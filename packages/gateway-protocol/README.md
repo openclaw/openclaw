@@ -89,6 +89,10 @@ names are open strings; consumers must not discard an unfamiliar owner phase.
 Validation does not authorize a stop or replace lease, process-identity, and
 readiness checks owned by the controller.
 
+Leave `includeLifecycle` unset when using older published status validators.
+Request `includeLifecycle: true` only with a validator that supports `ownerId`
+and `phase`.
+
 ## Guard an event without TypeBox
 
 Use the lightweight guards when code only needs safe frame discrimination. They
@@ -125,6 +129,16 @@ Nodes and probes use `MIN_NODE_PROTOCOL_VERSION` and
 it does not grant authorization.
 
 ## Contract notes
+
+### Retired worker tool imports
+
+The `WorkerSessionsSpawn*`, `WorkerSessionsSend*`, `WorkerSessionTool*`,
+`WorkerPortal*`, and `WorkerPresence*` schemas, types, root validators, and associated
+feature/limit constants published in 2026.9.6 and 2026.9.7 remain available for decoding older data. They do
+not register or advertise the retired worker RPCs. Current workers use the
+prepared tool surface and `worker.gatewayTool` transport; migrate integrations to
+`WorkerGatewayTool*`. These imports can be removed only in an explicitly announced
+breaking package API release after consumer migration.
 
 ### Session identifiers
 

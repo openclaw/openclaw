@@ -104,14 +104,9 @@ afterEach(() => {
 describe("binding target drivers", () => {
   it("delegates ensureReady to the resolved driver", async () => {
     const ensureReady = vi.fn(async () => ({ ok: true as const }));
-    const ensureSession = vi.fn(async () => ({
-      ok: true as const,
-      sessionKey: "agent:codex:test-driver",
-    }));
     const driver: StatefulBindingTargetDriver = {
       id: "test-driver",
       ensureReady,
-      ensureSession,
     };
     unregisterDriver = registerStatefulBindingTargetDriver(driver);
 
@@ -134,10 +129,6 @@ describe("binding target drivers", () => {
     const driver: StatefulBindingTargetDriver = {
       id: "test-driver",
       ensureReady: async () => ({ ok: true }),
-      ensureSession: async () => ({
-        ok: true,
-        sessionKey: "agent:codex:test-driver",
-      }),
       resolveTargetBySessionKey: ({ sessionKey }) => ({
         kind: "stateful",
         driverId: "test-driver",

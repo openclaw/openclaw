@@ -1,8 +1,9 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 // Npm Package Lock Generator tests cover transient npm package-lock behavior.
 import path from "node:path";
+import { create as createTar } from "tar";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   applyPackageExtensionPeerMetadata,
@@ -10,10 +11,8 @@ import {
   collectPnpmLockViolations,
   createNpmPackageLockInstallStrategyArgs,
   createNpmLockExecOptions,
-  createNpmLockCommand,
   disableDependencyShrinkwrapOverrideConflictSources,
-  exactOverrideRulesFromOverrides,
-  exactVersionFromOverrideSpec,
+  validationOverrideRulesFromOverrides,
   normalizeNpmVersionDrift,
   normalizeOverrides,
   packageJsonForNpmLock,
@@ -69,26 +68,6 @@ describe("generate-npm-package-lock", () => {
     expect(normalized).not.toHaveProperty("cpu");
     expect(normalized).not.toHaveProperty("libc");
     expect(normalized.dependencies).toEqual({ chalk: "5.6.2" });
-  });
-
-  it("runs npm package-lock generation through cmd.exe for Windows npm shims", () => {
-    const execPath = "C:\\nodejs\\node.exe";
-    const npmCmdPath = path.win32.resolve(path.win32.dirname(execPath), "npm.cmd");
-
-    expect(
-      createNpmLockCommand(["install", "--package-lock-only"], {
-        comSpec: "C:\\Windows\\System32\\cmd.exe",
-        env: {},
-        execPath,
-        existsSync: (candidate: string) => candidate === npmCmdPath,
-        platform: "win32",
-      }),
-    ).toEqual({
-      args: ["/d", "/s", "/c", `${npmCmdPath} install --package-lock-only`],
-      command: "C:\\Windows\\System32\\cmd.exe",
-      shell: false,
-      windowsVerbatimArguments: true,
-    });
   });
 
   it("bounds npm-lock command runtime and captured output by default", () => {
@@ -259,17 +238,170 @@ describe("generate-npm-package-lock", () => {
     ).toThrow("invalid OPENCLAW_NPM_LOCK_COMMAND_MAX_BUFFER_BYTES: 64mb");
   });
 
-  it("extracts exact versions from npm override specs", () => {
-    expect(exactVersionFromOverrideSpec("8.4.0")).toBe("8.4.0");
-    expect(exactVersionFromOverrideSpec("npm:@nolyfill/domexception@1.0.28")).toBe("1.0.28");
-    expect(exactVersionFromOverrideSpec("^8.4.0")).toBeNull();
-  });
-
   it("pins same-line pnpm lock versions to the newest locked patch", () => {
     expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.38"]))).toBe("3.972.38");
     expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.38", "3.972.39"]))).toBe("3.972.39");
     expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.39", "3.973.0"]))).toBeNull();
     expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.39", "4.0.0"]))).toBeNull();
+  });
+
+  it("pins the published runtime graph independently of unrelated workspace versions", () => {
+    const root = tempDirs.make("openclaw-npm-runtime-policy-");
+    const localDir = path.join(root, "local");
+    mkdirSync(localDir);
+    writeFileSync(path.join(root, "pnpm-workspace.yaml"), "{}\n");
+    writeFileSync(
+      path.join(localDir, "package.json"),
+      JSON.stringify({
+        dependencies: { "local-child": "2.0.0" },
+        peerDependencies: { "absent-optional-peer": "^1.0.0" },
+        peerDependenciesMeta: { "absent-optional-peer": { optional: true } },
+      }),
+    );
+    const snapshots = {
+      "first@1.0.0": { dependencies: { helper: "8.0.0" } },
+      "second@1.0.0": { optionalDependencies: { helper: "8.0.0" } },
+      "helper@8.0.0": {},
+      "helper@7.0.0": {},
+      "host@3.1.0": {},
+      "local-child@2.0.0": {},
+      "packed@1.0.0": { dependencies: { helper: "8.0.0" } },
+    };
+    writeFileSync(
+      path.join(root, "pnpm-lock.yaml"),
+      JSON.stringify({
+        packages: Object.fromEntries(Object.keys(snapshots).map((key) => [key, {}])),
+        snapshots,
+      }),
+    );
+    const manifest = {
+      dependencies: {
+        alias: "npm:first@1.0.0",
+        local: "file:./local",
+        packed: "file:./packed.tgz",
+      },
+      optionalDependencies: { second: "1.0.0" },
+      peerDependencies: { host: "^3.0.0" },
+      devDependencies: { helper: "7.0.0" },
+    };
+    const script = `import { readNpmLockOverrides } from ${JSON.stringify(new URL("../../scripts/generate-npm-package-lock.mts", import.meta.url).href)};
+      const manifest = ${JSON.stringify(manifest)};
+      const artifacts = [{ name: "packed", version: "1.0.0", spec: "file:./packed.tgz", integrity: "sha512-fixture" }];
+      const read = (input) => readNpmLockOverrides(input, ${JSON.stringify(root)}, artifacts);
+      let missing;
+      try { read({ dependencies: { absent: "1.0.0" } }); } catch (error) { missing = error.message; }
+      console.log(JSON.stringify({
+        native: read(manifest),
+        legacy: read({ ...manifest, peerDependenciesMeta: { host: { optional: true } } }),
+        empty: read({ devDependencies: { helper: "7.0.0" } }),
+        missing,
+      }));`;
+    const result = spawnSync(
+      process.execPath,
+      ["--import", import.meta.resolve("tsx"), "--input-type=module", "-e", script],
+      { encoding: "utf8", env: { ...process.env, OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT: root } },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const policy = JSON.parse(result.stdout);
+    expect(policy.native).toEqual({
+      first: "1.0.0",
+      second: "1.0.0",
+      helper: "8.0.0",
+      host: "3.1.0",
+      "local-child": "2.0.0",
+      packed: "1.0.0",
+    });
+    expect(policy.legacy).toEqual({ ...policy.native, host: undefined });
+    expect(policy.empty).toEqual({});
+    expect(policy.missing).toContain("no runtime resolution for absent@1.0.0");
+  });
+
+  it("keeps explicit workspace root policy when a runtime uses its scoped fork", () => {
+    const root = tempDirs.make("openclaw-npm-scoped-workspace-policy-");
+    writeFileSync(
+      path.join(root, "pnpm-workspace.yaml"),
+      JSON.stringify({
+        overrides: {
+          forked: "2.0.0",
+          "parent@1.0.0>forked": "1.0.0",
+        },
+      }),
+    );
+    writeFileSync(
+      path.join(root, "pnpm-lock.yaml"),
+      JSON.stringify({
+        packages: {
+          "parent@1.0.0": {},
+          "forked@1.0.0": {},
+          "forked@2.0.0": {},
+        },
+        snapshots: {
+          "parent@1.0.0": { dependencies: { forked: "1.0.0" } },
+          "forked@1.0.0": {},
+          "forked@2.0.0": {},
+        },
+      }),
+    );
+    const script = `import { readNpmLockOverrides } from ${JSON.stringify(new URL("../../scripts/generate-npm-package-lock.mts", import.meta.url).href)};
+      console.log(JSON.stringify(readNpmLockOverrides({ dependencies: { parent: "1.0.0" } }, ${JSON.stringify(root)})));`;
+    const result = spawnSync(
+      process.execPath,
+      ["--import", import.meta.resolve("tsx"), "--input-type=module", "-e", script],
+      { encoding: "utf8", env: { ...process.env, OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT: root } },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      parent: { ".": "1.0.0", forked: "1.0.0" },
+      forked: "2.0.0",
+      "parent@1.0.0": { forked: "1.0.0" },
+    });
+  });
+
+  it("pins a transitive workspace range to the pnpm resolution", () => {
+    const root = tempDirs.make("openclaw-npm-ranged-workspace-policy-");
+    writeFileSync(
+      path.join(root, "pnpm-workspace.yaml"),
+      JSON.stringify({
+        overrides: {
+          forked: "^2.0.0",
+          "parent@1.0.0>forked": "1.0.0",
+        },
+      }),
+    );
+    writeFileSync(
+      path.join(root, "pnpm-lock.yaml"),
+      JSON.stringify({
+        packages: {
+          "parent@1.0.0": {},
+          "other@1.0.0": {},
+          "forked@1.0.0": {},
+          "forked@2.0.0": {},
+        },
+        snapshots: {
+          "parent@1.0.0": { dependencies: { forked: "1.0.0" } },
+          "other@1.0.0": { dependencies: { forked: "2.0.0" } },
+          "forked@1.0.0": {},
+          "forked@2.0.0": {},
+        },
+      }),
+    );
+    const script = `import { readNpmLockOverrides } from ${JSON.stringify(new URL("../../scripts/generate-npm-package-lock.mts", import.meta.url).href)};
+      console.log(JSON.stringify(readNpmLockOverrides({ dependencies: { parent: "1.0.0", other: "1.0.0" } }, ${JSON.stringify(root)})));`;
+    const result = spawnSync(
+      process.execPath,
+      ["--import", import.meta.resolve("tsx"), "--input-type=module", "-e", script],
+      { encoding: "utf8", env: { ...process.env, OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT: root } },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      parent: { ".": "1.0.0", forked: "1.0.0" },
+      other: { ".": "1.0.0", forked: "2.0.0" },
+      forked: "2.0.0",
+      "parent@1.0.0": { forked: "1.0.0" },
+      "other@1.0.0": { forked: "2.0.0" },
+    });
   });
 
   it("uses scoped forks unless peer contexts conflict under one parent", () => {
@@ -360,7 +492,7 @@ describe("generate-npm-package-lock", () => {
         },
       },
     };
-    const overrideRules = exactOverrideRulesFromOverrides({
+    const overrideRules = validationOverrideRulesFromOverrides({
       protobufjs: "8.4.0",
       "node-domexception": "npm:@nolyfill/domexception@1.0.28",
     });
@@ -374,6 +506,386 @@ describe("generate-npm-package-lock", () => {
       lockfile.packages["node_modules/@openclaw/codex/node_modules/protobufjs"],
     ).toBeUndefined();
   });
+
+  it("attributes a hoisted override violation to its dependency shrinkwrap", () => {
+    const lockfile = {
+      packages: {
+        "": { dependencies: { parent: "1.0.0" } },
+        "node_modules/parent": {
+          dependencies: { forked: "1.0.0" },
+          hasShrinkwrap: true,
+          version: "1.0.0",
+        },
+        "node_modules/forked": { version: "1.0.0" },
+      },
+    };
+    const overrides = { forked: "2.0.0", parent: "1.0.0" };
+
+    expect(
+      disableDependencyShrinkwrapOverrideConflictSources(
+        lockfile,
+        validationOverrideRulesFromOverrides(overrides),
+        overrides,
+      ),
+    ).toEqual(["node_modules/parent"]);
+    expect(lockfile.packages["node_modules/parent"]).not.toHaveProperty("hasShrinkwrap");
+  });
+
+  it("disables a shrinkwrap that violates a scoped rule with the global version", () => {
+    const lockfile = {
+      packages: {
+        "": { dependencies: { parent: "1.0.0" } },
+        "node_modules/parent": {
+          dependencies: { forked: "2.0.0" },
+          hasShrinkwrap: true,
+          version: "1.0.0",
+        },
+        "node_modules/forked": { version: "2.0.0" },
+      },
+    };
+    const overrides = {
+      forked: "2.0.0",
+      parent: { ".": "1.0.0", forked: "1.0.0" },
+    };
+
+    expect(
+      disableDependencyShrinkwrapOverrideConflictSources(
+        lockfile,
+        validationOverrideRulesFromOverrides(overrides),
+        overrides,
+      ),
+    ).toEqual(["node_modules/parent"]);
+  });
+
+  it("matches a scoped override against the incoming dependency range", () => {
+    const lockfile = {
+      packages: {
+        "": { dependencies: { parent: "^1.0.0" } },
+        "node_modules/parent": {
+          dependencies: { forked: "2.0.0" },
+          hasShrinkwrap: true,
+          version: "1.1.0",
+        },
+        "node_modules/forked": { version: "2.0.0" },
+      },
+    };
+    const overrides = {
+      "parent@1.0.0": { forked: "1.0.0" },
+    };
+
+    expect(
+      disableDependencyShrinkwrapOverrideConflictSources(
+        lockfile,
+        validationOverrideRulesFromOverrides(overrides),
+        overrides,
+      ),
+    ).toEqual(["node_modules/parent"]);
+  });
+
+  it.each([
+    {
+      expected: ["node_modules/parent"],
+      name: "plain Git spec",
+      root: { dependencies: { parent: "git+https://example.test/parent.git" } },
+    },
+    {
+      expected: ["node_modules/parent"],
+      name: "hosted Git URL without suffix",
+      root: { dependencies: { parent: "https://github.com/example/parent" } },
+    },
+    {
+      expected: [],
+      name: "hosted archive URL",
+      root: {
+        dependencies: { parent: "https://github.com/example/parent/archive/v1.0.0.tar.gz" },
+      },
+    },
+    {
+      expected: [],
+      name: "local tarball",
+      root: { dependencies: { parent: "file:./parent.tgz" } },
+    },
+    {
+      expected: [],
+      name: "local directory",
+      root: { dependencies: { parent: "../parent" } },
+    },
+    {
+      expected: ["node_modules/parent"],
+      name: "GitHub shorthand",
+      root: { dependencies: { parent: "example/parent" } },
+    },
+    {
+      expected: [],
+      name: "Git semver range",
+      root: { dependencies: { parent: "git+https://example.test/parent.git#semver:^1.0.0" } },
+    },
+    {
+      expected: [],
+      name: "npm alias range",
+      root: { dependencies: { parent: "npm:aliased-parent@^1.0.0" } },
+    },
+    {
+      expected: ["node_modules/parent"],
+      name: "optional dependency precedence",
+      root: {
+        dependencies: { parent: "1.0.0" },
+        optionalDependencies: { parent: "2.0.0" },
+      },
+    },
+  ])("matches scoped selectors using the effective edge spec ($name)", ({ expected, root }) => {
+    const lockfile = {
+      packages: {
+        "": root,
+        "node_modules/parent": {
+          dependencies: { forked: "1.0.0" },
+          hasShrinkwrap: true,
+          version: "1.1.0",
+        },
+        "node_modules/forked": { version: "1.0.0" },
+      },
+    };
+    const overrides = {
+      forked: "2.0.0",
+      "parent@1.0.0": { forked: "1.0.0" },
+    };
+
+    expect(
+      disableDependencyShrinkwrapOverrideConflictSources(
+        lockfile,
+        validationOverrideRulesFromOverrides(overrides),
+        overrides,
+      ),
+    ).toEqual(expected);
+  });
+
+  it("enforces a version-qualified override object's implicit parent version", () => {
+    const lockfile = {
+      packages: {
+        "": { dependencies: { wrapper: "1.0.0" } },
+        "node_modules/wrapper": {
+          dependencies: { parent: "^1.0.0" },
+          hasShrinkwrap: true,
+          version: "1.0.0",
+        },
+        "node_modules/parent": {
+          dependencies: { forked: "1.0.0" },
+          version: "1.1.0",
+        },
+        "node_modules/forked": { version: "1.0.0" },
+      },
+    };
+    const overrides = {
+      "parent@1.0.0": { forked: "1.0.0" },
+    };
+
+    expect(
+      disableDependencyShrinkwrapOverrideConflictSources(
+        lockfile,
+        validationOverrideRulesFromOverrides(overrides),
+        overrides,
+      ),
+    ).toEqual(["node_modules/wrapper"]);
+  });
+
+  it("applies a wildcard scoped override to a plain Git edge", () => {
+    const lockfile = {
+      packages: {
+        "": { dependencies: { parent: "git+https://example.test/parent.git" } },
+        "node_modules/parent": {
+          dependencies: { forked: "2.0.0" },
+          hasShrinkwrap: true,
+          version: "1.1.0",
+        },
+        "node_modules/forked": { version: "2.0.0" },
+      },
+    };
+    const overrides = {
+      forked: "2.0.0",
+      "parent@*": { forked: "1.0.0" },
+    };
+
+    expect(
+      disableDependencyShrinkwrapOverrideConflictSources(
+        lockfile,
+        validationOverrideRulesFromOverrides(overrides),
+        overrides,
+      ),
+    ).toEqual(["node_modules/parent"]);
+  });
+
+  it.each([
+    { actualName: "foo", expected: ["node_modules/parent"], name: "original package" },
+    { actualName: "patched-foo", expected: [], name: "alias target" },
+  ])("validates npm override alias identity ($name)", ({ actualName, expected }) => {
+    const lockfile = {
+      packages: {
+        "": { dependencies: { parent: "1.0.0" } },
+        "node_modules/parent": {
+          dependencies: { foo: "1.0.0" },
+          hasShrinkwrap: true,
+          version: "1.0.0",
+        },
+        "node_modules/foo": { name: actualName, version: "1.0.0" },
+      },
+    };
+    const overrides = { foo: "npm:patched-foo@1.0.0" };
+
+    expect(
+      disableDependencyShrinkwrapOverrideConflictSources(
+        lockfile,
+        validationOverrideRulesFromOverrides(overrides),
+        overrides,
+      ),
+    ).toEqual(expected);
+  });
+
+  it("accepts a hoisted peer that satisfies its scoped override", () => {
+    const lockfile = {
+      packages: {
+        "": { dependencies: { parent: "1.0.0" } },
+        "node_modules/parent": {
+          peerDependencies: { forked: "1.0.0" },
+          version: "1.0.0",
+        },
+        "node_modules/forked": { version: "1.0.0" },
+      },
+    };
+    const overrides = {
+      forked: "2.0.0",
+      parent: { ".": "1.0.0", forked: "1.0.0" },
+    };
+
+    expect(
+      disableDependencyShrinkwrapOverrideConflictSources(
+        lockfile,
+        validationOverrideRulesFromOverrides(overrides),
+        overrides,
+      ),
+    ).toEqual([]);
+  });
+
+  it.each(
+    [
+      { name: "minimatch", version: "10.2.5", required: "10.2.6" },
+      { name: "brace-expansion", version: "5.0.9", required: "5.0.12" },
+      { name: "ip-address", version: "10.5.0", required: "10.7.2" },
+    ].flatMap((entry) =>
+      ["11.20.0", "12.1.0"].map((npmVersion) => Object.assign({ npmVersion }, entry)),
+    ),
+  )(
+    "limits the npm@$npmVersion bundled exception for $name to its approved occurrence",
+    ({ name, version, required, npmVersion }) => {
+      for (const change of [
+        "approved",
+        "bundle version",
+        "npm version",
+        "path",
+        "unbundled",
+      ] as const) {
+        const installedNpmVersion =
+          change === "npm version"
+            ? `${npmVersion.slice(0, npmVersion.lastIndexOf(".") + 1)}1`
+            : npmVersion;
+        const bundledVersion = change === "bundle version" ? "0.0.1" : version;
+        const npmPath =
+          change === "path" ? "node_modules/other/node_modules/npm" : "node_modules/npm";
+        const childPath = `${npmPath}/node_modules/${name}`;
+        const lockfile = {
+          packages: {
+            "": { dependencies: { npm: installedNpmVersion } },
+            [npmPath]: {
+              version: installedNpmVersion,
+              dependencies: { [name]: bundledVersion },
+              hasShrinkwrap: true,
+            },
+            [childPath]: {
+              version: bundledVersion,
+              ...(change === "unbundled"
+                ? { inBundle: false }
+                : npmVersion === "12.1.0"
+                  ? { inBundle: true }
+                  : {}),
+            },
+          },
+        };
+        const rules = { [name]: required };
+        const expectedPaths = change === "approved" ? [] : [childPath];
+        expect(
+          collectOverrideViolations(lockfile, rules).map((entry) => entry.path),
+          change,
+        ).toEqual(expectedPaths);
+        expect(
+          collectPnpmLockViolations(
+            lockfile,
+            new Set([`npm@${installedNpmVersion}`, `${name}@${required}`]),
+            new Map(),
+          ).map((entry) => entry.path),
+          change,
+        ).toEqual([childPath]);
+        expect(disableDependencyShrinkwrapOverrideConflictSources(lockfile, rules), change).toEqual(
+          change === "approved" ? [] : [npmPath],
+        );
+      }
+    },
+  );
+
+  it.each(["11.20.0", "12.1.0"])(
+    "authenticates npm@%s bundled lock entries against the pnpm-locked archive",
+    (npmVersion) => {
+      const root = tempDirs.make("openclaw-npm-bundle-");
+      const child = "node_modules/@npmcli/arborist";
+      const childPath = `node_modules/npm/${child}`;
+      mkdirSync(path.join(root, "package", child), { recursive: true });
+      writeFileSync(
+        path.join(root, "package/package.json"),
+        JSON.stringify({ name: "npm", version: npmVersion }),
+      );
+      writeFileSync(
+        path.join(root, "package", child, "package.json"),
+        JSON.stringify({ name: "@npmcli/arborist", version: "9.9.2" }),
+      );
+      const archive = path.join(root, "npm.tgz");
+      createTar({ cwd: root, file: archive, sync: true, gzip: true }, ["package"]);
+      const bytes = readFileSync(archive);
+      const integrity = `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
+      const lockfile = {
+        packages: {
+          "node_modules/npm": { version: npmVersion, integrity },
+          [childPath]: { version: "9.9.2", inBundle: true },
+        },
+      };
+      const pins = new Set([`npm@${npmVersion}`]);
+      const integrities = new Map([[`npm@${npmVersion}`, new Set([integrity])]]);
+      const check = (
+        value: Parameters<typeof collectPnpmLockViolations>[0] = lockfile,
+        tarball = bytes,
+        hashes = integrities,
+      ) => collectPnpmLockViolations(value, pins, hashes, [], tarball);
+      expect(check()).toEqual([]);
+      expect(() => check(lockfile, Buffer.concat([bytes, Buffer.from("changed")]))).toThrow(
+        "integrity",
+      );
+      expect(() => check(lockfile, bytes, new Map())).toThrow("integrity");
+      for (const change of ["version", "path", "unbundled", "name"]) {
+        const entryPath = change === "path" ? `node_modules/other/${child}` : childPath;
+        const changed = {
+          packages: {
+            "node_modules/npm": lockfile.packages["node_modules/npm"],
+            [entryPath]: {
+              version: change === "version" ? "9.9.1" : "9.9.2",
+              inBundle: change !== "unbundled",
+              ...(change === "name" ? { name: "other" } : {}),
+            },
+          },
+        };
+        expect(
+          check(changed).map((entry) => entry.path),
+          change,
+        ).toEqual([entryPath]);
+      }
+    },
+  );
 
   it("detects npm package-lock entries that bypass the pnpm lock", () => {
     const lockfile = {
@@ -393,31 +905,6 @@ describe("generate-npm-package-lock", () => {
       {
         packageKey: "react@19.2.6",
         path: "node_modules/react",
-      },
-    ]);
-  });
-
-  it("detects npm package-lock integrity drift from the pnpm lock", () => {
-    const packageKey = "react@19.2.4";
-    expect(
-      collectPnpmLockViolations(
-        {
-          packages: {
-            "node_modules/react": {
-              version: "19.2.4",
-              integrity: "sha512-unreviewed",
-            },
-          },
-        },
-        new Set([packageKey]),
-        new Map([[packageKey, new Set(["sha512-reviewed"])]]),
-      ),
-    ).toEqual([
-      {
-        path: "node_modules/react",
-        packageKey,
-        actualIntegrity: "sha512-unreviewed",
-        expectedIntegrities: ["sha512-reviewed"],
       },
     ]);
   });
@@ -583,6 +1070,434 @@ describe("generate-npm-package-lock", () => {
     ]);
   });
 
+  it("preserves scoped hoists and repairs unrelated shrinkwraps in final locks", async () => {
+    const root = tempDirs.make("openclaw-npm-scoped-shrinkwrap-");
+    const packageDir = path.join(root, "plugin");
+    mkdirSync(packageDir);
+
+    const writePackage = (
+      packageRoot: string,
+      manifest: Record<string, unknown>,
+      shrinkwrap?: Record<string, unknown>,
+    ) => {
+      mkdirSync(packageRoot, { recursive: true });
+      writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify(manifest));
+      writeFileSync(path.join(packageRoot, "index.js"), "module.exports = true;\n");
+      if (shrinkwrap) {
+        writeFileSync(path.join(packageRoot, "npm-shrinkwrap.json"), JSON.stringify(shrinkwrap));
+      }
+    };
+    const packPackage = (source: string) => {
+      const pack = spawnSync(
+        "npm",
+        ["pack", "--json", "--ignore-scripts", "--pack-destination", packageDir],
+        { cwd: source, encoding: "utf8" },
+      );
+      expect(pack.status, pack.stderr).toBe(0);
+      const packed = JSON.parse(pack.stdout);
+      const [{ filename }] = Array.isArray(packed) ? packed : Object.values(packed);
+      const tarball = path.join(packageDir, filename);
+      const manifest = JSON.parse(readFileSync(path.join(source, "package.json"), "utf8"));
+      return {
+        artifact: {
+          name: manifest.name,
+          version: manifest.version,
+          spec: `file:./${filename}`,
+          integrity: `sha512-${createHash("sha512").update(readFileSync(tarball)).digest("base64")}`,
+        },
+        manifest,
+        tarball,
+      };
+    };
+    const writeParent = (
+      name: string,
+      dependencies: Record<string, string>,
+      withShrinkwrap: boolean,
+    ) => {
+      const source = path.join(root, name);
+      writePackage(source, {
+        name,
+        version: "1.0.0",
+        main: "index.js",
+        dependencies,
+      });
+      if (withShrinkwrap) {
+        writeFileSync(
+          path.join(source, "npm-shrinkwrap.json"),
+          JSON.stringify({
+            name,
+            version: "1.0.0",
+            lockfileVersion: 3,
+            requires: true,
+            packages: {
+              "": { name, version: "1.0.0", dependencies },
+              ...Object.fromEntries(
+                Object.entries(dependencies).map(([dependencyName, version]) => [
+                  `node_modules/${dependencyName}`,
+                  { version },
+                ]),
+              ),
+            },
+          }),
+        );
+      }
+      return packPackage(source);
+    };
+
+    const parent = writeParent("parent", { forked: "1.0.0" }, false);
+    const overlap = writeParent("overlap", { forked: "1.0.0", blocked: "1.0.0" }, false);
+    const modern = writeParent("modern", { forked: "2.0.0", blocked: "2.0.0" }, false);
+    const unrelated = writeParent("unrelated", { forked: "1.0.0", blocked: "1.0.0" }, true);
+    const violator = writeParent("violator", { forked: "1.0.0", replacement: "1.0.0" }, true);
+    const broadSource = path.join(root, "broad");
+    writePackage(broadSource, {
+      name: "broad",
+      version: "1.0.0",
+      main: "index.js",
+      optionalDependencies: { overlap: "1.0.0" },
+      peerDependencies: { forked: ">=1" },
+      peerDependenciesMeta: { forked: { optional: true } },
+    });
+    const broad = packPackage(broadSource);
+    const leafPackages = ["1.0.0", "2.0.0"].map((version) => {
+      const source = path.join(root, `leaf-${version}`);
+      writePackage(source, { name: "leaf", version, main: "index.js" });
+      return packPackage(source);
+    });
+    const forkedPackages = ["1.0.0", "2.0.0"].map((version) => {
+      const source = path.join(root, `forked-${version}`);
+      writePackage(source, {
+        name: "forked",
+        version,
+        main: "index.js",
+        dependencies: { leaf: version },
+      });
+      return packPackage(source);
+    });
+    const blockedPackages = ["1.0.0", "2.0.0"].map((version) => {
+      const source = path.join(root, `blocked-${version}`);
+      writePackage(source, { name: "blocked", version, main: "index.js" });
+      return packPackage(source);
+    });
+    const replacementPackages = ["1.0.0", "2.0.0"].map((version) => {
+      const source = path.join(root, `replacement-${version}`);
+      const dependencies = version === "2.0.0" ? { blocked: "1.0.0" } : {};
+      writePackage(
+        source,
+        { name: "replacement", version, main: "index.js", dependencies },
+        version === "2.0.0"
+          ? {
+              name: "replacement",
+              version,
+              lockfileVersion: 3,
+              requires: true,
+              packages: {
+                "": { name: "replacement", version, dependencies },
+                "node_modules/blocked": { version: "1.0.0" },
+              },
+            }
+          : undefined,
+      );
+      return packPackage(source);
+    });
+    const registryConfig = path.join(root, "registry.json");
+    writeFileSync(
+      registryConfig,
+      JSON.stringify({
+        parent: {
+          "1.0.0": {
+            integrity: parent.artifact.integrity,
+            manifest: parent.manifest,
+            tarball: parent.tarball,
+          },
+        },
+        overlap: {
+          "1.0.0": {
+            integrity: overlap.artifact.integrity,
+            manifest: overlap.manifest,
+            tarball: overlap.tarball,
+          },
+        },
+        modern: {
+          "1.0.0": {
+            integrity: modern.artifact.integrity,
+            manifest: modern.manifest,
+            tarball: modern.tarball,
+          },
+        },
+        broad: {
+          "1.0.0": {
+            integrity: broad.artifact.integrity,
+            manifest: broad.manifest,
+            tarball: broad.tarball,
+          },
+        },
+        unrelated: {
+          "1.0.0": {
+            integrity: unrelated.artifact.integrity,
+            manifest: unrelated.manifest,
+            tarball: unrelated.tarball,
+          },
+        },
+        violator: {
+          "1.0.0": {
+            integrity: violator.artifact.integrity,
+            manifest: violator.manifest,
+            tarball: violator.tarball,
+          },
+        },
+        forked: Object.fromEntries(
+          forkedPackages.map(({ artifact, manifest, tarball }) => [
+            artifact.version,
+            { integrity: artifact.integrity, manifest, tarball },
+          ]),
+        ),
+        leaf: Object.fromEntries(
+          leafPackages.map(({ artifact, manifest, tarball }) => [
+            artifact.version,
+            { integrity: artifact.integrity, manifest, tarball },
+          ]),
+        ),
+        blocked: Object.fromEntries(
+          blockedPackages.map(({ artifact, manifest, tarball }) => [
+            artifact.version,
+            { integrity: artifact.integrity, manifest, tarball },
+          ]),
+        ),
+        replacement: Object.fromEntries(
+          replacementPackages.map(({ artifact, manifest, tarball }) => [
+            artifact.version,
+            { integrity: artifact.integrity, manifest, tarball },
+          ]),
+        ),
+      }),
+    );
+    const registryScript = path.join(root, "registry.mjs");
+    writeFileSync(
+      registryScript,
+      `import { createServer } from "node:http";
+import { readFileSync } from "node:fs";
+const packages = JSON.parse(readFileSync(process.argv[2], "utf8"));
+const server = createServer((request, response) => {
+  const port = server.address().port;
+  const packageName = request.url?.slice(1);
+  const versions = packageName ? packages[packageName] : undefined;
+  if (versions) {
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify({ name: packageName, "dist-tags": { latest: Object.keys(versions).at(-1) }, versions: Object.fromEntries(Object.entries(versions).map(([version, entry]) => [version, { ...entry.manifest, dist: { integrity: entry.integrity, tarball: \`http://127.0.0.1:\${port}/\${packageName}/-/\${packageName}-\${version}.tgz\` } }])) }));
+    return;
+  }
+  const match = request.url?.match(/^\\/([^/]+)\\/-\\/[^/]+-(.+)\\.tgz$/u);
+  const entry = match ? packages[match[1]]?.[match[2]] : undefined;
+  if (!entry) {
+    response.statusCode = 404;
+    response.end("not found");
+    return;
+  }
+  response.setHeader("content-type", "application/octet-stream");
+  response.end(readFileSync(entry.tarball));
+});
+server.listen(0, "127.0.0.1", () => process.stdout.write(String(server.address().port)));
+process.on("SIGTERM", () => server.close(() => process.exit(0)));
+`,
+    );
+    const registry = spawn(process.execPath, [registryScript, registryConfig], {
+      stdio: ["ignore", "pipe", "inherit"],
+    });
+    const registryPort = await new Promise<number>((resolve, reject) => {
+      registry.once("error", reject);
+      registry.once("exit", (code) => reject(new Error(`fixture registry exited ${code}`)));
+      registry.stdout.once("data", (chunk) => resolve(Number(String(chunk))));
+    });
+    try {
+      const artifacts: unknown[] = [];
+
+      writeFileSync(
+        path.join(root, "pnpm-workspace.yaml"),
+        JSON.stringify({
+          overrides: {
+            parent: "1.0.0",
+            forked: "2.0.0",
+            blocked: "2.0.0",
+            replacement: "2.0.0",
+            "parent@1.0.0>forked": "1.0.0",
+            "unrelated@1.0.0>forked": "1.0.0",
+          },
+        }),
+      );
+      writeFileSync(
+        path.join(root, "pnpm-lock.yaml"),
+        JSON.stringify({
+          packages: {
+            "parent@1.0.0": {},
+            "overlap@1.0.0": {},
+            "modern@1.0.0": {},
+            "broad@1.0.0": { optionalDependencies: { overlap: "1.0.0" } },
+            "unrelated@1.0.0": {},
+            "violator@1.0.0": {},
+            "forked@1.0.0": {},
+            "forked@2.0.0": {},
+            "leaf@1.0.0": {},
+            "leaf@2.0.0": {},
+            "blocked@1.0.0": {},
+            "blocked@2.0.0": {},
+            "replacement@1.0.0": {},
+            "replacement@2.0.0": {},
+          },
+          snapshots: {
+            "parent@1.0.0": { dependencies: { forked: "1.0.0" } },
+            "overlap@1.0.0": { dependencies: { forked: "1.0.0", blocked: "1.0.0" } },
+            "modern@1.0.0": { dependencies: { forked: "2.0.0", blocked: "2.0.0" } },
+            "broad@1.0.0": { optionalDependencies: { overlap: "1.0.0" } },
+            "unrelated@1.0.0": {
+              dependencies: { forked: "1.0.0", blocked: "2.0.0" },
+            },
+            "violator@1.0.0": {
+              dependencies: { forked: "2.0.0", replacement: "2.0.0" },
+            },
+            "forked@1.0.0": { dependencies: { leaf: "1.0.0" } },
+            "forked@2.0.0": { dependencies: { leaf: "2.0.0" } },
+            "leaf@1.0.0": {},
+            "leaf@2.0.0": {},
+            "blocked@1.0.0": {},
+            "blocked@2.0.0": {},
+            "replacement@1.0.0": {},
+            "replacement@2.0.0": { dependencies: { blocked: "2.0.0" } },
+          },
+        }),
+      );
+      const generateLock = (
+        dependencies: Record<string, string>,
+        localPackageArtifacts: unknown[],
+      ) => {
+        writeFileSync(
+          path.join(packageDir, "package.json"),
+          JSON.stringify({ name: "fixture-plugin", version: "1.0.0", dependencies }),
+        );
+        const script = `import { generateNpmPackageLock } from ${JSON.stringify(new URL("../../scripts/generate-npm-package-lock.mts", import.meta.url).href)};
+        console.log(generateNpmPackageLock(${JSON.stringify(packageDir)}, { localPackageArtifacts: ${JSON.stringify(localPackageArtifacts)} }));`;
+        const result = spawnSync(
+          process.execPath,
+          ["--import", import.meta.resolve("tsx"), "--input-type=module", "-e", script],
+          {
+            cwd: root,
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT: root,
+              npm_config_registry: `http://127.0.0.1:${registryPort}`,
+            },
+          },
+        );
+        expect(result.status, result.stderr).toBe(0);
+        return JSON.parse(result.stdout);
+      };
+
+      const lock = generateLock(
+        {
+          parent: "1.0.0",
+          unrelated: "1.0.0",
+          violator: "1.0.0",
+          forked: "2.0.0",
+          blocked: "2.0.0",
+        },
+        artifacts,
+      );
+      expect(lock.packages["node_modules/forked"].version).toBe("2.0.0");
+      expect(lock.packages["node_modules/blocked"].version).toBe("2.0.0");
+      expect(lock.packages["node_modules/parent/node_modules/forked"].version).toBe("1.0.0");
+      expect(lock.packages["node_modules/unrelated/node_modules/forked"].version).toBe("1.0.0");
+      expect(lock.packages["node_modules/unrelated/node_modules/blocked"]).toBeUndefined();
+      expect(lock.packages["node_modules/violator/node_modules/forked"]).toBeUndefined();
+      expect(lock.packages["node_modules/replacement"].version).toBe("2.0.0");
+      expect(lock.packages["node_modules/replacement/node_modules/blocked"]).toBeUndefined();
+
+      const hoisted = generateLock({ parent: "1.0.0" }, artifacts);
+      expect(hoisted.packages["node_modules/forked"].version).toBe("1.0.0");
+      expect(hoisted.packages["node_modules/parent/node_modules/forked"]).toBeUndefined();
+
+      writeFileSync(
+        path.join(root, "pnpm-workspace.yaml"),
+        JSON.stringify({
+          overrides: {
+            violator: "^1.0.0",
+            forked: "^2.0.0",
+            replacement: "^2.0.0",
+            blocked: "^2.0.0",
+            "violator@1.0.0>forked": "2.0.0",
+            "violator@1.0.0>replacement": "2.0.0",
+            "replacement@2.0.0>blocked": "2.0.0",
+          },
+        }),
+      );
+      const nestedOnly = generateLock({ violator: "^1.0.0" }, artifacts);
+      expect(nestedOnly.packages["node_modules/forked"].version).toBe("2.0.0");
+      expect(nestedOnly.packages["node_modules/replacement"].version).toBe("2.0.0");
+      expect(nestedOnly.packages["node_modules/replacement/node_modules/blocked"]).toBeUndefined();
+
+      writeFileSync(
+        path.join(root, "pnpm-workspace.yaml"),
+        JSON.stringify({
+          overrides: {
+            unrelated: "^1.0.0",
+            forked: "^2.0.0",
+            blocked: "^2.0.0",
+          },
+        }),
+      );
+      const rangedRoots = generateLock({ unrelated: "^1.0.0" }, artifacts);
+      expect(rangedRoots.packages["node_modules/forked"].version).toBe("2.0.0");
+      expect(rangedRoots.packages["node_modules/blocked"].version).toBe("2.0.0");
+      expect(rangedRoots.packages["node_modules/unrelated/node_modules/forked"]).toBeUndefined();
+      expect(rangedRoots.packages["node_modules/unrelated/node_modules/blocked"]).toBeUndefined();
+
+      const installedVersions = (generatedPackages: Record<string, unknown>, name: string) =>
+        Object.entries(generatedPackages)
+          .filter(
+            ([lockPath]) =>
+              lockPath === `node_modules/${name}` || lockPath.endsWith(`/node_modules/${name}`),
+          )
+          .map(([, metadata]) => {
+            if (
+              typeof metadata !== "object" ||
+              metadata === null ||
+              !("version" in metadata) ||
+              typeof metadata.version !== "string"
+            ) {
+              throw new Error(`missing ${name} version metadata`);
+            }
+            return metadata.version;
+          })
+          .toSorted();
+
+      writeFileSync(
+        path.join(root, "pnpm-workspace.yaml"),
+        JSON.stringify({
+          overrides: {
+            overlap: "^1.0.0",
+            forked: "2.0.0",
+            blocked: "2.0.0",
+            leaf: "2.0.0",
+            "overlap@^1.0.0>forked": "1.0.0",
+            "overlap@1.0.0>blocked": "1.0.0",
+            "forked@1.0.0>leaf": "1.0.0",
+          },
+        }),
+      );
+      const rangedParent = generateLock({ broad: "1.0.0", modern: "1.0.0" }, artifacts);
+      expect(installedVersions(rangedParent.packages, "forked")).toEqual(["1.0.0", "2.0.0"]);
+      expect(installedVersions(rangedParent.packages, "blocked")).toEqual(["1.0.0", "2.0.0"]);
+      expect(installedVersions(rangedParent.packages, "leaf")).toEqual(["1.0.0", "2.0.0"]);
+
+      writeFileSync(path.join(root, "pnpm-workspace.yaml"), "{}\n");
+      const inferredBranches = generateLock({ broad: "1.0.0", modern: "1.0.0" }, artifacts);
+      expect(installedVersions(inferredBranches.packages, "forked")).toEqual(["1.0.0", "2.0.0"]);
+      expect(installedVersions(inferredBranches.packages, "leaf")).toEqual(["1.0.0", "2.0.0"]);
+    } finally {
+      registry.kill();
+    }
+  });
+
   it.each(["valid", "tampered", "wrong-version", "outside-root", "symlink-escape"])(
     "validates real local dependency tarballs before accepting npm locks (%s)",
     (scenario) => {
@@ -607,16 +1522,24 @@ describe("generate-npm-package-lock", () => {
                   "fixture-child@1.0.0": {},
                   "fixture-child@2.0.0": {},
                   "fixture-extra@3.0.0": {},
+                  "fixture-sibling@1.0.0": {},
                 }
               : {}),
           },
-          ...(scenario === "valid"
-            ? {
-                snapshots: {
-                  "fixture-dep@1.0.0": { dependencies: { "fixture-child": "1.0.0" } },
-                },
-              }
-            : {}),
+          snapshots: {
+            "fixture-dep@1.0.0": {},
+            ...(scenario === "valid"
+              ? {
+                  "fixture-dep@1.0.0": {
+                    dependencies: { "fixture-child": "1.0.0", "fixture-sibling": "1.0.0" },
+                  },
+                  "fixture-child@1.0.0": {},
+                  "fixture-child@2.0.0": {},
+                  "fixture-extra@3.0.0": {},
+                  "fixture-sibling@1.0.0": { dependencies: { "fixture-child": "2.0.0" } },
+                }
+              : {}),
+          },
         }),
       );
       writeFileSync(
@@ -671,7 +1594,7 @@ describe("generate-npm-package-lock", () => {
       );
       const script = `import { generateNpmPackageLock, readNpmLockOverrides } from ${JSON.stringify(new URL("../../scripts/generate-npm-package-lock.mts", import.meta.url).href)};
       const lock = JSON.parse(generateNpmPackageLock(${JSON.stringify(packageDir)}, { localPackageArtifacts: ${JSON.stringify([artifact])} }));
-      console.log(JSON.stringify({ lock, overrides: readNpmLockOverrides() }));`;
+      console.log(JSON.stringify({ lock, overrides: readNpmLockOverrides({ dependencies: { "fixture-dep": "1.0.0" } }, ${JSON.stringify(packageDir)}) }));`;
       const result = spawnSync(
         process.execPath,
         ["--import", import.meta.resolve("tsx"), "--input-type=module", "-e", script],
@@ -699,7 +1622,7 @@ describe("generate-npm-package-lock", () => {
           scenario === "tampered"
             ? "local package artifact integrity mismatch"
             : scenario === "wrong-version"
-              ? "violates workspace overrides: node_modules/fixture-dep locked 2.0.0, expected 1.0.0"
+              ? "npm lock differs from local package artifact: fixture-dep@1.0.0"
               : scenario === "symlink-escape"
                 ? "local package artifact escapes package root"
                 : "invalid local package artifact",
@@ -836,14 +1759,6 @@ describe("generate-npm-package-lock", () => {
         repoRelativePath,
       ),
     ).toEqual(["packages/gateway-protocol"]);
-  });
-
-  it("targets the changed publishable gateway client manifest", () => {
-    expect(
-      npmLockPackageDirsForChangedPaths(["packages/gateway-client/package.json"]).map(
-        repoRelativePath,
-      ),
-    ).toEqual(["packages/gateway-client"]);
   });
 
   it("falls back to every npm lock when lockfile ownership is ambiguous", () => {

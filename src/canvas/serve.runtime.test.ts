@@ -22,6 +22,12 @@ async function createStateDir(): Promise<string> {
   return stateDir;
 }
 
+async function createHtmlDocument(html: string, cspSandbox?: "scripts") {
+  const stateDir = await createStateDir();
+  const document = await createCanvasDocument({ id: "widget-1", html, cspSandbox }, { stateDir });
+  return { stateDir, document };
+}
+
 async function capture(url: string, method = "GET") {
   const response = {
     statusCode: 200,
@@ -59,10 +65,7 @@ describe("core canvas document host", () => {
     ],
   ])("preserves document-approved renderer sources for %s documents", async (_, html) => {
     const stateDir = await createStateDir();
-    const document = await createCanvasDocument(
-      { kind: "html_bundle", entrypoint: { type: "html", value: html }, cspSandbox: "scripts" },
-      { stateDir },
-    );
+    const document = await createCanvasDocument({ html, cspSandbox: "scripts" }, { stateDir });
     const response = await capture(document.entryUrl);
     const policy = String(response.headers["content-security-policy"]);
     const scripts = policy
@@ -75,17 +78,8 @@ describe("core canvas document host", () => {
   });
 
   it("serves sandbox-marked HTML with the stable CSP header and no mutation", async () => {
-    const stateDir = await createStateDir();
     const html = "<html><body>widget</body></html>";
-    const document = await createCanvasDocument(
-      {
-        id: "widget-1",
-        kind: "html_bundle",
-        entrypoint: { type: "html", value: html },
-        cspSandbox: "scripts",
-      },
-      { stateDir },
-    );
+    const { document } = await createHtmlDocument(html, "scripts");
 
     const response = await capture(document.entryUrl);
     expect(response.handled).toBe(true);
@@ -103,15 +97,7 @@ describe("core canvas document host", () => {
   });
 
   it("omits the sandbox response header for unmarked documents", async () => {
-    const stateDir = await createStateDir();
-    const document = await createCanvasDocument(
-      {
-        id: "plain-1",
-        kind: "html_bundle",
-        entrypoint: { type: "html", value: "<html><body>plain</body></html>" },
-      },
-      { stateDir },
-    );
+    const { document } = await createHtmlDocument("<html><body>plain</body></html>");
 
     const response = await capture(document.entryUrl);
     expect(response.statusCode).toBe(200);
@@ -119,17 +105,8 @@ describe("core canvas document host", () => {
   });
 
   it("serves Content-Length on HEAD responses", async () => {
-    const stateDir = await createStateDir();
     const html = "<html><body>widget</body></html>";
-    const document = await createCanvasDocument(
-      {
-        id: "widget-1",
-        kind: "html_bundle",
-        entrypoint: { type: "html", value: html },
-        cspSandbox: "scripts",
-      },
-      { stateDir },
-    );
+    const { stateDir, document } = await createHtmlDocument(html, "scripts");
     const css = "body { color: red; }";
     await writeFile(
       path.join(resolveCanvasDocumentsDir(stateDir), "widget-1", "style.css"),

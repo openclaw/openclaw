@@ -1,31 +1,27 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
-import { createDeferredCore } from "../../../shared/deferred.js";
-import { StateDatabaseReadAdmissionInvalidatedError } from "../../../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db-cache.js";
-import * as reads from "../../../state/openclaw-state-db-readonly.js";
-import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
+import { configureMockSubagentRegistryPersistence } from "../../subagent-test-fixtures.test-helpers.js";
+import * as delivery from "./subagent-delivery-state.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { withPreparedLatestSubagentRunByChildSessionKey } from "./subagent-registry-read.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
+import type { SubagentRunReadScope } from "./subagent-registry-read-snapshot.js";
+import {
+  persistRegistryFixture,
+  saveSubagentRegistryToSqlite,
+} from "./subagent-registry-state.fixture.test-support.js";
 import {
   clearSubagentRunsReadCacheForTest,
   getSubagentRunsSnapshotForRead,
-  getSubagentRunsSnapshotForSessions,
-  persistSubagentRunsToDiskOrThrow,
-  persistSubagentRunsToDisk,
+  withSubagentRunReadSnapshot,
 } from "./subagent-registry-state.js";
 import * as store from "./subagent-registry.store.sqlite.js";
-import {
-  saveSubagentRegistryChangesToSqlite,
-  saveSubagentRegistryToSqlite,
-} from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 let state: OpenClawTestState;
@@ -44,23 +40,19 @@ function run(runId = "retained", createdAt = 100): SubagentRunRecord {
     delivery: { status: "not_required" },
   };
 }
-function holdReadResult() {
-  const held = createDeferredCore();
-  const release = createDeferredCore();
-  const original = reads.executeExistingOpenClawStateRead;
-  let paused = false;
-  const spy = vi
-    .spyOn(reads, "executeExistingOpenClawStateRead")
-    .mockImplementation(async (...args) => {
-      const result = await original(...args);
-      if (args[1].type === "subagents.forChildSession" && !paused) {
-        paused = true;
-        held.resolve();
-        await release.promise;
-      }
-      return result;
-    });
-  return { held: held.promise, release: () => release.resolve(), spy };
+function readLatest() {
+  return withSubagentRunReadSnapshot(
+    subagentRuns,
+    (snapshot) => ({
+      runIds: [...snapshot.values()]
+        .filter((entry) => entry.childSessionKey === childSessionKey)
+        .map((entry) => entry.runId),
+      sessionKeys: [],
+    }),
+    (_selection, runs) =>
+      getLatestSubagentRunByChildSessionKeyFromRuns(runs.values(), childSessionKey) ?? null,
+    { sessionKeys: [childSessionKey], descendants: true },
+  );
 }
 beforeEach(async () => {
   state = await createOpenClawTestState({ prefix: "openclaw-subagent-read-", applyEnv: true });
@@ -77,322 +69,205 @@ afterEach(async () => {
   await state.cleanup();
 });
 
-describe("prepared subagent child-session reads", () => {
-  it("recovers restart-only rows in the worker and refreshes beyond a warmed host snapshot", async () => {
-    const retained = run();
-    saveSubagentRegistryToSqlite(new Map([[retained.runId, retained]]));
-    await closeOpenClawStateDatabaseAsync();
-    expect(subagentRuns.size).toBe(0);
-    expect(
-      await withPreparedLatestSubagentRunByChildSessionKey(
-        childSessionKey,
-        captureOpenClawStateWorkerContext(),
-        (read) => read(),
-      ),
-    ).toMatchObject(retained);
-    getSubagentRunsSnapshotForRead(new Map());
-    const newer = run("newer", 200);
-    saveSubagentRegistryChangesToSqlite(new Map([[newer.runId, newer]]), [newer.runId]);
-    const tracker = trackSqliteStatementExecutions(
-      openOpenClawStateDatabase().db,
-      ["subagent"] as const,
-      (sql) => (/\bsubagent_runs\b/i.test(sql) ? "subagent" : null),
-    );
-    try {
-      expect(
-        await withPreparedLatestSubagentRunByChildSessionKey(
-          childSessionKey,
-          captureOpenClawStateWorkerContext(),
-          (read) => read(),
-        ),
-      ).toMatchObject(newer);
-      expect(tracker.counts.subagent).toBe(0);
-    } finally {
-      tracker.restore();
-    }
-  });
-
-  it("applies current live rows last, including a live move outside the persisted child scope", async () => {
-    const older = run("older", 100);
-    const newer = run("newer", 200);
-    saveSubagentRegistryToSqlite(
-      new Map([
-        [older.runId, older],
-        [newer.runId, newer],
-      ]),
-    );
-    const moved = { ...newer, childSessionKey: "agent:main:subagent:moved" };
-    const current = { ...older, task: "Current live owner", generation: 2 };
-    const hold = holdReadResult();
-    const prepared = withPreparedLatestSubagentRunByChildSessionKey(
-      childSessionKey,
-      captureOpenClawStateWorkerContext(),
-      (read) => read(),
-    );
-    try {
-      await hold.held;
-      subagentRuns.set(newer.runId, moved);
-      subagentRuns.set(older.runId, current);
-    } finally {
-      hold.release();
-    }
-    expect(await prepared).toBe(current);
-  });
-
-  it("reprepares after an owner publication deletes a row while durable preparation is awaited", async () => {
-    const retained = run();
-    saveSubagentRegistryToSqlite(new Map([[retained.runId, retained]]));
-    const hold = holdReadResult();
-    const prepared = withPreparedLatestSubagentRunByChildSessionKey(
-      childSessionKey,
-      captureOpenClawStateWorkerContext(),
-      (read) => read(),
-    );
-    try {
-      await hold.held;
-      persistSubagentRunsToDiskOrThrow(new Map(), [retained.runId]);
-    } finally {
-      hold.release();
-    }
-    expect(await prepared).toBeNull();
-    expect(
-      hold.spy.mock.calls.filter((call) => call[1].type === "subagents.forChildSession"),
-    ).toHaveLength(2);
-  });
-
-  it("refuses a result after its captured database admission closes", async () => {
-    const retained = run();
-    saveSubagentRegistryToSqlite(new Map([[retained.runId, retained]]));
-    const hold = holdReadResult();
-    const consume = vi.fn((read: () => SubagentRunRecord | null) => read());
-    const prepared = withPreparedLatestSubagentRunByChildSessionKey(
-      childSessionKey,
-      captureOpenClawStateWorkerContext(),
-      consume,
-    );
-    const rejected = expect(prepared).rejects.toBeInstanceOf(
-      StateDatabaseReadAdmissionInvalidatedError,
-    );
-    try {
-      await hold.held;
-      await closeOpenClawStateDatabaseAsync();
-    } finally {
-      hold.release();
-    }
-    await rejected;
-    expect(consume).not.toHaveBeenCalled();
-  });
-
-  it("does not let a retained reader outlive its synchronous consumption phase", async () => {
-    const retained = run();
-    saveSubagentRegistryToSqlite(new Map([[retained.runId, retained]]));
-    const escaped = await withPreparedLatestSubagentRunByChildSessionKey(
-      childSessionKey,
-      captureOpenClawStateWorkerContext(),
-      (read) => {
-        expect(read()).toMatchObject(retained);
-        return read;
-      },
-    );
-    expect(escaped).toThrow(/no longer current/);
-  });
-  it.each([
-    { warm: false, tree: false },
-    { warm: true, tree: false },
-    { warm: false, tree: true },
-  ])(
-    "retains failed named deletion through hydration (warm=$warm, tree=$tree) and clears only exact successful rows",
-    async ({ warm, tree }) => {
-      const first = run("first", 100);
-      const second = run("second", 200);
-      saveSubagentRegistryToSqlite(
-        new Map([
-          [first.runId, first],
-          [second.runId, second],
-        ]),
+describe("prepared subagent publication ownership", () => {
+  it.each(["run", "session"] as const)(
+    "copies only the selected %s from 5,000 retained records",
+    async (kind) => {
+      const records = new Map(
+        Array.from({ length: 5_000 }, (_, i) => {
+          const entry = {
+            ...run(`run-${i}`),
+            childSessionKey: `agent:main:child-${i}`,
+            requesterSessionKey: `agent:main:parent-${i}`,
+          };
+          return [entry.runId, entry] as const;
+        }),
       );
-      if (warm) {
-        getSubagentRunsSnapshotForRead(new Map());
+      persistRegistryFixture(records);
+      for (const entry of [...records.values()].slice(0, 300)) {
+        subagentRuns.set(entry.runId, entry);
       }
-      const fail = vi
-        .spyOn(store, "saveSubagentRegistryChangesToSqlite")
-        .mockImplementationOnce(() => {
-          throw new Error("Synthetic disk failure");
-        });
-      persistSubagentRunsToDisk(new Map(), [first.runId, second.runId]);
-      fail.mockRestore();
-      if (tree) {
-        expect(getSubagentRunsSnapshotForSessions(new Map(), [childSessionKey]).size).toBe(0);
-      }
-      expect(getSubagentRunsSnapshotForRead(new Map()).size).toBe(0);
-      expect(store.loadSubagentRegistryFromSqlite().size).toBe(2);
-      const context = captureOpenClawStateWorkerContext();
-      expect(
-        await withPreparedLatestSubagentRunByChildSessionKey(childSessionKey, context, (read) =>
-          read(),
-        ),
-      ).toBeNull();
-      persistSubagentRunsToDiskOrThrow(new Map([[first.runId, first]]), [first.runId]);
-      const fresh = { ...first, task: "Durable update after exact commit" };
-      saveSubagentRegistryChangesToSqlite(new Map([[fresh.runId, fresh]]), [fresh.runId]);
-      expect(
-        await withPreparedLatestSubagentRunByChildSessionKey(childSessionKey, context, (read) =>
-          read(),
-        ),
-      ).toMatchObject(fresh);
+      const readScope: SubagentRunReadScope =
+        kind === "run"
+          ? { runIds: new Set(["run-0"]) }
+          : { sessionKeys: ["agent:main:parent-0"], descendants: true };
+      const read = () =>
+        withSubagentRunReadSnapshot(
+          subagentRuns,
+          (snapshot) => ({ snapshot, runIds: ["run-0"], sessionKeys: [] }),
+          ({ snapshot }, selected) => ({ snapshot, ids: [...selected.keys()] }),
+          readScope,
+        );
+      await read();
+      const projected = vi.spyOn(delivery, "projectSubagentRunForSessionList");
+      const scan = vi.spyOn(subagentRuns, Symbol.iterator).mockImplementation(() => {
+        throw new Error("A keyed read must not scan the live registry");
+      });
+      const result = await read();
+      scan.mockRestore();
+      expect(result.ids).toEqual(["run-0"]);
+      expect([...result.snapshot.keys()]).toEqual(["run-0"]);
+      expect(new Set(projected.mock.calls.map(([entry]) => entry.runId))).toEqual(
+        new Set(["run-0"]),
+      );
+      // Each preparation/capture frame owns at most one copy of its matching record.
+      expect(projected.mock.calls.length).toBeLessThanOrEqual(3);
+      const current = subagentRuns.get("run-0")!;
+      subagentRuns.set(current.runId, {
+        ...current,
+        execution: { ...current.execution, status: "terminal" },
+      });
+      expect(result.snapshot.get("run-0")?.execution.status).toBe("running");
     },
   );
 
-  it("preserves failed full replacement intent while exact commits release their rows to fresh SQL", async () => {
+  it.each([
+    { warm: false, preparedFirst: false },
+    { warm: true, preparedFirst: false },
+    { warm: false, preparedFirst: true },
+  ])(
+    "retains committed rows after refused deletion through hydration (warm=$warm, prepared first=$preparedFirst)",
+    async ({ warm, preparedFirst }) => {
+      const first = run("first", 100);
+      const second = run("second", 200);
+      const committed = new Map([
+        [first.runId, first],
+        [second.runId, second],
+      ]);
+      saveSubagentRegistryToSqlite(committed);
+      if (warm) {
+        getSubagentRunsSnapshotForRead(new Map());
+      }
+      const fail = await configureMockSubagentRegistryPersistence({
+        persistRegistryRows: () => {
+          throw new Error("Synthetic disk failure");
+        },
+      });
+      try {
+        await expect(
+          mutateSubagentRuns(
+            [first.runId, second.runId],
+            () => ({
+              value: undefined,
+              postimages: new Map([
+                [first.runId, null],
+                [second.runId, null],
+              ]),
+            }),
+            { runs: committed },
+          ),
+        ).rejects.toThrow("Synthetic disk failure");
+      } finally {
+        fail.mockRestore();
+      }
+      if (preparedFirst) {
+        expect(await readLatest()).toMatchObject(second);
+      }
+      expect(getSubagentRunsSnapshotForRead(new Map()).size).toBe(2);
+      expect(store.loadSubagentRegistryFromSqlite().size).toBe(2);
+      expect(await readLatest()).toMatchObject(second);
+      persistRegistryFixture(new Map(), [second.runId]);
+      expect(await readLatest()).toMatchObject(first);
+      expect(getSubagentRunsSnapshotForRead(new Map()).has(second.runId)).toBe(false);
+    },
+  );
+
+  it("keeps committed rows after refused replacement and applies acknowledged publications", async () => {
     const removed = run("removed", 900);
     const retained = run("retained", 100);
     const intended = run("intended", 300);
-    saveSubagentRegistryToSqlite(
-      new Map([
-        [removed.runId, removed],
-        [retained.runId, retained],
-      ]),
-    );
+    const original = new Map([
+      [removed.runId, removed],
+      [retained.runId, retained],
+    ]);
+    saveSubagentRegistryToSqlite(original);
     getSubagentRunsSnapshotForRead(new Map());
-    const fail = vi.spyOn(store, "saveSubagentRegistryToSqlite").mockImplementationOnce(() => {
-      throw new Error("Synthetic replacement failure");
+    const fail = await configureMockSubagentRegistryPersistence({
+      persistRegistryRows: () => {
+        throw new Error("Synthetic replacement failure");
+      },
     });
-    persistSubagentRunsToDisk(
-      new Map([
-        [retained.runId, retained],
-        [intended.runId, intended],
-      ]),
-    );
-    fail.mockRestore();
-    const context = captureOpenClawStateWorkerContext();
-    expect(
-      await withPreparedLatestSubagentRunByChildSessionKey(childSessionKey, context, (read) => {
-        const copy = expectDefined(read(), "failed replacement row");
-        copy.task = "Caller must not mutate the replacement owner";
-        return read();
-      }),
-    ).toMatchObject(intended);
-    const committed = { ...retained, createdAt: 400 };
-    persistSubagentRunsToDiskOrThrow(new Map([[committed.runId, committed]]), [committed.runId]);
-    const fresh = {
-      ...committed,
-      task: "Fresh SQL owns the exact committed exemption",
-      createdAt: 500,
-    };
-    saveSubagentRegistryChangesToSqlite(new Map([[fresh.runId, fresh]]), [fresh.runId]);
-    expect(
-      await withPreparedLatestSubagentRunByChildSessionKey(childSessionKey, context, (read) =>
-        read(),
-      ),
-    ).toMatchObject(fresh);
-    persistSubagentRunsToDiskOrThrow(new Map([[retained.runId, retained]]));
-    saveSubagentRegistryChangesToSqlite(new Map([[removed.runId, removed]]), [removed.runId]);
-    expect(
-      await withPreparedLatestSubagentRunByChildSessionKey(childSessionKey, context, (read) =>
-        read(),
-      ),
-    ).toMatchObject(removed);
+    try {
+      await expect(
+        mutateSubagentRuns(
+          [removed.runId, retained.runId, intended.runId],
+          () => ({
+            value: undefined,
+            postimages: new Map<string, SubagentRunRecord | null>([
+              [removed.runId, null],
+              [retained.runId, retained],
+              [intended.runId, intended],
+            ]),
+          }),
+          { runs: original },
+        ),
+      ).rejects.toThrow("Synthetic replacement failure");
+    } finally {
+      fail.mockRestore();
+    }
+    const copy = expectDefined(await readLatest(), "retained committed row");
+    expect(() => {
+      copy.task = "Caller must not mutate committed facts";
+    }).toThrow(TypeError);
+    expect(await readLatest()).toBe(copy);
+    expect(await readLatest()).toMatchObject(removed);
+    expect(getSubagentRunsSnapshotForRead(new Map()).has(intended.runId)).toBe(false);
+    const committed = { ...retained, createdAt: 1_000 };
+    persistRegistryFixture(new Map([[committed.runId, committed]]), [committed.runId]);
+    expect(await readLatest()).toMatchObject(committed);
+    expect(getSubagentRunsSnapshotForRead(new Map()).has(removed.runId)).toBe(true);
+    persistRegistryFixture(new Map([[retained.runId, retained]]));
+    expect(await readLatest()).toMatchObject(retained);
+    expect(getSubagentRunsSnapshotForRead(new Map()).has(removed.runId)).toBe(false);
   });
 
-  it.each(["named", "full"] as const)("does not publish a strict %s failure", async (kind) => {
+  it("keeps committed snapshots with their database after refused writes and source switches", async () => {
     const retained = run();
-    saveSubagentRegistryToSqlite(new Map([[retained.runId, retained]]));
+    const original = new Map([[retained.runId, retained]]);
+    saveSubagentRegistryToSqlite(original);
     getSubagentRunsSnapshotForRead(new Map());
-    const fail = vi
-      .spyOn(
-        store,
-        kind === "named" ? "saveSubagentRegistryChangesToSqlite" : "saveSubagentRegistryToSqlite",
-      )
-      .mockImplementationOnce(() => {
-        throw new Error("Synthetic strict failure");
-      });
-    expect(() =>
-      persistSubagentRunsToDiskOrThrow(new Map(), kind === "named" ? [retained.runId] : undefined),
-    ).toThrow("Synthetic strict failure");
-    fail.mockRestore();
-    expect(
-      await withPreparedLatestSubagentRunByChildSessionKey(
-        childSessionKey,
-        captureOpenClawStateWorkerContext(),
-        (read) => read(),
-      ),
-    ).toMatchObject(retained);
-  });
-
-  it("keeps failed publication overlays with their database without clearing a newer owner's intent", async () => {
-    const retained = run();
-    saveSubagentRegistryToSqlite(new Map([[retained.runId, retained]]));
-    getSubagentRunsSnapshotForRead(new Map());
-    const originalContext = captureOpenClawStateWorkerContext();
-    const failOriginal = vi
-      .spyOn(store, "saveSubagentRegistryChangesToSqlite")
-      .mockImplementationOnce(() => {
-        throw new Error("Synthetic first database failure");
-      });
-    persistSubagentRunsToDisk(new Map(), [retained.runId]);
-    failOriginal.mockRestore();
+    const fail = await configureMockSubagentRegistryPersistence({
+      persistRegistryRows: () => {
+        throw new Error("Synthetic database failure");
+      },
+    });
     const other = await createOpenClawTestState({
       prefix: "openclaw-subagent-other-",
       applyEnv: false,
     });
     try {
+      await expect(
+        mutateSubagentRuns(
+          [retained.runId],
+          () => ({ value: undefined, postimages: new Map([[retained.runId, null]]) }),
+          { runs: original },
+        ),
+      ).rejects.toThrow("Synthetic database failure");
       const otherDurable = { ...retained, task: "Other database durable row" };
-      const otherIntent = { ...retained, task: "Other database failed owner intent" };
-      const otherContext = await withEnvAsync({ OPENCLAW_STATE_DIR: other.stateDir }, async () => {
-        saveSubagentRegistryToSqlite(new Map([[otherDurable.runId, otherDurable]]));
-        return captureOpenClawStateWorkerContext();
-      });
-      expect(
-        await withPreparedLatestSubagentRunByChildSessionKey(
-          childSessionKey,
-          otherContext,
-          (read) => read(),
-        ),
-      ).toMatchObject(otherDurable);
-      const hold = holdReadResult();
-      const olderRead = withPreparedLatestSubagentRunByChildSessionKey(
-        childSessionKey,
-        originalContext,
-        (read) => read(),
-      );
-      try {
-        await hold.held;
-        await withEnvAsync({ OPENCLAW_STATE_DIR: other.stateDir }, async () => {
-          const failOther = vi
-            .spyOn(store, "saveSubagentRegistryChangesToSqlite")
-            .mockImplementationOnce(() => {
-              throw new Error("Synthetic other database failure");
-            });
-          persistSubagentRunsToDisk(new Map([[otherIntent.runId, otherIntent]]), [
-            otherIntent.runId,
-          ]);
-          failOther.mockRestore();
-        });
-      } finally {
-        hold.release();
-      }
-      expect(await olderRead).toMatchObject(retained);
-      expect(
-        await withPreparedLatestSubagentRunByChildSessionKey(
-          childSessionKey,
-          otherContext,
-          (read) => {
-            const copy = expectDefined(read(), "failed named publication row");
-            copy.task = "Caller must not mutate the failed publication owner";
-            return read();
-          },
-        ),
-      ).toMatchObject(otherIntent);
-      await reads.withOpenClawStateDatabaseReadSnapshot(async () => {
-        expect(
-          await withPreparedLatestSubagentRunByChildSessionKey(
-            childSessionKey,
-            otherContext,
-            (read) => read(),
+      const otherIntent = { ...retained, task: "Other database refused owner intent" };
+      await withEnvAsync({ OPENCLAW_STATE_DIR: other.stateDir }, async () => {
+        const otherRows = new Map([[otherDurable.runId, otherDurable]]);
+        saveSubagentRegistryToSqlite(otherRows);
+        expect(await readLatest()).toMatchObject(otherDurable);
+        await expect(
+          mutateSubagentRuns(
+            [otherIntent.runId],
+            () => ({ value: undefined, postimages: new Map([[otherIntent.runId, otherIntent]]) }),
+            { runs: otherRows },
           ),
-        ).toMatchObject(otherIntent);
+        ).rejects.toThrow("Synthetic database failure");
+        const copy = expectDefined(await readLatest(), "other database committed row");
+        expect(() => {
+          copy.task = "Caller must not mutate committed facts";
+        }).toThrow(TypeError);
+        expect(await readLatest()).toMatchObject(otherDurable);
+      });
+      expect(await readLatest()).toMatchObject(retained);
+      await withEnvAsync({ OPENCLAW_STATE_DIR: other.stateDir }, async () => {
+        expect(await readLatest()).toMatchObject(otherDurable);
       });
     } finally {
+      fail.mockRestore();
       await other.cleanup();
     }
   });

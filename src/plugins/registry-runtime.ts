@@ -267,11 +267,10 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             ) => {
               assertTrustedPluginRuntime("openChannelIngressQueue");
               const stateDir = options?.stateDir ?? baseState.resolveStateDir();
-              return createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
-                ...options,
-                channelId: pluginId,
-                stateDir,
-              });
+              return createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>(
+                { ...options, channelId: pluginId, stateDir },
+                assertRuntimeCurrent,
+              );
             },
             openChannelIngressDrain: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
               options: Omit<
@@ -291,11 +290,10 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               const stateDir = options.stateDir ?? baseState.resolveStateDir();
               const queue =
                 options.queue ??
-                createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
-                  channelId: pluginId,
-                  accountId: options.accountId,
-                  stateDir,
-                });
+                createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>(
+                  { channelId: pluginId, accountId: options.accountId, stateDir },
+                  assertRuntimeCurrent,
+                );
               const {
                 queue: _queue,
                 accountId: _accountId,
@@ -371,7 +369,8 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           } satisfies PluginRuntime["llm"];
         }
         if (prop === "gateway") {
-          const gateway = getRuntimeProperty();
+          const gateway: PluginRuntime["gateway"] = getRuntimeProperty();
+          const withIdentity = gateway.withUserProfileIdentity;
           return {
             isAvailable: () => runWithPluginScope(() => gateway.isAvailable(), false),
             request: async (method, params, options) => {
@@ -381,6 +380,39 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 return await gateway.request(method, params, options);
               });
             },
+            openPluginPanel: (params) =>
+              runWithPluginScope(async () => {
+                const result = await gateway.openPluginPanel(params);
+                assertRuntimeCurrent();
+                return result;
+              }),
+            readSessionFacts: (params) =>
+              runWithPluginScope(async () => {
+                const result = await gateway.readSessionFacts(params);
+                assertRuntimeCurrent();
+                return result;
+              }),
+            subscribeSessionChanges: (listener) =>
+              runWithPluginScope(() =>
+                gateway.subscribeSessionChanges((event) =>
+                  runWithPluginScope(() => listener(event)),
+                ),
+              ),
+            withUserProfileIdentity: withIdentity
+              ? async (params, run) =>
+                  await runWithPluginScope(async () => {
+                    const result = await withIdentity(params, async (assertIdentityCurrent) => {
+                      const assertCurrent = () => {
+                        assertRuntimeCurrent();
+                        assertIdentityCurrent();
+                      };
+                      assertCurrent();
+                      return await run(assertCurrent);
+                    });
+                    assertRuntimeCurrent();
+                    return result;
+                  })
+              : undefined,
           } satisfies PluginRuntime["gateway"];
         }
         if (prop === "hooks") {
@@ -668,7 +700,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
 
   return {
     resolvePluginRuntime,
-    resolveRegisteredChannelRuntime: (record: PluginRecord) => resolveRecordChannelRuntime(record),
+    resolveRegisteredChannelRuntime: resolveRecordChannelRuntime,
     revokePluginRuntimeRecord: (pluginId: string, record: PluginRecord) => {
       revokePluginRecord(registry, record);
       registeredAdmissionOwnerByRecord.get(record)?.dispose();

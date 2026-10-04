@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
@@ -135,8 +136,6 @@ describe("command-execution-startup", () => {
       },
       allowInvalid: true,
       loadPlugins: true,
-      skipPristineCoreStateMigrations: true,
-      skipPristineStartupStateMigrations: true,
     });
 
     expect(ensureConfigReadyMock).toHaveBeenLastCalledWith({
@@ -144,8 +143,6 @@ describe("command-execution-startup", () => {
       commandPath: ["message", "send"],
       measure: expect.any(Function),
       allowInvalid: true,
-      skipPristineCoreStateMigrations: true,
-      skipPristineStartupStateMigrations: true,
     });
     expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",

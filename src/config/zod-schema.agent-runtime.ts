@@ -1,6 +1,6 @@
-// Defines Zod schema fragments for per-agent runtime configuration.
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
@@ -39,15 +39,14 @@ const AgentTtsConfigSchema = TtsConfigSchema.unwrap()
   .optional();
 
 export const HeartbeatSchema = z
-  .object({
+  .strictObject({
     every: z.string().optional(),
     activeHours: z
-      .object({
+      .strictObject({
         start: z.string().optional(),
         end: z.string().optional(),
         timezone: z.string().optional(),
       })
-      .strict()
       .optional(),
     model: z.string().optional(),
     session: z.string().optional(),
@@ -60,7 +59,6 @@ export const HeartbeatSchema = z
     lightContext: z.boolean().optional(),
     isolatedSession: z.boolean().optional(),
   })
-  .strict()
   .superRefine((val, ctx) => {
     if (val.every) {
       try {
@@ -79,109 +77,82 @@ export const HeartbeatSchema = z
       return;
     }
     const timePattern = /^([01]\d|2[0-3]|24):([0-5]\d)$/;
-    const validateTime = (raw: string | undefined, opts: { allow24: boolean }, path: string) => {
+    for (const path of ["start", "end"] as const) {
+      const raw = active[path];
       if (!raw) {
-        return;
+        continue;
       }
-      if (!timePattern.test(raw)) {
+      const match = timePattern.exec(raw);
+      let message: string | undefined;
+      if (!match) {
+        message = 'invalid time (use "HH:MM" 24h format)';
+      } else if (match[1] === "24" && match[2] !== "00") {
+        message = "invalid time (24:00 is the only allowed 24:xx value)";
+      } else if (match[1] === "24" && path === "start") {
+        message = "invalid time (start cannot be 24:00)";
+      }
+      if (message) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["activeHours", path],
-          message: 'invalid time (use "HH:MM" 24h format)',
-        });
-        return;
-      }
-      const [hourStr, minuteStr] = raw.split(":");
-      const hour = Number(hourStr);
-      const minute = Number(minuteStr);
-      if (hour === 24 && minute !== 0) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["activeHours", path],
-          message: "invalid time (24:00 is the only allowed 24:xx value)",
-        });
-        return;
-      }
-      if (hour === 24 && !opts.allow24) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["activeHours", path],
-          message: "invalid time (start cannot be 24:00)",
+          message,
         });
       }
-    };
-
-    validateTime(active.start, { allow24: false }, "start");
-    validateTime(active.end, { allow24: true }, "end");
+    }
   })
   .optional();
 
 export const AgentContextLimitsSchema = z
-  .object({
+  .strictObject({
     /** Default max chars returned by memory_get before truncation metadata/notice (default: 12000). */
     memoryGetMaxChars: z.number().int().min(1).max(250_000).optional(),
     /** Max chars retained from post-compaction AGENTS.md context injection (default: 1800). */
     postCompactionMaxChars: z.number().int().min(1).max(50_000).optional(),
   })
-  .strict()
   .optional();
 
 const AgentSkillsLimitsSchema = z
-  .object({
+  .strictObject({
     maxSkillsPromptChars: z.number().int().min(0).optional(),
   })
-  .strict()
   .optional();
 
-const ToolPolicyBaseSchema = z
-  .object({
-    /** Exact tool names allowed in this policy scope. */
-    allow: z.array(z.string()).optional(),
-    /** Additional allowlist entries merged into the inherited policy. */
-    alsoAllow: z.array(z.string()).optional(),
-    /** Exact tool names denied after allow expansion; deny wins. */
-    deny: z.array(z.string()).optional(),
-  })
-  .strict();
+const ToolPolicyBaseSchema = z.strictObject({
+  /** Exact tool names allowed in this policy scope. */
+  allow: z.array(z.string()).optional(),
+  /** Additional allowlist entries merged into the inherited policy. */
+  alsoAllow: z.array(z.string()).optional(),
+  /** Exact tool names denied after allow expansion; deny wins. */
+  deny: z.array(z.string()).optional(),
+});
 
 export const ToolPolicySchema = ToolPolicyBaseSchema.superRefine((value, ctx) => {
-  if (value.allow && value.allow.length > 0 && value.alsoAllow && value.alsoAllow.length > 0) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message:
-        "tools policy cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
-    });
-  }
+  addAllowAlsoAllowConflictIssue(
+    value,
+    ctx,
+    "tools policy cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
+  );
 }).optional();
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
 
-const TrimmedOptionalConfigStringSchema = z
-  .string()
-  .transform((value) => {
-    const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : undefined;
-  })
-  .optional();
+const TrimmedOptionalConfigStringSchema = z.string().transform(normalizeOptionalString).optional();
 
 const CodexAllowedDomainsSchema = z
   .array(z.string())
   .transform((values) => {
-    const deduped = uniqueStrings(
-      values.map((value) => value.trim()).filter((value) => value.length > 0),
-    );
+    const deduped = normalizeUniqueStringEntries(values);
     return deduped.length > 0 ? deduped : undefined;
   })
   .optional();
 
 const CodexUserLocationSchema = z
-  .object({
+  .strictObject({
     country: TrimmedOptionalConfigStringSchema,
     region: TrimmedOptionalConfigStringSchema,
     city: TrimmedOptionalConfigStringSchema,
     timezone: TrimmedOptionalConfigStringSchema,
   })
-  .strict()
   .transform((value) => {
     return value.country || value.region || value.city || value.timezone ? value : undefined;
   })
@@ -214,7 +185,7 @@ const ToolsWebSearchSchema = z
         timeoutSeconds: z.number().int().positive().optional(),
         cacheTtlMinutes: z.number().nonnegative().optional(),
         openaiCodex: z
-          .object({
+          .strictObject({
             enabled: z.boolean().optional(),
             mode: z.union([z.literal("cached"), z.literal("live")]).optional(),
             allowedDomains: CodexAllowedDomainsSchema,
@@ -223,7 +194,6 @@ const ToolsWebSearchSchema = z
               .optional(),
             userLocation: CodexUserLocationSchema,
           })
-          .strict()
           .optional(),
       })
       .catchall(z.unknown())
@@ -262,7 +232,7 @@ const ToolsWebSearchSchema = z
   .optional();
 
 const ToolsWebFetchSchema = z
-  .object({
+  .strictObject({
     /** Enable web fetch tool (default: true). */
     enabled: z.boolean().optional(),
     /** Web fetch fallback provider id. */
@@ -297,15 +267,13 @@ const ToolsWebFetchSchema = z
     /** SSRF policy configuration for web_fetch. */
     ssrfPolicy: SsrFPolicyConfigSchema.optional(),
   })
-  .strict()
   .optional();
 
 const ToolsWebSchema = z
-  .object({
+  .strictObject({
     search: ToolsWebSearchSchema,
     fetch: ToolsWebFetchSchema,
   })
-  .strict()
   .optional();
 
 const ToolProfileSchema = z
@@ -330,21 +298,15 @@ function addAllowAlsoAllowConflictIssue(
   }
 }
 
-const ToolPolicyWithProfileSchema = z
-  .object({
-    allow: z.array(z.string()).optional(),
-    alsoAllow: z.array(z.string()).optional(),
-    deny: z.array(z.string()).optional(),
-    profile: ToolProfileSchema,
-  })
-  .strict()
-  .superRefine((value, ctx) => {
-    addAllowAlsoAllowConflictIssue(
-      value,
-      ctx,
-      "tools.byProvider policy cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
-    );
-  });
+const ToolPolicyWithProfileSchema = ToolPolicyBaseSchema.extend({
+  profile: ToolProfileSchema,
+}).superRefine((value, ctx) => {
+  addAllowAlsoAllowConflictIssue(
+    value,
+    ctx,
+    "tools.byProvider policy cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
+  );
+});
 
 // Provider docking: allowlists keyed by provider id (no schema updates when adding providers).
 export const ElevatedAllowFromSchema = z
@@ -352,7 +314,7 @@ export const ElevatedAllowFromSchema = z
   .optional();
 
 const ToolExecApplyPatchSchema = z
-  .object({
+  .strictObject({
     /** Enable apply_patch for OpenAI models (default: true; set false to disable). */
     enabled: z.boolean().optional(),
     /**
@@ -366,17 +328,14 @@ const ToolExecApplyPatchSchema = z
      */
     allowModels: z.array(z.string()).optional(),
   })
-  .strict()
   .optional();
 
-const ToolExecSafeBinProfileSchema = z
-  .object({
-    minPositional: z.number().int().nonnegative().optional(),
-    maxPositional: z.number().int().nonnegative().optional(),
-    allowedValueFlags: z.array(z.string()).optional(),
-    deniedFlags: z.array(z.string()).optional(),
-  })
-  .strict();
+const ToolExecSafeBinProfileSchema = z.strictObject({
+  minPositional: z.number().int().nonnegative().optional(),
+  maxPositional: z.number().int().nonnegative().optional(),
+  allowedValueFlags: z.array(z.string()).optional(),
+  deniedFlags: z.array(z.string()).optional(),
+});
 
 const ToolExecBaseShape = {
   /** Exec host routing (default: auto). */
@@ -413,7 +372,7 @@ const ToolExecBaseShape = {
   safeBinProfiles: z.record(z.string(), ToolExecSafeBinProfileSchema).optional(),
   /** Model-backed reviewer used by tools.exec.mode=auto before falling back to human approval. */
   reviewer: z
-    .object({
+    .strictObject({
       /** Optional reviewer model override (provider/model or agent model config). */
       model: AgentModelSchema.optional(),
       /** Optional reasoning effort for model-backed approval reviews. */
@@ -423,7 +382,6 @@ const ToolExecBaseShape = {
       /** Reviewer timeout in milliseconds (default: 30000). */
       timeoutMs: z.number().int().positive().optional(),
     })
-    .strict()
     .optional(),
   /** Default time (ms) before an exec command auto-backgrounds. */
   backgroundMs: z.number().int().positive().optional(),
@@ -471,47 +429,40 @@ function addExecPolicyModeConflictIssue(
 }
 
 const ToolExecSchema = z
-  .object(ToolExecBaseShape)
-  .strict()
+  .strictObject(ToolExecBaseShape)
   .superRefine(addExecPolicyModeConflictIssue)
   .optional();
 
 const ToolFsSchema = z
-  .object({
+  .strictObject({
     /**
      * Restrict filesystem tools (read/write/edit/apply_patch) to the agent workspace directory.
      * Default: false (unrestricted, matches legacy behavior).
      */
     workspaceOnly: z.boolean().optional(),
   })
-  .strict()
   .optional();
 
 const ToolLoopDetectionSchema = z
-  .object({
+  .strictObject({
     /** Enable tool-loop protection (default: false). */
     enabled: z.boolean().optional(),
   })
-  .strict()
   .optional();
 
 const ToolSearchSchema = z
   .union([
     z.boolean(),
-    z
-      .object({
-        /** Enable compact search/call cataloging for large tool sets. */
-        enabled: z.boolean().optional(),
-        /** Exposed model surface. "code" exposes tool_search_code; "tools" exposes structured fallback tools; "directory" keeps a bounded directory plus selected schemas visible while deferring the rest behind search/describe/call. */
-        mode: z.enum(["code", "tools", "directory"]).optional(),
-        /** Timeout in milliseconds for one tool_search_code execution. Runtime clamps to 1s..60s. */
-        codeTimeoutMs: z.number().int().positive().optional(),
-        /** Default search result count when the model omits a limit. Runtime clamps to maxSearchLimit. */
-        searchDefaultLimit: z.number().int().positive().optional(),
-        /** Maximum search result count. Runtime clamps to 1..50. */
-        maxSearchLimit: z.number().int().positive().optional(),
-      })
-      .strict(),
+    z.strictObject({
+      /** Enable compact search/call cataloging for large tool sets. */
+      enabled: z.boolean().optional(),
+      /** Exposed model surface. "tools" exposes structured search/describe/call tools; "directory" keeps a bounded directory plus selected schemas visible while deferring the rest behind search/describe/call. */
+      mode: z.enum(["tools", "directory"]).optional(),
+      /** Default search result count when the model omits a limit. Runtime clamps to maxSearchLimit. */
+      searchDefaultLimit: z.number().int().positive().optional(),
+      /** Maximum search result count. Runtime clamps to 1..50. */
+      maxSearchLimit: z.number().int().positive().optional(),
+    }),
   ])
   .optional();
 
@@ -519,59 +470,55 @@ const CodeModeSchema = z
   .union([
     z.boolean(),
     z.literal("auto"),
-    z
-      .object({
-        /** Explicit object-form activation. Omitted stays off; "auto" engages catalog-preferred models. A completely absent global codeMode setting defaults separately to auto. */
-        enabled: z.union([z.boolean(), z.literal("auto")]).optional(),
-        /** Executor. Node is the default; QuickJS provides a separate WASM guest. */
-        executor: z.enum(["node", "quickjs"]).optional(),
-        /** Model-facing mode. Only "only" is supported: expose exec/wait and hide normal tools. */
-        mode: z.literal("only").optional(),
-        /** Wall-clock limit in milliseconds for one exec or wait call. */
-        timeoutMs: z.number().int().positive().optional(),
-        /** QuickJS guest heap limit or best-effort Node worker V8 heap budget in bytes; excludes external buffers and process RSS. */
-        memoryLimitBytes: z.number().int().positive().optional(),
-        /** Maximum serialized output bytes. */
-        maxOutputBytes: z.number().int().positive().optional(),
-        /** Maximum serialized snapshot bytes. */
-        maxSnapshotBytes: z.number().int().positive().optional(),
-        /** Maximum concurrent nested tool calls. */
-        maxPendingToolCalls: z.number().int().positive().optional(),
-        /** Retention for suspended snapshots. */
-        snapshotTtlSeconds: z.number().int().positive().optional(),
-        /** Default search result count for catalog.search. */
-        searchDefaultLimit: z.number().int().positive().optional(),
-        /** Maximum search result count for catalog.search. */
-        maxSearchLimit: z.number().int().positive().optional(),
-      })
-      .strict(),
+    z.strictObject({
+      /** Explicit object-form activation. Omitted stays off; "auto" engages catalog-preferred models. A completely absent global codeMode setting defaults separately to auto. */
+      enabled: z.union([z.boolean(), z.literal("auto")]).optional(),
+      /** Executor. Node is the default; QuickJS provides a separate WASM guest. */
+      executor: z.enum(["node", "quickjs"]).optional(),
+      /** Model-facing mode. Only "only" is supported: expose exec/wait and hide normal tools. */
+      mode: z.literal("only").optional(),
+      /** Wall-clock limit in milliseconds for one exec or wait call. */
+      timeoutMs: z.number().int().positive().optional(),
+      /** QuickJS guest heap limit or best-effort Node worker V8 heap budget in bytes; excludes external buffers and process RSS. */
+      memoryLimitBytes: z.number().int().positive().optional(),
+      /** Maximum serialized output bytes. */
+      maxOutputBytes: z.number().int().positive().optional(),
+      /** Maximum serialized snapshot bytes. */
+      maxSnapshotBytes: z.number().int().positive().optional(),
+      /** Maximum concurrent nested tool calls. */
+      maxPendingToolCalls: z.number().int().positive().optional(),
+      /** Retention for suspended snapshots. */
+      snapshotTtlSeconds: z.number().int().positive().optional(),
+      /** Default search result count for catalog.search. */
+      searchDefaultLimit: z.number().int().positive().optional(),
+      /** Maximum search result count for catalog.search. */
+      maxSearchLimit: z.number().int().positive().optional(),
+    }),
   ])
   .optional();
 
 const SwarmSchema = z
   .union([
     z.boolean(),
-    z
-      .object({
-        /** Enable collector-mode subagents and agents_wait. Default: true. */
-        enabled: z.boolean().optional(),
-        /** Maximum concurrently running collector children per swarm group. */
-        maxConcurrent: z.number().int().positive().optional(),
-        /** Maximum live collector children per swarm group. */
-        maxChildrenPerGroup: z.number().int().positive().optional(),
-        /** Maximum lifetime collector spawns per swarm group. */
-        maxTotalPerGroup: z.number().int().positive().optional(),
-        /** Maximum agents_wait timeout in seconds. */
-        waitTimeoutSecondsMax: z.number().int().positive().optional(),
-        /** Default child agent id when sessions_spawn omits agentId. */
-        defaultAgentId: z.string().optional(),
-      })
-      .strict(),
+    z.strictObject({
+      /** Enable collector-mode subagents and agents_wait. Default: true. */
+      enabled: z.boolean().optional(),
+      /** Maximum concurrently running collector children per swarm group. */
+      maxConcurrent: z.number().int().positive().optional(),
+      /** Maximum live collector children per swarm group. */
+      maxChildrenPerGroup: z.number().int().positive().optional(),
+      /** Maximum lifetime collector spawns per swarm group. */
+      maxTotalPerGroup: z.number().int().positive().optional(),
+      /** Maximum agents_wait timeout in seconds. */
+      waitTimeoutSecondsMax: z.number().int().positive().optional(),
+      /** Default child agent id when sessions_spawn omits agentId. */
+      defaultAgentId: z.string().optional(),
+    }),
   ])
   .optional();
 
 const SandboxSshSchema = z
-  .object({
+  .strictObject({
     target: z.string().min(1).optional(),
     command: z.string().min(1).optional(),
     workspaceRoot: z.string().min(1).optional(),
@@ -584,11 +531,10 @@ const SandboxSshSchema = z
     certificateData: SecretInputSchema.optional().register(sensitive),
     knownHostsData: SecretInputSchema.optional().register(sensitive),
   })
-  .strict()
   .optional();
 
 export const AgentSandboxSchema = z
-  .object({
+  .strictObject({
     mode: z.union([z.literal("off"), z.literal("non-main"), z.literal("all")]).optional(),
     backend: z.string().min(1).optional(),
     workspaceAccess: z.union([z.literal("none"), z.literal("ro"), z.literal("rw")]).optional(),
@@ -600,7 +546,6 @@ export const AgentSandboxSchema = z
     browser: SandboxBrowserSchema,
     prune: SandboxPruneSchema,
   })
-  .strict()
   .superRefine((data, ctx) => {
     const blockedBrowserNetworkReason = getBlockedNetworkModeReason({
       network: data.browser?.network,
@@ -621,27 +566,35 @@ export const AgentSandboxSchema = z
 const CommonToolPolicyFields = {
   /** Base tool profile applied before allow/deny lists. */
   profile: ToolProfileSchema,
-  allow: z.array(z.string()).optional(),
-  /** Additional allowlist entries merged into allow and/or profile allowlist. */
-  alsoAllow: z.array(z.string()).optional(),
-  deny: z.array(z.string()).optional(),
+  ...ToolPolicyBaseSchema.shape,
   /** Optional tool policy overrides keyed by provider id or "provider/model". */
   byProvider: z.record(z.string(), ToolPolicyWithProfileSchema).optional(),
   /** Per-sender tool policy overrides keyed by sender identity. */
   toolsBySender: ToolPolicyBySenderSchema,
 };
 
+const NestedToolPolicySchema = z.strictObject({ tools: ToolPolicySchema }).optional();
+
+const ElevatedToolsSchema = z
+  .strictObject({
+    /** Enable or disable elevated mode (default: true). */
+    enabled: z.boolean().optional(),
+    /** Approved senders for /elevated (per-provider allowlists). */
+    allowFrom: ElevatedAllowFromSchema,
+  })
+  .optional();
+
 const MessageToolConfigSchema = z
-  .object({
+  .strictObject({
     crossContext: z
-      .object({
+      .strictObject({
         /** Allow sends to other channels within the same provider (default: true). */
         allowWithinProvider: z.boolean().optional(),
         /** Allow sends across different providers (default: true). */
         allowAcrossProviders: z.boolean().optional(),
         /** Cross-context marker configuration. */
         marker: z
-          .object({
+          .strictObject({
             /** Enable origin markers for cross-context sends (default: true). */
             enabled: z.boolean().optional(),
             /** Text prefix template, supports {channel}. */
@@ -649,82 +602,66 @@ const MessageToolConfigSchema = z
             /** Text suffix template, supports {channel}. */
             suffix: z.string().optional(),
           })
-          .strict()
           .optional(),
       })
-      .strict()
       .optional(),
     actions: z
-      .object({
+      .strictObject({
         /** Message action names exposed and accepted by the message tool. */
         allow: z.array(z.string()).optional(),
       })
-      .strict()
       .optional(),
     broadcast: z
-      .object({
+      .strictObject({
         /** Enable broadcast action (default: true). */
         enabled: z.boolean().optional(),
       })
-      .strict()
       .optional(),
   })
-  .strict()
   .optional();
 
 const GitHubToolIdentitySchema = z
-  .object({
+  .strictObject({
     /** Opaque generated directory version for atomic credential rotation. */
     profileId: z.string().regex(MANAGED_GITHUB_PROFILE_ID_PATTERN),
     /** OAuth generations retain a separate rotating refresh credential. */
     kind: z.literal("oauth").optional(),
     /** Optional process-local author identity for commits made by local tools. */
     gitAuthor: z
-      .object({
+      .strictObject({
         name: z.string().trim().min(1).optional(),
         email: z.string().trim().min(1).optional(),
       })
-      .strict()
       .optional(),
   })
-  .strict()
   .optional();
 
 const AgentToolsSchema = z
-  .object({
+  .strictObject({
     ...CommonToolPolicyFields,
     /** Per-agent code mode override; merges over the top-level tools.codeMode config. */
     codeMode: CodeModeSchema,
     /** Per-agent swarm override; merges over the top-level tools.swarm config. */
     swarm: SwarmSchema,
     /** Per-agent elevated exec gate (can only further restrict global tools.elevated). */
-    elevated: z
-      .object({
-        /** Enable or disable elevated mode for this agent (default: true). */
-        enabled: z.boolean().optional(),
-        /** Approved senders for /elevated (per-provider allowlists). */
-        allowFrom: ElevatedAllowFromSchema,
-      })
-      .strict()
-      .optional(),
+    elevated: ElevatedToolsSchema,
     /** Exec tool defaults for this agent. */
     exec: ToolExecSchema,
     /** Complete per-agent GitHub CLI identity and Git author override. */
-    github: GitHubToolIdentitySchema,
+    github: GitHubToolIdentitySchema.unwrap()
+      .extend({
+        /** Explicitly expose this agent's managed identity inside its own sandbox (default: false). */
+        allowInSandbox: z.boolean().optional(),
+      })
+      .optional(),
     /** Filesystem tool path guards. */
     fs: ToolFsSchema,
     /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
     loopDetection: ToolLoopDetectionSchema,
     /** Message tool configuration for this agent. */
     message: MessageToolConfigSchema,
-    sandbox: z
-      .object({
-        tools: ToolPolicySchema,
-      })
-      .strict()
-      .optional(),
+    sandbox: NestedToolPolicySchema,
   })
-  .strict()
   .superRefine((value, ctx) => {
     addAllowAlsoAllowConflictIssue(
       value,
@@ -736,10 +673,9 @@ const AgentToolsSchema = z
 
 export const AgentEntrySchema = AgentEntryBaseSchema.extend({
   memory: z
-    .object({
+    .strictObject({
       search: MemorySearchSchema,
     })
-    .strict()
     .optional(),
   humanDelay: HumanDelaySchema.optional(),
   typingMode: TypingModeSchema.optional(),
@@ -754,7 +690,7 @@ export const AgentEntrySchema = AgentEntryBaseSchema.extend({
 }).strict();
 
 export const ToolsSchema = z
-  .object({
+  .strictObject({
     ...CommonToolPolicyFields,
     web: ToolsWebSchema,
     /** Managed local GitHub CLI identity and Git author; never overrides Git transport. */
@@ -768,7 +704,7 @@ export const ToolsSchema = z
      * Default: "all" (all sessions on the Gateway, with cross-agent access scoped by agentToAgent).
      */
     sessions: z
-      .object({
+      .strictObject({
         /**
          * - "self": only the current session
          * - "tree": current session + sessions spawned by this session
@@ -777,7 +713,6 @@ export const ToolsSchema = z
          */
         visibility: z.enum(["self", "tree", "agent", "all"]).optional(),
       })
-      .strict()
       .optional(),
     loopDetection: ToolLoopDetectionSchema,
     /** Compact large OpenClaw, MCP, and client tool catalogs behind search/call tools. */
@@ -789,7 +724,7 @@ export const ToolsSchema = z
     /** Message tool configuration. */
     message: MessageToolConfigSchema,
     agentToAgent: z
-      .object({
+      .strictObject({
         /** Default: true. False blocks ordinary cross-agent session tool access; requester-owned native subagent and ACP child sessions remain reachable under tree/all visibility. */
         enabled: z.boolean().optional(),
         /**
@@ -798,39 +733,21 @@ export const ToolsSchema = z
          */
         allow: z.array(z.string()).optional(),
       })
-      .strict()
       .optional(),
     /** Elevated exec permissions for the host machine. */
-    elevated: z
-      .object({
-        /** Enable or disable elevated mode (default: true). */
-        enabled: z.boolean().optional(),
-        allowFrom: ElevatedAllowFromSchema,
-      })
-      .strict()
-      .optional(),
+    elevated: ElevatedToolsSchema,
     /** Exec tool defaults. */
     exec: ToolExecSchema,
     fs: ToolFsSchema,
     /** Sub-agent tool policy defaults (deny wins; progress_card is always denied). */
-    subagents: z
-      .object({
-        tools: ToolPolicySchema,
-      })
-      .strict()
-      .optional(),
+    subagents: NestedToolPolicySchema,
     /** Sandbox tool policy defaults (deny wins). */
-    sandbox: z
-      .object({
-        tools: ToolPolicySchema,
-      })
-      .strict()
-      .optional(),
+    sandbox: NestedToolPolicySchema,
     /** sessions_spawn tool configuration. */
     sessions_spawn: z
-      .object({
+      .strictObject({
         attachments: z
-          .object({
+          .strictObject({
             /** Enable inline attachments for sessions_spawn. */
             enabled: z.boolean().optional(),
             maxTotalBytes: z.number().optional(),
@@ -838,15 +755,12 @@ export const ToolsSchema = z
             maxFileBytes: z.number().optional(),
             retainOnSessionKeep: z.boolean().optional(),
           })
-          .strict()
           .optional(),
       })
-      .strict()
       .optional(),
     /** Unified progress_card status tool for parent sessions; enabled by default. False opts out. */
     updatePlan: z.boolean().optional(),
   })
-  .strict()
   .superRefine((value, ctx) => {
     addAllowAlsoAllowConflictIssue(
       value,

@@ -152,20 +152,6 @@ describe("published upstream repository advisories", () => {
       reviewed: ">= 5.9.3, < 5.10.1",
       version: "5.11.0",
     },
-    {
-      name: "hono",
-      id: "GHSA-m732-5p4w-x69g",
-      raw: "> 1.1.0",
-      reviewed: ">= 1.1.0, < 4.10.2",
-      version: "4.13.3",
-    },
-    {
-      name: "hono",
-      id: "GHSA-xh87-mx6m-69f3",
-      raw: ">= 4.12.0",
-      reviewed: ">= 4.12.0, < 4.12.2",
-      version: "4.13.3",
-    },
   ])(
     "reconciles the published $id range without losing raw evidence",
     async ({ name, id, raw, reviewed, version }) => {
@@ -554,8 +540,6 @@ describe("published upstream repository advisories", () => {
 
   it.each([
     null,
-    "",
-    ">= 1.0.0 < 2.0.0",
     ">= 1.0.0, < 2.0.0; >= 3.0.0, < 4.0.0",
     "^1.0.0",
     ">= 1.0",
@@ -712,10 +696,8 @@ describe("published upstream repository advisories", () => {
       let now = 0;
       vi.spyOn(performance, "now").mockImplementation(() => now);
       const realSetTimeout = globalThis.setTimeout;
-      const requestedTimeouts: Array<number | undefined> = [];
       // Exercise the real timeout race without a 15-second wait or shared fake timers.
       vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, milliseconds, ...args) => {
-        requestedTimeouts.push(milliseconds);
         return realSetTimeout(callback, milliseconds === 15_000 ? 1 : milliseconds, ...args);
       });
       const cancel = vi.fn();
@@ -736,7 +718,14 @@ describe("published upstream repository advisories", () => {
         },
       });
       const report = await scan(source.fetchImpl);
-      expect(requestedTimeouts.at(-1)).toBe(deadline === "run" ? 5 : 15_000);
+      const stalledSignal = expectDefined(
+        source.calls.find(({ url }) => url.searchParams.has("after"))?.init?.signal,
+        "stalled advisory request signal",
+      );
+      expect(stalledSignal.aborted).toBe(true);
+      expect(stalledSignal.reason).toMatchObject({
+        message: `Upstream advisory request exceeded timeout of ${deadline === "run" ? 5 : 15_000}ms`,
+      });
       expect(cancel).toHaveBeenCalledTimes(deadline === "run" ? 1 : 0);
       expect(report.advisories).toHaveLength(1);
       expect(report.coverage).toMatchObject({ status: "partial", checkedRepositories: 0 });

@@ -3,6 +3,7 @@ import type { Session } from "node:inspector/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { getHeapSpaceStatistics, type HeapSpaceInfo } from "node:v8";
 import { parseNodeOptionsEnvVar } from "../infra/node-options.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 
@@ -12,6 +13,8 @@ let capturing = false;
 let cleanupUncertain = false;
 
 type FailureReason =
+  | "cooldown"
+  | "heap-too-large"
   | "busy"
   | "unsupported"
   | "conflict"
@@ -26,10 +29,12 @@ export type DiagnosticProfileOutcome<Result> =
   | { status: "complete"; result: Result }
   | { status: "unavailable"; reason: FailureReason; cleanupFailed: boolean };
 
+type ProfileMemoryUsage = NodeJS.MemoryUsage & { heapSpaces: HeapSpaceInfo[] };
 type ProfileMeasurement = {
   durationMs: number;
-  before: NodeJS.MemoryUsage;
-  after: NodeJS.MemoryUsage;
+  startBlockedMs: number;
+  before: ProfileMemoryUsage;
+  after: ProfileMemoryUsage;
 };
 
 export class ProfileFailure extends Error {
@@ -59,17 +64,14 @@ function codeUrl(url: string, packageRoot: string | null): string | undefined {
   if (/^node:[a-zA-Z0-9_./-]+$/.test(url)) {
     return url;
   }
-  if (!packageRoot || url.length > 2_048) {
+  // Path normalization can erase suffix segments containing parent traversals.
+  if (url.length > 2_048 || /[?#]/.test(url)) {
     return undefined;
   }
   let filename = url;
   if (url.startsWith("file:")) {
     try {
-      const parsed = new URL(url);
-      if (parsed.search || parsed.hash) {
-        return undefined;
-      }
-      filename = fileURLToPath(parsed);
+      filename = fileURLToPath(url);
     } catch {
       return undefined;
     }
@@ -77,8 +79,21 @@ function codeUrl(url: string, packageRoot: string | null): string | undefined {
   if (!path.isAbsolute(filename)) {
     return undefined;
   }
-  const relative = path.relative(packageRoot, filename).split(path.sep).join("/");
-  return /^(?:src|dist|node_modules)\/[a-zA-Z0-9_@./+-]+\.[cm]?js$/.test(relative) ||
+  const relative = packageRoot
+    ? path.relative(packageRoot, filename).split(path.sep).join("/")
+    : "";
+  // Ignore the installation's enclosing node_modules; classify only its contents.
+  const dependency = (
+    packageRoot && !relative.startsWith("..")
+      ? `/${relative}`
+      : path.normalize(filename).split(path.sep).join("/")
+  ).match(
+    /.*\/node_modules\/((?:@[a-zA-Z0-9_-][a-zA-Z0-9._-]*\/)?[a-zA-Z0-9_-][a-zA-Z0-9._-]*)\//,
+  )?.[1];
+  if (dependency) {
+    return `node_modules/${dependency}`;
+  }
+  return /^(?:src|dist)\/[a-zA-Z0-9_@./+-]+\.[cm]?js$/.test(relative) ||
     /^src\/[a-zA-Z0-9_@./+-]+\.ts$/.test(relative)
     ? `openclaw:${relative}`
     : undefined;
@@ -101,16 +116,20 @@ export function sanitizeDiagnosticProfileFrame(
   );
   const url = codeUrl(frame.url, packageRoot);
   const engine = frame.url === "" && ENGINE_NAMES.has(frame.functionName);
+  const attribution = url?.startsWith("node_modules/")
+    ? `[dep:${url.slice(13)}]`
+    : frame.scriptId === "0" && frame.url === "" && frame.lineNumber < 0 && !engine
+      ? "[native]"
+      : undefined;
   const safeName =
     engine ||
     (url !== undefined &&
       frame.functionName.length <= 256 &&
       /^(?:(?:(?:get|set) )?[$A-Z_a-z][$\w]*(?:\.[$A-Z_a-z][$\w]*)*)?$/.test(frame.functionName));
-  const redacted = !safeName || (!engine && !url);
   return {
-    redacted,
+    redacted: !safeName && !attribution,
     callFrame: {
-      functionName: safeName ? frame.functionName : "[redacted]",
+      functionName: attribution ?? (safeName ? frame.functionName : "[redacted]"),
       scriptId: frame.scriptId,
       url: url ?? "",
       lineNumber: frame.lineNumber,
@@ -149,16 +168,17 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
     return unavailable("busy");
   }
   capturing = true;
-  let session: import("node:inspector/promises").Session | undefined;
+  let session: Session | undefined;
   let connected = false;
   let startAttempted = false;
   let stopAttempted = false;
   let failure: FailureReason | undefined;
   let cleanupFailed = false;
   let profile: Profile | undefined;
-  let before: NodeJS.MemoryUsage | undefined;
-  let after: NodeJS.MemoryUsage | undefined;
+  let before: ProfileMemoryUsage | undefined;
+  let after: ProfileMemoryUsage | undefined;
   let durationMs = 0;
+  let startBlockedMs = 0;
   let packageRoot: string | null = null;
   const assertActive = () => {
     if (options.signal.aborted || !options.hasAuthority()) {
@@ -197,10 +217,13 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
     await options.setup(session);
     assertActive();
     assertTracingInactive();
-    before = process.memoryUsage();
+    before = { ...process.memoryUsage(), heapSpaces: getHeapSpaceStatistics() };
     const startedAt = performance.now();
     startAttempted = true;
-    await options.start(session);
+    // Inspector dispatch can synchronously scan V8's heap before returning a promise.
+    const starting = options.start(session);
+    startBlockedMs = performance.now() - startedAt;
+    await starting;
     // The event loop owns this timer. Requested duration is not a hard wall-time
     // or V8 allocation bound when the Gateway is blocked; return native actual timing.
     await delay(options.durationMs, undefined, { signal: options.signal });
@@ -208,7 +231,7 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
     stopAttempted = true;
     ({ profile } = await options.stop(session));
     durationMs = performance.now() - startedAt;
-    after = process.memoryUsage();
+    after = { ...process.memoryUsage(), heapSpaces: getHeapSpaceStatistics() };
   } catch (error) {
     failure =
       error instanceof ProfileFailure
@@ -247,6 +270,7 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
       status: "complete",
       result: options.sanitize(profile!, packageRoot, {
         durationMs,
+        startBlockedMs,
         before: before!,
         after: after!,
       }),

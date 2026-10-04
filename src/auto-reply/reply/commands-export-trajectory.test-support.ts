@@ -153,6 +153,7 @@ describe("buildExportTrajectoryCommandReply", () => {
   it("requests per-run exec approval for trajectory exports", async () => {
     const { execCalls } = mockCommandBoundaries();
     const params = makeParams();
+    params.ctx.ApprovalReviewerDeviceId = "device-trajectory-reviewer";
 
     const reply = await buildExportTrajectoryCommandReply(params);
 
@@ -173,6 +174,7 @@ describe("buildExportTrajectoryCommandReply", () => {
     expect(execCall.defaults.sessionStore).toBe("/tmp/openclaw-sessions.json");
     expect(execCall.defaults.currentChannelId).toBe("bot");
     expect(execCall.defaults.accountId).toBe("account-1");
+    expect(execCall.defaults.approvalReviewerDeviceId).toBe("device-trajectory-reviewer");
     expect(execCall.params.ask).toBe("always");
     expect(execCall.params.background).toBe(true);
     const command = typeof execCall.params.command === "string" ? execCall.params.command : "";
@@ -339,18 +341,15 @@ describe("buildExportTrajectoryCommandReply", () => {
       expect(reply.text).not.toContain("--request-json-base64");
       expect(reply.text).not.toContain("agent:target:session");
       const route = commandMocks.resolvePrivateCommandRouteTargets.mock.calls[0]?.[0];
-      expect(route?.request).toMatchObject({
-        approvalKind: "exec",
+      expect(route).toMatchObject({
         id: "trajectory-export-private-route",
-        request: {
+        commandParams: {
           agentId: "target",
           sessionKey: "agent:target:session",
-          turnSourceChannel: "quietchat",
-          turnSourceTo: "origin-group",
-          turnSourceAccountId: "account-1",
-          turnSourceThreadId: "42",
-          commandArgv: expect.arrayContaining(["sessions", "export-trajectory", "--json"]),
+          command: { channel: "quietchat" },
+          ctx: { OriginatingTo: "origin-group", AccountId: "account-1", MessageThreadId: 42 },
         },
+        commandArgv: expect.arrayContaining(["sessions", "export-trajectory", "--json"]),
       });
       expect(privateReplies).toHaveLength(1);
       expect(privateReplies[0]?.targets).toEqual([

@@ -7,7 +7,6 @@ export type DecorativeEmojiOptions = {
   env?: NodeJS.ProcessEnv;
   isTty?: boolean;
   platform?: NodeJS.Platform;
-  stream?: { isTTY?: boolean };
 };
 
 const EMOJI_GRAPHEME_PATTERN = /[\p{Extended_Pictographic}\p{Regional_Indicator}\u20e3]/u;
@@ -43,7 +42,7 @@ function hasUtf8Locale(env: NodeJS.ProcessEnv): boolean {
 export function supportsDecorativeEmoji(options: DecorativeEmojiOptions = {}): boolean {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
-  const isTty = options.isTty ?? options.stream?.isTTY ?? process.stdout.isTTY;
+  const isTty = options.isTty ?? process.stdout.isTTY;
 
   if (!isTty) {
     return false;
@@ -54,13 +53,7 @@ export function supportsDecorativeEmoji(options: DecorativeEmojiOptions = {}): b
   if (!hasUtf8Locale(env)) {
     return false;
   }
-  if (isKnownEmojiTerminal(env)) {
-    return true;
-  }
-  if (platform === "darwin") {
-    return true;
-  }
-  return false;
+  return isKnownEmojiTerminal(env) || platform === "darwin";
 }
 
 /** Return the emoji only when decorative emoji output is supported. */

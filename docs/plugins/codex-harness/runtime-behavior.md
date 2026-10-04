@@ -12,11 +12,19 @@ What the Codex harness owns during a turn, and what stays with OpenClaw. Part of
 
 ## Dynamic tools and web search
 
+OpenClaw exposes `skills_search` and `skills_read` as host-owned dynamic tools
+when eligible installed skills and tool policy permit them. Search includes
+skills omitted from OpenClaw's bounded prompt directory. Reads use an exact
+installed name and return complete instructions or an explicit refusal if the
+turn's dynamic-tool output budget cannot hold them. These tools do not change
+Codex's native `skills` namespace or install marketplace skills. See
+[installed skill search](/tools/skills#search-installed-skills).
+
 Codex dynamic tools default to `searchable` loading. OpenClaw normally does
 not expose dynamic tools that duplicate Codex-native workspace operations:
 `read`, `write`, `edit`, `apply_patch`, `exec`, `process`,
 `get_goal`, `create_goal`, `update_goal`, `tool_call`, `tool_describe`,
-`tool_search`, and `tool_search_code`. Goal operations stay native to Codex,
+and `tool_search`. Goal operations stay native to Codex,
 so OpenClaw does not project a second goal store into Codex turns. Most
 remaining OpenClaw integration tools, such as messaging, media, cron,
 browser, nodes, gateway, `progress_card`, and `heartbeat_respond` are available through
@@ -86,6 +94,13 @@ OpenClaw associates the response with its tool-call ID before checkpointing the 
 labeled as execution output instead. Code-mode response IDs are distinct from
 nested command IDs.
 
+If a native patch or command fails before Codex emits its native item, the mirror
+can recover a failed `apply_patch` or `bash` receipt from a single-call Code Mode
+wrapper with literal input and unmodified `text` output, including a local input
+variable. A completed script can still contain a failed command: its structured
+nonzero exit code owns that outcome. Existing native items retain their own IDs;
+unsupported wrappers and unknown responses remain outer `exec` evidence.
+
 Neither event proves the exact final model input. Codex can apply additional
 history truncation and context normalization after constructing the response;
 its app-server does not expose that final request representation here. OpenClaw
@@ -149,6 +164,12 @@ attempt: progress does not reset it, and `0` means unlimited execution.
 OpenClaw still bounds its own requests, dynamic tools, cancellation, and local
 settlement. See [Timeouts](/plugins/codex-harness-reference#timeouts) for those
 budgets, Stop and replay behavior, and Doctor migration of retired idle settings.
+
+Failed app-server startup waits for child shutdown before returning its error.
+If startup times out or is canceled during process registration, cleanup joins
+that registration and closes any late child. Cleanup can extend beyond the
+startup deadline. A canceled caller leaves startup running when another caller
+still owns it.
 
 OpenClaw preserves assistant text supplied with the initial native item and
 reasoning supplied with a completed item, even when Codex sends no text deltas.

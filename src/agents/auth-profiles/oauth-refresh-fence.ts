@@ -1,8 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
+import { retainCurrentWorkerNativeSection } from "@openclaw/worker-runtime/worker";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { toErrorObject } from "../../infra/errors.js";
-import { retainCurrentWorkerNativeSection } from "../../infra/worker-task-native-sections.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import {
@@ -12,11 +12,11 @@ import {
   isPendingOAuthRefreshFence,
 } from "./oauth-refresh-marker.js";
 import { isSafeOAuthOwnerRefreshResult, isSafeOAuthPostClaimSettlement } from "./oauth-shared.js";
-import type { OAuthCredential } from "./types.js";
+import type { AuthProfileCredential, OAuthCredential } from "./types.js";
 
 /** Full structural equality for compare-and-swap of persisted OAuth credentials. */
 export function isExactOAuthCredential(
-  current: OAuthCredential | undefined,
+  current: AuthProfileCredential | undefined,
   expected: OAuthCredential,
 ): boolean {
   return current?.type === "oauth" && isDeepStrictEqual(current, expected);

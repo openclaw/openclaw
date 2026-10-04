@@ -1,3 +1,4 @@
+import type { ClawHubPublicationState } from "./lib/clawhub-publication-state.mjs";
 export const FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1";
 export const FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1";
 export type ValidationPurpose =
@@ -6,8 +7,8 @@ export type ValidationPurpose =
   | "main-qualification"
   | "postpublish-confidence";
 export interface PublicationSelection {
-  route: "normal" | "prepared" | "extended-stable" | "alpha";
-  npmDistTag: "alpha" | "beta" | "latest" | "extended-stable";
+  route: "normal" | "prepared" | "extended-stable";
+  npmDistTag: "beta" | "latest" | "extended-stable";
   publishOpenclawNpm: boolean;
   pluginPublishScope: "selected" | "all-publishable";
   plugins: string[];
@@ -20,7 +21,7 @@ export interface PublicationIntent {
 }
 export interface PublicationDispatchEnvelope extends PublicationIntent {
   trustedWorkflow: { ref: string; fullRef: string; sha: string } | null;
-  laneInputs?: { extension_test_exclude_patterns_json?: string; known_flaky_jobs_json?: string };
+  laneInputs?: { extension_test_exclude_patterns_json?: string };
 }
 export interface PublicationSourceRequest extends PublicationIntent {
   repository: string;
@@ -37,7 +38,11 @@ export interface PublicationSourceFact extends PublicationSourceRequest {
   contract: "1";
   status: "source-admitted" | "not-applicable";
   inventoryDigest: string | null;
-  projection: { version: string; packages: unknown[]; platforms: unknown[] } | null;
+  projection: {
+    version: string;
+    packages: Array<{ name: string; version: string; targets: string[] }>;
+    platforms: unknown[];
+  } | null;
   digest: string;
 }
 export function publicationSourceContract(source: string): "1" | undefined;
@@ -65,7 +70,7 @@ export function publicationSourceRequest(
 export function createPublicationSourceFact(
   request: PublicationSourceRequest,
   inventory: unknown,
-  projection: PublicationSourceFact["projection"],
+  projection: { version: string; packages: unknown[]; platforms: unknown[] } | null,
 ): PublicationSourceFact;
 export function validatePublicationSourceBinding(
   record: Record<string, unknown>,
@@ -104,6 +109,7 @@ export interface PublicationClawHubObservation {
   state: {
     packageExists: boolean;
     alreadyPublished: boolean;
+    publication?: ClawHubPublicationState;
     hasTrustedPublisher: boolean;
     trustedPublisher: {
       provider: string | null;
@@ -114,7 +120,12 @@ export interface PublicationClawHubObservation {
   };
 }
 export interface PublicationPlanningSummary {
-  all: Array<{ name: string; version: string; alreadyPublished: boolean }>;
+  all: Array<{
+    name: string;
+    version: string;
+    alreadyPublished: boolean;
+    publication?: ClawHubPublicationState;
+  }>;
   candidates: string[];
   skippedPublished: string[];
   warnings: string[];
@@ -137,6 +148,8 @@ export interface PublicationObservationCollection {
     clawhub: PublicationPlanningSummary & {
       bootstrapCandidates: string[];
       missingTrustedPublisher: string[];
+      pendingPublication?: string[];
+      failedPublication?: string[];
     };
   };
 }

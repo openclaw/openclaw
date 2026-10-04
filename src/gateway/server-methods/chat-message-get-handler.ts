@@ -1,88 +1,29 @@
-// Single-message lookup applies the same visibility and display projection as chat.history.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
   validateChatMessageGetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
+import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
 import { readSessionPendingInput } from "../../config/sessions/session-accessor.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.history.js";
 import {
   augmentChatHistoryWithCanvasBlocks,
-  dropPreSessionStartAnnouncePairs,
-  isPendingAssistantError,
   projectChatDisplayMessage,
 } from "../chat-display-projection.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
+import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
-import { readChatHistoryMessageId } from "../session-history-tail.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { hiddenSessionNotFound } from "../session-sharing-policy.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
-import {
-  readSessionMessagesAroundIdWithStatsAsync,
-  readSessionMessageByIdAsync,
-} from "../session-transcript-readers.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
-import { readChatHistoryPage } from "./chat-history-pages.js";
+import { loadGatewaySessionEntryReadOnly, resolveSessionModelRef } from "../session-utils.js";
+import { readChatHistoryMessageById } from "./chat-history-pages.js";
 import { projectPendingInputMessage } from "./chat-pending-inputs.js";
-import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-async function isChatMessageIdVisibleAfterHistoryFilters(params: {
-  sessionId: string;
-  storePath: string | undefined;
-  sessionEntry: ReturnType<typeof loadGatewaySessionEntryReadOnly>["entry"];
-  sessionKey: string;
-  agentId: string;
-  message: unknown;
-  messageId: string;
-  sessionStartedAt?: number;
-  allowResetArchiveFallback?: boolean;
-}): Promise<boolean> {
-  if (isPendingAssistantError(params.message)) {
-    // A recovered attempt remains stored but no longer belongs to visible history.
-    // Reuse the anchored history owner; ordinary message lookups stay on the exact-ID path.
-    const page = await readChatHistoryPage({
-      entry: params.sessionEntry,
-      provider: undefined,
-      sessionId: params.sessionId,
-      storePath: params.storePath,
-      sessionAgentId: params.agentId,
-      canonicalKey: params.sessionKey,
-      max: 1,
-      maxHistoryBytes: MAX_PAYLOAD_BYTES,
-      effectiveMaxChars: MAX_PAYLOAD_BYTES,
-      offset: undefined,
-      messageId: params.messageId,
-      ignoreCliSessionImports: true,
-    });
-    return page.messages.some((message) => readChatHistoryMessageId(message) === params.messageId);
-  }
-  if (params.sessionStartedAt === undefined) {
-    return true;
-  }
-  // The anchored reader includes the immediately preceding row, which is the
-  // complete context needed to hide a stale announce and its paired reply.
-  const { messages } = await readSessionMessagesAroundIdWithStatsAsync(
-    {
-      agentId: params.agentId,
-      sessionEntry: params.sessionEntry,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-    },
-    {
-      maxMessages: 1,
-      messageId: params.messageId,
-      ...(params.allowResetArchiveFallback === true ? { allowResetArchiveFallback: true } : {}),
-    },
-  );
-  return dropPreSessionStartAnnouncePairs(messages, params.sessionStartedAt).some(
-    (message) => readChatHistoryMessageId(message) === params.messageId,
-  );
-}
 
 export const chatMessageGetHandlers: GatewayRequestHandlers = {
   "chat.message.get": async ({
@@ -96,7 +37,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       return;
     }
     const { sessionKey, messageId, maxChars } = params;
-    const agentIdOverride = normalizeOptionalText(params.agentId);
+    const agentIdOverride = normalizeOptionalString(params.agentId);
     const cfg = context.getRuntimeConfig();
     const requestedAgent = resolveRequestedSessionAgentId(cfg, sessionKey, agentIdOverride);
     if (!requestedAgent.ok) {
@@ -111,7 +52,13 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       respond(true, { ok: false, unavailableReason: "not_found" });
       return;
     }
-    const canReadSession = (current: typeof session): boolean => {
+    const canReadSession = (
+      current: typeof session = loadGatewaySessionEntryReadOnly(sessionKey, {
+        agentId: requestedAgentId,
+        clone: false,
+        projection: "list",
+      }),
+    ): boolean => {
       sessionMutationAuthorization?.assertCurrent();
       if (
         !current.entry ||
@@ -146,12 +93,11 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const effectiveMaxChars =
-      typeof maxChars === "number" ? maxChars : Math.min(MAX_PAYLOAD_BYTES, 1_000_000);
+    const effectiveMaxChars = maxChars ?? Math.min(MAX_PAYLOAD_BYTES, 1_000_000);
     if (messageId.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)) {
       // Pending IDs have their own owner. A transcript miss must never widen
       // into pending custody or an archived physical session.
-      const pending = readSessionPendingInput(
+      const pending = await readSessionPendingInput(
         {
           agentId: sessionAgentId,
           sessionKey: canonicalKey,
@@ -160,11 +106,26 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
         },
         messageId.slice(CHAT_PENDING_INPUT_MESSAGE_PREFIX.length),
       );
+      if (!canReadSession()) {
+        return;
+      }
       if (!pending) {
         respond(true, { ok: false, unavailableReason: "not_found" });
         return;
       }
-      const message = projectPendingInputMessage(pending, effectiveMaxChars);
+      const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
+        [pending.message],
+        context.cronStorePath,
+      );
+      if (!canReadSession()) {
+        return;
+      }
+      const message = projectPendingInputMessage(
+        pending,
+        effectiveMaxChars,
+        undefined,
+        resolveCronJobName,
+      );
       if (!message) {
         respond(true, { ok: false, unavailableReason: "not_visible" });
         return;
@@ -177,45 +138,29 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const resolved = await readSessionMessageByIdAsync(
-      {
-        agentId: sessionAgentId,
-        sessionEntry: entry,
-        sessionId,
-        sessionKey,
-        storePath,
-      },
+    const resolved = await readChatHistoryMessageById({
+      entry,
+      provider: getCliSessionBinding(entry, "claude-cli")?.sessionId
+        ? resolveSessionModelRef(cfg, entry, sessionAgentId, {
+            allowPluginNormalization: false,
+          }).provider
+        : undefined,
+      sessionAgentId,
+      sessionId,
+      canonicalKey,
+      storePath,
       messageId,
-      { allowResetArchiveFallback: true },
-    );
-    const visible =
-      resolved.found &&
-      (await isChatMessageIdVisibleAfterHistoryFilters({
-        sessionId,
-        storePath,
-        sessionEntry: entry,
-        sessionKey,
-        agentId: sessionAgentId,
-        message: resolved.message,
-        messageId,
-        sessionStartedAt:
-          typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
-        allowResetArchiveFallback: true,
-      }));
+      max: 1,
+      maxHistoryBytes: MAX_PAYLOAD_BYTES,
+      effectiveMaxChars,
+      offset: undefined,
+    });
     // Async transcript/archive reads cannot publish under a stale sharing or
-    // physical-session snapshot. Pending input reads above are synchronous.
-    if (
-      !canReadSession(
-        loadGatewaySessionEntryReadOnly(sessionKey, {
-          agentId: requestedAgentId,
-          clone: false,
-          projection: "list",
-        }),
-      )
-    ) {
+    // physical-session snapshot.
+    if (!canReadSession()) {
       return;
     }
-    if (!visible) {
+    if (!resolved.found) {
       respond(true, { ok: false, unavailableReason: "not_found" });
       return;
     }
@@ -223,11 +168,18 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       respond(true, { ok: false, unavailableReason: "oversized" });
       return;
     }
-
+    const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
+      [resolved.message],
+      context.cronStorePath,
+    );
+    if (!canReadSession()) {
+      return;
+    }
     const projectedMessage = resolved.message
       ? projectChatDisplayMessage(resolved.message, {
           maxChars: effectiveMaxChars,
           resolveCurrentUserProfileDisplay,
+          resolveCronJobName,
         })
       : undefined;
     const projected = projectedMessage
@@ -244,7 +196,10 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       true,
       jsonUtf8Bytes(projected) > MAX_PAYLOAD_BYTES - 1024
         ? { ok: false, unavailableReason: "oversized" }
-        : { ok: true, message: projected },
+        : projectOperatorModelRead(
+            { context, client, agentId: sessionAgentId },
+            { ok: true, message: projected },
+          ),
     );
   },
 };

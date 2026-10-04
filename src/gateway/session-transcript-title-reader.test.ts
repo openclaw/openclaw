@@ -196,7 +196,7 @@ describe("session transcript title hydration", () => {
       await expect(
         runSessionColdStorageMaintenance({
           config: {
-            agents: { list: [{ id: "main" }] },
+            agents: { entries: { main: {} } },
             session: {
               store: storePath,
               maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
@@ -547,12 +547,23 @@ describe("session transcript title hydration", () => {
     expect(pageReader).toHaveBeenCalledTimes(1);
   });
 
-  test("retains cached title fields across more than 256 sessions", async () => {
+  test("retains cached title fields across more than 256 sessions", () => {
+    // Keep the capacity check independent of asynchronous turn orchestration.
     const scopes: SessionTranscriptReadScope[] = [];
     for (let index = 0; index < 300; index += 1) {
-      const scope = await writeSqliteMessages(`reader-title-capacity-${index}`, [
-        { role: "user", content: `prompt ${index}` },
-      ]);
+      const sessionId = `reader-title-capacity-${index}`;
+      const scope = {
+        agentId: "main",
+        sessionId,
+        sessionKey: `agent:main:${sessionId}`,
+        storePath,
+      };
+      sessionAccessor.replaceSessionEntrySync(scope, { sessionId, updatedAt: 1 });
+      expect(
+        sessionAccessor.appendTranscriptMessageSync(scope, {
+          message: { role: "user", content: `prompt ${index}` },
+        }),
+      ).toMatchObject({ ok: true, value: { appended: true } });
       scopes.push(scope);
       expect(readSessionTitleFieldsFromTranscript(scope).firstUserMessage).toBe(`prompt ${index}`);
     }

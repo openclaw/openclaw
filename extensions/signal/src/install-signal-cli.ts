@@ -1,4 +1,3 @@
-// Signal plugin module implements install signal cli behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { walkDirectory } from "@openclaw/fs-safe/walk";
@@ -17,12 +16,7 @@ import {
 import { withTempDownloadPath } from "openclaw/plugin-sdk/temp-path";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
-export type ReleaseAsset = {
-  name?: string;
-  browser_download_url?: string;
-};
-
-export type NamedAsset = {
+type NamedAsset = {
   name: string;
   browser_download_url: string;
 };
@@ -66,11 +60,6 @@ export async function extractSignalCliArchive(
   });
 }
 
-/** @internal Exported for testing. */
-export function looksLikeArchive(name: string): boolean {
-  return name.endsWith(".tar.gz") || name.endsWith(".tgz") || name.endsWith(".zip");
-}
-
 function normalizeReleaseAsset(value: unknown): NamedAsset | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -95,54 +84,6 @@ function normalizeSignalCliRelease(value: Record<string, unknown>): SignalCliRel
       return normalized ? [normalized] : [];
     }),
   };
-}
-
-/**
- * Pick a native release asset from the official GitHub releases.
- *
- * The official signal-cli releases only publish native (GraalVM) binaries for
- * x86-64 Linux.  On architectures where no native asset is available this
- * returns `undefined` so the caller can fall back to a different install
- * strategy (e.g. Homebrew).
- */
-/** @internal Exported for testing. */
-export function pickAsset(
-  assets: ReleaseAsset[],
-  platform: NodeJS.Platform,
-  arch: string,
-): NamedAsset | undefined {
-  const withName = assets.filter((asset): asset is NamedAsset =>
-    Boolean(asset.name && asset.browser_download_url),
-  );
-
-  // Archives only, excluding signature files (.asc)
-  const archives = withName.filter((a) =>
-    looksLikeArchive(normalizeLowercaseStringOrEmpty(a.name)),
-  );
-
-  const byName = (pattern: RegExp) =>
-    archives.find((asset) => pattern.test(normalizeLowercaseStringOrEmpty(asset.name)));
-
-  if (platform === "linux") {
-    // The official "Linux-native" asset is an x86-64 GraalVM binary.
-    // On non-x64 architectures it will fail with "Exec format error",
-    // so only select it when the host architecture matches.
-    if (arch === "x64") {
-      return byName(/linux-native/) || byName(/linux/) || archives[0];
-    }
-    // No native release for this arch — caller should fall back.
-    return undefined;
-  }
-
-  if (platform === "darwin") {
-    return byName(/macos|osx|darwin/);
-  }
-
-  if (platform === "win32") {
-    return byName(/windows|win/) || archives[0];
-  }
-
-  return archives[0];
 }
 
 /** @internal Exported for testing. */
@@ -211,10 +152,6 @@ async function findSignalCliBinary(root: string): Promise<string | null> {
   return entries[0]?.path ?? null;
 }
 
-// ---------------------------------------------------------------------------
-// Brew-based install (used on architectures without an official native build)
-// ---------------------------------------------------------------------------
-
 async function resolveBrewSignalCliPath(brewExe: string): Promise<string | null> {
   try {
     const result = await runPluginCommandWithTimeout({
@@ -271,7 +208,6 @@ async function installSignalCliViaBrew(runtime: RuntimeEnv): Promise<SignalInsta
     };
   }
 
-  // Extract version from the installed binary.
   let version: string | undefined;
   try {
     const vResult = await runPluginCommandWithTimeout({
@@ -286,10 +222,6 @@ async function installSignalCliViaBrew(runtime: RuntimeEnv): Promise<SignalInsta
 
   return { ok: true, cliPath, version };
 }
-
-// ---------------------------------------------------------------------------
-// Direct download install (used when an official native asset is available)
-// ---------------------------------------------------------------------------
 
 /** @internal Exported for testing. */
 export async function installSignalCliFromRelease(
@@ -335,7 +267,13 @@ export async function installSignalCliFromRelease(
   } finally {
     await release();
   }
-  const asset = pickAsset(releaseInfo.assets, process.platform, process.arch);
+  // installSignalCli selects this path only for Linux x64; other platforms use Homebrew.
+  const archives = releaseInfo.assets.filter((asset) =>
+    /\.(?:tar\.gz|tgz|zip)$/.test(normalizeLowercaseStringOrEmpty(asset.name)),
+  );
+  const byName = (pattern: RegExp) =>
+    archives.find((asset) => pattern.test(normalizeLowercaseStringOrEmpty(asset.name)));
+  const asset = byName(/linux-native/) || byName(/linux/) || archives[0];
 
   if (!asset) {
     return {
@@ -355,9 +293,6 @@ export async function installSignalCliFromRelease(
       const installRoot = path.join(CONFIG_DIR, "tools", "signal-cli", releaseInfo.version);
       await fs.mkdir(installRoot, { recursive: true });
 
-      if (!looksLikeArchive(normalizeLowercaseStringOrEmpty(asset.name))) {
-        return { ok: false, error: `Unsupported archive type: ${asset.name}` };
-      }
       try {
         await extractSignalCliArchive(archivePath, installRoot, 60_000);
       } catch (err) {
@@ -386,10 +321,6 @@ export async function installSignalCliFromRelease(
     },
   );
 }
-
-// ---------------------------------------------------------------------------
-// Public entry point
-// ---------------------------------------------------------------------------
 
 export async function installSignalCli(runtime: RuntimeEnv): Promise<SignalInstallResult> {
   if (process.platform === "win32") {

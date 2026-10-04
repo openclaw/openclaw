@@ -1,4 +1,3 @@
-// Handles TUI input submission and command dispatch.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type {
   TuiChatSubmitAdmission,
@@ -47,12 +46,12 @@ export function createEditorSubmitHandler(params: {
     setText: (value: string) => void;
     addToHistory: (value: string) => void;
   };
-  handleCommand: (value: string) => Promise<void> | void;
+  handleCommand: (value: string, onBlockedChat?: () => void) => Promise<void> | void;
   sendMessage: (value: string) => Promise<void> | void;
   handleBangLine: (value: string) => Promise<void> | void;
   onSubmitError: (action: TuiSubmitAction, error: unknown) => void;
   admitMessage?: (value: string, snapshot?: TuiChatSubmitSnapshot) => TuiChatSubmitAdmission;
-  onBlockedMessageSubmit?: (value: string, admission: TuiChatSubmitBlock) => void;
+  onBlockedMessageSubmit?: (admission: TuiChatSubmitBlock) => void;
 }) {
   const clearSubmittedEditor = () => {
     // pi-tui clears before onSubmit; a delayed paste flush must not erase a newer draft.
@@ -74,7 +73,6 @@ export function createEditorSubmitHandler(params: {
     const action = resolveEditorSubmitAction(raw);
     const trimChangesAction = resolveEditorSubmitAction(value) !== action;
 
-    // Keep previous behavior: ignore empty/whitespace-only submissions.
     if (!value) {
       clearSubmittedEditor();
       return;
@@ -83,11 +81,17 @@ export function createEditorSubmitHandler(params: {
     if (action !== "message") {
       clearSubmittedEditor();
       const command = action === "local shell" ? raw : value;
-      const handle = action === "local shell" ? params.handleBangLine : params.handleCommand;
       if (!isBrowserSetupInput(command)) {
         params.editor.addToHistory(command);
       }
-      runSubmitAction(action, () => handle(command), params.onSubmitError);
+      runSubmitAction(
+        action,
+        () =>
+          action === "local shell"
+            ? params.handleBangLine(command)
+            : params.handleCommand(command, () => restoreBlockedEditor(command)),
+        params.onSubmitError,
+      );
       return;
     }
 
@@ -96,7 +100,7 @@ export function createEditorSubmitHandler(params: {
       : params.admitMessage?.(value)) ?? { status: "allowed" };
     if (admission.status === "blocked") {
       restoreBlockedEditor(trimChangesAction ? raw : value);
-      params.onBlockedMessageSubmit?.(value, admission);
+      params.onBlockedMessageSubmit?.(admission);
       return;
     }
 
@@ -120,10 +124,7 @@ export function shouldEnableWindowsGitBashPasteFallback(params?: {
   // Some macOS terminals emit multiline paste as rapid single-line submits.
   // Enable burst coalescing so pasted blocks stay as one user message.
   if (platform === "darwin") {
-    if (termProgram.includes("iterm") || termProgram.includes("apple_terminal")) {
-      return true;
-    }
-    return false;
+    return termProgram.includes("iterm") || termProgram.includes("apple_terminal");
   }
 
   if (platform !== "win32") {
@@ -210,23 +211,15 @@ export function createSubmitBurstCoalescer(params: {
     const ts = now();
     const snapshot = params.captureSnapshot?.();
     params.onCapture?.(value, snapshot);
-    if (!pending) {
-      pending = { value, ...(snapshot ? { snapshot } : {}) };
-      pendingAt = ts;
-      scheduleFlush();
-      return;
-    }
-    if (ts - pendingAt <= windowMs) {
+    if (pending && ts - pendingAt <= windowMs) {
       pending = {
         value: `${pending.value}\n${value}`,
         ...(pending.snapshot || snapshot ? { snapshot: pending.snapshot ?? snapshot } : {}),
       };
-      pendingAt = ts;
-      scheduleFlush();
-      return;
+    } else {
+      flushPending();
+      pending = { value, ...(snapshot ? { snapshot } : {}) };
     }
-    flushPending();
-    pending = { value, ...(snapshot ? { snapshot } : {}) };
     pendingAt = ts;
     scheduleFlush();
   };

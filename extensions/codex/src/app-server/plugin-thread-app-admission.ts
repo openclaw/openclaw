@@ -8,12 +8,10 @@ import {
 } from "./app-inventory-cache.js";
 import { CODEX_SESSION_OVERRIDABLE_LAYER_TYPES } from "./config-layer-policy.js";
 import type { ResolvedCodexPluginsPolicy } from "./config.js";
-import {
-  resolveOwnedAppApprovalOverrideKeys,
-  type CodexPluginInventory,
-  type CodexPluginInventoryRecord,
-  type CodexPluginOwnedApp,
-  type CodexPluginRuntimeRequest,
+import type {
+  CodexPluginInventory,
+  CodexPluginOwnedApp,
+  CodexPluginRuntimeRequest,
 } from "./plugin-inventory.js";
 import {
   type CodexAppServerRequestResult,
@@ -56,9 +54,7 @@ function createCodexPluginThreadAppInventoryRequest(
   return async (method, requestParams) =>
     (await params.request(
       method,
-      (method === "app/installed" || method === "app/read") && params.threadId
-        ? { ...requestParams, threadId: params.threadId }
-        : requestParams,
+      params.threadId ? { ...requestParams, threadId: params.threadId } : requestParams,
     )) as CodexAppServerRequestResult<typeof method>;
 }
 
@@ -174,68 +170,32 @@ export async function readCodexThreadAdmissibleAccountApps(
   const installedAppsById = new Map(snapshot.installedApps.map((app) => [app.id, app]));
   return {
     apps: snapshot.apps
-      .filter(
-        (app) =>
-          resolveCodexInstalledAppThreadAdmission(
-            toCodexPluginOwnedAccountApp(app, installedAppsById.get(app.id)),
-            installedAppsById.get(app.id),
-          ) !== "blocked",
-      )
+      .filter((app) => isCodexInstalledAppThreadAdmissible(installedAppsById.get(app.id)))
       .toSorted((left, right) => left.id.localeCompare(right.id)),
     installedApps: snapshot.installedApps,
   };
 }
 
-export function toCodexPluginOwnedAccountApp(
-  app: CodexAppInventorySnapshot["apps"][number],
-  installedApp: v2.InstalledApp | undefined,
-): CodexPluginOwnedApp {
-  return {
-    id: app.id,
-    name: app.name,
-    accessible: true,
-    enabled: installedApp?.enabled ?? false,
-    needsAuth: false,
-    ...resolveOwnedAppApprovalOverrideKeys(app),
-  };
-}
-
-export function resolveCodexThreadConfigAppsForRecord(params: {
-  record: CodexPluginInventoryRecord;
-  inventory: CodexPluginInventory;
-}): CodexPluginOwnedApp[] {
-  return params.inventory.appInventory?.state === "missing" ? [] : params.record.apps;
-}
-
-type CodexPluginAppThreadAdmission = "ready" | "provisional" | "blocked";
-
-export function resolveCodexPluginAppThreadAdmission(
+export function isCodexPluginAppThreadAdmissible(
   app: CodexPluginOwnedApp,
   inventory: CodexPluginInventory,
-): CodexPluginAppThreadAdmission {
+): boolean {
   const snapshot = inventory.appInventory?.snapshot;
-  if (!snapshot) {
-    return "blocked";
+  if (!app.accessible || app.needsAuth || !snapshot) {
+    return false;
   }
-  return resolveCodexInstalledAppThreadAdmission(
-    app,
+  return isCodexInstalledAppThreadAdmissible(
     snapshot.installedApps.find((candidate) => candidate.id === app.id),
   );
 }
 
-function resolveCodexInstalledAppThreadAdmission(
-  app: Pick<CodexPluginOwnedApp, "accessible" | "needsAuth">,
-  installed: v2.InstalledApp | undefined,
-): CodexPluginAppThreadAdmission {
-  if (!app.accessible || app.needsAuth || !installed) {
-    return "blocked";
-  }
-  if (installed.enabled && installed.callable) {
-    return "ready";
-  }
+function isCodexInstalledAppThreadAdmissible(installed: v2.InstalledApp | undefined): boolean {
   // Explicit plugin and account-wide policy can both override deny-by-default.
   // An enabled app with no callable tools cannot be repaired by thread policy.
-  return !installed.enabled && !installed.callable ? "provisional" : "blocked";
+  return Boolean(
+    installed &&
+    ((installed.enabled && installed.callable) || (!installed.enabled && !installed.callable)),
+  );
 }
 
 export async function readCodexConfigForAppAdmission(

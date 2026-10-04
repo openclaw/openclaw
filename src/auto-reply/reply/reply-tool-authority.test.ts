@@ -1,8 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import { attachToolAllowlistIntersection } from "../../agents/tool-policy.js";
+import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { captureGatewayDeviceRevocation } from "../../gateway/device-revocation.js";
+import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
+import { createOperatorClient } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
+import type { GatewayAccessGrantRef } from "../../plugins/gateway-access-policy.types.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
@@ -62,145 +70,163 @@ describe("reply tool authority", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["agent:agent:main", "global"])(
-    "distinguishes hidden allowlist intersections in steering authority for %s",
-    (sessionKey) => {
+  it.each([
+    ["agent allowlist intersection", "agent:agent:main", undefined, undefined],
+    ["global allowlist intersection", "global", undefined, undefined],
+    [
+      "provider",
+      undefined,
+      { provider: "openai", model: "gpt-test" },
+      { provider: "anthropic", model: "gpt-test" },
+    ],
+    [
+      "model",
+      undefined,
+      { provider: "openai", model: "gpt-primary" },
+      { provider: "openai", model: "gpt-fallback" },
+    ],
+  ] as const)(
+    "distinguishes %s in steering authority",
+    (_dimension, sessionKey, firstRoute, secondRoute) => {
       const first = createQueueTestRun({ prompt: "first" });
       const second = createQueueTestRun({ prompt: "second" });
-      for (const run of [first, second]) {
-        run.run.sessionKey = sessionKey;
-        run.run.config = { agents: { ownership: "explicit", entries: { agent: {}, other: {} } } };
+      if (sessionKey) {
+        for (const run of [first, second]) {
+          run.run.sessionKey = sessionKey;
+          run.run.config = { agents: { ownership: "explicit", entries: { agent: {}, other: {} } } };
+        }
+        first.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"]]);
+        second.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"], ["message"]]);
       }
-      first.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"]]);
-      second.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"], ["message"]]);
 
-      expect(resolveFollowupRunToolAuthorityFingerprint(first)).not.toBe(
-        resolveFollowupRunToolAuthorityFingerprint(second),
+      expect(resolveFollowupRunToolAuthorityFingerprint(first, firstRoute)).not.toBe(
+        resolveFollowupRunToolAuthorityFingerprint(second, secondRoute),
       );
     },
   );
 
-  it.each(["other-participant", undefined])(
-    "steers participant %s without replacing session personal context",
-    async (participant) =>
-      withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const owner = ensureProfileForEmail("owner@example.test");
-        const other = ensureProfileForEmail("participant@example.test");
-        const participantId = participant ? other.id : undefined;
-        const run = createQueueTestRun({ prompt: "Session owner's turn" });
-        run.run.bootstrapUserProfileId = owner.id;
-        run.run.senderId = "first-participant";
-        run.run.permissionMode = "full";
-        run.operatorAuthority = createAdmittedRunOperatorAuthority({
-          profileId: "original-operator",
-          scopes: ["operator.read", "operator.write"],
-          source: {},
-          assertCurrent: () => {},
-        });
-        const operation = createTestReplyOperation({ sessionId: "personal-steering" });
-        operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
-        const fingerprint = operation.bindToolAuthorityRoute(run.run);
-        const queueMessage = vi.fn(
-          async (_text: string, _options?: ReplyBackendQueueMessageOptions) => {},
-        );
-        operation.attachBackend({
-          kind: "embedded",
-          cancel: vi.fn(),
-          isStreaming: () => true,
-          queueMessage,
-        });
-        operation.setPhase("running");
-        const incoming = {
-          ...run,
-          run: { ...run.run, senderId: participantId, bootstrapUserProfileId: participantId },
-        };
-        // An owner reassignment can update the next turn's bootstrap selection,
-        // but it is not a permission change and must not rewrite the active turn.
-        expect(resolveFollowupRunToolAuthorityFingerprint(incoming)).toBe(fingerprint);
-        for (const options of [
-          { toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(incoming) },
-          { toolAuthorityOverlay: toolAuthorityOverlay(incoming) },
-        ]) {
-          await expect(
-            queueCurrentReplyRunMessage("personal-steering", "new turn", {
-              isInboundUserMessage: true,
-              ...options,
-            }),
-          ).resolves.toMatchObject({ status: "accepted" });
-        }
-        expect(queueMessage).toHaveBeenCalledTimes(2);
-        for (const [, options] of queueMessage.mock.calls) {
-          expect(options).not.toHaveProperty("bootstrapUserProfileId");
-          expect(options).not.toHaveProperty("toolAuthorityOverlay");
-        }
-        expect(run.run.bootstrapUserProfileId).toBe(owner.id);
-        expect(incoming.run.bootstrapUserProfileId).toBe(participantId);
-        expect(operation.toolAuthorityFingerprint).toBe(fingerprint);
+  it("steers another participant without replacing session personal context", async () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const owner = ensureProfileForEmail("owner@example.test");
+      const other = ensureProfileForEmail("participant@example.test");
+      const participantId = other.id;
+      const run = createQueueTestRun({ prompt: "Session owner's turn" });
+      run.run.bootstrapUserProfileId = owner.id;
+      run.run.senderId = "first-participant";
+      run.run.permissionMode = "full";
+      run.operatorAuthority = createAdmittedRunOperatorAuthority({
+        profileId: "original-operator",
+        scopes: ["operator.read", "operator.write"],
+        source: {},
+        assertCurrent: () => {},
+      });
+      const operation = createTestReplyOperation({ sessionId: "personal-steering" });
+      operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
+      const fingerprint = operation.bindToolAuthorityRoute(run.run);
+      const queueMessage = vi.fn(
+        async (_text: string, _options?: ReplyBackendQueueMessageOptions) => {},
+      );
+      operation.attachBackend({
+        kind: "embedded",
+        cancel: vi.fn(),
+        isStreaming: () => true,
+        queueMessage,
+      });
+      operation.setPhase("running");
+      const incoming = {
+        ...run,
+        run: { ...run.run, senderId: participantId, bootstrapUserProfileId: participantId },
+      };
+      // An owner reassignment can update the next turn's bootstrap selection,
+      // but it is not a permission change and must not rewrite the active turn.
+      expect(resolveFollowupRunToolAuthorityFingerprint(incoming)).toBe(fingerprint);
+      for (const options of [
+        { toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(incoming) },
+        { toolAuthorityOverlay: toolAuthorityOverlay(incoming) },
+      ]) {
+        await expect(
+          queueCurrentReplyRunMessage("personal-steering", "new turn", {
+            isInboundUserMessage: true,
+            ...options,
+          }),
+        ).resolves.toMatchObject({ status: "accepted" });
+      }
+      expect(queueMessage).toHaveBeenCalledTimes(2);
+      for (const [, options] of queueMessage.mock.calls) {
+        expect(options).not.toHaveProperty("bootstrapUserProfileId");
+        expect(options).not.toHaveProperty("toolAuthorityOverlay");
+      }
+      expect(run.run.bootstrapUserProfileId).toBe(owner.id);
+      expect(incoming.run.bootstrapUserProfileId).toBe(participantId);
+      expect(operation.toolAuthorityFingerprint).toBe(fingerprint);
 
-        for (const changed of [
-          { permissionMode: "guarded" },
-          { toolOverrides: { webSearch: false } },
-          { operatorAuthority: undefined },
-          {
-            operatorAuthority: createAdmittedRunOperatorAuthority({
-              ...run.operatorAuthority,
-              source: {},
-            }),
-          },
-          {
-            operatorAuthority: createAdmittedRunOperatorAuthority({
-              ...run.operatorAuthority,
-              scopes: ["operator.admin"],
-            }),
-          },
-        ] satisfies Partial<ReplyToolAuthorityOverlay>[]) {
-          await expect(
-            queueCurrentReplyRunMessage("personal-steering", "different authority", {
-              isInboundUserMessage: true,
-              toolAuthorityOverlay: { ...toolAuthorityOverlay(incoming), ...changed },
-            }),
-          ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
-        }
-        expect(queueMessage).toHaveBeenCalledTimes(2);
-      }),
-  );
-
-  it("distinguishes session permission and tool settings in steering authority", () => {
-    const full = createQueueTestRun({ prompt: "full authority" });
-    const guarded = createQueueTestRun({ prompt: "guarded authority" });
-    full.run.permissionMode = "full";
-    guarded.run.permissionMode = "guarded";
-    expect(resolveFollowupRunToolAuthorityFingerprint(full)).not.toBe(
-      resolveFollowupRunToolAuthorityFingerprint(guarded),
-    );
-
-    guarded.run.permissionMode = "full";
-    guarded.run.toolOverrides = { webSearch: false };
-    expect(resolveFollowupRunToolAuthorityFingerprint(full)).not.toBe(
-      resolveFollowupRunToolAuthorityFingerprint(guarded),
-    );
-  });
+      for (const changed of [
+        { permissionMode: "guarded" },
+        { toolOverrides: { webSearch: false } },
+        { operatorAuthority: undefined },
+        {
+          operatorAuthority: createAdmittedRunOperatorAuthority({
+            ...run.operatorAuthority,
+            scopes: ["operator.admin"],
+          }),
+        },
+      ] satisfies Partial<ReplyToolAuthorityOverlay>[]) {
+        await expect(
+          queueCurrentReplyRunMessage("personal-steering", "different authority", {
+            isInboundUserMessage: true,
+            toolAuthorityOverlay: { ...toolAuthorityOverlay(incoming), ...changed },
+          }),
+        ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
+      }
+      expect(queueMessage).toHaveBeenCalledTimes(2);
+    }));
 
   it.each([
-    {
-      label: "provider",
-      first: { provider: "openai", model: "gpt-test" },
-      second: { provider: "anthropic", model: "gpt-test" },
-    },
-    {
-      label: "model",
-      first: { provider: "openai", model: "gpt-primary" },
-      second: { provider: "openai", model: "gpt-fallback" },
-    },
-  ])("distinguishes the concrete $label route in steering authority", ({ first, second }) => {
-    const run = createQueueTestRun({ prompt: "route authority" });
+    ["automatic rotation", "auto", "auto", "backup", "full", true],
+    ["unchanged user pin", "user", "user", "primary", "full", true],
+    ["changed user pin", "user", "user", "backup", "full", false],
+    ["explicit pin replacing automatic selection", "auto", "user", "primary", "full", false],
+    ["removed automatic selection", "auto", undefined, undefined, "full", false],
+    ["permission change during automatic rotation", "auto", "auto", "backup", "guarded", false],
+  ] as const)(
+    "preserves steering admission for %s",
+    async (_name, source, nextSource, nextProfile, permissionMode, accepted) => {
+      const run = createQueueTestRun({ prompt: "running request" });
+      run.run.authProfileId = "openai:primary";
+      run.run.authProfileIdSource = source;
+      run.run.permissionMode = "full";
+      const operation = createTestReplyOperation({ sessionId: "profile-steering" });
+      operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
+      operation.bindToolAuthorityRoute(run.run);
+      const queueMessage = vi.fn(async () => {});
+      operation.attachBackend({ kind: "embedded", cancel: vi.fn(), queueMessage });
+      operation.setPhase("running");
+      const incoming = {
+        ...run,
+        run: {
+          ...run.run,
+          authProfileId: nextProfile ? `openai:${nextProfile}` : undefined,
+          authProfileIdSource: nextSource,
+          permissionMode,
+        },
+      };
 
-    expect(resolveFollowupRunToolAuthorityFingerprint(run, first)).not.toBe(
-      resolveFollowupRunToolAuthorityFingerprint(run, second),
-    );
-  });
+      await expect(
+        queueCurrentReplyRunMessage("profile-steering", "change direction", {
+          isInboundUserMessage: true,
+          toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(incoming),
+        }),
+      ).resolves.toMatchObject(
+        accepted
+          ? { status: "accepted" }
+          : { status: "rejected", reason: "tool_authority_mismatch" },
+      );
+      expect(queueMessage).toHaveBeenCalledTimes(accepted ? 1 : 0);
+      expect(run.run.authProfileId).toBe("openai:primary");
+    },
+  );
 
-  it.each(["complete", "fail", "abortByUser", "abortForRestart"] as const)(
+  it.each(["complete", "abortForRestart"] as const)(
     "requires a snapshot for route preparation and rejects it after %s",
     (close) => {
       const run = createQueueTestRun({ prompt: "operation projection" });
@@ -221,11 +247,7 @@ describe("reply tool authority", () => {
       expect(operation.bindToolAuthorityRoute(route)).toBe(fingerprint);
       expect(operation.projectToolAuthorityFingerprint(overlay)).toBe(fingerprint);
 
-      if (close === "fail") {
-        operation.fail("run_failed");
-      } else {
-        operation[close]();
-      }
+      operation[close]();
       expect(operation.projectToolAuthorityFingerprint(overlay)).toBeUndefined();
       expect(() => operation.bindToolAuthorityRoute({ ...route, model: "gpt-late" })).toThrow(
         "Reply operation has no active tool authority snapshot",
@@ -274,13 +296,284 @@ describe("reply tool authority", () => {
     operation.complete();
   });
 
-  it("rejects inbound steering when tool authority changes before backend admission", async () => {
-    const queueMessage = vi.fn(async () => {});
-    const operation = createTestReplyOperation({ sessionId: "session-authority" });
-    operation.bindToolAuthoritySnapshot({
-      fingerprint: () => "authority-a",
-      project: () => "authority-a",
-    });
+  it.each([
+    ...[false, true].map((withModelPolicy) => ({
+      withModelPolicy,
+      grantKind: "bound",
+      grant: { pluginId: "access-policy", grantId: "original-grant" },
+      toolsAllow: withModelPolicy ? undefined : ["screen"],
+    })),
+    { withModelPolicy: true, grantKind: "independent", grant: null, toolsAllow: ["theme"] },
+    { withModelPolicy: true, grantKind: "unclassified", grant: undefined, toolsAllow: undefined },
+  ])(
+    "preserves steering across profiles and reconnects (model policy: $withModelPolicy, grant: $grantKind)",
+    async ({ withModelPolicy, grant, toolsAllow }) =>
+      withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const profileId = ensureProfileForEmail("steering-operator@example.test").id;
+        const otherProfileId = ensureProfileForEmail("another-steering-operator@example.test").id;
+        setUserProfileRole(profileId, withModelPolicy ? "writer" : null);
+        setUserProfileRole(otherProfileId, withModelPolicy ? "writer" : null);
+        const scopes: GatewayOperatorRoleDefinition["scopes"] = [
+          "operator.admin",
+          "operator.read",
+          "operator.write",
+        ];
+        let config: OpenClawConfig = withModelPolicy
+          ? {
+              agents: {
+                defaults: {
+                  model: { primary: "openai/gpt-test", fallbacks: ["openai/gpt-fallback"] },
+                },
+              },
+              gateway: {
+                roles: {
+                  definitions: {
+                    writer: {
+                      scopes,
+                      agents: "*",
+                      sessions: { others: "none" },
+                      modelPolicy: {},
+                    },
+                  },
+                },
+              },
+            }
+          : {};
+        const context = { getRuntimeConfig: () => config };
+        const originalClient = createOperatorClient({ profileId, scopes, caps: ["ui-commands"] });
+        const reconnectedClient = createOperatorClient({
+          profileId,
+          scopes,
+          caps: ["ui-commands"],
+        });
+        reconnectedClient.connId = "reconnected-browser";
+        const originalRevocation = new AbortController();
+        const reconnectedRevocation = new AbortController();
+        const cleanups: Array<() => void> = [];
+        const capture = async (
+          client: typeof originalClient,
+          signal: AbortSignal,
+          gatewayAccessGrant: GatewayAccessGrantRef | null | undefined,
+          grantSignal = new AbortController().signal,
+        ) => {
+          const caller = captureGatewayDeviceRevocation(
+            context,
+            { deviceId: "same-device", role: "operator" },
+            () => !signal.aborted,
+            undefined,
+            {
+              dependencies: { client, context, authPolicyGeneration: "same-policy" },
+              isCurrent: () => !signal.aborted,
+              subscribe: () => () => {},
+            },
+          );
+          cleanups.push(caller.release);
+          const owner = await captureGatewayOperatorRunAuthority({
+            client,
+            context,
+            hasCurrentClientAuthority: caller.isCurrent,
+            sourceAuthority:
+              gatewayAccessGrant === null
+                ? null
+                : {
+                    gatewayAccessGrant,
+                    signal: grantSignal,
+                    assertCurrent: () => grantSignal.throwIfAborted(),
+                  },
+          });
+          if (!owner) {
+            throw new Error("Expected an authenticated operator authority");
+          }
+          cleanups.push(owner.release);
+          return owner.authority;
+        };
+        try {
+          const run = createQueueTestRun({ prompt: "keep playing" });
+          run.toolsAllow = toolsAllow;
+          run.operatorAuthority = await capture(originalClient, originalRevocation.signal, grant);
+          run.run.gatewayUiCommandTarget = { connId: originalClient.connId!, profileId };
+          run.run.approvalReviewerDeviceId = "original-reviewer";
+          run.run.clientCaps = ["ui-commands"];
+          run.run.toolBindings = { browser: { kind: "tab", targetId: "original-tab" } };
+          run.run.senderIsOwner = true;
+          run.run.permissionMode = "full";
+          const reconnectedAuthority = await capture(
+            reconnectedClient,
+            reconnectedRevocation.signal,
+            grant,
+          );
+          const operation = createTestReplyOperation({ sessionId: "reconnected-steering" });
+          operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
+          const fingerprint = operation.bindToolAuthorityRoute(run.run);
+          const queueMessage = vi.fn(
+            async (_text: string, _options?: ReplyBackendQueueMessageOptions) => {},
+          );
+          operation.attachBackend({ kind: "embedded", cancel: vi.fn(), queueMessage });
+          operation.setPhase("running");
+          const overlay = {
+            ...toolAuthorityOverlay(run),
+            operatorAuthority: reconnectedAuthority,
+            gatewayUiCommandTarget: { connId: reconnectedClient.connId!, profileId },
+            approvalReviewerDeviceId: "new-reviewer",
+          };
+          const inject = (changes: Partial<ReplyToolAuthorityOverlay> = {}) =>
+            queueCurrentReplyRunMessage("reconnected-steering", "change strategy", {
+              isInboundUserMessage: true,
+              toolAuthorityOverlay: { ...overlay, ...changes },
+            });
+          await expect(
+            inject({
+              operatorAuthority:
+                grant === undefined
+                  ? run.operatorAuthority
+                  : await capture(originalClient, originalRevocation.signal, grant),
+              gatewayUiCommandTarget: run.run.gatewayUiCommandTarget,
+            }),
+          ).resolves.toEqual({ status: "accepted" });
+          // An unrelated config publication must not change the effective model ceiling.
+          config = { ...config };
+          await expect(inject()).resolves.toEqual(
+            grant === undefined
+              ? { status: "rejected", reason: "tool_authority_mismatch" }
+              : { status: "accepted" },
+          );
+          const otherAuthority = await capture(
+            createOperatorClient({ profileId: otherProfileId, scopes, caps: ["ui-commands"] }),
+            new AbortController().signal,
+            grant,
+          );
+          await expect(
+            inject({
+              operatorAuthority: otherAuthority,
+              gatewayUiCommandTarget: { connId: "other-browser", profileId: otherProfileId },
+            }),
+          ).resolves.toEqual(
+            grant === undefined
+              ? { status: "rejected", reason: "tool_authority_mismatch" }
+              : { status: "accepted" },
+          );
+          const acceptedMessages = grant === undefined ? 1 : 3;
+          expect(queueMessage).toHaveBeenLastCalledWith(
+            "change strategy",
+            expect.objectContaining({
+              toolAuthorityFingerprint: fingerprint,
+            }),
+          );
+          const forwarded = queueMessage.mock.calls.at(-1)?.[1];
+          expect(forwarded).not.toHaveProperty("operatorAuthority");
+          expect(forwarded).not.toHaveProperty("gatewayUiCommandTarget");
+          expect(forwarded).not.toHaveProperty("approvalReviewerDeviceId");
+          expect(forwarded).not.toHaveProperty("toolBindings");
+          for (const changedGrant of [
+            { pluginId: "access-policy", grantId: "replacement-grant" },
+            { pluginId: "other-policy", grantId: "original-grant" },
+            ...(grant === null ? [] : [null]),
+            ...(grant === undefined ? [] : [undefined]),
+          ]) {
+            await expect(
+              inject({
+                operatorAuthority: await capture(
+                  reconnectedClient,
+                  reconnectedRevocation.signal,
+                  changedGrant,
+                ),
+              }),
+            ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
+            expect(queueMessage).toHaveBeenCalledTimes(acceptedMessages);
+          }
+          if (grant !== null) {
+            const revokedGrant = new AbortController();
+            const revokedAuthority = await capture(
+              reconnectedClient,
+              reconnectedRevocation.signal,
+              grant,
+              revokedGrant.signal,
+            );
+            revokedGrant.abort();
+            await expect(inject({ operatorAuthority: revokedAuthority })).resolves.toMatchObject({
+              status: "rejected",
+              reason: "tool_authority_mismatch",
+            });
+            expect(queueMessage).toHaveBeenCalledTimes(acceptedMessages);
+          }
+          for (const changed of [
+            {
+              operatorAuthority: createAdmittedRunOperatorAuthority({
+                ...reconnectedAuthority,
+                scopes: ["operator.read"],
+              }),
+            },
+            {
+              operatorAuthority: otherAuthority,
+              gatewayUiCommandTarget: { connId: "other-browser", profileId },
+            },
+            { gatewayUiCommandTarget: { connId: "other-browser", profileId: otherProfileId } },
+            { gatewayUiCommandTarget: undefined },
+            {
+              operatorAuthority: createAdmittedRunOperatorAuthority({
+                ...reconnectedAuthority,
+                modelPolicy: prepareOperatorModelPolicy({
+                  cfg: config,
+                  policy: { allow: ["openai/gpt-test"] },
+                }),
+              }),
+            },
+            {
+              operatorAuthority: createAdmittedRunOperatorAuthority({
+                ...reconnectedAuthority,
+                modelPolicy: prepareOperatorModelPolicy({
+                  cfg: config,
+                  policy: { allow: ["openai/another-model"] },
+                }),
+              }),
+            },
+            { clientCaps: [] },
+            { toolBindings: { browser: { kind: "tab", targetId: "different-tab" } } },
+          ]) {
+            await expect(inject(changed)).resolves.toMatchObject({
+              status: "rejected",
+              reason: "tool_authority_mismatch",
+            });
+          }
+          reconnectedRevocation.abort();
+          await expect(inject()).resolves.toMatchObject({
+            status: "rejected",
+            reason: "tool_authority_mismatch",
+          });
+          const liveReplacement = await capture(
+            reconnectedClient,
+            new AbortController().signal,
+            grant,
+          );
+          originalRevocation.abort();
+          await expect(inject({ operatorAuthority: liveReplacement })).resolves.toMatchObject({
+            status: "rejected",
+            reason: "tool_authority_mismatch",
+          });
+          expect(queueMessage).toHaveBeenCalledTimes(acceptedMessages);
+        } finally {
+          for (const release of cleanups.toReversed()) {
+            release();
+          }
+        }
+      }),
+  );
+
+  it("projects inbound authority without forwarding a changed approval destination", async () => {
+    const run = createQueueTestRun({ prompt: "projected inbound" });
+    run.run.approvalReviewerDeviceId = "device-a";
+    run.run.gatewayUiCommandTarget = { connId: "browser-a", profileId: "profile-a" };
+    run.run.clientCaps = ["ui-commands"];
+    run.run.senderIsOwner = true;
+    run.run.permissionMode = "full";
+    const route = { provider: "openai", model: "gpt-primary" };
+    const overlay = { ...toolAuthorityOverlay(run), approvalReviewerDeviceId: "device-b" };
+    const queueMessage = vi.fn(
+      async (_text: string, _options?: ReplyBackendQueueMessageOptions) => {},
+    );
+    const operation = createTestReplyOperation({ sessionId: "session-projected-authority" });
+    operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
+    operation.bindToolAuthorityRoute(route);
     operation.attachBackend({
       kind: "embedded",
       cancel: vi.fn(),
@@ -290,90 +583,45 @@ describe("reply tool authority", () => {
     operation.setPhase("running");
 
     await expect(
-      queueCurrentReplyRunMessage("session-authority", "restricted turn", {
+      queueCurrentReplyRunMessage("session-projected-authority", "same authority", {
         isInboundUserMessage: true,
-        toolAuthorityFingerprint: "authority-b",
-      }),
-    ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
-    expect(queueMessage).not.toHaveBeenCalled();
-
-    await expect(
-      queueCurrentReplyRunMessage("session-authority", "same authority", {
-        isInboundUserMessage: true,
-        toolAuthorityFingerprint: "authority-a",
+        toolAuthorityFingerprint: "caller-cannot-override-projection",
+        toolAuthorityOverlay: overlay,
       }),
     ).resolves.toEqual({ status: "accepted" });
-  });
+    const forwardedOptions = queueMessage.mock.calls[0]?.[1];
+    expect(forwardedOptions).toMatchObject({
+      isInboundUserMessage: true,
+      toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(run, route),
+    });
+    expect(forwardedOptions).not.toHaveProperty("toolAuthorityOverlay");
+    expect(forwardedOptions).not.toHaveProperty("approvalReviewerDeviceId");
+    expect(queueMessage).toHaveBeenCalledOnce();
 
-  it.each(["device-a", "device-b", undefined])(
-    "projects inbound authority from reviewer %s without forwarding its approval destination",
-    async (approvalReviewerDeviceId) => {
-      const run = createQueueTestRun({ prompt: "projected inbound" });
-      run.run.approvalReviewerDeviceId = "device-a";
-      run.run.gatewayUiCommandTarget = { connId: "browser-a", profileId: "profile-a" };
-      run.run.clientCaps = ["ui-commands"];
-      run.run.senderIsOwner = true;
-      run.run.permissionMode = "full";
-      const route = { provider: "openai", model: "gpt-primary" };
-      const overlay = { ...toolAuthorityOverlay(run), approvalReviewerDeviceId };
-      const queueMessage = vi.fn(
-        async (_text: string, _options?: ReplyBackendQueueMessageOptions) => {},
-      );
-      const operation = createTestReplyOperation({ sessionId: "session-projected-authority" });
-      operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
-      operation.bindToolAuthorityRoute(route);
-      operation.attachBackend({
-        kind: "embedded",
-        cancel: vi.fn(),
-        isStreaming: () => true,
-        queueMessage,
-      });
-      operation.setPhase("running");
-
+    for (const restricted of [
+      { clientCaps: ["changed-capability"] },
+      { gatewayUiCommandTarget: { connId: "browser-b", profileId: "profile-a" } },
+      { gatewayUiCommandTarget: { connId: "browser-a", profileId: "profile-b" } },
+      { gatewayUiCommandTarget: undefined },
+      { toolBindings: { browser: { clientId: "different-browser" } } },
+      { permissionMode: "guarded" },
+    ] satisfies Partial<ReplyToolAuthorityOverlay>[]) {
       await expect(
-        queueCurrentReplyRunMessage("session-projected-authority", "same authority", {
+        queueCurrentReplyRunMessage("session-projected-authority", "changed authority", {
           isInboundUserMessage: true,
-          toolAuthorityFingerprint: "caller-cannot-override-projection",
-          toolAuthorityOverlay: overlay,
+          toolAuthorityOverlay: { ...overlay, ...restricted },
         }),
-      ).resolves.toEqual({ status: "accepted" });
-      const forwardedOptions = queueMessage.mock.calls[0]?.[1];
-      expect(forwardedOptions).toMatchObject({
-        isInboundUserMessage: true,
-        toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(run, route),
-      });
-      expect(forwardedOptions).not.toHaveProperty("toolAuthorityOverlay");
-      expect(forwardedOptions).not.toHaveProperty("approvalReviewerDeviceId");
+      ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
       expect(queueMessage).toHaveBeenCalledOnce();
-
-      for (const restricted of [
-        { clientCaps: ["changed-capability"] },
-        { gatewayUiCommandTarget: { connId: "browser-b", profileId: "profile-a" } },
-        { gatewayUiCommandTarget: { connId: "browser-a", profileId: "profile-b" } },
-        { gatewayUiCommandTarget: undefined },
-        { toolBindings: { browser: { clientId: "different-browser" } } },
-        { permissionMode: "guarded" },
-      ] satisfies Partial<ReplyToolAuthorityOverlay>[]) {
-        await expect(
-          queueCurrentReplyRunMessage("session-projected-authority", "changed authority", {
-            isInboundUserMessage: true,
-            toolAuthorityOverlay: { ...overlay, ...restricted },
-          }),
-        ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
-        expect(queueMessage).toHaveBeenCalledOnce();
-      }
-    },
-  );
+    }
+  });
 
   it.each([
     { restriction: "disabled", themeAvailable: false },
     { restriction: "no-capability", themeAvailable: true },
-    { restriction: "runtime-cap", themeAvailable: false },
-    { restriction: "runtime-theme", themeAvailable: true },
     { restriction: "runtime-intersection", themeAvailable: false },
     { restriction: "policy-deny", themeAvailable: true },
     { restriction: "policy-theme-deny", themeAvailable: false },
-    { restriction: "profile", themeAvailable: false },
     { restriction: "non-owner", themeAvailable: true },
   ])(
     "preserves steering within available theme authority when screen is unavailable: $restriction",
@@ -388,12 +636,6 @@ describe("reply tool authority", () => {
       if (restriction === "no-capability") {
         run.run.clientCaps = [];
       }
-      if (restriction === "runtime-cap") {
-        run.toolsAllow = ["read"];
-      }
-      if (restriction === "runtime-theme") {
-        run.toolsAllow = ["read", "theme"];
-      }
       if (restriction === "runtime-intersection") {
         run.toolsAllow = attachToolAllowlistIntersection(
           ["read", "screen"],
@@ -405,9 +647,6 @@ describe("reply tool authority", () => {
       }
       if (restriction === "policy-theme-deny") {
         run.run.config = { tools: { deny: ["screen", "theme"] } };
-      }
-      if (restriction === "profile") {
-        run.run.config = { tools: { profile: "minimal" } };
       }
       const queueMessage = vi.fn(async () => {});
       const operation = createTestReplyOperation({ sessionId: "screen-unavailable" });

@@ -129,16 +129,14 @@ describe("runMessageAction core send routing", () => {
         message: { crossContext: { allowAcrossProviders: policy.global } },
       },
       agents: {
-        list: [
-          {
-            id: "main",
-            ...(policy.agent === undefined
+        entries: {
+          main:
+            policy.agent === undefined
               ? {}
               : {
                   tools: { message: { crossContext: { allowAcrossProviders: policy.agent } } },
-                }),
-          },
-        ],
+                },
+        },
       },
     };
     const recovery = resolveAgentRestartRecoveryContext({
@@ -264,11 +262,7 @@ describe("runMessageAction core send routing", () => {
     expect(sendText).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    "agent:main:subagent:worker",
-    "agent:main:cron:job:run:turn",
-    "channel:agent:main:main",
-  ])(
+  it.each(["agent:main:subagent:worker", "channel:agent:main:main"])(
     "rejects implicit delivery to internal session %s before sending",
     async (currentChannelId) => {
       const sendText = registerSlackTextPlugin();

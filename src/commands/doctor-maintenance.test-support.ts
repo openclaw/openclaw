@@ -1,4 +1,15 @@
+import { aroundEach, vi } from "vitest";
 import type { SystemdServiceReadBinding } from "../daemon/service-types.js";
+import * as tmpOpenClawDir from "../infra/tmp-openclaw-dir.js";
+
+/** Synthetic services keep native lifecycle locks in their owned fixture root. */
+export function useDoctorMaintenanceRuntimeDirectory(createDirectory: () => string) {
+  aroundEach((runTest) => {
+    const directory = createDirectory();
+    vi.spyOn(tmpOpenClawDir, "resolvePreferredOpenClawTmpDir").mockReturnValue(directory);
+    return runTest();
+  });
+}
 
 export function stoppedSystemdBinding(onPassiveRead: () => void): SystemdServiceReadBinding {
   const unit = "openclaw-gateway.service";
@@ -19,6 +30,7 @@ export function stoppedSystemdBinding(onPassiveRead: () => void): SystemdService
     KillMode: "control-group",
     TasksCurrent: Number("18446744073709551615"),
     MemoryCurrent: 0,
+    ControlGroup: "",
   };
   return {
     unit,

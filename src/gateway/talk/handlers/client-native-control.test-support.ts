@@ -5,6 +5,7 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { createAttemptNestedToolActivityState } from "../../../agents/embedded-agent-runner/run/attempt-nested-tool-activity.js";
 import type { RunEmbeddedAgentParams } from "../../../agents/embedded-agent-runner/run/params.js";
 import * as embeddedRuns from "../../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../../agents/embedded-agent-runner/runs.test-support.js";
@@ -393,6 +394,41 @@ export function nativeDelegation(id: string, text: string) {
   };
 }
 
+type NativeCallSession = {
+  instructions: string;
+  initial_items?: unknown;
+  delegation?: Record<string, unknown>;
+};
+
+function isNativeCallSession(value: unknown): value is NativeCallSession {
+  return (
+    isRecord(value) &&
+    typeof value.instructions === "string" &&
+    (value.delegation === undefined || isRecord(value.delegation))
+  );
+}
+
+export async function nativeCallSession(): Promise<NativeCallSession> {
+  const init = upstream.fetch.mock.calls.at(-1)?.[1];
+  if (!init) {
+    throw new Error("Missing native call request");
+  }
+  const form = await new Request("https://example.test", {
+    method: "POST",
+    headers: init.headers,
+    body: init.body,
+  }).formData();
+  const sessionJson = form.get("session");
+  if (typeof sessionJson !== "string") {
+    throw new Error("Missing native call session");
+  }
+  const session: unknown = JSON.parse(sessionJson);
+  if (!isNativeCallSession(session)) {
+    throw new Error("Invalid native call session");
+  }
+  return session;
+}
+
 export function talkEventTypes(broadcast: ReturnType<typeof vi.fn>): string[] {
   return broadcast.mock.calls.flatMap(([event, payload]) => {
     if (event !== "talk.event" || !isRecord(payload) || !isRecord(payload.talkEvent)) {
@@ -484,16 +520,27 @@ export async function withParkedNativeTask(
                   thinkLevel: "off",
                   fastMode: undefined,
                 },
-                activeSession: embeddedSession,
-                hookRunner: null,
+                agentSession: {
+                  activeSession: embeddedSession,
+                  hookRunner: null,
+                  clientToolCallSlots: [],
+                  hasDeliveredSourceReply: () => false,
+                  markSourceReplyDelivered: () => {},
+                  builtinToolNames: new Set(),
+                  sourceReplyCapableToolNames: new Set(),
+                  coreBuiltinToolNames: new Set(),
+                  replaySafeToolNames: new Set(),
+                  codeModeExecToolNames: new Set(),
+                  sideEffectToolOwners: new Map(),
+                  trustedLocalMediaToolNames: new Set(),
+                },
                 hookAgentId: AGENT_ID,
                 diagnosticTrace: createDiagnosticTraceContext(),
                 diagnosticOwner: createDiagnosticEmbeddedRunOwner({
                   sessionId: params.sessionId,
                   runId: params.runId,
                 }),
-                clientToolCallSlots: [],
-                nestedToolActivities: [],
+                nestedToolActivityState: createAttemptNestedToolActivityState(),
                 isReplaySafeTool: () => false,
                 runAbortController,
                 abortRun: abortOwned,
@@ -504,14 +551,8 @@ export async function withParkedNativeTask(
                   timedOut: false,
                   yieldDetected: false,
                 }),
-                hasDeliveredSourceReply: () => false,
-                markSourceReplyDelivered: () => {},
                 onBlockReply: undefined,
                 onBlockReplyFlush: undefined,
-                sandboxSessionKey: SESSION_KEY,
-                builtinToolNames: new Set(),
-                replaySafeToolNames: new Set(),
-                trustedLocalMediaToolNames: new Set(),
               });
             }
             const handle =

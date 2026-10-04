@@ -1,12 +1,12 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.hasPermission
 import android.Manifest
 import android.content.ContentProviderOperation
 import android.content.ContentResolver
 import android.content.Context
 import android.provider.ContactsContract
-import androidx.core.content.ContextCompat
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -14,9 +14,6 @@ import kotlinx.serialization.json.JsonPrimitive
 
 private const val DEFAULT_CONTACTS_LIMIT = 25
 
-/**
- * Normalized Android contact row returned through the contacts commands.
- */
 @Serializable
 internal data class ContactRecord(
   val identifier: String,
@@ -28,17 +25,11 @@ internal data class ContactRecord(
   val emails: List<String>,
 )
 
-/**
- * Parsed contacts.search request with bounded result count.
- */
 internal data class ContactsSearchRequest(
   val query: String?,
   val limit: Int,
 )
 
-/**
- * Parsed contacts.add request before ContentProviderOperation batching.
- */
 internal data class ContactsAddRequest(
   val givenName: String?,
   val familyName: String?,
@@ -48,9 +39,6 @@ internal data class ContactsAddRequest(
   val emails: List<String>,
 )
 
-/**
- * Injectable ContactsProvider facade for command tests and Android runtime access.
- */
 internal interface ContactsDataSource {
   fun hasReadPermission(context: Context): Boolean
 
@@ -68,13 +56,9 @@ internal interface ContactsDataSource {
 }
 
 private object SystemContactsDataSource : ContactsDataSource {
-  override fun hasReadPermission(context: Context): Boolean =
-    ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) ==
-      android.content.pm.PackageManager.PERMISSION_GRANTED
+  override fun hasReadPermission(context: Context): Boolean = context.hasPermission(Manifest.permission.READ_CONTACTS)
 
-  override fun hasWritePermission(context: Context): Boolean =
-    ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_CONTACTS) ==
-      android.content.pm.PackageManager.PERMISSION_GRANTED
+  override fun hasWritePermission(context: Context): Boolean = context.hasPermission(Manifest.permission.WRITE_CONTACTS)
 
   override fun search(
     context: Context,
@@ -94,7 +78,7 @@ private object SystemContactsDataSource : ContactsDataSource {
     } else {
       // Escape wildcard characters so user text remains a substring search, not a LIKE pattern.
       selection = "${ContactsContract.Contacts.DISPLAY_NAME_PRIMARY} LIKE ? ESCAPE '\\'"
-      selectionArgs = arrayOf("%${escapeLikePattern(request.query)}%")
+      selectionArgs = arrayOf("%${escapeSqlLikeLiteral(request.query)}%")
     }
     val sortOrder = "${ContactsContract.Contacts.DISPLAY_NAME_PRIMARY} COLLATE NOCASE ASC LIMIT ${request.limit}"
     resolver
@@ -133,10 +117,7 @@ private object SystemContactsDataSource : ContactsDataSource {
     // Subsequent Data rows use back-reference 0 to attach to the RawContact inserted above.
     if (!request.givenName.isNullOrEmpty() || !request.familyName.isNullOrEmpty() || !request.displayName.isNullOrEmpty()) {
       operations +=
-        ContentProviderOperation
-          .newInsert(ContactsContract.Data.CONTENT_URI)
-          .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, 0)
-          .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE)
+        newContactData(ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE)
           .withValue(ContactsContract.CommonDataKinds.StructuredName.GIVEN_NAME, request.givenName)
           .withValue(ContactsContract.CommonDataKinds.StructuredName.FAMILY_NAME, request.familyName)
           .withValue(ContactsContract.CommonDataKinds.StructuredName.DISPLAY_NAME, request.displayName)
@@ -144,29 +125,20 @@ private object SystemContactsDataSource : ContactsDataSource {
     }
     if (!request.organizationName.isNullOrEmpty()) {
       operations +=
-        ContentProviderOperation
-          .newInsert(ContactsContract.Data.CONTENT_URI)
-          .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, 0)
-          .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Organization.CONTENT_ITEM_TYPE)
+        newContactData(ContactsContract.CommonDataKinds.Organization.CONTENT_ITEM_TYPE)
           .withValue(ContactsContract.CommonDataKinds.Organization.COMPANY, request.organizationName)
           .build()
     }
     request.phoneNumbers.forEach { number ->
       operations +=
-        ContentProviderOperation
-          .newInsert(ContactsContract.Data.CONTENT_URI)
-          .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, 0)
-          .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE)
+        newContactData(ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE)
           .withValue(ContactsContract.CommonDataKinds.Phone.NUMBER, number)
           .withValue(ContactsContract.CommonDataKinds.Phone.TYPE, ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE)
           .build()
     }
     request.emails.forEach { email ->
       operations +=
-        ContentProviderOperation
-          .newInsert(ContactsContract.Data.CONTENT_URI)
-          .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, 0)
-          .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE)
+        newContactData(ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE)
           .withValue(ContactsContract.CommonDataKinds.Email.ADDRESS, email)
           .withValue(ContactsContract.CommonDataKinds.Email.TYPE, ContactsContract.CommonDataKinds.Email.TYPE_HOME)
           .build()
@@ -189,6 +161,12 @@ private object SystemContactsDataSource : ContactsDataSource {
       fallbackDisplayName = request.displayName.orEmpty(),
     )
   }
+
+  private fun newContactData(mimeType: String): ContentProviderOperation.Builder =
+    ContentProviderOperation
+      .newInsert(ContactsContract.Data.CONTENT_URI)
+      .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, 0)
+      .withValue(ContactsContract.Data.MIMETYPE, mimeType)
 
   private fun resolveContactIdForRawContact(
     resolver: ContentResolver,
@@ -216,8 +194,22 @@ private object SystemContactsDataSource : ContactsDataSource {
   ): ContactRecord {
     val nameRow = loadNameRow(resolver, contactId)
     val organization = loadOrganization(resolver, contactId)
-    val phones = loadPhones(resolver, contactId)
-    val emails = loadEmails(resolver, contactId)
+    val phones =
+      queryContactValues(
+        resolver = resolver,
+        contentUri = ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+        valueColumn = ContactsContract.CommonDataKinds.Phone.NUMBER,
+        contactIdColumn = ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
+        contactId = contactId,
+      )
+    val emails =
+      queryContactValues(
+        resolver = resolver,
+        contentUri = ContactsContract.CommonDataKinds.Email.CONTENT_URI,
+        valueColumn = ContactsContract.CommonDataKinds.Email.ADDRESS,
+        contactIdColumn = ContactsContract.CommonDataKinds.Email.CONTACT_ID,
+        contactId = contactId,
+      )
     val displayName =
       (nameRow.displayName ?: fallbackDisplayName).ifEmpty {
         listOfNotNull(nameRow.givenName, nameRow.familyName).joinToString(" ").ifEmpty {
@@ -290,32 +282,6 @@ private object SystemContactsDataSource : ContactsDataSource {
       }
   }
 
-  private fun escapeLikePattern(pattern: String): String = pattern.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-  private fun loadPhones(
-    resolver: ContentResolver,
-    contactId: Long,
-  ): List<String> =
-    queryContactValues(
-      resolver = resolver,
-      contentUri = ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-      valueColumn = ContactsContract.CommonDataKinds.Phone.NUMBER,
-      contactIdColumn = ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
-      contactId = contactId,
-    )
-
-  private fun loadEmails(
-    resolver: ContentResolver,
-    contactId: Long,
-  ): List<String> =
-    queryContactValues(
-      resolver = resolver,
-      contentUri = ContactsContract.CommonDataKinds.Email.CONTENT_URI,
-      valueColumn = ContactsContract.CommonDataKinds.Email.ADDRESS,
-      contactIdColumn = ContactsContract.CommonDataKinds.Email.CONTACT_ID,
-      contactId = contactId,
-    )
-
   private fun queryContactValues(
     resolver: ContentResolver,
     contentUri: android.net.Uri,
@@ -343,70 +309,44 @@ private object SystemContactsDataSource : ContactsDataSource {
   }
 }
 
-/**
- * Handles contacts.search and contacts.add gateway commands through Android ContactsProvider.
- */
 class ContactsHandler internal constructor(
   private val appContext: Context,
   private val dataSource: ContactsDataSource = SystemContactsDataSource,
 ) {
-  /** Searches contacts by optional display-name substring with bounded result count. */
   fun handleContactsSearch(paramsJson: String?): GatewaySession.InvokeResult {
     if (!dataSource.hasReadPermission(appContext)) {
-      return GatewaySession.InvokeResult.error(
-        code = "CONTACTS_PERMISSION_REQUIRED",
-        message = "CONTACTS_PERMISSION_REQUIRED: grant Contacts permission",
-      )
+      return nodeInvokeError("CONTACTS_PERMISSION_REQUIRED", "grant Contacts permission")
     }
     val request =
       parseSearchRequest(paramsJson)
-        ?: return GatewaySession.InvokeResult.error(
-          code = "INVALID_REQUEST",
-          message = "INVALID_REQUEST: expected JSON object",
-        )
+        ?: return nodeInvokeError("INVALID_REQUEST", "expected JSON object")
     return try {
       val contacts = dataSource.search(appContext, request)
       GatewaySession.InvokeResult.ok(Json.encodeToString(mapOf("contacts" to contacts)))
     } catch (err: Throwable) {
-      GatewaySession.InvokeResult.error(
-        code = "CONTACTS_UNAVAILABLE",
-        message = "CONTACTS_UNAVAILABLE: ${err.message ?: "contacts query failed"}",
-      )
+      nodeInvokeError("CONTACTS_UNAVAILABLE", err.message ?: "contacts query failed")
     }
   }
 
-  /** Adds a local contact after validating that at least one user-visible field is present. */
   fun handleContactsAdd(paramsJson: String?): GatewaySession.InvokeResult {
     if (!dataSource.hasWritePermission(appContext)) {
-      return GatewaySession.InvokeResult.error(
-        code = "CONTACTS_PERMISSION_REQUIRED",
-        message = "CONTACTS_PERMISSION_REQUIRED: grant Contacts permission",
-      )
+      return nodeInvokeError("CONTACTS_PERMISSION_REQUIRED", "grant Contacts permission")
     }
     val request =
       parseAddRequest(paramsJson)
-        ?: return GatewaySession.InvokeResult.error(
-          code = "INVALID_REQUEST",
-          message = "INVALID_REQUEST: expected JSON object",
-        )
+        ?: return nodeInvokeError("INVALID_REQUEST", "expected JSON object")
     val hasName =
       !(request.givenName.isNullOrEmpty() && request.familyName.isNullOrEmpty() && request.displayName.isNullOrEmpty())
     val hasOrg = !request.organizationName.isNullOrEmpty()
     val hasDetails = request.phoneNumbers.isNotEmpty() || request.emails.isNotEmpty()
     if (!hasName && !hasOrg && !hasDetails) {
-      return GatewaySession.InvokeResult.error(
-        code = "CONTACTS_INVALID",
-        message = "CONTACTS_INVALID: include a name, organization, phone, or email",
-      )
+      return nodeInvokeError("CONTACTS_INVALID", "include a name, organization, phone, or email")
     }
     return try {
       val contact = dataSource.add(appContext, request)
       GatewaySession.InvokeResult.ok(Json.encodeToString(mapOf("contact" to contact)))
     } catch (err: Throwable) {
-      GatewaySession.InvokeResult.error(
-        code = "CONTACTS_UNAVAILABLE",
-        message = "CONTACTS_UNAVAILABLE: ${err.message ?: "contact add failed"}",
-      )
+      nodeInvokeError("CONTACTS_UNAVAILABLE", err.message ?: "contact add failed")
     }
   }
 

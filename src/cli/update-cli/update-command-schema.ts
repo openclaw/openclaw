@@ -3,7 +3,8 @@ import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { tryReadJson } from "../../infra/json-files.js";
-import { checkGlobalPackageUpdatePermissions } from "../../infra/package-update-manager-preflight.js";
+import { readPackageName } from "../../infra/package-json.js";
+import { checkGlobalPackageUpdateAdmission } from "../../infra/package-update-manager-preflight.js";
 import {
   readUpdateStateSchemaVersions,
   resolveUpdateStateContentVersion,
@@ -26,8 +27,10 @@ import {
   checkTargetDatabaseSchemasForContexts,
   formatSchemaRefusalLines,
   hasSchemaRefusal,
+  isCandidateAdmissionContextCovered,
 } from "./schema-preflight.js";
 import {
+  DEFAULT_PACKAGE_NAME,
   resolveGitInstallDir,
   UpdatePreMutationError,
   type UpdateCommandOptions,
@@ -39,11 +42,11 @@ import {
 } from "./update-command-dry-run.js";
 import type { RefuseUpdate } from "./update-command-result.js";
 import type { prepareUpdateCommand } from "./update-command-run.js";
-import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
-import {
-  resolvePackageRuntimePreflight,
-  type ManagedServiceRootRedirect,
-} from "./update-command-service-plan.js";
+import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
+import type {
+  ManagedServiceRootRedirect,
+  PreManagedServiceStop,
+} from "./update-command-service-context-types.js";
 import type { resolveUpdateCommandTarget } from "./update-command-target.js";
 
 /** Render prepared preview facts without initializing runtime state. */
@@ -81,14 +84,21 @@ export async function previewUpdateCommand(params: {
       !target.packageAlreadyCurrent &&
       preflight.preflightFailures.length === 0
     ) {
-      const permissions = await checkGlobalPackageUpdatePermissions(target.packageInstallTarget);
-      if (permissions?.stderrTail) {
+      const admission = await checkGlobalPackageUpdateAdmission(
+        target.packageInstallTarget,
+        (await readPackageName(target.packageInstallTarget.packageRoot ?? target.root)) ??
+          DEFAULT_PACKAGE_NAME,
+      );
+      if (admission?.stderrTail) {
         preflight.preflightFailures.push({
-          reason: UPDATE_GLOBAL_PERMISSION_REASON,
-          message: permissions.stderrTail,
-          failureFacts: permissions.failureFacts,
+          reason:
+            admission.name === "package-permissions"
+              ? UPDATE_GLOBAL_PERMISSION_REASON
+              : admission.name,
+          message: admission.stderrTail,
+          failureFacts: admission.failureFacts,
         });
-        preflight.preflightNotes.push(`Would refuse update: ${permissions.stderrTail}`);
+        preflight.preflightNotes.push(`Would refuse update: ${admission.stderrTail}`);
       }
     }
     await printUpdateDryRun({
@@ -116,6 +126,7 @@ export async function preflightUpdateCommandSchemas(params: {
   updateStepTimeoutMs: number;
   invocationCwd?: string;
   legacyConfigPlan?: LegacyConfigUpdatePlan;
+  callerLegacyConfigPlan?: LegacyConfigUpdatePlan;
   managedServiceRootRedirect: ManagedServiceRootRedirect | null;
   managedServiceRoot?: string;
   channel: UpdateChannel;
@@ -128,6 +139,7 @@ export async function preflightUpdateCommandSchemas(params: {
   packageAlreadyCurrent?: boolean;
   managedServiceNodeRunner?: string;
   expectedForeground?: true;
+  candidateAdmissionChecks?: readonly string[];
   opts: Pick<UpdateCommandOptions, "dryRun" | "json" | "run">;
   refuseUpdate: RefuseUpdate;
 }): Promise<
@@ -154,6 +166,10 @@ export async function preflightUpdateCommandSchemas(params: {
     refuseUpdate,
   } = params;
   const run = opts.run;
+  const candidateAdmissionChecks =
+    updateInstallKind === "package" && !opts.dryRun
+      ? (params.candidateAdmissionChecks ?? run?.candidateAdmissionChecks)
+      : undefined;
   if (run) {
     recordUpdateRunPhase(run.runId, "validating", undefined, { env: run.env });
   }
@@ -179,6 +195,8 @@ export async function preflightUpdateCommandSchemas(params: {
         managedServiceRootRedirect,
         managedServiceRoot: params.managedServiceRoot,
         legacyConfigPlan: params.legacyConfigPlan,
+        callerLegacyConfigPlan: params.callerLegacyConfigPlan,
+        candidateAdmissionChecks,
         expectedForeground:
           params.expectedForeground || run?.completionOwner === "gateway-restart" || undefined,
       });
@@ -208,16 +226,21 @@ export async function preflightUpdateCommandSchemas(params: {
           : { schemaVersions: packageTargetSchemaVersions };
       if ("metadataUnreadable" in target && target.metadataUnreadable) {
         const failure = createUpdatePreflightFailure(
-          "target-git-metadata",
+          "failureCode" in target && target.failureCode
+            ? target.failureCode
+            : "target-git-metadata",
           target.metadataUnreadable,
         );
         throw new UpdatePreMutationError("target-metadata-preflight", failure.message, {
           failureFacts: failure.failureFacts,
         });
       }
+      const installedContexts = candidateAdmissionChecks?.includes("database-schema")
+        ? admission.contexts.filter((context) => !isCandidateAdmissionContextCovered(context.env))
+        : admission.contexts;
       packageSchemaPreflight = await checkTargetDatabaseSchemasForContexts(
         target.schemaVersions,
-        admission.contexts,
+        installedContexts,
       );
       if (opts.dryRun && updateInstallKind === "package") {
         const runtime = await resolvePackageRuntimePreflight({

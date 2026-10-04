@@ -319,7 +319,16 @@ describe("update failure triage boundary", () => {
           result: {
             reason: result.reason,
             recovery: result.recovery,
-            steps: gateway === "preserve" ? [{ stderrTail: "ENOSPC" }] : [],
+            steps:
+              gateway === "preserve"
+                ? [{ stderrTail: "ENOSPC" }]
+                : [
+                    {
+                      name: "update",
+                      exitCode: null,
+                      failureFacts: [{ check: "update", code: "restart-unhealthy" }],
+                    },
+                  ],
           },
         },
       });
@@ -377,11 +386,15 @@ describe("update failure triage boundary", () => {
       const detail = `Fresh Doctor failed token=${secret}; original Doctor diagnostic`;
       const failure =
         kind === "reported" ? new UpdateCommandFailure(result, 1, detail) : new Error(detail);
+      const observedResult = failure instanceof UpdateCommandFailure ? failure.result : result;
       const completion = withUpdateFailureTriage({ json: true }, targetWithResult, async () => {
         try {
           throw failure;
         } finally {
-          result.recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+          observedResult.recovery = {
+            serviceRestartSafe: false,
+            reason: "runtime-verification-failed",
+          };
           await fs.writeFile(path.join(target.root, "released"), "done");
         }
       });
@@ -479,26 +492,7 @@ describe("update failure triage boundary", () => {
     expect(attemptIds[0]).not.toBe(attemptIds[1]);
   });
 
-  it("passes the admitted run identity to interactive reporting", async () => {
-    const target = await createInstalledTriage();
-    const runId = "b89e301f-2df4-4dd8-a7ea-4f4b4e10b6f3";
-    const opts = { json: false, run: { runId, env: target.env } };
-    runInteractiveUpdateFailureAction.mockResolvedValue("handled");
-
-    await withTriageTerminal(true, async () => {
-      await expect(
-        withUpdateFailureTriage(opts, target, async () => {
-          throw new UpdateCommandFailure(failedUpdate);
-        }),
-      ).rejects.toMatchObject({ code: 1 });
-    });
-
-    expect(runInteractiveUpdateFailureAction).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ attemptId: runId }),
-    );
-  });
-
-  it("keeps reporting in the admitted run's state scope", async () => {
+  it("keeps reporting in the admitted run's identity and state scope", async () => {
     const target = await createInstalledTriage();
     const env = { ...target.env, OPENCLAW_STATE_DIR: path.join(target.root, "admitted-state") };
     const opts = { run: { runId: "b89e301f-2df4-4dd8-a7ea-4f4b4e10b6f3", env } };
@@ -513,7 +507,7 @@ describe("update failure triage boundary", () => {
     });
 
     expect(runInteractiveUpdateFailureAction).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ env }),
+      expect.objectContaining({ attemptId: opts.run.runId, env }),
     );
   });
 

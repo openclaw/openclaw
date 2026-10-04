@@ -1,6 +1,6 @@
-// Discord provider module implements model/runtime integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -11,16 +11,14 @@ import {
   type BaseMessageInteractiveComponent,
   type DiscordCommand,
   type Modal,
-  type Plugin,
+  type RegisteredPlugin,
 } from "../internal/discord.js";
-import type { GatewayPlugin } from "../internal/gateway.js";
 import { VoicePlugin } from "../internal/voice.js";
 import { parseApplicationIdFromToken } from "../probe.js";
 import { DISCORD_REST_TIMEOUT_MS } from "../proxy-request-client.js";
 import type { DiscordGuildEntryResolved } from "./allow-list.js";
 import { createDiscordAutoPresenceController } from "./auto-presence.js";
 import type { DiscordDmPolicy } from "./dm-command-auth.js";
-import type { MutableDiscordGateway } from "./gateway-handle.js";
 import {
   createDiscordGatewayPlugin,
   waitForDiscordGatewayPluginRegistration,
@@ -56,11 +54,10 @@ type CreateClientFn = (
 ) => Client;
 type DiscordEventQueueOptions = NonNullable<ConstructorParameters<typeof Client>[0]["eventQueue"]>;
 
-function registerLatePlugin(client: Client, plugin: Plugin) {
+function registerLatePlugin(client: Client, plugin: RegisteredPlugin) {
   void plugin.registerClient?.(client);
-  void plugin.registerRoutes?.(client);
   if (!client.plugins.some((entry) => entry.id === plugin.id)) {
-    client.plugins.push({ id: plugin.id, plugin });
+    client.plugins.push(plugin);
   }
 }
 
@@ -76,22 +73,18 @@ function createDiscordStatusReadyListener(params: {
         return;
       }
 
-      const gateway = client.getPlugin<GatewayPlugin>("gateway");
+      const gateway = client.getPlugin("gateway");
       if (!gateway) {
         return;
       }
 
-      const presence = resolveDiscordPresenceUpdate(params.discordConfig);
-      if (!presence) {
-        return;
-      }
-
-      gateway.updatePresence(presence);
+      gateway.updatePresence(resolveDiscordPresenceUpdate(params.discordConfig));
     }
   })();
 }
 
 export async function createDiscordMonitorClient(params: {
+  scheduler: PluginServiceSchedulerV1;
   accountId: string;
   applicationId: string;
   token: string;
@@ -104,25 +97,16 @@ export async function createDiscordMonitorClient(params: {
   runtime: RuntimeEnv;
   commandDeployHashStore?: DiscordCommandDeployHashStore;
   createClient: CreateClientFn;
-  createGatewayPlugin: typeof createDiscordGatewayPlugin;
-  createGatewaySupervisor: typeof createDiscordGatewaySupervisor;
-  createAutoPresenceController: typeof createDiscordAutoPresenceController;
   isDisallowedIntentsError: (err: unknown) => boolean;
 }) {
   let autoPresenceController: DiscordAutoPresenceController | null = null;
-  const clientPlugins: Plugin[] = [
-    params.createGatewayPlugin({
+  const constructorPlugins: RegisteredPlugin[] = [
+    createDiscordGatewayPlugin({
       discordConfig: params.discordConfig,
       runtime: params.runtime,
     }),
   ];
-  if (params.voiceEnabled) {
-    clientPlugins.push(new VoicePlugin());
-  }
-  const voicePlugin = clientPlugins.find((plugin) => plugin.id === "voice");
-  const constructorPlugins = voicePlugin
-    ? clientPlugins.filter((plugin) => plugin !== voicePlugin)
-    : clientPlugins;
+  const voicePlugin = params.voiceEnabled ? new VoicePlugin() : undefined;
 
   const eventQueueOpts = {
     listenerTimeout: 120_000,
@@ -134,17 +118,11 @@ export async function createDiscordMonitorClient(params: {
   });
   const client = params.createClient(
     {
-      baseUrl: "http://localhost",
-      deploySecret: "a",
       clientId: params.applicationId,
-      publicKey: "a",
       token: params.token,
-      autoDeploy: false,
       commandDeployHashStore: params.commandDeployHashStore,
       requestOptions: {
         timeout: DISCORD_REST_TIMEOUT_MS,
-        runtimeProfile: "persistent",
-        maxQueueSize: 1000,
         ...(params.restFetch ? { fetch: params.restFetch } : {}),
       },
       eventQueue: eventQueueOpts,
@@ -160,16 +138,17 @@ export async function createDiscordMonitorClient(params: {
   if (voicePlugin) {
     registerLatePlugin(client, voicePlugin);
   }
-  const gateway = client.getPlugin<GatewayPlugin>("gateway") as MutableDiscordGateway | undefined;
+  const gateway = client.getPlugin("gateway");
   await waitForDiscordGatewayPluginRegistration(gateway);
-  const gatewaySupervisor = params.createGatewaySupervisor({
+  const gatewaySupervisor = createDiscordGatewaySupervisor({
     gateway,
     isDisallowedIntentsError: params.isDisallowedIntentsError,
     runtime: params.runtime,
   });
 
   if (gateway) {
-    autoPresenceController = params.createAutoPresenceController({
+    autoPresenceController = createDiscordAutoPresenceController({
+      scheduler: params.scheduler,
       accountId: params.accountId,
       discordConfig: params.discordConfig,
       gateway,
@@ -212,14 +191,9 @@ export async function fetchDiscordBotIdentity(params: {
     throw new Error("Failed to resolve Discord bot identity", { cause: err });
   }
 
-  const botUserRecord = botUser as
-    | { id?: unknown; username?: unknown; globalName?: unknown }
-    | null
-    | undefined;
-  const botUserId = normalizeOptionalString(botUserRecord?.id);
+  const botUserId = normalizeOptionalString(botUser?.id);
   const botUserName =
-    normalizeOptionalString(botUserRecord?.username) ??
-    normalizeOptionalString(botUserRecord?.globalName);
+    normalizeOptionalString(botUser?.username) ?? normalizeOptionalString(botUser?.globalName);
   if (!botUserId) {
     const details = 'fetchUser("@me") returned no usable id';
     params.runtime.error?.(danger(`discord: failed to fetch bot identity: ${details}`));
@@ -253,14 +227,12 @@ export function registerDiscordMonitorListeners(params: {
   messageHandler: ConstructorParameters<typeof DiscordMessageListener>[0];
   trackInboundEvent?: () => void;
 }) {
-  registerDiscordListener(
-    params.client.listeners,
+  for (const listener of [
     new DiscordInteractionListener(params.logger, params.trackInboundEvent),
-  );
-  registerDiscordListener(
-    params.client.listeners,
     new DiscordMessageListener(params.messageHandler, params.logger, params.trackInboundEvent),
-  );
+  ]) {
+    registerDiscordListener(params.client.listeners, listener);
+  }
   const guildJoinListener = new DiscordGuildJoinIntroductionListener({
     readPolicy: params.readPolicy,
     cfg: params.cfg,
@@ -289,24 +261,20 @@ export function registerDiscordMonitorListeners(params: {
     logger: params.logger,
     onEvent: params.trackInboundEvent,
   };
-  registerDiscordListener(
-    params.client.listeners,
+  for (const listener of [
     new DiscordReactionListener(reactionListenerOptions),
-  );
-  registerDiscordListener(
-    params.client.listeners,
     new DiscordReactionRemoveListener(reactionListenerOptions),
-  );
+  ]) {
+    registerDiscordListener(params.client.listeners, listener);
+  }
   const threadUpdateListener = new DiscordThreadUpdateListener(params.cfg, params.logger);
-  registerDiscordListener(params.client.listeners, threadUpdateListener);
-  registerDiscordListener(
-    params.client.listeners,
+  for (const listener of [
+    threadUpdateListener,
     new DiscordThreadReadyListener(threadUpdateListener),
-  );
-  registerDiscordListener(
-    params.client.listeners,
     new DiscordThreadDeleteListener(params.cfg, params.accountId, params.logger),
-  );
+  ]) {
+    registerDiscordListener(params.client.listeners, listener);
+  }
 
   let presenceListener: DiscordPresenceListener | undefined;
   if (params.discordConfig.intents?.presence) {
@@ -318,19 +286,14 @@ export function registerDiscordMonitorListeners(params: {
       botUserId: params.botUserId,
       guildEntries: params.guildEntries,
     });
-    registerDiscordListener(params.client.listeners, presenceListener);
-    registerDiscordListener(
-      params.client.listeners,
+    for (const listener of [
+      presenceListener,
       new DiscordPresenceGuildCreateListener(presenceListener),
-    );
-    registerDiscordListener(
-      params.client.listeners,
       new DiscordPresenceGuildDeleteListener(presenceListener),
-    );
-    registerDiscordListener(
-      params.client.listeners,
       new DiscordPresenceReadyListener(presenceListener),
-    );
+    ]) {
+      registerDiscordListener(params.client.listeners, listener);
+    }
     params.runtime.log?.("discord: GuildPresences intent enabled — presence listener registered");
   }
   return async () => {

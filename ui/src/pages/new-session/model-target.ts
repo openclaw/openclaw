@@ -46,6 +46,10 @@ export type NewSessionModelMetadata = ChatModelCatalogState & {
   displayOnly?: boolean;
 };
 
+export function createEmptyDraftModelMetadata(): NewSessionModelMetadata {
+  return { catalog: [], hasSnapshot: false, status: "idle" };
+}
+
 type DraftModelControlSelection = {
   agentRuntime?: string;
   contextWindow: string;

@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   captureI18nStateForTesting,
   createI18nManagerForTesting,
@@ -10,15 +10,10 @@ vi.hoisted(() => vi.resetModules());
 
 let restoreI18n: () => Promise<void>;
 
-beforeEach(() => {
-  restoreI18n = captureI18nStateForTesting();
-});
-
-afterEach(async () => {
-  await restoreI18n();
-});
+afterEach(() => restoreI18n());
 
 it("loads bundle fallback copy with the skill preview without replacing the active language", async () => {
+  restoreI18n = captureI18nStateForTesting();
   const manager = createI18nManagerForTesting(async () => ({
     filePreview: { bundle: { binary: "Binärdatei" } },
   }));

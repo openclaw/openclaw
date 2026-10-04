@@ -1,4 +1,3 @@
-// Materializes normalized config into runtime-ready settings.
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   applyCompactionDefaults,
@@ -8,7 +7,6 @@ import {
   applyModelDefaults,
   applySessionDefaults,
 } from "./defaults.js";
-import { inheritLegacyDefaultAgentId } from "./legacy.default-agent-owner.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
 import { normalizeConfigPaths } from "./normalize-paths.js";
 import { normalizeTalkConfig } from "./talk.js";
@@ -47,5 +45,5 @@ export function materializeRuntimeConfig(
   next = normalizeTalkConfig(next);
   normalizeConfigPaths(next, options);
   normalizeExecSafeBinProfilesInConfig(next);
-  return asRuntimeConfig(inheritLegacyDefaultAgentId(config, next));
+  return asRuntimeConfig(next);
 }

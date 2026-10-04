@@ -16,7 +16,7 @@ Heartbeat is a system-owned automation that runs **periodic agent turns** in the
 main session so the model can surface anything that needs attention without
 spamming you.
 
-Heartbeat is a scheduled main-session turn - it does **not** create [background task](/automation/tasks) records. Task records are for detached work (ACP runs, subagents, isolated automation jobs).
+Heartbeat is a scheduled main-session turn. ACP runs, subagents, and isolated automation jobs use their own execution owners.
 
 Under the hood, heartbeat cadence is owned by the Automations scheduler: the gateway maintains one system-owned automation job per heartbeat-enabled agent (visible in `openclaw cron list --all` as `Heartbeat (agent-id)`). Heartbeat config remains the desired-state input, while the persisted monitor schedule owns the actual tick and the runner's later cooldown. The gateway writes config changes through at startup and on config reload. `openclaw doctor --fix` can materialize missing or stale monitor rows before the next gateway start. Edit `agents.*.heartbeat`, not the automation job. If saving monitor rows fails after a config change is accepted, the Gateway keeps the accepted config and reports that recovery is required. Monitor retries use the current accepted config. Rejected changes never become retry targets.
 
@@ -96,9 +96,9 @@ string. `heartbeat.target` accepts `owner`, `last`, `none`, or a channel ID such
 - Interval: `30m`. Applying Anthropic provider defaults bumps this to `1h` when the resolved auth mode is OAuth/token (including Claude CLI reuse), but only while `heartbeat.every` is unset. Set `agents.defaults.heartbeat.every` or per-agent `agents.entries.*.heartbeat.every`. Use `0m` to disable recurring cadence.
 - Delivery target: `owner`. OpenClaw uses the first concrete `commands.ownerAllowFrom` entry, then channel `allowFrom`, and never sends this route to a group. Without a resolvable owner DM, ambient polls skip with `reason=no-route`. Set `target: "last"` to follow the most recent conversation, including groups, or `target: "none"` for internal-only runs.
 - Prompt body (configurable via `agents.defaults.heartbeat.prompt`): `Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply NO_REPLY.`
-- Timeout: unset heartbeat turns use `agents.defaults.timeoutSeconds` when set. Otherwise, they use the heartbeat cadence capped at 600 seconds. Set `agents.defaults.heartbeat.timeoutSeconds` or per-agent `agents.entries.*.heartbeat.timeoutSeconds` for longer heartbeat work. Turns that resume work after a background command completes or process background-task review and blocked-task events use the ordinary agent timeout (48 hours by default); heartbeat cadence and timeout settings do not shorten these continuations. The event must be included in the turn; an isolated monitor does not inherit the budget of work pending in its base session.
+- Timeout: unset heartbeat turns use `agents.defaults.timeoutSeconds` when set. Otherwise, they use the heartbeat cadence capped at 600 seconds. Set `agents.defaults.heartbeat.timeoutSeconds` or per-agent `agents.entries.*.heartbeat.timeoutSeconds` for longer heartbeat work. Turns that resume work after a background command completes or process background-task review, blocked-task events, and recovered restart work use the ordinary agent timeout (48 hours by default); heartbeat cadence and timeout settings do not shorten these continuations. The event must be included in the turn; an isolated monitor does not inherit the budget of work pending in its base session.
 - The heartbeat prompt is sent **verbatim** as the scheduled user message. Heartbeat runs use the same system prompt as ordinary agent turns. There is no heartbeat-specific system-prompt section.
-- When recurring heartbeats are disabled with `0m`, the automation job stays but is disabled. Its monitor scratch is retained for when you re-enable the cadence. Targeted event-driven wakes remain available.
+- When recurring heartbeats are disabled with `0m`, the automation job stays but is disabled. Doctor reports a disabled monitor when creating or updating this job, rather than showing its retained interval as an active cadence. Its monitor scratch is retained for when you re-enable the cadence. Targeted event-driven wakes remain available.
 - When automations are disabled entirely, scheduled heartbeats do not run even if heartbeat cadence remains enabled.
 - Active hours (`heartbeat.activeHours`) are checked in the configured timezone. Outside the window, heartbeats are skipped until the next tick inside the window.
 - Scheduled heartbeats defer while the main queue or automation work is active or queued, while any reply or embedded run for the same agent is active, and while the resolved target session has active or queued work. An event-free plain monitor poll that has not begun preparation is recorded as skipped and waits for its next persisted cadence tick, instead of keeping a running automation open behind busy work. Wakes carrying queued events or scheduled tasks, and work already admitted or retained after execution, still retry. Immediate and manual wakes bypass the broad same-agent active-run check, but still honor the main, automation, and target-session busy guards. Sibling agents do not pause each other.
@@ -123,7 +123,7 @@ Proactive heartbeat behavior is opt-in:
   night-time pings in your configured local timezone (see
   [Timezone](/concepts/timezone)).
 
-Heartbeat can react to completed [background tasks](/automation/tasks), but a heartbeat run itself does not create a task record.
+Heartbeat can react to completion events from background execution.
 
 If you want a heartbeat to do something very specific (e.g. "check Gmail PubSub stats" or "verify gateway health"), set `agents.defaults.heartbeat.prompt` (or `agents.entries.*.heartbeat.prompt`) to a custom body (sent verbatim).
 
@@ -166,7 +166,7 @@ Outside heartbeats, stray `HEARTBEAT_OK` at the start/end of a message is stripp
 
 - `agents.defaults.heartbeat` sets global heartbeat behavior.
 - `agents.entries.*.heartbeat` merges on top. If any agent has a `heartbeat` block, **only those agents** run heartbeats.
-- Ambient ownership resolves through `agents.defaults.heartbeat.agentId`, `agents.defaults.systemAgent.agentId`, the legacy default owner, then the sole agent. When no per-agent or default heartbeat block applies and that chain leaves a multi-agent roster ownerless, heartbeats stay disabled and emit validation and Gateway warnings.
+- Ambient ownership resolves through `agents.defaults.heartbeat.agentId`, `agents.defaults.systemAgent.agentId`, then the sole agent. When no per-agent or default heartbeat block applies and that chain leaves a multi-agent roster ownerless, heartbeats stay disabled and emit validation and Gateway warnings.
 - `channels.defaults.heartbeatVisibility` sets visibility defaults for all channels.
 - `channels.<channel>.heartbeatVisibility` overrides channel defaults.
 - `channels.<channel>.accounts.<id>.heartbeatVisibility` (multi-account channels) overrides per-channel settings.
@@ -180,14 +180,16 @@ Example: two agents, only the second agent runs heartbeats.
 ```json5
 {
   agents: {
+    ownership: "explicit",
     defaults: {
+      systemAgent: { agentId: "main" },
       heartbeat: {
         every: "30m",
         target: "owner", // default: operator DM
       },
     },
     entries: {
-      main: { default: true },
+      main: { workspace: "~/.openclaw/workspace" },
       ops: {
         heartbeat: {
           every: "1h",
@@ -199,6 +201,7 @@ Example: two agents, only the second agent runs heartbeats.
       },
     },
   },
+  talk: { agentId: "main" },
 }
 ```
 
@@ -246,7 +249,6 @@ Use `accountId` to target a specific account on multi-account channels like Tele
   agents: {
     entries: {
       ops: {
-        default: true,
         heartbeat: {
           every: "1h",
           target: "telegram",
@@ -317,7 +319,7 @@ The `target` field does not accept a combined channel-and-recipient value such a
 </ParamField>
 <ParamField path="timeoutSeconds" type="number" default="global timeout or min(every, 600)">
   Maximum seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use `agents.defaults.timeoutSeconds` when set, otherwise the heartbeat cadence capped at 600 seconds.
-  Exec-completion continuations use the ordinary agent timeout instead, including an explicit `agents.defaults.timeoutSeconds` value of `0` for no timeout.
+  Exec-completion, background-task, and recovered restart continuations use the ordinary agent timeout instead, including an explicit `agents.defaults.timeoutSeconds` value of `0` for no timeout.
 
 </ParamField>
 <ParamField path="activeHours" type="object">
@@ -340,7 +342,8 @@ Heartbeat configuration is strict: only the fields listed above are accepted. Ac
 <AccordionGroup>
   <Accordion title="Session and target routing">
     - Heartbeats run in the agent's main session by default (`agent:<id>:main`), or `global` when `session.scope = "global"`. Set `session` to override to a specific channel session (Discord/WhatsApp/etc.).
-    - `session` only affects the run context. Delivery is controlled by `target` and `to`.
+    - `session` only affects the run context. Delivery is controlled by `target` and `to`, except for session-owned events in an internal session (see below).
+    - A wake whose pending events are all session-owned (background exec completions, or the continuation of a turn interrupted by a Gateway restart) in an internal session (Control UI/WebChat, or another operator-owned session without an external route) publishes the reply into that session's transcript instead of the `target`/`to` channel. `target: "none"` still suppresses it. If the session write fails, the event stays queued for a later wake and does not fall back to the channel. Batches that also contain other events use `target`/`to` as usual.
     - The default `owner` target chooses an explicitly configured owner identity. It reuses the exact account/thread only when the session's last route is a direct chat to that owner.
     - A wake that carries a channel and recipient uses that named origin before owner discovery. This event destination can be a group because it is explicit, not inferred.
     - To deliver to a specific channel/recipient, set a channel `target` plus `to`. `target: "last"` is an explicit opt-in to the last external conversation, including groups.
@@ -361,7 +364,7 @@ Heartbeat configuration is strict: only the fields listed above are accepted. Ac
   <Accordion title="Session lifecycle and audit">
     - Heartbeat-only replies do **not** keep the session alive. Heartbeat metadata may update the session row, but idle expiry uses `lastInteractionAt` from the last real user/channel message, and daily expiry uses `sessionStartedAt`.
     - Control UI and WebChat history hide heartbeat prompts and OK-only acknowledgments. The underlying session transcript can still contain those turns for audit/replay.
-    - Detached [background tasks](/automation/tasks) can enqueue a system event and wake heartbeat when the main session should notice something quickly. That wake does not make the heartbeat run a background task.
+    - Background execution can enqueue a system event and wake heartbeat when the main session should notice something quickly.
 
   </Accordion>
 </AccordionGroup>
@@ -549,6 +552,5 @@ To avoid this, use `isolatedSession: true` to run heartbeats in a fresh session.
 ## Related
 
 - [Automation](/automation) - all automation mechanisms at a glance
-- [Background Tasks](/automation/tasks) - how detached work is tracked
 - [Timezone](/concepts/timezone) - how timezone affects heartbeat scheduling
 - [Troubleshooting](/automation/cron-jobs#troubleshooting) - debugging automation issues

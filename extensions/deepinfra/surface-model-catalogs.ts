@@ -1,4 +1,3 @@
-// Deepinfra plugin module implements surface model catalogs behavior.
 import type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogProviderContext,
@@ -8,42 +7,13 @@ import type {
   VideoGenerationProviderCapabilities,
 } from "openclaw/plugin-sdk/video-generation";
 import { DEEPINFRA_VIDEO_ASPECT_RATIOS, DEEPINFRA_VIDEO_DURATIONS } from "./media-models.js";
-import type { DeepInfraSurfaceModel } from "./media-models.js";
 import { discoverDeepInfraSurfaces } from "./provider-models.js";
 
 const PROVIDER_ID = "deepinfra";
 
-// Live catalog providers (registered via api.registerModelCatalogProvider).
-// Mirrors extensions/openrouter/video-model-catalog.ts: auth-gated (returns
-// null without a key so the static fallback wins), and reuses the cached
-// discoverDeepInfraSurfaces call so chat/image-gen/video-gen share one fetch.
-
-function surfaceModelToImageGenEntry(model: DeepInfraSurfaceModel): UnifiedModelCatalogEntry {
-  return {
-    kind: "image_generation",
-    provider: PROVIDER_ID,
-    model: model.id,
-    source: "live",
-    ...(model.name ? { label: model.name } : {}),
-  };
-}
-
-function surfaceModelToVideoGenEntry(
-  model: DeepInfraSurfaceModel,
-): UnifiedModelCatalogEntry<VideoGenerationProviderCapabilities> {
-  return {
-    kind: "video_generation",
-    provider: PROVIDER_ID,
-    model: model.id,
-    source: "live",
-    ...(model.name ? { label: model.name } : {}),
-    capabilities: buildDeepInfraVideoModelCapabilities(),
-  };
-}
-
 // Canonical DeepInfra-wide video-gen shape. Wire per-model hints
 // (metadata.supported_durations etc.) in here once the backend emits them.
-function buildDeepInfraVideoModelCapabilities(): VideoGenerationProviderCapabilities {
+export function buildDeepInfraVideoModelCapabilities(): VideoGenerationProviderCapabilities {
   return {
     providerOptions: {
       seed: "number",
@@ -63,39 +33,45 @@ function buildDeepInfraVideoModelCapabilities(): VideoGenerationProviderCapabili
   };
 }
 
-export async function listDeepInfraImageGenCatalog(
+async function listDeepInfraGenerationCatalog(
   ctx: UnifiedModelCatalogProviderContext,
-): Promise<readonly UnifiedModelCatalogEntry[] | null> {
-  const { discoveryApiKey } = ctx.resolveProviderApiKey(PROVIDER_ID);
-  if (!discoveryApiKey) {
-    return null;
-  }
-  const catalog = await discoverDeepInfraSurfaces({ hasApiKey: true, env: ctx.env });
-  // Bail on non-live (static fallback owns offline) and on empty surface
-  // (returning [] would starve the unified catalog instead of falling back).
-  if (!catalog.live || catalog.imageGen.length === 0) {
-    return null;
-  }
-  return catalog.imageGen.map(surfaceModelToImageGenEntry);
-}
-
-export async function listDeepInfraVideoGenCatalog(
-  ctx: UnifiedModelCatalogProviderContext,
+  kind: "image_generation" | "video_generation",
 ): Promise<readonly UnifiedModelCatalogEntry<VideoGenerationProviderCapabilities>[] | null> {
   const { discoveryApiKey } = ctx.resolveProviderApiKey(PROVIDER_ID);
   if (!discoveryApiKey) {
     return null;
   }
   const catalog = await discoverDeepInfraSurfaces({ hasApiKey: true, env: ctx.env });
-  if (!catalog.live || catalog.videoGen.length === 0) {
+  const models = kind === "image_generation" ? catalog.imageGen : catalog.videoGen;
+  // Non-live and empty surfaces leave the static fallback authoritative.
+  if (!catalog.live || models.length === 0) {
     return null;
   }
-  return catalog.videoGen.map(surfaceModelToVideoGenEntry);
+  return models.map((model) => {
+    const entry: UnifiedModelCatalogEntry<VideoGenerationProviderCapabilities> = {
+      kind,
+      provider: PROVIDER_ID,
+      model: model.id,
+      source: "live",
+    };
+    if (model.name) {
+      entry.label = model.name;
+    }
+    if (kind === "video_generation") {
+      entry.capabilities = buildDeepInfraVideoModelCapabilities();
+    }
+    return entry;
+  });
 }
 
-// VideoGenerationProvider.resolveModelCapabilities hook. Returns the
-// capability shape per-request when the model is live; provider static caps
-// are the fallback.
+export function listDeepInfraImageGenCatalog(ctx: UnifiedModelCatalogProviderContext) {
+  return listDeepInfraGenerationCatalog(ctx, "image_generation");
+}
+
+export function listDeepInfraVideoGenCatalog(ctx: UnifiedModelCatalogProviderContext) {
+  return listDeepInfraGenerationCatalog(ctx, "video_generation");
+}
+
 export async function resolveDeepInfraVideoModelCapabilities(
   ctx: VideoGenerationModelCapabilitiesContext,
 ): Promise<VideoGenerationProviderCapabilities | undefined> {

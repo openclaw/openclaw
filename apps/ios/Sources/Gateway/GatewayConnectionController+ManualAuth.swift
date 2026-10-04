@@ -16,21 +16,15 @@ extension GatewayConnectionController {
     }
 
     static func clearDeviceAuthTokens(gatewayID: String) {
-        if let primaryIdentity = DeviceIdentityStore.loadOrCreatePersisted() {
-            DeviceAuthStore.clearToken(deviceId: primaryIdentity.deviceId, role: "node", gatewayID: gatewayID)
-            DeviceAuthStore.clearToken(deviceId: primaryIdentity.deviceId, role: "operator", gatewayID: gatewayID)
-        }
-        if let shareIdentity = DeviceIdentityStore.loadOrCreatePersisted(profile: .shareExtension) {
-            DeviceAuthStore.clearToken(
-                deviceId: shareIdentity.deviceId,
-                role: "node",
-                gatewayID: gatewayID,
-                profile: .shareExtension)
-            DeviceAuthStore.clearToken(
-                deviceId: shareIdentity.deviceId,
-                role: "operator",
-                gatewayID: gatewayID,
-                profile: .shareExtension)
+        for profile in [GatewayDeviceIdentityProfile.primary, .shareExtension] {
+            guard let identity = DeviceIdentityStore.loadOrCreatePersisted(profile: profile) else { continue }
+            for role in ["node", "operator"] {
+                DeviceAuthStore.clearToken(
+                    deviceId: identity.deviceId,
+                    role: role,
+                    gatewayID: gatewayID,
+                    profile: profile)
+            }
         }
     }
 
@@ -122,6 +116,91 @@ extension GatewayConnectionController {
     }
 
     struct ManualAuthOverride: Equatable {
+        struct Fields {
+            var token = ""
+            var password = ""
+            var targetStableID: String?
+            var pendingOverride: ManualAuthOverride?
+
+            mutating func load(instanceId: String, targetStableID: String) {
+                let credentials = GatewaySettingsStore.loadGatewayCredentials(
+                    instanceId: instanceId,
+                    gatewayStableID: targetStableID)
+                let ownsFields = credentials.hasCredentials || credentials.suppressStoredDeviceAuth
+                self.targetStableID = ownsFields ? targetStableID : nil
+                self.token = credentials.token ?? ""
+                self.password = credentials.password ?? ""
+                self.pendingOverride = ManualAuthOverride.selectingCredentialTarget(
+                    current: self.pendingOverride,
+                    instanceId: instanceId,
+                    targetStableID: targetStableID,
+                    allowManualOverride: true)
+            }
+
+            mutating func selectTarget(_ targetStableID: String, instanceId: String, allowManualOverride: Bool) {
+                if !GatewayStableIdentifier.matches(self.targetStableID, targetStableID) {
+                    let credentials = GatewaySettingsStore.loadGatewayCredentials(
+                        instanceId: instanceId,
+                        gatewayStableID: targetStableID)
+                    self.targetStableID = targetStableID
+                    self.token = credentials.token ?? ""
+                    self.password = credentials.password ?? ""
+                } else if let fields = self.pendingOverride?.refreshedFieldsAfterHandoff(
+                    token: self.token,
+                    password: self.password,
+                    instanceId: instanceId,
+                    targetStableID: targetStableID)
+                {
+                    self.token = fields.token
+                    self.password = fields.password
+                }
+                self.pendingOverride = ManualAuthOverride.selectingCredentialTarget(
+                    current: self.pendingOverride,
+                    instanceId: instanceId,
+                    targetStableID: targetStableID,
+                    allowManualOverride: allowManualOverride)
+            }
+
+            mutating func persist(instanceId: String, targetStableID: String?) {
+                guard !instanceId.isEmpty, let targetStableID else { return }
+                self.targetStableID = targetStableID
+                let saved = GatewaySettingsStore.updateGatewayCredentials(
+                    token: self.token,
+                    password: self.password,
+                    gatewayStableID: targetStableID,
+                    instanceId: instanceId)
+                self.pendingOverride = saved
+                    ? ManualAuthOverride.selectingCredentialTarget(
+                        current: self.pendingOverride,
+                        instanceId: instanceId,
+                        targetStableID: targetStableID,
+                        allowManualOverride: true)
+                    : nil
+            }
+
+            func prepareManualConnection(instanceId: String, targetStableID: String) -> ManualAuthOverride? {
+                let fieldsMatchTarget = GatewayStableIdentifier.matches(self.targetStableID, targetStableID)
+                let pending = GatewayStableIdentifier.matches(self.pendingOverride?.targetStableID, targetStableID)
+                    ? self.pendingOverride
+                    : nil
+                let authOverride = ManualAuthOverride.currentManualInput(
+                    token: fieldsMatchTarget ? self.token : nil,
+                    pendingOverride: pending,
+                    password: fieldsMatchTarget ? self.password : nil,
+                    targetStableID: targetStableID)
+                if !instanceId.isEmpty, fieldsMatchTarget || pending != nil {
+                    GatewaySettingsStore.saveGatewayCredentials(
+                        token: authOverride?.token,
+                        bootstrapToken: authOverride?.bootstrapToken,
+                        password: authOverride?.password,
+                        gatewayStableID: targetStableID,
+                        suppressStoredDeviceAuth: authOverride?.suppressStoredDeviceAuth == true,
+                        instanceId: instanceId)
+                }
+                return authOverride
+            }
+        }
+
         private final class Handoff: Sendable {
             let accepted = OSAllocatedUnfairLock(initialState: false)
         }

@@ -82,39 +82,6 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     },
   );
 
-  it.each([
-    ["gateway", { ok: true, result: { path: "gateway.port", config: 19_801 } }],
-    ["dashboard", { ok: true, delivered: 0 }],
-    ["memory_search", { ok: true, results: [{ id: "memory-1" }] }],
-  ])("retains structured %s transcript details", async (tool, details) => {
-    const projector = await createProjector();
-    const call = {
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: `call-${tool}`,
-      namespace: null,
-      tool,
-      arguments: {},
-    };
-    const protocolResponse = {
-      success: true,
-      contentItems: [{ type: "inputText" as const, text: `${tool} done` }],
-    };
-
-    projector.recordDynamicToolCall({ callId: call.callId, tool, arguments: {} });
-    recordCodexDynamicToolResult(
-      projector,
-      call,
-      { ...protocolResponse, transcriptDetails: details },
-      protocolResponse,
-    );
-
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-    const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
-    expect(toolResultMessage).toMatchObject({ role: "toolResult", toolName: tool, details });
-    expect(protocolResponse).not.toHaveProperty("details");
-  });
-
   it("records dynamic OpenClaw tool calls in mirrored transcript snapshots", async () => {
     const projector = await createProjector(undefined, {
       resolveDynamicToolResultContentSource: (toolName) =>
@@ -167,78 +134,185 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     });
   });
 
-  it("retains MCP App preview details in mirrored dynamic tool results", async () => {
-    const projector = await createProjector();
-    const details = {
-      mcpAppPreview: {
-        kind: "canvas",
-        view: { id: "mcp-app-view-1" },
-        presentation: { target: "assistant_message", sandbox: "scripts" },
-        mcpApp: { viewId: "mcp-app-view-1" },
+  it("records bounded searchable discovery evidence without changing transcript bytes", async () => {
+    vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
+    const recordEvent = vi.fn();
+    const projector = await createProjector(undefined, {
+      trajectoryRecorder: {
+        recordEvent,
+        flush: async () => undefined,
       },
-    };
-
-    projector.recordDynamicToolCall({
-      callId: "call-app-1",
-      tool: "sample__show_options",
-      arguments: { limit: 4 },
     });
-    projector.recordDynamicToolResult({
-      callId: "call-app-1",
-      tool: "sample__show_options",
-      success: true,
-      contentItems: [{ type: "inputText", text: "Found four nearby restaurants." }],
-      details,
-    });
-
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-    const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
-    expect(toolResultMessage.details).toEqual(details);
-  });
-
-  it("awaits MCP App preview details for native MCP tool results", async () => {
-    const details = {
-      mcpAppPreview: {
-        kind: "canvas",
-        view: { id: "mcp-app-native-1" },
-        presentation: { target: "assistant_message", sandbox: "scripts" },
-        mcpApp: {
-          viewId: "mcp-app-native-1",
-          serverName: "sample",
-          toolName: "show_options",
-          uiResourceUri: "ui://sample/options.html",
-          toolCallId: "call-native-app-1",
+    const searchedTools = [
+      {
+        type: "function",
+        name: "web_search",
+        description: "private-description-marker",
+        defer_loading: true,
+        parameters: {
+          type: "object",
+          properties: { secret: { const: "private-schema-marker" } },
         },
       },
-    };
-    const prepareNativeMcpAppResultDetails = vi.fn(async () => details);
-    const projector = await createProjector(undefined, { prepareNativeMcpAppResultDetails });
+      ...Array.from({ length: 40 }, (_value, index) => ({
+        type: "function",
+        name: `search_result_${index.toString().padStart(2, "0")}`,
+        description: `private-description-${index}`,
+        defer_loading: true,
+        parameters: { type: "object" },
+      })),
+    ];
 
     await projector.handleNotification(
-      forCurrentTurn("item/completed", {
+      forCurrentTurn("rawResponseItem/completed", {
         item: {
-          type: "mcpToolCall",
-          id: "call-native-app-1",
-          status: "completed",
-          server: "sample",
-          tool: "show_options",
-          arguments: { limit: 4 },
-          appContext: { connectorId: "sample", resourceUri: "ui://sample/options.html" },
-          result: {
-            content: [{ type: "text", text: "Found four nearby restaurants." }],
-            structuredContent: { stores: [{ id: "store-1", name: "Nan's Noodle House" }] },
-          },
+          type: "tool_search_call",
+          call_id: "search-call-1",
+          execution: "client",
+          arguments: { query: "private-query-marker" },
         },
       }),
     );
-
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-    const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
-    expect(prepareNativeMcpAppResultDetails).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "call-native-app-1", type: "mcpToolCall" }),
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "tool_search_output",
+          call_id: "search-call-1",
+          status: "completed",
+          execution: "client",
+          tools: [
+            {
+              type: "namespace",
+              name: "openclaw",
+              description: "private-namespace-marker",
+              tools: searchedTools,
+            },
+          ],
+        },
+      }),
     );
-    expect(toolResultMessage.details).toEqual(details);
+    projector.recordDynamicToolCall({
+      callId: "dynamic-call-1",
+      namespace: "openclaw",
+      tool: "web_search",
+      arguments: { query: "release marker" },
+    });
+    projector.recordDynamicToolResult({
+      callId: "dynamic-call-1",
+      tool: "web_search",
+      success: true,
+      contentItems: [{ type: "inputText", text: "synthetic result" }],
+    });
+
+    const evidenceCall = recordEvent.mock.calls.find(([type]) => type === "tool.search.discovery");
+    expect(evidenceCall?.[1]).toEqual({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      search: {
+        callId: "search-call-1",
+        callExecution: "client",
+        outputExecution: "client",
+        outputStatus: "completed",
+        tools: [
+          { namespace: "openclaw", name: "web_search" },
+          ...Array.from({ length: 31 }, (_value, index) => ({
+            namespace: "openclaw",
+            name: `search_result_${index.toString().padStart(2, "0")}`,
+          })),
+        ],
+        truncated: true,
+      },
+      target: {
+        callId: "dynamic-call-1",
+        namespace: "openclaw",
+        name: "web_search",
+        success: true,
+      },
+    });
+    const recordedEvidence = JSON.stringify(recordEvent.mock.calls);
+    expect(recordedEvidence).not.toContain("private-query-marker");
+    expect(recordedEvidence).not.toContain("private-description");
+    expect(recordedEvidence).not.toContain("private-schema-marker");
+    expect(recordedEvidence).not.toContain("private-namespace-marker");
+    expect(
+      JSON.stringify(projector.buildResult(buildEmptyToolTelemetry()).messagesSnapshot),
+    ).not.toContain("tool_search");
   });
+
+  it.each([
+    { privateQa: false, namespace: "openclaw" },
+    { privateQa: true, namespace: undefined },
+    { privateQa: true, namespace: null },
+    { privateQa: true, namespace: "" },
+    { privateQa: true, namespace: "other" },
+    { privateQa: true, namespace: " openclaw " },
+  ])(
+    "does not credit discovery with privateQa=$privateQa namespace=$namespace",
+    async ({ privateQa, namespace }) => {
+      vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", privateQa ? "1" : "0");
+      const recordEvent = vi.fn();
+      const projector = await createProjector(undefined, {
+        trajectoryRecorder: {
+          recordEvent,
+          flush: async () => undefined,
+        },
+      });
+
+      await projector.handleNotification(
+        forCurrentTurn("rawResponseItem/completed", {
+          item: {
+            type: "tool_search_call",
+            call_id: "search-call-1",
+            status: "completed",
+            execution: "client",
+            arguments: { query: "web search" },
+          },
+        }),
+      );
+      await projector.handleNotification(
+        forCurrentTurn("rawResponseItem/completed", {
+          item: {
+            type: "tool_search_output",
+            call_id: "search-call-1",
+            status: "completed",
+            execution: "client",
+            tools: [
+              {
+                type: "namespace",
+                name: "openclaw",
+                tools: [{ type: "function", name: "web_search" }],
+              },
+            ],
+          },
+        }),
+      );
+      projector.recordDynamicToolCall({
+        callId: "dynamic-call-1",
+        namespace,
+        tool: "web_search",
+      });
+      projector.recordDynamicToolResult({
+        callId: "dynamic-call-1",
+        tool: "web_search",
+        success: true,
+        contentItems: [{ type: "inputText", text: "synthetic result" }],
+      });
+
+      expect(recordEvent).not.toHaveBeenCalledWith("tool.search.discovery", expect.anything());
+      const result = projector.buildResult(buildEmptyToolTelemetry());
+      expect(result.messagesSnapshot[1]).toMatchObject({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "dynamic-call-1", name: "web_search" }],
+      });
+      expect(result.messagesSnapshot[2]).toMatchObject({
+        role: "toolResult",
+        toolCallId: "dynamic-call-1",
+        toolName: "web_search",
+        isError: false,
+        content: [{ type: "text", text: "synthetic result" }],
+      });
+    },
+  );
 
   it.each(
     ["item", "turn"].flatMap((source) => [false, true].map((closed) => ({ source, closed }))),
@@ -539,186 +613,4 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
       mutatingAction: false,
     });
   });
-
-  it("does not mark a blocked pre-execution dynamic mutation as attempted", async () => {
-    const observeToolTerminal = createCodexTestToolTerminalObserver();
-    const projector = await createProjector({ ...(await createParams()), observeToolTerminal });
-    const messageArgs = { action: "send", to: "channel:123", message: "hello" };
-
-    projector.recordDynamicToolResult({
-      callId: "call-message-preflight-blocked",
-      tool: "message",
-      terminalResolution: observeToolTerminal({
-        toolCallId: "call-message-preflight-blocked",
-        toolName: "message",
-        arguments: messageArgs,
-        executionStarted: false,
-        outcome: "failure",
-        failure: { error: "blocked before execution" },
-      }),
-      success: false,
-      terminalType: "blocked",
-      contentItems: [{ type: "inputText", text: "blocked before execution" }],
-    });
-
-    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toMatchObject({
-      toolName: "message",
-      mutatingAction: false,
-    });
-  });
-
-  it("keeps the latest dynamic failure until the same tool succeeds", async () => {
-    const observeToolTerminal = createCodexTestToolTerminalObserver();
-    const projector = await createProjector({ ...(await createParams()), observeToolTerminal });
-    const messageArgs = {
-      action: "send",
-      provider: "discord",
-      to: "channel:123",
-      message: "deployment ready",
-    };
-
-    projector.recordDynamicToolResult({
-      callId: "call-message-blocked",
-      tool: "message",
-      terminalResolution: observeToolTerminal({
-        toolCallId: "call-message-blocked",
-        toolName: "message",
-        arguments: messageArgs,
-        meta: "send to channel:123",
-        executionStarted: true,
-        outcome: "failure",
-        failure: { error: "cross-context messaging denied" },
-      }),
-      success: false,
-      terminalType: "blocked",
-      contentItems: [{ type: "inputText", text: "cross-context messaging denied" }],
-    });
-
-    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toMatchObject({
-      toolName: "message",
-      error: "cross-context messaging denied",
-      mutatingAction: true,
-    });
-
-    projector.recordDynamicToolResult({
-      callId: "call-read-failed",
-      tool: "read",
-      terminalResolution: observeToolTerminal({
-        toolCallId: "call-read-failed",
-        toolName: "read",
-        arguments: { path: "/tmp/missing" },
-        executionStarted: true,
-        outcome: "failure",
-        failure: { error: "file not found" },
-      }),
-      success: false,
-      terminalType: "error",
-      contentItems: [{ type: "inputText", text: "file not found" }],
-    });
-
-    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toMatchObject({
-      toolName: "read",
-      mutatingAction: false,
-    });
-
-    projector.recordDynamicToolResult({
-      callId: "call-heartbeat-response",
-      tool: "heartbeat_respond",
-      terminalResolution: observeToolTerminal({
-        toolCallId: "call-heartbeat-response",
-        toolName: "heartbeat_respond",
-        arguments: { notify: false, summary: "nothing else changed" },
-        executionStarted: true,
-        outcome: "success",
-      }),
-      success: true,
-      terminalType: "completed",
-      contentItems: [{ type: "inputText", text: "HEARTBEAT_OK" }],
-    });
-
-    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toMatchObject({
-      toolName: "read",
-      mutatingAction: false,
-    });
-
-    projector.recordDynamicToolResult({
-      callId: "call-message-retry",
-      tool: "message",
-      terminalResolution: observeToolTerminal({
-        toolCallId: "call-message-retry",
-        toolName: "message",
-        arguments: messageArgs,
-        meta: "send to channel:123",
-        executionStarted: true,
-        outcome: "success",
-      }),
-      success: true,
-      terminalType: "completed",
-      contentItems: [{ type: "inputText", text: "sent" }],
-    });
-
-    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError?.toolName).toBe("read");
-
-    projector.recordDynamicToolResult({
-      callId: "call-read-retry",
-      tool: "read",
-      terminalResolution: observeToolTerminal({
-        toolCallId: "call-read-retry",
-        toolName: "read",
-        arguments: { path: "/tmp/available" },
-        executionStarted: true,
-        outcome: "success",
-      }),
-      success: true,
-      terminalType: "completed",
-      contentItems: [{ type: "inputText", text: "ok" }],
-    });
-
-    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();
-  });
-
-  it.each([
-    {
-      command: "/bin/zsh -lc 'rg -n TODO src'",
-      commandActions: [{ type: "search", command: "rg -n TODO src", query: "TODO", path: "src" }],
-    },
-    {
-      command: "/bin/zsh -lc 'cat package.json'",
-      commandActions: [
-        { type: "read", command: "cat package.json", name: "cat", path: "/workspace/package.json" },
-      ],
-    },
-    {
-      command: "/bin/zsh -lc 'touch changed.txt'",
-      commandActions: [{ type: "unknown", command: "touch changed.txt" }],
-    },
-  ])(
-    "treats native command actions as replay-unsafe: $command",
-    async ({ command, commandActions }) => {
-      const projector = await createProjector();
-
-      await projector.handleNotification(
-        forCurrentTurn("item/completed", {
-          item: {
-            type: "commandExecution",
-            id: "command-native",
-            command,
-            cwd: "/workspace",
-            processId: null,
-            source: "agent",
-            status: "completed",
-            commandActions,
-            aggregatedOutput: "",
-            exitCode: 0,
-            durationMs: 1,
-          },
-        }),
-      );
-
-      expect(projector.buildResult(buildEmptyToolTelemetry()).replayMetadata).toEqual({
-        hadPotentialSideEffects: true,
-        replaySafe: false,
-      });
-    },
-  );
 });

@@ -1,10 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import type { AgentTool } from "../../runtime/index.js";
 import { createEditTool } from "./edit.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -16,7 +14,7 @@ async function createFixture() {
   return { tool: createEditTool(cwd), filePath };
 }
 
-function prepare<TParameters extends TSchema>(tool: AgentTool<TParameters>, input: unknown) {
+function prepare(tool: ReturnType<typeof createEditTool>, input: unknown) {
   const prepared = tool.prepareArguments?.(input);
   if (!Value.Check(tool.parameters, prepared)) {
     throw new Error("Prepared replacements did not satisfy the edit schema");
@@ -25,13 +23,15 @@ function prepare<TParameters extends TSchema>(tool: AgentTool<TParameters>, inpu
 }
 
 describe("legacy edit input", () => {
-  it.each(["array", "serialized"] as const)(
-    "applies a legacy pair already present in %s edits only once",
+  it.each(["array", "serialized", "distinct"] as const)(
+    "applies the batch and legacy pair once with %s edits",
     async (shape) => {
       const { tool, filePath } = await createFixture();
       const edits = [
         { oldText: "alpha", newText: "ALPHA" },
-        { oldText: "before", newText: "after", reason: "extra model metadata" },
+        ...(shape === "distinct"
+          ? []
+          : [{ oldText: "before", newText: "after", reason: "extra model metadata" }]),
       ];
       const prepared = prepare(tool, {
         path: filePath,
@@ -41,23 +41,6 @@ describe("legacy edit input", () => {
       });
       await tool.execute("legacy-duplicate", prepared, undefined);
       await expect(fs.readFile(filePath, "utf8")).resolves.toBe("ALPHA\nafter\nomega\n");
-    },
-  );
-
-  it.each([false, true])(
-    "retains a distinct legacy replacement with an existing batch: %s",
-    async (hasBatch) => {
-      const { tool, filePath } = await createFixture();
-      const prepared = prepare(tool, {
-        path: filePath,
-        ...(hasBatch ? { edits: [{ oldText: "alpha", newText: "ALPHA" }] } : {}),
-        oldText: "before",
-        newText: "after",
-      });
-      await tool.execute("legacy-distinct", prepared, undefined);
-      await expect(fs.readFile(filePath, "utf8")).resolves.toBe(
-        `${hasBatch ? "ALPHA" : "alpha"}\nafter\nomega\n`,
-      );
     },
   );
 

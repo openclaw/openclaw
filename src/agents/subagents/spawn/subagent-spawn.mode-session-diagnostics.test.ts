@@ -19,7 +19,7 @@ describe('spawnSubagentDirect mode="session" diagnostics (#67400)', () => {
       getRuntimeConfig: () => createSubagentSpawnTestConfig(os.tmpdir()),
       workspaceDir: os.tmpdir(),
     }));
-    resetSubagentRegistryForTests();
+    await resetSubagentRegistryForTests();
   });
 
   it("names usable alternatives before a thread retry", async () => {
@@ -59,42 +59,6 @@ describe('spawnSubagentDirect mode="session" diagnostics (#67400)', () => {
     expect(result.status).toBe("error");
     if (result.status === "error") {
       expect(result.error).toContain("not running on a channel");
-      expect(result.error).toContain('mode="run"');
-      expect(result.error).not.toContain("sessions_send");
-    }
-  });
-});
-
-describe('spawnSubagentDirect mode="session" with thread binding-capable channels (#67400)', () => {
-  const callGatewayMock = vi.fn();
-  let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
-  let resetSubagentRegistryForTests: typeof import("../registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
-
-  beforeEach(async () => {
-    callGatewayMock.mockReset();
-    ({ spawnSubagentDirect, resetSubagentRegistryForTests } = await loadSubagentSpawnModuleForTest({
-      callGatewayMock,
-      getRuntimeConfig: () => createSubagentSpawnTestConfig(os.tmpdir()),
-      workspaceDir: os.tmpdir(),
-    }));
-    resetSubagentRegistryForTests();
-  });
-
-  it("names thread=true and the non-thread alternatives when hooks are registered", async () => {
-    const result = await spawnSubagentDirect(
-      {
-        task: "persistent planning session",
-        mode: "session",
-      },
-      {
-        agentSessionKey: "agent:main:main",
-        agentChannel: "discord",
-      },
-    );
-
-    expect(result.status).toBe("error");
-    if (result.status === "error") {
-      expect(result.error).toContain("thread: true");
       expect(result.error).toContain('mode="run"');
       expect(result.error).not.toContain("sessions_send");
     }

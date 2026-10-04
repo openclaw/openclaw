@@ -1,4 +1,3 @@
-// Resolves and checks packaged Control UI assets.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +7,7 @@ import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "../gateway/control-ui-root-assets.js";
+import { selectControlUiRoutePreloads } from "../gateway/control-ui-route-preloads.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { openRootFileSync, readFileDescriptorBoundedSync } from "./boundary-file-read.js";
@@ -72,11 +72,10 @@ function resolveControlUiRepoRoot(opts: {
 }
 
 async function resolveControlUiDistIndexPath(
-  argv1OrOpts?: string | { argv1?: string; moduleUrl?: string },
+  opts: ControlUiRootResolveOptions,
 ): Promise<string | null> {
-  const argv1 =
-    typeof argv1OrOpts === "string" ? argv1OrOpts : (argv1OrOpts?.argv1 ?? process.argv[1]);
-  const moduleUrl = typeof argv1OrOpts === "object" ? argv1OrOpts?.moduleUrl : undefined;
+  const argv1 = opts.argv1 ?? process.argv[1];
+  const moduleUrl = opts.moduleUrl;
   if (!argv1) {
     return null;
   }
@@ -326,27 +325,34 @@ function inspectControlUiAssetHealth(
     }
     return { kind: "missing-index", indexPath };
   }
-  let references = 0;
-  for (const tag of html.matchAll(/<(?:link|script)\b[^>]*>/giu)) {
-    const attribute = tag[0].match(/\s(?:href|src)\s*=\s*["']([^"']+)["']/iu);
-    const reference = attribute?.[1]?.split(/[?#]/u, 1)[0]?.replace(/\\/gu, "/");
-    if (!reference || /^(?:[a-z][a-z\d+.-]*:|\/\/|#)/iu.test(reference)) {
-      continue;
-    }
-    const marker = reference.lastIndexOf("assets/");
-    if (marker === -1 || !/\.(?:css|js)$/iu.test(reference)) {
-      continue;
-    }
-    const asset = reference.slice(marker);
-    if (++references > 128 || reference.split("/").includes("..")) {
-      return {
-        kind: "incomplete",
-        indexPath,
-        missingAsset: references > 128 ? "too many startup assets" : asset,
-      };
-    }
-    if (!fs.existsSync(path.join(path.dirname(indexPath), asset))) {
-      return { kind: "incomplete", indexPath, missingAsset: asset };
+  // Route templates are mutually exclusive. Inspect the same documents the
+  // Gateway serves, retaining the reference limit and integrity checks per page.
+  const documents = new Set(
+    ([null, "chat", "new"] as const).map((route) => selectControlUiRoutePreloads(html, route)),
+  );
+  for (const document of documents) {
+    let references = 0;
+    for (const tag of document.matchAll(/<(?:link|script)\b[^>]*>/giu)) {
+      const attribute = tag[0].match(/\s(?:href|src)\s*=\s*["']([^"']+)["']/iu);
+      const reference = attribute?.[1]?.split(/[?#]/u, 1)[0]?.replace(/\\/gu, "/");
+      if (!reference || /^(?:[a-z][a-z\d+.-]*:|\/\/|#)/iu.test(reference)) {
+        continue;
+      }
+      const marker = reference.lastIndexOf("assets/");
+      if (marker === -1 || !/\.(?:css|js)$/iu.test(reference)) {
+        continue;
+      }
+      const asset = reference.slice(marker);
+      if (++references > 128 || reference.split("/").includes("..")) {
+        return {
+          kind: "incomplete",
+          indexPath,
+          missingAsset: references > 128 ? "too many startup assets" : asset,
+        };
+      }
+      if (!fs.existsSync(path.join(path.dirname(indexPath), asset))) {
+        return { kind: "incomplete", indexPath, missingAsset: asset };
+      }
     }
   }
   const publicAssetBuildId = new RegExp(

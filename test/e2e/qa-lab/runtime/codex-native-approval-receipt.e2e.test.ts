@@ -11,12 +11,16 @@ import {
   GatewayClient,
   startGatewayClientWhenEventLoopReady,
 } from "../../../../src/plugin-sdk/gateway-runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../../../src/state/openclaw-agent-db.js";
 import { loadBundledPluginFacade } from "../../../../src/test-utils/bundled-plugin-public-surface.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../helpers/openclaw-test-instance.js";
+import { withinTest } from "../../../helpers/promise.js";
 
 const MODEL = "openai/gpt-5.6-luna";
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -190,7 +194,7 @@ describe("Codex native approval receipt", () => {
   it(
     "preserves a native command approval and its exact receipt across Gateway restart",
     { timeout: 180_000 },
-    async () => {
+    async ({ signal }) => {
       const { CODEX_APP_SERVER_VERSION } = await loadBundledPluginFacade<{
         CODEX_APP_SERVER_VERSION: string;
       }>({ pluginId: "codex", artifactBasename: "test-api.js" });
@@ -203,6 +207,8 @@ describe("Codex native approval receipt", () => {
           OPENCLAW_AGENT_HARNESS_FALLBACK: "none",
           OPENCLAW_QA_CODEX_APP_SERVER_VERSION: CODEX_APP_SERVER_VERSION,
           OPENCLAW_SKIP_PROVIDERS: undefined,
+          // Native task admission needs the configured owner published by full Gateway startup.
+          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
         },
         config: {
           logging: { audit: { enabled: true, executionIdentity: true } },
@@ -256,6 +262,7 @@ describe("Codex native approval receipt", () => {
         },
         instance.state.agentDir(),
       );
+      await closeOpenClawAgentDatabasesAsync();
       await instance.startGateway();
       const reviewer = await connectApprovalReviewer(instance);
 
@@ -303,23 +310,21 @@ describe("Codex native approval receipt", () => {
           id: approval.id,
           decision: "allow-once",
         });
-        await vi.waitFor(
-          () => {
-            const response = readJsonLines(appServerLogPath).find(
-              (entry) =>
-                entry.id === "approval-private-native-approval" && entry.result !== undefined,
-            );
-            expect(response?.result).toEqual({ decision: "accept" });
-          },
-          { interval: 25, timeout: REQUEST_TIMEOUT_MS },
-        );
         await expect(
-          reviewer.request(
-            "agent.wait",
-            { runId: started.runId, timeoutMs: REQUEST_TIMEOUT_MS },
-            { timeoutMs: REQUEST_TIMEOUT_MS + 5_000 },
+          withinTest(
+            reviewer.request(
+              "agent.wait",
+              { runId: started.runId, timeoutMs: REQUEST_TIMEOUT_MS },
+              { timeoutMs: REQUEST_TIMEOUT_MS + 5_000 },
+            ),
+            signal,
           ),
         ).resolves.toMatchObject({ status: "ok" });
+        // The fixture records the decision before sending turn/completed, which agent.wait joins.
+        const response = readJsonLines(appServerLogPath).find(
+          (entry) => entry.id === "approval-private-native-approval" && entry.result !== undefined,
+        );
+        expect(response?.result).toEqual({ decision: "accept" });
 
         const identity = readApprovalIdentity(instance, approval.id);
         expect(identity).toMatchObject({

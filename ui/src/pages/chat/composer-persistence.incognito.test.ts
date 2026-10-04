@@ -1,9 +1,11 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { outboxStorageScope } from "../../lib/chat/outbox-payload-store.runtime.ts";
 import { createStoredChatOutboxReader } from "../../lib/chat/outbox-store-projection.ts";
 import {
   captureChatOutboxAdmission,
+  storageTargetForComposer,
   subscribeStoredChatOutboxChanges,
 } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -21,34 +23,16 @@ type ComposerState = Parameters<typeof persistChatComposerState>[0] & {
   selectedChatSessionIncognito: boolean;
 };
 
-const STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v4:";
-
-function gatewayOwner(gatewayUrl: string | null | undefined): string {
-  return gatewayUrl?.trim() || "default";
-}
-
-function storageKeyForGateway(gatewayUrl: string | null | undefined): string {
-  return `${STORAGE_KEY_PREFIX}${encodeURIComponent(gatewayOwner(gatewayUrl))}`;
-}
-
 function createState(overrides: Partial<ComposerState> = {}): ComposerState {
   return {
     settings: { gatewayUrl: "ws://gateway.test/control" },
+    connected: true,
+    client: { recoveryScope: "credential", recoveryScopeReady: true },
     sessionKey: "agent:lily:main",
     chatMessage: "",
     chatQueue: [],
     selectedChatSessionIncognito: false,
     ...overrides,
-  };
-}
-
-function reconnectItem(id: string, createdAt: number): ChatQueueItem {
-  return {
-    id,
-    text: `message ${id}`,
-    createdAt,
-    sendRunId: `run-${id}`,
-    sendState: "waiting-reconnect",
   };
 }
 
@@ -67,7 +51,7 @@ function startPersistence(state: ComposerState) {
 }
 
 function reloadStorage(state: ComposerState) {
-  const storageKey = storageKeyForGateway(state.settings?.gatewayUrl);
+  const storageKey = storageTargetForComposer(state).key;
   const stored = sessionStorage.getItem(storageKey);
   expect(stored).not.toBeNull();
   const freshStorage = createStorageMock();
@@ -85,54 +69,69 @@ afterEach(() => {
 });
 
 describe("Incognito composer persistence", () => {
-  it("keeps canonical Incognito input out of storage before session metadata arrives", () => {
-    const state = createState({
-      sessionKey: "agent:lily:dashboard:incognito-private",
-      chatMessage: "@Alex private objective",
-      chatMentions: [{ profileId: "alex", start: 0, end: 5 }],
-      chatGoalDraftMode: { action: "start", sessionId: "private-session" },
-      connected: true,
-      client: { recoveryScope: "credential", recoveryScopeReady: true },
-    });
-    const queued: ChatQueueItem = {
-      id: "submitted",
-      text: "Submitted private message",
-      createdAt: 1,
-      sendState: "held",
-    };
-    expect(admitItem(state, queued)).toBe(true);
-    const storageKey = storageKeyForGateway(state.settings?.gatewayUrl);
-    const legacy = JSON.parse(sessionStorage.getItem(storageKey)!);
-    Object.assign(legacy.sessions[`${state.sessionKey}\u0000agent:lily`], {
-      draft: state.chatMessage,
-      draftMentions: state.chatMentions,
-      goalMode: state.chatGoalDraftMode,
-    });
-    sessionStorage.setItem(storageKey, JSON.stringify(legacy));
-    const persistence = startPersistence(state);
-    expect(persistence.durableScope).toBeNull();
-    expect(sessionStorage.getItem(storageKey)).not.toContain("private objective");
-    expect(persistChatComposerState(state)).toBe(true);
-    const stored = JSON.parse(
-      sessionStorage.getItem(storageKeyForGateway(state.settings?.gatewayUrl))!,
-    );
-    expect(stored.sessions[`${state.sessionKey}\u0000agent:lily`]).toMatchObject({
-      queue: [queued],
-    });
-    expect(stored.sessions[`${state.sessionKey}\u0000agent:lily`].draft).toBeUndefined();
-    expect(stored.sessions[`${state.sessionKey}\u0000agent:lily`].draftMentions).toBeUndefined();
-    expect(stored.sessions[`${state.sessionKey}\u0000agent:lily`].goalMode).toBeUndefined();
-    expect(restoreChatComposerState(state)).toBe(true);
-    expect(state.chatMessage).toBe("@Alex private objective");
-    expect(state.chatMentions).toHaveLength(1);
-    expect(state.chatGoalDraftMode?.action).toBe("start");
-    reloadStorage(state);
-    const restored = createState({ sessionKey: state.sessionKey });
-    expect(restoreChatComposerState(restored)).toBe(true);
-    expect(restored.chatMessage).toBe("");
-    expect(restored.chatQueue).toMatchObject([queued]);
-    persistence.stop();
-  });
+  it.each(["canonical key", "arriving metadata"] as const)(
+    "retires Incognito input identified by %s without clearing live input or queues",
+    (source) => {
+      const state = createState({
+        sessionKey:
+          source === "canonical key" ? "agent:lily:dashboard:incognito-private" : "agent:lily:main",
+        chatMessage: "@Alex private objective",
+        chatMentions: [{ profileId: "alex", start: 0, end: 5 }],
+        chatGoalDraftMode: { action: "start", sessionId: "private-session" },
+        chatReplyTarget: { messageId: "private-reply", text: "Private quote" },
+        connected: true,
+        client: { recoveryScope: "credential", recoveryScopeReady: true },
+      });
+      const queued: ChatQueueItem = {
+        id: "submitted",
+        storageScope: outboxStorageScope(state),
+        text: "Submitted private message",
+        createdAt: 1,
+        sendState: "held",
+      };
+      if (source === "arriving metadata") {
+        expect(persistChatComposerState(state)).toBe(true);
+      }
+      expect(admitItem(state, queued)).toBe(true);
+      const storageKey = storageTargetForComposer(state).key;
+      if (source === "canonical key") {
+        const legacy = JSON.parse(sessionStorage.getItem(storageKey)!);
+        Object.assign(legacy.sessions[`${state.sessionKey}\u0000agent:lily`], {
+          draft: state.chatMessage,
+          draftMentions: state.chatMentions,
+          goalMode: state.chatGoalDraftMode,
+          replyTarget: state.chatReplyTarget,
+        });
+        sessionStorage.setItem(storageKey, JSON.stringify(legacy));
+      }
+      const persistence = startPersistence(state);
+      if (source === "arriving metadata") {
+        state.selectedChatSessionIncognito = true;
+        persistence.persistChangedState();
+      }
+      expect(persistence.durableScope).toBeNull();
+      expect(sessionStorage.getItem(storageKey)).not.toContain("private objective");
+      expect(persistChatComposerState(state)).toBe(true);
+      const stored = JSON.parse(sessionStorage.getItem(storageTargetForComposer(state).key)!);
+      expect(stored.sessions[`${state.sessionKey}\u0000agent:lily`]).toMatchObject({
+        queue: [queued],
+      });
+      expect(stored.sessions[`${state.sessionKey}\u0000agent:lily`].draft).toBeUndefined();
+      expect(stored.sessions[`${state.sessionKey}\u0000agent:lily`].draftMentions).toBeUndefined();
+      expect(stored.sessions[`${state.sessionKey}\u0000agent:lily`].goalMode).toBeUndefined();
+      expect(stored.sessions[`${state.sessionKey}\u0000agent:lily`].replyTarget).toBeUndefined();
+      expect(restoreChatComposerState(state)).toBe(true);
+      expect(state.chatMessage).toBe("@Alex private objective");
+      expect(state.chatMentions).toHaveLength(1);
+      expect(state.chatGoalDraftMode?.action).toBe("start");
+      reloadStorage(state);
+      const restored = createState({ sessionKey: state.sessionKey });
+      expect(restoreChatComposerState(restored)).toBe(true);
+      expect(restored.chatMessage).toBe("");
+      expect(restored.chatQueue).toMatchObject([queued]);
+      persistence.stop();
+    },
+  );
 
   it.each(["admit", "update", "remove"] as const)(
     "retires legacy private input during queue %s",
@@ -140,18 +139,19 @@ describe("Incognito composer persistence", () => {
       const state = createState({ sessionKey: "agent:lily:dashboard:incognito-queue" });
       const queued: ChatQueueItem = {
         id: "submitted",
+        storageScope: outboxStorageScope(state),
         sessionKey: state.sessionKey,
         agentId: "lily",
         text: "Submitted private message",
         createdAt: 1,
         sendState: "held",
       };
-      const storageKey = storageKeyForGateway(state.settings?.gatewayUrl);
+      const storageKey = storageTargetForComposer(state).key;
       sessionStorage.setItem(
         storageKey,
         JSON.stringify({
           version: 4,
-          gatewayOwner: gatewayOwner(state.settings?.gatewayUrl),
+          gatewayOwner: storageTargetForComposer(state).gatewayOwner,
           recovery: {},
           sessions: {
             [`${state.sessionKey}\u0000agent:lily`]: {
@@ -199,7 +199,9 @@ describe("Incognito composer persistence", () => {
     const state = createState();
     const persistence = startPersistence(state);
     const reader = createStoredChatOutboxReader();
-    const stopReader = reader.subscribe(() => reader.read(state));
+    const stopReader = reader.subscribe(() =>
+      reader.read({ ...state, client: state.client ?? null, connected: state.connected ?? false }),
+    );
     const unsubscribe = subscribeStoredChatOutboxChanges(() => {
       state.selectedChatSessionIncognito = true;
       persistence.persistChangedState();
@@ -208,42 +210,20 @@ describe("Incognito composer persistence", () => {
       state.chatMessage = "private notification draft";
       persistence.schedule();
       persistence.persistNow();
-      expect(
-        sessionStorage.getItem(storageKeyForGateway(state.settings?.gatewayUrl)),
-      ).not.toContain("private notification draft");
+      expect(sessionStorage.getItem(storageTargetForComposer(state).key)).not.toContain(
+        "private notification draft",
+      );
       expect(state.chatMessage).toBe("private notification draft");
-      expect(reader.read(state).hasSessionDraft(state.sessionKey)).toBe(false);
+      expect(
+        reader
+          .read({ ...state, client: state.client ?? null, connected: state.connected ?? false })
+          .hasSessionDraft(state.sessionKey),
+      ).toBe(false);
     } finally {
       stopReader();
       unsubscribe();
       persistence.stop();
     }
-  });
-
-  it("retires legacy unsent fields when Incognito metadata arrives without clearing live input or queues", () => {
-    const state = createState({
-      chatMessage: "@Alex private legacy draft",
-      chatMentions: [{ profileId: "alex", start: 0, end: 5 }],
-      chatGoalDraftMode: { action: "start", sessionId: "private-session" },
-    });
-    expect(persistChatComposerState(state)).toBe(true);
-    const queued = { ...reconnectItem("legacy-queue", 1), sendState: "held" as const };
-    expect(admitItem(state, queued)).toBe(true);
-    const persistence = startPersistence(state);
-    state.selectedChatSessionIncognito = true;
-    persistence.persistChangedState();
-    expect(state.chatMessage).toBe("@Alex private legacy draft");
-    expect(state.chatMentions).toHaveLength(1);
-    expect(state.chatGoalDraftMode?.action).toBe("start");
-    const stored = JSON.parse(
-      sessionStorage.getItem(storageKeyForGateway(state.settings?.gatewayUrl))!,
-    );
-    const row = stored.sessions[`${state.sessionKey}\u0000agent:lily`];
-    expect(row.draft).toBeUndefined();
-    expect(row.draftMentions).toBeUndefined();
-    expect(row.goalMode).toBeUndefined();
-    expect(row.queue).toMatchObject([queued]);
-    persistence.stop();
   });
 
   it.each([true, false])(

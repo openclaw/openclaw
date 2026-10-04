@@ -1,4 +1,3 @@
-// Normalizes SCP remote host and path values.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 // SCP host/path normalization rejects shell metacharacters before values are
@@ -27,7 +26,7 @@ export function normalizeScpRemoteHost(value: string | null | undefined): string
   if (hasControlOrWhitespace(trimmed)) {
     return undefined;
   }
-  if (trimmed.startsWith("-") || trimmed.includes("/") || trimmed.includes("\\")) {
+  if (trimmed.startsWith("-")) {
     return undefined;
   }
 
@@ -48,13 +47,7 @@ export function normalizeScpRemoteHost(value: string | null | undefined): string
     }
   }
 
-  if (!host || host.startsWith("-") || host.includes("@")) {
-    return undefined;
-  }
-  if (host.includes(":") && !BRACKETED_IPV6.test(host)) {
-    return undefined;
-  }
-  if (!SSH_TOKEN.test(host) && !BRACKETED_IPV6.test(host)) {
+  if (host.startsWith("-") || (!SSH_TOKEN.test(host) && !BRACKETED_IPV6.test(host))) {
     return undefined;
   }
 
@@ -81,9 +74,4 @@ export function normalizeScpRemotePath(value: string | null | undefined): string
   }
 
   return trimmed;
-}
-
-/** Return true when a value is safe for the SCP remote path position. */
-export function isSafeScpRemotePath(value: string | null | undefined): boolean {
-  return normalizeScpRemotePath(value) !== undefined;
 }

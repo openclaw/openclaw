@@ -1,4 +1,3 @@
-import { timingSafeEqual } from "node:crypto";
 import type {
   IncomingHttpHeaders,
   IncomingMessage,
@@ -9,6 +8,7 @@ import { request as requestHttp } from "node:http";
 import net from "node:net";
 import type { Duplex } from "node:stream";
 import { createLoopbackConnectOptions } from "../../infra/loopback-connect.js";
+import { safeEqualSecret } from "../../security/secret-equal.js";
 
 const PORTAL_AUTH_NAME = "openclaw_portal";
 // Browser cookie jars are hostname-scoped, so the stable listener port in the
@@ -63,14 +63,7 @@ type PortalAuthorization =
   | { kind: "unauthorized" };
 
 function tokensEqual(candidate: string | undefined, expected: string): boolean {
-  if (!candidate) {
-    return false;
-  }
-  const candidateBytes = Buffer.from(candidate);
-  const expectedBytes = Buffer.from(expected);
-  return (
-    candidateBytes.length === expectedBytes.length && timingSafeEqual(candidateBytes, expectedBytes)
-  );
+  return Boolean(candidate) && safeEqualSecret(candidate, expected);
 }
 
 function readPortalCookie(
@@ -155,23 +148,19 @@ function authorizePortalRequest(
 ): PortalAuthorization {
   const url = parsePortalUrl(req);
   const queryToken = url?.searchParams.get(PORTAL_AUTH_NAME) ?? undefined;
-  if (tokensEqual(queryToken, target.token)) {
-    url?.searchParams.delete(PORTAL_AUTH_NAME);
-    return {
-      kind: "authorized",
-      requestPath: `${url?.pathname ?? "/"}${url?.search ?? ""}`,
-      setCookie: true,
-    };
+  const setCookie = tokensEqual(queryToken, target.token);
+  if (
+    !setCookie &&
+    !tokensEqual(readPortalCookie(req.headers.cookie, target.listenPort), target.token)
+  ) {
+    return { kind: "unauthorized" };
   }
-  if (tokensEqual(readPortalCookie(req.headers.cookie, target.listenPort), target.token)) {
-    url?.searchParams.delete(PORTAL_AUTH_NAME);
-    return {
-      kind: "authorized",
-      requestPath: `${url?.pathname ?? "/"}${url?.search ?? ""}`,
-      setCookie: false,
-    };
-  }
-  return { kind: "unauthorized" };
+  url?.searchParams.delete(PORTAL_AUTH_NAME);
+  return {
+    kind: "authorized",
+    requestPath: `${url?.pathname ?? "/"}${url?.search ?? ""}`,
+    setCookie,
+  };
 }
 
 function portalCookie(target: PortalProxyTarget, tls: boolean): string {

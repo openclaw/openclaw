@@ -425,7 +425,7 @@ describe("explicit GitHub publication", () => {
     },
   );
 
-  it("offers shared publication without a personal owner and never auto-selects personal when shared is absent", async () => {
+  it("keeps a sole personal account unselected until its labeled publish button is clicked", async () => {
     const unbound = setup({ shared, personal: null, pendingPersonal: null, latestShared: null });
     expect((await settled(unbound.controller)).selection).toEqual({
       source: "shared",
@@ -433,18 +433,65 @@ describe("explicit GitHub publication", () => {
     });
     const personalOnly = setup({ ...options, shared: null });
     expect((await settled(personalOnly.controller)).selection).toBeNull();
-    personalOnly.controller.view()?.onSelect?.("personal");
-    expect(personalOnly.controller.view()?.selection).toEqual({
-      source: "personal",
-      account,
-      generation,
+    const container = document.createElement("div");
+    personalOnly.request.mockResolvedValueOnce({
+      requestId,
+      status: "requested",
+      message: "Accepted.",
     });
+    try {
+      render(renderGitHubPublicationAction(personalOnly.controller.view()!), container);
+      expect(container.querySelector('[aria-label="Publication account"]')).toBeNull();
+      const button = container.querySelector<HTMLButtonElement>(".chat-pr__create");
+      expect(button?.textContent?.trim()).toBe("Publish as @alice-tools");
+      expect(personalOnly.request).toHaveBeenCalledTimes(1);
+      button?.click();
+      await settled(personalOnly.controller);
+      expect(personalOnly.request).toHaveBeenLastCalledWith("sessions.github.publish", {
+        sessionKey: "agent:main:one",
+        agentId: "main",
+        idempotencyKey: expect.any(String),
+        selection: { source: "personal", account, generation },
+      });
+    } finally {
+      render(null, container);
+    }
+  });
+
+  it("does not confirm a personal receipt with shared-only publication access", async () => {
+    const { controller, request, scope } = setup({ ...options, pendingPersonal: interrupted });
+    const staff = await settled(controller);
+    expect(staff.onConfirm).toBeTypeOf("function");
+    controller.sync({ ...scope, canPublishPersonal: false });
+    expect(controller.view()?.onConfirm).toBeUndefined();
+    staff.onConfirm?.();
+    expect(request.mock.calls.some(([method]) => method === "sessions.github.confirm")).toBe(false);
+  });
+
+  it("retires a new shared publication action when refreshed options withdraw the target", async () => {
+    const { controller, request, scope } = setup();
+    await settled(controller);
+    controller.sync({ ...scope, canPublishPersonal: false });
+    const response = createDeferred<GitHubPublicationOptions>();
+    request.mockReturnValueOnce(response.promise);
+    controller.view()?.onRefresh();
+    const refreshing = controller.view()!;
+    expect(refreshing.onPublish).toBeTypeOf("function");
+    response.resolve({ ...options, shared: null, personal: null });
+    expect((await settled(controller)).onPublish).toBeUndefined();
+    refreshing.onPublish?.();
+    expect(request.mock.calls.some(([method]) => method === "sessions.github.publish")).toBe(false);
   });
 
   it("keeps readers nonmutating and personal publication unavailable on busy or remote workspaces", async () => {
     const { controller, request, scope } = setup();
     await settled(controller);
-    controller.sync({ ...scope, key: "reader", canWrite: false });
+    controller.sync({
+      ...scope,
+      key: "reader",
+      canPublishShared: false,
+      canPublishPersonal: false,
+    });
     const reader = await settled(controller);
     expect(reader.onSelect).toBeUndefined();
     expect(reader.onPublish).toBeUndefined();

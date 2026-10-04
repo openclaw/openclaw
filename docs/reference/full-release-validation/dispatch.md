@@ -21,11 +21,11 @@ runs strict `control-ui-i18n` and `native-i18n` jobs; their failures remain visi
 in the run summary and fail validation. PR-side locale checks, release preparation,
 and publication requirements are unchanged.
 
-Linux (`ubuntu`) cross-OS fresh-install and upgrade lanes gate publication in
-the beta, stable, and full profiles. Windows and macOS cross-OS lanes run in
-parallel as **advisory** coverage: their pass/fail conclusions remain in the
-manifest and summary, but failures do not block Release Decision, npm publish,
-or `pnpm release:candidate`. Selected lanes still need terminal evidence.
+Linux (`ubuntu`), Windows, and macOS Gateway cross-OS fresh-install and upgrade
+lanes gate publication in the beta, stable, and full profiles. A failure blocks
+Release Decision, npm publish, and `pnpm release:candidate`. Retain each lane's
+actual conclusion in the manifest and summary; selected lanes need terminal
+evidence.
 Normal CI, npm qualification, Docker, Package Acceptance, and the profile's
 performance and soak requirements keep their existing gates.
 
@@ -109,7 +109,7 @@ Plugin Prerelease owns the full extension sweep.
 Pass them through the SHA-pinned helper as `-f name='["exact/path.test.ts"]'`.
 The helper packs the extension input into the existing trusted dispatch envelope
 to stay within GitHub's 25-input limit, and refuses tooling without the matching
-lane-input capability before creating remote refs or dispatching.
+lane-input capability before creating the workflow ref or dispatching.
 
 Preflight rejects malformed, duplicate, nonexistent, and out-of-lane paths using
 the selected target's actual Vitest discovery. Globs and basenames are not
@@ -126,10 +126,16 @@ coverage, not passing evidence.
 
 ## Retain and reconcile the root request
 
-Before creating remote refs, the helper writes a private operator artifact at
+For new dispatches, including `--dry-run`, the helper first proves GitHub serves
+the exact Validation SHA by bare-SHA fetch in a fresh temporary repository. A failed
+fetch stops before any request artifact or remote mutation. The helper pushes one
+immutable `release-ci/*` workflow ref at the Tooling SHA and dispatches the exact
+Validation SHA as `ref` and `expected_sha`.
+
+Before creating that workflow ref, the helper writes a private operator artifact at
 `.artifacts/full-release-validation/<request-id>.json` and prints its path.
 Use `--request-file <path>` to choose the artifact location. It retains the
-repository, workflow, frozen target/tooling identities, transport refs, complete
+repository, workflow, frozen target/tooling identities, workflow transport ref, complete
 typed/defaulted inputs, effective soak, and the first observed run and attempt.
 The helper records attempted intent before its single workflow dispatch POST.
 
@@ -146,10 +152,19 @@ creation/deletion, dispatch, rerun, cancellation, Git fetch, or request rewrite.
 `dispatch=observed` reports the exact run URL and attempt, not successful
 validation. A newer attempt cannot replace the retained attempt.
 
+Requests written before the helper stopped creating `validation/target-*` refs
+still record `targetRef` and `refs.target`, and the current helper rejects them
+as invalid. Reconcile such a file with the helper from the parent of the merge
+commit that removed the target ref, for example from
+`git worktree add --detach <path> <merge-commit>^`. Neither version creates or
+deletes refs during reconciliation. Keep any remaining `release-ci/*` or
+`validation/target-*` ref while GitHub reruns or evidence diagnosis may still
+need it, then delete it deliberately.
+
 Missing or ambiguous runs, incomplete pagination, unavailable or mismatched input
 witnesses, and exhausted discovery remain `dispatch=unknown`. A complete HTTP
 rejection is retained as `dispatch=rejected`; neither state permits redispatch.
-Keep the artifact and printed refs for investigation. There is no automatic
+Keep the artifact and printed workflow ref for investigation. There is no automatic
 retention expiry or cleanup for the local artifact; remove it only through
 deliberate operator cleanup. Losing or deleting it never proves non-execution.
 Independent requests and copies on other hosts are not globally deduplicated.
@@ -177,11 +192,10 @@ package version or a matching beta prerelease. For a correction, use
 `--target-ref release/YYYY.M.PATCH-N` to preserve the intended final tag before
 tagging. Its base package version is also accepted when `vYYYY.M.PATCH` resolves
 to the exact Code SHA; preparation retains the package version and seals both
-npm and Docker artifacts for `vYYYY.M.PATCH-N`. Tideclaw alpha validation uses
-its exact alpha tag and matching alpha branch. The helper maps beta releases and
-exact alpha tags to the `beta` profile and final versions to `stable`. Pass
+npm and Docker artifacts for `vYYYY.M.PATCH-N`. The helper maps beta releases
+to the `beta` profile and final versions to `stable`. Pass
 alternate workflow inputs with `-f key=value`; use `-f release_profile=full`
-only for the broad advisory sweep.
+only for the broad provider sweep.
 `fail_fast` defaults to `false`, so dispatched child workflows finish and expose
 independent failures together. In that mode, the parent makes no child
 cancellation calls. Pass `-f fail_fast=true` only when the shorter
@@ -197,24 +211,10 @@ attempts, recheck their source and Tooling SHAs, and reuse the successful builds
 Historical parents that produced their own candidate or publication artifacts
 cannot continue: keep both SHAs frozen and start a fresh all-group validation.
 
-For a diagnosed intermittent failure, declare an exact child key and GitHub job
-name before dispatch with `known_flaky_jobs_json`, for example:
-
-```bash
--f known_flaky_jobs_json='["normalCi:checks-node-agentic-control-plane-agent-chat"]'
-```
-
-The helper carries this semantic input in the `laneInputs` field of the existing
-`trusted_workflow_json` envelope. Direct dispatch supplies the JSON string value
-as `laneInputs.known_flaky_jobs_json`. The default is `[]`. The immutable execution
-plan binds the declaration; adding or changing an allowance after dispatch is not
-supported. The frozen Tooling SHA must support declared flake retries; the helper
-rejects older tooling with only exclusion support before creating refs or a run.
-Each selected child
-gets at most one automatic retry wave from its original attempt, with no more
-than two executions of a declared job. A repeated failure remains a blocker.
-See [Automatic retries for declared flakes](/reference/full-release-validation/continuation#automatic-retries-for-declared-flakes)
-for mutation, recovery, and evidence rules.
+Automatic test retries are disabled. Dispatch rejects `known_flaky_jobs_json`;
+remove that retired input and investigate the original job failure. Explicit
+operator recovery remains available after diagnosis through
+[continuation commands](/reference/full-release-validation/continuation).
 
 After dispatch, the parent writes one immutable
 `full-release-execution-plan-<run-id>` artifact and preserves the same bytes in

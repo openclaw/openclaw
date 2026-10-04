@@ -50,27 +50,42 @@ function abortReason(signal: AbortSignal): Error {
     : new Error("RFB authentication negotiation aborted");
 }
 
-/** Exact-byte queue shared by stream and WebSocket handshake adapters. */
+export function writeRfbPreauthFrame(
+  signal: AbortSignal,
+  send: (done: (error?: Error | null) => void) => void,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const onAbort = () => {
+      cleanup();
+      reject(abortReason(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    send((error) => {
+      cleanup();
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    });
+  });
+}
+
+/** Exact-byte queue for each sequential stream or WebSocket handshake. */
 export class RfbPreauthBuffer {
   private buffered = Buffer.alloc(0);
   private failure: Error | undefined;
-  private readonly waiters = new Set<() => void>();
+  private wake?: () => void;
 
   push(chunk: Buffer): void {
     this.buffered = Buffer.concat([this.buffered, chunk]);
-    this.wake();
+    this.wake?.();
   }
 
   fail(error: Error): void {
     this.failure = error;
-    this.wake();
-  }
-
-  private wake(): void {
-    for (const waiter of this.waiters) {
-      waiter();
-    }
-    this.waiters.clear();
+    this.wake?.();
   }
 
   private async waitForData(signal: AbortSignal): Promise<void> {
@@ -79,7 +94,7 @@ export class RfbPreauthBuffer {
     }
     await new Promise<void>((resolve, reject) => {
       const cleanup = () => {
-        this.waiters.delete(onWake);
+        this.wake = undefined;
         signal.removeEventListener("abort", onAbort);
       };
       const onWake = () => {
@@ -90,7 +105,7 @@ export class RfbPreauthBuffer {
         cleanup();
         reject(abortReason(signal));
       };
-      this.waiters.add(onWake);
+      this.wake = onWake;
       signal.addEventListener("abort", onAbort, { once: true });
     });
   }
@@ -114,48 +129,28 @@ export class RfbPreauthBuffer {
   }
 }
 
-class StreamRfbPreauthPeer implements RfbPreauthPeer {
-  private readonly reader = new RfbPreauthBuffer();
-
-  private readonly onData = (chunk: Buffer) => this.reader.push(chunk);
+class StreamRfbPreauthPeer extends RfbPreauthBuffer implements RfbPreauthPeer {
+  private readonly onData = (chunk: Buffer) => this.push(chunk);
   private readonly onEnd = () => {
-    this.reader.fail(new Error("RFB peer closed during authentication negotiation"));
+    this.fail(new Error("RFB peer closed during authentication negotiation"));
   };
   private readonly onError = (error: Error) => {
-    this.reader.fail(error);
+    this.fail(error);
   };
 
   constructor(private readonly stream: Duplex) {
+    super();
     stream.on("data", this.onData);
     stream.once("end", this.onEnd);
     stream.once("close", this.onEnd);
     stream.once("error", this.onError);
   }
 
-  async readExactly(length: number, signal: AbortSignal): Promise<Buffer> {
-    return await this.reader.readExactly(length, signal);
-  }
-
   async write(buffer: Buffer, signal: AbortSignal): Promise<void> {
     if (signal.aborted) {
       throw abortReason(signal);
     }
-    await new Promise<void>((resolve, reject) => {
-      const cleanup = () => signal.removeEventListener("abort", onAbort);
-      const onAbort = () => {
-        cleanup();
-        reject(abortReason(signal));
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-      this.stream.write(buffer, (error) => {
-        cleanup();
-        if (error) {
-          reject(error);
-        } else {
-          resolve();
-        }
-      });
-    });
+    await writeRfbPreauthFrame(signal, (done) => this.stream.write(buffer, done));
   }
 
   dispose(): void {
@@ -227,9 +222,6 @@ function leftPadBigInt(value: bigint, length: number): Buffer {
 }
 
 function modularExponentiation(base: bigint, exponent: bigint, modulus: bigint): bigint {
-  if (modulus <= 0n) {
-    throw new Error("invalid ARD Diffie-Hellman modulus");
-  }
   let result = 1n;
   let factor = base % modulus;
   let power = exponent;

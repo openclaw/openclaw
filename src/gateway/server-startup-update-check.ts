@@ -1,5 +1,8 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { applyRemoteModelCatalogUpdate } from "../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
 import type { createGatewayUpdateCheck } from "../infra/update-startup.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
@@ -15,6 +18,7 @@ import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace
 import { startUpdateRunWatcher, wakeUpdateRunWatcher } from "./update-run-watcher.js";
 
 export function createDeferredGatewayUpdateCheck(params: {
+  scheduler: GatewayScheduler;
   startupTrace?: GatewayStartupTrace;
   createUpdateCheck: (
     ...args: Parameters<typeof createGatewayUpdateCheck>
@@ -34,7 +38,7 @@ export function createDeferredGatewayUpdateCheck(params: {
   activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
 }): { start: () => void; stop: () => Promise<void> } {
   // Reserve cancellation before an early RPC can start install discovery.
-  const lifecycle = createGatewayUpdateLifecycle();
+  const lifecycle = createGatewayUpdateLifecycle(params.scheduler);
   let stopped = false;
   let started = false;
   let runWatcher: ReturnType<typeof startUpdateRunWatcher> | undefined;
@@ -85,6 +89,7 @@ export function createDeferredGatewayUpdateCheck(params: {
     }
     started = true;
     runWatcher = startUpdateRunWatcher({
+      lifecycle,
       broadcast: (event, payload) =>
         params.broadcastToConnIds(event, payload, params.getClientConnIds()),
       log: params.log,
@@ -92,9 +97,7 @@ export function createDeferredGatewayUpdateCheck(params: {
     void (async () => {
       if (params.waitForPostReadyWork) {
         await params.waitForPostReadyWork();
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextTurn();
       }
       if (stopped || params.isClosing?.()) {
         return;
@@ -104,6 +107,8 @@ export function createDeferredGatewayUpdateCheck(params: {
           owner = await params.createUpdateCheck({
             lifecycle,
             getConfig: params.getConfig,
+            applyRemoteCatalogUpdate: (signal) =>
+              applyRemoteModelCatalogUpdate(params.getConfig, signal),
             onUpdateRunCreated: wakeUpdateRunWatcher,
             log: params.log,
             isNixMode: params.isNixMode,
@@ -138,16 +143,19 @@ export function createDeferredGatewayUpdateCheck(params: {
           return;
         }
         const updateCheck = owner;
-        initialization = (async () => updateCheck.initialize())().catch((err: unknown) => {
+        initialization = (async () => {
+          const result = await updateCheck.initialize();
+          if (result.status.error) {
+            throw new Error(result.status.error.message);
+          }
+        })().catch((err: unknown) => {
           if (!stopped) {
             params.log.warn(`gateway update status failed to initialize: ${String(err)}`);
           }
         });
       })();
       await ownerReady;
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextTurn();
       if (!stopped && !params.isClosing?.()) {
         await runWithGatewayIndependentRootWorkAdmission(async () => {
           if (stopped || params.isClosing?.()) {

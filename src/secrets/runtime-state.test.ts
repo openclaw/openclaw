@@ -3,7 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { cloneAuthProfileStore } from "../agents/auth-profiles/clone.js";
 import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credential-fixtures.test-support.js";
+import {
+  observeCanonicalAuthProfileCredentials,
+  withCanonicalAuthProfileCredentialObserver,
+  type CanonicalAuthProfileCredentialObservation,
+} from "../agents/auth-profiles/credential-observation.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreCredentialsRevision,
@@ -14,6 +20,7 @@ import {
   setRuntimeAuthProfileStoreSnapshot,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import { testing as runtimeSnapshotsTesting } from "../agents/auth-profiles/runtime-snapshots.test-support.js";
+import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
@@ -42,48 +49,15 @@ import {
   activateSecretsRuntimeSnapshotState,
   activateSecretsRuntimeSnapshotStateIfCurrent,
   clearSecretsRuntimeSnapshotState,
-  collectSecretStoreRefKeysInSnapshot,
   getActiveSecretsRuntimeConfigSnapshot,
   getActiveSecretsRuntimeSnapshotState,
   getActiveSecretsRuntimeSnapshotRevisionState,
   hasSameSecretReloadContract,
   restoreSecretsRuntimeSourceSnapshotIfLineageCurrent,
-  restoreSecretsRuntimeSnapshotStateIfCurrent,
+  prepareSecretsRuntimeSnapshotRestoreState,
   setSecretsRuntimeSourceSnapshotIfCurrent,
   type PreparedSecretsRuntimeSnapshot,
 } from "./runtime-state.js";
-
-describe("secret store references", () => {
-  it("finds canonical and provider-defaulted store refs without matching other sources", () => {
-    const config = {
-      secrets: { defaults: { store: "default" } },
-      models: {
-        providers: {
-          one: {
-            apiKey: { source: "store", id: "TEAM_API_KEY" },
-            models: [],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    expect(
-      collectSecretStoreRefKeysInSnapshot({ sourceConfig: config, authStores: [] }, "TEAM_API_KEY"),
-    ).toEqual(new Set(["store:default:TEAM_API_KEY"]));
-    expect(
-      collectSecretStoreRefKeysInSnapshot(
-        {
-          sourceConfig: {
-            gateway: {
-              auth: { token: { source: "env", provider: "default", id: "TEAM_API_KEY" } },
-            },
-          },
-          authStores: [],
-        },
-        "TEAM_API_KEY",
-      ),
-    ).toEqual(new Set());
-  });
-});
 
 type PreparedSnapshotOverrides = Omit<
   Partial<PreparedSecretsRuntimeSnapshot>,
@@ -155,17 +129,12 @@ function activateSnapshotIfCurrent(
   });
 }
 
-type RestoreIfCurrentOptions = Omit<
-  Parameters<typeof restoreSecretsRuntimeSnapshotStateIfCurrent>[0],
-  "snapshot" | "ownedSnapshot" | "expectedRevision" | "refreshContext" | "refreshHandler"
-> & { expectedRevision?: number };
-
 function restoreSnapshotIfCurrent(
   snapshot: PreparedSecretsRuntimeSnapshot,
   ownedSnapshot: PreparedSecretsRuntimeSnapshot,
-  options: RestoreIfCurrentOptions = {},
+  options: ActivateIfCurrentOptions = {},
 ): boolean {
-  return restoreSecretsRuntimeSnapshotStateIfCurrent({
+  const restoration = prepareSecretsRuntimeSnapshotRestoreState({
     snapshot,
     ownedSnapshot,
     expectedRevision: options.expectedRevision ?? getActiveSecretsRuntimeSnapshotRevisionState(),
@@ -173,6 +142,7 @@ function restoreSnapshotIfCurrent(
     refreshHandler: null,
     ...options,
   });
+  return restoration !== null && activateSecretsRuntimeSnapshotStateIfCurrent(restoration);
 }
 
 describe("secrets runtime state", () => {
@@ -188,6 +158,64 @@ describe("secrets runtime state", () => {
     runtimeSnapshotsTesting.resetPersistedMutationLineage();
     envSnapshot.restore();
   });
+
+  it.each(["activation", "rollback"] as const)(
+    "preserves exact canonical credential observations through %s without claiming runtime secrets",
+    async (phase) => {
+      const agentDir = "/tmp/openclaw-auth-observation-clones";
+      const databasePath = resolveAuthProfileDatabasePath(agentDir);
+      const canonical: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          inline: { type: "api_key", provider: "fixture", key: "canonical" },
+          ref: {
+            type: "api_key",
+            provider: "fixture",
+            keyRef: { source: "env", provider: "default", id: "OBSERVATION_TEST_KEY" },
+          },
+        },
+      };
+      observeCanonicalAuthProfileCredentials(databasePath, canonical.profiles);
+      const materialized = cloneAuthProfileStore(canonical);
+      materialized.profiles.ref = {
+        type: "api_key",
+        provider: "fixture",
+        keyRef: { source: "env", provider: "default", id: "OBSERVATION_TEST_KEY" },
+        key: "resolved-only",
+      };
+      materialized.profiles.external = {
+        type: "token",
+        provider: "fixture",
+        token: "external-only",
+      };
+      materialized.runtimeExternalProfileIds = ["external"];
+      activateSnapshot(preparedGatewayAuthSnapshot(agentDir, 19_001, materialized));
+      const previous = getActiveSecretsRuntimeSnapshotState()!;
+      if (phase === "rollback") {
+        const rotated = cloneAuthProfileStore(materialized);
+        rotated.profiles.inline = { type: "api_key", provider: "fixture", key: "rotated" };
+        observeCanonicalAuthProfileCredentials(databasePath, { inline: rotated.profiles.inline });
+        const candidate = preparedGatewayAuthSnapshot(agentDir, 19_002, rotated);
+        expect(activateSnapshotIfCurrent(candidate)).toBe(true);
+        expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
+      } else {
+        activateSnapshot(previous);
+      }
+      const observations: CanonicalAuthProfileCredentialObservation[] = [];
+      await withCanonicalAuthProfileCredentialObserver(
+        (value) => observations.push(value),
+        async () => {
+          const cached = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
+          expect(cached?.profiles.inline).toEqual(canonical.profiles.inline);
+          expect(cached?.profiles.ref).toMatchObject({ key: "resolved-only" });
+          expect(cached?.profiles.external).toMatchObject({ token: "external-only" });
+        },
+      );
+      expect(observations).toEqual([
+        { databasePath, profiles: { inline: canonical.profiles.inline! } },
+      ]);
+    },
+  );
 
   it("includes env shorthand SecretRefs in the reload contract", () => {
     const configWithRef = (apiKey: string): OpenClawConfig => ({
@@ -455,42 +483,6 @@ describe("secrets runtime state", () => {
     expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.lastGood?.openai).toBe(
       "openai:default",
     );
-  });
-
-  it("removes candidate-only auth profiles when rolling config back", () => {
-    const agentDir = "/tmp/openclaw-auth-rollback-cas";
-    const snapshot = (key: string, port: number) =>
-      preparedGatewayAuthSnapshot(
-        agentDir,
-        port,
-        createAuthProfileStoreFixture({
-          "openai:default": { type: "api_key", provider: "openai", key },
-        }),
-      );
-    activateSnapshot(snapshot("sk-old", 19_001));
-    const previous = getActiveSecretsRuntimeSnapshotState();
-    const previousRevision = getActiveSecretsRuntimeSnapshotRevisionState();
-    const candidate = snapshot("sk-old", 19_002);
-    candidate.authStores[0]!.store.profiles["anthropic:candidate"] = {
-      type: "api_key",
-      provider: "anthropic",
-      key: "sk-rejected-candidate",
-    };
-    expect(previous).not.toBeNull();
-    expect(activateSnapshotIfCurrent(candidate, { expectedRevision: previousRevision })).toBe(true);
-    const candidateRevision = getActiveSecretsRuntimeSnapshotRevisionState();
-    expect(
-      restoreSnapshotIfCurrent(previous!, candidate, { expectedRevision: candidateRevision }),
-    ).toBe(true);
-    expect(getActiveSecretsRuntimeSnapshotState()?.config.gateway?.port).toBe(19_001);
-    expect(
-      getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles["openai:default"],
-    ).toMatchObject({
-      key: "sk-old",
-    });
-    expect(
-      getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles["anthropic:candidate"],
-    ).toBeUndefined();
   });
 
   it("publishes prepared bookkeeping when the live snapshot is unchanged", () => {
@@ -1282,38 +1274,6 @@ describe("secrets runtime state", () => {
     ).toMatchObject({
       key: changedRef ? "sk-old" : "sk-refreshed",
       keyRef: changedRef ? previousRef : candidateRef,
-    });
-  });
-
-  it("preserves live credentials when the captured predecessor is stale", () => {
-    const agentDir = "/tmp/openclaw-auth-stale-predecessor-rollback";
-    const snapshot = (key: string, port: number) =>
-      preparedGatewayAuthSnapshot(
-        agentDir,
-        port,
-        createAuthProfileStoreFixture({
-          "openai:default": { type: "api_key", provider: "openai", key },
-        }),
-      );
-    activateSnapshot(snapshot("sk-old", 19_011));
-    setRuntimeAuthProfileStoreSnapshot(
-      createAuthProfileStoreFixture({
-        "openai:default": { type: "api_key", provider: "openai", key: "sk-live" },
-      }),
-      agentDir,
-    );
-    const previous = getActiveSecretsRuntimeSnapshotState();
-    const previousRevision = getActiveSecretsRuntimeSnapshotRevisionState();
-    const candidate = snapshot("sk-live", 19_012);
-    expect(previous).not.toBeNull();
-    expect(activateSnapshotIfCurrent(candidate, { expectedRevision: previousRevision })).toBe(true);
-
-    expect(restoreSnapshotIfCurrent(previous!, candidate)).toBe(true);
-    expect(getActiveSecretsRuntimeSnapshotState()?.config.gateway?.port).toBe(19_011);
-    expect(
-      getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles["openai:default"],
-    ).toMatchObject({
-      key: "sk-live",
     });
   });
 

@@ -23,13 +23,14 @@ export function prepareSessionPortalToolAccess(input: {
     input.senderIsOwner === false && !input.sandboxed
       ? prepareSessionPortalToolTarget(input)
       : undefined;
-  // Portal qualification grants only the scoped tool. Keep the existing exact-run
-  // automation exception without granting the remaining owner-only tools.
+  // Sessions owns its assignment/control action gates; portal and automation
+  // remain scoped exceptions. Other control-plane tools require owner authority.
   const ownerOnlyCoreToolDenylist =
     input.senderIsOwner === false
       ? GATEWAY_OWNER_ONLY_CORE_TOOLS.filter(
           (name) =>
             (name !== "portal" || !sessionPortalTarget) &&
+            name !== "sessions" &&
             (name !== AUTOMATIONS_TOOL_NAME || !input.hasAutomationGrant),
         )
       : [];
@@ -51,7 +52,29 @@ export function prepareSessionPortalToolTarget(input: {
   const context = getInProcessGatewayToolContext();
   const environments = context?.workerEnvironmentService;
   const projection = getSessionRowProjection(context);
-  const row = projection?.sharingTarget({ agentId: input.agentId, key: input.sessionKey });
+  const query = { agentId: input.agentId, key: input.sessionKey };
+  const readCurrentTarget = () => {
+    const row = projection?.capture(query);
+    const state = projection?.sharingTargetState(query);
+    if (
+      !row?.storedEntry ||
+      row.unresolvedDatabaseFacts ||
+      !projection?.isCurrent(row) ||
+      state?.status !== "ready" ||
+      state.target.generation !== row.generation ||
+      state.target.agentId !== row.agentId ||
+      state.target.canonicalKey !== row.key ||
+      state.target.storePath !== row.storeTarget.storePath ||
+      state.target.entry.sessionId !== row.storedEntry.sessionId ||
+      state.target.entry.lifecycleRevision !== row.storedEntry.lifecycleRevision ||
+      row.storedEntry.modelSelectionLocked === true
+    ) {
+      return undefined;
+    }
+    return state.target;
+  };
+  const row = readCurrentTarget();
+  const generation = row?.generation;
   const record = row && {
     agentId: row.agentId,
     sessionKey: row.canonicalKey,
@@ -64,8 +87,7 @@ export function prepareSessionPortalToolTarget(input: {
     !record ||
     record.sessionKey !== input.sessionKey ||
     record.agentId !== input.agentId ||
-    record.sessionId !== input.sessionId ||
-    row?.entry.modelSelectionLocked === true
+    record.sessionId !== input.sessionId
   ) {
     return undefined;
   }
@@ -79,15 +101,12 @@ export function prepareSessionPortalToolTarget(input: {
         if (getInProcessGatewayToolContext() !== context) {
           throw new Error("Session preview belongs to a different or retired Gateway");
         }
-        const current = projection?.sharingTarget({
-          agentId: record.agentId,
-          key: record.sessionKey,
-        });
+        const current = readCurrentTarget();
         if (
           !current ||
+          current.generation !== generation ||
           current.entry.sessionId !== record.sessionId ||
-          current.entry.lifecycleRevision !== record.sessionLifecycleRevision ||
-          current.entry.modelSelectionLocked === true
+          current.entry.lifecycleRevision !== record.sessionLifecycleRevision
         ) {
           throw new Error("Conversation preview policy or session identity changed");
         }

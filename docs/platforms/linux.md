@@ -20,9 +20,9 @@ Gateways. It:
 
 - walks new users through choosing a local Gateway, a discovered remote Gateway,
   a manually entered Gateway URL, or an SSH tunnel
-- installs the OpenClaw CLI and Node in a private managed runtime when local
-  setup needs them, rather than requiring a global CLI install; release builds
-  install the stable channel automatically, while development builds ask for
+- installs the OpenClaw CLI and runs fresh local installations on the bundled
+  OpenClaw Bun fork, without requiring a global CLI install; release builds
+  install their matching stable version, while development builds ask for
   the channel first
 - attaches to a healthy Gateway before attempting service changes
 - delegates install, start, stop, and restart operations to the CLI-managed systemd user service
@@ -79,6 +79,14 @@ runtime installer. See [Chrome extension](/tools/chrome-extension) for approval,
 disconnection, and manual recovery.
 
 ### Desktop compatibility
+
+The Linux companion shares one Bun fork pin with the native macOS app and CI.
+Runtime admission, SQLite safety checks, and the fork's disabled implicit package
+auto-install remain enabled. macOS Tauri test builds keep their existing runtime
+behavior; the native macOS app owns its separate bundled runtime. Windows Tauri
+test builds retain their existing runtime until a signed Windows fork is
+available; an unsigned dry-run is not shippable. See
+[Bun compatibility](/install/bun-compatibility).
 
 Published AMD64 AppImages are built on Ubuntu 22.04 and require glibc 2.35 or
 newer plus a `libstdc++` that provides `GLIBCXX_3.4.30`. Ubuntu 22.04 and
@@ -140,6 +148,44 @@ after the new dashboard loads successfully.
 
 The macOS Tauri build is named **OpenClaw-Tauri** and keeps its saved connections
 separate from the native **OpenClaw** app.
+
+<a id="adopt-the-bundled-runtime" />
+
+### Use the bundled runtime
+
+On Linux, fresh local setup installs the Gateway on the bundled OpenClaw Bun
+fork through the canonical CLI. The install guard requires the service to still
+be absent. A service that appears during setup blocks that installation. The app's
+runtime marker is informational and never authorizes automatic service changes.
+
+For any existing Gateway that uses another runtime, choose **Use bundled
+runtime…** in the tray menu. This includes Node, an older bundled Bun after an
+app update, and an operator-selected runtime. The confirmation shows the current
+runtime. The CLI install checks that the service definition and runtime pin still
+match what you confirmed before switching to the current bundled Bun. If either
+changed, the action refuses. A paused or stopped Gateway stays stopped; choose
+**Start Gateway** before switching runtimes.
+
+The app checks Gateway health after installation. On failure it shows the error
+and a CLI command to return to the previous runtime. It does not automatically
+restore a runtime. To return to Node, install a
+[supported Node version](/install/node-compatibility) if needed, then run:
+
+```sh
+openclaw gateway install --force --runtime node
+```
+
+To return to a particular previous executable, use
+`openclaw gateway install --force --runtime-path /absolute/path/to/node-or-bun`.
+The CLI owns service installation. Switching an existing Gateway's runtime
+leaves its CLI launcher unchanged.
+
+Startup and app updates never change an existing Gateway service or runtime pin.
+After an app update, the current service keeps its existing runtime until you
+choose **Use bundled runtime…** again. Immutable app runtime directories are
+retained, so updates never remove a runtime referenced by a service. These actions
+are Linux-only; macOS Tauri keeps its existing behavior, separate from the
+[native macOS app](/platforms/mac/bundled-gateway).
 
 ### Desktop sharing
 
@@ -273,7 +319,7 @@ file; a new Gateway release alone does not prove a new Linux app is available.
 The shipped updater still uses `releases/latest/download/latest.json`.
 Independent `linux-stable` publication tooling is not a client endpoint or
 download-link migration. That activation requires separate release approval and
-signed installed-client proof; see [Linux companion publication](/reference/RELEASING#linux-companion-publication).
+signed installed-client proof; see [Linux companion publication](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/platform-publication.md#linux).
 
 ### Media codecs
 
@@ -287,7 +333,7 @@ either Linux bundle, install the packages and inspection tool explicitly:
 
 ```bash
 sudo apt update && sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-good \
-  gstreamer1.0-plugins-bad gstreamer1.0-tools patchelf xdg-utils
+  gstreamer1.0-plugins-bad gstreamer1.0-tools patchelf xdg-utils unzip
 ```
 
 The packaging script stages only that media capability set before Tauri invokes
@@ -531,6 +577,12 @@ For eligible Linux child spawns, OpenClaw wraps the command in a short
 `/bin/sh` shim that attempts to raise the child's own `oom_score_adj` to
 `1000`, then `exec`s the real command. This is unprivileged: a process may
 always raise its own OOM score.
+
+The small spawn broker and service-child anchor avoid this extra shell exec:
+they temporarily raise their own score around the native spawn, then restore it.
+The child inherits `1000` before it can execute or fork descendants. If the
+helper cannot adjust its score, it uses the shim. Direct launches and PTYs
+keep the shim so the Gateway's own score never needs to change.
 
 Covered child process surfaces:
 

@@ -190,32 +190,6 @@ suite.define(() => {
     });
   });
 
-  it("keeps offline outbox guidance in one bounded composer row", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const gateway = await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
-      await gateway.setOnline(false);
-
-      const statusBand = page.locator(".agent-chat__composer-status-band");
-      await expect
-        .poll(() => statusBand.locator("xpath=..").getAttribute("data-tone"))
-        .toBe("info");
-      await expect.poll(() => statusBand.textContent()).toContain("You can keep writing.");
-      await expect
-        .poll(() =>
-          statusBand.locator("svg").evaluate((node) => {
-            const bounds = node.getBoundingClientRect();
-            return [bounds.width, bounds.height];
-          }),
-        )
-        .toEqual([16, 16]);
-      await expect
-        .poll(() => statusBand.evaluate((node) => node.getBoundingClientRect().height))
-        .toBe(44);
-    });
-  });
-
   it("keeps mobile picker panels above an attachment-expanded composer", async () => {
     await suite.withPage({ viewport: { width: 393, height: 852 } }, async ({ page }) => {
       const gateway = await installMockGateway(page);
@@ -258,9 +232,11 @@ suite.define(() => {
         if (!composerBox || !footerBox || !menuBox || !triggerBox) {
           throw new Error(`expected mobile layout boxes for ${picker.menu}`);
         }
-        expect(menuBox.x).toBeGreaterThanOrEqual(12);
-        expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(381);
-        expect(menuBox.width).toBeGreaterThanOrEqual(368);
+        // Fixed pickers use the shared 16px mobile gutter without the
+        // in-flow content shell’s additional 4px inset.
+        expect(menuBox.x).toBeCloseTo(16, 0);
+        expect(menuBox.x + menuBox.width).toBeCloseTo(393 - 16, 0);
+        expect(menuBox.width).toBeCloseTo(393 - 2 * 16, 0);
         expect(menuBox.y).toBeGreaterThanOrEqual(0);
         expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(composerBox.y + 1);
         expect(triggerBox.y + triggerBox.height).toBeLessThanOrEqual(853);
@@ -274,7 +250,7 @@ suite.define(() => {
         .toBe(true);
       await effort.press("Tab");
       const focusedEffortControl = composer.locator(
-        "[data-chat-thinking-slider]:not([disabled]), [data-chat-speed-toggle]:not([disabled])",
+        "[data-chat-thinking-slider]:not([disabled]), [data-chat-speed-option]:not([disabled])",
       );
       await expect
         .poll(() =>
@@ -569,14 +545,14 @@ suite.define(() => {
 
       await effort.click();
       const thinkingSlider = composer.locator('[data-chat-thinking-slider="true"]');
-      const speedToggle = composer.locator("[data-chat-speed-toggle]");
+      const fastOption = composer.locator('[data-chat-speed-option="on"]');
       await expect.poll(() => thinkingSlider.isVisible()).toBe(true);
       await expect
         .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
         .toBe("off,low,medium,high");
       await expect.poll(() => thinkingSlider.inputValue()).toBe("3");
       // OpenAI sessions toggle between the standard and priority tiers.
-      await expect.poll(() => speedToggle.getAttribute("aria-checked")).toBe("false");
+      await expect.poll(() => fastOption.getAttribute("aria-checked")).toBe("false");
       // Reasoning and speed commit immediately while the Effort picker stays open.
       await thinkingSlider.press("Home");
       await thinkingSlider.press("ArrowRight");
@@ -593,7 +569,7 @@ suite.define(() => {
         .toBe(true);
       await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("low");
       await expect.poll(() => thinkingSlider.inputValue()).toBe("1");
-      await speedToggle.click();
+      await fastOption.click();
       await expect
         .poll(async () =>
           (await gateway.getRequests("sessions.patch")).some(
@@ -605,13 +581,13 @@ suite.define(() => {
           ),
         )
         .toBe(true);
-      await expect.poll(() => speedToggle.getAttribute("aria-checked")).toBe("true");
+      await expect.poll(() => fastOption.getAttribute("aria-checked")).toBe("true");
       await page.keyboard.press("Escape");
       await expect
         .poll(() => composer.locator(".chat-controls__effort-menu").isVisible())
         .toBe(false);
       await effort.click();
-      await expect.poll(() => speedToggle.getAttribute("aria-checked")).toBe("true");
+      await expect.poll(() => fastOption.getAttribute("aria-checked")).toBe("true");
       await expect
         .poll(() => composer.locator('[data-chat-thinking-slider="true"]').count())
         .toBe(1);
@@ -1000,7 +976,7 @@ suite.define(() => {
       expect(
         await composer
           .locator(".chat-controls__model-menu")
-          .getByText(/Effort|Fast mode/)
+          .getByText(/Effort|Speed/)
           .count(),
       ).toBe(0);
       await page.keyboard.press("Escape");

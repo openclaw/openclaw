@@ -46,31 +46,36 @@ function resolveProviderChoiceOptions(params?: {
   return resolveProviderSetupFlowContributions({
     ...params,
     scope: "text-inference",
-  }).map((contribution) =>
-    Object.assign(
-      {},
-      { value: contribution.option.value as AuthChoice, label: contribution.option.label },
-      { providerId: contribution.providerId },
-      contribution.option.modelTarget ? { modelTarget: contribution.option.modelTarget } : {},
-      contribution.option.hint ? { hint: contribution.option.hint } : {},
-      contribution.option.assistantPriority !== undefined
-        ? { assistantPriority: contribution.option.assistantPriority }
-        : {},
-      contribution.option.assistantVisibility
-        ? { assistantVisibility: contribution.option.assistantVisibility }
-        : {},
-      contribution.option.group
-        ? {
-            groupId: contribution.option.group.id as AuthChoiceGroupId,
-            groupLabel: contribution.option.group.label,
-            ...(contribution.option.group.hint
-              ? { groupHint: contribution.option.group.hint }
-              : {}),
-          }
-        : {},
-      contribution.option.onboardingFeatured ? { onboardingFeatured: true } : {},
-    ),
-  );
+  }).map(({ option, providerId }) => {
+    const choice: AuthChoiceOption = {
+      value: option.value,
+      label: option.label,
+      providerId,
+    };
+    if (option.modelTarget) {
+      choice.modelTarget = option.modelTarget;
+    }
+    if (option.hint) {
+      choice.hint = option.hint;
+    }
+    if (option.assistantPriority !== undefined) {
+      choice.assistantPriority = option.assistantPriority;
+    }
+    if (option.assistantVisibility) {
+      choice.assistantVisibility = option.assistantVisibility;
+    }
+    if (option.group) {
+      choice.groupId = option.group.id;
+      choice.groupLabel = option.group.label;
+      if (option.group.hint) {
+        choice.groupHint = option.group.hint;
+      }
+    }
+    if (option.onboardingFeatured) {
+      choice.onboardingFeatured = true;
+    }
+    return choice;
+  });
 }
 
 /**
@@ -82,13 +87,12 @@ function resolveProviderChoiceOptions(params?: {
  * them before any surface sees them.
  */
 export function formatAuthChoiceChoicesForCli(params?: {
-  includeSkip?: boolean;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): string {
   const values = [
-    ...formatStaticAuthChoiceChoicesForCli(params).split("|"),
+    ...formatStaticAuthChoiceChoicesForCli().split("|"),
     ...resolveProviderSetupFlowContributions({ ...params, scope: "all" }).map(
       (contribution) => contribution.option.value,
     ),
@@ -97,7 +101,6 @@ export function formatAuthChoiceChoicesForCli(params?: {
   return uniqueStrings(values).join("|");
 }
 
-/** Build flat auth-choice options from core choices plus provider setup flows. */
 function buildAuthChoiceOptions(params: {
   assistantVisibleOnly?: boolean;
   detectedProviderIds?: ReadonlySet<string>;
@@ -120,7 +123,7 @@ function buildAuthChoiceOptions(params: {
   const detectedProviders = new Set(
     [...(params.detectedProviderIds ?? [])].map(normalizeProviderId),
   );
-  const options: AuthChoiceOption[] = Array.from(optionByValue.values())
+  return Array.from(optionByValue.values())
     .toSorted(compareOptionLabels)
     .filter(
       (option) =>
@@ -131,8 +134,6 @@ function buildAuthChoiceOptions(params: {
     .filter((option) =>
       params.assistantVisibleOnly ? option.assistantVisibility !== "manual-only" : true,
     );
-
-  return options;
 }
 
 /** Build grouped auth choices, filtering manual-only methods by default. */

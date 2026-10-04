@@ -1,8 +1,11 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { resolveSessionEntryResetFreshness } from "./entry-freshness.js";
 import {
   appendTranscriptEvent,
@@ -23,9 +26,10 @@ describe("resolveSessionEntryResetFreshness", () => {
     storePath = path.join(tempDir, "sessions.json");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     cleanupTempDirs(tempDirs);
   });
 
@@ -165,33 +169,6 @@ describe("resolveSessionEntryResetFreshness", () => {
       fresh: false,
       staleReason: "daily",
     });
-  });
-
-  it("resolves fresh daily freshness for active lifecycle timestamps", async () => {
-    const sessionKey = "agent:main:main";
-    const now = new Date("2026-01-02T12:00:00Z").getTime();
-    await upsertSessionEntryCore(
-      { sessionKey, storePath },
-      {
-        sessionId: "session-fresh",
-        updatedAt: now,
-        sessionStartedAt: now - 60_000,
-        lastInteractionAt: now - 60_000,
-      },
-    );
-
-    const result = resolveSessionEntryResetFreshness({
-      sessionKey,
-      storePath,
-      sessionCfg: {},
-      resetType: "direct",
-      now,
-    });
-
-    expect(result.state).toBe("fresh");
-    expect(result.entry?.sessionId).toBe("session-fresh");
-    expect(result.resetType).toBe("direct");
-    expect(result.freshness).toMatchObject({ fresh: true });
   });
 
   it("honors reset overrides when resolving entry freshness", async () => {

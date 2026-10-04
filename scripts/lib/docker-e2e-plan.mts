@@ -8,7 +8,6 @@ import { resolve } from "node:path";
 import { resolveUpgradeSurvivorConfigStepsForBaseline } from "../e2e/lib/upgrade-survivor/config-recipe.mts";
 import {
   BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS,
-  DEFAULT_LIVE_RETRIES,
   allReleasePathLanes,
   fleetCacheLane,
   mainLanes,
@@ -22,17 +21,24 @@ import {
   type DockerE2eReleaseProfileInput,
 } from "./docker-e2e-scenarios.mts";
 import officialExternalChannelCatalog from "./official-external-channel-catalog.json" with { type: "json" };
+import officialExternalProviderCatalog from "./official-external-provider-catalog.json" with { type: "json" };
+import { isRecord } from "./record-shared.mjs";
 import {
+  UPDATE_FIRST_HOP_COMPAT_LANE,
+  UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE,
+  isUpdateFirstHopCompatLane,
+  listUpdateFirstHopCompatLaneNames,
+  updateFirstHopCompatLaneName,
+} from "./update-first-hop-lanes.mjs";
+import {
+  assertSupportedUpgradeSurvivorBaselineSpec,
   isTrustedHarnessOwnedUpgradeSurvivorScenario,
-  normalizeUpgradeSurvivorBaselineSpec,
   parseUpgradeSurvivorBaselineSpecs,
   parseUpgradeSurvivorScenarios,
   supportsUpgradeSurvivorScenarioAtBaseline,
 } from "./upgrade-survivor-policy.mjs";
 
-export { DEFAULT_LIVE_RETRIES };
 export { normalizeReleaseProfile };
-export { normalizeUpgradeSurvivorBaselineSpec };
 
 export const DEFAULT_E2E_BARE_IMAGE = "openclaw-docker-e2e-bare:local";
 export const DEFAULT_E2E_FUNCTIONAL_IMAGE = "openclaw-docker-e2e-functional:local";
@@ -78,7 +84,6 @@ type DockerE2ePlanOptions = {
   frozenTarget?: InertTargetContract;
   includeOpenWebUI: boolean;
   liveMode: LiveMode;
-  liveRetries: number;
   orderLanes: (lanes: DockerE2eLane[], timingStore?: unknown) => DockerE2eLane[];
   planReleaseAll: boolean;
   profile: string;
@@ -96,6 +101,7 @@ export function parseLaneSelection(raw: string | undefined): string[] {
   }
   const laneAliases = new Map([
     ["install-e2e", ["install-e2e-openai", "install-e2e-anthropic"]],
+    [UPDATE_FIRST_HOP_COMPAT_LANE, listUpdateFirstHopCompatLaneNames()],
     [
       "bundled-plugin-install-uninstall",
       Array.from(
@@ -415,11 +421,38 @@ function readTargetMetadata(
 }
 
 function supportsUpdateFirstHopCompatForTarget(
+  laneName: string,
   targetRoot: string | undefined,
   frozenTarget?: InertTargetContract,
 ): boolean {
   if (!targetRoot && !frozenTarget) {
+    // Untargeted planning runs this checkout's matching lane and package; this lane
+    // entered the catalog with candidate admission protocol 1.
     return true;
+  }
+  if (laneName === UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE) {
+    // Release targets are full pinned checkouts. A missing manifest is an incomplete
+    // target contract, so never infer candidate admission from sibling metadata.
+    const manifest = readTargetMetadata(targetRoot, "package.json", frozenTarget);
+    return (
+      manifest !== null &&
+      (JSON.parse(manifest) as { openclaw?: { updateAdmissionProtocol?: number } }).openclaw
+        ?.updateAdmissionProtocol === 1
+    );
+  }
+  // A target that records its own inventory only proves the hops it lists.
+  const inventory = readTargetMetadata(
+    targetRoot,
+    "scripts/lib/update-compat-inventory.json",
+    frozenTarget,
+  );
+  if (inventory !== null) {
+    const releases = (JSON.parse(inventory).releases as { version: string }[]).map((release) =>
+      updateFirstHopCompatLaneName(release.version),
+    );
+    if (!releases.includes(laneName)) {
+      return false;
+    }
   }
   const source = readTargetMetadata(targetRoot, "scripts/runtime-postbuild.mts", frozenTarget);
   if (source === null) {
@@ -500,6 +533,7 @@ function expandUpgradeSurvivorBaselineLanes(
     return { lanes: poolLanes, omittedLaneNames: [] };
   }
   const baselineSpecs = parseUpgradeSurvivorBaselineSpecs(rawBaselineSpecs);
+  baselineSpecs.forEach(assertSupportedUpgradeSurvivorBaselineSpec);
   // Trusted-current planners may know scenarios that a frozen target's Docker
   // harness cannot seed or assert. Filter by the selected tree's concrete
   // harness contract so validation never schedules an impossible target lane.
@@ -588,23 +622,6 @@ function dedupeLanes(poolLanes: DockerE2eLane[]): DockerE2eLane[] {
   return [...byName.values()];
 }
 
-function selectNamedLanes(
-  poolLanes: DockerE2eLane[],
-  selectedNames: string[],
-  label: string,
-): DockerE2eLane[] {
-  const byName = new Map(poolLanes.map((poolLane) => [poolLane.name, poolLane]));
-  const missing = selectedNames.filter((name) => !byName.has(name));
-  if (missing.length > 0) {
-    throw new Error(
-      `${label} unknown lane(s): ${missing.join(", ")}. Available lanes: ${[...byName.keys()]
-        .toSorted((a, b) => a.localeCompare(b))
-        .join(", ")}`,
-    );
-  }
-  return selectedNames.map((name) => byName.get(name)!);
-}
-
 export function parseLiveMode(raw: unknown): LiveMode {
   const mode = raw || "all";
   if (mode === "all" || mode === "skip" || mode === "only") {
@@ -632,10 +649,6 @@ function applyLiveMode(poolLanes: DockerE2eLane[], mode: LiveMode): DockerE2eLan
   return poolLanes.filter((poolLane) => (mode === "only" ? poolLane.live : !poolLane.live));
 }
 
-function applyLiveRetries(poolLanes: DockerE2eLane[], retries: number): DockerE2eLane[] {
-  return poolLanes.map((poolLane) => (poolLane.live ? { ...poolLane, retries } : poolLane));
-}
-
 export function laneWeight(poolLane: DockerE2eLane): number {
   return Math.max(1, poolLane.weight ?? 1);
 }
@@ -650,11 +663,10 @@ export function laneSummary(poolLane: DockerE2eLane): string {
   const noOutputTimeout = poolLane.noOutputTimeoutMs
     ? ` no-output=${Math.round(poolLane.noOutputTimeoutMs / 1000)}s`
     : "";
-  const retries = poolLane.retries > 0 ? ` retries=${poolLane.retries}` : "";
   const cache = poolLane.cacheKey ? ` cache=${poolLane.cacheKey}` : "";
   const image = poolLane.e2eImageKind ? ` image=${poolLane.e2eImageKind}` : "";
   const state = poolLane.stateScenario ? ` state=${poolLane.stateScenario}` : "";
-  return `${poolLane.name}(w=${laneWeight(poolLane)} r=${resources}${timeout}${noOutputTimeout}${retries}${cache}${image}${state})`;
+  return `${poolLane.name}(w=${laneWeight(poolLane)} r=${resources}${timeout}${noOutputTimeout}${cache}${image}${state})`;
 }
 
 export function lanesNeedE2eImageKind(
@@ -669,20 +681,18 @@ export function lanesNeedOpenClawPackage(poolLanes: DockerE2eLane[]): boolean {
 }
 
 export function findLaneByName(name: string): DockerE2eLane | undefined {
-  return dedupeLanes(
-    expandUpgradeSurvivorBaselineLanes(
-      [
-        ...allReleasePathLanes({ includeOpenWebUI: true }),
-        ...publicInstallerLanes,
-        fleetCacheLane,
-        ...mainLanes,
-        ...tailLanes,
-      ],
-      process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS,
-      undefined,
-      process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
-    ).lanes,
-  ).find((poolLane) => poolLane.name === name);
+  return expandUpgradeSurvivorBaselineLanes(
+    [
+      ...allReleasePathLanes({ includeOpenWebUI: true }),
+      ...publicInstallerLanes,
+      fleetCacheLane,
+      ...mainLanes,
+      ...tailLanes,
+    ],
+    process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS,
+    undefined,
+    process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
+  ).lanes.find((poolLane) => poolLane.name === name);
 }
 
 function laneCredentialRequirements(poolLane: DockerE2eLane): string[] {
@@ -741,9 +751,43 @@ function upgradeSurvivorBaselineVersionForLane(poolLane: DockerE2eLane): string 
   return /(?:^|\/|@)(\d{4}\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/u.exec(spec ?? "")?.[1] ?? null;
 }
 
-export function requiredPrepublishPluginPackagesForLanes(poolLanes: DockerE2eLane[]): string[] {
+function legacyOperatorProviderPackages(
+  targetRoot?: string,
+  frozenTarget?: InertTargetContract,
+): string[] {
+  const catalogPath = "scripts/lib/official-external-provider-catalog.json";
+  const text =
+    targetRoot || frozenTarget ? readTargetMetadata(targetRoot, catalogPath, frozenTarget) : null;
+  // Older candidates without the external catalog still carry their bundled providers.
+  const catalog: unknown =
+    targetRoot || frozenTarget
+      ? text === null
+        ? { entries: [] }
+        : JSON.parse(text)
+      : officialExternalProviderCatalog;
+  if (!isRecord(catalog) || !Array.isArray(catalog.entries)) {
+    throw new Error(`invalid candidate provider catalog: ${catalogPath}`);
+  }
+  return catalog.entries.flatMap((entry: unknown) =>
+    isRecord(entry) &&
+    entry.source === "official" &&
+    typeof entry.name === "string" &&
+    isRecord(entry.openclaw) &&
+    isRecord(entry.openclaw.install) &&
+    entry.openclaw.install.npmSpec === entry.name
+      ? [entry.name]
+      : [],
+  );
+}
+
+export function requiredPrepublishPluginPackagesForLanes(
+  poolLanes: DockerE2eLane[],
+  targetRoot?: string,
+  frozenTarget?: InertTargetContract,
+): string[] {
   const configuredChannelIds = new Set<string>();
   const requiredPackages = new Set<string>();
+  let legacyOperatorProviders: string[] | undefined;
   for (const poolLane of poolLanes) {
     for (const packageName of poolLane.prepublishPluginPackages ?? []) {
       requiredPackages.add(packageName);
@@ -752,17 +796,28 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes: DockerE2eLan
     if (
       !scenario ||
       scenario === "abandoned-update" ||
+      scenario === "backup-schedule" ||
       scenario === "custom-plugin-siblings" ||
       scenario === "projects-doctor" ||
+      scenario === "channel-owner-policy" ||
+      scenario === "cron-owner-doctor" ||
       scenario === "projects-startup-migration" ||
-      scenario === "taskflow-restoration" ||
-      scenario === "workshop-doctor-recovery"
+      scenario === "workshop-doctor-recovery" ||
+      scenario === "update-report-recovery" ||
+      scenario === "dreaming-cron-doctor"
     ) {
       continue;
     }
     if (scenario === "legacy-operator-state") {
+      requiredPackages.add("@openclaw/codex");
       requiredPackages.add("@openclaw/discord");
       requiredPackages.add("@openclaw/duckduckgo-plugin");
+      // The baseline authors an allowlist from its enabled bundled inventory.
+      // Supply candidate providers once, even when several baselines share the registry.
+      legacyOperatorProviders ??= legacyOperatorProviderPackages(targetRoot, frozenTarget);
+      for (const packageName of legacyOperatorProviders) {
+        requiredPackages.add(packageName);
+      }
       continue;
     }
     for (const packageName of UPGRADE_SURVIVOR_RUNTIME_COMPANION_PACKAGES) {
@@ -816,12 +871,18 @@ function buildPlanJson(params: {
   releaseChunk: string;
   releaseProfile: DockerE2eReleaseProfile;
   selectedLaneNames: string[];
+  targetRoot?: string;
+  frozenTarget?: InertTargetContract;
 }) {
   const scheduledLanes = [...params.orderedLanes, ...params.orderedTailLanes];
   const imageKinds = unique(scheduledLanes.map((poolLane) => poolLane.e2eImageKind)).toSorted(
     (a, b) => a.localeCompare(b),
   );
-  const requiredPrepublishPluginPackages = requiredPrepublishPluginPackagesForLanes(scheduledLanes);
+  const requiredPrepublishPluginPackages = requiredPrepublishPluginPackagesForLanes(
+    scheduledLanes,
+    params.targetRoot,
+    params.frozenTarget,
+  );
   return {
     chunk: params.releaseChunk || undefined,
     credentials: unique(scheduledLanes.flatMap(laneCredentialRequirements)).toSorted((a, b) =>
@@ -861,8 +922,6 @@ function buildPlanJson(params: {
 
 export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
   const releaseProfile = normalizeReleaseProfile(options.releaseProfile);
-  const retriedMainLanes = applyLiveRetries(mainLanes, options.liveRetries);
-  const retriedTailLanes = applyLiveRetries(tailLanes, options.liveRetries);
   const upgradeSurvivorBaselines = options.upgradeSurvivorBaselines ?? "";
   const upgradeSurvivorScenarios = options.upgradeSurvivorScenarios ?? "";
   const unexpandedSelectableLanes = dedupeLanes([
@@ -872,8 +931,8 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
     }),
     ...publicInstallerLanes,
     fleetCacheLane,
-    ...retriedMainLanes,
-    ...retriedTailLanes,
+    ...mainLanes,
+    ...tailLanes,
   ]);
   const omittedUnsupportedLaneNames = new Set<string>();
   const expandRequestedSurvivorLanes = (poolLanes: DockerE2eLane[]) => {
@@ -885,6 +944,21 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
       options.allowFrozenTargetScenarioOmissions,
       options.frozenTarget,
     );
+    const requestedBaselines = parseUpgradeSurvivorBaselineSpecs(upgradeSurvivorBaselines);
+    if (
+      poolLanes.some(
+        (lane) => lane.name === "published-upgrade-survivor" || lane.name === "update-migration",
+      ) &&
+      parseUpgradeSurvivorScenarios(upgradeSurvivorScenarios).includes("missing-load-path") &&
+      requestedBaselines.length > 0 &&
+      requestedBaselines.every(
+        (baseline) => !supportsUpgradeSurvivorScenarioAtBaseline("missing-load-path", baseline),
+      )
+    ) {
+      throw new Error(
+        `missing-load-path has no compatible published baseline in ${upgradeSurvivorBaselines}: the installed updater must admit invalid config before candidate staging.`,
+      );
+    }
     for (const laneName of expansion.omittedLaneNames) {
       omittedUnsupportedLaneNames.add(laneName);
     }
@@ -935,6 +1009,7 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
             if (!survivorBaseLane) {
               return [expandedLane];
             }
+            // Exact-row reruns retain the original matrix only to reconstruct the catalog.
             const targetExpansion = expandUpgradeSurvivorBaselineLanes(
               [survivorBaseLane],
               upgradeSurvivorBaselines,
@@ -952,8 +1027,12 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
             omittedUnsupportedLaneNames.add(selectedName);
             return [];
           }
-          selectNamedLanes(unfilteredSelectableLanes, [selectedName], "OPENCLAW_DOCKER_ALL_LANES");
-          return [];
+          throw new Error(
+            `OPENCLAW_DOCKER_ALL_LANES unknown lane(s): ${selectedName}. Available lanes: ${unfilteredSelectableLanes
+              .map((lane) => lane.name)
+              .toSorted((a, b) => a.localeCompare(b))
+              .join(", ")}`,
+          );
         })
       : undefined;
   let configuredLanes = selectedLanes
@@ -961,47 +1040,25 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
     : releaseLanes
       ? applyLiveMode(releaseLanes, options.liveMode)
       : options.liveMode === "only"
-        ? applyLiveMode([...retriedMainLanes, ...retriedTailLanes], options.liveMode)
-        : applyLiveMode(retriedMainLanes, options.liveMode);
+        ? applyLiveMode([...mainLanes, ...tailLanes], options.liveMode)
+        : applyLiveMode(mainLanes, options.liveMode);
   if (options.allowFrozenTargetScenarioOmissions) {
-    const unsupportedLaneRules = [
-      {
-        matches: (lane: DockerE2eLane) => lane.name === "update-first-hop-compat",
-        supported: () =>
-          supportsUpdateFirstHopCompatForTarget(
-            options.upgradeSurvivorTargetRoot,
-            options.frozenTarget,
-          ),
-      },
-      {
-        matches: (lane: DockerE2eLane) => lane.name.includes("mobile-pairing-reconnect"),
-        supported: () =>
-          supportsMobilePairingReconnectForTarget(
-            options.upgradeSurvivorTargetRoot,
-            options.frozenTarget,
-          ),
-      },
-      {
-        matches: (lane: DockerE2eLane) => lane.name === "update-corrupt-plugin",
-        supported: () =>
-          supportsCorruptPluginUpdateForTarget(
-            options.upgradeSurvivorTargetRoot,
-            options.frozenTarget,
-          ),
-      },
-    ];
-    for (const rule of unsupportedLaneRules) {
-      if (!configuredLanes.some(rule.matches) || rule.supported()) {
-        continue;
+    configuredLanes = configuredLanes.filter((lane) => {
+      const targetRoot = options.upgradeSurvivorTargetRoot;
+      const frozenTarget = options.frozenTarget;
+      const supported = isUpdateFirstHopCompatLane(lane.name)
+        ? supportsUpdateFirstHopCompatForTarget(lane.name, targetRoot, frozenTarget)
+        : lane.name.includes("mobile-pairing-reconnect")
+          ? supportsMobilePairingReconnectForTarget(targetRoot, frozenTarget)
+          : lane.name === "update-corrupt-plugin"
+            ? supportsCorruptPluginUpdateForTarget(targetRoot, frozenTarget)
+            : true;
+      if (supported) {
+        return true;
       }
-      const retainedLanes = configuredLanes.filter((lane) => !rule.matches(lane));
-      if (retainedLanes.length !== configuredLanes.length) {
-        for (const lane of configuredLanes.filter(rule.matches)) {
-          omittedUnsupportedLaneNames.add(lane.name);
-        }
-        configuredLanes = retainedLanes;
-      }
-    }
+      omittedUnsupportedLaneNames.add(lane.name);
+      return false;
+    });
   }
   if (omittedUnsupportedLaneNames.size > 0 && !options.allowFrozenTargetScenarioOmissions) {
     throw new Error("unsupported frozen target lanes require authorized scenario omissions");
@@ -1011,7 +1068,7 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
       ? []
       : options.liveMode === "only"
         ? []
-        : applyLiveMode(retriedTailLanes, options.liveMode);
+        : applyLiveMode(tailLanes, options.liveMode);
   const orderedLanes = options.orderLanes(configuredLanes, options.timingStore);
   const orderedTailLanes = options.orderLanes(configuredTailLanes, options.timingStore);
   return {
@@ -1027,6 +1084,8 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
       releaseChunk: options.releaseChunk,
       releaseProfile,
       selectedLaneNames: options.selectedLaneNames,
+      targetRoot: options.upgradeSurvivorTargetRoot,
+      frozenTarget: options.frozenTarget,
     }),
     scheduledLanes: [...orderedLanes, ...orderedTailLanes],
   };

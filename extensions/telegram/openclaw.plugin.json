@@ -5,7 +5,7 @@
   "description": "OpenClaw Telegram channel plugin.",
   "doctorContract": {
     "configRepair": true,
-    "stateMigrations": [{ "id": "telegram-legacy-state" }]
+    "stateMigrations": [{ "id": "telegram-update-offsets", "phase": "after-session-repair" }, { "id": "telegram-json-ingress-spool" }]
   },
   "activation": {
     "onStartup": false

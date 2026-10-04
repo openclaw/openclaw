@@ -7,9 +7,13 @@ import type {
   SessionCatalogProvider,
 } from "openclaw/plugin-sdk/session-catalog";
 import { publishSessionCatalogHost } from "openclaw/plugin-sdk/session-catalog-paging";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
 import { CodexCatalogLoadingError } from "./session-catalog-availability.js";
-import { currentCodexCatalogListDiagnostics } from "./session-catalog-diagnostics.js";
+import {
+  currentCodexCatalogListDiagnostics,
+  startCodexCatalogListTiming,
+} from "./session-catalog-diagnostics.js";
 import type { CodexCatalogHome } from "./session-catalog-homes.js";
 import type { CatalogNode } from "./session-catalog-node-continue.js";
 import {
@@ -29,7 +33,6 @@ import type {
   CodexSessionCatalogHost,
   CodexSessionCatalogPage,
   CodexSessionCatalogParams,
-  CodexSessionCatalogResult,
 } from "./session-catalog-types.js";
 import { CodexCatalogVisiblePage } from "./session-catalog-visible-page.js";
 
@@ -74,17 +77,7 @@ type PreparedList = {
 async function boundedHost(
   pending: Promise<CodexSessionCatalogHost>,
 ): Promise<CodexSessionCatalogHost | undefined> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      pending,
-      new Promise<undefined>((resolve) => {
-        timer = setTimeout(() => resolve(undefined), 250);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
+  return await raceWithTimeout(pending, 250, () => undefined);
 }
 
 function measureNodeHost(
@@ -131,11 +124,7 @@ async function projectLocalHost(
   const { listAdoptedSessionEntries } = await import("./session-catalog-adoption.js");
   const { sessionCatalogAdoptedSourceKey } = await import("openclaw/plugin-sdk/session-catalog");
   params.signal?.throwIfAborted();
-  const diagnostics = currentCodexCatalogListDiagnostics();
-  const started = diagnostics ? performance.now() : 0;
-  if (diagnostics) {
-    diagnostics.fields.adoptionCalls++;
-  }
+  const finishTiming = startCodexCatalogListTiming("adoptionSumMs", "adoptionCalls");
   let adopted: Awaited<ReturnType<typeof listAdoptedSessionEntries>>;
   try {
     adopted = await listAdoptedSessionEntries({
@@ -146,10 +135,7 @@ async function projectLocalHost(
       sessionEntries: params.sessionEntries,
     });
   } finally {
-    if (diagnostics && !diagnostics.closed) {
-      diagnostics.fields.adoptionSumMs =
-        (diagnostics.fields.adoptionSumMs ?? 0) + performance.now() - started;
-    }
+    finishTiming();
   }
   const hostId = source?.hostId ?? CODEX_LOCAL_SESSION_HOST_ID;
   const sourceHomeId = source?.sourceHomeId ?? CODEX_LOCAL_SESSION_HOST_ID;
@@ -182,18 +168,11 @@ function managedMarker(
     if (managed?.has(threadId)) {
       return;
     }
-    const diagnostics = currentCodexCatalogListDiagnostics();
-    const started = diagnostics ? performance.now() : 0;
-    if (diagnostics) {
-      diagnostics.fields.exclusionMarkCalls++;
-    }
+    const finishTiming = startCodexCatalogListTiming("exclusionMarkSumMs", "exclusionMarkCalls");
     try {
       await store.mark({ sourceHomeId, threadId, ...(rolloutPath ? { rolloutPath } : {}) });
     } finally {
-      if (diagnostics && !diagnostics.closed) {
-        diagnostics.fields.exclusionMarkSumMs =
-          (diagnostics.fields.exclusionMarkSumMs ?? 0) + performance.now() - started;
-      }
+      finishTiming();
     }
   };
 }
@@ -671,10 +650,4 @@ export async function runCatalogListInline<THost>(
   } finally {
     operation.close();
   }
-}
-
-export async function listCodexSessionCatalog(
-  params: ListParams,
-): Promise<CodexSessionCatalogResult> {
-  return { hosts: await runCatalogListInline(createCodexSessionCatalogListOperation(params)) };
 }

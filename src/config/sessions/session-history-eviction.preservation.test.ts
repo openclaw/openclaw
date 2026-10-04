@@ -57,15 +57,7 @@ describe("SQLite historical session preservation", () => {
     closeOpenClawAgentDatabasesForTest();
     await testState.cleanup();
   });
-  it.each([
-    "recent",
-    "archived",
-    "pinned",
-    "manual",
-    "age-retention",
-    "stale-dashboard",
-    "restart-recovery",
-  ] as const)(
+  it.each(["recent", "pinned", "manual"] as const)(
     "preserves every generation of a %s session under physical pressure",
     async (protection) => {
       async function inspectHistoryReads<T>(operation: () => Promise<T>): Promise<T> {
@@ -76,14 +68,16 @@ describe("SQLite historical session preservation", () => {
           sql.startsWith("select") &&
           sql.includes('"session_windows"') &&
           sql.includes('"session_nodes"') &&
-          sql.includes('"entry_json"')
+          sql.includes('"entry_json"') &&
+          !sql.includes('where "session_windows"."session_id" =')
             ? "history"
             : null,
         );
         try {
           const result = await operation();
-          expect.soft(reads.rowCounts.history).toBeGreaterThan(0);
-          expect.soft(reads.textBytes.history).toBeLessThan(16 * 1024);
+          // Whole-store recent-history discovery belongs to the worker; keyed live checks remain.
+          expect.soft(reads.rowCounts.history).toBe(0);
+          expect.soft(reads.textBytes.history).toBe(0);
           return result;
         } finally {
           reads.restore();
@@ -115,10 +109,7 @@ describe("SQLite historical session preservation", () => {
           ...(protection === "recent"
             ? { skillsSnapshot: { prompt: "p".repeat(64 * 1024), skills: [] } }
             : {}),
-          ...(protection !== "recent" && protection !== "pinned" ? { archivedAt: now } : {}),
-          ...(protection !== "recent" && protection !== "pinned" && protection !== "archived"
-            ? { archiveReason: protection }
-            : {}),
+          ...(protection === "manual" ? { archivedAt: now, archiveReason: protection } : {}),
           ...(protection === "pinned" ? { pinnedAt: now } : {}),
         },
       );

@@ -2,10 +2,6 @@
 (function () {
   "use strict";
 
-  // ============================================================
-  // DATA LOADING
-  // ============================================================
-
   const base64 = document.getElementById("session-data").textContent;
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -23,11 +19,6 @@
     warning,
   } = data;
 
-  // ============================================================
-  // URL PARAMETER HANDLING
-  // ============================================================
-
-  // Parse URL parameters for deep linking: leafId and targetId
   // Check for injected params (when loaded in iframe via srcdoc) or use window.location
   const injectedParams = document.querySelector('meta[name="openclaw-url-params"]');
   const searchString = injectedParams
@@ -36,20 +27,10 @@
   const urlParams = new URLSearchParams(searchString);
   const urlLeafId = urlParams.get("leafId");
   const urlTargetId = urlParams.get("targetId");
-  // Use URL leafId if provided, otherwise fall back to session default
   const leafId = urlLeafId || defaultLeafId;
 
-  // ============================================================
-  // DATA STRUCTURES
-  // ============================================================
+  const byId = new Map(entries.map((entry) => [entry.id, entry]));
 
-  // Entry lookup by ID
-  const byId = new Map();
-  for (const entry of entries) {
-    byId.set(entry.id, entry);
-  }
-
-  // Tool call lookup (toolCallId -> {name, arguments})
   const toolCallMap = new Map();
   for (const entry of entries) {
     if (entry.type === "message" && entry.message.role === "assistant") {
@@ -64,7 +45,6 @@
     }
   }
 
-  // Label lookup (entryId -> label string)
   // Labels are stored in 'label' entries that reference their target via targetId
   const labelMap = new Map();
   for (const entry of entries) {
@@ -73,19 +53,10 @@
     }
   }
 
-  // ============================================================
-  // TREE DATA PREPARATION (no DOM, pure data)
-  // ============================================================
-
-  /**
-   * Build tree structure from flat entries.
-   * Returns array of root nodes, each with { entry, children, label }.
-   */
   function buildTree() {
     const nodeMap = new Map();
     const roots = [];
 
-    // Create nodes
     for (const entry of entries) {
       nodeMap.set(entry.id, {
         entry,
@@ -94,22 +65,15 @@
       });
     }
 
-    // Build parent-child relationships
     for (const entry of entries) {
       const node = nodeMap.get(entry.id);
-      if (entry.parentId === null || entry.parentId === undefined || entry.parentId === entry.id) {
-        roots.push(node);
-      } else {
-        const parent = nodeMap.get(entry.parentId);
-        if (parent) {
-          parent.children.push(node);
-        } else {
-          roots.push(node);
-        }
-      }
+      const parent =
+        entry.parentId != null && entry.parentId !== entry.id
+          ? nodeMap.get(entry.parentId)
+          : undefined;
+      (parent ? parent.children : roots).push(node);
     }
 
-    // Sort children by timestamp
     function sortChildren(node) {
       node.children.sort(
         (a, b) => new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime(),
@@ -121,41 +85,19 @@
     return roots;
   }
 
-  /**
-   * Build set of entry IDs on path from root to target.
-   */
-  function buildActivePathIds(targetId) {
-    const ids = new Set();
-    let current = byId.get(targetId);
-    while (current) {
-      ids.add(current.id);
-      // Stop if no parent or self-referencing (root)
-      if (!current.parentId || current.parentId === current.id) {
-        break;
-      }
-      current = byId.get(current.parentId);
-    }
-    return ids;
-  }
-
-  /**
-   * Get array of entries from root to target (the conversation path).
-   */
   function getPath(targetId) {
     const path = [];
     let current = byId.get(targetId);
     while (current) {
-      path.unshift(current);
-      // Stop if no parent or self-referencing (root)
+      path.push(current);
       if (!current.parentId || current.parentId === current.id) {
         break;
       }
       current = byId.get(current.parentId);
     }
-    return path;
+    return path.reverse();
   }
 
-  // Tree node lookup for finding leaves
   let treeNodeMap = null;
 
   /**
@@ -164,7 +106,6 @@
    * Children are sorted by timestamp, so the newest is always last.
    */
   function findNewestLeaf(nodeId) {
-    // Build tree node map lazily
     if (!treeNodeMap) {
       treeNodeMap = new Map();
       const tree = buildTree();
@@ -180,7 +121,6 @@
       return nodeId;
     }
 
-    // Follow the newest (last) child at each level
     let current = node;
     while (current.children.length > 0) {
       current = current.children[current.children.length - 1];
@@ -223,19 +163,9 @@
 
       const children = getChildren(node);
       const multipleChildren = children.length > 1;
-      let childIndent;
-      if (multipleChildren) {
-        // Parent branches: children get +1
-        childIndent = indent + 1;
-      } else if (justBranched && indent > 0) {
-        // First generation after a branch: +1 for visual grouping
-        childIndent = indent + 1;
-      } else {
-        // Single-child chain: stay flat
-        childIndent = indent;
-      }
+      // Indent branches and their first generation; single-child chains stay flat.
+      const childIndent = multipleChildren || (justBranched && indent > 0) ? indent + 1 : indent;
 
-      // Build gutters for children
       const connectorDisplayed = showConnector && !isVirtualRootChild;
       const currentDisplayIndent = multipleRoots ? Math.max(0, indent - 1) : indent;
       const connectorPosition = Math.max(0, currentDisplayIndent - 1);
@@ -243,7 +173,6 @@
         ? [...gutters, { position: connectorPosition, show: !isLast }]
         : gutters;
 
-      // Add children in reverse order for stack
       for (let i = children.length - 1; i >= 0; i--) {
         const childIsLast = i === children.length - 1;
         stack.push([
@@ -277,8 +206,8 @@
 
     const activeFirst = (a, b) => Number(containsActive.get(b)) - Number(containsActive.get(a));
     layoutTree(
-      [...roots].toSorted(activeFirst),
-      (node) => [...node.children].toSorted(activeFirst),
+      roots.toSorted(activeFirst),
+      (node) => node.children.toSorted(activeFirst),
       (node) => {
         const target = { node };
         result.push(target);
@@ -288,42 +217,25 @@
     return result;
   }
 
-  /**
-   * Build ASCII prefix string for tree node.
-   */
   function buildTreePrefix(flatNode) {
     const { indent, showConnector, isLast, gutters, isVirtualRootChild, multipleRoots } = flatNode;
     const displayIndent = multipleRoots ? Math.max(0, indent - 1) : indent;
     const connector = showConnector && !isVirtualRootChild ? (isLast ? "└─ " : "├─ ") : "";
     const connectorPosition = connector ? displayIndent - 1 : -1;
 
-    const totalChars = displayIndent * 3;
-    const prefixChars = [];
-    for (let i = 0; i < totalChars; i++) {
-      const level = Math.floor(i / 3);
-      const posInLevel = i % 3;
-
+    const prefix = [];
+    for (let level = 0; level < displayIndent; level++) {
       const gutter = gutters.find((g) => g.position === level);
       if (gutter) {
-        prefixChars.push(posInLevel === 0 ? (gutter.show ? "│" : " ") : " ");
+        prefix.push(gutter.show ? "│  " : "   ");
       } else if (connector && level === connectorPosition) {
-        if (posInLevel === 0) {
-          prefixChars.push(isLast ? "└" : "├");
-        } else if (posInLevel === 1) {
-          prefixChars.push("─");
-        } else {
-          prefixChars.push(" ");
-        }
+        prefix.push(connector);
       } else {
-        prefixChars.push(" ");
+        prefix.push("   ");
       }
     }
-    return prefixChars.join("");
+    return prefix.join("");
   }
-
-  // ============================================================
-  // FILTERING (pure data)
-  // ============================================================
 
   let filterMode = "default";
   let searchQuery = "";
@@ -338,14 +250,10 @@
     if (typeof content === "string") {
       return content.trim().length > 0;
     }
-    if (Array.isArray(content)) {
-      for (const c of content) {
-        if (c.type === "text" && c.text && c.text.trim().length > 0) {
-          return true;
-        }
-      }
-    }
-    return false;
+    return (
+      Array.isArray(content) &&
+      content.some((c) => c.type === "text" && c.text && c.text.trim().length > 0)
+    );
   }
 
   function extractContent(content) {
@@ -371,6 +279,13 @@
     return [];
   }
 
+  function messageText(content) {
+    return renderableContentBlocks(content)
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join("\n");
+  }
+
   function getSearchableText(entry, label) {
     const parts = [];
     if (label) {
@@ -391,9 +306,7 @@
       }
       case "custom_message":
         parts.push(entry.customType);
-        parts.push(
-          typeof entry.content === "string" ? entry.content : extractContent(entry.content),
-        );
+        parts.push(extractContent(entry.content));
         break;
       case "compaction":
         parts.push("compaction");
@@ -412,9 +325,6 @@
     return parts.join(" ").toLowerCase();
   }
 
-  /**
-   * Filter flat nodes based on current filterMode and searchQuery.
-   */
   function filterNodes(flatNodes, currentLeafId) {
     const searchTokens = searchQuery.toLowerCase().split(/\s+/).filter(Boolean);
 
@@ -428,7 +338,6 @@
         return false;
       }
 
-      // Always show current leaf
       if (isCurrentLeaf) {
         return true;
       }
@@ -444,7 +353,6 @@
         }
       }
 
-      // Apply filter mode
       const isSettingsEntry = ["label", "custom", "model_change", "thinking_level_change"].includes(
         entry.type,
       );
@@ -464,7 +372,7 @@
         case "all":
           passesFilter = true;
           break;
-        default: // 'default'
+        default:
           passesFilter = !isSettingsEntry;
           break;
       }
@@ -473,7 +381,6 @@
         return false;
       }
 
-      // Apply search filter
       if (searchTokens.length > 0) {
         const nodeText = getSearchableText(entry, label);
         if (!searchTokens.every((t) => nodeText.includes(t))) {
@@ -484,7 +391,6 @@
       return true;
     });
 
-    // Recalculate visual structure based on visible tree
     recalculateVisualStructure(filtered, flatNodes);
 
     return filtered;
@@ -503,13 +409,8 @@
 
     const visibleIds = new Set(filteredNodes.map((n) => n.node.entry.id));
 
-    // Build entry map for parent lookup (using full tree)
-    const entryMap = new Map();
-    for (const flatNode of allFlatNodes) {
-      entryMap.set(flatNode.node.entry.id, flatNode);
-    }
+    const entryMap = new Map(allFlatNodes.map((node) => [node.node.entry.id, node]));
 
-    // Find nearest visible ancestor for a node
     function findVisibleAncestor(nodeId) {
       let currentId = entryMap.get(nodeId)?.node.entry.parentId;
       while (currentId != null) {
@@ -522,9 +423,8 @@
       return null;
     }
 
-    // Build visible tree structure
     const visibleChildren = new Map();
-    visibleChildren.set(null, []); // root-level nodes
+    visibleChildren.set(null, []);
 
     for (const flatNode of filteredNodes) {
       const nodeId = flatNode.node.entry.id;
@@ -538,11 +438,7 @@
 
     const visibleRootIds = visibleChildren.get(null);
 
-    // Build a map for quick lookup: nodeId → FlatNode
-    const filteredNodeMap = new Map();
-    for (const flatNode of filteredNodes) {
-      filteredNodeMap.set(flatNode.node.entry.id, flatNode);
-    }
+    const filteredNodeMap = new Map(filteredNodes.map((node) => [node.node.entry.id, node]));
 
     // Filtering preserves the full traversal's order; update the original last-ID records.
     layoutTree(
@@ -552,27 +448,11 @@
     );
   }
 
-  // ============================================================
-  // TREE DISPLAY TEXT (pure data -> string)
-  // ============================================================
-
   function shortenPath(p) {
     if (typeof p !== "string") {
       return "";
     }
-    if (p.startsWith("/Users/")) {
-      const parts = p.split("/");
-      if (parts.length > 2) {
-        return "~" + p.slice(("/Users/" + parts[2]).length);
-      }
-    }
-    if (p.startsWith("/home/")) {
-      const parts = p.split("/");
-      if (parts.length > 2) {
-        return "~" + p.slice(("/home/" + parts[2]).length);
-      }
-    }
-    return p;
+    return p.replace(/^\/(?:Users|home)\/[^/]*/, "~");
   }
 
   function truncateUtf16Safe(s, maxLen) {
@@ -671,9 +551,6 @@
     }
     return `<img src="data:${mimeType};base64,${imgBase64}" class="${className}" />`;
   }
-  /**
-   * Truncate string to maxLen chars, append "..." if truncated.
-   */
   function truncate(s, maxLen = 100) {
     if (s.length <= maxLen) {
       return s;
@@ -681,9 +558,6 @@
     return truncateUtf16Safe(s, maxLen) + "...";
   }
 
-  /**
-   * Get display text for tree node (returns HTML string).
-   */
   function getTreeNodeDisplayHtml(entry, label) {
     const normalize = (s) => s.replace(/[\n\t]/g, " ").trim();
     const labelHtml =
@@ -730,7 +604,10 @@
               `<span class="tree-role-tool">${escapeHtml(formatToolCall(toolCall.name, toolCall.arguments))}</span>`
             );
           }
-          return labelHtml + `<span class="tree-role-tool">[${escapeHtml(msg.toolName || "tool")}]</span>`;
+          return (
+            labelHtml +
+            `<span class="tree-role-tool">[${escapeHtml(msg.toolName || "tool")}]</span>`
+          );
         }
         if (msg.role === "bashExecution") {
           const cmd = truncate(normalize(msg.command || ""));
@@ -751,8 +628,7 @@
         );
       }
       case "custom_message": {
-        const content =
-          typeof entry.content === "string" ? entry.content : extractContent(entry.content);
+        const content = extractContent(entry.content);
         return (
           labelHtml +
           `<span class="tree-custom">[${escapeHtml(entry.customType)}]:</span> ${escapeHtml(truncate(normalize(content)))}`
@@ -761,15 +637,14 @@
       case "model_change":
         return labelHtml + `<span class="tree-muted">[model: ${escapeHtml(entry.modelId)}]</span>`;
       case "thinking_level_change":
-        return labelHtml + `<span class="tree-muted">[thinking: ${escapeHtml(entry.thinkingLevel)}]</span>`;
+        return (
+          labelHtml +
+          `<span class="tree-muted">[thinking: ${escapeHtml(entry.thinkingLevel)}]</span>`
+        );
       default:
         return labelHtml + `<span class="tree-muted">[${escapeHtml(entry.type)}]</span>`;
     }
   }
-
-  // ============================================================
-  // TREE RENDERING (DOM manipulation)
-  // ============================================================
 
   let currentLeafId = leafId;
   let currentTargetId = urlTargetId || leafId;
@@ -777,7 +652,7 @@
 
   function renderTree() {
     const tree = buildTree();
-    const activePathIds = buildActivePathIds(currentLeafId);
+    const activePathIds = new Set(getPath(currentLeafId).map((entry) => entry.id));
     const flatNodes = flattenTree(tree, activePathIds);
     const filtered = filterNodes(flatNodes, currentLeafId);
     const container = document.getElementById("tree-container");
@@ -828,7 +703,6 @@
 
       treeRendered = true;
     } else {
-      // Just update markers and classes
       const nodes = container.querySelectorAll(".tree-node");
       for (const node of nodes) {
         const id = node.dataset.id;
@@ -861,10 +735,6 @@
     treeRendered = false;
     renderTree();
   }
-
-  // ============================================================
-  // MESSAGE RENDERING
-  // ============================================================
 
   function formatTokens(count) {
     if (count < 1000) {
@@ -942,27 +812,29 @@
   }
 
   function findToolResult(toolCallId) {
-    for (const entry of entries) {
-      if (entry.type === "message" && entry.message.role === "toolResult") {
-        if (entry.message.toolCallId === toolCallId) {
-          return entry.message;
-        }
-      }
+    return (
+      entries.find(
+        (entry) =>
+          entry.type === "message" &&
+          entry.message.role === "toolResult" &&
+          entry.message.toolCallId === toolCallId,
+      )?.message ?? null
+    );
+  }
+
+  function highlightCode(code, lang) {
+    try {
+      return lang ? hljs.highlight(code, { language: lang }).value : hljs.highlightAuto(code).value;
+    } catch {
+      return escapeHtml(code);
     }
-    return null;
   }
 
   function formatOutputLines(lines, lang) {
     if (lang) {
-      const code = lines.join("\n");
-      try {
-        return hljs.highlight(code, { language: lang }).value;
-      } catch {
-        return escapeHtml(code);
-      }
+      return highlightCode(lines.join("\n"), lang);
     }
-
-    return lines.map((line) => `<div>${escapeHtml(replaceTabs(line))}</div>`).join("");
+    return lines.map((line) => `<div>${escapeHtml(line)}</div>`).join("");
   }
 
   function formatExpandableOutput(text, maxLines, lang) {
@@ -986,7 +858,6 @@
       return `<div class="tool-output"><pre><code class="hljs">${highlighted}</code></pre></div>`;
     }
 
-    // Plain text output
     if (remaining > 0) {
       let out =
         '<div class="tool-output expandable" onclick="this.classList.toggle(\'expanded\')">';
@@ -1002,37 +873,17 @@
     return `<div class="tool-output">${formatOutputLines(displayLines)}</div>`;
   }
 
+  function renderContentImages(content, containerClass, imageClass) {
+    const images = renderableContentBlocks(content).filter((block) => block.type === "image");
+    return images.length > 0
+      ? `<div class="${containerClass}">${images.map((img) => renderDataUrlImage(img, imageClass)).join("")}</div>`
+      : "";
+  }
+
   function renderToolCall(call) {
     const result = findToolResult(call.id);
     const isError = result?.isError || false;
     const statusClass = result ? (isError ? "error" : "success") : "pending";
-
-    const getResultText = () => {
-      if (!result) {
-        return "";
-      }
-      const textBlocks = renderableContentBlocks(result.content).filter((c) => c.type === "text");
-      return textBlocks.map((c) => c.text).join("\n");
-    };
-
-    const getResultImages = () => {
-      if (!result) {
-        return [];
-      }
-      return renderableContentBlocks(result.content).filter((c) => c.type === "image");
-    };
-
-    const renderResultImages = () => {
-      const images = getResultImages();
-      if (images.length === 0) {
-        return "";
-      }
-      return (
-        '<div class="tool-images">' +
-        images.map((img) => renderDataUrlImage(img, "tool-image")).join("") +
-        "</div>"
-      );
-    };
 
     let html = `<div class="tool-execution ${statusClass}">`;
     const args = call.arguments || {};
@@ -1046,7 +897,7 @@
         const cmdDisplay = command === null ? invalidArg : escapeHtml(command || "...");
         html += `<div class="tool-command">$ ${cmdDisplay}</div>`;
         if (result) {
-          const output = getResultText().trim();
+          const output = messageText(result.content).trim();
           if (output) {
             html += formatExpandableOutput(output, 5);
           }
@@ -1062,13 +913,14 @@
         if (filePath !== null && (offset !== undefined || limit !== undefined)) {
           const startLine = offset ?? 1;
           const endLine = limit !== undefined ? startLine + limit - 1 : "";
-          pathHtml += `<span class="line-numbers">:${startLine}${endLine ? "-" + endLine : ""}</span>`;
+          const lineNumbers = `:${startLine}${endLine ? "-" + endLine : ""}`;
+          pathHtml += `<span class="line-numbers">${escapeHtml(lineNumbers)}</span>`;
         }
 
         html += `<div class="tool-header"><span class="tool-name">read</span> <span class="tool-path">${pathHtml}</span></div>`;
         if (result) {
-          html += renderResultImages();
-          const output = getResultText();
+          html += renderContentImages(result.content, "tool-images", "tool-image");
+          const output = messageText(result.content);
           const lang = filePath ? getLanguageFromPath(filePath) : null;
           if (output) {
             html += formatExpandableOutput(output, 10, lang);
@@ -1096,7 +948,7 @@
           html += formatExpandableOutput(content, 10, lang);
         }
         if (result) {
-          const output = getResultText().trim();
+          const output = messageText(result.content).trim();
           if (output) {
             html += `<div class="tool-output"><div>${escapeHtml(output)}</div></div>`;
           }
@@ -1120,7 +972,7 @@
           }
           html += "</div>";
         } else if (result) {
-          const output = getResultText().trim();
+          const output = messageText(result.content).trim();
           if (output) {
             html += `<div class="tool-output"><pre>${escapeHtml(output)}</pre></div>`;
           }
@@ -1131,7 +983,7 @@
         html += `<div class="tool-header"><span class="tool-name">${escapeHtml(name)}</span></div>`;
         html += `<div class="tool-output"><pre>${escapeHtml(JSON.stringify(args, null, 2))}</pre></div>`;
         if (result) {
-          const output = getResultText();
+          const output = messageText(result.content);
           if (output) {
             html += formatExpandableOutput(output, 10);
           }
@@ -1143,12 +995,7 @@
     return html;
   }
 
-  /**
-   * Download the session data as a JSONL file.
-   * Reconstructs the original format: header line + entry lines.
-   */
   window.downloadSessionJson = function () {
-    // Build JSONL content: header first, then all entries
     const lines = [];
     if (header) {
       lines.push(JSON.stringify({ type: "header", ...header }));
@@ -1158,7 +1005,6 @@
     }
     const jsonlContent = lines.join("\n");
 
-    // Create download
     const blob = new Blob([jsonlContent], { type: "application/x-ndjson" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -1175,33 +1021,25 @@
    * URL format: base?gistId&leafId=<leafId>&targetId=<entryId>
    */
   function buildShareUrl(entryId) {
-    // Check for injected base URL (used when loaded in iframe via srcdoc)
+    // The iframe's srcdoc location cannot identify the share target.
     const baseUrlMeta = document.querySelector('meta[name="openclaw-share-base-url"]');
-    const baseUrl = baseUrlMeta ? baseUrlMeta.content : window.location.href.split("?")[0];
 
     const url = new URL(window.location.href);
     // Find the gist ID (first query param without value, e.g., ?abc123)
     const gistId = Array.from(url.searchParams.keys()).find((k) => !url.searchParams.get(k));
 
-    // Build the share URL
     const params = new URLSearchParams();
     params.set("leafId", currentLeafId);
     params.set("targetId", entryId);
 
-    // If we have an injected base URL (iframe context), use it directly
     if (baseUrlMeta) {
-      return `${baseUrl}&${params.toString()}`;
+      return `${baseUrlMeta.content}&${params.toString()}`;
     }
 
-    // Otherwise build from current location (direct file access)
     url.search = gistId ? `?${gistId}&${params.toString()}` : `?${params.toString()}`;
     return url.toString();
   }
 
-  /**
-   * Copy text to clipboard with visual feedback.
-   * Uses navigator.clipboard with fallback to execCommand for HTTP contexts.
-   */
   async function copyToClipboard(text, button) {
     let success = false;
     try {
@@ -1240,9 +1078,6 @@
     }
   }
 
-  /**
-   * Render the copy-link button HTML for a message.
-   */
   function renderCopyLinkButton(entryId) {
     return `<button class="copy-link-btn" data-entry-id="${escapeHtmlAttr(entryId)}" title="Copy link to this message">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1268,28 +1103,10 @@
         let html = `<div class="user-message" id="${entryId}">${copyBtnHtml}${tsHtml}`;
         const content = msg.content;
 
-        if (Array.isArray(content)) {
-          const images = content.filter((c) => c.type === "image");
-          if (images.length > 0) {
-            html += '<div class="message-images">';
-            for (const img of images) {
-              html += renderDataUrlImage(img, "message-image");
-            }
-            html += "</div>";
-          }
-        }
-
-        const text =
-          typeof content === "string"
-            ? content
-            : Array.isArray(content)
-                ? content
-                    .filter((c) => c.type === "text")
-                    .map((c) => c.text)
-                    .join("\n")
-                : "";
+        html += renderContentImages(content, "message-images", "message-image");
+        const text = messageText(content);
         if (text.trim()) {
-          html += `<div class="markdown-content">${safeMarkedParse(text)}</div>`;
+          html += `<div class="markdown-content">${marked.parse(text)}</div>`;
         }
         html += "</div>";
         return html;
@@ -1301,7 +1118,7 @@
 
         for (const block of contentBlocks) {
           if (block.type === "text" && block.text.trim()) {
-            html += `<div class="assistant-text markdown-content">${safeMarkedParse(block.text)}</div>`;
+            html += `<div class="assistant-text markdown-content">${marked.parse(block.text)}</div>`;
           } else if (block.type === "thinking" && block.thinking.trim()) {
             html += `<div class="thinking-block">
                   <div class="thinking-text">${escapeHtml(block.thinking)}</div>
@@ -1362,23 +1179,19 @@
     if (entry.type === "branch_summary") {
       return `<div class="branch-summary" id="${entryId}">${tsHtml}
             <div class="branch-summary-header">Branch Summary</div>
-            <div class="markdown-content">${safeMarkedParse(entry.summary)}</div>
+            <div class="markdown-content">${marked.parse(entry.summary)}</div>
           </div>`;
     }
 
     if (entry.type === "custom_message") {
       return `<div class="hook-message" id="${entryId}">${tsHtml}
             <div class="hook-type">[${escapeHtml(entry.customType)}]</div>
-            <div class="markdown-content">${safeMarkedParse(typeof entry.content === "string" ? entry.content : JSON.stringify(entry.content))}</div>
+            <div class="markdown-content">${marked.parse(typeof entry.content === "string" ? entry.content : JSON.stringify(entry.content))}</div>
           </div>`;
     }
 
     return "";
   }
-
-  // ============================================================
-  // HEADER / STATS
-  // ============================================================
 
   function computeStats(entryList) {
     let userMessages = 0,
@@ -1404,18 +1217,16 @@
             models.add(msg.provider ? `${msg.provider}/${msg.model}` : msg.model);
           }
           if (msg.usage) {
-            tokens.input += msg.usage.input || 0;
-            tokens.output += msg.usage.output || 0;
-            tokens.cacheRead += msg.usage.cacheRead || 0;
-            tokens.cacheWrite += msg.usage.cacheWrite || 0;
-            if (msg.usage.cost) {
-              cost.input += msg.usage.cost.input || 0;
-              cost.output += msg.usage.cost.output || 0;
-              cost.cacheRead += msg.usage.cost.cacheRead || 0;
-              cost.cacheWrite += msg.usage.cost.cacheWrite || 0;
+            for (const key of Object.keys(tokens)) {
+              tokens[key] += msg.usage[key] || 0;
+              if (msg.usage.cost) {
+                cost[key] += msg.usage.cost[key] || 0;
+              }
             }
           }
-          toolCalls += (Array.isArray(msg.content) ? msg.content : []).filter((c) => c.type === "toolCall").length;
+          toolCalls += (Array.isArray(msg.content) ? msg.content : []).filter(
+            (c) => c.type === "toolCall",
+          ).length;
         }
         if (msg.role === "toolResult") {
           toolResults++;
@@ -1452,39 +1263,22 @@
       globalStats.cost.cacheRead +
       globalStats.cost.cacheWrite;
 
-    const tokenParts = [];
-    if (globalStats.tokens.input) {
-      tokenParts.push(`↑${formatTokens(globalStats.tokens.input)}`);
-    }
-    if (globalStats.tokens.output) {
-      tokenParts.push(`↓${formatTokens(globalStats.tokens.output)}`);
-    }
-    if (globalStats.tokens.cacheRead) {
-      tokenParts.push(`R${formatTokens(globalStats.tokens.cacheRead)}`);
-    }
-    if (globalStats.tokens.cacheWrite) {
-      tokenParts.push(`W${formatTokens(globalStats.tokens.cacheWrite)}`);
-    }
-
-    const msgParts = [];
-    if (globalStats.userMessages) {
-      msgParts.push(`${globalStats.userMessages} user`);
-    }
-    if (globalStats.assistantMessages) {
-      msgParts.push(`${globalStats.assistantMessages} assistant`);
-    }
-    if (globalStats.toolResults) {
-      msgParts.push(`${globalStats.toolResults} tool results`);
-    }
-    if (globalStats.customMessages) {
-      msgParts.push(`${globalStats.customMessages} custom`);
-    }
-    if (globalStats.compactions) {
-      msgParts.push(`${globalStats.compactions} compactions`);
-    }
-    if (globalStats.branchSummaries) {
-      msgParts.push(`${globalStats.branchSummaries} branch summaries`);
-    }
+    const tokenParts = [
+      ["input", "↑"],
+      ["output", "↓"],
+      ["cacheRead", "R"],
+      ["cacheWrite", "W"],
+    ].flatMap(([key, prefix]) =>
+      globalStats.tokens[key] ? [`${prefix}${formatTokens(globalStats.tokens[key])}`] : [],
+    );
+    const msgParts = [
+      ["userMessages", "user"],
+      ["assistantMessages", "assistant"],
+      ["toolResults", "tool results"],
+      ["customMessages", "custom"],
+      ["compactions", "compactions"],
+      ["branchSummaries", "branch summaries"],
+    ].flatMap(([key, label]) => (globalStats[key] ? [`${globalStats[key]} ${label}`] : []));
 
     let html = "";
     if (warning) {
@@ -1507,7 +1301,6 @@
             </div>
           </div>`;
 
-    // Render system prompt (user's base prompt, applies to all providers)
     if (systemPrompt) {
       const lines = systemPrompt.split("\n");
       const previewLines = 10;
@@ -1568,20 +1361,13 @@
     return html;
   }
 
-  // ============================================================
-  // NAVIGATION
-  // ============================================================
-
-  // Cache for rendered entry DOM nodes
   const entryCache = new Map();
 
   function renderEntryToNode(entry) {
-    // Check cache first
     if (entryCache.has(entry.id)) {
       return entryCache.get(entry.id).cloneNode(true);
     }
 
-    // Render to HTML string, then parse to node
     const html = renderEntry(entry);
     if (!html) {
       return null;
@@ -1591,7 +1377,6 @@
     template.innerHTML = html;
     const node = template.content.firstElementChild;
 
-    // Cache the node
     if (node) {
       entryCache.set(entry.id, node.cloneNode(true));
     }
@@ -1607,7 +1392,6 @@
 
     document.getElementById("header-container").innerHTML = renderHeader();
 
-    // Build messages using cached DOM nodes
     const messagesEl = document.getElementById("messages");
     const fragment = document.createDocumentFragment();
 
@@ -1621,7 +1405,6 @@
     messagesEl.innerHTML = "";
     messagesEl.appendChild(fragment);
 
-    // Attach click handlers for copy-link buttons
     messagesEl.querySelectorAll(".copy-link-btn").forEach((btn) => {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -1637,12 +1420,10 @@
       if (scrollMode === "bottom") {
         content.scrollTop = content.scrollHeight;
       } else if (scrollMode === "target") {
-        // If scrollToEntryId is provided, scroll to that specific entry
         const scrollTargetId = scrollToEntryId || targetId;
         const targetEl = document.getElementById(`entry-${scrollTargetId}`);
         if (targetEl) {
           targetEl.scrollIntoView?.({ block: "center" });
-          // Briefly highlight the target message
           if (scrollToEntryId) {
             targetEl.classList.add("highlight");
             setTimeout(() => targetEl.classList.remove("highlight"), 2000);
@@ -1651,10 +1432,6 @@
       }
     }, 0);
   }
-
-  // ============================================================
-  // INITIALIZATION
-  // ============================================================
 
   // Escape HTML tags in text (but not code blocks)
   function escapeHtmlTags(text) {
@@ -1744,37 +1521,20 @@
     return `${html}>${text}</a>`;
   }
 
-  // Configure marked with syntax highlighting and HTML escaping for text
   marked.use({
     breaks: true,
     gfm: true,
     renderer: {
-      // Code blocks: syntax highlight, no HTML escaping
       code(token) {
         const code = token.text;
         const lang = token.lang;
-        let highlighted;
-        if (lang && hljs.getLanguage(lang)) {
-          try {
-            highlighted = hljs.highlight(code, { language: lang }).value;
-          } catch {
-            highlighted = escapeHtml(code);
-          }
-        } else {
-          // Auto-detect language if not specified
-          try {
-            highlighted = hljs.highlightAuto(code).value;
-          } catch {
-            highlighted = escapeHtml(code);
-          }
-        }
+        const highlighted = highlightCode(code, lang && hljs.getLanguage(lang) ? lang : undefined);
         return `<pre><code class="hljs">${highlighted}</code></pre>`;
       },
       // Delegate nested inline tokens; leaf text keeps the existing escaping.
       text(token) {
         return token.tokens ? false : escapeHtmlTags(escapeHtml(token.text));
       },
-      // Inline code: escape HTML
       codespan(token) {
         return `<code>${escapeHtml(token.text)}</code>`;
       },
@@ -1782,28 +1542,17 @@
       html(token) {
         return escapeHtml(token.text);
       },
-      image(token) {
-        return renderMarkdownImage(token);
-      },
-      link(token) {
-        return renderMarkdownLink.call(this, token);
-      },
+      image: renderMarkdownImage,
+      link: renderMarkdownLink,
     },
   });
 
-  // Simple marked parse (escaping handled in renderers)
-  function safeMarkedParse(text) {
-    return marked.parse(text);
-  }
-
-  // Search input
   const searchInput = document.getElementById("tree-search");
   searchInput.addEventListener("input", (e) => {
     searchQuery = e.target.value;
     forceTreeRerender();
   });
 
-  // Filter buttons
   document.querySelectorAll(".filter-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       document.querySelectorAll(".filter-btn").forEach((b) => b.classList.remove("active"));
@@ -1813,7 +1562,6 @@
     });
   });
 
-  // Sidebar toggle
   const sidebar = document.getElementById("sidebar");
   const overlay = document.getElementById("sidebar-overlay");
   const hamburger = document.getElementById("hamburger");
@@ -1833,7 +1581,6 @@
   overlay.addEventListener("click", closeSidebar);
   document.getElementById("sidebar-close").addEventListener("click", closeSidebar);
 
-  // Toggle states
   let thinkingExpanded = true;
   let toolOutputsExpanded = false;
 
@@ -1857,11 +1604,11 @@
     });
   };
 
-  // Keyboard shortcuts
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       searchInput.value = "";
       searchQuery = "";
+      treeRendered = false;
       navigateTo(leafId, "bottom");
     }
     if (e.ctrlKey && e.key === "t") {
@@ -1874,11 +1621,8 @@
     }
   });
 
-  // Initial render
-  // If URL has targetId, scroll to that specific message; otherwise stay at top
   if (leafId) {
     if (urlTargetId && byId.has(urlTargetId)) {
-      // Deep link: navigate to leaf and scroll to target message
       navigateTo(leafId, "target", urlTargetId);
     } else {
       navigateTo(leafId, "none");
@@ -1887,7 +1631,6 @@
     // A null leaf selected by a control record is an intentional empty branch.
     navigateTo(null, "none");
   } else if (entries.length > 0) {
-    // Fallback: use last entry if no leafId
     navigateTo(entries[entries.length - 1].id, "none");
   }
 })();

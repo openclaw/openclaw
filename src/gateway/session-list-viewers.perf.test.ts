@@ -305,7 +305,11 @@ test("preserves viewer pages across publications while bounding shared predicate
       },
     });
     const store = {
-      "agent:main:a": entry("a", 0, 1),
+      "agent:main:a": {
+        ...entry("a", 0, 1),
+        heartbeatIsolatedBaseSessionKey: "agent:main:heartbeat",
+        label: "Operator lane",
+      },
       "agent:main:b": { ...entry("b", 0, 9), visibility: "draft" as const },
       "agent:main:c": entry("c", 1, 8),
       "agent:main:d": { ...entry("d", 1, 10), archivedAt: 1 },
@@ -341,6 +345,7 @@ test("preserves viewer pages across publications while bounding shared predicate
     ];
     try {
       for (let revision = 0; revision < 2; revision++) {
+        await projection.ensureMaterialized();
         // The first viewer primes only viewer-independent membership.
         await listProjectedSessions({ projection, client: clients[0], opts });
         predicate.mockClear();
@@ -437,17 +442,26 @@ test("preserves viewer pages across publications while bounding shared predicate
           client: clients[0],
           opts: { ...opts, ownerFirst: false, archived: true },
         });
-        expect(archived.sessions.map((row) => row.sessionId)).toEqual([revision === 0 ? "d" : "a"]);
-        expect(archived.totalCount).toBe(1);
-        expect(predicate).toHaveBeenCalled();
+        // Removing a heartbeat's operator label changes its accepted classification.
+        const archivedIds = revision === 0 ? ["d"] : [];
+        expect(archived.sessions.map((row) => row.sessionId)).toEqual(archivedIds);
+        expect(archived.totalCount).toBe(archivedIds.length);
+        // Cold archives can acquire metadata; warm reads and filter changes reuse those facts.
         predicate.mockClear();
+        const warmArchive = await listProjectedSessions({
+          projection,
+          client: clients[0],
+          opts: { ...opts, ownerFirst: false, archived: true },
+        });
+        expect(warmArchive.sessions.map((row) => row.sessionId)).toEqual(archivedIds);
+        expect(predicate).not.toHaveBeenCalled();
         const unarchived = await listProjectedSessions({ projection, client: clients[0], opts });
         expect(unarchived.sessions.map((row) => row.sessionId)).toEqual(golden[revision]![0]!.ids);
-        expect(predicate).toHaveBeenCalled();
+        expect(predicate).not.toHaveBeenCalled();
         if (revision === 0) {
           replaceSessionEntrySync(
             { agentId: "main", sessionKey: "agent:main:a" },
-            { ...store["agent:main:a"], archivedAt: 2 },
+            { ...store["agent:main:a"], label: undefined, archivedAt: 2 },
           );
           replaceSessionEntrySync(
             { agentId: "main", sessionKey: "agent:main:b" },
@@ -504,8 +518,11 @@ test("refreshes cached lists after placement readiness and refuses disposed resp
     const empty: WorkerSessionPlacementProjection = {
       placements: new Map(),
       moves: new Map(),
+      pendingResults: new Map(),
+      workspaceJournalOwnerSessionIds: new Set(),
       environments: new Map(),
       workspaceResultReconcilingSessionIds: new Set(),
+      workspaceRecoveryPendingSessionIds: new Set(),
     };
     let entered = createDeferredCore();
     let paused = createDeferredCore<WorkerSessionPlacementProjection>();

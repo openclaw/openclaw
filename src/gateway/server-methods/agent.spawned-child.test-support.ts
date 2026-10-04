@@ -1,11 +1,16 @@
+import path from "node:path";
+import { vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
-import { onSubagentRegistryPersisted } from "../../agents/subagents/registry/subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
+import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import {
+  addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import {
   type AgentHandlerArgs,
@@ -31,6 +36,20 @@ export function nativeSubagentClient(): AgentHandlerArgs["client"] {
   };
 }
 
+export function observeAgentSubagentCleanup(params: { runId: string; childSessionKey: string }) {
+  const cleanupCompleted = createDeferred();
+  const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
+    const entry = getSubagentRunByChildSessionKey(params.childSessionKey);
+    if (entry?.runId === params.runId && entry.cleanupCompletedAt) {
+      cleanupCompleted.resolve();
+    }
+  });
+  return {
+    cleanupCompleted: cleanupCompleted.promise,
+    [Symbol.dispose]: unsubscribe,
+  };
+}
+
 export function createPluginSubagentTestLifetime(params: {
   root: string;
   runId: string;
@@ -42,21 +61,58 @@ export function createPluginSubagentTestLifetime(params: {
     endedAt: Date.now(),
   }));
   const work = new AsyncWorkScope();
-  const cleanupCompleted = createDeferred();
-  const unsubscribe = onSubagentRegistryPersisted(() => {
-    const entry = getSubagentRunByChildSessionKey(params.childSessionKey);
-    if (entry?.runId === params.runId && entry.cleanupCompletedAt) {
-      cleanupCompleted.resolve();
-    }
-  });
+  const cleanup = observeAgentSubagentCleanup(params);
   return {
     work,
-    cleanupCompleted: cleanupCompleted.promise,
+    cleanupCompleted: cleanup.cleanupCompleted,
     async [Symbol.asyncDispose]() {
-      unsubscribe();
+      cleanup[Symbol.dispose]();
       await work.drain();
-      resetSubagentRegistryForTests({ persist: false });
+      await resetSubagentRegistryForTests({ persist: false });
       await cleanupSessionStateForTest({ stateDir: params.root });
     },
   };
+}
+
+/** Seed the paused owner's durable row and published projection together. */
+export async function seedPersistedSubagentRunForAgentTest(
+  overrides: Parameters<typeof addSubagentRunForTests>[0],
+) {
+  await addSubagentRunForTests(overrides);
+}
+
+// Shared by spawned-child handler fixtures; real transcript reads stay in the fixture root.
+export function mockSpawnedChildSessionEntry(childSessionKey: string, root: string) {
+  const mocks = getAgentTestMocks();
+  mocks.userTurnStorePath = path.join(root, "agents", "main", "sessions", "sessions.json");
+  mocks.loadSessionEntry.mockReturnValue({
+    cfg: {},
+    storePath: mocks.userTurnStorePath,
+    entry: { sessionId: "spawned-child-session", updatedAt: Date.now() },
+    canonicalKey: childSessionKey,
+  });
+  mocks.agentCommand.mockResolvedValue({
+    payloads: [{ text: "ok" }],
+    meta: { durationMs: 100 },
+  });
+}
+
+/** Join native registry completions before retiring temporary state and database owners. */
+export async function withPluginSubagentTestState(
+  prefix: string,
+  run: (state: Awaited<ReturnType<typeof createOpenClawTestState>>) => Promise<void>,
+): Promise<void> {
+  const state = await createOpenClawTestState({ prefix, layout: "state-only" });
+  try {
+    await resetSubagentRegistryForTests({ persist: false });
+    await run(state);
+  } finally {
+    // Stop producers, then join admitted work before deleting storage. A failed join retains it.
+    await resetSubagentRegistryForTests({ persist: false });
+    await vi.dynamicImportSettled();
+    await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
+    await settleSubagentRegistryPersistenceWork();
+    await resetSubagentRegistryForTests({ persist: false });
+    await state.cleanup();
+  }
 }

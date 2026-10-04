@@ -141,37 +141,6 @@ describe("heartbeat outcome store", () => {
     expect(existsSync(resolveOpenClawAgentSqlitePath(target))).toBe(false);
   });
 
-  it("orders disk persistence and claims without running heartbeat SQL on the caller", async () => {
-    const env = await createEnv();
-    const target = { agentId: "main", sessionKey: "agent:main:main", env };
-    const db = openOpenClawAgentDatabase(target).db;
-    const prepare = db.prepare.bind(db);
-    vi.spyOn(db, "prepare").mockImplementation((sql) => {
-      if (sql.includes('"heartbeat_outcomes"')) {
-        throw new Error("Heartbeat SQL ran on the caller");
-      }
-      return prepare(sql);
-    });
-    const first = persistHeartbeatOutcome({
-      ...target,
-      runSessionKey: "agent:main:main:heartbeat",
-      occurredAt: 100,
-      response: { outcome: "progress", notify: false, summary: "First" },
-    });
-    const claimFirst = claimHeartbeatOutcomeForRun({ ...target, runId: "first" });
-    const second = persistHeartbeatOutcome({
-      ...target,
-      runSessionKey: "agent:main:main:heartbeat",
-      occurredAt: 200,
-      response: { outcome: "done", notify: false, summary: "Second" },
-    });
-    const claimSecond = claimHeartbeatOutcomeForRun({ ...target, runId: "second" });
-    const results = await Promise.all([first, claimFirst, second, claimSecond]);
-    expect(results[1]).toMatchObject({ summary: "First" });
-    expect(results[3]).toMatchObject({ summary: "Second" });
-    expect(await claimHeartbeatOutcomeForRun({ ...target, runId: "third" })).toBeUndefined();
-  });
-
   it("keeps one bounded typed outcome per base session with provenance", async () => {
     const env = await createEnv();
     await persistHeartbeatOutcome({
@@ -256,16 +225,30 @@ describe("heartbeat outcome store", () => {
       occurredAt: 200,
       response: { outcome: "blocked", notify: false, summary: "Waiting for build" },
     });
-    await persistHeartbeatOutcome({
-      ...base,
-      occurredAt: 300,
-      response: { outcome: "needs_attention", notify: true, summary: "Visible alert" },
+    const reservation = await reserveWorker(env);
+    let settled = false;
+    const skipped = Promise.all([
+      persistHeartbeatOutcome({
+        ...base,
+        occurredAt: 300,
+        response: { outcome: "needs_attention", notify: true, summary: "Visible alert" },
+      }),
+      persistHeartbeatOutcome({
+        ...base,
+        occurredAt: 400,
+        response: { outcome: "no_change", notify: false, summary: "Nothing changed" },
+      }),
+    ]).then(() => {
+      settled = true;
     });
-    await persistHeartbeatOutcome({
-      ...base,
-      occurredAt: 400,
-      response: { outcome: "no_change", notify: false, summary: "Nothing changed" },
-    });
+    try {
+      await setImmediate();
+      expect(settled).toBe(true);
+    } finally {
+      reservation.release();
+      await reservation.done;
+      await skipped;
+    }
 
     expect(
       await claimHeartbeatOutcomeForRun({
@@ -312,60 +295,6 @@ describe("heartbeat outcome store", () => {
     });
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
-
-  it("injects once per user run, keeps retries, and resets after a new heartbeat", async () => {
-    const env = await createEnv();
-    const base = {
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      runSessionKey: "agent:main:main:heartbeat",
-      occurredAt: 100,
-      env,
-    };
-    await persistHeartbeatOutcome({
-      ...base,
-      response: { outcome: "progress", notify: false, summary: "First outcome" },
-    });
-
-    expect(
-      await claimHeartbeatOutcomeForRun({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        runId: "user-run-1",
-        env,
-      }),
-    ).toMatchObject({ summary: "First outcome" });
-    expect(
-      await claimHeartbeatOutcomeForRun({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        runId: "user-run-1",
-        env,
-      }),
-    ).toMatchObject({ summary: "First outcome" });
-    expect(
-      await claimHeartbeatOutcomeForRun({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        runId: "user-run-2",
-        env,
-      }),
-    ).toBeUndefined();
-
-    await persistHeartbeatOutcome({
-      ...base,
-      occurredAt: 200,
-      response: { outcome: "done", notify: false, summary: "Second outcome" },
-    });
-    expect(
-      await claimHeartbeatOutcomeForRun({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        runId: "user-run-2",
-        env,
-      }),
-    ).toMatchObject({ summary: "Second outcome" });
-  });
 });
 
 async function reserveWorker(env: NodeJS.ProcessEnv) {
@@ -379,9 +308,17 @@ async function reserveWorker(env: NodeJS.ProcessEnv) {
   return { done, release: release.resolve };
 }
 
-it("queues heartbeat persistence and claims in order with captured inputs", async () => {
+it("queues captured outcomes off-thread and claims once per run until the next heartbeat", async () => {
   const env = await createEnv();
   const target = { agentId: "main", sessionKey: "agent:main:main", env };
+  const db = openOpenClawAgentDatabase(target).db;
+  const prepare = db.prepare.bind(db);
+  vi.spyOn(db, "prepare").mockImplementation((sql) => {
+    if (sql.includes('"heartbeat_outcomes"')) {
+      throw new Error("Heartbeat SQL ran on the caller");
+    }
+    return prepare(sql);
+  });
   const reservation = await reserveWorker(env);
   const input = {
     ...target,
@@ -393,10 +330,13 @@ it("queues heartbeat persistence and claims in order with captured inputs", asyn
   const first = persistHeartbeatOutcome(input);
   const claim = { ...target, runId: "first-run" };
   const claimed = claimHeartbeatOutcomeForRun(claim);
+  const retry = claimHeartbeatOutcomeForRun(claim);
+  const alreadyClaimed = claimHeartbeatOutcomeForRun({ ...target, runId: "second-run" });
   const second = persistHeartbeatOutcome({
     ...input,
     response: { outcome: "done", notify: false, summary: "second" },
   });
+  const claimedSecond = claimHeartbeatOutcomeForRun({ ...target, runId: "second-run" });
   input.sessionKey = "agent:main:changed";
   input.response.summary = "changed";
   input.taskNames[0] = "changed";
@@ -404,18 +344,17 @@ it("queues heartbeat persistence and claims in order with captured inputs", asyn
   claim.sessionKey = "agent:main:changed";
   try {
     await setImmediate();
-    expect(
-      openOpenClawAgentDatabase(target).db.prepare("SELECT * FROM heartbeat_outcomes").all(),
-    ).toEqual([]);
+    expect(db.prepare("SELECT * FROM heartbeat_outcomes").all()).toEqual([]);
   } finally {
     reservation.release();
     await reservation.done;
-    await Promise.all([first, claimed, second]);
+    await Promise.all([first, claimed, retry, alreadyClaimed, second, claimedSecond]);
   }
   expect(await claimed).toMatchObject({ summary: "captured", taskNames: ["captured task"] });
-  expect(await claimHeartbeatOutcomeForRun({ ...target, runId: "second-run" })).toMatchObject({
-    summary: "second",
-  });
+  expect(await retry).toMatchObject({ summary: "captured" });
+  expect(await alreadyClaimed).toBeUndefined();
+  expect(await claimedSecond).toMatchObject({ summary: "second" });
+  expect(await claimHeartbeatOutcomeForRun({ ...target, runId: "third-run" })).toBeUndefined();
 });
 
 it("rechecks a queued claim's captured authority and leaves the outcome unclaimed", async () => {
@@ -448,37 +387,4 @@ it("rechecks a queued claim's captured authority and leaves the outcome unclaime
   expect(await claimHeartbeatOutcomeForRun({ ...target, runId: "current-run" })).toMatchObject({
     summary: "unclaimed",
   });
-});
-
-it("skips visible and no-change outcomes without waiting for a reserved worker", async () => {
-  const env = await createEnv();
-  const reservation = await reserveWorker(env);
-  const target = {
-    agentId: "main",
-    sessionKey: "agent:main:main",
-    runSessionKey: "agent:main:main:heartbeat",
-    occurredAt: 100,
-    env,
-  };
-  let settled = false;
-  const skipped = Promise.all([
-    persistHeartbeatOutcome({
-      ...target,
-      response: { outcome: "progress", notify: true, summary: "visible" },
-    }),
-    persistHeartbeatOutcome({
-      ...target,
-      response: { outcome: "no_change", notify: false, summary: "unchanged" },
-    }),
-  ]).then(() => {
-    settled = true;
-  });
-  try {
-    await setImmediate();
-    expect(settled).toBe(true);
-  } finally {
-    reservation.release();
-    await reservation.done;
-    await skipped;
-  }
 });

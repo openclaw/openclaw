@@ -1,7 +1,6 @@
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import * as stateDatabase from "./openclaw-state-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -9,132 +8,107 @@ import {
 } from "./openclaw-state-db.js";
 import { readUserProfileVersion } from "./user-profile-events.js";
 import { listUserProfilesSync } from "./user-profile-identity.read.js";
-import { mergeOwnerIntoPerson, profileState } from "./user-profiles-owner.test-support.js";
-import { UserProfileOwnerError } from "./user-profiles-schema.js";
 import {
-  ensureGatewayOwnerProfile,
-  ensureProfileForEmail,
-  ensureProfileForTailscaleIdentity,
   linkEmail,
   setDisplayName,
   setUserProfileRole,
   syncGitHubIdentity,
+} from "./user-profile-writes.worker.js";
+import { mergeOwnerIntoPerson, profileState } from "./user-profiles-owner.test-support.js";
+import {
+  ensureGatewayOwnerProfile,
+  ensureProfileForEmail,
+  ensureProfileForTailscaleIdentity,
 } from "./user-profiles.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
-    vi.restoreAllMocks();
     closeOpenClawStateDatabaseForTest();
     cleanup();
   });
 });
 
 function stateOptions() {
-  const directory = tempDirs.make("openclaw-user-profiles-owner-");
-  return { path: join(directory, "openclaw.sqlite") };
+  return { path: join(tempDirs.make("openclaw-user-profiles-owner-"), "openclaw.sqlite") };
 }
 
-function seedOwnerTombstone(ownerId: string, options: ReturnType<typeof stateOptions>) {
-  openOpenClawStateDatabase(options)
-    .db.prepare(
+function fixture() {
+  const options = stateOptions();
+  const owner = ensureGatewayOwnerProfile("Local Owner", options);
+  const db = openOpenClawStateDatabase(options).db;
+  return { options, owner, db };
+}
+
+function ownerReference(kind: "merged owner" | "tombstone", state: ReturnType<typeof fixture>) {
+  if (kind === "merged owner") {
+    mergeOwnerIntoPerson(state.owner.id, state.options);
+    return state.owner.id;
+  }
+  state.db
+    .prepare(
       "INSERT INTO user_profiles (id, merged_into, created_at, updated_at) VALUES (?, ?, 1, 1)",
     )
-    .run("retired-owner-alias", ownerId);
+    .run("retired-owner-alias", state.owner.id);
   return "retired-owner-alias";
 }
 
+function expectUnchanged(
+  operation: () => unknown,
+  options: ReturnType<typeof fixture>["options"],
+  code: "merge" | "role" | "repair-required",
+) {
+  const before = profileState(options);
+  expect(operation).toThrow(expect.objectContaining({ name: "UserProfileOwnerError", code }));
+  expect(profileState(options)).toEqual(before);
+}
+
 describe("gateway owner profiles", () => {
-  it.each(["new email", "existing email", "tombstoned target", "merged owner"])(
-    "rejects linking a %s to the owner without changing profile state",
-    (scenario) => {
-      const options = stateOptions();
-      const owner = ensureGatewayOwnerProfile("Local Owner", options);
-      const email = "person@example.test";
-      if (scenario !== "new email") {
-        ensureProfileForEmail(email, options);
-      }
-      const target =
-        scenario === "tombstoned target" ? seedOwnerTombstone(owner.id, options) : owner.id;
-      if (scenario === "merged owner") {
-        mergeOwnerIntoPerson(owner.id, options);
-      }
-      const before = profileState(options);
+  it.each(["merged owner", "tombstone"] as const)("rejects linking to the %s", (kind) => {
+    const state = fixture();
+    const target = ownerReference(kind, state);
+    expectUnchanged(
+      () => linkEmail("person@example.test", target, state.options),
+      state.options,
+      "merge",
+    );
+  });
 
-      expect(() => linkEmail(email, target, options)).toThrow(
-        "the shared owner profile cannot be merged; sign in with a personal identity instead",
-      );
-      expect(profileState(options)).toEqual(before);
-    },
-  );
-
-  it.each([1, 2])("rejects moving an owner's email when it has %s aliases", (aliasCount) => {
-    const options = stateOptions();
-    const owner = ensureGatewayOwnerProfile("Local Owner", options);
+  it("rejects moving an owner's email to a person", () => {
+    const { options, owner, db } = fixture();
     const person = ensureProfileForEmail("person@example.test", options);
-    const insertAlias = openOpenClawStateDatabase(options).db.prepare(
+    db.prepare(
       "INSERT INTO user_profile_emails (email, profile_id, created_at) VALUES (?, ?, 1)",
+    ).run("old-owner@example.test", owner.id);
+    expectUnchanged(
+      () => linkEmail("old-owner@example.test", person.id, options),
+      options,
+      "merge",
     );
-    for (let index = 0; index < aliasCount; index++) {
-      insertAlias.run(`old-owner-${index}@example.test`, owner.id);
-    }
-    const before = profileState(options);
-
-    expect(() => linkEmail("old-owner-0@example.test", person.id, options)).toThrow(
-      "the shared owner profile cannot be merged; sign in with a personal identity instead",
-    );
-    expect(profileState(options)).toEqual(before);
   });
 
-  it.each([
-    { target: "owner", role: "guest" },
-    { target: "owner", role: null },
-    { target: "tombstone", role: "guest" },
-    { target: "tombstone", role: null },
-    { target: "merged owner", role: "guest" },
-    { target: "merged owner", role: null },
-  ])("rejects role $role on the $target without changing state", ({ target, role }) => {
-    const options = stateOptions();
-    const owner = ensureGatewayOwnerProfile("Local Owner", options);
-    const profileId = target === "tombstone" ? seedOwnerTombstone(owner.id, options) : owner.id;
-    if (target === "merged owner") {
-      mergeOwnerIntoPerson(owner.id, options);
-    }
-    const before = profileState(options);
-
-    expect(() => setUserProfileRole(profileId, role, options)).toThrow(
-      "the shared owner profile is not governed by operator roles",
+  it.each(["merged owner", "tombstone"] as const)("rejects assigning a role to the %s", (kind) => {
+    const state = fixture();
+    const target = ownerReference(kind, state);
+    expectUnchanged(
+      () => setUserProfileRole(target, "guest", state.options),
+      state.options,
+      "role",
     );
-    expect(profileState(options)).toEqual(before);
   });
 
-  it.each([
-    { existingAccount: false, merged: false },
-    { existingAccount: true, merged: false },
-    { existingAccount: false, merged: true },
-    { existingAccount: true, merged: true },
-  ])(
-    "rejects GitHub sync through an old owner email (existing: $existingAccount, merged: $merged)",
-    ({ existingAccount, merged }) => {
-      const options = stateOptions();
-      const owner = ensureGatewayOwnerProfile("Local Owner", options);
-      const identity = { accountId: 10, login: "person" };
-      if (existingAccount) {
-        syncGitHubIdentity(
-          { identity, authenticationAlias: { kind: "github-login", login: identity.login } },
-          options,
-        );
-      }
-      openOpenClawStateDatabase(options)
-        .db.prepare(
-          "INSERT INTO user_profile_emails (email, profile_id, created_at) VALUES (?, ?, 1)",
-        )
-        .run("old-owner@example.test", owner.id);
-      if (merged) {
-        mergeOwnerIntoPerson(owner.id, options);
-      }
-      const before = profileState(options);
-
-      expect(() =>
+  it("rejects verified GitHub sign-in through an old merged-owner email", () => {
+    const { options, owner, db } = fixture();
+    const identity = { accountId: 10, login: "person" };
+    syncGitHubIdentity(
+      { identity, authenticationAlias: { kind: "github-login", login: "person" } },
+      options,
+    );
+    db.prepare(
+      "INSERT INTO user_profile_emails (email, profile_id, created_at) VALUES (?, ?, 1)",
+    ).run("old-owner@example.test", owner.id);
+    mergeOwnerIntoPerson(owner.id, options);
+    expectUnchanged(
+      () =>
         syncGitHubIdentity(
           {
             identity,
@@ -142,30 +116,28 @@ describe("gateway owner profiles", () => {
           },
           options,
         ),
-      ).toThrow(
-        "the shared owner profile cannot be merged; sign in with a personal identity instead",
-      );
-      expect(profileState(options)).toEqual(before);
-    },
-  );
+      options,
+      "merge",
+    );
+    expectUnchanged(
+      () =>
+        ensureProfileForEmail("old-owner@example.test", {
+          ...options,
+          expectedGitHubAccountId: identity.accountId,
+        }),
+      options,
+      "merge",
+    );
+  });
 
-  it.each([false, true])(
-    "rejects a personal login into an old owner GitHub identity (merged: %s)",
-    (merged) => {
-      const options = stateOptions();
-      const owner = ensureGatewayOwnerProfile("Local Owner", options);
-      ensureProfileForEmail("person@example.test", options);
-      openOpenClawStateDatabase(options)
-        .db.prepare(
-          "INSERT INTO user_profile_identities (provider, subject, profile_id, canonical_login, created_at) VALUES ('github', '10', ?, 'person', 1)",
-        )
-        .run(owner.id);
-      if (merged) {
-        mergeOwnerIntoPerson(owner.id, options);
-      }
-      const before = profileState(options);
-
-      expect(() =>
+  it("rejects personal sign-in through an old merged-owner GitHub identity", () => {
+    const { options, owner, db } = fixture();
+    db.prepare(
+      "INSERT INTO user_profile_identities (provider, subject, profile_id, canonical_login, created_at) VALUES ('github', '10', ?, 'person', 1)",
+    ).run(owner.id);
+    mergeOwnerIntoPerson(owner.id, options);
+    expectUnchanged(
+      () =>
         syncGitHubIdentity(
           {
             identity: { accountId: 10, login: "person" },
@@ -173,93 +145,46 @@ describe("gateway owner profiles", () => {
           },
           options,
         ),
-      ).toThrow(
-        "the shared owner profile cannot be merged; sign in with a personal identity instead",
-      );
-      expect(profileState(options)).toEqual(before);
-    },
-  );
+      options,
+      "merge",
+    );
+  });
 
-  it.each(["tombstone", "person", "missing", "legacy", "merged identity", "misdirected"])(
-    "requires Doctor without mutating a merged owner whose identity targets %s",
-    (identityTarget) => {
-      const options = stateOptions();
-      const owner =
-        identityTarget === "legacy"
-          ? ensureProfileForTailscaleIdentity({ login: "legacy@other" }, options)
-          : ensureGatewayOwnerProfile("Local Owner", options);
-      const identityOnly = identityTarget === "merged identity" || identityTarget === "misdirected";
-      const legacy = identityOnly
-        ? ensureProfileForTailscaleIdentity({ login: "legacy@other" }, options)
-        : undefined;
-      const person =
-        identityTarget === "misdirected"
-          ? ensureProfileForEmail("person@example.test", options)
-          : mergeOwnerIntoPerson(legacy?.id ?? owner.id, options);
-      const db = openOpenClawStateDatabase(options).db;
-      if (identityTarget === "legacy") {
-        db.prepare(
-          "INSERT INTO user_profile_identities (provider, subject, profile_id, created_at) VALUES ('gateway.local', 'owner', ?, 1)",
-        ).run(owner.id);
-      } else if (identityOnly) {
-        db.prepare(
-          "UPDATE user_profile_identities SET profile_id = ? WHERE provider = 'gateway.local'",
-        ).run(legacy!.id);
-      } else if (identityTarget === "person") {
-        db.prepare(
-          "UPDATE user_profile_identities SET profile_id = ? WHERE provider = 'gateway.local'",
-        ).run(person.id);
-      } else if (identityTarget === "missing") {
-        db.prepare("DELETE FROM user_profile_identities WHERE provider = 'gateway.local'").run();
+  it.each(["owner", "identity", "misdirected"])("requires Doctor for a damaged %s", (kind) => {
+    const { options, owner, db } = fixture();
+    if (kind === "owner") {
+      mergeOwnerIntoPerson(owner.id, options);
+    } else {
+      const legacy = ensureProfileForTailscaleIdentity({ login: "legacy@other" }, options);
+      if (kind === "identity") {
+        mergeOwnerIntoPerson(legacy.id, options);
       }
-      const before = profileState(options);
+      db.prepare(
+        "UPDATE user_profile_identities SET profile_id = ? WHERE provider = 'gateway.local'",
+      ).run(legacy.id);
+    }
+    expectUnchanged(
+      () => ensureGatewayOwnerProfile("Host Renamed", options),
+      options,
+      "repair-required",
+    );
+    expect(() => ensureGatewayOwnerProfile("Host Renamed", options)).toThrow(
+      "openclaw doctor --fix",
+    );
+  });
 
-      expect(() => ensureGatewayOwnerProfile("Host Renamed", options)).toThrow(
-        UserProfileOwnerError,
-      );
-      expect(() => ensureGatewayOwnerProfile("Host Renamed", options)).toThrow(
-        expect.objectContaining({
-          code: "repair-required",
-          message: expect.stringContaining("openclaw doctor --fix"),
-        }),
-      );
-      expect(profileState(options)).toEqual(before);
-    },
-  );
-
-  it("keeps one email-less gateway owner and its edits across database reopen", () => {
-    const options = stateOptions();
-    const version = readUserProfileVersion();
-    const owner = ensureGatewayOwnerProfile("  Ada Lovelace  ", options);
-    expect(readUserProfileVersion()).toBe(version + 1);
-    expect(owner.id).toBe("gateway-owner");
-    expect(owner.displayName).toBe("Ada Lovelace");
-    const transaction = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
+  it("keeps one email-less owner and its edits across database reopen", () => {
+    const { options, owner } = fixture();
     expect(ensureGatewayOwnerProfile("Host Renamed", options)).toEqual(owner);
-    expect(transaction).not.toHaveBeenCalled();
-    transaction.mockRestore();
-    expect(readUserProfileVersion()).toBe(version + 1);
     setDisplayName(owner.id, "User Chosen", options);
     closeOpenClawStateDatabaseForTest();
-
-    expect(ensureGatewayOwnerProfile("Host Renamed", options)).toMatchObject({
-      id: owner.id,
-      displayName: "User Chosen",
-    });
+    ensureGatewayOwnerProfile("Host Renamed", options);
     expect(listUserProfilesSync(options)).toEqual([
-      expect.objectContaining({ id: owner.id, emails: [], displayName: "User Chosen" }),
+      expect.objectContaining({ id: "gateway-owner", emails: [], displayName: "User Chosen" }),
     ]);
-    expect(readUserProfileVersion()).toBe(version + 2);
-    expect(
-      openOpenClawStateDatabase(options)
-        .db.prepare("SELECT provider, subject, profile_id FROM user_profile_identities")
-        .all(),
-    ).toEqual([{ provider: "gateway.local", subject: "owner", profile_id: owner.id }]);
-    openOpenClawStateDatabase(options)
-      .db.prepare("DELETE FROM user_profile_identities WHERE provider = 'gateway.local'")
-      .run();
+    const reopened = openOpenClawStateDatabase(options).db;
+    reopened.prepare("DELETE FROM user_profile_identities WHERE provider = 'gateway.local'").run();
     expect(ensureGatewayOwnerProfile(null, options).id).toBe(owner.id);
-    expect(readUserProfileVersion()).toBe(version + 3);
   });
 
   it("publishes a new owner only after the outer transaction commits", () => {
@@ -277,7 +202,6 @@ describe("gateway owner profiles", () => {
     expect(listUserProfilesSync(options).some((profile) => profile.id === "gateway-owner")).toBe(
       false,
     );
-
     runOpenClawStateWriteTransaction(() => {
       ensureGatewayOwnerProfile("Local Owner", options);
       expect(readUserProfileVersion()).toBe(version);
@@ -290,38 +214,22 @@ describe("gateway owner profiles", () => {
     const existing = ensureProfileForEmail("existing-owner@example.test", options);
     openOpenClawStateDatabase(options)
       .db.prepare(
-        "INSERT INTO user_profile_identities (provider, subject, profile_id, created_at) VALUES (?, ?, ?, ?)",
+        "INSERT INTO user_profile_identities (provider, subject, profile_id, created_at) VALUES ('gateway.local', 'owner', ?, 1)",
       )
-      .run("gateway.local", "owner", existing.id, existing.createdAt);
-
+      .run(existing.id);
     expect(ensureGatewayOwnerProfile("Host Name", options)).toEqual(existing);
     expect(listUserProfilesSync(options)).toHaveLength(1);
   });
 
   it.each(["owner@gateway", "owner@gateway.local"])(
-    "keeps the gateway owner separate from a Tailscale login: %s",
+    "keeps the gateway owner separate from Tailscale login %s",
     (login) => {
-      const options = stateOptions();
-      const owner = ensureGatewayOwnerProfile("Local Owner", options);
+      const { options, owner } = fixture();
       const external = ensureProfileForTailscaleIdentity({ login, name: "External User" }, options);
-
       expect(external.id).not.toBe(owner.id);
       expect(ensureGatewayOwnerProfile(null, options)).toEqual(owner);
     },
   );
-
-  it.each([null, "", " \t "])("seeds an unset gateway owner name: %s", (emptyName) => {
-    const options = stateOptions();
-    const owner = ensureGatewayOwnerProfile(null, options);
-    setDisplayName(owner.id, emptyName, options);
-    const version = readUserProfileVersion();
-
-    expect(ensureGatewayOwnerProfile("  Ada Lovelace  ", options)).toMatchObject({
-      id: owner.id,
-      displayName: "Ada Lovelace",
-    });
-    expect(readUserProfileVersion()).toBe(version + 1);
-  });
 
   it("leaves an unavailable owner name unset and bounds a later seed", () => {
     const options = stateOptions();

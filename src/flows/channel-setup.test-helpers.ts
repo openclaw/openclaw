@@ -165,7 +165,7 @@ export function createChannelSetupMocks() {
       installableCatalogById: new Map(),
     }),
   );
-  const collectChannelStatus = vi.fn(async (_params: Parameters<CollectChannelStatus>[0]) => ({
+  const collectChannelStatus = vi.fn<CollectChannelStatus>(async (_params) => ({
     installedPlugins: [],
     catalogEntries: [],
     installedCatalogEntries: [],
@@ -231,10 +231,9 @@ export function createChannelSetupMocks() {
         collectChannelStatus(params),
       findBundledSourceForCatalogChannel: vi.fn(() => undefined),
       noteChannelPrimer: vi.fn(),
-      noteChannelStatus: vi.fn(),
       resolveCatalogChannelSelectionHint: vi.fn(() => "download from <npm>"),
       resolveChannelSelectionNoteLines: vi.fn(() => []),
-      resolveChannelSetupSelectionContributions: vi.fn(() => []),
+      resolveChannelSetupSelectionOptions: vi.fn(() => []),
       resolveChannelSetupWorkspaceDir: (cfg?: unknown) => resolveChannelSetupWorkspaceDir(cfg),
       resolveQuickstartDefault: vi.fn(() => undefined),
     }),

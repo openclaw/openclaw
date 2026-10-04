@@ -124,6 +124,34 @@ Provider fields:
 | `defaultUtilityModel` | `string`                 | Optional provider-recommended small model id for short internal utility tasks (titles, progress narration). Used when `agents.defaults.utilityModel` is unset and this provider serves the agent's primary model. |
 | `models`              | `object[]`               | Required model rows. Rows without an `id` are ignored.                                                                                                                                                            |
 
+`recommendedModels` is an optional ordered shortlist of distinct model
+ids from this provider's `models`. Ids are trimmed and must be non-empty. The field
+is reserved for picker ordering and is not yet used. It is published only in catalog
+v2, never v1. Invalid manifest lists are omitted; invalid remote v2 lists are rejected.
+
+The catalog generator opts into local paired output with `--out <v1-file> --out-v2 <v2-file>`.
+It validates both bundles and prepares candidate bytes and previous-file backups
+before replacing either output. Paired destinations must resolve to distinct regular
+files or absent targets. Output symlinks and directory aliases are resolved before
+preparation; publication replaces each target in its real parent and leaves output
+symlinks intact. Dangling output symlinks create their targets if the target parents
+exist. Missing target parents and symlink cycles fail before either output is replaced.
+The v1-only writer is unchanged.
+
+Each file is replaced separately: this is **not** a multi-file atomic transaction.
+Use a single publisher and do not serve or deploy the pair until the command succeeds.
+If publication fails or the process stops between replacements, inspect the
+`.catalog-pair-*` directories beside both outputs. Each contains `next.json`,
+`previous.json` when the output existed, and `RECOVERY.txt` mapping both destinations
+and recovery directories. Stop competing writers, compare the current outputs with
+these artifacts, and explicitly restore or finish the pair before retrying. There
+is no automatic rollback or replay that could overwrite another writer's replacement.
+Identity checks detect observed changes but are not filesystem compare-and-swap;
+this protocol does not promise power-loss durability. After successful publication,
+cleanup failures warn with retained paths without reporting the pair as unpublished.
+Cleanup retains recovery entries when their device or inode is unknown (zero)
+or differs from the captured identity.
+
 Model fields:
 
 | Field                  | Type                                                           | What it means                                                                        |
@@ -220,8 +248,9 @@ Use `modelPricing` when the hosted catalog publisher needs provider-specific pri
       },
       "openrouter": {
         "openRouter": {
-          "passthroughProviderModel": true
+          "provider": "openrouter"
         },
+        "modelsDev": false,
         "liteLLM": false
       }
     }
@@ -238,7 +267,8 @@ Provider fields:
 | `deepinfra`  | `false \| object` | Explicit mapping to the public DeepInfra `/models/list` catalog. Never enabled implicitly.      |
 | `external`   | `boolean`         | Set `false` for local/self-hosted providers that should never use published external pricing.   |
 | `openCode`   | `false \| object` | Explicit mapping to the public `models.opencode.ai/api.json` catalog. Never enabled implicitly. |
-| `openRouter` | `false \| object` | OpenRouter publication-key mapping. `false` disables OpenRouter matching for this provider.     |
+| `modelsDev`  | `false \| object` | models.dev price list for the provider that bills the request. Enabled by default.              |
+| `openRouter` | `false \| object` | OpenRouter's own prices. They price only `openrouter/*` keys, never a vendor's models.          |
 | `liteLLM`    | `false \| object` | LiteLLM publication-key mapping. `false` disables LiteLLM matching for this provider.           |
 | `venice`     | `false \| object` | Explicit mapping to the public Venice `/api/v1/models` catalog. Never enabled implicitly.       |
 
@@ -247,14 +277,24 @@ Source fields:
 | Field                      | Type               | What it means                                                                                                        |
 | -------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------- |
 | `provider`                 | `string`           | External catalog provider id when it differs from the OpenClaw provider id, for example `z-ai` for a `zai` provider. |
-| `passthroughProviderModel` | `boolean`          | Treat slash-containing model ids as nested provider/model refs, useful for proxy providers such as OpenRouter.       |
+| `passthroughProviderModel` | `boolean`          | Treat slash-containing model ids as `vendor/model` refs priced at the vendor's rate, for gateways that bill it.      |
 | `modelIdTransforms`        | `"version-dots"[]` | Extra external catalog model-id variants. `version-dots` tries dotted version ids like `claude-opus-4.6`.            |
 
-A declared provider policy enables only its declared source mappings. Without a
-policy, publication tries OpenRouter, then LiteLLM. Each selected price is a
-complete schedule: base rates and context tiers are never combined across sources.
-OpenRouter's native prompt-length overrides are supported; time-based overrides
-are not represented as static context tiers.
+Prices come from whoever bills the request. A declared provider policy enables
+only its declared source mappings. Without a policy, publication tries the
+provider's models.dev entry, then LiteLLM. The models.dev entry is the one named
+by `modelCatalog.modelsDev`, or by `modelsDev.provider`, and otherwise the
+OpenClaw provider id. OpenRouter's feed describes OpenRouter's billing, including
+its promotions, so it prices only OpenRouter routes.
+
+Gateways with `passthroughProviderModel` use their own price list first when their
+manifest names one, for example a `kilo` or `vercel` models.dev entry. Without a
+named list, a gateway bills the vendor's rate: the vendor's own catalog row, then
+the vendor's standalone price.
+
+Each selected price is a complete schedule: base rates and context tiers are
+never combined across sources. OpenRouter's native prompt-length overrides are
+supported; time-based overrides are not represented as static context tiers.
 
 For authoritative native source mappings, use:
 

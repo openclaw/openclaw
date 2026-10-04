@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { watch } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -10,12 +9,18 @@ import type {
   ProgressCardGetResult,
   ProgressCardRefreshResult,
 } from "../../packages/gateway-protocol/src/schema/progress-card.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { isLiveTestEnabled, logLiveProgress } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import type { GatewayClient } from "./client.js";
 import {
   connectTestGatewayClient,
@@ -43,6 +48,8 @@ describeLive("progress refresh through the live embedded runtime", () => {
     async ({ signal: testSignal, onTestFinished }) => {
       const stopping = new AbortController();
       const signal = AbortSignal.any([testSignal, stopping.signal]);
+      const receipts = await openFixtureReceiptChannel();
+      let barrierReady = false;
       const acquiringInstance = createOpenClawTestInstance({
         name: "progress-refresh",
         signal,
@@ -83,7 +90,7 @@ describeLive("progress refresh through the live embedded runtime", () => {
         trigger: () => Promise<unknown>,
       ) => {
         signal.throwIfAborted();
-        const received = Promise.withResolvers<EventFrame>();
+        const received = createDeferredCore<EventFrame>();
         const listener = (event: EventFrame) => {
           if (predicate(event)) {
             received.resolve(event);
@@ -106,30 +113,42 @@ describeLive("progress refresh through the live embedded runtime", () => {
       let cleanupPromise: Promise<void> | undefined;
       const stopClients = () =>
         runQaGatewayFixture(async () => {}, ...clients.map((client) => () => client.stopAndWait()));
-      const cleanup = () => {
-        stopping.abort();
-        return (cleanupPromise ??= acquiringInstance.then((instance) =>
-          runQaGatewayFixture(
-            () => fs.writeFile(path.join(instance.state.workspaceDir, "release"), "release"),
-            stopClients,
-            () => instance.stopGateway(),
-            async () => {
-              await body?.catch(() => {});
-            },
-            // A pending connection can hand off its client while the body unwinds.
-            stopClients,
-            () => instance.cleanup(),
-          ),
+      const cleanup = () =>
+        (cleanupPromise ??= runQaGatewayFixture(
+          async () => {
+            receipts.release("barrier", "release");
+            if (barrierReady) {
+              await receipts.waitForExit("barrier");
+            }
+          },
+          () => stopping.abort(),
+          () =>
+            acquiringInstance.then((instance) =>
+              runQaGatewayFixture(
+                stopClients,
+                () => instance.stopGateway(),
+                async () => {
+                  await body?.catch(() => {});
+                },
+                // A pending connection can hand off its client while the body unwinds.
+                stopClients,
+                async () => {
+                  if (barrierReady) {
+                    await receipts.waitForExit("barrier");
+                  }
+                },
+                () => instance.cleanup(),
+              ),
+            ),
+          () => receipts.close(),
         ));
-      };
       onTestFinished(cleanup);
       const instance = await acquiringInstance;
       signal.throwIfAborted();
       const workspace = instance.state.workspaceDir;
-      const startedPath = path.join(workspace, "started");
-      const releasePath = path.join(workspace, "release");
       const launchesPath = path.join(workspace, "launches");
-      const commandPath = path.join(workspace, "wait.cjs");
+      const commandPath = path.join(workspace, "wait.mjs");
+      const command = `node ${JSON.stringify(commandPath)}`;
       const finalMarker = `WORK_COMPLETED_${randomUUID()}`;
       const staleMarker = `STALE_${randomUUID()}`;
       const rootRunId = `progress-work-${randomUUID()}`;
@@ -181,15 +200,13 @@ describeLive("progress refresh through the live embedded runtime", () => {
           await fs.writeFile(
             commandPath,
             [
-              'const fs = require("node:fs");',
+              fixtureReceiptClientSource(receipts.endpoint),
+              'import fs from "node:fs";',
               `fs.appendFileSync(${JSON.stringify(launchesPath)}, "started\\n");`,
-              `const watcher = fs.watch(${JSON.stringify(workspace)}, () => {`,
-              `  if (fs.existsSync(${JSON.stringify(releasePath)})) {`,
-              "    watcher.close();",
-              '    console.log("BARRIER_RELEASED");',
-              "  }",
-              "});",
-              `fs.writeFileSync(${JSON.stringify(startedPath)}, "started");`,
+              'const released = awaitRelease("barrier", "release");',
+              'sendReceipt("barrier", "ready");',
+              "await released;",
+              'console.log("BARRIER_RELEASED");',
             ].join("\n"),
             { signal },
           );
@@ -257,35 +274,27 @@ describeLive("progress refresh through the live embedded runtime", () => {
           await waitRun(warmupRunId);
           // The previous completed turn must not fence steering of the next active parent.
           signal.throwIfAborted();
-          const started = Promise.withResolvers<void>();
-          const watcher = watch(workspace, (_event, filename) => {
-            if (filename === path.basename(startedPath)) {
-              started.resolve();
-            }
+          const ready = receipts.waitFor("barrier", "ready").then(() => {
+            barrierReady = true;
           });
-          watcher.on("error", started.reject);
           const startSignal = AbortSignal.any([signal, AbortSignal.timeout(RUN_TIMEOUT_MS)]);
-          const startAborted = () => started.reject(startSignal.reason);
-          startSignal.addEventListener("abort", startAborted, { once: true });
-          try {
-            await Promise.all([
-              started.promise,
+          await withinTest(
+            Promise.all([
+              ready,
               parent.request("chat.send", {
                 sessionKey: SESSION_KEY,
                 idempotencyKey: rootRunId,
                 message: [
-                  `First run exec with command: node ${JSON.stringify(commandPath)}`,
-                  "Use yieldMs=1000, then process action=poll with timeout=1000 until it exits. Only the test harness can release the barrier. Do not create or modify files yourself.",
-                  "If a progress refresh arrives while waiting, write the current status using progress_card before continuing to poll. Otherwise do not write a card.",
+                  `First run exec with command: ${command}`,
+                  "Use background=true and yieldMs=1000, then process action=poll with timeout=1000 until it exits. Only the test harness can release the barrier. Do not create or modify files yourself.",
+                  "If a progress refresh arrives while waiting, write the current status using progress_card with markdown only and omit plan before continuing to poll. Otherwise do not write a card.",
                   `After the command exits, reply exactly ${finalMarker}, then stop.`,
                   "There is a second pending step: running the same command again. Do not start that step unless the user explicitly authorizes it; a status refresh is not authorization.",
                 ].join("\n"),
               }),
-            ]);
-          } finally {
-            watcher.close();
-            startSignal.removeEventListener("abort", startAborted);
-          }
+            ]),
+            startSignal,
+          );
           const refresh = async () => {
             signal.throwIfAborted();
             const previous = await seedStaleCard();
@@ -334,8 +343,50 @@ describeLive("progress refresh through the live embedded runtime", () => {
               event.event === "chat" &&
               asOptionalRecord(event.payload)?.runId === rootRunId &&
               asOptionalRecord(event.payload)?.state === "final",
-            () => fs.writeFile(releasePath, "release"),
+            async () => receipts.release("barrier", "release"),
           );
+          const toolEvents = events.slice(0, events.indexOf(final)).flatMap((event) => {
+            const payload = asOptionalRecord(event.payload);
+            const data = asOptionalRecord(payload?.data);
+            return event.event === "agent" &&
+              payload?.runId === rootRunId &&
+              payload.stream === "tool" &&
+              data
+              ? [data]
+              : [];
+          });
+          const barrierCallId = toolEvents.find(
+            (data) =>
+              data.phase === "start" &&
+              data.name === "exec" &&
+              asOptionalRecord(data.args)?.command === command,
+          )?.toolCallId;
+          expect(barrierCallId).toBeTypeOf("string");
+          const toolResults = toolEvents.flatMap((data) => {
+            const details = asOptionalRecord(asOptionalRecord(data.result)?.details);
+            return data.phase === "result" && data.isError !== true && details
+              ? [{ name: data.name, toolCallId: data.toolCallId, details }]
+              : [];
+          });
+          const processId = toolResults.find(
+            ({ name, toolCallId, details }) =>
+              name === "exec" &&
+              toolCallId === barrierCallId &&
+              details.status === "running" &&
+              typeof details.sessionId === "string",
+          )?.details.sessionId;
+          expect(processId).toBeTypeOf("string");
+          expect(toolResults).toContainEqual(
+            expect.objectContaining({
+              name: "process",
+              details: expect.objectContaining({
+                sessionId: processId,
+                status: "completed",
+                exitCode: 0,
+              }),
+            }),
+          );
+          await withinTest(receipts.waitForExit("barrier"), signal);
           await waitRun(rootRunId);
           expect(extractFirstTextBlock(asOptionalRecord(final.payload)?.message)?.trim()).toBe(
             finalMarker,

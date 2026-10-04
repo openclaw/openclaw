@@ -12,9 +12,8 @@ import {
   upsertWebPushSubscription,
   type WebPushMutationGuard,
 } from "./push-web-store.js";
-import { executeWebPushCommand } from "./push-web-store.worker.js";
+import { webPushOperations } from "./push-web-store.worker.js";
 import { runWithSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
-import { captureStateDatabaseCoordinatorRuntime } from "./state-database-coordinator.js";
 
 const admission = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock("./sqlite-worker-operation-admission.js", async (importOriginal) => ({
@@ -57,21 +56,20 @@ it("resolves repeated Web Push profile references once per mutation and rereads 
     runWithSqliteWorkerStateContext(
       {
         environment: { OPENCLAW_STATE_DIR: stateDir },
-        coordinatorRuntime: captureStateDatabaseCoordinatorRuntime(),
       },
       () =>
-        executeWebPushCommand(
+        webPushOperations["webPush.deleteBoundWebPushSubscription"](
           {
-            type: "webPush.deleteBoundWebPushSubscription",
-            input: {
-              endpointHash: "missing-endpoint",
-              endpoint: "https://push.example.test/subscription",
-              expectedDeviceId: "browser",
-              expectedUserProfileId: bound,
-              requestProfiles: { original, current },
-            },
+            endpointHash: "missing-endpoint",
+            endpoint: "https://push.example.test/subscription",
+            expectedDeviceId: "browser",
+            expectedUserProfileId: bound,
+            requestProfiles: { original, current },
           },
-          database,
+          {
+            open: () => database,
+            stateOptions: () => ({ path: database.path, env: { OPENCLAW_STATE_DIR: stateDir } }),
+          },
         ),
     );
   try {
@@ -90,95 +88,31 @@ it("resolves repeated Web Push profile references once per mutation and rereads 
     });
     expect(observe.counts.profiles).toBeLessThanOrEqual(2);
 
-    database.db
-      .prepare(
-        "INSERT INTO user_profiles(id, merged_into, created_at, updated_at) VALUES (?, ?, 1, 1)",
-      )
-      .run("person", null);
-    database.db
-      .prepare(
-        "INSERT INTO user_profiles(id, merged_into, created_at, updated_at) VALUES (?, ?, 1, 1)",
-      )
-      .run("other", null);
-    database.db
-      .prepare(
-        "INSERT INTO user_profiles(id, merged_into, created_at, updated_at) VALUES (?, ?, 1, 1)",
-      )
-      .run("alias", "person");
+    const insertProfile = database.db.prepare(
+      "INSERT INTO user_profiles(id, merged_into, created_at, updated_at) VALUES (?, ?, 1, 1)",
+    );
+    insertProfile.run("person", null);
+    insertProfile.run("other", null);
+    insertProfile.run("alias", "person");
     const cases = [
-      {
-        original: "alias",
-        current: "alias",
-        bound: "alias",
-        reads: 2,
-        profileId: "person",
-        bindingCurrent: true,
-      },
-      {
-        original: "alias",
-        current: "person",
-        bound: "person",
-        reads: 3,
-        profileId: "person",
-        bindingCurrent: true,
-      },
-      {
-        original: "person",
-        current: "alias",
-        bound: "person",
-        reads: 3,
-        profileId: "person",
-        bindingCurrent: true,
-      },
-      {
-        original: "person",
-        current: "person",
-        bound: "other",
-        reads: 2,
-        profileId: "person",
-        bindingCurrent: false,
-      },
-      {
-        original: "person",
-        current: "other",
-        bound: "person",
-        reads: 2,
-        profileId: "other",
-        bindingCurrent: false,
-      },
-      {
-        original: "person",
-        current: "other",
-        bound: "alias",
-        reads: 4,
-        profileId: "other",
-        bindingCurrent: false,
-      },
-      {
-        original: null,
-        current: null,
-        bound: null,
-        reads: 0,
-        profileId: null,
-        bindingCurrent: true,
-      },
-      {
-        original: null,
-        current: "person",
-        bound: "person",
-        reads: 1,
-        profileId: "person",
-        bindingCurrent: false,
-      },
-    ];
-    for (const entry of cases) {
+      // original, current, bound, reads, profileId, bindingCurrent
+      ["alias", "alias", "alias", 2, "person", true],
+      ["alias", "person", "person", 3, "person", true],
+      ["person", "alias", "person", 3, "person", true],
+      ["person", "person", "other", 2, "person", false],
+      ["person", "other", "person", 2, "other", false],
+      ["person", "other", "alias", 4, "other", false],
+      [null, null, null, 0, null, true],
+      [null, "person", "person", 1, "person", false],
+    ] as const;
+    for (const [original, current, bound, reads, profileId, bindingCurrent] of cases) {
       const readsBefore = observe.counts.profiles;
-      expect(execute(entry.original, entry.current, entry.bound)).toBe(false);
+      expect(execute(original, current, bound)).toBe(false);
       expect(admission.request).toHaveBeenLastCalledWith({
         stage: "transaction",
-        facts: { profileId: entry.profileId, bindingCurrent: entry.bindingCurrent },
+        facts: { profileId, bindingCurrent },
       });
-      expect(observe.counts.profiles - readsBefore).toBeLessThanOrEqual(entry.reads);
+      expect(observe.counts.profiles - readsBefore).toBeLessThanOrEqual(reads);
     }
     admission.request.mockClear();
     database.db

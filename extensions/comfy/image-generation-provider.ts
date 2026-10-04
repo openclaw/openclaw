@@ -1,8 +1,4 @@
-// Comfy provider module implements model/runtime integration.
-import type {
-  GeneratedImageAsset,
-  ImageGenerationProvider,
-} from "openclaw/plugin-sdk/image-generation";
+import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import {
   DEFAULT_COMFY_MODEL,
   isComfyCapabilityConfigured,
@@ -43,34 +39,15 @@ export function buildComfyImageGenerationProvider(): ImageGenerationProvider {
       }
 
       const result = await runComfyWorkflow({
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        authStore: req.authStore,
-        prompt: req.prompt,
-        model: req.model,
-        timeoutMs: req.timeoutMs,
+        ...req,
         capability: "image",
-        outputKinds: ["images"],
         inputImage: req.inputImages?.[0],
       });
 
-      const images: GeneratedImageAsset[] = result.assets.map((asset) => ({
-        buffer: asset.buffer,
-        mimeType: asset.mimeType,
-        fileName: asset.fileName,
-        metadata: {
-          nodeId: asset.nodeId,
-          promptId: result.promptId,
-        },
-      }));
-
       return {
-        images,
+        images: result.assets,
         model: result.model,
-        metadata: {
-          promptId: result.promptId,
-          outputNodeIds: result.outputNodeIds,
-        },
+        metadata: result.metadata,
       };
     },
   };

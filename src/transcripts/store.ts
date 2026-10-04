@@ -1,8 +1,8 @@
-// Stores meeting-capture transcripts in the shared SQLite state database.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { TranscriptUtterance as ProjectedTranscriptUtterance } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import { sha256File, sha256Hex } from "../infra/crypto-digest.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { ensureAbsoluteDirectory } from "../infra/fs-safe.js";
 import { iterateOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-read-connection.js";
 import {
@@ -49,11 +49,10 @@ import {
   createTranscriptStoreOperation,
   type TranscriptStoreOperation,
 } from "./store-worker-client.js";
-import type {
-  TranscriptAppendScheduler,
-  TranscriptReadRequests,
-  TranscriptWriteOperations,
-} from "./store-worker-contract.js";
+import type { TranscriptReadRequests } from "./store-worker-contract.js";
+import type { TranscriptAppendScheduler } from "./store-worker.types.js";
+// Stores meeting-capture transcripts in the shared SQLite state database.
+import type { TranscriptWriteOperations } from "./store-write.worker-contract.js";
 import type { TranscriptsSummary } from "./summary.js";
 import { renderTranscriptsMarkdown } from "./summary.js";
 
@@ -177,19 +176,6 @@ export class TranscriptsStore {
     }
   }
 
-  private async markPendingExports(
-    session: TranscriptSessionDescriptor,
-    fileNames: string[],
-    operation: TranscriptStoreOperation,
-    lease: OpenClawStateLeaseContext,
-  ): Promise<void> {
-    await operation.writeExport(
-      "transcripts.markPendingExports",
-      { session: { sessionId: session.sessionId, startedAt: session.startedAt }, fileNames },
-      lease,
-    );
-  }
-
   private async assertExportDestinationOwned(
     session: TranscriptSessionDescriptor,
     sessionDir = this.sessionDir(session),
@@ -200,7 +186,7 @@ export class TranscriptsStore {
     try {
       entries = await fs.readdir(sessionDir, { withFileTypes: true });
     } catch (error) {
-      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      if (hasErrnoCode(error, "ENOENT")) {
         return;
       }
       throw error;
@@ -598,7 +584,14 @@ export class TranscriptsStore {
       ...(includeTranscript ? ["transcript.jsonl"] : []),
       ...(includeSummary ? ["summary.json", "summary.md"] : []),
     ];
-    await this.markPendingExports(session, pendingFiles, operation, lease);
+    await operation.writeExport(
+      "transcripts.markPendingExports",
+      {
+        session: { sessionId: session.sessionId, startedAt: session.startedAt },
+        fileNames: pendingFiles,
+      },
+      lease,
+    );
     assertOwner();
     const ensured = await ensureAbsoluteDirectory(sessionDir, {
       mode: 0o700,

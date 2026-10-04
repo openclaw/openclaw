@@ -82,11 +82,8 @@ const controlUiSurfaces = new Set<PluginControlUiDescriptor["surface"]>([
   "link-reader",
 ]);
 export function createControlUiRegistrar(state: PluginRegistryState) {
-  const { registry, createRegistration, pushDiagnostic, reportRegistrationError } = state;
-  const registerControlUiDescriptor = (
-    record: PluginRecord,
-    descriptor: PluginControlUiDescriptor,
-  ) => {
+  const { registry, createIdentityRegistration, pushDiagnostic, reportRegistrationError } = state;
+  return (record: PluginRecord, descriptor: PluginControlUiDescriptor) => {
     // SAFETY: Shipped flat JS descriptors may supply name; it is read as unknown and normalized below.
     const legacyDescriptor = descriptor as PluginControlUiDescriptor & { name?: unknown };
     const id = normalizeHostHookString(descriptor.id);
@@ -194,8 +191,24 @@ export function createControlUiRegistrar(state: PluginRegistryState) {
       typeof descriptor.order === "number" && Number.isFinite(descriptor.order)
         ? descriptor.order
         : undefined;
+    const capability =
+      surface === "tab"
+        ? "page"
+        : surface === "widget"
+          ? "widget"
+          : surface === "link-reader"
+            ? "link-reader"
+            : undefined;
+    // Missing declarations are advisory: metadata never grants or denies a UI registration.
+    if (capability && record.uiCapabilities && !record.uiCapabilities.includes(capability)) {
+      state.reportRegistrationWarning(
+        record,
+        `Registered UI capability "${capability}" is missing from uiCapabilities in openclaw.plugin.json.`,
+      );
+    }
     registry.controlUiDescriptors.push(
-      createRegistration(record, {
+      // Descriptors are admitted metadata, so retained snapshots need no executable lease.
+      createIdentityRegistration(record, {
         descriptor: {
           ...descriptor,
           id,
@@ -215,6 +228,4 @@ export function createControlUiRegistrar(state: PluginRegistryState) {
       }),
     );
   };
-
-  return registerControlUiDescriptor;
 }

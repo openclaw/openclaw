@@ -36,8 +36,6 @@ import { BrowserPanelViewportController } from "./browser-panel-viewport-control
 import { browserRouteKey, type BrowserRoute } from "./browser-target.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
-const ACTION_REFRESH_DELAY_MS = 350;
-
 type BrowserPanelMode = "interact" | "annotate" | "inspect";
 
 export type { BrowserPanelControllerHost } from "./browser-panel-operation-ownership.ts";
@@ -69,7 +67,7 @@ export class BrowserPanelController implements ReactiveController {
   private activeClient: GatewayBrowserClient | null = null;
   urlDraftEditing = false;
   private readonly viewport = new BrowserPanelViewportController(this);
-  private readonly snapshot = new BrowserPanelSnapshotController(this, this.viewport);
+  private readonly snapshot = new BrowserPanelSnapshotController(this);
 
   constructor(readonly host: BrowserPanelControllerHost) {
     this.operations = new BrowserPanelOperationOwnership(host);
@@ -111,6 +109,9 @@ export class BrowserPanelController implements ReactiveController {
       this.stream.close();
     }
     Object.assign(this, { [key]: value });
+    if (key === "view" && this.view) {
+      this.viewport.captured();
+    }
     this.host.requestUpdate();
     if (key === "activeTargetId" || key === "mode") {
       this.native.presentation.update();
@@ -233,9 +234,7 @@ export class BrowserPanelController implements ReactiveController {
         this.exitCaptureModes();
       }
       this.setState("activeTargetId", active?.id ?? null);
-      if (!this.urlDraftEditing) {
-        this.setState("urlDraft", active?.url ?? "");
-      }
+      this.syncUrlDraft(active?.url ?? "");
       if (active) {
         await this.refreshView(active.id, invocation.epoch);
       } else {
@@ -270,11 +269,7 @@ export class BrowserPanelController implements ReactiveController {
       this.setState("errorText", null);
       await action(client);
       if (current() && refreshView) {
-        this.pendingInput.scheduleRefresh(ACTION_REFRESH_DELAY_MS, () => {
-          if (current() && this.activeTargetId) {
-            void this.refreshView(this.activeTargetId, epoch);
-          }
-        });
+        this.snapshot.scheduleRefresh(epoch, current);
       }
       return current();
     } catch (error) {
@@ -296,12 +291,9 @@ export class BrowserPanelController implements ReactiveController {
     return this.viewport.observedViewportSize;
   }
 
-  scheduleViewportSync(): void {
-    this.viewport.schedule();
-  }
-
   handleViewportResize(width: number, height: number): void {
     this.viewport.resize(width, height);
+    this.stream.resize();
   }
 
   async startBrowserNow(): Promise<void> {
@@ -368,9 +360,7 @@ export class BrowserPanelController implements ReactiveController {
         invocation.epoch = this.operations.epoch;
         this.exitCaptureModes();
         const targetId = this.activeTargetId;
-        previousNavigationQueued =
-          this.operations.hasQueuedNavigation(client, targetId) ||
-          this.operations.hasUnreconciledNavigation(client, targetId);
+        previousNavigationQueued = this.operations.hasPendingNavigation(client, targetId);
         await this.operations.queueNavigation(client, targetId, async () => {
           if (invocation.isCurrent()) {
             await navigateBrowser(client, { url, targetId });
@@ -387,7 +377,7 @@ export class BrowserPanelController implements ReactiveController {
         const targetId = this.activeTargetId;
         await this.refreshView(targetId, invocation.epoch);
         if (!options.newTab && invocation.isCurrent() && this.view?.targetId === targetId) {
-          this.operations.markNavigationReconciled(client, targetId);
+          this.operations.forgetNavigation(client, targetId);
         }
       }
     } catch (error) {
@@ -402,7 +392,7 @@ export class BrowserPanelController implements ReactiveController {
             this.setState("view", null);
             await this.refreshView(targetId, invocation.epoch);
             if (invocation.isCurrent() && this.view?.targetId === targetId) {
-              this.operations.markNavigationReconciled(client, targetId);
+              this.operations.forgetNavigation(client, targetId);
             }
           }
           if (
@@ -411,9 +401,7 @@ export class BrowserPanelController implements ReactiveController {
           ) {
             this.setState("activeTargetId", null);
             this.setState("view", null);
-            if (!this.urlDraftEditing) {
-              this.setState("urlDraft", "");
-            }
+            this.syncUrlDraft("");
           }
         }
         this.reportError(error);
@@ -503,7 +491,7 @@ export class BrowserPanelController implements ReactiveController {
         this.activeTargetId === selectedTargetId &&
         this.view?.targetId === selectedTargetId
       ) {
-        this.operations.markNavigationReconciled(actionClient, selectedTargetId);
+        this.operations.forgetNavigation(actionClient, selectedTargetId);
       }
     }, false);
     if (!selectionSucceeded && this.operations.isLive(epoch) && this.activeTargetId === targetId) {
@@ -511,9 +499,7 @@ export class BrowserPanelController implements ReactiveController {
         // The prior remote document changed while selection failed. Expose an
         // unavailable state instead of restoring a screenshot that no longer owns it.
         this.setState("activeTargetId", null);
-        if (!this.urlDraftEditing) {
-          this.setState("urlDraft", "");
-        }
+        this.syncUrlDraft("");
         return;
       }
       this.setState("activeTargetId", previous.targetId);
@@ -645,10 +631,6 @@ export class BrowserPanelController implements ReactiveController {
         this.host.renderRoot.querySelector<HTMLInputElement>(".bp-url")?.focus();
       }
     });
-  }
-
-  setUrlDraftEditing(editing: boolean): void {
-    this.urlDraftEditing = editing;
   }
 
   resetUrlDraftFromView(): void {

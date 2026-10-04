@@ -1,10 +1,16 @@
-// Shared type contracts for pairing challenge and channel binding records.
 import type { ChannelId } from "../channels/plugins/channel-id.types.js";
 import type { ChannelPairingAdapter } from "../channels/plugins/pairing.types.js";
 
 // Pairing store contracts shared by channel ingress and approval flows. Pairing
 // channels use channel ids but keep a narrower alias for readability.
 export type PairingChannel = ChannelId;
+
+export type PairingReadOperations = {
+  "pairing.allowFrom": {
+    input: { channel: string; accountId: string };
+    output: { type: "pairing.allowFrom"; entries: string[] };
+  };
+};
 
 export type PairingRequestRecord = {
   id: string;

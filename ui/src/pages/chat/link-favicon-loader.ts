@@ -1,15 +1,34 @@
+import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
+import { hasSameOriginGatewayTransport } from "../../dev-gateway.ts";
 import { fetchLinkFaviconBlobUrl } from "../plugins/icon-loader.ts";
+import { readLinkFavicon, type LinkFaviconFetcher } from "./link-favicon-cache.ts";
 
-const LINK_FAVICON_BROWSER_TIMEOUT_MS = 15_000;
-
-export type LinkFaviconFetcher = (hostname: string, signal: AbortSignal) => Promise<string | null>;
+let currentFetcher:
+  | {
+      authCandidates: string[];
+      resourceBasePath: string;
+      gatewayUrl: string;
+      fetcher: LinkFaviconFetcher;
+    }
+  | undefined;
 
 function createLinkFaviconFetcher(params: {
-  auth: Parameters<typeof fetchLinkFaviconBlobUrl>[0]["auth"];
+  authCandidates: string[];
   resourceBasePath: string;
   gatewayUrl: string;
 }): LinkFaviconFetcher {
-  return (hostname, signal) => fetchLinkFaviconBlobUrl({ ...params, hostname, signal });
+  if (
+    currentFetcher?.resourceBasePath === params.resourceBasePath &&
+    currentFetcher.gatewayUrl === params.gatewayUrl &&
+    currentFetcher.authCandidates.length === params.authCandidates.length &&
+    currentFetcher.authCandidates.every((value, index) => value === params.authCandidates[index])
+  ) {
+    return currentFetcher.fetcher;
+  }
+  const fetcher: LinkFaviconFetcher = (hostname, signal) =>
+    fetchLinkFaviconBlobUrl({ ...params, auth: {}, hostname, signal });
+  currentFetcher = { ...params, fetcher };
+  return fetcher;
 }
 
 export function resolveChatLinkFaviconFetcher(
@@ -20,11 +39,12 @@ export function resolveChatLinkFaviconFetcher(
     client: { gatewayUrl: string } | null;
   },
 ): LinkFaviconFetcher | undefined {
-  return state.automaticallyFetchFavicons
+  const gatewayUrl = state.client?.gatewayUrl ?? state.settings.gatewayUrl;
+  return state.automaticallyFetchFavicons && hasSameOriginGatewayTransport(gatewayUrl)
     ? createLinkFaviconFetcher({
-        auth: { hello: state.hello, settings: state.settings, password: state.password },
+        authCandidates: resolveControlUiAuthCandidates(state),
         resourceBasePath: state.resourceBasePath,
-        gatewayUrl: state.client?.gatewayUrl ?? state.settings.gatewayUrl,
+        gatewayUrl,
       })
     : undefined;
 }
@@ -45,43 +65,37 @@ export function hydrateLinkFavicons(root: ParentNode, fetchFavicon?: LinkFavicon
       continue;
     }
     image.dataset.linkFaviconState = "loading";
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), LINK_FAVICON_BROWSER_TIMEOUT_MS);
-    void fetchFavicon(hostname, controller.signal)
-      .then((blobUrl) => {
-        if (!blobUrl) {
-          image.dataset.linkFaviconState = "failed";
-          return;
-        }
-        if (!image.isConnected) {
-          URL.revokeObjectURL(blobUrl);
-          return;
-        }
-        const release = () => URL.revokeObjectURL(blobUrl);
-        image.addEventListener(
-          "load",
-          () => {
-            if (image.naturalWidth > 0) {
-              image.classList.add("is-loaded");
-              image.dataset.linkFaviconState = "loaded";
-            }
-            release();
-          },
-          { once: true },
-        );
-        image.addEventListener(
-          "error",
-          () => {
-            image.dataset.linkFaviconState = "failed";
-            release();
-          },
-          { once: true },
-        );
-        image.src = blobUrl;
-      })
-      .catch(() => {
+    const apply = () => {
+      const blobUrl = readLinkFavicon(hostname, fetchFavicon, apply);
+      if (blobUrl === undefined) {
+        return;
+      }
+      if (!blobUrl) {
         image.dataset.linkFaviconState = "failed";
-      })
-      .finally(() => window.clearTimeout(timeout));
+        return;
+      }
+      if (!image.isConnected) {
+        return;
+      }
+      image.addEventListener(
+        "load",
+        () => {
+          if (image.naturalWidth > 0) {
+            image.classList.add("is-loaded");
+            image.dataset.linkFaviconState = "loaded";
+          }
+        },
+        { once: true },
+      );
+      image.addEventListener(
+        "error",
+        () => {
+          image.dataset.linkFaviconState = "failed";
+        },
+        { once: true },
+      );
+      image.src = blobUrl;
+    };
+    apply();
   }
 }

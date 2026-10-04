@@ -1,15 +1,8 @@
 import { basename, isAbsolute, resolve } from "node:path";
 import JSON5 from "json5";
-import {
-  readExecApprovalsSnapshot,
-  resolveExecApprovalsDisplayPath,
-} from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { readExecApprovalsSnapshot } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import type { HealthCheckContext, HealthFinding } from "openclaw/plugin-sdk/health";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import {
-  isRecord,
-  normalizeLowercaseStringOrEmpty,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { EXEC_APPROVALS_POLICY_DOCUMENT_NAME } from "../exec-approvals-uri.js";
 import type { PolicyAuthProfileEvidence } from "../policy-state.js";
 import { CHECK_IDS } from "./check-ids.js";
@@ -20,29 +13,12 @@ import {
 import { isChannelDenyRule } from "./shape-helpers.js";
 import { readPolicyStringArray } from "./utils.js";
 
-export const normalizePolicyChannelId: (value: string) => string = normalizeLowercaseStringOrEmpty;
-
-const loadFsPromisesModule = createLazyRuntimeModule(() => import("node:fs/promises"));
-
 export async function readPolicyFile(
   ctx: HealthCheckContext,
 ): Promise<{ raw: string; path: string; displayName: string; ocDocName: string } | null> {
   const displayName = policyDisplayName(ctx);
-  const path = resolveWorkspacePath(ctx, policyPathSetting(ctx));
-  try {
-    const fs = await loadFsPromisesModule();
-    return {
-      raw: await fs.readFile(path, "utf-8"),
-      path,
-      displayName,
-      ocDocName: basename(displayName),
-    };
-  } catch (err) {
-    if (isNotFoundPathError(err)) {
-      return null;
-    }
-    throw err;
-  }
+  const file = await readWorkspaceFile(ctx, policyPathSetting(ctx));
+  return file === null ? null : { ...file, displayName, ocDocName: basename(displayName) };
 }
 
 export async function readExecApprovalsFile(
@@ -66,7 +42,7 @@ export async function readWorkspaceFile(
 ): Promise<{ raw: string; path: string } | null> {
   const path = resolveWorkspacePath(ctx, fileName);
   try {
-    const fs = await loadFsPromisesModule();
+    const fs = await import("node:fs/promises");
     return { raw: await fs.readFile(path, "utf-8"), path };
   } catch (err) {
     if (isNotFoundPathError(err)) {
@@ -158,38 +134,18 @@ export function readChannelDenyRules(
   ) {
     return [];
   }
-  return policy.channels.denyRules
-    .map((rule, index) => ({ rule, index }))
-    .filter(
-      (
-        entry,
-      ): entry is {
-        readonly index: number;
-        readonly rule: {
-          readonly id?: string;
-          readonly when?: { readonly provider?: string };
-          readonly reason?: string;
-        };
-      } => isChannelDenyRule(entry.rule),
-    )
-    .map(({ rule, index }) => {
-      const next: {
-        id?: string;
-        when?: { readonly provider?: string };
-        reason?: string;
-        requirement: string;
-      } = {
-        when: rule.when,
-        requirement: `oc://${policyDocName}/channels/denyRules/#${index}`,
-      };
-      if (rule.id !== undefined) {
-        next.id = rule.id;
-      }
-      if (rule.reason !== undefined) {
-        next.reason = rule.reason;
-      }
-      return next;
-    });
+  return policy.channels.denyRules.flatMap((rule, index) =>
+    isChannelDenyRule(rule)
+      ? [
+          {
+            when: rule.when,
+            requirement: `oc://${policyDocName}/channels/denyRules/#${index}`,
+            ...(rule.id === undefined ? {} : { id: rule.id }),
+            ...(rule.reason === undefined ? {} : { reason: rule.reason }),
+          },
+        ]
+      : [],
+  );
 }
 
 export function channelIdsFromFindings(findings: readonly HealthFinding[]): readonly string[] {
@@ -277,10 +233,6 @@ export function authProfileHasMetadata(
   return SUPPORTED_AUTH_PROFILE_MODES.includes(
     profile.mode as (typeof SUPPORTED_AUTH_PROFILE_MODES)[number],
   );
-}
-
-export function execApprovalsDisplayName(): string {
-  return resolveExecApprovalsDisplayPath();
 }
 
 function policyPathSetting(ctx: HealthCheckContext): string {

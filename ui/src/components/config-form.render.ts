@@ -1,4 +1,3 @@
-// Control UI view renders config form.render screen content.
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { ConfigUiHints } from "../api/types.ts";
@@ -48,6 +47,8 @@ type ConfigFormProps = {
    *  section must stay silent there instead of claiming the page is empty. */
   embedded?: boolean;
   revealSensitive?: boolean;
+  /** Render sensitive strings as editable password inputs instead of redacted read-only text. */
+  maskSensitive?: boolean;
   isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
   onToggleSensitivePath?: (path: Array<string | number>) => void;
   onPatch: (path: Array<string | number>, value: unknown) => void;
@@ -86,7 +87,7 @@ export function renderConfigTierGroups(params: {
           : nothing
       }
       ${
-        split.advanced && split.advancedLeafCount > 0
+        split.advanced
           ? html`<details
               class="config-advanced-disclosure"
               ?open=${params.revealAdvanced}
@@ -122,25 +123,6 @@ export function renderConfigTierGroups(params: {
   `;
 }
 
-function matchesSearch(params: {
-  key: string;
-  schema: JsonSchema;
-  sectionValue: unknown;
-  uiHints: ConfigUiHints;
-  query: string;
-}): boolean {
-  const meta = SECTION_META[params.key];
-  return matchesConfigSectionSearch({
-    key: params.key,
-    schema: params.schema,
-    value: params.sectionValue,
-    hints: params.uiHints,
-    query: params.query,
-    label: meta?.label,
-    description: meta?.description,
-  });
-}
-
 export function renderConfigForm(props: ConfigFormProps) {
   if (!props.schema) {
     return html` <div class="muted">${t("configForm.schemaUnavailable")}</div> `;
@@ -172,12 +154,14 @@ export function renderConfigForm(props: ConfigFormProps) {
     }
     if (
       searchQuery &&
-      !matchesSearch({
+      !matchesConfigSectionSearch({
         key,
         schema: node,
-        sectionValue: value[key],
-        uiHints: props.uiHints,
+        value: value[key],
+        hints: props.uiHints,
         query: searchQuery,
+        label: SECTION_META[key]?.label,
+        description: SECTION_META[key]?.description,
       })
     ) {
       return false;
@@ -244,6 +228,7 @@ export function renderConfigForm(props: ConfigFormProps) {
         showHeaderMeta: true,
         searchCriteria,
         revealSensitive: props.revealSensitive ?? false,
+        maskSensitive: props.maskSensitive,
         isSensitivePathRevealed: props.isSensitivePathRevealed,
         onToggleSensitivePath: props.onToggleSensitivePath,
         onPatch: props.onPatch,
@@ -334,9 +319,10 @@ export function renderConfigForm(props: ConfigFormProps) {
           });
         })()
       : filteredEntries.map(([key, node]) => {
+          const hint = localizedHintForPath([key], props.uiHints);
           const meta = SECTION_META[key] ?? {
-            label: key.charAt(0).toUpperCase() + key.slice(1),
-            description: node.description ?? "",
+            label: hint?.label ?? key.charAt(0).toUpperCase() + key.slice(1),
+            description: hint?.help ?? node.description ?? "",
           };
 
           return renderSection({

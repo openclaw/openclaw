@@ -6,16 +6,25 @@ import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
-import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
+import {
+  senderIdentityKey,
+  sessionParticipantIdentityKey,
+  type SenderIdentity,
+} from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
-import { resolveAssistantReplyPhase } from "./chat-assistant-reply.ts";
+import {
+  assistantMessageIsInterrupted,
+  resolveAssistantReplyPhase,
+} from "./chat-assistant-reply.ts";
 import { prepareMessagesForGrouping } from "./chat-thread-duplicates.ts";
 import { userTurnRunId } from "./chat-thread-items.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
   assistantGroupIsForwardedBoundary,
+  chatItemStartsDisplayTurn,
   chatItemStartsUserTurn,
   hasForwardedSource,
+  isInterSessionMessage,
 } from "./chat-turn-boundary.ts";
 import { indexTurnContinuations, persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 
@@ -23,49 +32,195 @@ function assistantMessageKind(message: unknown, visibleContent: MessageGroup["vi
   return resolveAssistantReplyPhase(message) ?? (visibleContent === "none" ? "activity" : "reply");
 }
 
+/**
+ * Keys a sender without a typed identity by its id alone; names change, ids do
+ * not. The Gateway stores a profile user's id as `senderId` (typed identities
+ * persist only when their id equals it), so an untyped id that matches a
+ * counted profile is that person. Any other untyped id is its own person.
+ */
+function untypedSenderPersonKey(
+  sender: SenderIdentity,
+  people: ReadonlySet<string>,
+  localPerson: string | undefined,
+): string {
+  if (!sender.id) {
+    return JSON.stringify(["sender-label", sender.username ?? sender.name ?? ""]);
+  }
+  const profile = sessionParticipantIdentityKey({ type: "profile", id: sender.id });
+  return people.has(profile) || profile === localPerson
+    ? profile
+    : JSON.stringify(["sender", sender.id]);
+}
+
+type ReplyState = {
+  sender?: MessageGroup["sender"];
+  message?: MessageGroup["replyToMessage"];
+  turnSource?: MessageGroup["replyTurnSource"];
+};
+
+/**
+ * Reply context comes from the full transcript, not the rendered rows: search
+ * renders a subset that can drop the other speaker or the prompt a reply answers.
+ */
 function stampReplyAttribution(
   items: Array<ChatItem | MessageGroup>,
+  context: Array<ChatItem | MessageGroup>,
+  { people: sessionPeople, localPerson }: ReplyAttributionContext,
 ): Array<ChatItem | MessageGroup> {
-  const userSenderKeys = new Set<string>();
-  for (const item of items) {
-    if (item.kind !== "group" || item.role !== "user" || !item.sender) {
+  const people = new Set(sessionPeople);
+  const untypedSenders: SenderIdentity[] = [];
+  // reply_to_current names the prompt that started the run. Only the persisted
+  // user-turn run identity resolves it; an ambiguous owner stays unresolved.
+  const runPrompts = new Map<string, MessageGroup["messages"][number] | null>();
+  const stateBefore = new Map<string, ReplyState>();
+  let state: ReplyState = {};
+  for (const item of context) {
+    // System notices and projected/forwarded inputs own turns too. Clear the
+    // previous prompt before recording reply state for their output.
+    if (chatItemStartsUserTurn(item) && !(item.kind === "group" && item.role === "user")) {
+      state = {};
+    }
+    if (item.kind === "stream") {
+      stateBefore.set(item.key, state);
+    }
+    if (item.kind !== "group") {
       continue;
     }
-    const senderKey = senderIdentityKey(item.sender);
-    if (senderKey) {
-      userSenderKeys.add(senderKey);
+    for (const source of item.messages) {
+      stateBefore.set(source.key, state);
+    }
+    if (item.role === "user") {
+      for (const source of item.messages) {
+        const runId = userTurnRunId(source.message);
+        if (runId) {
+          runPrompts.set(runId, runPrompts.has(runId) ? null : source);
+        }
+      }
+      // A local message carries no sender metadata: its author is the signed-in
+      // viewer, one person for counting, never a name for this message.
+      if (item.sender?.identity) {
+        people.add(sessionParticipantIdentityKey(item.sender.identity));
+      } else if (item.sender) {
+        untypedSenders.push(item.sender);
+      } else if (!item.senderSession && localPerson) {
+        people.add(localPerson);
+      }
+      // A sender-less user group clears attribution: no chip is safer than
+      // mislabeling the reply as addressed to the previous participant.
+      const last = item.messages.at(-1);
+      state = { sender: item.sender, message: item.sender ? last : undefined, turnSource: last };
+    } else if (item.role === "assistant" && hasForwardedSource(item)) {
+      // Forwarded input starts a turn without a local human reply recipient.
+      state = {};
     }
   }
-  if (userSenderKeys.size < 2) {
-    return items;
+  // Untyped senders resolve after every typed person is known, so order never splits one.
+  for (const sender of untypedSenders) {
+    people.add(untypedSenderPersonKey(sender, people, localPerson));
   }
+  // Automatic attribution is only useful when several people share the thread.
+  const shared = people.size >= 2;
 
-  let latestUserSender: MessageGroup["sender"];
-  for (const item of items) {
+  // Rows outside the context (live output) take the state of the next row that
+  // has one, or the transcript end.
+  const states: ReplyState[] = [];
+  let next = state;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index]!;
+    const known =
+      item.kind === "group"
+        ? item.messages.map((source) => stateBefore.get(source.key)).find(Boolean)
+        : item.kind === "stream"
+          ? stateBefore.get(item.key)
+          : undefined;
+    states[index] = known ?? next;
+    if (known) {
+      next = known;
+    }
+  }
+  for (const [index, item] of items.entries()) {
+    const { sender, message, turnSource } = states[index]!;
     if (item.kind === "stream") {
-      item.replyToSender = latestUserSender;
+      if (shared) {
+        item.replyToSender = sender;
+        item.replyToMessage = message;
+      }
       continue;
     }
     if (item.kind !== "group") {
       continue;
     }
-    if (item.role === "user") {
-      // A sender-less user group clears attribution: no chip is safer than
-      // mislabeling the reply as addressed to the previous participant.
-      latestUserSender = item.sender;
-    } else if (item.role === "assistant" && hasForwardedSource(item)) {
-      // Forwarded input starts a turn without a local human reply recipient.
-      latestUserSender = undefined;
-    } else if (item.role === "assistant" && latestUserSender) {
-      item.replyToSender = latestUserSender;
+    // Every strip follows the thread: an unattributed source is "You" only in 1:1.
+    if (shared) {
+      item.replyShared = true;
+    }
+    if (item.role !== "assistant" || hasForwardedSource(item)) {
+      continue;
+    }
+    const currentSource =
+      item.runId && item.messages.some((source) => source.replyTarget?.kind === "current")
+        ? runPrompts.get(item.runId)
+        : undefined;
+    if (turnSource) {
+      item.replyTurnSource = turnSource;
+    }
+    if (currentSource) {
+      item.replyCurrentSource = currentSource;
+    }
+    if (shared && sender) {
+      item.replyToSender = sender;
+      item.replyToMessage = message;
     }
   }
   return items;
 }
-export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
+
+/** Transcript facts that outlive the rendered subset of rows. */
+export type ReplyAttributionContext = {
+  /** Every transcript row, including those a search hides from `items`. */
+  items?: ChatItem[];
+  /** People the session row lists, keyed by `sessionParticipantIdentityKey`. */
+  people?: readonly string[];
+  /** Key of the signed-in viewer, who authors local user messages without a sender. */
+  localPerson?: string;
+};
+
+export function groupMessages(
+  items: ChatItem[],
+  replyContext: ReplyAttributionContext = {},
+): Array<ChatItem | MessageGroup> {
+  const result = groupChatItems(
+    items,
+    replyContext.items && rowsAfterHiddenTurns(items, replyContext.items),
+  );
+  const context = replyContext.items ? groupChatItems(replyContext.items) : result;
+  return stampReplyAttribution(result, context, replyContext);
+}
+
+/** Search hides rows, not turns: a row after a hidden turn start never joins the group before it. */
+function rowsAfterHiddenTurns(items: ChatItem[], context: ChatItem[]): Set<string> {
+  const visible = new Set(items.map((item) => item.key));
+  const rows = new Set<string>();
+  let hiddenTurn = false;
+  for (const item of context) {
+    if (!visible.has(item.key)) {
+      hiddenTurn ||= chatItemStartsDisplayTurn(item);
+    } else if (hiddenTurn) {
+      rows.add(item.key);
+      hiddenTurn = false;
+    }
+  }
+  return rows;
+}
+
+function groupChatItems(
+  items: ChatItem[],
+  rowsAfterHiddenTurn?: ReadonlySet<string>,
+): Array<ChatItem | MessageGroup> {
   const result: Array<ChatItem | MessageGroup> = [];
   let currentGroup: MessageGroup | null = null;
   let currentUserTurnIdentity: string | null = null;
+  let currentReplyTargetKey: string | null = null;
 
   for (const prepared of prepareMessagesForGrouping(items)) {
     if (prepared.kind !== "message") {
@@ -80,12 +235,13 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
     const { item, normalized } = prepared;
     const role = normalizeRoleForGrouping(normalized.role);
     // Classify after content projection and keep the fact with its group; later
-    // presentation passes reuse it, while a rebuild sees in-place message changes.
+    // presentation passes reuse it; replacing a message refreshes its facts.
     const visibleContent = resolveMessageVisibleContent(item.message, normalized);
     const source = {
       message: item.message,
       key: item.key,
       duplicateCount: item.duplicateCount,
+      ...(normalized.replyTarget ? { replyTarget: normalized.replyTarget } : {}),
       hasVisibleContent:
         visibleContent === "non-text" ||
         Boolean(resolveMessageDisplayMarkdown(item.message, normalized).trim()),
@@ -101,8 +257,12 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
     // user runIds onto groups: reply-less activity pooling uses that field.
     const steerTarget = role === "user" ? persistedSteerTargetRunId(item.message) : null;
     const userTurnIdentity = role === "user" ? (steerTarget ?? userTurnRunId(item.message)) : null;
+    const replyTargetKey =
+      role === "assistant" ? JSON.stringify(normalized.replyTarget ?? null) : null;
     const shouldSplitBySender = role === "user" || role === "assistant";
     const startsProjectedTurn =
+      item.startsTurn === true ||
+      rowsAfterHiddenTurn?.has(item.key) === true ||
       asRecord(asRecord(item.message)?.["__openclaw"])?.turnBoundary === true;
     const splitsAssistantKind =
       role === "assistant" &&
@@ -113,9 +273,13 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
     if (
       !currentGroup ||
       startsProjectedTurn ||
+      (isInterSessionMessage(item.message) && !normalized.senderSession?.sessionKey) ||
       currentGroup.role !== role ||
       currentGroup.runId !== runId ||
+      isInterSessionMessage(currentGroup.messages[0]?.message) !==
+        isInterSessionMessage(item.message) ||
       currentUserTurnIdentity !== userTurnIdentity ||
+      (role === "assistant" && currentReplyTargetKey !== replyTargetKey) ||
       splitsAssistantKind ||
       messageClientSourcesKey(currentGroup.sourceClients ?? []) !==
         messageClientSourcesKey(normalized.sourceClients ?? []) ||
@@ -123,12 +287,14 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
         ((!sender?.identity && currentGroup.senderLabel !== senderLabel) ||
           currentGroup.senderSession?.sessionKey !== normalized.senderSession?.sessionKey ||
           currentGroup.senderSession?.label !== normalized.senderSession?.label ||
+          currentGroup.senderSession?.agentId !== normalized.senderSession?.agentId ||
           senderIdentityKey(currentGroup.sender) !== senderIdentityKey(sender)))
     ) {
       if (currentGroup) {
         result.push(currentGroup);
       }
       currentUserTurnIdentity = userTurnIdentity;
+      currentReplyTargetKey = replyTargetKey;
       currentGroup = {
         kind: "group",
         key: `group:${role}:${item.key}`,
@@ -154,7 +320,7 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
   if (currentGroup) {
     result.push(currentGroup);
   }
-  return stampReplyAttribution(result);
+  return result;
 }
 
 type RenderChatItem = ChatItem | MessageGroup;
@@ -164,6 +330,7 @@ export type StreamRunRenderItem = {
   runId?: string;
   boundaryId?: string;
   replyToSender?: MessageGroup["replyToSender"];
+  replyToMessage?: MessageGroup["replyToMessage"];
   parts: Array<Extract<ChatItem, { kind: "stream" | "reading-indicator" }>>;
 };
 export function coalesceStreamRuns(
@@ -180,6 +347,7 @@ export function coalesceStreamRuns(
         key: `stream-run:${first.key}`,
         parts: run,
         replyToSender: run.find((part) => part.kind === "stream")?.replyToSender,
+        replyToMessage: run.find((part) => part.kind === "stream")?.replyToMessage,
         ...(runId ? { runId } : {}),
         ...(boundaryId ? { boundaryId } : {}),
       });
@@ -207,6 +375,10 @@ export type WorkGroupRenderItem = {
   kind: "work-group";
   key: string;
   groups: MessageGroup[];
+  /** Terminal reply owning this rollup’s presentation, not its nested execution identities. */
+  replyRunId?: string;
+  /** Hidden group -> preceding preserved output; absent entries stay under the summary. */
+  previewAfterGroup?: ReadonlyMap<string, string>;
   durationMs: number | null;
 };
 
@@ -254,7 +426,7 @@ export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolea
 
 // Unphased providers keep the last-visible-reply policy. Explicit commentary
 // cannot move the completed-work boundary past an already delivered answer.
-function isFinalReplyGroup(item: TurnRenderItem): boolean {
+function isFinalReplyGroup(item: TurnRenderItem): item is MessageGroup {
   return (
     item.kind === "group" &&
     !item.isStreaming &&
@@ -321,21 +493,13 @@ export function collapseCompletedTurnWork(
     turns,
     turnUserMessages,
   );
-  const finalReplyIndexes = turns.map((turn, turnIndex) => {
-    if (continuationTurnIndexes.has(turnIndex)) {
-      return -1;
-    }
-    for (let index = turn.length - 1; index >= 0; index -= 1) {
-      const candidate = turn[index];
-      if (candidate && isFinalReplyGroup(candidate)) {
-        return index;
-      }
-    }
-    return -1;
-  });
-  const terminalReplies = finalReplyIndexes.map((index, turnIndex) =>
-    index >= 0 ? (turns[turnIndex]?.[index] as MessageGroup) : undefined,
+  const terminalReplies = turns.map((turn, turnIndex) =>
+    continuationTurnIndexes.has(turnIndex) ? undefined : turn.findLast(isFinalReplyGroup),
   );
+  const finalReplyIndexes = turns.map((turn, index) => {
+    const reply = terminalReplies[index];
+    return reply ? turn.lastIndexOf(reply) : -1;
+  });
   for (let turnIndex = turns.length - 2; turnIndex >= 0; turnIndex -= 1) {
     const continuationTurnIndex = continuationTurnIndexes.get(turnIndex);
     if (!terminalReplies[turnIndex] && continuationTurnIndex !== undefined) {
@@ -397,6 +561,8 @@ export function collapseCompletedTurnWork(
     }
     const groups: MessageGroup[] = [];
     const answers: TurnRenderItem[] = [];
+    const previewAfterGroup = new Map<string, string>();
+    let precedingAnswerKey: string | undefined;
     for (let index = segmentStart; index <= segmentEnd; index += 1) {
       const item = turn[index]!;
       // Only a later answer can put a failed result inside completed work.
@@ -411,12 +577,15 @@ export function collapseCompletedTurnWork(
           ))
       ) {
         groups.push(item);
+        if (precedingAnswerKey) {
+          previewAfterGroup.set(item.key, precedingAnswerKey);
+        }
       } else {
         answers.push(item);
+        precedingAnswerKey = item.key;
       }
     }
-    const firstGroup = groups[0];
-    if (!firstGroup) {
+    if (groups.length === 0) {
       result.push(...turn);
       continue;
     }
@@ -439,6 +608,22 @@ export function collapseCompletedTurnWork(
         ? runtimeMs
         : null;
     const continuationBoundary = turns[continuationTurnIndexes.get(turnIndex) ?? -1]?.[0];
+    // A completed rollup may span automatic resumptions. Its reply owns the
+    // display only when reaching it crosses neither another answer’s run nor a steer.
+    const replyRunId =
+      finalReplyIndex >= 0 &&
+      !hasForwardedSource(terminalReply) &&
+      !groups.some(hasForwardedSource) &&
+      answers
+        .slice(0, answers.indexOf(terminalReply))
+        .every(
+          (answer) =>
+            answer.kind === "group" &&
+            !hasForwardedSource(answer) &&
+            answer.runId === terminalReply.runId,
+        )
+        ? terminalReply.runId
+        : undefined;
     result.push(...turn.slice(0, segmentStart));
     result.push({
       kind: "work-group",
@@ -447,6 +632,8 @@ export function collapseCompletedTurnWork(
         finalReplyIndex >= 0 || !continuationBoundary ? terminalReply.key : continuationBoundary.key
       }`,
       groups,
+      ...(replyRunId ? { replyRunId } : {}),
+      ...(previewAfterGroup.size > 0 ? { previewAfterGroup } : {}),
       durationMs,
     });
     result.push(...answers, ...turn.slice(segmentEnd + 1));
@@ -456,9 +643,8 @@ export function collapseCompletedTurnWork(
 
 export type CompletedTurnRenderItem = TurnRenderItem | WorkGroupRenderItem;
 
-// Runs whose transcript shows any reply/stream content keep their activity
-// separate per run (one run, one response); only fully reply-less runs — e.g.
-// heartbeat wakes that just call their response tool — may pool across runs.
+// Completed work may include activity after an answer only when that activity
+// belongs to a run with a visible reply, not an independent background wake.
 function runIdsWithVisibleReplies(items: CompletedTurnRenderItem[]): Set<string> {
   const replyRunIds = new Set<string>();
   for (const item of items) {
@@ -489,20 +675,35 @@ export function coalesceActivityRuns(
   if (opts.searchActive) {
     return items;
   }
-  const replyRunIds = runIdsWithVisibleReplies(items);
-  // A group is its run's entire visible outcome when the run never produced a
-  // reply. Consecutive such runs (heartbeats, cron wakes) collapse into one
-  // activity rollup instead of stacking identical rows down the transcript.
-  const isReplyLessRunActivity = (group: MessageGroup): boolean => {
+  // Adjacent activity is one disclosure even when automatic continuations use
+  // new run IDs. Visible content, not other output elsewhere in those runs,
+  // bounds the log. Reuse prepared visibility and cached cards in this pass.
+  const isActivity = (group: MessageGroup): boolean => {
+    if (group.isStreaming || group.visibleContent === "non-text" || hasForwardedSource(group)) {
+      return false;
+    }
+    // Tool-call content is normalized to the tool role. Its original assistant
+    // envelope still owns narration and terminal outcomes; do not hide those.
+    if (
+      group.messages.some(({ message, hasVisibleContent }) => {
+        const record = asRecord(message);
+        return (
+          record?.role === "assistant" &&
+          (hasVisibleContent ||
+            resolveAssistantReplyPhase(message) === "final_answer" ||
+            assistantMessageIsInterrupted(message) ||
+            record.stopReason === "error")
+        );
+      })
+    ) {
+      return false;
+    }
     const role = group.role.toLowerCase();
     return (
-      !group.isStreaming &&
-      group.runId !== undefined &&
-      !replyRunIds.has(group.runId) &&
-      (role === "tool" || (role === "assistant" && !assistantGroupIsForwardedBoundary(group))) &&
-      // includeText=false: any assistant text already marked the run as replied
-      // above; here only non-tool blocks (media/attachments) block pooling.
-      !groupHasVisibleReplyContent(group, false)
+      role === "tool" ||
+      (role === "assistant" &&
+        group.visibleContent === "none" &&
+        group.messages.some(({ message }) => extractToolCardsCached(message).length > 0))
     );
   };
   const result: Array<CompletedTurnRenderItem | ActivityRunRenderItem> = [];
@@ -518,16 +719,7 @@ export function coalesceActivityRuns(
     groups = [];
   };
   for (const item of items) {
-    const replyLessRunActivity = item.kind === "group" && isReplyLessRunActivity(item);
-    if (item.kind === "group" && (item.role.toLowerCase() === "tool" || replyLessRunActivity)) {
-      const tail = groups[groups.length - 1];
-      if (
-        tail &&
-        tail.runId !== item.runId &&
-        !(replyLessRunActivity && isReplyLessRunActivity(tail))
-      ) {
-        flush();
-      }
+    if (item.kind === "group" && isActivity(item)) {
       groups.push(item);
       continue;
     }

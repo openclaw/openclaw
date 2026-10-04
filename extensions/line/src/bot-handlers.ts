@@ -1,4 +1,5 @@
 import type { webhook } from "@line/bot-sdk";
+import { firstDefined } from "openclaw/plugin-sdk/allow-from";
 import {
   type buildChannelInboundEventContext,
   buildMentionRegexes,
@@ -41,14 +42,16 @@ import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { firstDefined, normalizeLineAllowEntry } from "./bot-access.js";
+import { normalizeLineAllowEntry } from "./bot-access.js";
 import {
   buildLineMessageContext,
   buildLinePostbackContext,
   getLineSourceInfo,
   readLineTextMessageBody,
+  prepareLineInboundRoute,
   type LineInboundContext,
   type LineInboundMentionAccess,
+  type PreparedLineInboundRoute,
 } from "./bot-message-context.js";
 import { downloadLineMedia, isRetryableLineInboundMediaError } from "./download.js";
 import { reserveLineGroupHistory } from "./group-history.js";
@@ -61,12 +64,9 @@ import { getLineGroupName, getUserDisplayName, pushMessageLine, replyMessageLine
 import type { ResolvedLineAccount } from "./types.js";
 import type { LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
 
-type FollowEvent = webhook.FollowEvent;
 type JoinEvent = webhook.JoinEvent;
-type LeaveEvent = webhook.LeaveEvent;
 type MessageEvent = webhook.MessageEvent;
 type PostbackEvent = webhook.PostbackEvent;
-type UnfollowEvent = webhook.UnfollowEvent;
 type WebhookEvent = webhook.Event;
 
 type MediaRef = Pick<ChannelInboundMediaInput, "contentType" | "fileName"> & { path: string };
@@ -210,11 +210,16 @@ async function resolveLineEventAdmission(
     contextBinding?: ChannelIngressContextBinding,
   ) => Promise<ResolvedChannelMessageIngress>;
   mentions?: LineInboundMentionAccess;
+  preparedRoute?: PreparedLineInboundRoute;
 } | null> {
   const { cfg, account } = context;
   const { userId, groupId, roomId, isGroup } = getLineSourceInfo(event.source);
   const senderId = userId ?? "";
   const groupConfig = resolveLineGroupConfigEntry(account.config.groups, { groupId, roomId });
+  if (isGroup && groupConfig?.enabled === false) {
+    logVerbose(`Blocked line group ${groupId ?? roomId ?? "unknown"} (group disabled)`);
+    return null;
+  }
   const rawText = resolveEventRawText(event);
   const requireMention = isGroup ? groupConfig?.requireMention !== false : false;
   const dmPolicy = account.config.dmPolicy ?? "pairing";
@@ -235,32 +240,8 @@ async function resolveLineEventAdmission(
   const groupAllowFrom = normalizeStringEntries(
     firstDefined(groupConfig?.allowFrom, account.config.groupAllowFrom),
   );
-  const mentionFacts = (() => {
-    if (!isGroup || event.type !== "message") {
-      return undefined;
-    }
-    const peerId = groupId ?? roomId ?? userId ?? "unknown";
-    const { agentId } = resolveAgentRoute({
-      cfg,
-      channel: "line",
-      accountId: account.accountId,
-      peer: { kind: "group", id: peerId },
-    });
-    const mentionRegexes = buildMentionRegexes(cfg, agentId);
-    const wasMentionedByNative = isLineBotMentioned(event.message);
-    const wasMentionedByPattern =
-      event.message.type === "text" ? matchesMentionPatterns(rawText, mentionRegexes) : false;
-    return {
-      canDetectMention: event.message.type === "text",
-      wasMentioned: wasMentionedByNative || wasMentionedByPattern,
-      explicitlyMentionedBot: wasMentionedByNative,
-      hasAnyMention: hasAnyLineMention(event.message),
-      implicitMentionKinds: implicitMentionKindWhen(
-        "quoted_bot",
-        quotesLineBotMessage(account.accountId, resolveLineQuotedMessageId(event.message)),
-      ),
-    };
-  })();
+  let preparedRoute: PreparedLineInboundRoute | undefined;
+  let mentionFacts: LineInboundMentionAccess | undefined;
   const resolveAccess = async (contextBinding?: ChannelIngressContextBinding) =>
     await getLineRuntime().channel.inbound.ingress.resolveStable({
       channelId: "line",
@@ -280,9 +261,6 @@ async function resolveLineEventAdmission(
         id: (groupId ?? roomId ?? senderId) || "unknown",
       },
       ...(contextBinding ? { contextBinding } : {}),
-      ...(isGroup && groupConfig?.enabled === false
-        ? { route: { id: "line:group-config", enabled: false } }
-        : {}),
       mentionFacts,
       event: { kind: event.type === "join" ? "system" : event.type },
       dmPolicy,
@@ -307,7 +285,27 @@ async function resolveLineEventAdmission(
         groupOwnerAllowFrom: "none",
       },
     });
-  const access = await resolveAccess();
+  let access = await resolveAccess();
+  if (isGroup && event.type === "message" && isLineEventAdmitted(access)) {
+    // Reject sender/group policy before consulting bindings. Reuse the same ingress
+    // owner for activation once the admitted message's bound mention owner is known.
+    preparedRoute = await prepareLineInboundRoute({ source: event.source, cfg, account });
+    const mentionRegexes = buildMentionRegexes(cfg, preparedRoute.mentionAgentId);
+    const wasMentionedByNative = isLineBotMentioned(event.message);
+    const wasMentionedByPattern =
+      event.message.type === "text" ? matchesMentionPatterns(rawText, mentionRegexes) : false;
+    mentionFacts = {
+      canDetectMention: event.message.type === "text",
+      wasMentioned: wasMentionedByNative || wasMentionedByPattern,
+      explicitlyMentionedBot: wasMentionedByNative,
+      hasAnyMention: hasAnyLineMention(event.message),
+      implicitMentionKinds: implicitMentionKindWhen(
+        "quoted_bot",
+        quotesLineBotMessage(account.accountId, resolveLineQuotedMessageId(event.message)),
+      ),
+    };
+    access = await resolveAccess();
+  }
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied,
     providerKey: "line",
@@ -319,7 +317,6 @@ async function resolveLineEventAdmission(
     // Joins have no sender to match. A configured audience must still contain
     // matchable entries after access-group expansion and LINE normalization.
     const roomAllowed =
-      groupConfig?.enabled !== false &&
       groupPolicy !== "disabled" &&
       (groupPolicy !== "allowlist" || access.state.allowlists.group.hasMatchableEntries);
     return roomAllowed ? { access, resolveBoundAccess: resolveAccess } : null;
@@ -335,7 +332,7 @@ async function resolveLineEventAdmission(
           requireMention,
         }
       : undefined;
-    return { access, resolveBoundAccess: resolveAccess, mentions };
+    return { access, resolveBoundAccess: resolveAccess, mentions, preparedRoute };
   }
 
   if (access.senderAccess.decision === "allow") {
@@ -344,10 +341,6 @@ async function resolveLineEventAdmission(
   }
 
   if (isGroup) {
-    if (groupConfig?.enabled === false) {
-      logVerbose(`Blocked line group ${groupId ?? roomId ?? "unknown"} (group disabled)`);
-      return null;
-    }
     if (groupConfig?.allowFrom !== undefined) {
       if (!senderId) {
         logVerbose("Blocked line group message (group allowFrom override, no sender ID)");
@@ -544,6 +537,7 @@ async function handleMessageEvent(
       ...(context.missingParts === undefined ? {} : { missingParts: context.missingParts }),
       cfg,
       account,
+      preparedRoute: decision.preparedRoute,
       commandAuthorized: decision.access.commandAccess.authorized,
       resolveChannelIngress: decision.resolveBoundAccess,
       inboundHistory: historyReservation.inboundHistory,
@@ -565,19 +559,6 @@ async function handleMessageEvent(
   } finally {
     historyReservation.release();
   }
-}
-
-async function handleFollowEvent(event: FollowEvent, _context: LineHandlerContext): Promise<void> {
-  const { userId } = getLineSourceInfo(event.source);
-  logVerbose(`line: user ${userId ?? "unknown"} followed`);
-}
-
-async function handleUnfollowEvent(
-  event: UnfollowEvent,
-  _context: LineHandlerContext,
-): Promise<void> {
-  const { userId } = getLineSourceInfo(event.source);
-  logVerbose(`line: user ${userId ?? "unknown"} unfollowed`);
 }
 
 async function handleJoinEvent(event: JoinEvent, context: LineHandlerContext): Promise<void> {
@@ -615,11 +596,6 @@ async function handleJoinEvent(event: JoinEvent, context: LineHandlerContext): P
       return title ? { ...roomContext, title } : roomContext;
     },
   });
-}
-
-async function handleLeaveEvent(event: LeaveEvent, _context: LineHandlerContext): Promise<void> {
-  const { groupId, roomId } = getLineSourceInfo(event.source);
-  logVerbose(`line: bot left ${groupId ? `group ${groupId}` : `room ${roomId}`}`);
 }
 
 /** What a tap that did not answer the question has to tell the person who tapped. */
@@ -719,43 +695,36 @@ export async function handleLineWebhookEvents(
     return;
   }
   try {
-    await handleLineWebhookEvent(event, context, setParts);
+    switch (event.type) {
+      case "message":
+        await handleMessageEvent(
+          event,
+          context,
+          setParts.filter((part): part is MessageEvent => part.type === "message"),
+        );
+        break;
+      case "follow":
+      case "unfollow": {
+        const { userId } = getLineSourceInfo(event.source);
+        logVerbose(`line: user ${userId ?? "unknown"} ${event.type}ed`);
+        break;
+      }
+      case "join":
+        await handleJoinEvent(event, context);
+        break;
+      case "leave": {
+        const { groupId, roomId } = getLineSourceInfo(event.source);
+        logVerbose(`line: bot left ${groupId ? `group ${groupId}` : `room ${roomId}`}`);
+        break;
+      }
+      case "postback":
+        await handlePostbackEvent(event, context);
+        break;
+      default:
+        logVerbose(`line: unhandled event type: ${event.type}`);
+    }
   } catch (err) {
     context.runtime.error?.(danger(`line: event handler failed: ${String(err)}`));
     throw toErrorObject(err, "Non-Error thrown");
-  }
-}
-
-async function handleLineWebhookEvent(
-  event: WebhookEvent,
-  context: LineHandlerContext,
-  /** The remaining parts of the image set this event opens, if any. */
-  setParts: readonly WebhookEvent[] = [],
-): Promise<void> {
-  switch (event.type) {
-    case "message":
-      await handleMessageEvent(
-        event,
-        context,
-        setParts.filter((part): part is MessageEvent => part.type === "message"),
-      );
-      break;
-    case "follow":
-      await handleFollowEvent(event, context);
-      break;
-    case "unfollow":
-      await handleUnfollowEvent(event, context);
-      break;
-    case "join":
-      await handleJoinEvent(event, context);
-      break;
-    case "leave":
-      await handleLeaveEvent(event, context);
-      break;
-    case "postback":
-      await handlePostbackEvent(event, context);
-      break;
-    default:
-      logVerbose(`line: unhandled event type: ${(event as WebhookEvent).type}`);
   }
 }

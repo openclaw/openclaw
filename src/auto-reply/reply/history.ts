@@ -1,4 +1,4 @@
-/** Pending chat-history windows and prompt context builders for auto-reply turns. */
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { HistoryEntry, HistoryMediaEntry } from "./history.types.js";
 
 export const HISTORY_CONTEXT_MARKER = "[Chat messages since your last reply - for context]";
@@ -6,7 +6,6 @@ export const RECENT_HISTORY_CONTEXT_MARKER = "[Recent chat messages - for contex
 export const CURRENT_MESSAGE_MARKER = "[Current message - respond to this]";
 export { DEFAULT_GROUP_HISTORY_LIMIT } from "./history-limit.js";
 
-/** Maximum number of group history keys to retain (LRU eviction when exceeded). */
 const MAX_HISTORY_KEYS = 1000;
 
 /**
@@ -17,17 +16,7 @@ export function evictOldHistoryKeys<T>(
   historyMap: Map<string, T[]>,
   maxKeys: number = MAX_HISTORY_KEYS,
 ): void {
-  if (historyMap.size <= maxKeys) {
-    return;
-  }
-  const keysToDelete = historyMap.size - maxKeys;
-  const iterator = historyMap.keys();
-  for (let i = 0; i < keysToDelete; i++) {
-    const key = iterator.next().value;
-    if (key !== undefined) {
-      historyMap.delete(key);
-    }
-  }
+  pruneMapToMaxSize(historyMap, maxKeys);
 }
 
 export type { HistoryEntry } from "./history.types.js";
@@ -50,14 +39,14 @@ export function buildHistoryContext(params: {
 }
 
 /** Appends one history entry, enforces per-session limit, and refreshes LRU key order. */
-function recordChannelHistoryEntry<T extends HistoryEntry>(params: {
+export function recordChannelHistoryEntryIfEnabled<T extends HistoryEntry>(params: {
   historyMap: Map<string, T[]>;
   historyKey: string;
-  entry: T;
+  entry?: T | null;
   limit: number;
 }): T[] {
   const { historyMap, historyKey, entry } = params;
-  if (params.limit <= 0) {
+  if (!entry || params.limit <= 0) {
     return [];
   }
   const history = historyMap.get(historyKey) ?? [];
@@ -71,26 +60,8 @@ function recordChannelHistoryEntry<T extends HistoryEntry>(params: {
     historyMap.delete(historyKey);
   }
   historyMap.set(historyKey, history);
-  // Evict oldest keys if map exceeds max size to prevent unbounded memory growth
   evictOldHistoryKeys(historyMap);
   return history;
-}
-
-export function recordChannelHistoryEntryIfEnabled<T extends HistoryEntry>(params: {
-  historyMap: Map<string, T[]>;
-  historyKey: string;
-  entry?: T | null;
-  limit: number;
-}): T[] {
-  if (!params.entry || params.limit <= 0) {
-    return [];
-  }
-  return recordChannelHistoryEntry({
-    historyMap: params.historyMap,
-    historyKey: params.historyKey,
-    entry: params.entry,
-    limit: params.limit,
-  });
 }
 
 /**
@@ -177,49 +148,30 @@ export async function recordChannelHistoryEntryWithMedia<T extends HistoryEntry>
   if (params.shouldRecord && !params.shouldRecord()) {
     return [];
   }
-  if (typeof params.media === "function") {
-    const recordedEntry = params.entry;
-    const history = recordChannelHistoryEntry({
-      historyMap: params.historyMap,
-      historyKey: params.historyKey,
-      entry: recordedEntry,
-      limit: params.limit,
-    });
-    const resolvedMedia = await params.media();
-    // The turn can be cancelled while media resolves; keep text but avoid late media attachment.
-    if (params.shouldRecord && !params.shouldRecord()) {
-      return history;
-    }
-    const media = normalizeHistoryMediaEntries({
-      media: resolvedMedia,
-      limit: params.mediaLimit,
-      messageId: params.messageId ?? params.entry.messageId,
-    });
-    if (media.length === 0) {
-      return history;
-    }
-    const currentHistory = params.historyMap.get(params.historyKey);
-    const entryIndex = currentHistory?.indexOf(recordedEntry) ?? -1;
-    if (currentHistory && entryIndex >= 0) {
-      currentHistory[entryIndex] = { ...recordedEntry, media } as T;
-    }
-    return history;
-  }
-  const resolvedMedia = params.media ?? undefined;
+  const recordedEntry = params.entry;
+  // Publish text before deferred media resolves; cancellation keeps the text.
+  const history =
+    typeof params.media === "function" ? recordChannelHistoryEntryIfEnabled(params) : undefined;
+  const resolvedMedia = typeof params.media === "function" ? await params.media() : params.media;
   if (params.shouldRecord && !params.shouldRecord()) {
-    return [];
+    return history ?? [];
   }
   const media = normalizeHistoryMediaEntries({
     media: resolvedMedia,
     limit: params.mediaLimit,
     messageId: params.messageId ?? params.entry.messageId,
   });
-  const entry = media.length > 0 ? ({ ...params.entry, media } as T) : params.entry;
-  return recordChannelHistoryEntry({
-    historyMap: params.historyMap,
-    historyKey: params.historyKey,
-    entry,
-    limit: params.limit,
+  if (history) {
+    const currentHistory = params.historyMap.get(params.historyKey);
+    const entryIndex = currentHistory?.indexOf(recordedEntry) ?? -1;
+    if (media.length > 0 && currentHistory && entryIndex >= 0) {
+      currentHistory[entryIndex] = { ...recordedEntry, media };
+    }
+    return history;
+  }
+  return recordChannelHistoryEntryIfEnabled({
+    ...params,
+    entry: media.length > 0 ? { ...params.entry, media } : params.entry,
   });
 }
 
@@ -281,9 +233,6 @@ export function buildInboundHistoryFromEntries(params: {
   if (params.limit <= 0) {
     return undefined;
   }
-  if (params.entries.length === 0) {
-    return [];
-  }
   return params.entries.slice(-params.limit).map((entry) => {
     const historyEntry: HistoryEntry = {
       sender: entry.sender,
@@ -293,7 +242,7 @@ export function buildInboundHistoryFromEntries(params: {
     if (entry.messageId) {
       historyEntry.messageId = entry.messageId;
     }
-    if (entry.media && entry.media.length > 0) {
+    if (entry.media?.length) {
       historyEntry.media = entry.media;
     }
     return historyEntry;
@@ -319,7 +268,7 @@ export function buildHistoryContextFromMap(params: {
     return params.currentMessage;
   }
   const entries = params.entry
-    ? recordChannelHistoryEntry({
+    ? recordChannelHistoryEntryIfEnabled({
         historyMap: params.historyMap,
         historyKey: params.historyKey,
         entry: params.entry,
@@ -335,20 +284,13 @@ export function buildHistoryContextFromMap(params: {
   });
 }
 
-function clearChannelHistory(params: {
-  historyMap: Map<string, HistoryEntry[]>;
-  historyKey: string;
-}): void {
-  params.historyMap.set(params.historyKey, []);
-}
-
 export function clearChannelHistoryIfEnabled(params: {
   historyMap: Map<string, HistoryEntry[]>;
   historyKey: string;
   limit: number;
 }): void {
   if (params.limit > 0) {
-    clearChannelHistory({ historyMap: params.historyMap, historyKey: params.historyKey });
+    params.historyMap.set(params.historyKey, []);
   }
 }
 

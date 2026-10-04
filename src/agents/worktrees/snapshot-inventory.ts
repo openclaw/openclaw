@@ -16,12 +16,20 @@ import {
   parseGitIndexPaths,
   parseGitTreePaths,
   rawPathExists,
+  rawPathStat,
   splitNullBuffer,
   type GitIndexPath,
   type GitTreePath,
 } from "./git-path-inventory.js";
 import type { GitWorktreeOperations } from "./git-worktree-operations.js";
-import { commandError, requireGit, requireGitBuffer, runGit } from "./git.js";
+import {
+  commandError,
+  requireGit,
+  requireGitBuffer,
+  resolveGitMetadataPath,
+  runGit,
+} from "./git.js";
+import { snapshotProvisionedFiles } from "./provisioned-snapshot.js";
 import {
   captureExactState,
   exactSnapshotPrefix,
@@ -153,14 +161,12 @@ async function inspectOtherPaths(
   for (let offset = 0; offset < replaced.length; offset += 64) {
     const batch = replaced.slice(offset, offset + 64);
     const stats = await Promise.allSettled(
-      batch.map((entry) => fs.lstat(checkoutPathFromGitBytes(checkoutPath, entry))),
+      batch.map((entry) => rawPathStat(checkoutPathFromGitBytes(checkoutPath, entry))),
     );
     for (const [index, result] of stats.entries()) {
       if (result.status === "rejected") {
-        if (!isMissingPathError(result.reason)) {
-          throw result.reason;
-        }
-      } else if (result.value.isDirectory()) {
+        throw result.reason;
+      } else if (result.value?.isDirectory()) {
         untracked.push(Buffer.concat([batch[index]!, Buffer.from("/")]));
       }
     }
@@ -178,17 +184,6 @@ async function inspectOtherPaths(
       skip: ignoredKeys,
     })) || (await walkCollapsedPaths(checkoutPath, ignored, { visitFile: options.ignored }))
   );
-}
-
-async function rawDirectoryExists(target: string | Buffer): Promise<boolean> {
-  try {
-    return (await fs.lstat(target)).isDirectory();
-  } catch (error) {
-    if (isMissingPathError(error)) {
-      return false;
-    }
-    throw error;
-  }
 }
 
 async function collectSnapshotInventory(input: SnapshotInput): Promise<SnapshotInventory> {
@@ -228,7 +223,7 @@ async function collectSnapshotInventory(input: SnapshotInput): Promise<SnapshotI
     // for Git to drop by name; its untracked children arrive through the listing.
     if (
       !headKeys.has(gitPathKey(entry.path)) &&
-      (await rawDirectoryExists(checkoutPathFromGitBytes(input.checkoutPath, entry.path)))
+      (await rawPathStat(checkoutPathFromGitBytes(input.checkoutPath, entry.path)))?.isDirectory()
     ) {
       continue;
     }
@@ -302,12 +297,7 @@ async function seedSnapshotIndex(
   inventory: SnapshotInventory,
   indexEnv: SnapshotIndexEnvironment,
 ): Promise<void> {
-  const source = path.resolve(
-    input.checkoutPath,
-    normalizeGitPathForFilesystem(
-      await requireGit(input.checkoutPath, ["rev-parse", "--git-path", "index"]),
-    ),
-  );
+  const source = await resolveGitMetadataPath(input.checkoutPath, "index");
   const destination = indexEnv.GIT_INDEX_FILE;
   try {
     const stat = await fs.stat(source);
@@ -403,23 +393,21 @@ async function prepareSnapshotIndex(
   for (let offset = 0; offset < candidates.length; offset += 64) {
     const batch = candidates.slice(offset, offset + 64);
     const stats = await Promise.allSettled(
-      batch.map(([, value]) => fs.lstat(checkoutPathFromGitBytes(input.checkoutPath, value))),
+      batch.map(([, value]) => rawPathStat(checkoutPathFromGitBytes(input.checkoutPath, value))),
     );
     for (const [index, result] of stats.entries()) {
       const key = batch[index]![0];
-      if (result.status === "fulfilled") {
+      if (result.status === "rejected") {
+        throw result.reason;
+      }
+      if (result.value) {
         if (provisioned.has(key)) {
           provisionedBytes += result.value.size;
         } else {
           gitBytes += result.value.size;
         }
-      } else {
-        if (!isMissingPathError(result.reason)) {
-          throw result.reason;
-        }
-        if (tracked.has(key)) {
-          missing.add(key);
-        }
+      } else if (tracked.has(key)) {
+        missing.add(key);
       }
     }
   }
@@ -494,24 +482,23 @@ export async function snapshotWorktree(
         temporaryDirectory,
       })
     : undefined;
-  const provisionedState = await requestGitWorkerEffect<"worktree.snapshot-provisioned">({
-    type: "worktree.snapshot-provisioned",
-    input: exact
+  const provisionedState = await snapshotProvisionedFiles(
+    input.checkoutPath,
+    input.provisionedPaths,
+    exact
       ? {
-          expected: {
-            algorithm: exact.metadata.head.length === 64 ? "sha256" : "sha1",
-            files: exact.metadata.files
-              .filter((entry) => entry.provisioned)
-              .map((entry) => ({
-                path: Buffer.from(entry.path, "hex").toString("utf8"),
-                mode: entry.kind === "missing" ? null : entry.mode,
-                size: entry.size,
-                blob: entry.blob,
-              })),
-          },
+          algorithm: exact.metadata.head.length === 64 ? "sha256" : "sha1",
+          files: exact.metadata.files
+            .filter((entry) => entry.provisioned)
+            .map((entry) => ({
+              path: Buffer.from(entry.path, "hex").toString("utf8"),
+              mode: entry.kind === "missing" ? null : entry.mode,
+              size: entry.size,
+              blob: entry.blob,
+            })),
         }
-      : {},
-  });
+      : undefined,
+  );
   const missingPaths: Buffer[] = [];
   const trackedPaths: Buffer[] = [];
   const addedPaths: Buffer[] = [];

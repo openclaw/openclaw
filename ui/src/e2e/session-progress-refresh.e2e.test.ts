@@ -137,8 +137,8 @@ suite.define(() => {
           expect(await pendingIcon.isVisible()).toBe(true);
         } else {
           expect(
-            await pendingIcon.evaluate((element) => getComputedStyle(element).animationName),
-          ).toBe("session-progress-refresh-spin");
+            await pendingIcon.evaluate((element) => element.getAnimations()[0]?.playState),
+          ).toBe("running");
         }
         expect(
           await card
@@ -157,11 +157,12 @@ suite.define(() => {
           status: "accepted",
           revision: 1,
         });
-        // Acceptance and a same-revision authoritative read are not completion.
+        // An unnumbered invalidation forces an authoritative read; returning
+        // the accepted baseline revision still must not complete the refresh.
         const reads = (await gateway.getRequests("progressCard.get")).length;
         await gateway.emitGatewayEvent("progressCard.changed", {
           sessionKey: scenario.sessionKey,
-          revision: 1,
+          revision: null,
         });
         await gateway.waitForRequest("progressCard.get", { after: reads });
         expect(await button.getAttribute("data-state")).toBe("pending");

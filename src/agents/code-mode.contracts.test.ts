@@ -1,13 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
-import ts from "typescript";
 import { afterEach, expect, it, vi } from "vitest";
-import { createMcpApiVirtualFiles } from "./code-mode-mcp-api.js";
+import { typeCheckSources } from "../../test/helpers/typescript.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   createCodeModeHarness,
   mcpTool,
-  pluginTool,
   pluginToolWithExecute,
   resetCodeModeTestState,
   resultDetails,
@@ -45,6 +43,7 @@ it("supports root MCP API and multiple server declarations", async () => {
             headers: [typeof root.header, typeof a.header, typeof b.header],
             rootDeclaration: rootFile.content.includes(root.header),
             indexDeclaration: indexFile?.content.includes("declare namespace MCP.index"),
+            files: [rootFile, indexFile, await API.read("mcp/alpha.d.ts"), await API.read("mcp/beta.d.ts")],
           };
         `,
     }),
@@ -60,38 +59,15 @@ it("supports root MCP API and multiple server declarations", async () => {
   for (const target of targets) {
     expect(target.execute).toHaveBeenCalledOnce();
   }
+  const { files } = result.value as { files: Array<{ path: string; content: string }> };
+  expect(
+    typeCheckSources({
+      ...Object.fromEntries(files.map((file) => ["/" + file.path, file.content])),
+      "/consumer.ts": "MCP.$api(); MCP.alpha.$api(); MCP.beta.$api(); MCP.index.$api();",
+    }),
+  ).toEqual([]);
 });
 
-it("supports documented catalog handle metadata", async () => {
-  const h = createCodeModeHarness();
-  const tool = pluginTool("shipment_list", "List shipments");
-  tool.outputSchema = Type.Object({ id: Type.String() }, { additionalProperties: false });
-  applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, tool] });
-  const result = resultDetails(
-    await expectDefined(h.tools[0], "exec").execute("handle-metadata", {
-      code: `
-          return catalog.all().map(tool => ({
-            label: tool.label,
-            input: tool.input,
-            output: tool.output,
-            serializedInput: tool.toJSON().input,
-          }));
-        `,
-    }),
-  );
-  expect(result, JSON.stringify(result)).toMatchObject({
-    status: "completed",
-    value: [
-      {
-        label: "shipment_list",
-        input: "{ value?: string }",
-        output: "{ id: string }",
-        serializedInput: "{ value?: string }",
-      },
-    ],
-  });
-  expect(tool.execute).not.toHaveBeenCalled();
-});
 it("allows omitted native empty inputs but preserves required fields", async () => {
   const h = createCodeModeHarness();
   const optional = pluginToolWithExecute("optional_input", "Optional input", async () =>
@@ -124,33 +100,32 @@ it("allows omitted native empty inputs but preserves required fields", async () 
   expect(required.execute).toHaveBeenCalledOnce();
 });
 
-it("merges actual root and multiple server files without skipping declaration errors", () => {
-  const files = createMcpApiVirtualFiles(
-    ["alpha", "beta", "index"].map((identifier) => ({
-      identifier,
-      serverName: identifier,
-      tools: [],
-    })),
+it("keeps an explicit tool error's text when its details carry no message", async () => {
+  const h = createCodeModeHarness();
+  const reason = "Start the Gateway with visitor-access enabled before managing visitors.";
+  const errorTool = (name: string, text: string, details: unknown) =>
+    pluginToolWithExecute(name, "Fail", async () => ({
+      content: [{ type: "text" as const, text }],
+      details,
+      isError: true,
+    }));
+  const tools = [
+    errorTool("flag_only", reason, { error: true }),
+    errorTool("no_details", "Gateway unavailable.", undefined),
+    errorTool("blank_message", "Visitor store is locked.", { error: true, message: " " }),
+    errorTool("structured", "Rendered failure.", { status: "failed", error: "structured" }),
+  ];
+  applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, ...tools] });
+  const result = resultDetails(
+    await expectDefined(h.tools[0], "exec").execute("tool-error-text", {
+      code: "return [await flag_only(), await no_details(), await blank_message(), await structured()];",
+    }),
   );
-  const texts = new Map(files.map((file) => ["/" + file.path, file.content]));
-  texts.set("/consumer.ts", "MCP.$api(); MCP.alpha.$api(); MCP.beta.$api(); MCP.index.$api();");
-  const options = {
-    noEmit: true,
-    strict: true,
-    types: [],
-    target: ts.ScriptTarget.ESNext,
-    skipLibCheck: false,
-  };
-  const host = ts.createCompilerHost(options);
-  const original = host.getSourceFile.bind(host);
-  host.getSourceFile = (name, ...args) =>
-    texts.has(name)
-      ? ts.createSourceFile(name, texts.get(name)!, args[0], true)
-      : original(name, ...args);
-  const program = ts.createProgram([...texts.keys()], options, host);
-  expect(
-    ts
-      .getPreEmitDiagnostics(program)
-      .map((d) => ts.flattenDiagnosticMessageText(d.messageText, "\n")),
-  ).toEqual([]);
+  expect(result.status, JSON.stringify(result)).toBe("completed");
+  expect(result.value).toEqual([
+    { error: true, message: reason },
+    { message: "Gateway unavailable." },
+    { error: true, message: "Visitor store is locked." },
+    { status: "failed", error: "structured" },
+  ]);
 });

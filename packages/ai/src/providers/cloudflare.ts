@@ -1,4 +1,3 @@
-// Cloudflare provider metadata describes Cloudflare-hosted model capabilities.
 import type { Model } from "../types.js";
 
 // This module owns URL metadata only; Anthropic/OpenAI adapters inject guarded fetch.
@@ -13,12 +12,11 @@ export function resolveCloudflareBaseUrl(model: Model): string {
   if (!url.includes("{")) {
     return url;
   }
-  const baseUrl = url.replace(/\{([A-Z_][A-Z0-9_]*)\}/g, (_match, name: string) => {
+  return url.replace(/\{([A-Z_][A-Z0-9_]*)\}/g, (_match, name: string) => {
     const value = process.env[name];
     if (!value) {
       throw new Error(`${name} is required for provider ${model.provider} but is not set.`);
     }
     return value;
   });
-  return baseUrl;
 }

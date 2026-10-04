@@ -11,7 +11,6 @@ import {
 import { hasNativeBrowserBridge } from "./native-browser-host.ts";
 import { webKitHostWindow, type WebKitHostMessages } from "./native-webkit-bridge.ts";
 
-type NativeLinkTarget = "external";
 type NativeLinkPoster = (message: WebKitHostMessages["openclawLink"]) => void;
 
 const NATIVE_UPDATE_DECLINED_EVENT = "openclaw:native-update-declined";
@@ -27,6 +26,7 @@ type NativeLinkRoutingOptions = {
   signal?: AbortSignal;
   onNativeUpdateDeclined?: () => void;
   shouldOpenInControlUiBrowser?: () => boolean;
+  shouldOpenExternally?: () => boolean;
   canPresentBrowserPanel?: () => boolean;
 };
 
@@ -65,21 +65,13 @@ function trustedExternalAppUrl(event: MouseEvent): { anchor: HTMLAnchorElement; 
   if (!anchor || anchor.hasAttribute("download") || anchor.hasAttribute("data-file-path")) {
     return null;
   }
-  try {
-    const url = new URL(anchor.href, window.location.href);
-    return url.protocol === "mailto:" || url.protocol === "tel:" ? { anchor, url } : null;
-  } catch {
-    return null;
-  }
+  const url = URL.parse(anchor.href, window.location.href);
+  return url && (url.protocol === "mailto:" || url.protocol === "tel:") ? { anchor, url } : null;
 }
 
-function postNativeLink(
-  postMessage: NativeLinkPoster,
-  url: URL,
-  target: NativeLinkTarget,
-): boolean {
+function postNativeLink(postMessage: NativeLinkPoster, url: URL): boolean {
   try {
-    postMessage({ type: "open-link", url: url.href, target });
+    postMessage({ type: "open-link", url: url.href, target: "external" });
     return true;
   } catch {
     return false;
@@ -91,11 +83,8 @@ export function postNativeExternalLink(url: string): boolean {
   if (!poster) {
     return false;
   }
-  try {
-    return postNativeLink(poster, new URL(url), "external");
-  } catch {
-    return false;
-  }
+  const parsed = URL.parse(url);
+  return parsed !== null && postNativeLink(poster, parsed);
 }
 
 function openBrowserPanel(url: URL): void {
@@ -130,7 +119,6 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
     return { dispose() {} };
   }
   let menu: NativeLinkMenu | null = null;
-  let menuModule: Promise<typeof import("../components/native-link-menu.runtime.ts")> | undefined;
   let menuRequest = 0;
   let disposed = false;
   let nativeUpdatePending = false;
@@ -152,12 +140,20 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
     menu?.remove();
     menu = null;
   };
+  const openInline = (url: URL) => {
+    if (hasNativeBrowserBridge() && options.canPresentBrowserPanel?.() === false) {
+      if (postMessage) {
+        postNativeLink(postMessage, url);
+      }
+    } else {
+      openBrowserPanel(url);
+    }
+  };
   const showMenu = async (event: MouseEvent, anchor: HTMLAnchorElement, url: URL) => {
     closeMenu();
     const request = menuRequest;
     const path = event.composedPath();
-    const { mountNativeLinkMenu } = await (menuModule ??=
-      import("../components/native-link-menu.runtime.ts"));
+    const { mountNativeLinkMenu } = await import("../components/native-link-menu.runtime.ts");
     if (disposed || options.signal?.aborted || request !== menuRequest || !anchor.isConnected) {
       return;
     }
@@ -168,27 +164,22 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
       x: event.clientX,
       y: event.clientY,
       close: closeMenu,
-      openExternal: () => postMessage && postNativeLink(postMessage, url, "external"),
-      openInline: () => {
-        if (hasNativeBrowserBridge() && options.canPresentBrowserPanel?.() === false) {
-          if (postMessage) {
-            postNativeLink(postMessage, url, "external");
-          }
-        } else {
-          openBrowserPanel(url);
-        }
-      },
+      openExternal: () => postMessage && postNativeLink(postMessage, url),
+      openInline: () => openInline(url),
     });
   };
 
   const handleClick = (event: MouseEvent) => {
     const webLink = externalHttpLinkFromEvent(event);
-    // The reader's escape hatch must bypass both native and preferred in-app browsers.
-    if (webLink?.anchor.hasAttribute("data-link-reader-external")) {
+    // Explicit external intent bypasses native panels and the Gateway browser preference.
+    if (
+      webLink &&
+      (webLink.anchor.hasAttribute("data-link-reader-external") || options.shouldOpenExternally?.())
+    ) {
       if (
         postMessage &&
         shouldHandleNavigationClick(event) &&
-        postNativeLink(postMessage, webLink.url, "external")
+        postNativeLink(postMessage, webLink.url)
       ) {
         closeMenu();
         event.preventDefault();
@@ -202,13 +193,7 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
         : shouldHandleControlUiBrowserActivation(event)) &&
       (hasNativeBrowserBridge() || options.shouldOpenInControlUiBrowser?.())
     ) {
-      if (hasNativeBrowserBridge() && options.canPresentBrowserPanel?.() === false) {
-        if (postMessage) {
-          postNativeLink(postMessage, webLink.url, "external");
-        }
-      } else {
-        openBrowserPanel(webLink.url);
-      }
+      openInline(webLink.url);
       closeMenu();
       event.preventDefault();
       return;
@@ -217,7 +202,7 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
       return;
     }
     const appLink = trustedExternalAppUrl(event);
-    if (!appLink || !postNativeLink(postMessage, appLink.url, "external")) {
+    if (!appLink || !postNativeLink(postMessage, appLink.url)) {
       return;
     }
     closeMenu();
@@ -234,7 +219,6 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
     event.preventDefault();
     event.stopPropagation();
     void showMenu(event, link.anchor, link.url).catch((error: unknown) => {
-      menuModule = undefined;
       if (!disposed) {
         console.error("[openclaw] native link menu failed to load; right-click to retry", error);
       }

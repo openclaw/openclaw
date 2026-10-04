@@ -130,7 +130,7 @@ async function repairInstalledOpenClawHostLinks(params: {
       }
       repaired += result.value.repaired;
     }
-    // Registered npm and ClawHub installs also live under extensions/, outside managed npm roots.
+    // Registered npm, ClawHub, and archive installs also live under extensions/, outside managed npm roots.
     const registeredRepair = await reconcileRegisteredOpenClawHostLinks({
       installRecords: params.installRecords,
       extensionsDir: resolveDefaultPluginExtensionsDir(params.env),
@@ -160,16 +160,9 @@ async function repairInstalledOpenClawHostLinks(params: {
       throw effectFailure.error;
     }
     beforePersistentEffect?.();
-    const message = `Failed to repair installed OpenClaw host peer links: ${err instanceof Error ? err.message : String(err)}`;
     return {
       changes: [],
-      warnings: [
-        {
-          reason: message,
-          message,
-          guidance: [REPAIR_GUIDANCE],
-        },
-      ],
+      warnings: [formatPeerLinkPackageReadWarning({ error: err })],
       packageReadFailures,
     };
   }

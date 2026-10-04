@@ -4,15 +4,6 @@ import { assertCodexThreadForkParams } from "./app-server/protocol.js";
 import type {
   CodexAppServerRequestParams,
   CodexAppServerRequestResult,
-  CodexThread,
-  CodexThreadForkParams,
-  CodexThreadForkResponse,
-  CodexThreadListParams,
-  CodexThreadListResponse,
-  CodexThreadItemsListParams,
-  CodexThreadItemsListResponse,
-  CodexThreadTurnsListParams,
-  CodexThreadTurnsListResponse,
 } from "./app-server/protocol.js";
 import type { CodexControlRequestObservation } from "./app-server/request-observation.js";
 import { withTimeout } from "./app-server/timeout.js";
@@ -22,32 +13,12 @@ import type { CodexCatalogIndex } from "./session-catalog-index.js";
 import {
   currentCodexCatalogListRequest,
   withCodexCatalogListRequest,
-  type CodexCatalogListRequest,
 } from "./session-catalog-list-request.js";
 import { readControlCursor, readPageParams } from "./session-catalog-parsing.js";
-import type { CodexCatalogSourceBackoff } from "./session-catalog-source-backoff.js";
+import type { CodexSessionCatalogRequestSnapshot } from "./session-catalog-request-types.js";
 import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
 
-export type CodexSessionCatalogRequestSnapshot = {
-  beginList: (request?: CodexCatalogListRequest) => ReturnType<CodexCatalogSourceBackoff["begin"]>;
-  index: () => Promise<CodexCatalogIndex>;
-  requestTimeoutMs: number;
-  listThreads(
-    params: CodexThreadListParams,
-    timeoutMs: number,
-    observation?: CodexControlRequestObservation,
-  ): Promise<CodexThreadListResponse>;
-  listThreadTurns(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
-  listThreadItems(params: CodexThreadItemsListParams): Promise<CodexThreadItemsListResponse>;
-  forkThread(
-    params: CodexThreadForkParams,
-    assertCurrent?: () => void,
-  ): Promise<CodexThreadForkResponse>;
-  readThread(threadId: string, includeTurns: boolean, timeoutMs?: number): Promise<CodexThread>;
-  archiveThread(threadId: string, assertCurrent?: () => void): Promise<void>;
-};
-
-export type CodexCatalogRequestMethod =
+type CodexCatalogRequestMethod =
   | typeof CODEX_CONTROL_METHODS.archiveThread
   | typeof CODEX_CONTROL_METHODS.forkThread
   | typeof CODEX_CONTROL_METHODS.listThreads

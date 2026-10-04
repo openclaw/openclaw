@@ -1,5 +1,5 @@
-// Resolves per-agent runtime limits from config.
 import os from "node:os";
+import { resolveOptionalIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "./types.js";
 
 const MIN_AGENT_MAX_CONCURRENT = 8;
@@ -8,13 +8,9 @@ let defaultAgentMaxConcurrent: number | undefined;
 
 function resolveDefaultAgentMaxConcurrent(): number {
   if (defaultAgentMaxConcurrent === undefined) {
-    // Prefer the quota-aware count on modern Node; retain the CPU-list fallback
-    // for runtimes where availableParallelism is absent.
-    const availableParallelism =
-      typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length;
     defaultAgentMaxConcurrent = Math.max(
       MIN_AGENT_MAX_CONCURRENT,
-      availableParallelism * AGENT_RUNS_PER_CPU,
+      os.availableParallelism() * AGENT_RUNS_PER_CPU,
     );
   }
   return defaultAgentMaxConcurrent;
@@ -37,18 +33,16 @@ export function isSubagentSpawnDepthAllowed(
 
 /** Resolves top-level agent concurrency, flooring finite values and clamping to at least one. */
 export function resolveAgentMaxConcurrent(cfg?: OpenClawConfig): number {
-  const raw = cfg?.agents?.defaults?.maxConcurrent;
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    return Math.max(1, Math.floor(raw));
-  }
-  return resolveDefaultAgentMaxConcurrent();
+  return (
+    resolveOptionalIntegerOption(cfg?.agents?.defaults?.maxConcurrent, { min: 1 }) ??
+    resolveDefaultAgentMaxConcurrent()
+  );
 }
 
 /** Resolves per-session subagent concurrency, flooring finite values and clamping to at least one. */
 export function resolveSubagentMaxConcurrent(cfg?: OpenClawConfig): number {
-  const raw = cfg?.agents?.defaults?.subagents?.maxConcurrent;
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    return Math.max(1, Math.floor(raw));
-  }
-  return DEFAULT_SUBAGENT_MAX_CONCURRENT;
+  return (
+    resolveOptionalIntegerOption(cfg?.agents?.defaults?.subagents?.maxConcurrent, { min: 1 }) ??
+    DEFAULT_SUBAGENT_MAX_CONCURRENT
+  );
 }

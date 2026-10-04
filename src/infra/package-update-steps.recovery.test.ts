@@ -1,15 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
 import { describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "./package-dist-inventory.js";
 import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
 import {
+  createNpmUpdateOptions,
   createNpmTarget,
   createRootRunner,
+  packageUpdateStepResult,
+  stagedNpmPrefix,
   writePackageRoot,
 } from "./package-update-steps.test-support.js";
+import { resolveNpmGlobalPrefixLayoutFromPrefix } from "./update-npm-prefix.js";
 
 describe("npm-lifecycle-policy-preflight", () => {
   it.each([false, true])(
@@ -174,21 +179,14 @@ describe("package update recovery safety", () => {
             await fs.writeFile(path.join(packDir, "candidate.tgz"), "fixture package");
             return { name, command: argv.join(" "), cwd: packDir, durationMs: 0, exitCode: 0 };
           }
-          const prefixIndex = argv.indexOf("--prefix");
-          const stagePrefix = argv[prefixIndex + 1];
-          if (prefixIndex < 0 || !stagePrefix) {
-            throw new Error("missing stage prefix");
-          }
-          const stageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
+          const stagePrefix = stagedNpmPrefix(argv);
+          const stageLayout = resolveNpmGlobalPrefixLayoutFromPrefix(stagePrefix);
+          const stageRoot = path.join(stageLayout.globalRoot, "openclaw");
           await writeIdentity(stageRoot, after);
           return { name, command: argv.join(" "), cwd: stagePrefix, durationMs: 0, exitCode: 0 };
         });
         const result = await runGlobalPackageUpdateSteps({
-          installTarget: createNpmTarget(globalRoot),
-          packageName: "openclaw",
-          installSpec: spec,
-          timeoutMs: 1000,
-          runCommand: createRootRunner(globalRoot),
+          ...createNpmUpdateOptions(globalRoot, spec),
           runStep,
           validateCandidate,
           beforeActivate,
@@ -238,12 +236,8 @@ describe("package update recovery safety", () => {
           return { name, command: argv.join(" "), cwd: globalRoot, durationMs: 0, exitCode: 0 };
         });
         const result = await runGlobalPackageUpdateSteps({
-          installTarget: createNpmTarget(globalRoot),
-          installSpec: "openclaw@2.0.0",
-          packageName: "openclaw",
-          runCommand: createRootRunner(globalRoot),
+          ...createNpmUpdateOptions(globalRoot),
           runStep,
-          timeoutMs: 1000,
           ...(hook === "validation"
             ? { validateCandidate }
             : hook === "activation"
@@ -277,23 +271,18 @@ describe("package update recovery safety", () => {
       await fs.writeFile(launcher, "old launcher\n");
 
       const result = await runGlobalPackageUpdateSteps({
-        installTarget: createNpmTarget(globalRoot),
-        installSpec: "openclaw@1.0.0",
-        packageName: "openclaw",
+        ...createNpmUpdateOptions(globalRoot, "openclaw@1.0.0"),
         packageRoot,
         requirePackageReplacement: true,
-        runCommand: createRootRunner(globalRoot),
         runStep: async ({ name, argv }) => {
-          const stagePrefix = argv[argv.indexOf("--prefix") + 1];
-          if (!stagePrefix) {
-            throw new Error("missing stage prefix");
-          }
-          const stageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
+          const stagePrefix = stagedNpmPrefix(argv);
+          const stageLayout = resolveNpmGlobalPrefixLayoutFromPrefix(stagePrefix);
+          const stageRoot = path.join(stageLayout.globalRoot, "openclaw");
           await writePackageRoot(stageRoot, "1.0.0");
           await fs.writeFile(path.join(stageRoot, "dist", "index.js"), "new runtime\n");
           await writePackageDistInventory(stageRoot);
-          await fs.mkdir(path.join(stagePrefix, "bin"), { recursive: true });
-          await fs.writeFile(path.join(stagePrefix, "bin", "openclaw"), "new launcher\n");
+          await fs.mkdir(stageLayout.binDir, { recursive: true });
+          await fs.writeFile(path.join(stageLayout.binDir, "openclaw"), "new launcher\n");
           return { name, command: argv.join(" "), cwd: stagePrefix, durationMs: 0, exitCode: 0 };
         },
         validateCandidate: async (candidateRoot) => {
@@ -318,7 +307,6 @@ describe("package update recovery safety", () => {
             exitCode: 1,
           };
         },
-        timeoutMs: 1000,
       });
 
       expect(result.reason).toBeUndefined();
@@ -346,13 +334,9 @@ describe("package update recovery safety", () => {
       const runStep = vi.fn();
       try {
         const result = await runGlobalPackageUpdateSteps({
-          installTarget: createNpmTarget(globalRoot),
-          installSpec: "openclaw@2.0.0",
-          packageName: "openclaw",
+          ...createNpmUpdateOptions(globalRoot),
           packageRoot,
-          runCommand: createRootRunner(globalRoot),
           runStep,
-          timeoutMs: 1000,
         });
         expect(result.failedStep?.name).toBe("package-stage");
         expect(result.recovery).toEqual({ serviceRestartSafe: true, version: "1.0.0" });
@@ -381,17 +365,12 @@ describe("package update recovery safety", () => {
         const packageRoot = path.join(globalRoot, "openclaw");
         await writePackageRoot(packageRoot, "1.0.0");
         const params = {
-          installTarget: createNpmTarget(globalRoot),
-          installSpec: "openclaw@2.0.0",
-          packageName: "openclaw",
+          ...createNpmUpdateOptions(globalRoot),
           packageRoot,
-          runCommand: createRootRunner(globalRoot),
           runStep: async ({ name, argv }: { name: string; argv: string[] }) => {
-            const prefix = argv[argv.indexOf("--prefix") + 1];
-            if (!prefix) {
-              throw new Error("missing staged prefix");
-            }
-            const installRoot = path.join(prefix, "lib", "node_modules", "openclaw");
+            const prefix = stagedNpmPrefix(argv);
+            const stageLayout = resolveNpmGlobalPrefixLayoutFromPrefix(prefix);
+            const installRoot = path.join(stageLayout.globalRoot, "openclaw");
             await writePackageRoot(installRoot, "2.0.0");
             if (stagingSideEffect === "replaced") {
               await writePackageRoot(packageRoot, "2.0.0");
@@ -401,18 +380,17 @@ describe("package update recovery safety", () => {
             if (failure === "install throw") {
               throw new Error("install interrupted");
             }
-            return {
-              name,
-              command: argv.join(" "),
-              cwd: globalRoot,
-              durationMs: 0,
-              exitCode: failure === "install exit" ? 1 : 0,
-            };
+            return packageUpdateStepResult(
+              { name, argv, cwd: globalRoot },
+              {
+                durationMs: 0,
+                exitCode: failure === "install exit" ? 1 : 0,
+              },
+            );
           },
           postVerifyStep: async () => {
             throw new Error("doctor interrupted after replacement");
           },
-          timeoutMs: 1000,
         };
         const result = await runGlobalPackageUpdateSteps(params);
 
@@ -474,18 +452,12 @@ describe("package update recovery safety", () => {
         let result: Awaited<ReturnType<typeof runGlobalPackageUpdateSteps>>;
         try {
           result = await runGlobalPackageUpdateSteps({
-            installTarget: createNpmTarget(globalRoot),
-            installSpec: "openclaw@2.0.0",
-            packageName: "openclaw",
+            ...createNpmUpdateOptions(globalRoot),
             packageRoot,
-            runCommand: createRootRunner(globalRoot),
-            timeoutMs: 1000,
             runStep: async ({ name, argv }) => {
-              const prefix = argv[argv.indexOf("--prefix") + 1];
-              if (!prefix) {
-                throw new Error("missing stage prefix");
-              }
-              const staged = path.join(prefix, "lib", "node_modules", "openclaw");
+              const prefix = stagedNpmPrefix(argv);
+              const stageLayout = resolveNpmGlobalPrefixLayoutFromPrefix(prefix);
+              const staged = path.join(stageLayout.globalRoot, "openclaw");
               await writePackageRoot(staged, "2.0.0");
               await fs.writeFile(stateCanary, "migrated by staged lifecycle");
               if (failure === "activation") {
@@ -532,34 +504,25 @@ describe("package update recovery safety", () => {
         );
 
         const result = await runGlobalPackageUpdateSteps({
-          installTarget: createNpmTarget(globalRoot),
-          installSpec: "openclaw@2.0.0",
-          packageName: "openclaw",
+          ...createNpmUpdateOptions(globalRoot),
           packageRoot,
-          runCommand: createRootRunner(globalRoot),
           runStep: async ({ name, argv }) => {
-            const stagePrefix = argv[argv.indexOf("--prefix") + 1];
-            if (!stagePrefix) {
-              throw new Error("missing stage prefix");
-            }
-            await writePackageRoot(
-              path.join(stagePrefix, "lib", "node_modules", "openclaw"),
-              "2.0.0",
-            );
-            const stagedBinDir = path.join(stagePrefix, "bin");
+            const stagePrefix = stagedNpmPrefix(argv);
+            const stageLayout = resolveNpmGlobalPrefixLayoutFromPrefix(stagePrefix);
+            await writePackageRoot(path.join(stageLayout.globalRoot, "openclaw"), "2.0.0");
+            const stagedBinDir = stageLayout.binDir;
             await fs.mkdir(stagedBinDir, { recursive: true });
             await Promise.all(
               shimNames.map((shimName) =>
                 fs.writeFile(path.join(stagedBinDir, shimName), `new ${shimName}\n`, "utf8"),
               ),
             );
-            return {
-              name,
-              command: argv.join(" "),
-              cwd: stagePrefix,
-              durationMs: 0,
-              exitCode: 0,
-            };
+            return packageUpdateStepResult(
+              { name, argv, cwd: stagePrefix },
+              {
+                durationMs: 0,
+              },
+            );
           },
           postVerifyStep: async (candidateRoot) => {
             expect(candidateRoot).toBe(packageRoot);
@@ -587,7 +550,6 @@ describe("package update recovery safety", () => {
               stderrTail: outcome === "blocking" ? "doctor rejected candidate" : null,
             };
           },
-          timeoutMs: 1000,
         });
 
         const expectedVersion = outcome === "success" ? "2.0.0" : "1.0.0";
@@ -638,35 +600,36 @@ describe("package update recovery safety", () => {
       await fs.mkdir(binDir, { recursive: true });
       await fs.writeFile(targetShim, "old openclaw\n", "utf8");
       await fs.writeFile(targetCmdShim, "old openclaw.cmd\n", "utf8");
-      const copyFile = fs.copyFile.bind(fs);
-      const copyFileSpy = vi.spyOn(fs, "copyFile").mockImplementation(async (...args) => {
-        const source = String(args[0]);
+      const prototype = Object.getPrototypeOf(await fsSafeRoot(base)) as Root;
+      // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted Root receiver to preserve its path and mutation authority.
+      const copy = prototype.copyIn;
+      let injections = 0;
+      const copySpy = vi.spyOn(prototype, "copyIn").mockImplementation(async function (
+        this: Root,
+        destination,
+        source,
+        options,
+      ) {
         if (
+          typeof source === "string" &&
           path.basename(source) === "openclaw.cmd" &&
           path.basename(path.dirname(source)).startsWith(".openclaw.shim-backup-")
         ) {
+          injections += 1;
           throw Object.assign(new Error("launcher restoration denied"), { code: "EACCES" });
         }
-        return await copyFile(...args);
+        await copy.call(this, destination, source, options);
       });
       let result: Awaited<ReturnType<typeof runGlobalPackageUpdateSteps>>;
       try {
         result = await runGlobalPackageUpdateSteps({
-          installTarget: createNpmTarget(globalRoot),
-          installSpec: "openclaw@2.0.0",
-          packageName: "openclaw",
+          ...createNpmUpdateOptions(globalRoot),
           packageRoot,
-          runCommand: createRootRunner(globalRoot),
           runStep: async ({ name, argv }) => {
-            const stagePrefix = argv[argv.indexOf("--prefix") + 1];
-            if (!stagePrefix) {
-              throw new Error("missing stage prefix");
-            }
-            await writePackageRoot(
-              path.join(stagePrefix, "lib", "node_modules", "openclaw"),
-              "2.0.0",
-            );
-            const stagedBinDir = path.join(stagePrefix, "bin");
+            const stagePrefix = stagedNpmPrefix(argv);
+            const stageLayout = resolveNpmGlobalPrefixLayoutFromPrefix(stagePrefix);
+            await writePackageRoot(path.join(stageLayout.globalRoot, "openclaw"), "2.0.0");
+            const stagedBinDir = stageLayout.binDir;
             await fs.mkdir(stagedBinDir, { recursive: true });
             await fs.writeFile(path.join(stagedBinDir, "openclaw"), "new openclaw\n", "utf8");
             await fs.writeFile(
@@ -674,13 +637,12 @@ describe("package update recovery safety", () => {
               "new openclaw.cmd\n",
               "utf8",
             );
-            return {
-              name,
-              command: argv.join(" "),
-              cwd: stagePrefix,
-              durationMs: 0,
-              exitCode: 0,
-            };
+            return packageUpdateStepResult(
+              { name, argv, cwd: stagePrefix },
+              {
+                durationMs: 0,
+              },
+            );
           },
           postVerifyStep: async (candidateRoot) => ({
             name: "openclaw doctor",
@@ -690,12 +652,12 @@ describe("package update recovery safety", () => {
             exitCode: 1,
             stderrTail: "doctor rejected candidate",
           }),
-          timeoutMs: 1000,
         });
       } finally {
-        copyFileSpy.mockRestore();
+        copySpy.mockRestore();
       }
 
+      expect(injections).toBe(1);
       expect(result.failedStep).toMatchObject({ name: "package-swap", exitCode: 1 });
       expect(result.failedStep).toMatchObject({
         failureFacts: [expect.objectContaining({ check: "package-swap", code: "swap-failed" })],

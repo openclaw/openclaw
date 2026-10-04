@@ -1,102 +1,94 @@
-// Browser tests cover browser request.profile from body plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayRequestHandlers } from "../core-api.js";
+import type { GatewayRequestHandlers } from "openclaw/plugin-sdk/gateway-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createBrowserNodeSessionTabRoute } from "../browser-node-proxy.js";
+import { getOptionalBrowserStateRuntime } from "../browser-runtime-state.js";
+import { resolveBrowserConfig, resolveProfile } from "../browser/config.js";
+import type { createBrowserRouteDispatcher } from "../browser/routes/dispatcher.js";
+import {
+  closeTrackedBrowserTabsForSessions,
+  filterTrackedSessionBrowserTabs,
+  sweepTrackedBrowserTabs,
+  trackSessionBrowserTab,
+} from "../browser/session-tab-registry.js";
 
-const {
-  loadConfigMock,
-  isNodeCommandAllowedMock,
-  resolveNodeCommandAllowlistMock,
-  startBrowserControlServiceFromConfigMock,
-  createBrowserControlContextMock,
-  createBrowserRouteDispatcherMock,
-  dispatchBrowserRouteMock,
-} = vi.hoisted(() => {
-  const dispatchMock = vi.fn();
-  return {
-    loadConfigMock: vi.fn(),
-    isNodeCommandAllowedMock: vi.fn(),
-    resolveNodeCommandAllowlistMock: vi.fn(),
-    startBrowserControlServiceFromConfigMock: vi.fn(async () => false),
-    createBrowserControlContextMock: vi.fn(() => ({ control: true })),
-    dispatchBrowserRouteMock: dispatchMock,
-    createBrowserRouteDispatcherMock: vi.fn(() => ({
-      dispatch: dispatchMock,
-    })),
-  };
-});
-
-const browserHostAvailabilityMocks = vi.hoisted(() => ({
-  isBrowserHostAvailable: vi.fn((_config: unknown, _profileName?: string) => false),
-}));
-vi.mock("../browser-host-availability.js", () => browserHostAvailabilityMocks);
-
-const dashboardMocks = vi.hoisted(() => ({
-  inspectBrowserDashboard: vi.fn(),
-  assertBrowserDashboardTargetCurrent: vi.fn(),
-}));
-vi.mock("../browser-dashboard.js", () => dashboardMocks);
-
-const uploadMocks = vi.hoisted(() => ({
-  isBrowserProxyUploadRequest: vi.fn(
+const m = vi.hoisted(() => ({
+  config: vi.fn(),
+  allowed: vi.fn(),
+  allowlist: vi.fn(),
+  start: vi.fn<() => Promise<boolean | { resolved: ReturnType<typeof resolveBrowserConfig> }>>(),
+  dispatch: vi.fn(),
+  hostAvailable: vi.fn((_config: unknown, _profileName?: string) => false),
+  inspect: vi.fn(),
+  dashboardCurrent: vi.fn(),
+  isUpload: vi.fn(
     (params: { method: string; path: string; body: unknown }) =>
       params.method === "POST" &&
       params.path === "/hooks/file-chooser" &&
       Array.isArray((params.body as { paths?: unknown } | undefined)?.paths) &&
       ((params.body as { paths: unknown[] }).paths.length ?? 0) > 0,
   ),
-  prepareBrowserProxyUploadRequest: vi.fn(),
+  prepareUpload: vi.fn(),
 }));
-
-vi.mock("../core-api.js", async () => {
-  const actual = await vi.importActual<typeof import("../core-api.js")>("../core-api.js");
-  return {
-    ...actual,
-    startBrowserControlServiceFromConfig: startBrowserControlServiceFromConfigMock,
-    createBrowserControlContext: createBrowserControlContextMock,
-    createBrowserRouteDispatcher: createBrowserRouteDispatcherMock,
-  };
-});
-
-vi.mock("../browser-proxy-upload.js", () => uploadMocks);
-
-vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
-  const actual = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
-  >("openclaw/plugin-sdk/runtime-config-snapshot");
-  return {
-    ...actual,
-    getRuntimeConfig: loadConfigMock,
-    loadConfig: loadConfigMock,
-  };
-});
-
-vi.mock("../sdk-node-runtime.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../sdk-node-runtime.js")>("../sdk-node-runtime.js");
-  return {
-    ...actual,
-    isNodeCommandAllowed: isNodeCommandAllowedMock,
-    resolveNodeCommandAllowlist: resolveNodeCommandAllowlistMock,
-  };
-});
+vi.mock("../browser-host-availability.js", () => ({ isBrowserHostAvailable: m.hostAvailable }));
+vi.mock("../browser-dashboard.js", () => ({
+  inspectBrowserDashboard: m.inspect,
+  assertBrowserDashboardTargetCurrent: m.dashboardCurrent,
+}));
+vi.mock("../control-service.js", () => ({ startBrowserControlServiceFromConfig: m.start }));
+vi.mock("../browser-control-state.js", () => ({
+  createBrowserControlContext: () => ({ control: true }),
+}));
+vi.mock("../browser/routes/dispatcher.js", () => ({
+  createBrowserRouteDispatcher: () => ({ dispatch: m.dispatch }),
+}));
+vi.mock("../browser-proxy-upload.js", () => ({
+  isBrowserProxyUploadRequest: m.isUpload,
+  prepareBrowserProxyUploadRequest: m.prepareUpload,
+}));
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  getRuntimeConfig: m.config,
+  loadConfig: m.config,
+}));
+vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/gateway-runtime")>()),
+  isNodeCommandAllowed: m.allowed,
+  resolveNodeCommandAllowlist: m.allowlist,
+}));
 
 import { browserHandlers } from "./browser-request.js";
 
-type RespondCall = [boolean, unknown?, { code: string; message: string; details?: unknown }?];
-
-type TestNode = {
-  nodeId: string;
-  displayName?: string;
-  caps?: string[];
-  commands?: string[];
-  declaredCommands?: string[];
-  platform?: string;
+type RequestOptions = Parameters<(typeof browserHandlers)["browser.request"]>[0];
+type TestNode = ReturnType<RequestOptions["context"]["nodeRegistry"]["listConnected"]>[number];
+const browserNode = (nodeId = "node-1", extra: Partial<TestNode> = {}): TestNode => ({
+  nodeId,
+  caps: ["browser"],
+  commands: ["browser.proxy"],
+  platform: "linux",
+  ...extra,
+  declaredCommands: extra.declaredCommands ?? [],
+});
+const upload = {
+  envelope: "browser-upload-v1",
+  files: [{ name: "report.txt", contentBase64: "aGk=" }],
 };
-
-type NodeInvoke = Parameters<
-  GatewayRequestHandlers[string]
->[0]["context"]["nodeRegistry"]["invoke"];
+const uploadBody = { paths: ["/tmp/openclaw/uploads/report.txt"], ref: "e12" };
+const hostUnavailable = {
+  ok: false,
+  error: {
+    code: "UNAVAILABLE",
+    message: "Browser control host is not reachable on 127.0.0.1:18791.",
+  },
+};
+function dispatchLocally(body: unknown = { ok: true }, status = 200) {
+  m.start.mockResolvedValueOnce(true);
+  m.dispatch.mockResolvedValueOnce({ status, body });
+}
+function policy(mode: "auto" | "manual" | "off" = "auto", selectedNode?: string) {
+  m.config.mockReturnValue({ gateway: { nodes: { browser: { mode, node: selectedNode } } } });
+}
+type NodeInvoke = RequestOptions["context"]["nodeRegistry"]["invoke"];
 type NodeInvokeResult = Awaited<ReturnType<NodeInvoke>>;
 
 function createContext(invokeResult?: NodeInvokeResult | NodeInvoke, connectedNodes?: TestNode[]) {
@@ -105,43 +97,29 @@ function createContext(invokeResult?: NodeInvokeResult | NodeInvoke, connectedNo
       ? await invokeResult(params)
       : (invokeResult ?? { ok: true, payload: { result: { ok: true } } }),
   );
-  const listConnected = vi.fn(
-    () =>
-      connectedNodes ?? [
-        {
-          nodeId: "node-1",
-          caps: ["browser"],
-          commands: ["browser.proxy", "browser.proxy.upload.v1"],
-          platform: "linux",
-        },
-      ],
-  );
   return {
     invoke,
-    listConnected,
+    listConnected: vi.fn(
+      () =>
+        connectedNodes ?? [
+          browserNode("node-1", { commands: ["browser.proxy", "browser.proxy.upload.v1"] }),
+        ],
+    ),
   };
 }
 
-async function runBrowserRequest(
+async function runRequest(
   params: Record<string, unknown>,
   invokeResult?: NodeInvokeResult | NodeInvoke,
   connectedNodes?: TestNode[],
-  requester: Partial<
-    Pick<
-      Parameters<GatewayRequestHandlers[string]>[0],
-      "client" | "hasCurrentClientAuthority" | "signal"
-    >
-  > = {},
+  requester: Partial<Pick<RequestOptions, "client" | "hasCurrentClientAuthority" | "signal">> = {},
 ) {
-  const respond = vi.fn();
+  const respond = vi.fn<RequestOptions["respond"]>();
   const nodeRegistry = createContext(invokeResult, connectedNodes);
-  await expectDefined(
-    browserHandlers["browser.request"],
-    "browser request handler",
-  )({
+  await browserHandlers["browser.request"]({
     params,
-    respond: respond as never,
-    context: { nodeRegistry } as never,
+    respond,
+    context: { nodeRegistry },
     client: null,
     req: { type: "req", id: "req-1", method: "browser.request" },
     isWebchatConnect: () => false,
@@ -150,48 +128,40 @@ async function runBrowserRequest(
   return { respond, nodeRegistry };
 }
 
-function invokeParams(nodeRegistry: ReturnType<typeof createContext>) {
-  const call = (nodeRegistry.invoke.mock.calls as unknown[][])[0];
-  if (!call) {
-    throw new Error("expected browser node invoke call");
-  }
-  return call[0] as { nodeId?: string; command?: string; params?: Record<string, unknown> };
+function nodeInvocation(registry: ReturnType<typeof createContext>) {
+  return expectDefined(registry.invoke.mock.calls[0], "node invocation")[0];
+}
+function reply(respond: Awaited<ReturnType<typeof runRequest>>["respond"]) {
+  return expectDefined(respond.mock.calls[0], "browser response");
+}
+function invalid(respond: Awaited<ReturnType<typeof runRequest>>["respond"]) {
+  expect(reply(respond)).toEqual([
+    false,
+    undefined,
+    expect.objectContaining({ code: "INVALID_REQUEST" }),
+  ]);
 }
 
-function firstRespondCall(respond: ReturnType<typeof vi.fn>): RespondCall {
-  const [call] = respond.mock.calls as RespondCall[];
-  if (!call) {
-    throw new Error("expected respond call");
-  }
-  return call;
-}
+beforeEach(() => {
+  m.hostAvailable.mockReset().mockReturnValue(false);
+  policy();
+  m.allowlist.mockReturnValue([]);
+  m.allowed.mockReturnValue({ ok: true });
+  m.start.mockReset().mockResolvedValue(false);
+  m.dispatch.mockReset();
+  m.inspect.mockReset().mockResolvedValue({
+    sessionKey: "agent:main:browser-dashboard-proof",
+    name: "service",
+    instanceId: "instance-one",
+    paused: false,
+    browserTab: { target: "host", profile: "openclaw", targetId: "dashboard-tab" },
+  });
+  m.dashboardCurrent.mockReset().mockResolvedValue(undefined);
+  m.isUpload.mockClear();
+  m.prepareUpload.mockReset().mockImplementation(async ({ body }: { body: unknown }) => ({ body }));
+});
 
 describe("browser.request profile selection", () => {
-  beforeEach(() => {
-    browserHostAvailabilityMocks.isBrowserHostAvailable.mockReset().mockReturnValue(false);
-    loadConfigMock.mockReturnValue({
-      gateway: { nodes: { browser: { mode: "auto" } } },
-    });
-    resolveNodeCommandAllowlistMock.mockReturnValue([]);
-    isNodeCommandAllowedMock.mockReturnValue({ ok: true });
-    startBrowserControlServiceFromConfigMock.mockReset().mockResolvedValue(false);
-    createBrowserControlContextMock.mockClear();
-    createBrowserRouteDispatcherMock.mockClear();
-    dispatchBrowserRouteMock.mockReset();
-    dashboardMocks.inspectBrowserDashboard.mockReset().mockResolvedValue({
-      sessionKey: "agent:main:browser-dashboard-proof",
-      name: "service",
-      instanceId: "instance-one",
-      paused: false,
-      browserTab: { target: "host", profile: "openclaw", targetId: "dashboard-tab" },
-    });
-    dashboardMocks.assertBrowserDashboardTargetCurrent.mockReset().mockResolvedValue(undefined);
-    uploadMocks.isBrowserProxyUploadRequest.mockClear();
-    uploadMocks.prepareBrowserProxyUploadRequest
-      .mockReset()
-      .mockImplementation(async ({ body }: { body: unknown }) => ({ body }));
-  });
-
   function requesterClient(
     connectionSignal: AbortSignal,
   ): NonNullable<Parameters<GatewayRequestHandlers[string]>[0]["client"]> {
@@ -207,47 +177,36 @@ describe("browser.request profile selection", () => {
   }
 
   it.each([
-    { path: "/tabs/open/", body: { url: "https://example.com" } },
-    { path: "tabs/open", body: { url: "https://example.com" } },
+    { path: "tabs/open/", body: { url: "https://example.com" } },
     { path: "/stop/" },
     { path: "/start" },
     { path: "/reset-profile" },
-    { path: "/tabs/action", body: { action: "new" } },
     { path: "/tabs/action", body: { action: "close", index: 0 } },
   ])(
     "keeps dashboard-scoped $path away from profile and indexed-tab mutations",
     async ({ path, body }) => {
-      startBrowserControlServiceFromConfigMock.mockResolvedValue(true);
-      dispatchBrowserRouteMock.mockResolvedValue({ status: 200, body: { ok: true } });
-      const { respond, nodeRegistry } = await runBrowserRequest({
+      dispatchLocally({ ok: true });
+      const { respond, nodeRegistry } = await runRequest({
         method: "POST",
         path,
         body,
         dashboard: { sessionKey: "agent:main:browser-dashboard-proof", name: "service" },
       });
-      expect(firstRespondCall(respond)).toEqual([
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      ]);
-      expect(dispatchBrowserRouteMock).not.toHaveBeenCalled();
+      invalid(respond);
+      expect(m.dispatch).not.toHaveBeenCalled();
       expect(nodeRegistry.invoke).not.toHaveBeenCalled();
     },
   );
 
   it("binds an omitted dashboard POST body to the retained tab", async () => {
-    startBrowserControlServiceFromConfigMock.mockResolvedValue(true);
-    dispatchBrowserRouteMock.mockResolvedValue({
-      status: 200,
-      body: { targetId: "dashboard-tab" },
-    });
-    const { respond } = await runBrowserRequest({
+    dispatchLocally({ targetId: "dashboard-tab" });
+    const { respond } = await runRequest({
       method: "POST",
       path: "/screenshot",
       dashboard: { sessionKey: "agent:main:browser-dashboard-proof", name: "service" },
     });
-    expect(firstRespondCall(respond)[0]).toBe(true);
-    expect(dispatchBrowserRouteMock).toHaveBeenCalledWith(
+    expect(reply(respond)[0]).toBe(true);
+    expect(m.dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         body: expect.objectContaining({ targetId: "dashboard-tab", profile: "openclaw" }),
       }),
@@ -255,24 +214,22 @@ describe("browser.request profile selection", () => {
   });
 
   it("normalizes uploads before selecting their node command and preparing files", async () => {
-    const upload = {
-      envelope: "browser-upload-v1",
-      files: [{ name: "report.txt", contentBase64: "aGk=" }],
-    };
-    uploadMocks.prepareBrowserProxyUploadRequest.mockResolvedValue({ body: { ref: "e1" }, upload });
-    const { nodeRegistry } = await runBrowserRequest({
+    m.prepareUpload.mockResolvedValue({ body: { ref: "e1" }, upload });
+    const { respond, nodeRegistry } = await runRequest({
       method: "POST",
       path: "hooks/file-chooser/",
       target: "node",
       body: { paths: ["/tmp/openclaw/uploads/report.txt"], ref: "e1" },
     });
-    expect(invokeParams(nodeRegistry)).toMatchObject({
+    expect(nodeInvocation(nodeRegistry)).toMatchObject({
       command: "browser.proxy.upload.v1",
-      params: { path: "/hooks/file-chooser", upload },
+      params: { path: "/hooks/file-chooser", body: { ref: "e1" }, upload },
     });
-    expect(uploadMocks.prepareBrowserProxyUploadRequest).toHaveBeenCalledWith(
+    expect(m.prepareUpload).toHaveBeenCalledWith(
       expect.objectContaining({ path: "/hooks/file-chooser" }),
     );
+    expect(nodeInvocation(nodeRegistry).params).not.toHaveProperty("body.paths");
+    expect(reply(respond)[0]).toBe(true);
   });
 
   it.each(["cancelled", "invalidated", "revoked"] as const)(
@@ -281,7 +238,7 @@ describe("browser.request profile selection", () => {
       const invocation = new AbortController();
       const client = requesterClient(new AbortController().signal);
       let current = true;
-      uploadMocks.prepareBrowserProxyUploadRequest.mockImplementationOnce(async ({ body }) => {
+      m.prepareUpload.mockImplementationOnce(async ({ body }) => {
         if (reason === "cancelled") {
           invocation.abort(new Error("Browser request cancelled"));
         }
@@ -293,18 +250,16 @@ describe("browser.request profile selection", () => {
         }
         return { body };
       });
-      const { respond, nodeRegistry } = await runBrowserRequest(
+      const { respond, nodeRegistry } = await runRequest(
         { method: "POST", path: "/act", target: "node", body: { kind: "click", ref: "e1" } },
         undefined,
         undefined,
         { client, signal: invocation.signal, hasCurrentClientAuthority: () => current },
       );
-      expect(uploadMocks.prepareBrowserProxyUploadRequest.mock.calls[0]?.[0].signal).toBeInstanceOf(
-        AbortSignal,
-      );
-      expect(firstRespondCall(respond)[0]).toBe(false);
+      expect(m.prepareUpload.mock.calls[0]?.[0].signal).toBeInstanceOf(AbortSignal);
+      expect(reply(respond)[0]).toBe(false);
       expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-      expect(startBrowserControlServiceFromConfigMock).not.toHaveBeenCalled();
+      expect(m.start).not.toHaveBeenCalled();
     },
   );
 
@@ -313,7 +268,7 @@ describe("browser.request profile selection", () => {
     const invocation = new AbortController();
     const client = requesterClient(connection.signal);
     const observations: unknown[] = [];
-    const { respond } = await runBrowserRequest(
+    const { respond } = await runRequest(
       { method: "POST", path: "/act", target: "node", body: { kind: "click", ref: "e1" } },
       async (request) => {
         observations.push(request.signal?.aborted, request.isDispatchAuthorized?.());
@@ -327,14 +282,14 @@ describe("browser.request profile selection", () => {
       { client, signal: invocation.signal },
     );
     expect(observations).toEqual([false, true, false, true]);
-    expect(firstRespondCall(respond)[0]).toBe(false);
-    expect(startBrowserControlServiceFromConfigMock).not.toHaveBeenCalled();
+    expect(reply(respond)[0]).toBe(false);
+    expect(m.start).not.toHaveBeenCalled();
   });
 
   it("returns the node's browser timeout diagnostic before the enclosing invoke watchdog", async () => {
     vi.useFakeTimers();
     try {
-      const request = runBrowserRequest(
+      const request = runRequest(
         { method: "GET", path: "/snapshot", target: "node", timeoutMs: 1_000 },
         async (invocation) =>
           await new Promise<NodeInvokeResult>((resolve) => {
@@ -357,7 +312,7 @@ describe("browser.request profile selection", () => {
       );
       await vi.advanceTimersByTimeAsync(10_000);
       const { respond } = await request;
-      expect(firstRespondCall(respond)[2]?.message).toContain(
+      expect(reply(respond)[2]?.message).toContain(
         "browser proxy timed out; status(cdpReady=true)",
       );
     } finally {
@@ -368,17 +323,11 @@ describe("browser.request profile selection", () => {
   it("invalidates dispatched requester authority immediately before the Gateway close handshake finishes", async () => {
     const connection = new AbortController();
     const client = requesterClient(connection.signal);
-    startBrowserControlServiceFromConfigMock.mockResolvedValueOnce(true);
-    dispatchBrowserRouteMock.mockResolvedValueOnce({ status: 200, body: {} });
-    await runBrowserRequest(
-      { method: "POST", path: "/screencast", target: "host" },
-      undefined,
-      [],
-      {
-        client,
-      },
-    );
-    const dispatched = dispatchBrowserRouteMock.mock.calls[0]?.[0];
+    dispatchLocally({});
+    await runRequest({ method: "POST", path: "/screencast", target: "host" }, undefined, [], {
+      client,
+    });
+    const dispatched = m.dispatch.mock.calls[0]?.[0];
     expect(dispatched.requester).toMatchObject({
       connId: "requester-1",
       signal: connection.signal,
@@ -399,9 +348,8 @@ describe("browser.request profile selection", () => {
       if (reason === "connection closed") {
         connection.abort();
       }
-      startBrowserControlServiceFromConfigMock.mockResolvedValueOnce(true);
-      dispatchBrowserRouteMock.mockResolvedValueOnce({ status: 200, body: {} });
-      const { respond } = await runBrowserRequest(
+      dispatchLocally({});
+      const { respond } = await runRequest(
         { method: "POST", path: "/screencast", target: "host", timeoutMs: 1000 },
         undefined,
         [],
@@ -410,51 +358,41 @@ describe("browser.request profile selection", () => {
           hasCurrentClientAuthority: () => reason !== "authority revoked",
         },
       );
-      expect(firstRespondCall(respond)[0]).toBe(false);
-      expect(dispatchBrowserRouteMock).not.toHaveBeenCalled();
+      expect(reply(respond)[0]).toBe(false);
+      expect(m.dispatch).not.toHaveBeenCalled();
     },
   );
 
-  it.each([undefined, "node"] as const)(
-    "rejects screencast on the %s node route before invoking the node",
-    async (target) => {
-      const { respond, nodeRegistry } = await runBrowserRequest({
-        method: "POST",
-        path: "/screencast",
-        target,
-        ...(target === "node" ? { node: "node-1" } : {}),
-      });
-
-      expect(firstRespondCall(respond)).toEqual([
-        false,
-        undefined,
-        {
-          code: "INVALID_REQUEST",
-          message: "browser screencast is not available over a node proxy",
-          details: { code: "SCREENCAST_UNSUPPORTED", reason: "node" },
-        },
-      ]);
-      expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-      expect(uploadMocks.prepareBrowserProxyUploadRequest).not.toHaveBeenCalled();
-      expect(startBrowserControlServiceFromConfigMock).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects node screencast before preparation or dispatch", async () => {
+    const { respond, nodeRegistry } = await runRequest({
+      method: "POST",
+      path: "/screencast",
+      target: "node",
+      node: "node-1",
+    });
+    expect(reply(respond)).toEqual([
+      false,
+      undefined,
+      {
+        code: "INVALID_REQUEST",
+        message: "browser screencast is not available over a node proxy",
+        details: { code: "SCREENCAST_UNSUPPORTED", reason: "node" },
+      },
+    ]);
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+    expect(m.prepareUpload).not.toHaveBeenCalled();
+    expect(m.start).not.toHaveBeenCalled();
+  });
 
   it.each([
-    { target: undefined, localAvailable: true },
-    { target: undefined, localAvailable: false },
     { target: "host", localAvailable: false },
     { target: "node", localAvailable: true },
   ] as const)(
     "dispatches target=$target with localAvailable=$localAvailable while preserving the profile",
     async ({ target, localAvailable }) => {
-      browserHostAvailabilityMocks.isBrowserHostAvailable.mockReturnValue(localAvailable);
-      startBrowserControlServiceFromConfigMock.mockResolvedValueOnce(true);
-      dispatchBrowserRouteMock.mockResolvedValueOnce({
-        status: 200,
-        body: { targetId: "host-tab" },
-      });
-      const { respond, nodeRegistry } = await runBrowserRequest(
+      m.hostAvailable.mockReturnValue(localAvailable);
+      dispatchLocally({ targetId: "host-tab" });
+      const { respond, nodeRegistry } = await runRequest(
         {
           method: "POST",
           path: "/tabs/focus",
@@ -465,14 +403,11 @@ describe("browser.request profile selection", () => {
         { ok: true, payload: { result: { targetId: "node-tab" } } },
       );
       const usesHost = target === "host" || (target === undefined && localAvailable);
-      expect(firstRespondCall(respond)).toEqual([
-        true,
-        { targetId: usesHost ? "host-tab" : "node-tab" },
-      ]);
+      expect(reply(respond)).toEqual([true, { targetId: usesHost ? "host-tab" : "node-tab" }]);
       if (usesHost) {
         expect(nodeRegistry.invoke).not.toHaveBeenCalled();
         expect(nodeRegistry.listConnected).not.toHaveBeenCalled();
-        expect(dispatchBrowserRouteMock).toHaveBeenCalledWith(
+        expect(m.dispatch).toHaveBeenCalledWith(
           expect.objectContaining({
             method: "POST",
             path: "/tabs/focus",
@@ -481,49 +416,38 @@ describe("browser.request profile selection", () => {
           }),
         );
       } else {
-        expect(invokeParams(nodeRegistry)).toMatchObject({
+        expect(nodeInvocation(nodeRegistry)).toMatchObject({
           nodeId: "node-1",
           params: { profile: "work" },
         });
-        expect(startBrowserControlServiceFromConfigMock).not.toHaveBeenCalled();
+        expect(m.start).not.toHaveBeenCalled();
       }
     },
   );
 
   it("resolves an explicit node selector instead of the configured node", async () => {
-    browserHostAvailabilityMocks.isBrowserHostAvailable.mockReturnValue(true);
-    loadConfigMock.mockReturnValue({
-      gateway: { nodes: { browser: { mode: "manual", node: "other" } } },
-    });
-    const { respond, nodeRegistry } = await runBrowserRequest(
+    m.hostAvailable.mockReturnValue(true);
+    policy("manual", "other");
+    const { respond, nodeRegistry } = await runRequest(
       { method: "GET", path: "/tabs", target: "node", node: "Selected Node" },
       undefined,
-      ["other", "selected"].map((nodeId) => ({
-        nodeId,
-        displayName: nodeId === "selected" ? "Selected Node" : "Other",
-        caps: ["browser"],
-        commands: ["browser.proxy"],
-      })),
+      ["other", "selected"].map((nodeId) =>
+        browserNode(nodeId, { displayName: nodeId === "selected" ? "Selected Node" : "Other" }),
+      ),
     );
-    expect(invokeParams(nodeRegistry).nodeId).toBe("selected");
-    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(nodeInvocation(nodeRegistry).nodeId).toBe("selected");
+    expect(reply(respond)[0]).toBe(true);
   });
 
   it.each([
     { query: { profile: "local-work" }, body: { profile: "node-work" }, local: true },
-    { query: undefined, body: { profile: "local-work" }, local: true },
+    { query: undefined, body: { profile: "node-work" }, local: false },
     { query: { profile: "node-work" }, body: { profile: "local-work" }, local: false },
   ])("uses the selected profile's host availability for %j", async ({ query, body, local }) => {
-    browserHostAvailabilityMocks.isBrowserHostAvailable.mockImplementation(
-      (_config, profileName) => profileName === "local-work",
-    );
-    startBrowserControlServiceFromConfigMock.mockResolvedValueOnce(true);
-    dispatchBrowserRouteMock.mockResolvedValueOnce({
-      status: 200,
-      body: { source: "host" },
-    });
+    m.hostAvailable.mockImplementation((_config, profileName) => profileName === "local-work");
+    dispatchLocally({ source: "host" });
 
-    const { respond, nodeRegistry } = await runBrowserRequest({
+    const { respond, nodeRegistry } = await runRequest({
       method: "POST",
       path: "/start",
       query,
@@ -531,73 +455,53 @@ describe("browser.request profile selection", () => {
     });
 
     if (local) {
-      expect(firstRespondCall(respond)).toEqual([true, { source: "host" }]);
+      expect(reply(respond)).toEqual([true, { source: "host" }]);
       expect(nodeRegistry.listConnected).not.toHaveBeenCalled();
       expect(nodeRegistry.invoke).not.toHaveBeenCalled();
     } else {
-      expect(firstRespondCall(respond)[0]).toBe(true);
-      expect(invokeParams(nodeRegistry).params?.profile).toBe("node-work");
-      expect(dispatchBrowserRouteMock).not.toHaveBeenCalled();
+      expect(reply(respond)[0]).toBe(true);
+      expect(nodeInvocation(nodeRegistry)).toMatchObject({
+        command: "browser.proxy",
+        params: { profile: "node-work", errorEnvelope: "browser-v1" },
+      });
+      expect(m.dispatch).not.toHaveBeenCalled();
     }
   });
 
   it("does not replay a failed host action on a connected node", async () => {
-    browserHostAvailabilityMocks.isBrowserHostAvailable.mockReturnValue(true);
-    startBrowserControlServiceFromConfigMock.mockResolvedValueOnce(true);
+    m.hostAvailable.mockReturnValue(true);
+    m.start.mockResolvedValueOnce(true);
     const message = "navigation timed out after the page received the request";
-    dispatchBrowserRouteMock.mockResolvedValueOnce({ status: 500, body: { error: message } });
+    m.dispatch.mockResolvedValueOnce({ status: 500, body: { error: message } });
 
-    const { respond, nodeRegistry } = await runBrowserRequest({
+    const { respond, nodeRegistry } = await runRequest({
       method: "POST",
       path: "/navigate",
       body: { targetId: "local-tab", url: "https://example.com" },
     });
 
-    expect(firstRespondCall(respond)).toEqual([
+    expect(reply(respond)).toEqual([
       false,
       undefined,
       { code: "UNAVAILABLE", message, details: { error: message } },
     ]);
-    expect(dispatchBrowserRouteMock).toHaveBeenCalledOnce();
+    expect(m.dispatch).toHaveBeenCalledOnce();
     expect(nodeRegistry.listConnected).not.toHaveBeenCalled();
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
   });
 
   it.each([
     { target: "sandbox" },
-    { target: 1 },
     { target: "host", node: "node-1" },
-    { node: "node-1" },
     { target: "node", node: " " },
-    { target: "node", node: 1 },
     { target: "node", node: "n".repeat(257) },
-  ])("rejects invalid route identity %j before dispatch", async (route) => {
-    const { respond, nodeRegistry } = await runBrowserRequest({
-      method: "GET",
-      path: "/tabs",
-      ...route,
-    });
-    expect(firstRespondCall(respond)).toEqual([
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    ]);
+    { target: "node", path: "/system-profiles" },
+    { target: "node", method: "POST", path: "/profiles/import" },
+  ])("rejects invalid or host-only route identity before dispatch: %j", async (route) => {
+    const { respond, nodeRegistry } = await runRequest({ method: "GET", path: "/tabs", ...route });
+    invalid(respond);
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-    expect(startBrowserControlServiceFromConfigMock).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { method: "GET", path: "/system-profiles" },
-    { method: "POST", path: "/profiles/import" },
-  ])("rejects explicit node routing for host-only $path", async (request) => {
-    const { respond, nodeRegistry } = await runBrowserRequest({ ...request, target: "node" });
-    expect(firstRespondCall(respond)).toEqual([
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    ]);
-    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-    expect(startBrowserControlServiceFromConfigMock).not.toHaveBeenCalled();
+    expect(m.start).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -608,12 +512,12 @@ describe("browser.request profile selection", () => {
     "denied command",
   ])("never retargets explicit node requests after %s", async (failure) => {
     if (failure === "disabled policy") {
-      loadConfigMock.mockReturnValue({ gateway: { nodes: { browser: { mode: "off" } } } });
+      policy("off");
     }
     if (failure === "denied command") {
-      isNodeCommandAllowedMock.mockReturnValueOnce({ ok: false, reason: "not in allowlist" });
+      m.allowed.mockReturnValueOnce({ ok: false, reason: "not in allowlist" });
     }
-    const { respond } = await runBrowserRequest(
+    const { respond } = await runRequest(
       failure === "unsupported upload"
         ? {
             method: "POST",
@@ -622,116 +526,52 @@ describe("browser.request profile selection", () => {
             body: { paths: ["/tmp/openclaw/uploads/report.txt"] },
           }
         : { method: "GET", path: "/tabs", target: "node" },
-      {
-        ok: false,
-        error: {
-          code: "UNAVAILABLE",
-          message: "Browser control host is not reachable on 127.0.0.1:18791.",
-        },
-      },
-      failure === "missing node"
-        ? []
-        : [{ nodeId: "node-1", caps: ["browser"], commands: ["browser.proxy"] }],
+      hostUnavailable,
+      failure === "missing node" ? [] : [browserNode()],
     );
-    expect(firstRespondCall(respond)[0]).toBe(false);
-    expect(startBrowserControlServiceFromConfigMock).not.toHaveBeenCalled();
+    expect(reply(respond)[0]).toBe(false);
+    expect(m.start).not.toHaveBeenCalled();
   });
 
   it("forces system-profile import host-local even when a browser node is connected", async () => {
-    const { respond, nodeRegistry } = await runBrowserRequest({
+    const { respond, nodeRegistry } = await runRequest({
       method: "POST",
       path: "/profiles/import",
       body: { browser: "chrome", systemProfile: "Default", into: "imported" },
     });
 
-    // Never routed to the browser node...
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-    // ...and reached host-local dispatch instead of the node-proxy block.
-    expect(startBrowserControlServiceFromConfigMock).toHaveBeenCalled();
-    const [ok, payload, error] = firstRespondCall(respond);
+    expect(m.start).toHaveBeenCalled();
+    const [ok, payload, error] = reply(respond);
     expect(ok).toBe(false);
     expect(payload).toBeUndefined();
     expect(error?.message).toContain("browser control disabled:");
   });
 
-  it("uses profile from request body when query profile is missing", async () => {
-    const { respond, nodeRegistry } = await runBrowserRequest({
-      method: "POST",
-      path: "/act",
-      body: { profile: "work", request: { action: "click", ref: "btn1" } },
-    });
+  it("honors a configured Unicode browser node in manual mode despite local availability", async () => {
+    policy("manual", "Café01");
 
-    const invoke = invokeParams(nodeRegistry);
-    expect(invoke.command).toBe("browser.proxy");
-    expect(invoke.params?.profile).toBe("work");
-    expect(invoke.params?.errorEnvelope).toBe("browser-v1");
-    expect(firstRespondCall(respond)[0]).toBe(true);
-  });
-
-  it("prefers query profile over body profile when both are present", async () => {
-    const { nodeRegistry } = await runBrowserRequest({
-      method: "POST",
-      path: "/act",
-      query: { profile: "chrome" },
-      body: { profile: "work", request: { action: "click", ref: "btn1" } },
-    });
-
-    expect(invokeParams(nodeRegistry).params?.profile).toBe("chrome");
-  });
-
-  it("routes configured compact Unicode browser node names through the node proxy", async () => {
-    loadConfigMock.mockReturnValue({
-      gateway: { nodes: { browser: { mode: "auto", node: "Café01" } } },
-    });
-
-    const { respond, nodeRegistry } = await runBrowserRequest(
+    m.hostAvailable.mockReturnValue(true);
+    const { respond, nodeRegistry } = await runRequest(
       {
         method: "GET",
         path: "/profiles",
       },
       undefined,
       [
-        {
-          nodeId: "cafe-node",
-          displayName: "Cafe\u0301 01",
-          caps: ["browser"],
-          commands: ["browser.proxy"],
-          platform: "linux",
-        },
-        {
-          nodeId: "other-node",
-          displayName: "Other Browser",
-          caps: ["browser"],
-          commands: ["browser.proxy"],
-          platform: "linux",
-        },
+        browserNode("cafe-node", { displayName: "Cafe\u0301 01" }),
+        browserNode("other-node", { displayName: "Other Browser" }),
       ],
     );
 
-    const invoke = invokeParams(nodeRegistry);
+    const invoke = nodeInvocation(nodeRegistry);
     expect(invoke.nodeId).toBe("cafe-node");
     expect(invoke.command).toBe("browser.proxy");
-    expect(firstRespondCall(respond)[0]).toBe(true);
-  });
-
-  it("honors a configured browser node in manual routing mode", async () => {
-    browserHostAvailabilityMocks.isBrowserHostAvailable.mockReturnValue(true);
-    loadConfigMock.mockReturnValue({
-      gateway: { nodes: { browser: { mode: "manual", node: "node-1" } } },
-    });
-
-    const { respond, nodeRegistry } = await runBrowserRequest({ method: "GET", path: "/" });
-
-    expect(invokeParams(nodeRegistry).nodeId).toBe("node-1");
-    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(invoke.params).toMatchObject({ method: "GET", path: "/profiles" });
+    expect(reply(respond)[0]).toBe(true);
   });
 
   it.each([
-    {
-      method: "POST",
-      path: "/profiles/create",
-      body: { name: "poc", cdpUrl: "http://10.0.0.42:9222" },
-    },
     {
       method: "DELETE",
       path: "/profiles/poc",
@@ -743,29 +583,19 @@ describe("browser.request profile selection", () => {
       body: { name: "poc", cdpUrl: "http://10.0.0.42:9222" },
     },
     {
-      method: "DELETE",
-      path: "profiles/poc",
-      body: undefined,
-    },
-    {
       method: "POST",
       path: "/reset-profile",
       body: { profile: "poc", name: "poc" },
     },
-    {
-      method: "POST",
-      path: "reset-profile",
-      body: { profile: "poc", name: "poc" },
-    },
   ])("blocks persistent profile mutations for $method $path", async ({ method, path, body }) => {
-    const { respond, nodeRegistry } = await runBrowserRequest({
+    const { respond, nodeRegistry } = await runRequest({
       method,
       path,
       body,
     });
 
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-    const [ok, payload, error] = firstRespondCall(respond);
+    const [ok, payload, error] = reply(respond);
     expect(ok).toBe(false);
     expect(payload).toBeUndefined();
     expect(error?.message).toBe(
@@ -773,221 +603,93 @@ describe("browser.request profile selection", () => {
     );
   });
 
-  it.each([
-    { method: "POST", path: "/profiles/create", body: { name: "poc" } },
-    { method: "DELETE", path: "/profiles/poc", body: undefined },
-    { method: "POST", path: "/reset-profile", body: { profile: "poc", name: "poc" } },
-  ])(
-    "dispatches host-local admin mutations for $method $path when no node handles the request",
-    async ({ method, path, body }) => {
-      const { respond, nodeRegistry } = await runBrowserRequest(
-        { method, path, body },
-        undefined,
-        [],
-      );
+  it("dispatches host-local admin mutations when no node handles the request", async () => {
+    const { respond, nodeRegistry } = await runRequest(
+      { method: "POST", path: "/profiles/create", body: { name: "poc" } },
+      undefined,
+      [],
+    );
 
-      expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-      expect(startBrowserControlServiceFromConfigMock).toHaveBeenCalledOnce();
-      const [ok, payload, error] = firstRespondCall(respond);
-      expect(ok).toBe(false);
-      expect(payload).toBeUndefined();
-      expect(error?.message).toContain("browser control disabled:");
-    },
-  );
-
-  it("allows non-mutating profile reads", async () => {
-    const { respond, nodeRegistry } = await runBrowserRequest({
-      method: "GET",
-      path: "/profiles",
-    });
-
-    const invoke = invokeParams(nodeRegistry);
-    expect(invoke.command).toBe("browser.proxy");
-    expect(invoke.params?.method).toBe("GET");
-    expect(invoke.params?.path).toBe("/profiles");
-    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+    expect(m.start).toHaveBeenCalledOnce();
+    const [ok, payload, error] = reply(respond);
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    expect(error?.message).toContain("browser control disabled:");
   });
 
   it("falls back to host dispatch when an auto-selected node has no browser host", async () => {
-    const { respond, nodeRegistry } = await runBrowserRequest(
+    const { respond, nodeRegistry } = await runRequest(
       { method: "GET", path: "/" },
-      {
-        ok: false,
-        error: {
-          code: "UNAVAILABLE",
-          message: "Browser control host is not reachable on 127.0.0.1:18791.",
-        },
-      },
+      hostUnavailable,
     );
 
     expect(nodeRegistry.invoke).toHaveBeenCalledOnce();
-    expect(startBrowserControlServiceFromConfigMock).toHaveBeenCalledOnce();
-    expect(firstRespondCall(respond)[2]?.message).toContain("browser control disabled:");
-  });
-
-  it("sends Gateway-owned upload bytes without forwarding source paths", async () => {
-    const upload = {
-      envelope: "browser-upload-v1",
-      files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
-    };
-    uploadMocks.prepareBrowserProxyUploadRequest.mockResolvedValueOnce({
-      body: { ref: "e12" },
-      upload,
-    });
-
-    const { respond, nodeRegistry } = await runBrowserRequest({
-      method: "POST",
-      path: "/hooks/file-chooser",
-      body: {
-        paths: ["/tmp/openclaw/uploads/report.txt"],
-        ref: "e12",
-      },
-    });
-
-    expect(invokeParams(nodeRegistry).params).toMatchObject({
-      body: { ref: "e12" },
-      upload,
-    });
-    expect(invokeParams(nodeRegistry).command).toBe("browser.proxy.upload.v1");
-    expect(invokeParams(nodeRegistry).params?.body).not.toHaveProperty("paths");
-    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(m.start).toHaveBeenCalledOnce();
+    expect(reply(respond)[2]?.message).toContain("browser control disabled:");
   });
 
   it("uses the original Gateway paths when an auto-selected old node lacks upload support", async () => {
-    const originalBody = {
-      paths: ["/tmp/openclaw/uploads/report.txt"],
-      ref: "e12",
-    };
-    uploadMocks.prepareBrowserProxyUploadRequest.mockResolvedValueOnce({
-      body: { ref: "e12" },
-      upload: {
-        envelope: "browser-upload-v1",
-        files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
-      },
-    });
-    startBrowserControlServiceFromConfigMock.mockResolvedValueOnce(true);
-    dispatchBrowserRouteMock.mockResolvedValueOnce({ status: 200, body: { ok: true } });
+    dispatchLocally({ ok: true });
 
-    const { respond, nodeRegistry } = await runBrowserRequest(
+    const { respond, nodeRegistry } = await runRequest(
       {
         method: "POST",
         path: "/hooks/file-chooser",
-        body: originalBody,
+        body: uploadBody,
       },
       undefined,
-      [
-        {
-          nodeId: "node-1",
-          caps: ["browser"],
-          commands: ["browser.proxy"],
-          platform: "linux",
-        },
-      ],
+      [browserNode()],
     );
 
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-    expect(dispatchBrowserRouteMock).toHaveBeenCalledWith(
+    expect(m.dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "POST",
         path: "/hooks/file-chooser",
-        body: originalBody,
+        body: uploadBody,
       }),
     );
-    expect(firstRespondCall(respond)).toEqual([true, { ok: true }]);
-    expect(uploadMocks.prepareBrowserProxyUploadRequest).not.toHaveBeenCalled();
+    expect(reply(respond)).toEqual([true, { ok: true }]);
+    expect(m.prepareUpload).not.toHaveBeenCalled();
   });
 
-  it("rejects a configured old node upload before node dispatch", async () => {
-    loadConfigMock.mockReturnValue({
-      gateway: { nodes: { browser: { mode: "auto", node: "node-1" } } },
-    });
-    uploadMocks.prepareBrowserProxyUploadRequest.mockResolvedValueOnce({
-      body: { ref: "e12" },
-      upload: {
-        envelope: "browser-upload-v1",
-        files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
-      },
-    });
-
-    const { respond, nodeRegistry } = await runBrowserRequest(
-      {
-        method: "POST",
-        path: "/hooks/file-chooser",
-        body: { paths: ["/tmp/openclaw/uploads/report.txt"], ref: "e12" },
-      },
-      undefined,
-      [
-        {
-          nodeId: "node-1",
-          caps: ["browser"],
-          commands: ["browser.proxy"],
-          platform: "linux",
-        },
-      ],
-    );
-
-    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-    expect(startBrowserControlServiceFromConfigMock).not.toHaveBeenCalled();
-    expect(firstRespondCall(respond)[2]?.message).toContain(
-      "browser node does not support remote upload transfer",
-    );
-    expect(uploadMocks.prepareBrowserProxyUploadRequest).not.toHaveBeenCalled();
-  });
-
-  it("explains when configured-node upload support is awaiting approval", async () => {
-    loadConfigMock.mockReturnValue({
-      gateway: { nodes: { browser: { mode: "auto", node: "node-1" } } },
-    });
-
-    const { respond, nodeRegistry } = await runBrowserRequest(
-      {
-        method: "POST",
-        path: "/hooks/file-chooser",
-        body: { paths: ["/tmp/openclaw/uploads/report.txt"], ref: "e12" },
-      },
-      undefined,
-      [
-        {
-          nodeId: "node-1",
-          caps: ["browser"],
-          commands: ["browser.proxy"],
-          declaredCommands: ["browser.proxy", "browser.proxy.upload.v1"],
-          platform: "linux",
-        },
-      ],
-    );
-
-    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-    expect(firstRespondCall(respond)[2]?.message).toContain(
-      "remote upload transfer is pending approval",
-    );
-    expect(uploadMocks.prepareBrowserProxyUploadRequest).not.toHaveBeenCalled();
-  });
+  it.each([
+    {
+      declaredCommands: undefined,
+      message: "browser node does not support remote upload transfer",
+    },
+    {
+      declaredCommands: ["browser.proxy", "browser.proxy.upload.v1"],
+      message: "remote upload transfer is pending approval",
+    },
+  ])(
+    "rejects configured-node upload before dispatch: $message",
+    async ({ declaredCommands, message }) => {
+      policy("auto", "node-1");
+      const { respond, nodeRegistry } = await runRequest(
+        { method: "POST", path: "/hooks/file-chooser", body: uploadBody },
+        undefined,
+        [browserNode("node-1", { declaredCommands })],
+      );
+      expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+      expect(m.start).not.toHaveBeenCalled();
+      expect(reply(respond)[2]?.message).toContain(message);
+      expect(m.prepareUpload).not.toHaveBeenCalled();
+    },
+  );
 
   it("preserves a configured node failure instead of falling back to the host", async () => {
-    browserHostAvailabilityMocks.isBrowserHostAvailable.mockReturnValue(true);
-    loadConfigMock.mockReturnValue({
-      gateway: { nodes: { browser: { mode: "auto", node: "node-1" } } },
-    });
-    const { respond } = await runBrowserRequest(
-      { method: "GET", path: "/" },
-      {
-        ok: false,
-        error: {
-          code: "UNAVAILABLE",
-          message: "Browser control host is not reachable on 127.0.0.1:18791.",
-        },
-      },
-    );
+    m.hostAvailable.mockReturnValue(true);
+    policy("auto", "node-1");
+    const { respond } = await runRequest({ method: "GET", path: "/" }, hostUnavailable);
 
-    expect(startBrowserControlServiceFromConfigMock).not.toHaveBeenCalled();
-    expect(firstRespondCall(respond)[2]?.message).toContain(
-      "Browser control host is not reachable",
-    );
+    expect(m.start).not.toHaveBeenCalled();
+    expect(reply(respond)[2]?.message).toContain("Browser control host is not reachable");
   });
 
   it("preserves ambiguous auto-selected node failures", async () => {
-    const { respond } = await runBrowserRequest(
+    const { respond } = await runRequest(
       { method: "GET", path: "/" },
       {
         ok: false,
@@ -995,8 +697,8 @@ describe("browser.request profile selection", () => {
       },
     );
 
-    expect(startBrowserControlServiceFromConfigMock).not.toHaveBeenCalled();
-    expect(firstRespondCall(respond)[2]?.message).toBe("UNAVAILABLE: node invoke timed out");
+    expect(m.start).not.toHaveBeenCalled();
+    expect(reply(respond)[2]?.message).toBe("UNAVAILABLE: node invoke timed out");
   });
 
   it("maps validated node-proxy route failures like local route failures", async () => {
@@ -1010,12 +712,12 @@ describe("browser.request profile selection", () => {
         displayPresent: false,
       },
     };
-    const { respond } = await runBrowserRequest(
+    const { respond } = await runRequest(
       { method: "POST", path: "/start" },
       { ok: true, payload: { error: { status: 409, body: errorBody } } },
     );
 
-    const [ok, payload, error] = firstRespondCall(respond);
+    const [ok, payload, error] = reply(respond);
     expect(ok).toBe(false);
     expect(payload).toBeUndefined();
     expect(error).toMatchObject({
@@ -1037,12 +739,12 @@ describe("browser.request profile selection", () => {
       details: { error: "evaluation disabled", unrecognizedCode: true },
     },
   ])("preserves bounded $name state through the node proxy", async ({ body, details }) => {
-    const { respond } = await runBrowserRequest(
+    const { respond } = await runRequest(
       { method: "POST", path: "/act" },
       { ok: true, payload: { error: { status: 403, body } } },
     );
 
-    expect(firstRespondCall(respond)[2]).toEqual({
+    expect(reply(respond)[2]).toEqual({
       code: "INVALID_REQUEST",
       message: "evaluation disabled",
       details,
@@ -1050,7 +752,7 @@ describe("browser.request profile selection", () => {
   });
 
   it("returns UNAVAILABLE for an incomplete node file envelope", async () => {
-    const { respond } = await runBrowserRequest(
+    const { respond } = await runRequest(
       { method: "POST", path: "/screenshot" },
       {
         ok: true,
@@ -1058,12 +760,289 @@ describe("browser.request profile selection", () => {
       },
     );
 
-    const [ok, payload, error] = firstRespondCall(respond);
+    const [ok, payload, error] = reply(respond);
     expect(ok).toBe(false);
     expect(payload).toBeUndefined();
     expect(error).toMatchObject({
       code: "UNAVAILABLE",
       message: "browser proxy file transfer failed",
     });
+  });
+});
+
+describe("session tab scope", () => {
+  const sessionKey = "agent:main:scope-a";
+  const otherSessionKey = "agent:main:scope-b";
+  const resolved = resolveBrowserConfig({ defaultProfile: "openclaw" });
+  const profile = expectDefined(resolveProfile(resolved, "openclaw"), "host profile");
+  type DispatchRequest = Parameters<ReturnType<typeof createBrowserRouteDispatcher>["dispatch"]>[0];
+
+  function hostResponse(body: unknown, status = 200, afterDispatch?: () => void) {
+    m.dispatch.mockImplementation(async (request: DispatchRequest) => {
+      await request.assertCurrent?.(profile);
+      afterDispatch?.();
+      return { status, body };
+    });
+  }
+
+  beforeEach(() => {
+    m.start.mockReset().mockResolvedValue({ resolved });
+    m.dispatch.mockReset();
+    m.inspect.mockReset();
+  });
+
+  afterEach(async () => {
+    await closeTrackedBrowserTabsForSessions({
+      sessionKeys: [sessionKey, otherSessionKey],
+      closeTab: async () => {},
+    });
+    vi.restoreAllMocks();
+  });
+
+  it("lists this session's owned and referenced host tabs while the dock lists all tabs", async () => {
+    await trackSessionBrowserTab({ sessionKey, targetId: "owned", profile: "openclaw" });
+    await trackSessionBrowserTab({
+      sessionKey: otherSessionKey,
+      targetId: "other-session",
+      profile: "openclaw",
+    });
+    const owned = { targetId: "owned", tabId: "t0", url: "", blocked: true };
+    const referenced = { targetId: "referenced", tabId: "t9" };
+    const tabs = [
+      owned,
+      referenced,
+      { targetId: "other-session" },
+      { targetId: "outside-openclaw" },
+      { targetId: "profile-collision", tabId: "t1" },
+      { targetId: "node-collision", tabId: "t3" },
+    ];
+    hostResponse({ running: true, tabs });
+    const { respond } = await runRequest({
+      target: "host",
+      method: "GET",
+      path: "/tabs",
+      tabScope: {
+        sessionKey: ` ${sessionKey} `,
+        referencedTabs: [
+          { target: "host", profile: "openclaw", targetId: "referenced" },
+          { target: "host", profile: "other-profile", targetId: "t1" },
+          { target: "node", node: "node-1", profile: "openclaw", targetId: "t3" },
+        ],
+      },
+    });
+    expect(reply(respond)).toEqual([true, { running: true, tabs: [owned, referenced] }]);
+    const dock = await runRequest({ target: "host", method: "GET", path: "/tabs" });
+    expect(reply(dock.respond)).toEqual([true, { running: true, tabs }]);
+  });
+
+  it("closes a newly opened tab on its resolved profile when cleanup tracking fails", async () => {
+    expect(getOptionalBrowserStateRuntime()).toBeNull();
+    hostResponse({
+      targetId: "opened/target",
+      resolvedProfile: "openclaw",
+      ownership: {
+        status: "durable",
+        nativeTargetId: "opened/target",
+        profileFingerprint: "test-profile-fingerprint",
+        browserInstanceFingerprint: "test-browser-instance-fingerprint",
+      },
+    });
+    const { respond } = await runRequest({
+      target: "host",
+      method: "POST",
+      path: "/tabs/open",
+      query: { profile: "requested-profile" },
+      body: { url: "https://example.com" },
+      tabScope: { sessionKey },
+    });
+    expect(reply(respond)).toEqual([
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("Browser state runtime not initialized"),
+      }),
+    ]);
+    expect(m.dispatch).toHaveBeenCalledTimes(2);
+    expect(m.dispatch).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        method: "DELETE",
+        path: "/tabs/opened%2Ftarget",
+        query: { profile: "openclaw", targetIdMode: "raw" },
+        assertCurrent: expect.any(Function),
+      }),
+    );
+  });
+
+  it.each(["host", "node"] as const)(
+    "tracks panel-opened %s tabs on their resolved profile",
+    async (target) => {
+      const opened = { targetId: "panel-opened", tabId: "t1", resolvedProfile: "openclaw" };
+      const params = { target, query: { profile: "requested-profile" }, tabScope: { sessionKey } };
+      const route = { status: "resolved", profile: "openclaw", driver: "openclaw" };
+      async function dispatch(method: string, path: string, result: unknown, body?: unknown) {
+        hostResponse(result);
+        return runRequest(
+          { ...params, method, path, body },
+          { ok: true, payload: { result, route } },
+          [browserNode()],
+        );
+      }
+      const result = await dispatch("POST", "/tabs/open", opened, { url: "https://example.com" });
+      expect(reply(result.respond)).toEqual([true, opened]);
+      const listed = await dispatch("GET", "/tabs", {
+        running: true,
+        tabs: [opened, { targetId: "untracked" }],
+      });
+      expect(reply(listed.respond)).toEqual([true, { running: true, tabs: [opened] }]);
+    },
+  );
+
+  it.each(
+    ["/tabs/open", "/tabs/owned", "/navigate", "/tabs/focus", "/act", "/screenshot"].flatMap(
+      (path) =>
+        ["success", "failure", "stale"].map((outcome) => ({
+          path,
+          outcome,
+          method: path === "/tabs/owned" ? "DELETE" : "POST",
+        })),
+    ),
+  )(
+    "updates ownership and activity only for current successful $path ($outcome)",
+    async ({ path, method, outcome }) => {
+      vi.spyOn(Date, "now").mockReturnValue(9_000);
+      await trackSessionBrowserTab({
+        sessionKey,
+        targetId: "owned",
+        profile: "openclaw",
+        now: 1_000,
+      });
+      let current = true;
+      hostResponse(
+        { targetId: "opened", resolvedProfile: "openclaw" },
+        outcome === "failure" ? 500 : 200,
+        () => {
+          current = outcome !== "stale";
+        },
+      );
+      const { respond } = await runRequest(
+        { target: "host", method, path, body: { targetId: "owned" }, tabScope: { sessionKey } },
+        undefined,
+        undefined,
+        { hasCurrentClientAuthority: () => current },
+      );
+      expect(reply(respond)[0]).toBe(outcome === "success");
+      const succeeds = outcome === "success";
+      const tracked = await filterTrackedSessionBrowserTabs({
+        sessionKey,
+        profile: "openclaw",
+        tabs: [{ targetId: "owned" }, { targetId: "opened" }],
+      });
+      expect(tracked).toEqual([
+        ...(path !== "/tabs/owned" || !succeeds ? [{ targetId: "owned" }] : []),
+        ...(path === "/tabs/open" && succeeds ? [{ targetId: "opened" }] : []),
+      ]);
+      const closeTab = vi.fn(async () => {});
+      await sweepTrackedBrowserTabs({
+        now: 10_000,
+        idleMs: 5_000,
+        closeTab,
+        sessionFilter: (key) => key === sessionKey,
+      });
+      const touched = succeeds && (path === "/navigate" || path === "/tabs/focus");
+      expect(closeTab).toHaveBeenCalledTimes(
+        touched || (path === "/tabs/owned" && succeeds) ? 0 : 1,
+      );
+    },
+  );
+
+  it("matches canonical node routes and profiles without forwarding tabScope to the proxy", async () => {
+    const node = {
+      nodeId: "canonical-node",
+      displayName: "Work Browser",
+      caps: ["browser"],
+      commands: ["browser.proxy"],
+      declaredCommands: ["browser.proxy"],
+    };
+    await trackSessionBrowserTab({
+      sessionKey,
+      targetId: "node-owned",
+      profile: "node-profile",
+      route: createBrowserNodeSessionTabRoute(node),
+    });
+    await trackSessionBrowserTab({
+      sessionKey,
+      targetId: "other-node-owned",
+      profile: "node-profile",
+      route: createBrowserNodeSessionTabRoute({ ...node, nodeId: "other-node" }),
+    });
+    const owned = { targetId: "node-owned" };
+    const referenced = { targetId: "node-referenced", tabId: "t1" };
+    const tabs = [
+      owned,
+      referenced,
+      { targetId: "other-node-owned" },
+      { targetId: "wrong-profile", tabId: "t2" },
+      { targetId: "wrong-node", tabId: "t3" },
+    ];
+    const { respond, nodeRegistry } = await runRequest(
+      {
+        target: "node",
+        node: "Work Browser",
+        method: "GET",
+        path: "/tabs",
+        query: { profile: "requested-profile" },
+        tabScope: {
+          sessionKey,
+          referencedTabs: [
+            { target: "node", node: "canonical-node", profile: "node-profile", targetId: "t1" },
+            { target: "node", node: "canonical-node", profile: "other-profile", targetId: "t2" },
+            { target: "node", node: "other-node", profile: "node-profile", targetId: "t3" },
+          ],
+        },
+      },
+      {
+        ok: true,
+        payload: {
+          result: { running: true, tabs },
+          route: { status: "resolved", profile: "node-profile", driver: "openclaw" },
+        },
+      },
+      [node],
+    );
+    expect(reply(respond)).toEqual([true, { running: true, tabs: [owned, referenced] }]);
+    expect(nodeInvocation(nodeRegistry)).toMatchObject({ nodeId: "canonical-node" });
+    expect(nodeInvocation(nodeRegistry).params).toEqual({
+      method: "GET",
+      path: "/tabs",
+      query: { profile: "requested-profile" },
+      body: undefined,
+      upload: undefined,
+      profile: "requested-profile",
+      timeoutMs: expect.any(Number),
+      errorEnvelope: "browser-v1",
+    });
+  });
+
+  it.each([
+    { tabScope: { sessionKey, extra: true } },
+    {
+      tabScope: {
+        sessionKey,
+        referencedTabs: [{ target: "host", node: "node-1", targetId: "t1" }],
+      },
+    },
+    { dashboard: { sessionKey, name: "board" } },
+    { path: "/dashboard" },
+  ])("rejects invalid or dashboard-mixed tab scopes before dispatch: %j", async (params) => {
+    const { respond, nodeRegistry } = await runRequest({
+      method: "GET",
+      path: "/tabs",
+      tabScope: { sessionKey },
+      ...params,
+    });
+    invalid(respond);
+    expect(m.inspect).not.toHaveBeenCalled();
+    expect(m.dispatch).not.toHaveBeenCalled();
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
   });
 });

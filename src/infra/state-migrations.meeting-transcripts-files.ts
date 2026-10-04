@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import type { DatabaseSync } from "node:sqlite";
+import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   TranscriptSessionDescriptor,
@@ -13,7 +14,6 @@ import { TRANSCRIPT_EXPORT_FILE_NAMES } from "../transcripts/store-artifacts.js"
 import type { TranscriptsSummary } from "../transcripts/summary.js";
 import { renderTranscriptsMarkdown } from "../transcripts/summary.js";
 import { sha256File, sha256FileSync, sha256Hex } from "./crypto-digest.js";
-import { assertNoSymlinkParents } from "./fs-safe-advanced.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 
 export const LEGACY_UTTERANCE_INSERT_CHUNK_SIZE = 64;
@@ -308,10 +308,6 @@ async function snapshotFile(filePath: string): Promise<{
   return { hash: await sha256File(filePath), sizeBytes: stat.size };
 }
 
-async function snapshotSourceFiles(files: string[]) {
-  return await Promise.all(files.map(snapshotFile));
-}
-
 function sourceFilesHash(
   files: string[],
   snapshots: Array<{ hash?: string; sizeBytes: number }>,
@@ -338,7 +334,7 @@ export async function snapshotLegacyMeetingTranscriptSession(params: {
   const summaryJsonPath = path.join(sourceDir, "summary.json");
   const summaryMarkdownPath = path.join(sourceDir, "summary.md");
   const files = [metadataPath, transcriptPath, summaryJsonPath, summaryMarkdownPath];
-  const beforeSnapshots = await snapshotSourceFiles(files);
+  const beforeSnapshots = await Promise.all(files.map(snapshotFile));
   if (!beforeSnapshots[0]?.hash) {
     throw new Error(`legacy transcript session is missing metadata.json: ${sourceDir}`);
   }
@@ -368,7 +364,7 @@ export async function snapshotLegacyMeetingTranscriptSession(params: {
     throw new Error(`legacy transcript summary session mismatch at ${summaryJsonPath}`);
   }
 
-  const fileSnapshots = await snapshotSourceFiles(files);
+  const fileSnapshots = await Promise.all(files.map(snapshotFile));
   if (
     fileSnapshots.some(
       (snapshot, index) =>
@@ -541,7 +537,7 @@ export async function rehashLegacyMeetingTranscriptSnapshots(
     const files = ["metadata.json", "transcript.jsonl", "summary.json", "summary.md"].map(
       (fileName) => path.join(snapshot.sourceDir, fileName),
     );
-    const fileSnapshots = await snapshotSourceFiles(files);
+    const fileSnapshots = await Promise.all(files.map(snapshotFile));
     const currentHash = sourceFilesHash(files, fileSnapshots);
     if (currentHash !== snapshot.sourceHash) {
       return false;
@@ -556,7 +552,7 @@ export async function archiveLegacyMeetingTranscriptSnapshots(params: {
   expectedRelativeDirs: string[];
   canonicalRelativeDirs: string[];
   archiveRoot: string;
-}): Promise<string> {
+}): Promise<void> {
   await validateMeetingTranscriptRoot(params.sourceRoot);
   const currentRelativeDirs = await listLegacyMeetingTranscriptSessionDirs(params.sourceRoot);
   const expectedRelativeDirs = params.expectedRelativeDirs.toSorted((a, b) => a.localeCompare(b));
@@ -584,7 +580,6 @@ export async function archiveLegacyMeetingTranscriptSnapshots(params: {
   } catch (error) {
     throw new LegacyMeetingTranscriptArchiveMovedError(error);
   }
-  return params.archiveRoot;
 }
 
 export class LegacyMeetingTranscriptArchiveMovedError extends Error {
@@ -709,16 +704,4 @@ export async function restoreCanonicalMeetingTranscriptExports(params: {
     await fs.mkdir(path.dirname(destination), { recursive: true });
     await fs.rename(source, destination);
   }
-}
-
-export async function archiveDivergentMeetingTranscriptExport(params: {
-  sourceRoot: string;
-  relativeDir: string;
-  recoveryRoot: string;
-}): Promise<string> {
-  const source = path.join(params.sourceRoot, params.relativeDir);
-  const destination = path.join(params.recoveryRoot, params.relativeDir);
-  await fs.mkdir(path.dirname(destination), { recursive: true });
-  await fs.rename(source, destination);
-  return destination;
 }

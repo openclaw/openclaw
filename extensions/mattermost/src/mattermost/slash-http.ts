@@ -1,12 +1,6 @@
-/**
- * HTTP callback handler for Mattermost slash commands.
- *
- * Receives POST requests from Mattermost when a slash command is invoked,
- * validates the token, and routes the command through the standard inbound pipeline.
- */
-
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -14,7 +8,6 @@ import {
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
 import { getMattermostRuntime } from "../runtime.js";
@@ -102,23 +95,7 @@ const SECRET_LOG_KEYS = new Set([
   "token",
 ]);
 
-/**
- * Read the full request body as a string.
- */
-function readBody(
-  req: IncomingMessage,
-  maxBytes: number,
-  timeoutMs = BODY_READ_TIMEOUT_MS,
-): Promise<string> {
-  return readRequestBodyWithLimit(req, {
-    maxBytes,
-    timeoutMs,
-    // Defer destruction so the rejections below reach Mattermost before the close.
-    destroyOnLimit: false,
-  });
-}
-
-function sendJsonResponse(
+export function sendSlashCommandResponse(
   res: ServerResponse,
   status: number,
   body: MattermostSlashCommandResponse,
@@ -194,19 +171,15 @@ function commandLookupKey(
 }
 
 export function clearMattermostSlashCommandValidationCacheForAccount(accountId: string): void {
-  for (const [key, entry] of commandValidationFailureCache) {
-    if (entry.accountId === accountId) {
-      commandValidationFailureCache.delete(key);
-    }
-  }
-  for (const [key, entry] of commandLookupInflight) {
-    if (entry.accountId === accountId) {
-      commandLookupInflight.delete(key);
-    }
-  }
-  for (const [key, entry] of commandValidationLookupRateLimit) {
-    if (entry.accountId === accountId) {
-      commandValidationLookupRateLimit.delete(key);
+  for (const cache of [
+    commandValidationFailureCache,
+    commandLookupInflight,
+    commandValidationLookupRateLimit,
+  ]) {
+    for (const [key, entry] of cache) {
+      if (entry.accountId === accountId) {
+        cache.delete(key);
+      }
     }
   }
 }
@@ -223,31 +196,12 @@ function sweepCommandValidationFailureCache(now = Date.now()): void {
       commandValidationFailureCache.delete(key);
     }
   }
-  while (commandValidationFailureCache.size > COMMAND_VALIDATION_FAILURE_CACHE_MAX_KEYS) {
-    const oldestKey = commandValidationFailureCache.keys().next().value;
-    if (!oldestKey) {
-      break;
-    }
-    commandValidationFailureCache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(commandValidationFailureCache, COMMAND_VALIDATION_FAILURE_CACHE_MAX_KEYS);
 }
 
 function hasCachedCommandValidationFailure(key: string, now = Date.now()): boolean {
   sweepCommandValidationFailureCache(now);
-  const validNow = asDateTimestampMs(now);
-  if (validNow === undefined) {
-    return false;
-  }
-  const cached = commandValidationFailureCache.get(key);
-  if (!cached) {
-    return false;
-  }
-  const expiresAt = asDateTimestampMs(cached.expiresAt);
-  if (expiresAt !== undefined && expiresAt > validNow) {
-    return true;
-  }
-  commandValidationFailureCache.delete(key);
-  return false;
+  return commandValidationFailureCache.has(key);
 }
 
 function cacheCommandValidationFailure(key: string, accountId: string): void {
@@ -279,13 +233,10 @@ function sweepCommandValidationLookupRateLimit(now = Date.now()): void {
       commandValidationLookupRateLimit.delete(key);
     }
   }
-  while (commandValidationLookupRateLimit.size > COMMAND_VALIDATION_LOOKUP_RATE_LIMIT_MAX_KEYS) {
-    const oldestKey = commandValidationLookupRateLimit.keys().next().value;
-    if (!oldestKey) {
-      break;
-    }
-    commandValidationLookupRateLimit.delete(oldestKey);
-  }
+  pruneMapToMaxSize(
+    commandValidationLookupRateLimit,
+    COMMAND_VALIDATION_LOOKUP_RATE_LIMIT_MAX_KEYS,
+  );
 }
 
 function reserveCommandValidationLookup(params: {
@@ -448,17 +399,9 @@ async function validateMattermostSlashCommandToken(params: {
   return true;
 }
 
-type SlashInvocationAuth = {
-  ok: boolean;
-  denyResponse?: MattermostSlashCommandResponse;
-  commandAuthorized: boolean;
-  channelInfo: MattermostChannel | null;
-  kind: "direct" | "group" | "channel";
-  chatType: "direct" | "group" | "channel";
-  channelName: string;
-  channelDisplay: string;
-  roomLabel: string;
-};
+type SlashInvocationAuth =
+  | Extract<Awaited<ReturnType<typeof authorizeMattermostCommandInvocation>>, { ok: true }>
+  | { ok: false; denyResponse: MattermostSlashCommandResponse };
 
 async function authorizeSlashInvocation(params: {
   account: ResolvedMattermostAccount;
@@ -473,7 +416,6 @@ async function authorizeSlashInvocation(params: {
   const { account, cfg, client, commandText, channelId, senderId, senderName, log } = params;
   const core = getMattermostRuntime();
 
-  // Resolve channel info so we can enforce DM vs group/channel policies.
   let channelInfo: MattermostChannel | null = null;
   try {
     channelInfo = await fetchMattermostChannel(client, channelId);
@@ -490,13 +432,6 @@ async function authorizeSlashInvocation(params: {
         response_type: "ephemeral",
         text: "Temporary error: unable to determine channel type. Please try again.",
       },
-      commandAuthorized: false,
-      channelInfo: null,
-      kind: "channel",
-      chatType: "channel",
-      channelName: "",
-      channelDisplay: "",
-      roomLabel: `#${channelId}`,
     };
   }
 
@@ -534,7 +469,7 @@ async function authorizeSlashInvocation(params: {
         meta: { name: senderName },
       });
       return {
-        ...decision,
+        ok: false,
         denyResponse: {
           response_type: "ephemeral",
           text: core.channel.pairing.buildPairingReply({
@@ -557,7 +492,7 @@ async function authorizeSlashInvocation(params: {
               ? "Slash commands are not configured for this channel (no allowlist)."
               : "Unauthorized.";
     return {
-      ...decision,
+      ok: false,
       denyResponse: {
         response_type: "ephemeral",
         text: denyText,
@@ -565,18 +500,9 @@ async function authorizeSlashInvocation(params: {
     };
   }
 
-  return {
-    ...decision,
-    denyResponse: undefined,
-  };
+  return decision;
 }
 
-/**
- * Create the HTTP request handler for Mattermost slash command callbacks.
- *
- * This handler is registered as a plugin HTTP route and receives POSTs
- * from the Mattermost server when a user invokes a registered slash command.
- */
 export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
   const { account, cfg, runtime, registeredCommands, triggerMap, log, bodyTimeoutMs } = params;
 
@@ -595,7 +521,14 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
 
     let body: string;
     try {
-      body = bufferedBody ?? (await readBody(req, MAX_BODY_BYTES, bodyTimeoutMs));
+      body =
+        bufferedBody ??
+        (await readRequestBodyWithLimit(req, {
+          maxBytes: MAX_BODY_BYTES,
+          timeoutMs: bodyTimeoutMs ?? BODY_READ_TIMEOUT_MS,
+          // Let rejection reach Mattermost before closing the connection.
+          destroyOnLimit: false,
+        }));
     } catch (error) {
       if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
         await sendHttpRequestRejection(req, res, 408, "Request body timeout");
@@ -608,7 +541,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     const contentType = req.headers["content-type"] ?? "";
     const payload = parseSlashCommandPayload(body, contentType);
     if (!payload) {
-      sendJsonResponse(res, 400, {
+      sendSlashCommandResponse(res, 400, {
         response_type: "ephemeral",
         text: "Invalid slash command payload.",
       });
@@ -625,18 +558,17 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     // which would otherwise let an attacker poison the per-command failure
     // cache and DoS legitimate invocations of command B.
     if (!registeredCommand || !safeEqualSecret(payload.token, registeredCommand.token)) {
-      sendJsonResponse(res, 401, {
+      sendSlashCommandResponse(res, 401, {
         response_type: "ephemeral",
         text: "Unauthorized: invalid command token.",
       });
       return;
     }
 
-    // Extract command info
     const client = createMattermostClient({
       baseUrl: account.baseUrl ?? "",
       botToken: account.botToken ?? "",
-      allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+      allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
     });
 
     const tokenIsCurrent = await validateMattermostSlashCommandToken({
@@ -647,7 +579,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       log,
     });
     if (!tokenIsCurrent) {
-      sendJsonResponse(res, 401, {
+      sendSlashCommandResponse(res, 401, {
         response_type: "ephemeral",
         text: "Unauthorized: invalid command token.",
       });
@@ -674,11 +606,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     });
 
     if (!auth.ok) {
-      sendJsonResponse(
-        res,
-        200,
-        auth.denyResponse ?? { response_type: "ephemeral", text: "Unauthorized." },
-      );
+      sendSlashCommandResponse(res, 200, auth.denyResponse);
       return;
     }
 
@@ -687,12 +615,11 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     );
 
     // Acknowledge immediately — we'll send the actual reply asynchronously
-    sendJsonResponse(res, 200, {
+    sendSlashCommandResponse(res, 200, {
       response_type: "ephemeral",
       text: "Processing...",
     });
 
-    // Now handle the command asynchronously (post reply as a message)
     try {
       await handleSlashCommandAsync({
         account,
@@ -707,7 +634,6 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
         triggerId: payload.trigger_id,
         kind: auth.kind,
         chatType: auth.chatType,
-        channelName: auth.channelName,
         channelDisplay: auth.channelDisplay,
         roomLabel: auth.roomLabel,
         commandAuthorized: auth.commandAuthorized,
@@ -740,7 +666,6 @@ async function handleSlashCommandAsync(params: {
   teamId: string;
   kind: "direct" | "group" | "channel";
   chatType: "direct" | "group" | "channel";
-  channelName: string;
   channelDisplay: string;
   roomLabel: string;
   commandAuthorized: boolean;
@@ -759,7 +684,6 @@ async function handleSlashCommandAsync(params: {
     teamId,
     kind,
     chatType,
-    channelName: _channelName,
     channelDisplay,
     roomLabel,
     commandAuthorized,
@@ -807,24 +731,16 @@ async function handleSlashCommandAsync(params: {
       route,
       data,
     });
+    const viewParams = { ownerUserId: senderId, data, currentModel };
     const view =
       pickerEntry.kind === "summary"
-        ? renderMattermostModelSummaryView({
-            ownerUserId: senderId,
-            currentModel,
-          })
+        ? renderMattermostModelSummaryView(viewParams)
         : pickerEntry.kind === "providers"
-          ? renderMattermostProviderPickerView({
-              ownerUserId: senderId,
-              data,
-              currentModel,
-            })
+          ? renderMattermostProviderPickerView(viewParams)
           : renderMattermostModelsPickerView({
-              ownerUserId: senderId,
-              data,
+              ...viewParams,
               provider: pickerEntry.provider,
               page: 1,
-              currentModel,
             });
 
     await sendMessageMattermost(
@@ -836,7 +752,6 @@ async function handleSlashCommandAsync(params: {
     return;
   }
 
-  // Build inbound context — the command text is the body
   const ctxPayload = finalizeInboundContext({
     Body: commandText,
     BodyForAgent: commandText,

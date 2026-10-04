@@ -1,8 +1,4 @@
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
-// Transport-agnostic Parallel search normalization shared by the paid REST
-// provider (`parallel`) and the free Search MCP provider (`parallel-free`).
-// Both transports return the same v1 result shape, so query/result handling
-// lives here instead of being copied into each runtime.
 import {
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
@@ -18,8 +14,10 @@ import {
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
 import {
+  asOptionalObjectRecord,
+  filterStringEntries,
+  isRecord,
   normalizeBoundedOptionalString,
-  normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { PARALLEL_FREE_SESSION_ID_MAX_LENGTH } from "./parallel-free-web-search-provider.shared.js";
@@ -37,13 +35,6 @@ const PARALLEL_MAX_SEARCH_QUERIES = 5;
 // (and advertises it in the tool schema) so callers never send an out-of-contract id.
 const PARALLEL_SESSION_ID_MAX_LENGTH = 1000;
 const PARALLEL_CLIENT_MODEL_MAX_LENGTH = 100;
-
-type ParallelSearchResult = {
-  title?: unknown;
-  url?: unknown;
-  publish_date?: unknown;
-  excerpts?: unknown;
-};
 
 export type ParallelSearchResponse = {
   search_id?: unknown;
@@ -66,8 +57,12 @@ function normalizeParallelSearchRequest(
   configuredCount: unknown,
   sessionIdMaxLength: number,
 ): { error: ReturnType<typeof invalidSearchQueriesPayload> } | NormalizedParallelSearchRequest {
-  const objective = normalizeParallelObjective(readStringParam(args, "objective"));
-  const cliQuery = normalizeParallelObjective(readStringParam(args, "query"));
+  const objective =
+    truncateUtf16Safe(readStringParam(args, "objective") ?? "", PARALLEL_MAX_OBJECTIVE_CHARS) ||
+    undefined;
+  const cliQuery =
+    truncateUtf16Safe(readStringParam(args, "query") ?? "", PARALLEL_MAX_OBJECTIVE_CHARS) ||
+    undefined;
   let searchQueries = normalizeParallelSearchQueries(readStringArrayParam(args, "search_queries"));
   if (searchQueries.length === 0 && cliQuery) {
     searchQueries = normalizeParallelSearchQueries([cliQuery]);
@@ -83,7 +78,11 @@ function normalizeParallelSearchRequest(
       readStringParam(args, "session_id"),
       sessionIdMaxLength,
     ),
-    clientModel: normalizeParallelClientModel(readStringParam(args, "client_model")),
+    clientModel:
+      truncateUtf16Safe(
+        readStringParam(args, "client_model") ?? "",
+        PARALLEL_CLIENT_MODEL_MAX_LENGTH,
+      ) || undefined,
   };
 }
 
@@ -108,7 +107,10 @@ export async function executeParallelSearchRequest(params: {
   if ("error" in request) {
     return request.error;
   }
-  const cacheKey = buildParallelCacheKey({ endpoint: params.endpoint, ...request });
+  const cacheKey = buildSearchCacheKey([
+    "parallel",
+    JSON.stringify({ endpoint: params.endpoint, ...request }),
+  ]);
   const cacheTtlMs = resolveSearchCacheTtlMs(params.searchConfig);
   const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
@@ -119,15 +121,38 @@ export async function executeParallelSearchRequest(params: {
   const response = await params.search(request, resolveSearchTimeoutSeconds(params.searchConfig));
   // A provider can finish after its caller aborts; never cache that stale result.
   params.signal?.throwIfAborted();
-  const payload = buildParallelSearchPayload({
-    provider: params.provider,
-    objective: request.objective,
+  const results = mapParallelResults(response, request.count);
+  const payload: Record<string, unknown> = {
+    ...(request.objective ? { objective: request.objective } : {}),
     searchQueries: request.searchQueries,
-    count: request.count,
-    response,
-    start,
-  });
-  const cachePayload = request.sessionId ? payload : stripParallelGeneratedSessionId(payload);
+    provider: params.provider,
+    count: results.length,
+    tookMs: Date.now() - start,
+    externalContent: {
+      untrusted: true,
+      source: "web_search",
+      provider: params.provider,
+      wrapped: true,
+    },
+    results,
+  };
+  if (typeof response.search_id === "string") {
+    payload.searchId = response.search_id;
+  }
+  if (typeof response.session_id === "string") {
+    payload.sessionId = response.session_id;
+  }
+  if (Array.isArray(response.warnings) && response.warnings.length > 0) {
+    payload.warnings = response.warnings;
+  }
+  if (Array.isArray(response.usage) && response.usage.length > 0) {
+    payload.usage = response.usage;
+  }
+  // Generated session ids belong to this call, never to unrelated cache hits.
+  const cachePayload = !request.sessionId && "sessionId" in payload ? { ...payload } : payload;
+  if (!request.sessionId) {
+    delete cachePayload.sessionId;
+  }
   writeCachedSearchPayload(cacheKey, cachePayload, cacheTtlMs);
   return payload;
 }
@@ -149,46 +174,19 @@ function resolveParallelSearchCount(
   });
 }
 
-function normalizeParallelObjective(value: string | undefined): string | undefined {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed.length <= PARALLEL_MAX_OBJECTIVE_CHARS
-    ? trimmed
-    : truncateUtf16Safe(trimmed, PARALLEL_MAX_OBJECTIVE_CHARS);
-}
-
-function normalizeParallelClientModel(value: string | undefined): string | undefined {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed.length <= PARALLEL_CLIENT_MODEL_MAX_LENGTH
-    ? trimmed
-    : truncateUtf16Safe(trimmed, PARALLEL_CLIENT_MODEL_MAX_LENGTH);
-}
-
 // Parallel's API caps each entry at 200 chars and accepts up to 5 queries. We
 // trim, drop empties/duplicates, truncate over-long entries to the API's hard
 // limit, and cap to the API's maximum so a malformed call from the model
 // doesn't 422 the request. See https://docs.parallel.ai/search/best-practices.
-function normalizeParallelSearchQueries(value: unknown): string[] {
-  const candidates = Array.isArray(value) ? value : [];
+function normalizeParallelSearchQueries(candidates: string[] = []): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const entry of candidates) {
-    if (typeof entry !== "string") {
-      continue;
-    }
     const trimmed = entry.trim();
     if (!trimmed) {
       continue;
     }
-    const capped =
-      trimmed.length <= PARALLEL_MAX_SEARCH_QUERY_CHARS
-        ? trimmed
-        : truncateUtf16Safe(trimmed, PARALLEL_MAX_SEARCH_QUERY_CHARS);
+    const capped = truncateUtf16Safe(trimmed, PARALLEL_MAX_SEARCH_QUERY_CHARS);
     if (seen.has(capped)) {
       continue;
     }
@@ -210,32 +208,18 @@ function invalidSearchQueriesPayload() {
   };
 }
 
-function normalizeParallelResults(payload: unknown): ParallelSearchResult[] {
-  if (!payload || typeof payload !== "object") {
-    return [];
-  }
-  const results = (payload as ParallelSearchResponse).results;
-  if (!Array.isArray(results)) {
-    return [];
-  }
-  return results.filter((entry): entry is ParallelSearchResult =>
-    Boolean(entry && typeof entry === "object" && !Array.isArray(entry)),
-  );
-}
-
 /** Maps a Parallel v1 response into wrapped `web_search` result entries. */
 function mapParallelResults(response: ParallelSearchResponse, count: number) {
-  const results = normalizeParallelResults(response).slice(0, count);
-  return results.map((entry) => {
+  const rawResults = asOptionalObjectRecord(response)?.results;
+  const results = Array.isArray(rawResults) ? rawResults.filter(isRecord) : [];
+  return results.slice(0, count).map((entry) => {
     const title = typeof entry.title === "string" ? entry.title : "";
     const url = typeof entry.url === "string" ? entry.url : "";
     const published =
       typeof entry.publish_date === "string" && entry.publish_date ? entry.publish_date : undefined;
-    const excerpts = Array.isArray(entry.excerpts)
-      ? entry.excerpts
-          .filter((e): e is string => typeof e === "string")
-          .map((e) => wrapWebContent(e, "web_search"))
-      : [];
+    const excerpts = filterStringEntries(entry.excerpts).map((e) =>
+      wrapWebContent(e, "web_search"),
+    );
     const description = excerpts.join("\n\n");
     return Object.assign(
       {
@@ -248,87 +232,4 @@ function mapParallelResults(response: ParallelSearchResponse, count: number) {
       excerpts.length > 0 ? { excerpts } : {},
     );
   });
-}
-
-function buildParallelSearchPayload(params: {
-  provider: "parallel" | "parallel-free";
-  objective?: string;
-  searchQueries: readonly string[];
-  count: number;
-  response: ParallelSearchResponse;
-  start: number;
-}): Record<string, unknown> {
-  const results = mapParallelResults(params.response, params.count);
-  const payload: Record<string, unknown> = {
-    ...(params.objective ? { objective: params.objective } : {}),
-    searchQueries: params.searchQueries,
-    provider: params.provider,
-    count: results.length,
-    tookMs: Date.now() - params.start,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: params.provider,
-      wrapped: true,
-    },
-    results,
-  };
-  if (typeof params.response.search_id === "string") {
-    payload.searchId = params.response.search_id;
-  }
-  if (typeof params.response.session_id === "string") {
-    payload.sessionId = params.response.session_id;
-  }
-  if (Array.isArray(params.response.warnings) && params.response.warnings.length > 0) {
-    payload.warnings = params.response.warnings;
-  }
-  if (Array.isArray(params.response.usage) && params.response.usage.length > 0) {
-    payload.usage = params.response.usage;
-  }
-  return payload;
-}
-
-/**
- * Drops a Parallel-generated `sessionId` before caching. Identical queries from
- * unrelated tasks would otherwise share that id; caller-supplied session ids are
- * part of the cache key, so a cache hit only ever returns the matching id.
- */
-function stripParallelGeneratedSessionId(
-  payload: Record<string, unknown>,
-): Record<string, unknown> {
-  if (!("sessionId" in payload)) {
-    return payload;
-  }
-  const { sessionId: _omitted, ...rest } = payload;
-  void _omitted;
-  return rest;
-}
-
-function buildParallelCacheKey(params: {
-  endpoint: string;
-  objective?: string;
-  searchQueries: readonly string[];
-  count: number;
-  sessionId?: string;
-  clientModel?: string;
-}): string {
-  return buildSearchCacheKey([
-    "parallel",
-    // The transport endpoint (REST URL or the free MCP URL) partitions paid-REST
-    // vs free-MCP and REST endpoint overrides so transports never share cached
-    // payloads.
-    params.endpoint,
-    params.objective,
-    // Join with a NUL delimiter (can't appear in normalized queries) so distinct
-    // arrays like ["ab","c"] and ["a","bc"] don't collide on the same cache key.
-    params.searchQueries.join("\u0000"),
-    params.count,
-    // Different Parallel sessions can return different ranked excerpts for the
-    // same query set, so partition cached payloads by caller-provided session.
-    params.sessionId,
-    // Parallel tailors defaults/optimizations to client_model per its docs, so
-    // partition cached payloads by it; otherwise two models hitting the same
-    // query inside the cache TTL would silently share ranked excerpts.
-    params.clientModel,
-  ]);
 }

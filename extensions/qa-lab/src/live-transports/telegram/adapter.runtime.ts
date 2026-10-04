@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import {
   assertQaGatewayCredentialLeaseQuarantine,
@@ -85,17 +84,6 @@ function renderTelegramQaInboundText(
     : renderedText;
 }
 
-async function releaseTelegramCredential(params: {
-  heartbeat: { stop(): Promise<void> };
-  release(): Promise<void>;
-}) {
-  try {
-    await params.heartbeat.stop();
-  } finally {
-    await params.release();
-  }
-}
-
 export async function createTelegramQaTransportAdapter(
   context: FactoryContext,
 ): Promise<AdapterDefinition> {
@@ -155,10 +143,11 @@ export async function createTelegramQaTransportAdapter(
     if (leaseReleased || !leasedRuntime) {
       return;
     }
-    await releaseTelegramCredential({
-      heartbeat: leasedRuntime.heartbeat,
-      release: () => leasedRuntime.credentialLease.release(),
-    });
+    try {
+      await leasedRuntime.heartbeat.stop();
+    } finally {
+      await leasedRuntime.credentialLease.release();
+    }
     leaseReleased = true;
   };
   let stateRoot: string | undefined;
@@ -166,6 +155,12 @@ export async function createTelegramQaTransportAdapter(
   let userbot: TelegramUserbotDriver | undefined;
   let participants: TelegramRuntimeParticipant[] = [];
   const drivers: TelegramUserbotDriver[] = [];
+  const assertTransportHealthy = () => {
+    for (const driver of drivers) {
+      driver.assertHealthy();
+    }
+    leasedRuntime?.heartbeat.throwIfFailed();
+  };
   const participantRoots: string[] = [];
   let primaryAlias: string | undefined;
   let participantCleanupUncertain = false;
@@ -389,12 +384,7 @@ export async function createTelegramQaTransportAdapter(
     accountId,
     requiredPluginIds: ["telegram"],
     supportedActions: [],
-    assertTransportHealthy() {
-      for (const driver of drivers) {
-        driver.assertHealthy();
-      }
-      leasedRuntime?.heartbeat.throwIfFailed();
-    },
+    assertTransportHealthy,
     describeTransportState: () => describeTelegramQaObserverState(observerState),
     async sendInbound(input) {
       leasedRuntime?.heartbeat.throwIfFailed();
@@ -582,10 +572,7 @@ export async function createTelegramQaTransportAdapter(
           forumTopicId: credential.forumTopicId,
         },
         readTelegramMessages: () => {
-          for (const driver of drivers) {
-            driver.assertHealthy();
-          }
-          leasedRuntime?.heartbeat.throwIfFailed();
+          assertTransportHealthy();
           // Share the existing message lifetime; readers cannot mutate a later snapshot.
           return [...busMessages.values()].flatMap(({ update }) =>
             update ? [structuredClone(update)] : [],
@@ -594,11 +581,8 @@ export async function createTelegramQaTransportAdapter(
       };
     },
     createGatewayConfig: () =>
-      // SAFETY: The builder accepts an empty base and supplies every QA-owned config section.
-      buildTelegramQaConfig({} as OpenClawConfig, {
+      buildTelegramQaConfig({
         apiRoot: activeApiProxy?.apiRoot,
-        directMessageOnly,
-        enableDirectMessages: true,
         additionalTesterUserIds: participants
           .slice(1)
           .map((participant) => participant.testerUserId),

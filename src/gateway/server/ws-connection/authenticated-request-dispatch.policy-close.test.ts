@@ -6,7 +6,8 @@ import { getPairedDevice, requestDevicePairing } from "../../../infra/device-pai
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import * as profileAuthority from "../../../state/user-channel-identity-operations.js";
-import { ensureProfileForEmail, linkEmail } from "../../../state/user-profiles.js";
+import { linkEmail } from "../../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import * as expectedProfile from "../../expected-profile.js";
 import { createDirectChatContext } from "../../server-chat.agent-events.test-helpers.js";

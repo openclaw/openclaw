@@ -1,9 +1,10 @@
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import * as historyWorker from "../../config/sessions/session-transcript-worker-runtime.js";
 import * as sqlite from "../../infra/kysely-sync.js";
+import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import * as sessionUtils from "../session-utils.js";
@@ -114,30 +115,7 @@ describe("resident session rows", () => {
     });
   });
 
-  it("resolves a person reference without SQLite when every row is clean", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const context = requestContext(await seedSessions());
-      const client = identifiedClient("owner@example.com");
-      await listSessions({ context, client, request: { archived: "all" } });
-      expect(getSessionRowProjection(context)!.dirtyRowCount).toBe(0);
-      const prepares = vi.spyOn(DatabaseSync.prototype, "prepare");
-      const reads = (["all", "get", "iterate"] as const).map((method) =>
-        vi.spyOn(StatementSync.prototype, method),
-      );
-      const result = await listSessions({
-        context,
-        client,
-        request: { archived: "all", involvingProfileId: "deadbeef" },
-      });
-      expect(result.sessions).toEqual([]);
-      expect({
-        prepares: prepares.mock.calls.length,
-        reads: reads.reduce((count, read) => count + read.mock.calls.length, 0),
-      }).toEqual({ prepares: 0, reads: 0 });
-    });
-  });
-
-  it("lists for different viewers and describes without SQLite after initialization", async () => {
+  it("lists for different viewers, filters a person and describes without SQLite after initialization", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = await seedSessions();
       const context = requestContext(cfg);
@@ -145,14 +123,20 @@ describe("resident session rows", () => {
       const viewer = identifiedClient("viewer@example.com");
       const request = { archived: "all" as const, limit: 100 };
       await listSessions({ context, client, request });
+      expect(getSessionRowProjection(context)!.dirtyRowCount).toBe(0);
 
       const queries = vi.spyOn(sqlite, "executeSqliteQuerySync");
       const firstRows = vi.spyOn(sqlite, "executeSqliteQueryTakeFirstSync");
       const iterators = vi.spyOn(sqlite, "iterateSqliteQuerySync");
       // Native calls also cover prepared compiled queries and direct PRAGMA probes.
       const prepares = vi.spyOn(DatabaseSync.prototype, "prepare");
-      const nativeReads = ["all", "get", "iterate"] as const;
-      const reads = nativeReads.map((method) => vi.spyOn(StatementSync.prototype, method));
+      const reads = observeMainThreadReads();
+      const person = await listSessions({
+        context,
+        client,
+        request: { archived: "all", involvingProfileId: "deadbeef" },
+      });
+      expect(person.sessions).toEqual([]);
       const listed = await listSessions({
         context,
         client: viewer,
@@ -179,7 +163,7 @@ describe("resident session rows", () => {
         firstRows: firstRows.mock.calls.length,
         iterators: iterators.mock.calls.length,
         prepares: prepares.mock.calls.length,
-        nativeReads: reads.reduce((total, spy) => total + spy.mock.calls.length, 0),
+        nativeReads: reads.count(),
       }).toEqual({ queries: 0, firstRows: 0, iterators: 0, prepares: 0, nativeReads: 0 });
     });
   });

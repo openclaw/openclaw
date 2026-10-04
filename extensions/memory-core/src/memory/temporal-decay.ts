@@ -1,10 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { ResolvedMemorySearchConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 
-export type TemporalDecayConfig = {
-  enabled: boolean;
-  halfLifeDays: number;
-};
+export type TemporalDecayConfig = ResolvedMemorySearchConfig["query"]["hybrid"]["temporalDecay"];
 
 export const DEFAULT_TEMPORAL_DECAY_CONFIG: TemporalDecayConfig = {
   enabled: false,
@@ -37,10 +35,6 @@ function parseMemoryDateFromPath(filePath: string): Date | null {
   const year = Number(match[1]);
   const month = Number(match[2]);
   const day = Number(match[3]);
-  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
-    return null;
-  }
-
   const timestamp = Date.UTC(year, month - 1, day);
   const parsed = new Date(timestamp);
   if (

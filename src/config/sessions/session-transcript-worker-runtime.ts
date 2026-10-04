@@ -7,16 +7,19 @@ import {
   type UsageCostWorkerResult,
 } from "../../infra/session-cost-usage-worker.types.js";
 import { withSqliteWorkerCleanupFailure } from "../../infra/sqlite-worker-broker-reply.js";
+import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { WorkerTaskOptions, WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { resolveStateDir } from "../state-dir.js";
-import { loadSessionEntryReadOnlyInScope } from "./session-accessor.sqlite-entry.js";
+import { loadSessionEntryReadOnlyInScope } from "./session-accessor.sqlite-exact-read.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { SessionAccessScope } from "./session-accessor.types.js";
+import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import {
   sessionHistoryCleanupError,
   unwrapSessionTranscriptWorkerReply,
@@ -35,11 +38,13 @@ import {
   historyClearTimeout,
   historyLane,
   pruneHistoryDatabases,
+  refreshDatabaseWorkerPressureSubscription,
   releaseRetiredDatabaseCustody,
   rotateDatabaseWorkers,
   type HistoryDatabaseResource,
   type SessionCostWorkerLane,
   type SessionDatabaseCleanup,
+  type SessionHistoryDatabaseTarget,
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 import type {
@@ -47,8 +52,63 @@ import type {
   SessionHistoryWorkerInput,
   SessionRowPresenceWorkerInput,
 } from "./session-transcript-worker.types.js";
+import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 export type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
+
+const log = createSubsystemLogger("sessions/history-worker");
+const historyPrewarms = new WeakMap<
+  HistoryDatabaseResource,
+  { promise: Promise<void>; pending: boolean; retiredSequence: number }
+>();
+
+export function isSessionHistoryWorkerCold(): boolean {
+  return historyLane.pending === 0 && historyLane.nativeSequence <= historyLane.retiredSequence;
+}
+
+/** Reuse normal reader custody; repeated warmups never refresh the idle deadline. */
+export async function prewarmSessionHistoryWorker(
+  options: OpenClawAgentDatabaseOptions,
+): Promise<void> {
+  try {
+    const resource = acquireHistoryDatabaseResource(options);
+    const existing = historyPrewarms.get(resource);
+    if (
+      existing &&
+      (existing.pending ||
+        (!historyLane.rotation &&
+          existing.retiredSequence === historyLane.retiredSequence &&
+          resource.nativeSequences.has(historyLane)))
+    ) {
+      return await existing.promise;
+    }
+    const completion = createDeferredCore();
+    const prewarm = {
+      promise: completion.promise,
+      pending: true,
+      retiredSequence: historyLane.retiredSequence,
+    };
+    historyPrewarms.set(resource, prewarm);
+    void withSessionHistoryWorkerDatabase(options, (owner) =>
+      owner.prewarm({
+        env: captureSessionTranscriptStorageEnvironment(options.env ?? process.env),
+      }),
+    ).then(
+      () => {
+        prewarm.pending = false;
+        completion.resolve();
+      },
+      (error: unknown) => {
+        historyPrewarms.delete(resource);
+        log.debug(`Session history worker prewarm failed: ${String(error)}`);
+        completion.resolve();
+      },
+    );
+    await completion.promise;
+  } catch (error) {
+    log.debug(`Session history worker prewarm failed: ${String(error)}`);
+  }
+}
 
 type SessionCostUsageWorkerOptions = Pick<
   WorkerTaskOptions<UsageCostWorkerInput>,
@@ -100,24 +160,51 @@ export function prepareSessionEntryPresenceRead(input: SessionAccessScope): Read
 
 /** Single and batch reads synchronously retain the same lane-aware database owner. */
 export function retainSessionHistoryWorkerDatabase(
-  options: OpenClawAgentDatabaseOptions,
+  options: SessionHistoryDatabaseTarget,
   lane: SessionHistoryWorkerLane = historyLane,
 ) {
   const owned = acquireHistoryDatabaseResource(options);
   const { database } = owned;
+  let entryReadSource: (CapturedSessionEntryReadSource & { databaseIdentity: string }) | undefined;
   const assertCurrent = () => {
     if (owned.revoked) {
       throw new WorkerTaskError("Session history database read was revoked", "unavailable");
+    }
+    if (entryReadSource) {
+      assertExistingDatabaseIdentity(
+        database.path,
+        `file:${entryReadSource.databaseIdentity}`,
+        entryReadSource.databaseBirthtime,
+      );
     }
   };
   historyClearTimeout(lane.idleTimer);
   lane.pending++;
   owned.pending++;
+  refreshDatabaseWorkerPressureSubscription();
+  let countsReleased = false;
+  let releaseFinished = false;
+  const releaseCleanup: SessionDatabaseCleanup = { run: async () => release() };
   const release = () => {
-    owned.pending--;
-    lane.pending--;
-    pruneHistoryDatabases();
-    armDatabaseWorkerIdleRetirement(lane);
+    if (releaseFinished) {
+      return;
+    }
+    // Keep the existing database resource registered until all release steps succeed.
+    owned.cleanups.add(releaseCleanup);
+    if (!countsReleased) {
+      countsReleased = true;
+      owned.pending--;
+      lane.pending--;
+    }
+    try {
+      armDatabaseWorkerIdleRetirement(lane);
+      owned.cleanups.delete(releaseCleanup);
+      pruneHistoryDatabases();
+      releaseFinished = true;
+    } catch (error) {
+      owned.cleanups.add(releaseCleanup);
+      throw error;
+    }
   };
   try {
     assertCurrent();
@@ -167,9 +254,31 @@ export function retainSessionHistoryWorkerDatabase(
             },
           },
         );
-        const value = receive(
-          unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply),
-        );
+        const received =
+          unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
+        if (
+          typeof received !== "boolean" &&
+          !Array.isArray(received) &&
+          (received.kind === "session-entry-read" ||
+            received.kind === "session-entry-current" ||
+            received.kind === "session-runtime-target" ||
+            received.kind === "session-diagnostic-text") &&
+          received.source
+        ) {
+          const source = received.source;
+          if (
+            source.agentId !== database.agentId ||
+            source.path !== database.path ||
+            (entryReadSource &&
+              (entryReadSource.databaseIdentity !== source.databaseIdentity ||
+                entryReadSource.databaseBirthtime !== source.databaseBirthtime))
+          ) {
+            throw new Error("Session entry read changed its retained physical owner");
+          }
+          // Retain the identity that actually supplied the row, not a later stat of its locator.
+          entryReadSource = source;
+        }
+        const value = receive(received);
         if (reply.ok && reply.closedHistoryDatabase) {
           // A later dispatched request may already hold this target's next native custody.
           clearClosedDatabaseCustody(lane, sequence, [reply.closedHistoryDatabase]);
@@ -209,7 +318,7 @@ export function retainSessionHistoryWorkerDatabase(
 
 /** Capture every selected store before yielding; a closed target cannot join a later generation. */
 export async function withSessionHistoryWorkerDatabases<T>(
-  options: readonly OpenClawAgentDatabaseOptions[],
+  options: readonly SessionHistoryDatabaseTarget[],
   operation: (owners: readonly SessionHistoryWorkerDatabase[]) => Promise<T>,
   lane: SessionHistoryWorkerLane = historyLane,
 ): Promise<T> {
@@ -250,7 +359,7 @@ export async function withSessionHistoryWorkerDatabases<T>(
 
 /** Single-target callers retain the same batch admission and revocation boundary. */
 export function withSessionHistoryWorkerDatabase<T>(
-  options: OpenClawAgentDatabaseOptions,
+  options: SessionHistoryDatabaseTarget,
   operation: (owner: SessionHistoryWorkerDatabase) => Promise<T>,
   lane: SessionHistoryWorkerLane = historyLane,
 ): Promise<T> {
@@ -368,6 +477,7 @@ export async function withSessionCostUsageWorkerDatabases<T>(
     }
     historyClearTimeout(lane.idleTimer);
     lane.pending++;
+    refreshDatabaseWorkerPressureSubscription();
     const hostEffects = new Set<Promise<WorkerTaskResponse>>();
     const onRequest = runOptions.onRequest;
     let sequence = 0;
@@ -498,4 +608,61 @@ export async function withSessionCostUsageWorkerDatabases<T>(
     throw result.error;
   }
   return result.value;
+}
+
+/** Process-held sources exchange bounded pages without reopening their memory database. */
+export async function runProcessHeldHistoryTask(
+  request: import("./session-history-types.js").ChatHistoryDisplayRequest,
+  onRequest: NonNullable<WorkerTaskOptions<SessionHistoryWorkerInput>["onRequest"]>,
+  signal?: AbortSignal,
+) {
+  historyLane.pending++;
+  historyClearTimeout(historyLane.idleTimer);
+  historyLane.idleTimer = undefined;
+  refreshDatabaseWorkerPressureSubscription();
+  let sequence = 0;
+  let executionRetired = false;
+  try {
+    await historyLane.rotation;
+    const value = unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(
+      await historyLane.pool.run(
+        () => {
+          sequence = ++historyLane.nativeSequence;
+          return { kind: "cli-process-history", request };
+        },
+        {
+          inputBytes: request.params.cliHistoryRedaction?.retainedBytes,
+          timeoutMs: 60_000,
+          onRequest,
+          signal,
+          onExecutionSettled: ({ retired }) => {
+            if (retired) {
+              executionRetired = true;
+              releaseRetiredDatabaseCustody(historyLane, sequence);
+            }
+          },
+        },
+      ),
+    );
+    if (
+      typeof value === "boolean" ||
+      Array.isArray(value) ||
+      (value.kind !== "rpc" && value.kind !== "rpc-message")
+    ) {
+      throw new Error("Unexpected process-held history reply");
+    }
+    return value;
+  } catch (error) {
+    if (sequence > 0 && !executionRetired) {
+      try {
+        await rotateDatabaseWorkers(historyLane);
+      } catch (cleanupError) {
+        throw sessionHistoryCleanupError(error, cleanupError, "worker retirement");
+      }
+    }
+    throw error;
+  } finally {
+    historyLane.pending--;
+    armDatabaseWorkerIdleRetirement(historyLane);
+  }
 }

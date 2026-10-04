@@ -138,7 +138,7 @@ Configure the tunnel ingress rules to route only the webhook path:
    - `audienceType: "project-number"` → audience is the Cloud project number.
    - Add-on tokens under `app-url` additionally require `appPrincipal` set to the app's numeric OAuth 2.0 client ID (21 digits, not an email). Otherwise verification fails with a logged warning.
 4. Messages route by space:
-   - Spaces get per-space sessions `agent:<agentId>:googlechat:group:<spaceId>`. Replies go to the message thread.
+   - Spaces get per-space sessions `agent:<agentId>:googlechat:group:<spaceId>`. With `replyToMode: "first"` or `"all"`, automatic replies stay in the inbound thread. The default and explicit `"off"` modes keep replies top-level, whether typing indicators are enabled or disabled.
    - DMs collapse into the agent's main session by default. Set `session.dmScope` for per-peer DM sessions (see [Session](/concepts/session)).
 5. DM access is pairing by default. Unknown senders receive a pairing code. Approve with:
    - `openclaw pairing approve googlechat <code>`

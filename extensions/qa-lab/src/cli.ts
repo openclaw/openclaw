@@ -47,24 +47,6 @@ type QaRunCliOptions = QaLabSelfCheckCommandOptions &
     excludeTestExecutionEvidence?: boolean;
   };
 
-const QA_RUN_PROFILE_ONLY_OPTIONS = [
-  { optionName: "outputDir", flag: "--output-dir" },
-  { optionName: "surface", flag: "--surface" },
-  { optionName: "category", flag: "--category" },
-  { optionName: "scenario", flag: "--scenario" },
-  { optionName: "evidenceMode", flag: "--evidence-mode" },
-  { optionName: "excludeTestExecutionEvidence", flag: "--exclude-test-execution-evidence" },
-  { optionName: "transport", flag: "--transport" },
-  { optionName: "providerMode", flag: "--provider-mode" },
-  { optionName: "model", flag: "--model" },
-  { optionName: "altModel", flag: "--alt-model" },
-  { optionName: "concurrency", flag: "--concurrency" },
-  { optionName: "allowFailures", flag: "--allow-failures" },
-  { optionName: "failFast", flag: "--fail-fast" },
-  { optionName: "fast", flag: "--fast" },
-] as const;
-
-const QA_RUN_SELF_CHECK_ONLY_OPTIONS = [{ optionName: "output", flag: "--output" }] as const;
 const MAX_QA_CLI_TCP_PORT = 65_535;
 
 type QaSuiteCliOptions = QaScenarioRunCliOptions & {
@@ -117,19 +99,6 @@ function resolveQaEvidenceModeOptions(opts: QaRunCliOptions) {
   return "slim";
 }
 
-function collectCliSuppliedQaRunFlags(
-  command: Command,
-  options: readonly { optionName: string; flag: string }[],
-): string[] {
-  return options
-    .filter((option) => command.getOptionValueSource(option.optionName) === "cli")
-    .map((option) => option.flag);
-}
-
-function formatFlagList(flags: readonly string[]): string {
-  return flags.join(", ");
-}
-
 function validateQaRunMode(opts: QaRunCliOptions, command: Command) {
   const hasQaProfile = Boolean(opts.qaProfile?.trim());
   if (command.getOptionValueSource("qaProfile") === "cli" && !hasQaProfile) {
@@ -137,19 +106,24 @@ function validateQaRunMode(opts: QaRunCliOptions, command: Command) {
   }
 
   if (hasQaProfile) {
-    const selfCheckFlags = collectCliSuppliedQaRunFlags(command, QA_RUN_SELF_CHECK_ONLY_OPTIONS);
-    if (selfCheckFlags.length > 0) {
+    if (command.getOptionValueSource("output") === "cli") {
       throw new Error(
-        `qa run ${formatFlagList(selfCheckFlags)} is only valid for the self-check mode without --qa-profile.`,
+        "qa run --output is only valid for the self-check mode without --qa-profile.",
       );
     }
     return;
   }
 
-  const profileFlags = collectCliSuppliedQaRunFlags(command, QA_RUN_PROFILE_ONLY_OPTIONS);
+  const profileFlags = command.options
+    .filter(
+      (option) =>
+        !["repoRoot", "output", "qaProfile"].includes(option.attributeName()) &&
+        command.getOptionValueSource(option.attributeName()) === "cli",
+    )
+    .map((option) => option.long);
   if (profileFlags.length > 0) {
     throw new Error(
-      `qa run ${formatFlagList(profileFlags)} requires --qa-profile; without --qa-profile, qa run only executes the self-check.`,
+      `qa run ${profileFlags.join(", ")} requires --qa-profile; without --qa-profile, qa run only executes the self-check.`,
     );
   }
 }
@@ -243,12 +217,11 @@ export function registerQaLabCli(program: Command) {
       });
       return;
     }
-    const selfCheckOptions = {
+    const runtime = await loadQaLabCliRuntime();
+    await runtime.runQaLabSelfCheckCommand({
       repoRoot: opts.repoRoot,
       output: opts.output,
-    };
-    const runtime = await loadQaLabCliRuntime();
-    await runtime.runQaLabSelfCheckCommand(selfCheckOptions);
+    });
   });
 
   qa.command("suite")
@@ -477,7 +450,8 @@ export function registerQaLabCli(program: Command) {
         fast?: boolean;
         timeoutMs?: number;
       }) => {
-        const manualOptions = {
+        const runtime = await loadQaLabCliRuntime();
+        await runtime.runQaManualLaneCommand({
           repoRoot: opts.repoRoot,
           transportId: opts.transport,
           providerMode: opts.providerMode,
@@ -486,9 +460,7 @@ export function registerQaLabCli(program: Command) {
           fastMode: opts.fast,
           message: opts.message,
           timeoutMs: opts.timeoutMs,
-        };
-        const runtime = await loadQaLabCliRuntime();
-        await runtime.runQaManualLaneCommand(manualOptions);
+        });
       },
     );
 
@@ -499,10 +471,6 @@ export function registerQaLabCli(program: Command) {
   credentials
     .command("doctor")
     .description("Check Convex credential broker env and admin reachability")
-    .option("--site-url <url>", "Override OPENCLAW_QA_CONVEX_SITE_URL")
-    .option("--endpoint-prefix <path>", "Override OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX")
-    .option("--actor-id <id>", "Optional admin actor id to include in broker audit events")
-    .option("--json", "Emit machine-readable JSON output", false)
     .action(async (opts) => (await loadQaLabCliRuntime()).runQaCredentialsDoctorCommand(opts));
 
   credentials
@@ -512,20 +480,12 @@ export function registerQaLabCli(program: Command) {
     .requiredOption("--payload-file <path>", "JSON object file containing the credential payload")
     .option("--repo-root <path>", "Repository root for resolving relative payload-file paths")
     .option("--note <text>", "Optional note stored with this credential row")
-    .option("--site-url <url>", "Override OPENCLAW_QA_CONVEX_SITE_URL")
-    .option("--endpoint-prefix <path>", "Override OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX")
-    .option("--actor-id <id>", "Optional admin actor id to include in broker audit events")
-    .option("--json", "Emit machine-readable JSON output", false)
     .action(async (opts) => (await loadQaLabCliRuntime()).runQaCredentialsAddCommand(opts));
 
   credentials
     .command("remove")
     .description("Remove one credential from active use by disabling it")
     .requiredOption("--credential-id <id>", "Credential row id from the Convex pool")
-    .option("--site-url <url>", "Override OPENCLAW_QA_CONVEX_SITE_URL")
-    .option("--endpoint-prefix <path>", "Override OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX")
-    .option("--actor-id <id>", "Optional admin actor id to include in broker audit events")
-    .option("--json", "Emit machine-readable JSON output", false)
     .action(async (opts) => (await loadQaLabCliRuntime()).runQaCredentialsRemoveCommand(opts));
 
   credentials
@@ -537,11 +497,15 @@ export function registerQaLabCli(program: Command) {
       parseQaCliPositiveIntegerOption(value, "--limit"),
     )
     .option("--show-secrets", "Include credential payload JSON in output", false)
-    .option("--site-url <url>", "Override OPENCLAW_QA_CONVEX_SITE_URL")
-    .option("--endpoint-prefix <path>", "Override OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX")
-    .option("--actor-id <id>", "Optional admin actor id to include in broker audit events")
-    .option("--json", "Emit machine-readable JSON output", false)
     .action(async (opts) => (await loadQaLabCliRuntime()).runQaCredentialsListCommand(opts));
+
+  for (const command of credentials.commands) {
+    command
+      .option("--site-url <url>", "Override OPENCLAW_QA_CONVEX_SITE_URL")
+      .option("--endpoint-prefix <path>", "Override OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX")
+      .option("--actor-id <id>", "Optional admin actor id to include in broker audit events")
+      .option("--json", "Emit machine-readable JSON output", false);
+  }
 
   qa.command("ui")
     .description("Start the private QA debugger UI and local QA bus")
@@ -624,9 +588,8 @@ export function registerQaLabCli(program: Command) {
         parseQaCliTcpPortOption(value, "--port"),
       )
       .action(async (opts: { host?: string; port?: number }) => {
-        const providerMode = providerCommand.providerMode;
         const runtime = await loadQaLabCliRuntime();
-        await runtime.runQaProviderServerCommand(providerMode, opts);
+        await runtime.runQaProviderServerCommand(providerCommand.providerMode, opts);
       });
   }
 

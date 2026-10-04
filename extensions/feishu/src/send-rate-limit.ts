@@ -10,9 +10,7 @@ export function getFeishuSendRateLimitCode(error: unknown): number | undefined {
   if (response?.status === 429) {
     return 429;
   }
-  const data = isRecord(response?.data) ? response.data : undefined;
-  const code = data?.code;
-  return typeof code === "number" && FEISHU_SEND_RATE_LIMIT_CODES.has(code) ? code : undefined;
+  return getFeishuSendRateLimitCodeFromResponse(response?.data);
 }
 
 export function getFeishuSendRateLimitCodeFromResponse(response: unknown): number | undefined {

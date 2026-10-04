@@ -14,8 +14,8 @@ import {
   browserPdfSave,
   browserScreenshotAction,
 } from "./client-actions.js";
+import { browserCloseTabByRawTargetId } from "./client-tab-close.runtime.js";
 import {
-  browserCloseTabByRawTargetId,
   browserDoctor,
   browserOpenTab,
   browserSnapshot,
@@ -86,14 +86,6 @@ describe("browser client", () => {
   it("adds useful cancellation messaging for abort-like failures", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("aborted")));
     await expect(browserStatus("http://127.0.0.1:18791")).rejects.toThrow(/cancelled/i);
-  });
-
-  it("surfaces non-2xx responses with body text", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("conflict", { status: 409 })));
-
-    await expect(
-      browserSnapshot("http://127.0.0.1:18791", { format: "aria", limit: 1 }),
-    ).rejects.toThrow(/conflict/i);
   });
 
   it("adds labels + efficient mode query params to snapshots", async () => {

@@ -1,12 +1,14 @@
 import type { ModelCostConfig } from "@openclaw/llm-core";
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import {
+  collectErrorGraphCandidates,
+  toErrorObject,
+} from "@openclaw/normalization-core/error-coercion";
+import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import {
-  listSessionTranscriptInstances,
-  readTranscriptStatsBatchReadOnlySync,
-} from "../config/sessions/session-accessor.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
+import { listSessionTranscriptInstances } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { readTranscriptStatsBatchReadOnlySync } from "../config/sessions/session-accessor.sqlite-read.js";
 import {
   getSessionKysely,
   resolveSqliteReadScope,
@@ -21,7 +23,7 @@ import {
 } from "../state/openclaw-agent-db-readonly.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
-import { executeSqliteQuerySync } from "./kysely-sync.js";
+import { iterateSqliteQuerySync } from "./kysely-sync.js";
 import {
   readSessionCostUsageRollupRowsInDatabase,
   readSessionCostUsageRollupBodyInDatabase,
@@ -56,7 +58,6 @@ import type {
   UsageCostWorkerResult,
 } from "./session-cost-usage-worker.types.js";
 import { isTransientSqliteError } from "./unhandled-rejections.js";
-import type { WorkerTaskControl } from "./worker-task-native-sections.js";
 import { WorkerTaskError } from "./worker-task-pool.js";
 import type { WorkerTaskChannel } from "./worker-task-server.js";
 
@@ -162,16 +163,20 @@ export async function executeUsageCostWorker(
       return result;
     },
   };
-  const inventory = (minMtimeMs?: number, sessionsDir?: string) =>
-    listUsageCountedTranscriptStats(location.agentId, {
-      ...access,
-      storePath: location.storePath,
-      sessionsDir,
-      minMtimeMs,
-    });
+  const inventory = async (sessionsDir?: string) =>
+    input.transcriptFiles
+      ? (await resolveUsageCostTranscriptFiles(input.transcriptFiles, access)).filter(
+          (file) => file !== undefined,
+        )
+      : listUsageCountedTranscriptStats(location.agentId, {
+          ...access,
+          storePath: location.storePath,
+          sessionsDir,
+        });
   if (operation.kind === "inventory") {
-    const files = operation.sessionFiles
-      ? (await resolveUsageCostTranscriptSources(operation.sessionFiles, access)).filter(
+    const selected = operation.sessionFiles ?? input.transcriptFiles;
+    let files = selected
+      ? (await resolveUsageCostTranscriptSources(selected, access)).filter(
           (file) => file !== undefined,
         )
       : await listUsageCountedTranscriptSources(location.agentId, {
@@ -179,6 +184,14 @@ export async function executeUsageCostWorker(
           storePath: location.storePath,
           minMtimeMs: operation.minMtimeMs,
         });
+    if (
+      input.transcriptFiles &&
+      operation.sessionFiles === undefined &&
+      operation.minMtimeMs !== undefined
+    ) {
+      const minMtimeMs = operation.minMtimeMs;
+      files = files.filter((file) => !(file.mtimeMs < minMtimeMs));
+    }
     return {
       kind: "inventory",
       files: files.map(({ kind, sourcePath, sessionId, mtimeMs }) => ({
@@ -299,7 +312,6 @@ export async function executeUsageCostWorker(
                 ...source,
                 ...operation,
                 files: reportFiles.filter((file) => file !== undefined),
-                refreshing: false,
               }),
             }
           : {
@@ -308,7 +320,6 @@ export async function executeUsageCostWorker(
                 ...source,
                 ...operation,
                 files: reportFiles,
-                refreshing: false,
               })),
             };
       control.throwIfCancelled();
@@ -389,10 +400,13 @@ export async function executeUsageCostWorker(
   const rows = await readMetadata();
   const byPath = new Map(rows.map((row) => [row.key, row]));
 
-  const discovered = await inventory(undefined, operation.sessionsDir);
+  const discovered = await inventory(operation.sessionsDir);
   const requestedFiles = (
     await resolveUsageCostTranscriptFiles(operation.sessionFiles ?? [], access)
   ).filter((file) => file !== undefined);
+  if (requestedFiles.length !== (operation.sessionFiles?.length ?? 0)) {
+    throw new WorkerTaskError("A requested usage transcript is unavailable", "unavailable");
+  }
   const filesByPath = new Map(discovered.map((file) => [file.filePath, file]));
   for (const file of requestedFiles) {
     filesByPath.set(file.filePath, file);
@@ -493,8 +507,20 @@ export async function executeUsageCostWorker(
                 .where("session_id", "=", marker.sessionId)
                 .where("seq", ">", afterSeq)
                 .where("seq", "<=", throughSeq)
-                .orderBy("seq", "asc");
-              return executeSqliteQuerySync(opened.db, query).rows;
+                .orderBy("seq", "asc")
+                .limit(1_024);
+              const page: Array<{ seq: number; event_json: string }> = [];
+              let bytes = 0;
+              // Stop before parsing: retain at most 8 MiB plus one lookahead event.
+              for (const row of iterateSqliteQuerySync(opened.db, query)) {
+                const size = Buffer.byteLength(row.event_json);
+                if (page.length > 0 && bytes + size > 8 * 1024 * 1024) {
+                  break;
+                }
+                page.push(row);
+                bytes += size;
+              }
+              return page;
             }),
           { ...database, env },
         );
@@ -512,8 +538,10 @@ export async function executeUsageCostWorker(
       return read();
     }
   };
+  let changed = false;
   for (const { file, row, envelope, rebuild } of stale.slice(0, maxFiles)) {
     control.throwIfCancelled();
+    await host("refresh-session", { sessionFile: file.filePath });
     let previous: UsageCostRollupEntry | undefined;
     if (
       !rebuild &&
@@ -546,31 +574,19 @@ export async function executeUsageCostWorker(
     if (!written) {
       throw new Error(`usage rollup changed while refreshing: ${file.filePath}`);
     }
+    changed = true;
   }
-  return { kind: "refresh" };
+  return { kind: "refresh", changed };
 }
 
 export function usageCostWorkerFailure(
   error: unknown,
 ): Extract<UsageCostWorkerReply, { ok: false }> {
-  const pending = [error];
-  const seen = new Set<unknown>();
-  let hostFailure: UsageCostHostEffectError | undefined;
-  for (const entry of pending) {
-    if (seen.has(entry)) {
-      continue;
-    }
-    seen.add(entry);
-    if (entry instanceof UsageCostHostEffectError) {
-      hostFailure ??= entry;
-    }
-    if (entry instanceof Error && entry.cause) {
-      pending.push(entry.cause);
-    }
-    if (entry instanceof AggregateError) {
-      pending.push(...entry.errors);
-    }
-  }
+  const hostFailure = collectErrorGraphCandidates(error, (entry) =>
+    entry instanceof Error
+      ? [entry.cause, ...(entry instanceof AggregateError ? entry.errors : [])]
+      : [],
+  ).find((entry): entry is UsageCostHostEffectError => entry instanceof UsageCostHostEffectError);
   return {
     ok: false,
     error: {

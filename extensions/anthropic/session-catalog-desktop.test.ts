@@ -33,16 +33,15 @@ describe("Claude Desktop overlay cache", () => {
   let now: number;
   let dirty: "all" | Set<string>;
   let watch: DirtyDirectoryWatch;
-  let closeWatch = vi.fn();
+  let closeWatch = vi.fn(async () => {});
 
   beforeEach(async () => {
     home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-desktop-overlay-"));
     now = Date.UTC(2026, 0, 1);
     dirty = new Set();
-    closeWatch = vi.fn();
+    closeWatch = vi.fn(async () => {});
     watch = {
       takeDirty: () => dirty,
-      observeChildDirectories: vi.fn(),
       close: closeWatch,
     };
     createWatch.mockReset().mockReturnValue(watch);
@@ -50,7 +49,7 @@ describe("Claude Desktop overlay cache", () => {
   });
 
   afterEach(async () => {
-    watch.close();
+    await watch.close();
     vi.restoreAllMocks();
     await fs.rm(home, { recursive: true, force: true });
   });
@@ -71,7 +70,7 @@ describe("Claude Desktop overlay cache", () => {
 
   it("keeps an absent Desktop store cached until the sixty-second backstop", async () => {
     const absent = await readDesktopOverlay(home);
-    expect(absent.available).toBe(false);
+    expect(absent.active.size).toBe(0);
     expect(closeWatch).toHaveBeenCalledOnce();
 
     await writeDesktopMetadata(home, "Created");
@@ -80,7 +79,6 @@ describe("Claude Desktop overlay cache", () => {
 
     now += 1;
     const refreshed = await readDesktopOverlay(home);
-    expect(refreshed.available).toBe(true);
     expect(refreshed.active.get("fixture-session")?.title).toBe("Created");
   });
 });

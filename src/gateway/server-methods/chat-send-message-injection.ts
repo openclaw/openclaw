@@ -23,7 +23,7 @@ import {
 import { resolveInboundReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-tool-authority.js";
 import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { isRestartRecoveryTerminalDeliveryFailClosed } from "../../config/sessions/restart-recovery-receipt.js";
+import { resolveRestartRecoverySteeringBlockReason } from "../../config/sessions/restart-recovery-receipt.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { logMessageProcessed, logMessageReceived } from "../../logging/diagnostic.js";
@@ -52,7 +52,7 @@ export function createChatSendMessageInjectionStarter(params: {
   >;
   admittedSessionSettings?: Readonly<Pick<SessionEntry, "permissionMode" | "toolOverrides">>;
   turn: Pick<
-    ReturnType<typeof prepareChatSendUserTurn>,
+    Awaited<ReturnType<typeof prepareChatSendUserTurn>>,
     "ctx" | "isInternalTextSlashCommandTurn" | "replyOptionImages" | "replyOptionMedia"
   >;
   imageOrder: ReplyBackendQueueMessageOptions["imageOrder"];
@@ -91,9 +91,13 @@ export function createChatSendMessageInjectionStarter(params: {
             readConsistency: "latest",
           }) ?? entry;
       } catch (error: unknown) {
-        params.logGateway.warn(
-          `failed to reload session entry before steering fence on ${sessionKey}: ${String(error)}`,
-        );
+        params.logGateway.warn("chat steering rejected; falling back to follow-up dispatch", {
+          reason: "session-entry-unavailable",
+          runId: clientRunId,
+          activeRunId: params.target.runId,
+          sessionKey,
+          error: String(error),
+        });
         return undefined;
       }
     }
@@ -106,17 +110,30 @@ export function createChatSendMessageInjectionStarter(params: {
       normalizeOptionalString(params.target?.sourceTurnId) ??
       normalizeOptionalString(fenceEntry?.restartRecoveryDeliverySourceRunId) ??
       "";
-    if (
-      fenceEntry &&
-      isRestartRecoveryTerminalDeliveryFailClosed(
-        fenceEntry,
-        fenceEntry.sessionId,
-        activeSourceTurnId,
-      )
-    ) {
-      params.logGateway.warn(
-        `active run ${clientRunId} cannot own another terminal source-reply send on session ${sessionKey}; rejecting steer injection before queueing`,
-      );
+    const blockReason = fenceEntry
+      ? resolveRestartRecoverySteeringBlockReason(
+          fenceEntry,
+          fenceEntry.sessionId,
+          activeSourceTurnId,
+        )
+      : undefined;
+    if (blockReason) {
+      params.logGateway.warn("chat steering rejected; falling back to follow-up dispatch", {
+        reason: blockReason,
+        runId: clientRunId,
+        activeRunId: params.target.runId,
+        sourceTurnId: activeSourceTurnId || undefined,
+        sourceTurnIdOrigin: params.target.sourceTurnId
+          ? "active-run"
+          : activeSourceTurnId
+            ? "recovery-claim"
+            : "unknown",
+        sessionKey,
+        sessionId: fenceEntry?.sessionId,
+        sessionStatus: fenceEntry?.status,
+        recoveryRunId: fenceEntry?.restartRecoveryDeliveryRunId,
+        recoverySourceTurnId: fenceEntry?.restartRecoveryDeliverySourceRunId,
+      });
       return undefined;
     }
     const { debounceMs } = resolveQueueSettings({
@@ -156,7 +173,7 @@ export function createChatSendMessageInjectionStarter(params: {
       cfg,
       commandAuthorized: ctx.CommandAuthorized === true,
     });
-    const attempt = beginReplyMessageInjectionTarget(
+    return beginReplyMessageInjectionTarget(
       params.target,
       p.replyToId
         ? buildChatSendReplyInjectionText({ body: text, cfg, ctx, sessionEntry: entry })
@@ -169,6 +186,7 @@ export function createChatSendMessageInjectionStarter(params: {
               text: buildInboundUserContextPrefix(ctx, resolveEnvelopeFormatOptions(cfg), entry),
             },
         assertCurrent,
+        inboundAudio: hasInboundAudio(ctx),
         steeringMode: "all",
         isInboundUserMessage: true,
         ...(isProgressCardRefreshInputProvenance(ctx.InputProvenance)
@@ -197,7 +215,6 @@ export function createChatSendMessageInjectionStarter(params: {
         userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
       },
     );
-    return attempt;
   };
 }
 

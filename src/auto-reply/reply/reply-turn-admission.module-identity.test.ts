@@ -4,20 +4,27 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "tsdown";
 import { expect, it } from "vitest";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { spawnNodeEvalSync } from "../../test-utils/node-process.js";
 
 it("keeps admitted session ownership when transformed plugins import the native SDK", async () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "reply-admission-module-")));
   const repo = process.cwd();
   const dist = path.join(root, "dist");
+  const processDeclaration = resolveRuntimeWorkerUrl({
+    currentModuleUrl: runtimeProcessEntrypoints.stateRead.currentModuleUrl,
+    sourceWorkerName: "runtime-process-entrypoints",
+    distWorkerPath: "infra/runtime-process-entrypoints.js",
+  }).href;
   const deferredModules = new Set<string>();
   const source = (relativePath: string) => JSON.stringify(path.join(repo, relativePath));
   const ownerExports = `
     export { admitReplyTurn } from ${source("src/auto-reply/reply/reply-turn-admission.ts")};
     export { replyRunRegistry } from ${source("src/auto-reply/reply/reply-run-registry.ts")};
     export { replaceSessionEntrySync } from ${source("src/config/sessions/session-accessor.sqlite-entry.ts")};
-    export { closeOpenClawAgentDatabases } from ${source("src/state/openclaw-agent-db.ts")};
-    export { closeOpenClawStateDatabase } from ${source("src/state/openclaw-state-db.ts")};
+    export { closeOpenClawAgentDatabasesAsync } from ${source("src/state/openclaw-agent-db.ts")};
+    export { closeOpenClawStateDatabaseAsync } from ${source("src/state/openclaw-state-db.ts")};
   `;
   try {
     fs.mkdirSync(dist);
@@ -34,18 +41,27 @@ it("keeps admitted session ownership when transformed plugins import the native 
       path.join(root, "plugin.ts"),
       'export * from "openclaw/plugin-sdk/admission-fixture";\n',
     );
-    // Keep lazy recovery/archival graphs out of this admission fixture. The child
-    // rejects and records any attempt to enter them, including caught import errors.
+    // Admission uses the real history worker and its cleanup owner. Borrow the maintained
+    // subprocess generation; keep unrelated recovery/archival graphs deferred.
     await build({
       plugins: [
         {
           name: "defer-unexercised-runtime",
           async resolveId(id, importer, options) {
-            if (options.kind !== "dynamic-import") {
-              return null;
-            }
             const resolved = await this.resolve(id, importer, { skipSelf: true });
             if (!resolved || resolved.external) {
+              return resolved;
+            }
+            const filename = path.normalize(resolved.id);
+            if (filename === path.join(repo, "src/infra/runtime-process-entrypoints.ts")) {
+              return { id: processDeclaration, external: true };
+            }
+            if (
+              options.kind !== "dynamic-import" ||
+              filename ===
+                path.join(repo, "src/config/sessions/session-transcript-worker-runtime.ts") ||
+              filename === path.join(repo, "src/infra/temp-artifact-cleanup.ts")
+            ) {
               return resolved;
             }
             const url = pathToFileURL(resolved.id).href;
@@ -95,7 +111,6 @@ it("keeps admitted session ownership when transformed plugins import the native 
           },
         });
         const operations = new Set();
-        const outcomes = [];
         let host;
         let transformed;
         const bounded = async (work, label) => {
@@ -122,7 +137,6 @@ it("keeps admitted session ownership when transformed plugins import the native 
           })(modulePath);
           assert.equal(transformed.admitReplyTurn, host.admitReplyTurn, "plugin transformation retains the native admission owner");
           const cases = [
-            { name: "native-same-store", parent: native, foreign: false },
             { name: "transformed-same-store", parent: transformed, foreign: false },
             { name: "transformed-foreign-store", parent: transformed, foreign: true },
           ];
@@ -173,11 +187,13 @@ it("keeps admitted session ownership when transformed plugins import the native 
               parent.complete();
               child = await bounded(pending, scenario.name + " successor");
               if (child.status === "owned") operations.add(child.operation);
-              const outcome = child.status === "owned"
-                ? { name: scenario.name, status: child.status, sessionId: child.operation.sessionId }
-                : { name: scenario.name, status: child.status, reason: child.reason };
-              outcomes.push(outcome);
-              console.log(JSON.stringify(outcome));
+              if (scenario.foreign) {
+                assert.equal(child.status, "skipped");
+                assert.equal(child.reason, "lifecycle-invalidated");
+              } else {
+                assert.equal(child.status, "owned");
+                assert.equal(child.operation.sessionId, successorId);
+              }
             } finally {
               host.replyRunRegistry.waitForIdle = waitForIdle;
               parent.complete();
@@ -189,17 +205,12 @@ it("keeps admitted session ownership when transformed plugins import the native 
               }
             }
           }
-          assert.deepEqual(outcomes, [
-            { name: "native-same-store", status: "owned", sessionId: "after-native-same-store" },
-            { name: "transformed-same-store", status: "owned", sessionId: "after-transformed-same-store" },
-            { name: "transformed-foreign-store", status: "skipped", reason: "lifecycle-invalidated" },
-          ]);
         } finally {
           for (const operation of operations) operation.complete();
-          transformed?.closeOpenClawAgentDatabases();
-          host?.closeOpenClawAgentDatabases();
-          transformed?.closeOpenClawStateDatabase();
-          host?.closeOpenClawStateDatabase();
+          await transformed?.closeOpenClawAgentDatabasesAsync();
+          await host?.closeOpenClawAgentDatabasesAsync();
+          await transformed?.closeOpenClawStateDatabaseAsync();
+          await host?.closeOpenClawStateDatabaseAsync();
           hooks.deregister();
         }
         assert.deepEqual(unexpectedImports, [], "all exercised runtime must stay in the fixture graph");

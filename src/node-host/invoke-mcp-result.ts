@@ -63,11 +63,11 @@ export function boundMcpToolResultPayload(result: {
   let markedTruncated = false;
   const textBoundedContent: McpInvokeContentBlock[] = [];
   for (const block of normalizedBlocks) {
-    if (block.type !== "text" || typeof block.text !== "string") {
-      textBoundedContent.push(block);
-      continue;
-    }
-    if (totalTextBytes <= MCP_TEXT_CONTENT_MAX_BYTES) {
+    if (
+      block.type !== "text" ||
+      typeof block.text !== "string" ||
+      totalTextBytes <= MCP_TEXT_CONTENT_MAX_BYTES
+    ) {
       textBoundedContent.push(block);
       continue;
     }

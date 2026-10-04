@@ -1,8 +1,17 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
-import { resolveUserChannelIdentity } from "../state/user-channel-identities.js";
-import { prepareUserChannelIdentityAuthority } from "../state/user-channel-identity-operations.js";
+import {
+  parseUserChannelAuthorizationReference,
+  resolveUserChannelAuthorizationPolicy,
+  resolveUserChannelIdentity,
+} from "../state/user-channel-identities.js";
+import {
+  authorizeCanonicalUserChannelIdentity,
+  prepareUserChannelIdentityAuthority,
+} from "../state/user-channel-identity-operations.js";
 import type {
+  UserChannelAuthorization,
+  UserChannelAuthorizationReference,
   UserChannelIdentity,
   UserChannelIdentityAuthorityFacts,
 } from "../state/user-profiles.types.js";
@@ -10,9 +19,13 @@ import {
   GatewayOperatorAccessDeniedError,
   hasCurrentGatewayOperatorAccess,
   resolvePreparedGatewayOperatorAccessAuthority,
+  resumeGatewayOperatorAccessGrant,
 } from "./operator-access-policy.js";
 import { resolveIdentityOperatorScopes } from "./operator-identity-scopes.js";
-import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
+import {
+  resolveOperatorRolePolicyForAssignment,
+  resolveOperatorRoleSelection,
+} from "./operator-role-policy.js";
 
 /** One-shot CLI owners retain the grant while checking their original installation's state. */
 export function resolveChannelOperatorAdminAuthority(
@@ -21,7 +34,9 @@ export function resolveChannelOperatorAdminAuthority(
   stateOptions: OpenClawStateDatabaseOptions = {},
 ) {
   const prepared = resolveChannelOperatorIdentityFacts(cfg, identity, stateOptions);
-  return prepared && captureLinkedOperatorAdmin(cfg, prepared.linked, prepared.isCurrent);
+  return (
+    prepared && captureLinkedOperatorAdmin(cfg, prepared.linked, prepared.isCurrent)?.authority
+  );
 }
 
 /** The update owner must prove accepted native custody before using identity-only checks. */
@@ -49,12 +64,21 @@ function resolveChannelOperatorIdentityFacts(
   }
   return {
     linked,
-    isCurrent: () => {
+    isCurrent: (currentCfg = cfg) => {
       const current = resolveUserChannelIdentity(capturedIdentity, stateOptions);
+      const usesGithubAssignment =
+        Object.keys(currentCfg.gateway?.roles?.assignments?.byGithubLogin ?? {}).length > 0 &&
+        resolveOperatorRoleSelection(
+          linked.profileId,
+          linked.role,
+          currentCfg,
+          linked.githubLogin ?? null,
+        ).roleSource !== "assigned";
       return (
         current !== undefined &&
         current.profileId === linked.profileId &&
         current.role === linked.role &&
+        (!usesGithubAssignment || current.githubLogin === linked.githubLogin) &&
         linked.emails.every((email) => current.emails.includes(email)) &&
         linked.loginIdentities.every((login) => current.loginIdentities.includes(login))
       );
@@ -66,7 +90,12 @@ function resolveLinkedOperatorAdmin(
   cfg: OpenClawConfig,
   linked: UserChannelIdentityAuthorityFacts,
 ): string | undefined {
-  const policy = resolveOperatorRolePolicyForAssignment(linked.profileId, linked.role, cfg);
+  const policy = resolveOperatorRolePolicyForAssignment(
+    linked.profileId,
+    linked.role,
+    cfg,
+    linked.githubLogin ?? null,
+  );
   const authorized = policy
     ? policy.scopes.includes("operator.admin")
     : linked.loginIdentities.some((login) =>
@@ -80,7 +109,7 @@ function resolveLinkedOperatorAdmin(
 function captureLinkedOperatorAdminIdentity(
   cfg: OpenClawConfig,
   linked: UserChannelIdentityAuthorityFacts,
-  isIdentityCurrent: () => boolean,
+  isIdentityCurrent: (cfg?: OpenClawConfig) => boolean,
 ) {
   if (!resolveLinkedOperatorAdmin(cfg, linked)) {
     return undefined;
@@ -89,14 +118,19 @@ function captureLinkedOperatorAdminIdentity(
     linked.profileId,
     linked.role,
     cfg,
+    linked.githubLogin ?? null,
   )?.accessPolicyPlugin;
   let current = true;
   const isCurrent = (currentCfg: OpenClawConfig) => {
     current &&=
-      isIdentityCurrent() &&
+      isIdentityCurrent(currentCfg) &&
       resolveLinkedOperatorAdmin(currentCfg, linked) === linked.profileId &&
-      resolveOperatorRolePolicyForAssignment(linked.profileId, linked.role, currentCfg)
-        ?.accessPolicyPlugin === requiredPlugin;
+      resolveOperatorRolePolicyForAssignment(
+        linked.profileId,
+        linked.role,
+        currentCfg,
+        linked.githubLogin ?? null,
+      )?.accessPolicyPlugin === requiredPlugin;
     return current;
   };
   return isCurrent(cfg) ? { profileId: linked.profileId, isCurrent } : undefined;
@@ -105,24 +139,52 @@ function captureLinkedOperatorAdminIdentity(
 function captureLinkedOperatorAdmin(
   cfg: OpenClawConfig,
   linked: UserChannelIdentityAuthorityFacts,
-  isIdentityCurrent: () => boolean,
+  isIdentityCurrent: (cfg?: OpenClawConfig) => boolean,
+  original?: UserChannelAuthorization,
 ) {
   const identity = captureLinkedOperatorAdminIdentity(cfg, linked, isIdentityCurrent);
   if (!identity) {
     return undefined;
   }
   try {
-    const access = resolvePreparedGatewayOperatorAccessAuthority(
-      { ...linked, isCurrent: isIdentityCurrent },
-      cfg,
-    );
+    const access = original
+      ? null
+      : resolvePreparedGatewayOperatorAccessAuthority(
+          {
+            ...linked,
+            githubLogin: linked.githubLogin ?? null,
+            isCurrent: () => isIdentityCurrent(cfg),
+          },
+          cfg,
+        );
     let current = true;
     const isCurrent = (currentCfg: OpenClawConfig) => {
       current &&= identity.isCurrent(currentCfg) && hasCurrentGatewayOperatorAccess(access);
+      if (current && original) {
+        resumeGatewayOperatorAccessGrant(
+          {
+            profileId: linked.profileId,
+            emails: linked.emails,
+            githubAccountIds: linked.githubAccountIds,
+            assignedRole: linked.role,
+            githubLogin: linked.githubLogin ?? null,
+          },
+          currentCfg,
+          original.grant,
+        );
+        current &&= isIdentityCurrent(currentCfg);
+      }
       return current;
     };
     return isCurrent(cfg)
-      ? { profileId: linked.profileId, isCurrent, ...(access ? { signal: access.signal } : {}) }
+      ? {
+          authority: {
+            profileId: linked.profileId,
+            isCurrent,
+            ...(access ? { signal: access.signal } : {}),
+          },
+          grant: access === null ? null : access.gatewayAccessGrant,
+        }
       : undefined;
   } catch (error) {
     if (error instanceof GatewayOperatorAccessDeniedError) {
@@ -132,14 +194,81 @@ function captureLinkedOperatorAdmin(
   }
 }
 
+export type ResolvedChannelOperatorIdentity = {
+  identity: UserChannelIdentity;
+  prepared: Awaited<ReturnType<typeof prepareUserChannelIdentityAuthority>>;
+};
+
 export async function prepareChannelOperatorAdmin(
   cfg: OpenClawConfig,
-  identity: UserChannelIdentity,
+  input: UserChannelIdentity | UserChannelAuthorizationReference | ResolvedChannelOperatorIdentity,
   stateOptions: OpenClawStateDatabaseOptions = {},
 ) {
   if (!cfg.gateway?.roles && !cfg.gateway?.auth?.identityScopes) {
     return undefined;
   }
-  const prepared = await prepareUserChannelIdentityAuthority(identity, stateOptions);
-  return prepared && captureLinkedOperatorAdmin(cfg, prepared.linked, prepared.isCurrent);
+  const identity = "identity" in input ? input.identity : input;
+  const policy = resolveUserChannelAuthorizationPolicy(cfg.gateway);
+  const reference =
+    "version" in identity ? parseUserChannelAuthorizationReference(identity) : undefined;
+  if ("version" in identity && !reference) {
+    return undefined;
+  }
+  // An admitted ingress carries even an absent result; never reread an unlinked sender.
+  const prepared =
+    "identity" in input
+      ? input.prepared
+      : await prepareUserChannelIdentityAuthority(
+          "version" in identity ? { authorizationId: identity.id, policy } : identity,
+          stateOptions,
+        );
+  if (!prepared) {
+    return undefined;
+  }
+  const captured = captureLinkedOperatorAdmin(
+    cfg,
+    prepared.linked,
+    prepared.isCurrent,
+    prepared.linked.authorization,
+  );
+  if (!captured) {
+    return undefined;
+  }
+  const original = prepared.linked.authorization;
+  const assertCurrent = () => {
+    if (!captured.authority.isCurrent(cfg)) {
+      throw new GatewayOperatorAccessDeniedError();
+    }
+  };
+  const recoveryReference =
+    original?.reference ??
+    (!("version" in identity) && captured.grant !== undefined
+      ? await authorizeCanonicalUserChannelIdentity(
+          {
+            action: "authorize",
+            identity,
+            profileId: prepared.linked.profileId,
+            policy,
+            grant: captured.grant,
+          },
+          { ...stateOptions, assertCurrent },
+        )
+      : undefined);
+  assertCurrent();
+  return {
+    ...captured.authority,
+    recoveryReference,
+    operatorProfile: {
+      profileId: prepared.linked.profileId,
+      assignedRole: prepared.linked.role,
+      githubLogin: prepared.linked.githubLogin ?? null,
+      scopes: resolveOperatorRolePolicyForAssignment(
+        prepared.linked.profileId,
+        prepared.linked.role,
+        cfg,
+        prepared.linked.githubLogin ?? null,
+      )?.scopes ?? ["operator.admin"],
+      gatewayAccessGrant: captured.grant,
+    },
+  };
 }

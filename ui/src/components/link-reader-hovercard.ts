@@ -77,14 +77,12 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
   private readonly subscriptions = new SubscriptionsController(this);
   constructor() {
     super();
-    this.subscriptions.watch(
+    this.subscriptions.watchStore(
       () => this.pagePreviewContext?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
       () => this.retirePage(),
     );
-    this.subscriptions.watch(
+    this.subscriptions.watchStore(
       () => this.pagePreviewContext?.config,
-      (config, notify) => config.subscribe(notify),
       () => {
         if (this.client && !this.pagePreviewContext?.config.current.automaticallyFetchFavicons) {
           clearLinkPreviews(this.client);
@@ -109,10 +107,7 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
       return;
     }
     this.invalidatePreviewContext();
-    this.close();
-    this.clearPreviews();
     this.readerDescriptors = value;
-    this.seeds = null;
     this.dispatchEvent(new Event("link-reader-capabilities-changed"));
   }
 
@@ -166,8 +161,6 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
       return;
     }
     this.invalidatePreviewContext();
-    this.close();
-    this.clearPreviews();
     this.gatewayClient = value;
     this.dispatchEvent(new Event("link-reader-capabilities-changed"));
   }
@@ -181,8 +174,6 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
       return;
     }
     this.invalidatePreviewContext();
-    this.close();
-    this.clearPreviews();
     this.selectedAgentId = value;
     this.dispatchEvent(new Event("link-reader-capabilities-changed"));
   }
@@ -195,6 +186,8 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
   private invalidatePreviewContext(): void {
     this.seeds = null;
     this.previewContext = null;
+    this.close();
+    this.clearPreviews();
   }
 
   private syncPreviewContext(): PreviewContext | null {
@@ -326,9 +319,6 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
       if (this.page && this.hovercard.card) {
         this.showPage(this.page);
       }
-      return;
-    }
-    if (!this.activeAnchor) {
       return;
     }
     const anchor = this.activeAnchor;

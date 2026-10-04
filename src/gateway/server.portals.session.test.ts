@@ -15,8 +15,11 @@ import { writeConfigFile } from "../config/config.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import * as nodePairing from "../infra/device-pairing-node-state.js";
-import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
-import { NODE_WORKER_PORTAL_STREAM_COMMAND } from "../infra/node-commands.js";
+import * as nodePairingWrites from "../infra/device-pairing-node.js";
+import {
+  NODE_WORKER_PORTAL_STREAM_COMMAND,
+  NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
+} from "../infra/node-commands.js";
 import {
   NODE_WORKER_PORTAL_STREAM_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
@@ -28,7 +31,9 @@ import {
 import { invokeNodeWorkerPortalStream } from "../node-host/portal-stream-command.js";
 import { projectPluginContributions } from "../plugins/registry-contributions.js";
 import { adoptPluginRegistryRecords } from "../plugins/registry-lifecycle.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import * as stateWorkerStore from "../state/openclaw-state-worker-store.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { pairDeviceIdentity } from "./device-authz.test-helpers.js";
 import * as workerStartup from "./server-worker-environment-startup.js";
@@ -42,6 +47,7 @@ import {
   testState,
   withGatewayServer,
 } from "./server.auth.test-helpers.js";
+import * as workerBundles from "./worker-environments/bundle.js";
 import { hashWorkerCredential } from "./worker-environments/credential.js";
 import * as workerService from "./worker-environments/service.js";
 
@@ -119,6 +125,26 @@ it("carries authenticated session previews through the node and retires access b
   const destinationPort = (destination.address() as AddressInfo).port;
   const runtimeFactory = vi.spyOn(workerStartup, "createGatewayWorkerEnvironmentRuntime");
   const serviceFactory = vi.spyOn(workerService, "createWorkerEnvironmentService");
+  // Packing an ambient dist/worker build costs tens of seconds and no part of this proof.
+  vi.spyOn(workerBundles, "createWorkerBundleProducer").mockReturnValue({
+    prepare: async () => ({
+      install: "bundle",
+      bundleHash: "a".repeat(64),
+      openclawVersion: "2026.9.1",
+      protocolFeatures: [],
+      tarballBytes: 1,
+      tarballSha256: "b".repeat(64),
+      tarballPath: "/synthetic/worker.tgz",
+    }),
+    prune: async () => {},
+  });
+  const recordConnection = nodePairingWrites.recordPairedNodeConnection;
+  const nodeConnectionRecorded = createDeferred<Awaited<ReturnType<typeof recordConnection>>>();
+  vi.spyOn(nodePairingWrites, "recordPairedNodeConnection").mockImplementation((...args) => {
+    const recording = recordConnection(...args);
+    nodeConnectionRecorded.resolve(recording);
+    return recording;
+  });
   const resolvePairing = nodePairing.resolveCurrentPairedDeviceNodeBinding;
   let pairingGate: (() => Promise<void>) | undefined;
   vi.spyOn(nodePairing, "resolveCurrentPairedDeviceNodeBinding").mockImplementation(
@@ -170,27 +196,12 @@ it("carries authenticated session previews through the node and retires access b
         const store = startup.startup.store;
         const serviceOptions = serviceFactory.mock.calls.at(-1)?.[0];
         assert(serviceOptions, "Gateway must own the worker bundle producer");
-        let bootstrapReceipt: WorkerAdmissionHandshake;
-        try {
-          const artifact = await serviceOptions.prepareInstallation("bundle");
-          bootstrapReceipt = {
-            bundleHash: artifact.bundleHash,
-            openclawVersion: artifact.openclawVersion,
-            protocolFeatures: [...artifact.protocolFeatures],
-          };
-          console.info("Portal transport proof: current Gateway worker build receipt");
-        } catch (error) {
-          assert(error instanceof Error);
-          expect(error.message).toMatch(/^OpenClaw worker deploy artifact is missing;/);
-          expect(error.cause).toMatchObject({ code: "ENOENT" });
-          // Source-only Gateways preserve admitted leases when no replacement build exists.
-          bootstrapReceipt = {
-            bundleHash: "a".repeat(64),
-            openclawVersion: "2026.9.1",
-            protocolFeatures: [],
-          };
-          console.info("Portal transport proof: historical receipt; worker build absent (ENOENT)");
-        }
+        const artifact = await serviceOptions.prepareInstallation("bundle");
+        const bootstrapReceipt: WorkerAdmissionHandshake = {
+          bundleHash: artifact.bundleHash,
+          openclawVersion: artifact.openclawVersion,
+          protocolFeatures: [...artifact.protocolFeatures],
+        };
         const sockets: Awaited<ReturnType<typeof openWs>>[] = [];
         const controllers = new Map<string, AbortController>();
         const running = new Set<Promise<void>>();
@@ -217,13 +228,13 @@ it("carries authenticated session previews through the node and retires access b
             });
             deviceIdentityPath = paired.identityPath;
             // Device identity approval and machine capability consent are separate grants.
-            const pairing = await requestNodePairing({
+            const pairing = await nodePairingWrites.requestNodePairing({
               nodeId: paired.identity.deviceId,
               platform: NODE_CLIENT.platform,
               caps: [],
               commands: [],
             });
-            const approved = await approveNodePairing(pairing.request.requestId, {
+            const approved = await nodePairingWrites.approveNodePairing(pairing.request.requestId, {
               callerScopes: ["operator.pairing", "operator.write"],
             });
             assert(approved && "node" in approved, "Node capability approval must succeed");
@@ -263,6 +274,19 @@ it("carries authenticated session previews through the node and retires access b
               return;
             }
             const frame = coerceNodeInvokePayload(event.payload);
+            if (frame?.command === NODE_WORKER_WORKSPACE_RETAIN_COMMAND) {
+              const maintenance = (async () => {
+                await rpcReq(node.socket, "node.invoke.result", {
+                  id: frame.id,
+                  nodeId: frame.nodeId,
+                  ok: true,
+                  payloadJSON: JSON.stringify({ applied: true, deleted: 0, hasMore: false }),
+                });
+              })();
+              running.add(maintenance);
+              void maintenance.finally(() => running.delete(maintenance)).catch(() => {});
+              return;
+            }
             assert(frame && frame.command === NODE_WORKER_PORTAL_STREAM_COMMAND);
             invocations.push(frame.id);
             const controller = new AbortController();
@@ -287,6 +311,8 @@ it("carries authenticated session previews through the node and retires access b
             running.add(invocation);
             void invocation.finally(() => running.delete(invocation)).catch(() => {});
           });
+          // Hello precedes pairing bookkeeping; this manual RPC does not use the node host's retry owner.
+          await nodeConnectionRecorded.promise;
           const inventory = await rpcReq(node.socket, "node.runnerInventory.update", {
             protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
             workerHost: {
@@ -362,7 +388,51 @@ it("carries authenticated session previews through the node and retires access b
             expect(response.status).toBe(200);
             expect(await response.text()).toBe("preview-ok");
             url.pathname = "/stream";
-            const streaming = await fetch(url);
+            const committed = createDeferred();
+            const publish = createDeferred();
+            const targetConnected = createDeferred();
+            const onTargetConnection = () => targetConnected.resolve();
+            const runOperation = stateWorkerStore.runOpenClawStateWorkerOperation;
+            const activity = vi
+              .spyOn(stateWorkerStore, "runOpenClawStateWorkerOperation")
+              .mockImplementation((workerContext, operation, options) =>
+                runOperation(
+                  workerContext,
+                  (scope) =>
+                    operation({
+                      execute: async (command, executeOptions) => {
+                        const result = await scope.execute(command, executeOptions);
+                        if (command.type === "workerEnvironments.reconcileSharedHost") {
+                          committed.resolve();
+                          await publish.promise;
+                        }
+                        return result;
+                      },
+                    }),
+                  options,
+                ),
+              );
+            const maintenance = store.reconcileSharedHost({
+              environmentId,
+              state: reconciled!.state,
+              leaseId: "preview-lease",
+              sharedHost: false,
+            });
+            let streaming: Response;
+            try {
+              await committed.promise;
+              destination.once("connection", onTargetConnection);
+              const requested = fetch(url);
+              await Promise.race([targetConnected.promise, requested]);
+              publish.resolve();
+              await maintenance;
+              streaming = await requested;
+            } finally {
+              publish.resolve();
+              await maintenance;
+              destination.off("connection", onTargetConnection);
+              activity.mockRestore();
+            }
             const reader = streaming.body!.getReader();
             expect(new TextDecoder().decode((await reader.read()).value)).toBe("preview-stream");
             const activePeersClosed = Promise.all(

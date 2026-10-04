@@ -1,13 +1,8 @@
-// Doctor core checks collect environment, config, and runtime readiness diagnostics.
-import path from "node:path";
 import { listAgentIds, tryResolveSoleAgentId } from "../agents/agent-scope.js";
 import { isExperimentalClawsEnabled } from "../claws/experimental.js";
 import {
-  detectLegacyClawdBrowserProfileResidue,
-  maybeArchiveLegacyClawdBrowserProfileResidue,
   maybeRepairOwnedChromeExtensionNativeHosts,
   noteChromeMcpBrowserReadiness,
-  type LegacyClawdBrowserProfileResidue,
 } from "../commands/doctor-browser.js";
 import { hasConfiguredCommandOwners } from "../commands/doctor-command-owner.js";
 import {
@@ -29,12 +24,9 @@ import {
   collectDisabledCodexPluginRouteIssues,
 } from "../commands/doctor/shared/codex-route-warnings.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronListPageResult } from "../cron/service/list-page-types.js";
 import type { CronJob } from "../cron/types.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
-import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
-import type { SecurityAuditFinding } from "../security/audit.types.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool-policy-diagnostic.js";
@@ -42,6 +34,8 @@ import { createAcpAgentModelCheck } from "./doctor-acp-agent-model-check.js";
 import { finalConfigValidationCheck } from "./doctor-config-validation-check.js";
 import { detectGatewayAuthHealth } from "./doctor-gateway-auth.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
+import { gatewayServicesExtraCheck } from "./doctor-gateway-services-check.js";
+import type { DoctorHealthCheckContext } from "./doctor-health-contribution-types.js";
 import { createModelReferenceCheck } from "./doctor-model-reference-check.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
 import {
@@ -49,111 +43,19 @@ import {
   createRuntimeToolSchemaCheck,
 } from "./doctor-tool-schema-check.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
-import { copyHealthChecks, securityAuditFindingToHealthFinding } from "./health-check-adapter.js";
+import { securityAuditFindingToHealthFinding } from "./health-check-adapter.js";
 import type { DoctorHealthCheck } from "./health-check-runner-types.js";
-import type {
-  HealthCheck,
-  HealthCheckContext,
-  HealthFinding,
-  HealthRepairContext,
-} from "./health-checks.js";
+import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 
-const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profile-residue";
+type CoreHealthCheck = Omit<DoctorHealthCheck, "kind" | "source">;
+
 const CODEX_SESSION_ROUTES_CHECK_ID = "core/doctor/codex-session-routes";
 const GATEWAY_DAEMON_CHECK_ID = "core/doctor/gateway-daemon";
 const GATEWAY_HEALTH_CHECK_ID = "core/doctor/gateway-health";
-const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 const TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID =
   "core/doctor/telegram-general-topic-conversations";
 const SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID = "core/doctor/skill-workshop-tool-policy";
 const SKILL_WORKSHOP_RELOCATION_CHECK_ID = "core/doctor/skill-workshop-relocation";
-type CoreHealthCheckContext = HealthCheckContext & {
-  readonly deep?: boolean;
-};
-type CoreHealthRepairContext = HealthRepairContext & {
-  readonly deep?: boolean;
-};
-
-const loadDoctorCoreChecksRuntimeModule = async () =>
-  await import("./doctor-core-checks.runtime.js");
-
-export type CoreHealthCheckDeps = {
-  readonly detectUnavailableSkills: typeof detectUnavailableSkillsWithRuntime;
-  readonly collectSecurityWarnings: (
-    cfg: OpenClawConfig,
-    env?: NodeJS.ProcessEnv,
-  ) => Promise<readonly SecurityAuditFinding[]>;
-  readonly collectWorkspaceSuggestionNotes: (workspaceDir: string) => Promise<readonly string[]>;
-  readonly collectRuntimeToolSchemaFindings: (
-    ctx: HealthCheckContext,
-  ) => Promise<readonly HealthFinding[]>;
-  readonly collectProviderCatalogProjectionFindings: (
-    ctx: HealthCheckContext,
-  ) => Promise<readonly HealthFinding[]>;
-  readonly collectLocalAudioAccelerationFindings: () => Promise<readonly HealthFinding[]>;
-  readonly collectGatewayHealthFindings: (
-    ctx: HealthCheckContext,
-  ) => Promise<readonly HealthFinding[]>;
-  readonly collectGatewayDaemonFindings: (
-    ctx: HealthCheckContext,
-  ) => Promise<readonly HealthFinding[]>;
-  readonly listGatewayCronJobs: (ctx: HealthCheckContext) => Promise<readonly CronJob[]>;
-};
-
-async function detectUnavailableSkillsWithRuntime(
-  ctx: HealthCheckContext,
-): Promise<readonly SkillStatusEntry[]> {
-  const runtime = await loadDoctorCoreChecksRuntimeModule();
-  return ctx.cwd ? runtime.detectUnavailableSkills(ctx.cfg, ctx.cwd) : [];
-}
-
-async function collectSecurityWarningsWithRuntime(
-  cfg: OpenClawConfig,
-  env?: NodeJS.ProcessEnv,
-): Promise<readonly SecurityAuditFinding[]> {
-  const { collectSecurityWarnings } = await import("../commands/doctor-security.js");
-  return collectSecurityWarnings(cfg, env);
-}
-
-async function collectWorkspaceSuggestionNotesWithRuntime(
-  workspaceDir: string,
-): Promise<readonly string[]> {
-  const { collectWorkspaceSuggestionNotes } =
-    await import("../commands/doctor-workspace-suggestions.js");
-  const notes: string[] = [];
-  for await (const note of collectWorkspaceSuggestionNotes(workspaceDir)) {
-    notes.push(note);
-  }
-  return notes;
-}
-
-async function collectProviderCatalogProjectionFindingsWithRuntime(
-  ctx: HealthCheckContext,
-): Promise<readonly HealthFinding[]> {
-  const runtime = await loadDoctorCoreChecksRuntimeModule();
-  return runtime.collectProviderCatalogProjectionFindings(ctx.cfg, ctx.cwd);
-}
-
-async function collectLocalAudioAccelerationFindingsWithRuntime(): Promise<
-  readonly HealthFinding[]
-> {
-  const runtime = await loadDoctorCoreChecksRuntimeModule();
-  return runtime.collectLocalAudioAccelerationFindings();
-}
-
-async function collectGatewayHealthFindingsWithRuntime(
-  ctx: HealthCheckContext,
-): Promise<readonly HealthFinding[]> {
-  const runtime = await import("../commands/doctor-gateway-health.js");
-  return runtime.collectGatewayHealthFindings(ctx);
-}
-
-async function collectGatewayDaemonFindingsWithRuntime(
-  ctx: HealthCheckContext,
-): Promise<readonly HealthFinding[]> {
-  const runtime = await loadDoctorCoreChecksRuntimeModule();
-  return runtime.collectGatewayDaemonFindings(ctx);
-}
 
 async function listGatewayCronJobsWithRuntime(
   ctx: HealthCheckContext,
@@ -226,23 +128,9 @@ async function listGatewayCronJobsWithRuntime(
   throw new Error("Gateway returned an incomplete cron inventory response.");
 }
 
-const defaultCoreHealthCheckDeps: CoreHealthCheckDeps = {
-  detectUnavailableSkills: detectUnavailableSkillsWithRuntime,
-  collectSecurityWarnings: collectSecurityWarningsWithRuntime,
-  collectWorkspaceSuggestionNotes: collectWorkspaceSuggestionNotesWithRuntime,
-  collectRuntimeToolSchemaFindings: collectRuntimeToolSchemaFindingsWithRuntime,
-  collectProviderCatalogProjectionFindings: collectProviderCatalogProjectionFindingsWithRuntime,
-  collectLocalAudioAccelerationFindings: collectLocalAudioAccelerationFindingsWithRuntime,
-  collectGatewayHealthFindings: collectGatewayHealthFindingsWithRuntime,
-  collectGatewayDaemonFindings: collectGatewayDaemonFindingsWithRuntime,
-  listGatewayCronJobs: listGatewayCronJobsWithRuntime,
-};
-
-const gatewayConfigCheck: HealthCheck = {
+const gatewayConfigCheck: CoreHealthCheck = {
   id: "core/doctor/gateway-config",
-  kind: "core",
   description: "openclaw.jsonc gateway block is set and unambiguous.",
-  source: "doctor",
   async detect(ctx) {
     const findings: HealthFinding[] = [];
     if (!ctx.cfg.gateway?.mode) {
@@ -270,11 +158,9 @@ const gatewayConfigCheck: HealthCheck = {
   },
 };
 
-const commandOwnerCheck: HealthCheck = {
+const commandOwnerCheck: CoreHealthCheck = {
   id: "core/doctor/command-owner",
-  kind: "core",
   description: "An owner account is configured for owner-only commands.",
-  source: "doctor",
   async detect(ctx) {
     if (hasConfiguredCommandOwners(ctx.cfg)) {
       return [];
@@ -293,11 +179,9 @@ const commandOwnerCheck: HealthCheck = {
   },
 };
 
-const skillWorkshopToolPolicyCheck: HealthCheck = {
+const skillWorkshopToolPolicyCheck: CoreHealthCheck = {
   id: SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID,
-  kind: "core",
   description: "Autonomous Skill Workshop capture has a callable review tool.",
-  source: "doctor",
   async detect(ctx) {
     const workshopEnabled = resolveSkillWorkshopConfig(ctx.cfg).autonomous.mode !== "off";
     const listedAgentIds = listAgentIds(ctx.cfg);
@@ -323,11 +207,9 @@ const skillWorkshopToolPolicyCheck: HealthCheck = {
   },
 };
 
-const skillWorkshopRelocationCheck: HealthCheck = {
+const skillWorkshopRelocationCheck: CoreHealthCheck = {
   id: SKILL_WORKSHOP_RELOCATION_CHECK_ID,
-  kind: "core",
   description: "Skill Workshop files and proposals use each agent's Workshop directory.",
-  source: "doctor",
   async detect(ctx) {
     const { inspectLegacySkillWorkshopMigration } =
       await import("../commands/doctor-skill-workshop-sqlite.js");
@@ -382,19 +264,15 @@ const skillWorkshopRelocationCheck: HealthCheck = {
   },
 };
 
-const gatewayAuthCheck: HealthCheck = {
+const gatewayAuthCheck: CoreHealthCheck = {
   id: "core/doctor/gateway-auth",
-  kind: "core",
   description: "Local Gateway auth mode has a usable token or another explicit auth mode.",
-  source: "doctor",
   detect: detectGatewayAuthHealth,
 };
 
-const hooksModelCheck: HealthCheck = {
+const hooksModelCheck: CoreHealthCheck = {
   id: "core/doctor/hooks-model",
-  kind: "core",
   description: "hooks.gmail.model resolves to an allowed catalog model.",
-  source: "doctor",
   async detect(ctx) {
     const { collectHooksModelIssues } = await import("../commands/doctor-hooks-model.js");
     return (await collectHooksModelIssues(ctx.cfg)).map(({ kind, model }): HealthFinding => {
@@ -423,11 +301,9 @@ const hooksModelCheck: HealthCheck = {
   },
 };
 
-const legacyStateCheck: HealthCheck & { readonly defaultEnabled: false } = {
+const legacyStateCheck: CoreHealthCheck = {
   id: "core/doctor/legacy-state",
-  kind: "core",
   description: "Legacy sessions, agent state, and channel auth paths have been migrated.",
-  source: "doctor",
   defaultEnabled: false,
   async detect(ctx) {
     const { detectLegacyStateMigrations } = await import("../infra/state-migrations.doctor.js");
@@ -457,11 +333,9 @@ const legacyStateCheck: HealthCheck & { readonly defaultEnabled: false } = {
   },
 };
 
-const bootstrapSizeCheck: HealthCheck = {
+const bootstrapSizeCheck: CoreHealthCheck = {
   id: "core/doctor/bootstrap-size",
-  kind: "core",
   description: "Workspace bootstrap files fit within configured injection limits.",
-  source: "doctor",
   async detect(ctx) {
     if (!ctx.cwd) {
       return [];
@@ -525,18 +399,6 @@ const bootstrapSizeCheck: HealthCheck = {
     return findings;
   },
 };
-
-function createProviderCatalogProjectionCheck(deps: CoreHealthCheckDeps): HealthCheck {
-  return {
-    id: "core/doctor/provider-catalog-projection",
-    kind: "core",
-    description: "Provider catalog hooks project into unified text model catalog rows.",
-    source: "doctor",
-    async detect(ctx) {
-      return deps.collectProviderCatalogProjectionFindings(ctx);
-    },
-  };
-}
 
 function noteTextToFinding(params: {
   checkId: string;
@@ -622,11 +484,9 @@ function noteMessageToText(message: unknown): string {
   }
 }
 
-const claudeCliCheck: HealthCheck = {
+const claudeCliCheck: CoreHealthCheck = {
   id: "core/doctor/claude-cli",
-  kind: "core",
   description: "Claude CLI readiness is captured as structured findings.",
-  source: "doctor",
   async detect(ctx) {
     const { noteClaudeCliHealth } = await import("../commands/doctor-claude-cli.js");
     const collector = createNoteCollector("core/doctor/claude-cli");
@@ -638,25 +498,9 @@ const claudeCliCheck: HealthCheck = {
   },
 };
 
-function createSecurityCheck(deps: CoreHealthCheckDeps): DoctorHealthCheck {
-  return {
-    id: "core/doctor/security",
-    updateReadiness: "post-plugin",
-    kind: "core",
-    description: "Security posture checks produce structured findings.",
-    source: "doctor",
-    async detect(ctx) {
-      const findings = await deps.collectSecurityWarnings(ctx.cfg, ctx.env);
-      return findings.map(securityAuditFindingToHealthFinding);
-    },
-  };
-}
-
-const openAIOAuthTlsCheck: HealthCheck = {
+const openAIOAuthTlsCheck: CoreHealthCheck = {
   id: "core/doctor/oauth-tls",
-  kind: "core",
   description: "OpenAI OAuth TLS prerequisites are satisfied before browser auth.",
-  source: "doctor",
   async detect(ctx) {
     const {
       formatOpenAIOAuthTlsPreflightFix,
@@ -681,11 +525,9 @@ const openAIOAuthTlsCheck: HealthCheck = {
   },
 };
 
-const legacyWhatsAppCrontabCheck: HealthCheck & { readonly defaultEnabled: false } = {
+const legacyWhatsAppCrontabCheck: CoreHealthCheck = {
   id: "core/doctor/legacy-whatsapp-crontab",
-  kind: "core",
   description: "Legacy WhatsApp crontab health entries are detected as structured findings.",
-  source: "doctor",
   defaultEnabled: false,
   async detect() {
     const { collectLegacyWhatsAppCrontabHealthWarning } =
@@ -704,11 +546,9 @@ const legacyWhatsAppCrontabCheck: HealthCheck & { readonly defaultEnabled: false
   },
 };
 
-const legacyCronStoreCheck: DoctorHealthCheck = {
+const legacyCronStoreCheck: CoreHealthCheck = {
   id: "core/doctor/legacy-cron-store",
-  kind: "core",
   description: "Legacy cron store, run-log, and payload state is normalized.",
-  source: "doctor",
   defaultEnabled: false,
   async detect(ctx) {
     const { collectLegacyCronStoreHealthFindings } =
@@ -717,11 +557,9 @@ const legacyCronStoreCheck: DoctorHealthCheck = {
   },
 };
 
-const staleRuntimeBuildCheck: DoctorHealthCheck = {
+const staleRuntimeBuildCheck: CoreHealthCheck = {
   id: "core/doctor/stale-runtime-build",
-  kind: "core",
   description: "The loaded runtime was built from the checkout's current commit.",
-  source: "doctor",
   async detect() {
     const { collectStaleRuntimeBuildFindings } =
       await import("../commands/doctor-stale-runtime-build.js");
@@ -729,11 +567,9 @@ const staleRuntimeBuildCheck: DoctorHealthCheck = {
   },
 };
 
-const codexSessionRoutesCheck: HealthCheck = {
+const codexSessionRoutesCheck: CoreHealthCheck = {
   id: CODEX_SESSION_ROUTES_CHECK_ID,
-  kind: "core",
   description: "Codex runtime routes are compatible with the configured plugin harness.",
-  source: "doctor",
   async detect(ctx) {
     const disabledPluginFindings = collectDisabledCodexPluginRouteIssues(ctx.cfg, ctx.env).map(
       (issue): HealthFinding => ({
@@ -769,11 +605,9 @@ const codexSessionRoutesCheck: HealthCheck = {
   },
 };
 
-const telegramGeneralTopicConversationsCheck: HealthCheck = {
+const telegramGeneralTopicConversationsCheck: CoreHealthCheck = {
   id: TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID,
-  kind: "core",
   description: "Telegram General-topic conversation bindings use the canonical chat target.",
-  source: "doctor",
   async detect(ctx) {
     const { detectTelegramGeneralTopicConversationRepairs } =
       await import("../commands/doctor-telegram-general-topic-conversations.js");
@@ -816,43 +650,9 @@ const telegramGeneralTopicConversationsCheck: HealthCheck = {
   },
 };
 
-const gatewayServicesExtraCheck: HealthCheck = {
-  id: GATEWAY_SERVICES_EXTRA_CHECK_ID,
-  kind: "core",
-  description: "Extra gateway-like services are represented as structured findings.",
-  source: "doctor",
-  async detect(ctx) {
-    const coreCtx = ctx as CoreHealthCheckContext;
-    const { detectExtraGatewayServiceIssues, extraGatewayServiceToHealthFinding } =
-      await import("../commands/doctor-gateway-services.js");
-    return (await detectExtraGatewayServiceIssues({ deep: coreCtx.deep === true })).map(
-      extraGatewayServiceToHealthFinding,
-    );
-  },
-  async repair(ctx) {
-    const coreCtx = ctx as CoreHealthRepairContext;
-    const { detectExtraGatewayServiceIssues, extraGatewayServiceToRepairEffects } =
-      await import("../commands/doctor-gateway-services.js");
-    const effects = (
-      await detectExtraGatewayServiceIssues({ deep: coreCtx.deep === true })
-    ).flatMap(extraGatewayServiceToRepairEffects);
-    if (ctx.dryRun === true) {
-      return { status: "repaired", changes: [], effects };
-    }
-    return {
-      status: "skipped",
-      reason: "legacy doctor gateway service contribution owns cleanup",
-      changes: [],
-      effects,
-    };
-  },
-};
-
-const gatewayPlatformNotesCheck: HealthCheck = {
+const gatewayPlatformNotesCheck: CoreHealthCheck = {
   id: "core/doctor/gateway-services/platform-notes",
-  kind: "core",
   description: "Gateway platform notes are captured as structured findings.",
-  source: "doctor",
   async detect(ctx) {
     if (!isDefaultInstallIdentity(process.env)) {
       return [];
@@ -869,49 +669,19 @@ const gatewayPlatformNotesCheck: HealthCheck = {
   },
 };
 
-function createGatewayHealthCheck(deps: CoreHealthCheckDeps): DoctorHealthCheck {
-  return {
-    id: GATEWAY_HEALTH_CHECK_ID,
-    kind: "core",
-    description: "Authenticated Gateway health and degraded secret owners are structured findings.",
-    source: "doctor",
-    defaultEnabled: false,
-    async detect(ctx) {
-      return deps.collectGatewayHealthFindings(ctx);
-    },
-  };
-}
-
-function createGatewayDaemonCheck(deps: CoreHealthCheckDeps): DoctorHealthCheck {
-  return {
-    id: GATEWAY_DAEMON_CHECK_ID,
-    kind: "core",
-    description: "Local Gateway daemon service state is represented as structured findings.",
-    source: "doctor",
-    defaultEnabled: false,
-    async detect(ctx) {
-      return deps.collectGatewayDaemonFindings(ctx);
-    },
-  };
-}
-
-const nodeRuntimeCheck: HealthCheck = {
+const nodeRuntimeCheck: CoreHealthCheck = {
   id: "core/doctor/node-runtime",
-  kind: "core",
   description:
     "Node SQLite capabilities and version support are represented as structured findings.",
-  source: "doctor",
   async detect(ctx) {
     const { collectNodeRuntimeFindings } = await import("../commands/node-runtime-diagnostics.js");
     return collectNodeRuntimeFindings(ctx.env);
   },
 };
 
-const browserCheck: HealthCheck = {
+const browserCheck: CoreHealthCheck = {
   id: "core/doctor/browser",
-  kind: "core",
   description: "Browser readiness is captured as structured findings.",
-  source: "doctor",
   async detect(ctx) {
     const collector = createNoteCollector("core/doctor/browser");
     await noteChromeMcpBrowserReadiness(ctx.cfg, { noteFn: collector.noteFn });
@@ -938,65 +708,61 @@ const browserCheck: HealthCheck = {
   },
 };
 
-function createSkillsReadinessCheck(
-  deps: CoreHealthCheckDeps,
-): HealthCheck & { readonly defaultEnabled: false } {
-  const detectUnavailableSkills = async (
-    ctx: HealthCheckContext | HealthRepairContext,
-  ): Promise<readonly SkillStatusEntry[]> => {
-    const runWithPluginMetadataSnapshot = (
-      ctx as (HealthCheckContext | HealthRepairContext) & {
-        runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
-      }
-    ).runWithPluginMetadataSnapshot;
-    const detect = ctx.cwd ? () => deps.detectUnavailableSkills(ctx) : async () => [];
-    if (!runWithPluginMetadataSnapshot) {
-      return await detect();
+async function detectSkillsReadiness(
+  ctx: DoctorHealthCheckContext,
+): Promise<readonly SkillStatusEntry[]> {
+  const { runWithPluginMetadataSnapshot } = ctx;
+  const detect = async () => {
+    if (!ctx.cwd) {
+      return [];
     }
-    return await runWithPluginMetadataSnapshot(
-      {
-        config: ctx.cfg,
-        workspaceDir: ctx.cwd,
-      },
-      detect,
-    );
+    const { detectUnavailableSkills } = await import("./doctor-core-checks.runtime.js");
+    return detectUnavailableSkills(ctx.cfg, ctx.cwd);
   };
-
-  return {
-    id: "core/doctor/skills-readiness",
-    kind: "core",
-    description: "Allowed skills are usable in the current runtime environment.",
-    source: "doctor",
-    defaultEnabled: false,
-    async detect(ctx, scope) {
-      const unavailable = filterUnavailableSkillsForScope(
-        await detectUnavailableSkills(ctx),
-        scope?.paths,
-      );
-      return unavailable.map(unavailableSkillToFinding);
+  if (!runWithPluginMetadataSnapshot) {
+    return await detect();
+  }
+  return await runWithPluginMetadataSnapshot(
+    {
+      config: ctx.cfg,
+      workspaceDir: ctx.cwd,
     },
-    async repair(ctx, findings) {
-      const unavailable = filterUnavailableSkillsForScope(
-        await detectUnavailableSkills(ctx),
-        findings.map((finding) => finding.path),
-      );
-      if (unavailable.length === 0) {
-        return { changes: [] };
-      }
-      const nextConfig = disableUnavailableSkillsInConfig(ctx.cfg, unavailable);
-      return {
-        config: nextConfig,
-        changes: unavailable.map((skill) => `Disabled unavailable skill ${skill.name}.`),
-        effects: unavailable.map((skill) => ({
-          kind: "config" as const,
-          action: ctx.dryRun === true ? "would-disable-skill" : "disable-skill",
-          target: skillReadinessPath(skill),
-          dryRunSafe: true,
-        })),
-      };
-    },
-  };
+    detect,
+  );
 }
+
+const skillsReadinessCheck: CoreHealthCheck = {
+  id: "core/doctor/skills-readiness",
+  description: "Allowed skills are usable in the current runtime environment.",
+  defaultEnabled: false,
+  async detect(ctx, scope) {
+    const unavailable = filterUnavailableSkillsForScope(
+      await detectSkillsReadiness(ctx),
+      scope?.paths,
+    );
+    return unavailable.map(unavailableSkillToFinding);
+  },
+  async repair(ctx, findings) {
+    const unavailable = filterUnavailableSkillsForScope(
+      await detectSkillsReadiness(ctx),
+      findings.map((finding) => finding.path),
+    );
+    if (unavailable.length === 0) {
+      return { changes: [] };
+    }
+    const nextConfig = disableUnavailableSkillsInConfig(ctx.cfg, unavailable);
+    return {
+      config: nextConfig,
+      changes: unavailable.map((skill) => `Disabled unavailable skill ${skill.name}.`),
+      effects: unavailable.map((skill) => ({
+        kind: "config" as const,
+        action: ctx.dryRun === true ? "would-disable-skill" : "disable-skill",
+        target: skillReadinessPath(skill),
+        dryRunSafe: true,
+      })),
+    };
+  },
+};
 
 function unavailableSkillToFinding(skill: SkillStatusEntry): HealthFinding {
   return {
@@ -1026,97 +792,9 @@ function skillReadinessPath(skill: SkillStatusEntry): string {
   return `skills.entries.${skill.skillKey}.enabled`;
 }
 
-function browserResidueDeps(ctx: { configPath?: string }) {
-  return ctx.configPath ? { configDir: path.dirname(ctx.configPath) } : {};
-}
-
-function browserResidueFinding(residue: LegacyClawdBrowserProfileResidue): HealthFinding {
-  return {
-    checkId: BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID,
-    severity: "warning",
-    message: `Legacy managed browser profile residue was found at ${residue.legacyProfileDir}.`,
-    path: residue.legacyProfileDir,
-    ocPath: "oc://state/browser/clawd",
-    fixHint:
-      "Run `openclaw doctor --fix` to archive the stale clawd profile safely instead of deleting it in place.",
-  };
-}
-
-function formatWouldArchiveBrowserResidue(residue: LegacyClawdBrowserProfileResidue): string {
-  return [
-    "Would archive legacy clawd managed browser profile residue.",
-    `- legacy profile: ${residue.legacyProfileDir}`,
-    `- canonical profile: ${residue.canonicalUserDataDir}`,
-  ].join("\n");
-}
-
-const browserClawdProfileResidueCheck: HealthCheck = {
-  id: BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID,
-  kind: "core",
-  description:
-    "Legacy clawd managed browser profile residue has been archived after the OpenClaw rename.",
-  source: "doctor",
-  async detect(ctx, scope) {
-    const residue = await detectLegacyClawdBrowserProfileResidue(ctx.cfg, browserResidueDeps(ctx));
-    if (!residue) {
-      return [];
-    }
-    const scopedPaths = new Set(scope?.paths ?? []);
-    if (scopedPaths.size > 0 && !scopedPaths.has(residue.legacyProfileDir)) {
-      return [];
-    }
-    return [browserResidueFinding(residue)];
-  },
-  async repair(ctx) {
-    const residue = await detectLegacyClawdBrowserProfileResidue(ctx.cfg, browserResidueDeps(ctx));
-    if (!residue) {
-      return {
-        status: "skipped",
-        reason: "legacy clawd browser profile residue no longer exists",
-        changes: [],
-      };
-    }
-    const effect = {
-      kind: "state" as const,
-      action:
-        ctx.dryRun === true
-          ? "would-archive-legacy-browser-profile-residue"
-          : "archive-legacy-browser-profile-residue",
-      target: residue.legacyProfileDir,
-      dryRunSafe: false,
-    };
-    if (ctx.dryRun === true) {
-      return {
-        changes: [formatWouldArchiveBrowserResidue(residue)],
-        effects: [effect],
-      };
-    }
-    const result = await maybeArchiveLegacyClawdBrowserProfileResidue(
-      ctx.cfg,
-      browserResidueDeps(ctx),
-    );
-    if (result.changes.length === 0 && result.warnings.length > 0) {
-      return {
-        status: "failed",
-        reason: result.warnings.join("; "),
-        changes: [],
-        warnings: result.warnings,
-        effects: [],
-      };
-    }
-    return {
-      changes: result.changes,
-      warnings: result.warnings,
-      effects: result.changes.length > 0 ? [effect] : [],
-    };
-  },
-};
-
-const shellCompletionCheck: HealthCheck = {
+const shellCompletionCheck: CoreHealthCheck = {
   id: "core/doctor/shell-completion",
-  kind: "core",
   description: "Shell completion uses the cached completion path when configured.",
-  source: "doctor",
   async detect() {
     return shellCompletionStatusToHealthFindings(await checkShellCompletionStatus());
   },
@@ -1135,11 +813,9 @@ const shellCompletionCheck: HealthCheck = {
   },
 };
 
-const uiProtocolFreshnessCheck: HealthCheck = {
+const uiProtocolFreshnessCheck: CoreHealthCheck = {
   id: "core/doctor/ui-protocol-freshness",
-  kind: "core",
   description: "Control UI assets are present and current with the Gateway protocol schema.",
-  source: "doctor",
   async detect() {
     return (await detectUiProtocolFreshnessIssues()).map(uiProtocolFreshnessIssueToHealthFinding);
   },
@@ -1159,41 +835,38 @@ const uiProtocolFreshnessCheck: HealthCheck = {
   },
 };
 
-function createWorkspaceSuggestionsCheck(
-  deps: CoreHealthCheckDeps,
-): HealthCheck & { readonly defaultEnabled: false } {
-  return {
-    id: "core/doctor/workspace-suggestions",
-    kind: "core",
-    description:
-      "Workspace backup and memory-system suggestions are captured as structured findings.",
-    defaultEnabled: false,
-    source: "doctor",
-    async detect(ctx) {
-      const scopes = resolveDoctorWorkspaceSuggestionScopes(ctx.cfg);
-      const findings = await Promise.all(
-        scopes.map(async ({ agentId, workspaceDir, labelAgent }) => {
-          const prefix = labelAgent ? `Agent "${agentId}": ` : "";
-          const notes = await deps.collectWorkspaceSuggestionNotes(workspaceDir);
-          return notes.map((text) =>
-            noteTextToFinding({
-              checkId: "core/doctor/workspace-suggestions",
-              severity: "info",
-              text: `${prefix}${text}`,
-              ...(labelAgent ? { target: agentId } : {}),
-            }),
-          );
-        }),
-      );
-      return findings.flat();
-    },
-  };
-}
+const workspaceSuggestionsCheck: CoreHealthCheck = {
+  id: "core/doctor/workspace-suggestions",
+  description:
+    "Workspace backup and memory-system suggestions are captured as structured findings.",
+  defaultEnabled: false,
+  async detect(ctx) {
+    const scopes = resolveDoctorWorkspaceSuggestionScopes(ctx.cfg);
+    const { collectWorkspaceSuggestionNotes } =
+      await import("../commands/doctor-workspace-suggestions.js");
+    const findings = await Promise.all(
+      scopes.map(async ({ agentId, workspaceDir, labelAgent }) => {
+        const prefix = labelAgent ? `Agent "${agentId}": ` : "";
+        const notes: string[] = [];
+        for await (const text of collectWorkspaceSuggestionNotes(workspaceDir)) {
+          notes.push(text);
+        }
+        return notes.map((text) =>
+          noteTextToFinding({
+            checkId: "core/doctor/workspace-suggestions",
+            severity: "info",
+            text: `${prefix}${text}`,
+            ...(labelAgent ? { target: agentId } : {}),
+          }),
+        );
+      }),
+    );
+    return findings.flat();
+  },
+};
 
-export function createCoreHealthChecks(
-  deps: CoreHealthCheckDeps = defaultCoreHealthCheckDeps,
-): readonly DoctorHealthCheck[] {
-  const checks: readonly DoctorHealthCheck[] = [
+export function createCoreHealthChecks(): readonly DoctorHealthCheck[] {
+  const checks: readonly CoreHealthCheck[] = [
     gatewayConfigCheck,
     claudeCliCheck,
     gatewayAuthCheck,
@@ -1208,38 +881,73 @@ export function createCoreHealthChecks(
     uiProtocolFreshnessCheck,
     gatewayServicesExtraCheck,
     gatewayPlatformNotesCheck,
-    createGatewayHealthCheck(deps),
-    createGatewayDaemonCheck(deps),
+    {
+      id: GATEWAY_HEALTH_CHECK_ID,
+      description:
+        "Authenticated Gateway health and degraded secret owners are structured findings.",
+      defaultEnabled: false,
+      async detect(ctx) {
+        const { collectGatewayHealthFindings } =
+          await import("../commands/doctor-gateway-health.js");
+        return collectGatewayHealthFindings(ctx);
+      },
+    },
+    {
+      id: GATEWAY_DAEMON_CHECK_ID,
+      description: "Local Gateway daemon service state is represented as structured findings.",
+      defaultEnabled: false,
+      async detect(ctx) {
+        const { collectGatewayDaemonFindings } = await import("./doctor-core-checks.runtime.js");
+        return collectGatewayDaemonFindings(ctx);
+      },
+    },
     nodeRuntimeCheck,
-    createSecurityCheck(deps),
+    {
+      id: "core/doctor/security",
+      updateReadiness: "post-plugin",
+      description: "Security posture checks produce structured findings.",
+      async detect(ctx) {
+        const { collectSecurityWarnings } = await import("../commands/doctor-security.js");
+        const findings = await collectSecurityWarnings(ctx.cfg, ctx.env);
+        return findings.map(securityAuditFindingToHealthFinding);
+      },
+    },
     browserCheck,
     openAIOAuthTlsCheck,
     hooksModelCheck,
     bootstrapSizeCheck,
     createModelReferenceCheck(),
     createAcpAgentModelCheck(),
-    createProviderCatalogProjectionCheck(deps),
     {
-      id: "core/doctor/local-audio-acceleration",
-      kind: "core",
-      description: "Local STT auto-selection and acceleration evidence are visible.",
-      source: "doctor",
-      async detect() {
-        return await deps.collectLocalAudioAccelerationFindings();
+      id: "core/doctor/provider-catalog-projection",
+      description: "Provider catalog hooks project into unified text model catalog rows.",
+      async detect(ctx) {
+        const { collectProviderCatalogProjectionFindings } =
+          await import("./doctor-core-checks.runtime.js");
+        return collectProviderCatalogProjectionFindings(ctx.cfg, ctx.cwd);
       },
     },
-    createRuntimeToolSchemaCheck(deps),
-    createWorkspaceSuggestionsCheck(deps),
+    {
+      id: "core/doctor/local-audio-acceleration",
+      description: "Local STT auto-selection and acceleration evidence are visible.",
+      async detect() {
+        const { collectLocalAudioAccelerationFindings } =
+          await import("./doctor-core-checks.runtime.js");
+        return collectLocalAudioAccelerationFindings();
+      },
+    },
+    createRuntimeToolSchemaCheck({
+      collectRuntimeToolSchemaFindings: collectRuntimeToolSchemaFindingsWithRuntime,
+    }),
+    workspaceSuggestionsCheck,
     skillWorkshopToolPolicyCheck,
     skillWorkshopRelocationCheck,
     ...(isExperimentalClawsEnabled()
       ? [
           {
             id: "core/doctor/claws-state",
-            kind: "core" as const,
             description: "Claw lifecycle ownership and managed resources are consistent.",
             defaultEnabled: false as const,
-            source: "doctor",
             async detect(ctx: HealthCheckContext) {
               const [{ collectClawStateHealthFindings }, { listConfiguredMcpServers }] =
                 await Promise.all([
@@ -1251,7 +959,7 @@ export function createCoreHealthChecks(
                 env: process.env,
                 listMcpServers: listConfiguredMcpServers,
                 cronGateway: {
-                  list: async () => await deps.listGatewayCronJobs(ctx),
+                  list: () => listGatewayCronJobsWithRuntime(ctx),
                 },
               });
             },
@@ -1259,11 +967,12 @@ export function createCoreHealthChecks(
         ]
       : []),
     commandOwnerCheck,
-    createSkillsReadinessCheck(deps),
-    browserClawdProfileResidueCheck,
+    skillsReadinessCheck,
     finalConfigValidationCheck,
   ];
-  return copyHealthChecks(checks);
+  return checks.map((check): DoctorHealthCheck =>
+    Object.assign({}, check, { kind: "core" as const, source: "doctor" }),
+  );
 }
 
 export const CORE_HEALTH_CHECKS: readonly DoctorHealthCheck[] = createCoreHealthChecks();

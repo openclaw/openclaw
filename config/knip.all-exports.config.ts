@@ -78,8 +78,12 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/vitest/vitest*.config.ts!",
   "test/vitest/vitest*.setup.ts!",
   "test/vitest/vitest*.global-setup.ts!",
+  // Worker execArgv imports this before Vitest creates the test environment.
+  "test/vitest/vitest.jsdom-preload.mts!",
   // Test drivers and Docker fixtures are executed by path from package scripts
   // and the test-project registry.
+  // The published-driver lifecycle runner copies this executable into its Docker image.
+  "scripts/e2e/lib/upgrade-survivor/published-driver-process-fixture.mjs!",
   "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts!",
   "test/e2e/qa-lab/runtime/docker-e2e-lane.ts!",
   "test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts!",
@@ -89,6 +93,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/e2e/qa-lab/runtime/gateway-config-hot-reload-upstream.mjs!",
   // The identity scenario spawns this process-isolated repeated-turn driver by path.
   "test/e2e/qa-lab/runtime/agent-run-identity-repeated-turn-child.ts!",
+  // The Slack requester flow seeds its stopped Gateway through this isolated process.
+  "test/e2e/qa-lab/slack-requester-profile.fixture.ts!",
   // Invoked directly by the Docker image-auth scenario.
   "test/e2e/qa-lab/runtime/openai-image-auth-docker-client.ts!",
   "test/e2e/qa-lab/runtime/system-agent-first-run-docker-client.ts!",
@@ -124,6 +130,8 @@ const workspaces = Object.fromEntries(
         : {}),
       entry: [
         ...settings.entry,
+        // Native builds load this private entry through the generator's temporary bundle.
+        ...(workspace === "packages/gateway-protocol" ? ["scripts/native-codegen.ts!"] : []),
         // Compiler registries emit entry modules, including declarations
         // imported by generated child scripts. Keep workspace-relative entries.
         ...[
@@ -141,6 +149,10 @@ const workspaces = Object.fromEntries(
           ? [".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!", ...ROOT_TEST_ENTRY_GLOBS]
           : [
               TEST_ENTRY_GLOB,
+              // The plugin README documents this standalone fixture benchmark command.
+              ...(workspace === "extensions/team-reports"
+                ? ["src/report-run.benchmark.test-support.ts!"]
+                : []),
               // Vitest's root aliases execute these Discord-owned runtime adapters.
               ...(workspace === "extensions/discord" ? ["test/*-runtime.ts!"] : []),
               // Core owner tests load this Telegram fixture through the bundled facade loader.

@@ -1,8 +1,7 @@
-// Terminal presentation for ClawHub plugin installation.
-import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatTerminalLink } from "../../packages/terminal-core/src/terminal-link.js";
 import { resolveClawHubBaseUrl } from "../infra/clawhub-client.js";
+import { encodeClawHubPackagePath, formatClawHubReleaseLabel } from "../infra/clawhub-display.js";
 import type {
   ClawHubPackageCompatibility,
   ClawHubPackageDetail,
@@ -17,23 +16,8 @@ export function formatClawHubSpecifier(params: { name: string; version?: string 
   return `clawhub:${params.name}${params.version ? `@${params.version}` : ""}`;
 }
 
-function encodeClawHubPackagePath(packageName: string): string {
-  return packageName
-    .split("/")
-    .map((part) => encodeURIComponent(part).replaceAll("%40", "@"))
-    .join("/");
-}
-
 function resolveClawHubPluginUrl(params: { baseUrl?: string; packageName: string }): string {
   return `${resolveClawHubBaseUrl(params.baseUrl)}/plugins/${encodeClawHubPackagePath(params.packageName)}`;
-}
-
-function padRight(value: string, width: number): string {
-  return `${value}${" ".repeat(Math.max(0, width - visibleWidth(value)))}`;
-}
-
-export function formatClawHubReleaseLabel(packageName: string, version: string): string {
-  return `${sanitizeTerminalText(packageName)}@${sanitizeTerminalText(version)}`;
 }
 
 export function logClawHubPackageSummary(params: {
@@ -61,12 +45,12 @@ export function logClawHubPackageSummary(params: {
   );
   params.logger?.info?.(
     [
-      `  ${padRight("Package", 9)} ${formatClawHubReleaseLabel(pkg.name, params.version)}`,
-      `  ${padRight("Type", 9)} ${familyLabel}`,
+      `  ${"Package".padEnd(9)} ${formatClawHubReleaseLabel(pkg.name, params.version)}`,
+      `  ${"Type".padEnd(9)} ${familyLabel}`,
       compatibilityParts.length > 0
-        ? `  ${padRight("Requires", 9)} ${compatibilityParts.join(" · ")}`
+        ? `  ${"Requires".padEnd(9)} ${compatibilityParts.join(" · ")}`
         : null,
-      `  ${padRight("ClawHub", 9)} ${formatTerminalLink("view plugin", pluginUrl, {
+      `  ${"ClawHub".padEnd(9)} ${formatTerminalLink("view plugin", pluginUrl, {
         fallback: pluginUrl,
         ...(params.logger?.terminalLinks !== undefined
           ? { force: params.logger.terminalLinks }

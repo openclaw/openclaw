@@ -1,17 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  emptySqliteCounts,
+  observeParentSqlite,
+} from "../../../test/helpers/sqlite-parent-observer.js";
 import {
   readSessionTranscriptMessageEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import { addSessionSuggestion } from "../../config/sessions/session-suggestion-store.js";
+import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import { sessionSuggestionHandlers } from "./sessions-suggestions.js";
+import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { getSessionSuggestionTestMocks } from "./sessions-suggestions.test-mocks.js";
 import {
   call,
@@ -24,8 +30,154 @@ import {
 
 const mocks = getSessionSuggestionTestMocks();
 registerSessionSuggestionTestLifecycle(mocks);
+// Register shared mocks before the handlers capture their presence dependency.
+const { sessionSuggestionHandlers } = await import("./sessions-suggestions.js");
 
 describe("session suggestion visibility and role ceilings", () => {
+  it("lists suggestions without caller-thread SQLite and propagates reader rejection", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await upsertDefaultSuggestionSession();
+      addSessionSuggestion(
+        { agentId: "main", sessionKey },
+        { id: "idea", authorId: "alice", text: "idea" },
+      );
+      const requestContext = context();
+      await initializeSessionReadContext(requestContext);
+      const params = { sessionKey };
+      const respond = vi.fn();
+      const requester = client("alice", "Alice");
+      const invoke = () =>
+        sessionSuggestionHandlers["session.suggestions.list"]!({
+          req: { type: "req", id: "list", method: "session.suggestions.list", params },
+          params,
+          client: requester,
+          context: requestContext,
+          respond,
+          isWebchatConnect: () => true,
+        });
+      const observer = observeParentSqlite();
+      try {
+        await invoke();
+        expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
+          role: "viewer",
+          suggestions: [expect.objectContaining({ id: "idea" })],
+        });
+        expect(observer.counts).toEqual(emptySqliteCounts());
+        const failure = new Error("suggestion reader refused");
+        const run = historyLane.pool.run.bind(historyLane.pool);
+        vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+          const reply = await run(...args);
+          if (
+            reply.ok &&
+            typeof reply.value === "object" &&
+            !Array.isArray(reply.value) &&
+            "kind" in reply.value &&
+            reply.value.kind === "session-suggestions"
+          ) {
+            throw failure;
+          }
+          return reply;
+        });
+        respond.mockClear();
+        await expect(invoke()).rejects.toBe(failure);
+        expect(respond).not.toHaveBeenCalled();
+        expect(observer.counts).toEqual(emptySqliteCounts());
+      } finally {
+        observer.restore();
+      }
+    });
+  });
+
+  it.each(["policy", "profile", "disconnect", "session"] as const)(
+    "rechecks %s after a delayed suggestion list reply",
+    async (change) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await upsertDefaultSuggestionSession();
+        for (const authorId of ["alice", "bob"]) {
+          addSessionSuggestion(
+            { agentId: "main", sessionKey },
+            { id: authorId, authorId, text: authorId },
+          );
+        }
+        const policy = (others: "view" | "write"): OpenClawConfig => ({
+          gateway: {
+            roles: {
+              default: "reader",
+              definitions: {
+                reader: {
+                  scopes: ["operator.read", "operator.write"],
+                  agents: "*",
+                  sessions: { others },
+                },
+              },
+            },
+          },
+        });
+        let committed = policy("write");
+        const requestContext = context(vi.fn(), committed);
+        requestContext.getCommittedRuntimeConfig = () => committed;
+        await initializeSessionReadContext(requestContext);
+        const requester = client("alice", "Alice");
+        const entered = createDeferred();
+        const release = createDeferred();
+        const run = historyLane.pool.run.bind(historyLane.pool);
+        vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+          const reply = await run(...args);
+          if (
+            reply.ok &&
+            typeof reply.value === "object" &&
+            !Array.isArray(reply.value) &&
+            "kind" in reply.value &&
+            reply.value.kind === "session-suggestions"
+          ) {
+            entered.resolve();
+            await release.promise;
+          }
+          return reply;
+        });
+        const pending = call("session.suggestions.list", { sessionKey }, requester, requestContext);
+        const outcome = pending.catch((error: unknown) => error);
+        try {
+          await awaitGateBeforeSettlement(
+            entered.promise,
+            pending,
+            "Suggestion list was not dispatched",
+          );
+          if (change === "policy") {
+            committed = policy("view");
+          } else if (change === "profile") {
+            requester.authenticatedUserProfile = client("bob", "Bob").authenticatedUserProfile;
+          } else if (change === "disconnect") {
+            requester.invalidated = true;
+          } else {
+            await upsertSessionEntryCore(
+              { agentId: "main", sessionKey },
+              { sessionId: "replacement", updatedAt: 2 },
+            );
+          }
+          release.resolve();
+          if (change === "session") {
+            await expect(pending).rejects.toThrow(/unavailable/);
+          } else {
+            const result = await pending;
+            expect(result.responses).toHaveLength(1);
+            expect(result.responses[0]).toMatchObject(
+              change === "policy"
+                ? [
+                    true,
+                    { role: "viewer", suggestions: [expect.objectContaining({ id: "alice" })] },
+                  ]
+                : [false, undefined, { code: "FORBIDDEN" }],
+            );
+          }
+        } finally {
+          release.resolve();
+          await outcome;
+        }
+      });
+    },
+  );
+
   it("retains committed suggestion visibility through a tentative role relaxation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const owner = ensureProfileForEmail("policy-suggestion-owner@example.test");
@@ -305,6 +457,7 @@ describe("session suggestion visibility and role ceilings", () => {
 
   it("keeps incognito suggestion and typing surfaces admin-only", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      vi.useFakeTimers();
       const incognitoKey = "agent:main:dashboard:incognito-suggestions";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: incognitoKey },
@@ -368,6 +521,37 @@ describe("session suggestion visibility and role ceilings", () => {
       expect(adminList.responses[0]?.[1]).toMatchObject({
         role: "admin",
         suggestions: [{ id: "incognito-suggestion", text: "private suggestion" }],
+      });
+
+      mocks.presence = ["admin", "other-admin"].map((id) => ({
+        user: { id, identity: { type: "profile", id } },
+        watchedSessions: [incognitoKey],
+      }));
+      const broadcast = vi.fn();
+      const typingContext = context(broadcast);
+      const admin = client("admin", "Admin", true);
+      const typeDraft = (preview: string) =>
+        call(
+          "session.typing",
+          { sessionKey: incognitoKey, sessionId: "session-incognito", typing: true, preview },
+          admin,
+          typingContext,
+        );
+      expect((await typeDraft("first private draft")).responses[0]?.[1]).toEqual({
+        ok: true,
+        broadcast: true,
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      expect((await typeDraft("latest private draft")).responses[0]?.[1]).toEqual({
+        ok: true,
+        broadcast: false,
+      });
+      await vi.advanceTimersByTimeAsync(150);
+      expect(broadcast).toHaveBeenCalledTimes(2);
+      expect(broadcast.mock.lastCall?.[1]).toMatchObject({
+        sessionKey: incognitoKey,
+        sessionId: "session-incognito",
+        preview: "latest private draft",
       });
     });
   });

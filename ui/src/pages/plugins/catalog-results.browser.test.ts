@@ -1,11 +1,12 @@
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import type { PluginDiscoveryEntry } from "../../lib/plugins/index.ts";
 import { renderPluginCatalogResults, type PluginCatalogResultsProps } from "./catalog-results.ts";
 import { renderArtTile } from "./consent-dialog.ts";
 import { renderPluginDetailShell } from "./detail-shell.ts";
 import type { PluginInstallProgress } from "./install-progress.ts";
+import { renderPluginMcpServers } from "./overview.ts";
 import baseStyles from "../../styles/base.css?inline";
 import componentStyles from "../../styles/components.css?inline";
 import pluginStyles from "../../styles/plugins.css?inline";
@@ -43,38 +44,43 @@ afterEach(() => {
   styles.remove();
 });
 
+function catalogProps(): PluginCatalogResultsProps {
+  return {
+    connected: true,
+    loading: false,
+    result: { items: [entry] },
+    error: null,
+    remoteError: null,
+    categories: [],
+    categoriesLoading: false,
+    categoriesError: null,
+    onRetryCategories: vi.fn(),
+    featured: [],
+    trending: [],
+    loadingMore: false,
+    loadMoreError: null,
+    intent: "all",
+    category: null,
+    query: "memory",
+    iconUrls: {},
+    pluginIconUrls: {},
+    canInstall: true,
+    entryHref: () => "/plugins/long-title",
+    onIntentChange: vi.fn(),
+    onCategoryChange: vi.fn(),
+    onQueryChange: vi.fn(),
+    onOpenEntry: vi.fn(),
+    onInstall: vi.fn(),
+    onLoadMore: vi.fn(),
+    onRetry: vi.fn(),
+  };
+}
+
 it.each([263, 362])(
   "keeps long identity text clear of the action within a %ipx card",
   async (width) => {
     const onInstall = vi.fn();
-    const props: PluginCatalogResultsProps = {
-      connected: true,
-      loading: false,
-      result: { items: [entry] },
-      error: null,
-      remoteError: null,
-      categories: [],
-      featured: [],
-      featuredLoading: false,
-      trending: [],
-      trendingLoading: false,
-      loadingMore: false,
-      loadMoreError: null,
-      intent: "all",
-      category: null,
-      query: "memory",
-      iconUrls: {},
-      pluginIconUrls: {},
-      canInstall: true,
-      entryHref: () => "/plugins/long-title",
-      onIntentChange: vi.fn(),
-      onCategoryChange: vi.fn(),
-      onQueryChange: vi.fn(),
-      onOpenEntry: vi.fn(),
-      onInstall,
-      onLoadMore: vi.fn(),
-      onRetry: vi.fn(),
-    };
+    const props = { ...catalogProps(), onInstall };
     const progress = {
       startedAt: Date.now(),
       activities: [{ activityId: "dependencies", stage: "dependencies", status: "started" }],
@@ -123,35 +129,158 @@ it.each([263, 362])(
   },
 );
 
-it.each([40, 80])("fills icon tiles without cropping a %ipx-wide source", async (width) => {
-  const icon = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="40"><rect width="100%" height="100%" fill="red"/></svg>`)}`;
-  render(
-    html`
-      <span class="installed-plugins-card__art">${renderArtTile("demo", "Demo", icon)}</span>
-      ${renderPluginDetailShell({
-        id: "demo",
-        name: "Demo",
+it.each([
+  { width: 40, whiteBackground: false },
+  { width: 80, whiteBackground: false },
+  { width: 40, whiteBackground: true },
+])(
+  "fits a $width-pixel icon with official background=$whiteBackground",
+  async ({ width, whiteBackground }) => {
+    const icon = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="40"><rect width="100%" height="100%" fill="red"/></svg>`)}`;
+    render(
+      whiteBackground
+        ? renderArtTile("official", "Official", { iconUrl: icon, whiteBackground })
+        : html`
+            <span class="installed-plugins-card__art"
+              >${renderArtTile("demo", "Demo", { iconUrl: icon, whiteBackground })}</span
+            >
+            ${renderPluginDetailShell({
+              id: "demo",
+              name: "Demo",
+              backHref: "/plugins",
+              backLabel: "Plugins",
+              onBack: vi.fn(),
+              identity: html``,
+              panel: html``,
+              icon: renderArtTile("demo", "Demo", { iconUrl: icon, whiteBackground }),
+            })}
+          `,
+      container,
+    );
+    await Promise.all(
+      [...container.querySelectorAll<HTMLImageElement>(".plugins-icon")].map(
+        (image) =>
+          new Promise<void>((resolve, reject) => {
+            image.addEventListener("load", () => resolve(), { once: true });
+            image.addEventListener("error", reject, { once: true });
+          }),
+      ),
+    );
+    if (whiteBackground) {
+      const image = container.querySelector<HTMLImageElement>(".plugins-icon")!;
+      expect(image.parentElement!.classList.contains("plugins-tile--white")).toBe(true);
+      expect(getComputedStyle(image.parentElement!).backgroundColor).toBe("rgb(255, 255, 255)");
+      expect(getComputedStyle(image).padding).toBe("4px");
+      return;
+    }
+    for (const selector of [".installed-plugins-card__art", ".plugin-catalog-detail__icon"]) {
+      const frame = container.querySelector<HTMLElement>(selector)!;
+      const image = frame.querySelector<HTMLImageElement>("img")!;
+      expect(image.naturalWidth).toBe(width);
+      const frameBounds = frame.getBoundingClientRect();
+      const imageBounds = image.getBoundingClientRect();
+      expect(imageBounds.width).toBe(frameBounds.width);
+      expect(imageBounds.height).toBe(frameBounds.height);
+      expect(getComputedStyle(image).padding).toBe("0px");
+      expect(getComputedStyle(image).objectFit).toBe("contain");
+      expect(getComputedStyle(image.parentElement!).borderWidth).toBe("0px");
+    }
+  },
+);
+
+it("fills the remaining viewport with card-sized placeholders across resizes", async () => {
+  render(renderPluginCatalogResults({ ...catalogProps(), loading: true }), container);
+  const errors: string[] = [];
+  const onError = (event: ErrorEvent) => errors.push(event.message);
+  window.addEventListener("error", onError);
+  try {
+    for (const { width, height } of [
+      { width: 1847, height: 1344 },
+      { width: 390, height: 844 },
+      { width: 768, height: 1024 },
+      { width: 1366, height: 768 },
+    ]) {
+      await page.viewport(width, height);
+      await expect
+        .poll(() => {
+          const grid = container.querySelector<HTMLElement>(".plugin-catalog-grid--skeleton")!;
+          const cards = [...grid.children].map((card) => card.getBoundingClientRect());
+          const cardHeight = cards[0]!.height;
+          const row = cardHeight + Number.parseFloat(getComputedStyle(grid).rowGap);
+          const bottom = cards.at(-1)!.bottom;
+          return bottom >= height && bottom < height + row && cardHeight < 200;
+        })
+        .toBe(true);
+    }
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+    expect(errors).toEqual([]);
+  } finally {
+    window.removeEventListener("error", onError);
+  }
+});
+
+it.each([390, 768, 1366, 1440])(
+  "keeps the README close to expandable MCP servers beside a tall sidebar at %ipx",
+  async (width) => {
+    await page.viewport(width, 900);
+    render(
+      renderPluginDetailShell({
+        id: "mcp",
+        name: "Workspace integrations",
         backHref: "/plugins",
         backLabel: "Plugins",
         onBack: vi.fn(),
-        identity: html``,
-        panel: html``,
-        icon: renderArtTile("demo", "Demo", icon),
-      })}
-    `,
-    container,
-  );
-  for (const selector of [".installed-plugins-card__art", ".plugin-catalog-detail__icon"]) {
-    const frame = container.querySelector<HTMLElement>(selector)!;
-    const image = frame.querySelector<HTMLImageElement>("img")!;
-    await image.decode();
-    expect(image.naturalWidth).toBe(width);
-    const frameBounds = frame.getBoundingClientRect();
-    const imageBounds = image.getBoundingClientRect();
-    expect(imageBounds.width).toBe(frameBounds.width);
-    expect(imageBounds.height).toBe(frameBounds.height);
-    expect(getComputedStyle(image).padding).toBe("0px");
-    expect(getComputedStyle(image).objectFit).toBe("contain");
-    expect(getComputedStyle(image.parentElement!).borderWidth).toBe("0px");
-  }
-});
+        identity: nothing,
+        panel: renderPluginMcpServers(
+          ["workspace", "local"],
+          [
+            {
+              name: "workspace",
+              url: "https://mcp.example.com/" + "long-path/".repeat(35),
+              transport: "streamable-http",
+              auth: "oauth",
+              scope: "documents.read documents.write",
+              setup: "Connect your workspace in OpenClaw.",
+            },
+          ],
+        ),
+        sidebar: html`<div style="min-height: 900px">Release and security metadata</div>`,
+        readme: html`<p>Use the workspace integration to read your documents.</p>`,
+      }),
+      container,
+    );
+    const readme = container.querySelector<HTMLElement>(".plugin-catalog-detail__readme-section")!;
+    const capabilities = container.querySelector<HTMLElement>(".plugin-capabilities")!;
+    const gap = () =>
+      readme.getBoundingClientRect().top - capabilities.getBoundingClientRect().bottom;
+    expect(gap()).toBeGreaterThanOrEqual(20);
+    expect(gap()).toBeLessThanOrEqual(32);
+    await expect
+      .element(page.getByRole("heading", { name: /MCP Servers\s*2/, exact: true }))
+      .toBeVisible();
+    const server = page.getByText("workspace", { exact: true });
+    await server.click();
+    await expect.element(page.getByText("OAuth", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("Connect your workspace in OpenClaw.")).toBeVisible();
+    expect(gap()).toBeLessThanOrEqual(32);
+    const authLabel = [...container.querySelectorAll("dt")].find(
+      (label) => label.textContent === "Authentication",
+    )!;
+    expect(authLabel.getBoundingClientRect().height).toBeLessThanOrEqual(
+      Number.parseFloat(getComputedStyle(authLabel).lineHeight) + 1,
+    );
+    expect(container.scrollWidth).toBeLessThanOrEqual(width);
+    const summary = container.querySelector<HTMLElement>("summary")!;
+    summary.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(container.querySelector("details")?.open).toBe(false);
+    await page.getByText("local", { exact: true }).click();
+    await expect
+      .element(
+        page.getByText("Connection details are not included in this plugin’s catalog metadata."),
+      )
+      .toBeVisible();
+  },
+);

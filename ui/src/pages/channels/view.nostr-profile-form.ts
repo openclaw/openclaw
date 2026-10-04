@@ -1,53 +1,26 @@
-/**
- * Nostr Profile Edit Form
- *
- * Provides UI for editing and publishing Nostr profile (kind:0).
- */
-
 import { html, nothing, type TemplateResult } from "lit";
 import type { NostrProfile as NostrProfileType } from "../../api/types.ts";
-import { renderSettingsStatus } from "../../components/settings-ui.ts";
+import { renderSettingsRow, renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 
-// ============================================================================
-// Types
-// ============================================================================
-
 export interface NostrProfileFormState {
-  /** Current form values */
   values: NostrProfileType;
-  /** Original values for dirty detection */
   original: NostrProfileType;
-  /** Whether the form is currently submitting */
   saving: boolean;
-  /** Whether import is in progress */
   importing: boolean;
-  /** Last error message */
   error: string | null;
-  /** Last success message */
   success: string | null;
-  /** Validation errors per field */
   fieldErrors: Record<string, string>;
-  /** Whether to show advanced fields */
   showAdvanced: boolean;
 }
 
 export interface NostrProfileFormCallbacks {
-  /** Called when a field value changes */
   onFieldChange: (field: keyof NostrProfileType, value: string) => void;
-  /** Called when save is clicked */
   onSave: () => void;
-  /** Called when import is clicked */
   onImport: () => void;
-  /** Called when cancel is clicked */
   onCancel: () => void;
-  /** Called when toggle advanced is clicked */
   onToggleAdvanced: () => void;
 }
-
-// ============================================================================
-// Helpers
-// ============================================================================
 
 function isFormDirty(state: NostrProfileFormState): boolean {
   const { values, original } = state;
@@ -62,10 +35,6 @@ function isFormDirty(state: NostrProfileFormState): boolean {
     values.lud16 !== original.lud16
   );
 }
-
-// ============================================================================
-// Form Rendering
-// ============================================================================
 
 export function renderNostrProfileForm(params: {
   state: NostrProfileFormState;
@@ -154,50 +123,36 @@ export function renderNostrProfileForm(params: {
       return nothing;
     }
 
-    return html`
-      <div class="settings-row">
-        <div class="settings-row__text">
-          <span class="settings-row__title">${t("channels.nostr.profilePicturePreview")}</span>
-        </div>
-        <div class="settings-row__control">
-          <img
-            src=${picture}
-            alt=${t("channels.nostr.profilePicturePreview")}
-            style="max-width: 80px; max-height: 80px; border-radius: 50%; object-fit: cover;"
-            @error=${(e: Event) => {
-              const img = e.target as HTMLImageElement;
-              img.style.display = "none";
-            }}
-            @load=${(e: Event) => {
-              const img = e.target as HTMLImageElement;
-              img.style.display = "block";
-            }}
-          />
-        </div>
-      </div>
-    `;
+    return renderSettingsRow({
+      title: t("channels.nostr.profilePicturePreview"),
+      control: html`<img
+        src=${picture}
+        alt=${t("channels.nostr.profilePicturePreview")}
+        style="max-width: 80px; max-height: 80px; border-radius: 50%; object-fit: cover;"
+        @error=${(e: Event) => {
+          const img = e.target as HTMLImageElement;
+          img.style.display = "none";
+        }}
+        @load=${(e: Event) => {
+          const img = e.target as HTMLImageElement;
+          img.style.display = "block";
+        }}
+      />`,
+    });
   };
 
   return html`
-    <div class="settings-row">
-      <div class="settings-row__text">
-        <span class="settings-row__title">${t("channels.nostr.editProfile")}</span>
-        <span class="settings-row__desc">${t("channels.nostr.account")}: ${accountId}</span>
-      </div>
-    </div>
-
+    ${renderSettingsRow({
+      title: t("channels.nostr.editProfile"),
+      description: html`${t("channels.nostr.account")}: ${accountId}`,
+    })}
     ${
       state.error
-        ? html`
-            <div class="settings-row" role="alert">
-              <div class="settings-row__text">
-                <span class="settings-row__title"
-                  >${renderSettingsStatus({ kind: "danger", label: t("channels.lastError") })}</span
-                >
-                <span class="settings-row__desc">${state.error}</span>
-              </div>
-            </div>
-          `
+        ? renderSettingsRow({
+            role: "alert",
+            title: renderSettingsStatus({ kind: "danger", label: t("channels.lastError") }),
+            description: state.error,
+          })
         : nothing
     }
     ${
@@ -236,12 +191,7 @@ export function renderNostrProfileForm(params: {
     ${
       state.showAdvanced
         ? html`
-            <div class="settings-row">
-              <div class="settings-row__text">
-                <span class="settings-row__title">${t("channels.nostr.advanced")}</span>
-              </div>
-            </div>
-
+            ${renderSettingsRow({ title: t("channels.nostr.advanced") })}
             ${renderField("banner", t("channels.nostr.bannerUrl"), {
               type: "url",
               placeholder: t("channels.nostr.placeholders.bannerUrl"),
@@ -305,13 +255,6 @@ export function renderNostrProfileForm(params: {
   `;
 }
 
-// ============================================================================
-// Factory
-// ============================================================================
-
-/**
- * Create initial form state from existing profile
- */
 export function createNostrProfileFormState(
   profile: NostrProfileType | undefined,
 ): NostrProfileFormState {

@@ -1,10 +1,6 @@
 import { createHash } from "node:crypto";
-import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
-import { Worker } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
@@ -23,7 +19,7 @@ import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-
 const { makeTempDir } = usePreparedCatalogWorkerFixtures();
 
 it("bounds catalog worker retention across repeated fleet preparations", async () => {
-  const fixture = createCatalogFixture(makeTempDir, 0);
+  const fixture = await createCatalogFixture(makeTempDir, 0);
   fs.writeFileSync(
     path.join(fixture.root, "plugin", "index.cjs"),
     `
@@ -40,8 +36,7 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
       v8.queryObjects(WeakRef);
       require("node:fs").writeFileSync(process.env.OPENCLAW_WORKER_CATALOG_MARKER, JSON.stringify({
         callbacks: state.callbacks.filter(ref => ref.deref()).length,
-        controlCollected: state.control.deref() === undefined,
-        heap: v8.getHeapStatistics().used_heap_size
+        controlCollected: state.control.deref() === undefined
       }));
     }
     return { provider: { api: "openai-completions", baseUrl: "https://heap.invalid/v1", models: [{ id: "heap-model", name: "Heap model" }] } };
@@ -99,14 +94,6 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
       pluginMetadataSnapshot: metadata,
     });
   });
-  const workers: Worker[] = [];
-  const events = channel("worker_threads");
-  const record = (message: unknown) => {
-    if (isRecord(message) && message.worker instanceof Worker) {
-      workers.push(message.worker);
-    }
-  };
-  events.subscribe(record);
   const pool = new WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>({
     workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
     maxWorkers: 1,
@@ -115,13 +102,11 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
     workerOptions: {
       resourceLimits: { maxOldGenerationSizeMb: 512 },
       workerData: {
-        kind: "gateway",
         sourceCaptureDirectory: makeTempDir("openclaw-catalog-heap-captures-"),
       },
       env: fixture.env,
     },
   });
-  const started = performance.now();
   try {
     const hashes = new Map<number, string>();
     const count = Number(process.env.OPENCLAW_CATALOG_HEAP_ITERATIONS ?? 12);
@@ -149,23 +134,6 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
         expect(hash).toBe(hashes.get(revision));
       }
       hashes.set(revision, hash);
-      if ((index + 1) % 100 === 0 || index + 1 === count) {
-        const worker = workers.find((candidate) => candidate.threadId !== -1)!;
-        const heap = await worker.getHeapStatistics();
-        console.log(
-          JSON.stringify({
-            preparations: index + 1,
-            worker: worker.threadId,
-            heapUsed: heap.used_heap_size,
-            heapTotal: heap.total_heap_size,
-            heapLimit: heap.heap_size_limit,
-            rss: process.memoryUsage().rss,
-            elapsedMs: performance.now() - started,
-            retained: JSON.parse(fs.readFileSync(fixture.marker, "utf8")),
-            hashes: [...hashes],
-          }),
-        );
-      }
     }
     // Reuse the last generation after its predecessor's retirement has completed.
     await pool.run(
@@ -182,12 +150,10 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
     const retained = JSON.parse(fs.readFileSync(fixture.marker, "utf8")) as {
       callbacks: number;
       controlCollected: boolean;
-      heap: number;
     };
     expect(retained.controlCollected).toBe(true);
     expect(retained.callbacks).toBe(1);
   } finally {
     await pool.close();
-    events.unsubscribe(record);
   }
 }, 300_000);

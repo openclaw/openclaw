@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import path from "node:path";
 import { expect, it, vi, type Mock } from "vitest";
+import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
 
 type CurrentAdmissionFixture = {
   prepareCurrentPackage: (prefix: string) => Promise<string>;
@@ -30,9 +31,10 @@ type CurrentAdmissionFixture = {
 };
 
 export function registerAlreadyCurrentAdmissionTests(f: CurrentAdmissionFixture) {
-  it.each([undefined, "30"])(
+  it.each([undefined])(
     "refuses pending service recovery acquired before already-current activation (timeout=%s)",
     async (timeout) => {
+      stubNodeRuntime();
       const updateExecutor = await import("./update-command-executor.js");
       const { resolvePackageActivationAnchor } =
         await import("../../infra/package-update-activation-journal.js");

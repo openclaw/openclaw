@@ -1,5 +1,5 @@
 // Daemon lifecycle output contracts exercise real response owners with shared service fixtures.
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import {
@@ -70,15 +70,9 @@ vi.mock("./lifecycle-audit.js", () => ({
   },
 }));
 
-let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;
-let runServiceStart: typeof import("./lifecycle-core.js").runServiceStart;
-let runServiceStop: typeof import("./lifecycle-core.js").runServiceStop;
+import { runServiceRestart, runServiceStart, runServiceStop } from "./lifecycle-core.js";
 
-describe("runServiceRestart token drift", () => {
-  beforeAll(async () => {
-    ({ runServiceRestart, runServiceStart, runServiceStop } = await import("./lifecycle-core.js"));
-  });
-
+describe("Gateway lifecycle output", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -107,86 +101,53 @@ describe("runServiceRestart token drift", () => {
   });
 
   it.each(
-    [
-      {
-        route: "start-recovery",
-        action: "start",
-        result: "started",
-        message: "service repaired",
-        loaded: true,
-      },
-      {
-        route: "already-running-pid",
-        action: "start",
-        result: "already-running",
-        message: "Gateway service already running (pid 4242).",
-        loaded: true,
-      },
-      {
-        route: "already-running",
-        action: "start",
-        result: "already-running",
-        message: "Gateway service already running.",
-        loaded: true,
-      },
-      {
-        route: "stop-recovery",
-        action: "stop",
-        result: "stopped",
-        message: "process stopped",
-        loaded: false,
-      },
-      { route: "stop-empty", action: "stop", result: "stopped", message: "", loaded: false },
-      {
-        route: "stop-missing",
-        action: "stop",
-        result: "not-loaded",
-        message: "Gateway service not loaded.",
-        loaded: false,
-      },
-      {
-        route: "restart-recovery",
-        action: "restart",
-        result: "restarted",
-        message: "process restarted",
-        loaded: false,
-      },
-      {
-        route: "restart-empty",
-        action: "restart",
-        result: "restarted",
-        message: "",
-        loaded: false,
-      },
-      {
-        route: "restart-no-message",
-        action: "restart",
-        result: "restarted",
-        message: undefined,
-        loaded: false,
-      },
-      {
-        route: "restart-scheduled",
-        action: "restart",
-        result: "scheduled",
-        message: "restart scheduled, gateway will restart momentarily",
-        loaded: true,
-      },
-      {
-        route: "restart-postcheck-scheduled",
-        action: "restart",
-        result: "scheduled",
-        message: "restart scheduled, gateway will restart momentarily",
-        loaded: true,
-      },
-      {
-        route: "restart-native",
-        action: "restart",
-        result: "restarted",
-        message: undefined,
-        loaded: true,
-      },
-    ].flatMap((row) => [[row.route, false, row] as const, [row.route, true, row] as const]),
+    (
+      [
+        ["start-recovery", "start", "started", "service repaired", true, true],
+        [
+          "already-running-pid",
+          "start",
+          "already-running",
+          "Gateway service already running (pid 4242).",
+          true,
+          false,
+        ],
+        [
+          "already-running",
+          "start",
+          "already-running",
+          "Gateway service already running.",
+          true,
+          true,
+        ],
+        ["stop-recovery", "stop", "stopped", "process stopped", false, false],
+        ["stop-empty", "stop", "stopped", "", false, true],
+        ["stop-missing", "stop", "not-loaded", "Gateway service not loaded.", false, false],
+        ["restart-recovery", "restart", "restarted", "process restarted", false, true],
+        ["restart-empty", "restart", "restarted", "", false, false],
+        ["restart-no-message", "restart", "restarted", undefined, false, true],
+        [
+          "restart-scheduled",
+          "restart",
+          "scheduled",
+          "restart scheduled, gateway will restart momentarily",
+          true,
+          false,
+        ],
+        [
+          "restart-postcheck-scheduled",
+          "restart",
+          "scheduled",
+          "restart scheduled, gateway will restart momentarily",
+          true,
+          true,
+        ],
+        ["restart-native", "restart", "restarted", undefined, true, false],
+      ] as const
+    ).map(
+      ([route, action, result, message, loaded, json]) =>
+        [route, json, { route, action, result, message, loaded }] as const,
+    ),
   )("preserves exact %s output (json=%s)", async (_route, json, row) => {
     const args = {
       serviceNoun: "Gateway",

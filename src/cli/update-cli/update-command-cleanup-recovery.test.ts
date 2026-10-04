@@ -51,6 +51,7 @@ it.each(["forced", "uncertain"] as const)(
           complete,
           suspended: Promise.resolve(true),
           beginMutation: () => {},
+          assertRecoveryCurrent: () => {},
           handoff: () => {},
           interrupted: () => false,
         },
@@ -84,7 +85,7 @@ it.each(["forced", "uncertain"] as const)(
       expect(collectNestedErrorCandidates(error)).toContain(original);
       expect(boundary.admission).not.toHaveBeenCalled();
       expect(restore).not.toHaveBeenCalled();
-      expect(complete).not.toHaveBeenCalled();
+      expect(complete).toHaveBeenCalledExactlyOnceWith(false, { preserveState: true });
       expect(boundary.prepareFailure).not.toHaveBeenCalled();
     } else {
       expect(error).toBe(prepared);

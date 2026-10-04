@@ -13,7 +13,7 @@ vi.mock("../credentials-read.js", () => ({
   loadMatrixCredentialsAsync: async () => null,
   credentialsMatchConfig: () => false,
 }));
-vi.mock("../credentials-write.runtime.js", () => ({
+vi.mock("../credentials.js", () => ({
   saveMatrixCredentials: async () => {},
 }));
 

@@ -14,11 +14,7 @@ import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-co
 import { normalizeOutboundLocation } from "openclaw/plugin-sdk/channel-inbound";
 import {
   buildOutboundSessionContext,
-  resolveChannelProgressDraftMaxLineChars,
-  resolveChannelProgressDraftMaxLines,
-  resolveChannelStreamingPreviewToolProgress,
   sendDurableMessageBatch,
-  type DurableMessageBatchSendResult,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -28,12 +24,12 @@ import {
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import {
   createTelegramActionGate,
   resolveDefaultTelegramAccountId,
   resolveTelegramPollActionGateState,
-  resolveTelegramAccount,
 } from "./accounts.js";
 import {
   readTelegramChatId,
@@ -42,7 +38,6 @@ import {
   readTelegramSendMediaUrls,
   readTelegramThreadId,
 } from "./action-params.js";
-import { resolveTelegramStreamMode } from "./bot/helpers.js";
 import {
   appendTelegramDroppedControlFallback,
   buildTelegramControlDegradation,
@@ -64,7 +59,7 @@ import {
 } from "./message-topic-binding.js";
 import { rejectTelegramNativeButtonParams } from "./native-button-params.js";
 import { resolveTelegramPollVisibility } from "./poll-visibility.js";
-import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js";
+import { renderTelegramAccountProgressDraftPreview } from "./progress-draft-preview.js";
 import { resolveTelegramReactionLevel } from "./reaction-level.js";
 import {
   createForumTopicTelegram,
@@ -81,7 +76,7 @@ import { TELEGRAM_SUPPORTED_REACTION_EMOJI_LIST } from "./status-reaction-varian
 import { getCacheStats, searchStickers } from "./sticker-cache.js";
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
 import { resolveTelegramToken } from "./token.js";
-import { resolveTopicNameCacheScope, updateTopicName } from "./topic-name-cache.js";
+import { updateTopicName } from "./topic-name-cache.js";
 
 const TELEGRAM_EMOJI_LIST_LIMIT = 100;
 const TELEGRAM_REACTION_HINT_LIMIT = 20;
@@ -121,10 +116,9 @@ function normalizeTelegramActionName(action: string): TelegramActionName {
 
 function resolveActionTopicNameCacheScope(cfg: OpenClawConfig, accountId?: string | null): string {
   const resolvedAccountId = accountId ?? resolveDefaultTelegramAccountId(cfg);
-  const storePath = resolveStorePath(cfg.session?.store, {
+  return resolveStorePath(cfg.session?.store, {
     agentId: resolveTelegramAccountOwnerAgentId({ cfg, accountId: resolvedAccountId }),
   });
-  return resolveTopicNameCacheScope(storePath);
 }
 
 function formatTelegramDeliveryTarget(to: string, messageThreadId?: number | null): string {
@@ -169,16 +163,10 @@ function readTelegramSendContent(params: {
     explicitContent == null && !params.presentation
       ? resolveTelegramInteractiveTextFallback({ interactive: params.interactive })
       : undefined;
-  let content =
+  const content =
     (presentationText?.trim() ? presentationText : undefined) ??
     explicitContent ??
     (interactiveText?.trim() ? interactiveText : undefined);
-  if ((content == null || content.trim().length === 0) && !params.mediaUrl && params.hasButtons) {
-    const fallback = presentationText?.trim() ? presentationText : interactiveText;
-    if (fallback?.trim()) {
-      content = fallback;
-    }
-  }
   if (content == null && !params.mediaUrl && !params.hasButtons && !params.hasLocation) {
     throw new Error("content required.");
   }
@@ -189,21 +177,13 @@ function readTelegramSendContent(params: {
 }
 
 function normalizeTelegramDeliveryPin(params: Record<string, unknown>) {
-  const delivery = params.delivery;
-  const pin =
-    delivery && typeof delivery === "object" && !Array.isArray(delivery)
-      ? (delivery as { pin?: unknown }).pin
-      : params.pin === true
-        ? true
-        : undefined;
+  const delivery = asOptionalRecord(params.delivery);
+  const pin = delivery ? delivery.pin : params.pin === true ? true : undefined;
   if (pin === true) {
     return { enabled: true } as const;
   }
-  if (!pin || typeof pin !== "object" || Array.isArray(pin)) {
-    return undefined;
-  }
-  const raw = pin as { enabled?: unknown; notify?: unknown; required?: unknown };
-  if (raw.enabled !== true) {
+  const raw = asOptionalRecord(pin);
+  if (raw?.enabled !== true) {
     return undefined;
   }
   return {
@@ -211,49 +191,6 @@ function normalizeTelegramDeliveryPin(params: Record<string, unknown>) {
     ...(raw.notify === true ? { notify: true } : {}),
     ...(raw.required === true ? { required: true } : {}),
   } as const;
-}
-
-function buildTelegramActionSendPayload(params: {
-  content: string;
-  mediaUrls: string[];
-  asVoice?: boolean;
-  asVideoNote?: boolean;
-  location?: ReplyPayload["location"];
-  pin?: ReturnType<typeof normalizeTelegramDeliveryPin>;
-  buttons?: ReturnType<typeof resolveTelegramButtonsFromParams>;
-  quoteText?: string;
-}): ReplyPayload {
-  const telegramData =
-    params.buttons || params.quoteText
-      ? {
-          ...(params.buttons ? { buttons: params.buttons } : {}),
-          ...(params.quoteText ? { quoteText: params.quoteText } : {}),
-        }
-      : undefined;
-  return {
-    text: params.content,
-    ...(params.mediaUrls.length > 0 ? { mediaUrls: params.mediaUrls } : {}),
-    ...(params.asVoice === true ? { audioAsVoice: true } : {}),
-    ...(params.asVideoNote === true ? { videoAsNote: true } : {}),
-    ...(params.location ? { location: params.location } : {}),
-    ...(params.pin ? { delivery: { pin: params.pin } } : {}),
-    ...(telegramData ? { channelData: { telegram: telegramData } } : {}),
-  };
-}
-
-function getLastDurableTelegramActionResult(
-  result: Extract<DurableMessageBatchSendResult, { status: "sent" }>,
-) {
-  const lastResult = result.results.at(-1);
-  const receipt = result.receipt;
-  return {
-    messageId:
-      lastResult?.messageId ??
-      receipt.primaryPlatformMessageId ??
-      receipt.platformMessageIds.at(-1),
-    chatId: lastResult?.target?.kind === "chat" ? lastResult.target.id : undefined,
-    receipt: { threadId: receipt.threadId, replyToId: receipt.replyToId },
-  };
 }
 
 async function describeTelegramAllowedReactionSample(params: {
@@ -318,6 +255,16 @@ export async function handleTelegramAction(
     cfg,
     accountId,
   });
+  const apiOptions = { cfg, accountId, gatewayClientScopes: options?.gatewayClientScopes };
+  const requireToken = () => {
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    return token;
+  };
   const notifyVisibleOutboundSuccess = (to: string, messageThreadId?: number | null) => {
     telegramInboundEventDelivery.notify({
       sessionKey: options?.sessionKey ?? undefined,
@@ -344,12 +291,7 @@ export async function handleTelegramAction(
       accountId,
       context: options,
     });
-    const token = resolveTelegramToken(cfg, { accountId }).token;
-    if (!token) {
-      throw new Error(
-        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
-      );
-    }
+    const token = requireToken();
     const limit = Math.min(
       readPositiveIntegerParam(params, "limit", {
         message: "limit must be a positive integer.",
@@ -441,12 +383,10 @@ export async function handleTelegramAction(
         accountId,
         context: options,
       });
-      reactionResult = await reactMessageTelegram(authorizedChatId, messageId ?? 0, emoji ?? "", {
-        cfg,
+      reactionResult = await reactMessageTelegram(authorizedChatId, messageId, emoji ?? "", {
+        ...apiOptions,
         token,
         remove,
-        accountId: accountId ?? undefined,
-        gatewayClientScopes: options?.gatewayClientScopes,
       });
     } catch (err) {
       const isInvalid = String(err).includes("REACTION_INVALID");
@@ -551,41 +491,28 @@ export async function handleTelegramAction(
         }
       }
     }
-    // Optional threading parameters for forum topics and reply chains
     const replyToMessageId = readTelegramReplyToMessageId(params);
     const messageThreadId = readTelegramThreadId(params);
     const quoteText = readStringParam(params, "quoteText", { trim: false });
-    const token = resolveTelegramToken(cfg, { accountId }).token;
-    if (!token) {
-      throw new Error(
-        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
-      );
-    }
-    const sendOptions = {
-      cfg,
-      accountId: accountId ?? undefined,
-      gatewayClientScopes: options?.gatewayClientScopes,
-      replyToMessageId: replyToMessageId ?? undefined,
-      messageThreadId: messageThreadId ?? undefined,
-      quoteText: quoteText ?? undefined,
-      asVoice: readBooleanParam(params, "asVoice"),
-      asVideoNote,
-      silent: readBooleanParam(params, "silent"),
-      forceDocument:
-        readBooleanParam(params, "forceDocument") ??
-        readBooleanParam(params, "asDocument") ??
-        false,
+    requireToken();
+    const asVoice = readBooleanParam(params, "asVoice");
+    const silent = readBooleanParam(params, "silent");
+    const forceDocument =
+      readBooleanParam(params, "forceDocument") ?? readBooleanParam(params, "asDocument") ?? false;
+    const pin = normalizeTelegramDeliveryPin(params);
+    const telegramData =
+      buttons || quoteText
+        ? { ...(buttons ? { buttons } : {}), ...(quoteText ? { quoteText } : {}) }
+        : undefined;
+    const payload: ReplyPayload = {
+      text: content,
+      ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
+      ...(asVoice === true ? { audioAsVoice: true } : {}),
+      ...(asVideoNote ? { videoAsNote: true } : {}),
+      ...(location ? { location } : {}),
+      ...(pin ? { delivery: { pin } } : {}),
+      ...(telegramData ? { channelData: { telegram: telegramData } } : {}),
     };
-    const payload = buildTelegramActionSendPayload({
-      content,
-      mediaUrls,
-      asVoice: sendOptions.asVoice,
-      asVideoNote: sendOptions.asVideoNote,
-      location,
-      pin: normalizeTelegramDeliveryPin(params),
-      buttons,
-      quoteText,
-    });
     const mediaAccess =
       options?.mediaAccess ??
       (options?.mediaLocalRoots || options?.mediaReadFile
@@ -609,8 +536,8 @@ export async function handleTelegramAction(
         ? { reply: options.reply }
         : { replyToId: replyToMessageId == null ? undefined : String(replyToMessageId) }),
       threadId: messageThreadId,
-      forceDocument: sendOptions.forceDocument,
-      silent: sendOptions.silent,
+      forceDocument,
+      silent,
       durability: "required",
       gatewayClientScopes: options?.gatewayClientScopes,
       deliveryRetryOwner: options?.deliveryRetryOwner,
@@ -637,13 +564,15 @@ export async function handleTelegramAction(
       // Hook diagnostics remain private; only the durable owner's bounded reason crosses here.
       return jsonResult({ status: "suppressed", reason: durableResult.reason });
     }
-    const result = getLastDurableTelegramActionResult(durableResult);
+    const result = durableResult.results.at(-1);
+    const receipt = durableResult.receipt;
     notifyVisibleOutboundSuccess(to, messageThreadId);
     return jsonResult({
       ok: true,
-      messageId: result.messageId,
-      chatId: result.chatId,
-      receipt: result.receipt,
+      messageId:
+        result?.messageId ?? receipt.primaryPlatformMessageId ?? receipt.platformMessageIds.at(-1),
+      chatId: result?.target?.kind === "chat" ? result.target.id : undefined,
+      receipt: { threadId: receipt.threadId, replyToId: receipt.replyToId },
       ...buildTelegramControlDegradation(droppedControls, Boolean(content.trim())),
     });
   }
@@ -688,12 +617,7 @@ export async function handleTelegramAction(
         pollPublic: readBooleanParam(params, "pollPublic"),
       });
     const silent = readBooleanParam(params, "silent");
-    const token = resolveTelegramToken(cfg, { accountId }).token;
-    if (!token) {
-      throw new Error(
-        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
-      );
-    }
+    const token = requireToken();
     const result = await sendPollTelegram(
       to,
       {
@@ -704,14 +628,12 @@ export async function handleTelegramAction(
         durationHours: durationHours ?? undefined,
       },
       {
-        cfg,
+        ...apiOptions,
         token,
-        accountId: accountId ?? undefined,
         replyToMessageId: replyToMessageId ?? undefined,
         messageThreadId: messageThreadId ?? undefined,
         isAnonymous: isAnonymous ?? undefined,
         silent: silent ?? undefined,
-        gatewayClientScopes: options?.gatewayClientScopes,
       },
     );
     notifyVisibleOutboundSuccess(to, messageThreadId);
@@ -725,9 +647,9 @@ export async function handleTelegramAction(
     });
   }
 
-  if (action === "deleteMessage") {
-    if (!isActionEnabled("deleteMessage")) {
-      throw new Error("Telegram deleteMessage is disabled.");
+  if (action === "deleteMessage" || action === "editMessage") {
+    if (!isActionEnabled(action)) {
+      throw new Error(`Telegram ${action} is disabled.`);
     }
     const chatId = readTelegramChatId(params);
     const messageId = readPositiveIntegerParam(params, "messageId", {
@@ -743,36 +665,16 @@ export async function handleTelegramAction(
       accountId,
       context: options,
     });
-    const result = await deleteMessageTelegram(authorizedChatId, messageId, {
-      cfg,
-      accountId: accountId ?? undefined,
-      gatewayClientScopes: options?.gatewayClientScopes,
-      assertPlatformSendAuthorized: options?.assertDirectAdapterHandoff,
-    });
-    if (!result.ok) {
-      return jsonResult({ ok: false, deleted: false, warning: result.warning });
+    if (action === "deleteMessage") {
+      const result = await deleteMessageTelegram(authorizedChatId, messageId, {
+        ...apiOptions,
+        assertPlatformSendAuthorized: options?.assertDirectAdapterHandoff,
+      });
+      if (!result.ok) {
+        return jsonResult({ ok: false, deleted: false, warning: result.warning });
+      }
+      return jsonResult({ ok: true, deleted: true });
     }
-    return jsonResult({ ok: true, deleted: true });
-  }
-
-  if (action === "editMessage") {
-    if (!isActionEnabled("editMessage")) {
-      throw new Error("Telegram editMessage is disabled.");
-    }
-    const chatId = readTelegramChatId(params);
-    const messageId = readPositiveIntegerParam(params, "messageId", {
-      message: "messageId must be a positive integer.",
-    });
-    if (messageId === undefined) {
-      throw new Error("messageId required");
-    }
-    const authorizedChatId = await resolveTelegramMessageMutationChatId({
-      chatId: chatId ?? "",
-      messageId,
-      cfg,
-      accountId,
-      context: options,
-    });
     let content =
       readStringParam(params, "content", { allowEmpty: false }) ??
       readStringParam(params, "message", { allowEmpty: false });
@@ -780,17 +682,9 @@ export async function handleTelegramAction(
     let caption = readStringParam(params, "caption", { allowEmpty: true });
     let progressPreview: TelegramDraftPreview | undefined;
     if (options?.progressSnapshot) {
-      const telegramCfg = resolveTelegramAccount({ cfg, accountId }).config;
-      const streamMode = resolveTelegramStreamMode(telegramCfg);
-      progressPreview = renderTelegramProgressDraftPreview(options.progressSnapshot, {
-        richMessages: telegramCfg.richMessages === true,
-        toolProgress: resolveChannelStreamingPreviewToolProgress(
-          telegramCfg,
-          streamMode !== "progress",
-          streamMode,
-        ),
-        maxLines: resolveChannelProgressDraftMaxLines(telegramCfg),
-        maxLineChars: resolveChannelProgressDraftMaxLineChars(telegramCfg),
+      progressPreview = renderTelegramAccountProgressDraftPreview(options.progressSnapshot, {
+        cfg,
+        accountId,
       });
       content = progressPreview.text;
     }
@@ -824,25 +718,13 @@ export async function handleTelegramAction(
         );
       }
     }
-    const token = resolveTelegramToken(cfg, { accountId }).token;
-    if (!token) {
-      throw new Error(
-        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
-      );
-    }
+    const token = requireToken();
     if (content == null && caption == null && buttons !== undefined) {
-      const result = await editMessageReplyMarkupTelegram(
-        authorizedChatId,
-        messageId ?? 0,
-        buttons,
-        {
-          cfg,
-          token,
-          accountId: accountId ?? undefined,
-          gatewayClientScopes: options?.gatewayClientScopes,
-          assertPlatformSendAuthorized: options?.assertDirectAdapterHandoff,
-        },
-      );
+      const result = await editMessageReplyMarkupTelegram(authorizedChatId, messageId, buttons, {
+        ...apiOptions,
+        token,
+        assertPlatformSendAuthorized: options?.assertDirectAdapterHandoff,
+      });
       return jsonResult({
         ok: true,
         messageId: result.messageId,
@@ -853,14 +735,13 @@ export async function handleTelegramAction(
     // Draft previews use <br>; the edit HTML sanitizer requires Bot API newlines.
     const result = await editMessageTelegram(
       authorizedChatId,
-      messageId ?? 0,
+      messageId,
       progressPreview?.parseMode === "HTML"
         ? progressPreview.text.replaceAll("<br>", "\n")
         : (progressPreview?.text ?? caption ?? content ?? ""),
       {
-        cfg,
+        ...apiOptions,
         token,
-        accountId: accountId ?? undefined,
         buttons,
         editMode: progressPreview ? "text" : caption != null ? "caption" : "auto",
         ...(progressPreview
@@ -869,7 +750,6 @@ export async function handleTelegramAction(
               richMessage: progressPreview.richMessage,
             }
           : {}),
-        gatewayClientScopes: options?.gatewayClientScopes,
         assertPlatformSendAuthorized: options?.assertDirectAdapterHandoff,
       },
     );
@@ -896,19 +776,12 @@ export async function handleTelegramAction(
     }
     const replyToMessageId = readTelegramReplyToMessageId(params);
     const messageThreadId = readTelegramThreadId(params);
-    const token = resolveTelegramToken(cfg, { accountId }).token;
-    if (!token) {
-      throw new Error(
-        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
-      );
-    }
+    const token = requireToken();
     const result = await sendStickerTelegram(to, fileId, {
-      cfg,
+      ...apiOptions,
       token,
-      accountId: accountId ?? undefined,
       replyToMessageId: replyToMessageId ?? undefined,
       messageThreadId: messageThreadId ?? undefined,
-      gatewayClientScopes: options?.gatewayClientScopes,
     });
     notifyVisibleOutboundSuccess(to, messageThreadId);
     return jsonResult({
@@ -957,32 +830,13 @@ export async function handleTelegramAction(
       readStringParam(params, "threadName", { required: true, label: "name" });
     const iconColor = readTelegramForumTopicIconColor(params);
     const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
-    const token = resolveTelegramToken(cfg, { accountId }).token;
-    if (!token) {
-      throw new Error(
-        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
-      );
-    }
+    const token = requireToken();
     const result = await createForumTopicTelegram(chatId ?? "", name, {
-      cfg,
+      ...apiOptions,
       token,
-      accountId: accountId ?? undefined,
       iconColor,
       iconCustomEmojiId: iconCustomEmojiId ?? undefined,
-      gatewayClientScopes: options?.gatewayClientScopes,
     });
-    if (result.topicId != null && result.chatId) {
-      await updateTopicName(
-        result.chatId,
-        result.topicId,
-        {
-          name,
-          ...(iconColor != null ? { iconColor } : {}),
-          ...(iconCustomEmojiId ? { iconCustomEmojiId } : {}),
-        },
-        resolveActionTopicNameCacheScope(cfg, accountId),
-      ).catch(() => {});
-    }
     return jsonResult({
       ok: true,
       topicId: result.topicId,
@@ -1002,19 +856,12 @@ export async function handleTelegramAction(
     }
     const name = readStringParam(params, "name") ?? readStringParam(params, "threadName");
     const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
-    const token = resolveTelegramToken(cfg, { accountId }).token;
-    if (!token) {
-      throw new Error(
-        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
-      );
-    }
+    const token = requireToken();
     const result = await editForumTopicTelegram(chatId ?? "", messageThreadId, {
-      cfg,
+      ...apiOptions,
       token,
-      accountId: accountId ?? undefined,
       name: name ?? undefined,
       iconCustomEmojiId: iconCustomEmojiId ?? undefined,
-      gatewayClientScopes: options?.gatewayClientScopes,
     });
     if (result.chatId) {
       const patch: { name?: string; iconCustomEmojiId?: string } = {};

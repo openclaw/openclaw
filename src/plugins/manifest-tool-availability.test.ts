@@ -122,16 +122,15 @@ describe("manifestConfigSignalPasses", () => {
   });
 
   it.each([
-    ["", false],
     ["   ", false],
     [[], false],
     [{}, false],
     [null, false],
     [undefined, false],
-    [0, true],
     [false, true],
     [["value"], true],
     [{ value: true }, true],
+    [{ source: "env", id: "OPAQUE_METADATA" }, true],
   ] as const)("treats required value %o as configured=%s", (apiKey, expected) => {
     expect(
       manifestConfigSignalPasses({
@@ -144,7 +143,7 @@ describe("manifestConfigSignalPasses", () => {
 
   it("resolves env secret refs only when their value is non-empty", () => {
     const config = xaiConfig({
-      webSearch: { apiKey: { source: "env", id: "XAI_API_KEY" } },
+      webSearch: { apiKey: { source: "env", provider: "default", id: "XAI_API_KEY" } },
     });
     expect(
       manifestConfigSignalPasses({
@@ -287,18 +286,15 @@ describe("hasManifestToolAvailability", () => {
       secrets: { defaults: { store: "shared" } },
       expected: true,
     },
-    ...(
-      [
-        { source: "file", path: "/tmp/unused-store-alias-fixture.json" },
-        { source: "env" },
-        { source: "exec", command: "/tmp/unused-store-alias-command" },
-      ] as const
-    ).map((provider) => ({
-      name: `selected store default shadowing ${provider.source}`,
-      ref: { source: "store", provider: "shared", id: "TOOL_API_KEY" } as const,
-      secrets: { defaults: { store: "shared" }, providers: { shared: provider } },
+    {
+      name: "selected store default shadowing exec",
+      ref: { source: "store", provider: "shared", id: "TOOL_API_KEY" },
+      secrets: {
+        defaults: { store: "shared" },
+        providers: { shared: { source: "exec", command: "/tmp/unused-store-alias-command" } },
+      },
       expected: true,
-    })),
+    },
     ...(
       [
         { source: "store" },

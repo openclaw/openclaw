@@ -1,6 +1,4 @@
 // Session lifecycle timestamps prefer store metadata and fall back to transcript headers.
-import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   assertProviderReviewAcknowledgment,
   type ProviderReviewAcknowledgment,
@@ -9,6 +7,10 @@ import {
   resolveIncognitoSessionExpiresAt,
   isIncognitoSessionKey,
 } from "../../shared/incognito-session-key.js";
+import {
+  resolveTimestamp,
+  resolveSessionLifecycleTimestampsWithHeader,
+} from "./lifecycle-timestamps.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
 import { canonicalizeMainSessionAlias } from "./main-session.js";
 import { loadTranscriptHeaderSync, readTranscriptMutationStateSync } from "./session-accessor.js";
@@ -18,16 +20,14 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "./types.js";
-import {
+export {
+  createSessionWorkStartChangedError,
+  isSessionWorkStartInvalidatedError,
   SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
-  SESSION_WORK_START_CHANGED_ERROR_CODE,
-  SESSION_WORK_START_INVALIDATED_ERROR_CODE,
+  SessionRestartRecoveryTombstoneError,
+  SessionWorkStartChangedError,
+  SessionWorkStartInvalidatedError,
 } from "./work-start-error.js";
-
-type SessionLifecycleEntry = Pick<
-  SessionEntry,
-  "sessionId" | "sessionStartedAt" | "lastInteractionAt" | "updatedAt"
->;
 
 type SessionWorkStartEntry = Pick<
   InternalSessionEntry,
@@ -64,56 +64,6 @@ export function isRestartRecoveryTombstone(
 
 /** Stable Gateway error detail for stale session lifecycle requests. */
 export const SESSION_LIFECYCLE_CHANGED_ERROR_REASON = "session-changed";
-export { SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE };
-
-export class SessionWorkStartInvalidatedError extends Error {
-  readonly code = SESSION_WORK_START_INVALIDATED_ERROR_CODE;
-
-  constructor(message: string) {
-    super(message);
-    this.name = "SessionWorkStartInvalidatedError";
-  }
-}
-
-export class SessionWorkStartChangedError extends Error {
-  readonly code = SESSION_WORK_START_CHANGED_ERROR_CODE;
-
-  constructor(message: string) {
-    super(message);
-    this.name = "SessionWorkStartChangedError";
-  }
-}
-
-export function createSessionWorkStartChangedError(
-  sessionKey: string,
-): SessionWorkStartChangedError {
-  return new SessionWorkStartChangedError(
-    `Session "${sessionKey}" changed while starting work. Retry.`,
-  );
-}
-
-export function isSessionWorkStartInvalidatedError(
-  error: unknown,
-): error is SessionWorkStartInvalidatedError | SessionWorkStartChangedError {
-  return (
-    error instanceof SessionWorkStartInvalidatedError ||
-    error instanceof SessionWorkStartChangedError ||
-    (typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error.code === SESSION_WORK_START_INVALIDATED_ERROR_CODE ||
-        error.code === SESSION_WORK_START_CHANGED_ERROR_CODE))
-  );
-}
-
-export class SessionRestartRecoveryTombstoneError extends Error {
-  readonly code = SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE;
-
-  constructor(message: string) {
-    super(message);
-    this.name = "SessionRestartRecoveryTombstoneError";
-  }
-}
 
 /** Lifecycle-owned expired, initializing, restart-tombstoned, and archived sessions reject work. */
 export function resolveSessionWorkStartError(
@@ -190,80 +140,23 @@ type TerminalMainSessionTranscriptRegistryCheck = {
   registryTimestampMs: number;
 };
 
-function resolveTimestamp(value: number | undefined): number | undefined {
-  const timestampMs = asDateTimestampMs(value);
-  return timestampMs !== undefined && timestampMs >= 0 ? timestampMs : undefined;
-}
-
 function resolvePositiveTimestamp(value: number | undefined): number | undefined {
   const timestampMs = resolveTimestamp(value);
   return timestampMs !== undefined && timestampMs > 0 ? timestampMs : undefined;
 }
 
-function parseTimestampMs(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return resolveTimestamp(value);
-  }
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-  return resolveTimestamp(Date.parse(value));
-}
-
-function readSessionHeaderStartedAtMs(params: {
-  entry: SessionLifecycleEntry;
-  agentId?: string;
-  sessionKey?: string;
-  storePath?: string;
-  readHeader?: (sessionId: string) => unknown;
-}): number | undefined {
-  const sessionId = params.entry.sessionId?.trim();
-  const sessionKey = params.sessionKey?.trim();
-  const agentId =
-    params.agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined);
-  if (!sessionId || !agentId) {
-    return undefined;
-  }
-  try {
-    const header = (
-      params.readHeader
-        ? params.readHeader(sessionId)
-        : loadTranscriptHeaderSync({
-            agentId,
-            sessionId,
-            ...(params.storePath ? { storePath: params.storePath } : {}),
-            ...(sessionKey ? { sessionKey } : {}),
-          })
-    ) as { type?: unknown; id?: unknown; timestamp?: unknown } | undefined;
-    if (
-      header?.type !== "session" ||
-      (typeof header.id === "string" && header.id.trim() && header.id !== sessionId)
-    ) {
-      return undefined;
-    }
-    return parseTimestampMs(header.timestamp);
-  } catch {
-    return undefined;
-  }
-}
-
 export function resolveSessionLifecycleTimestamps(params: {
-  entry: SessionLifecycleEntry | undefined;
+  entry: Parameters<typeof resolveSessionLifecycleTimestampsWithHeader>[0]["entry"];
   agentId?: string;
   sessionKey?: string;
   storePath?: string;
   readHeader?: (sessionId: string) => unknown;
 }): SessionLifecycleTimestamps {
-  const entry = params.entry;
-  if (!entry) {
-    return {};
-  }
-  return {
-    sessionStartedAt:
-      resolveTimestamp(entry.sessionStartedAt) ??
-      readSessionHeaderStartedAtMs({ ...params, entry }),
-    lastInteractionAt: resolveTimestamp(entry.lastInteractionAt),
-  };
+  return resolveSessionLifecycleTimestampsWithHeader({
+    ...params,
+    readHeader: (scope) =>
+      params.readHeader ? params.readHeader(scope.sessionId) : loadTranscriptHeaderSync(scope),
+  });
 }
 
 function resolveTerminalMainSessionTranscriptRegistryCheck(
@@ -321,15 +214,6 @@ function resolveTerminalMainSessionTranscriptRegistryCheck(
   return { sessionId, registryTimestampMs };
 }
 
-function isTranscriptMutationNewerThanRegistry(params: {
-  transcriptMutationAtMs: number;
-  registryTimestampMs: number;
-}): boolean {
-  const transcriptMutationAtMs = Math.floor(params.transcriptMutationAtMs);
-  const registryTimestampMs = Math.floor(params.registryTimestampMs);
-  return Number.isFinite(transcriptMutationAtMs) && transcriptMutationAtMs > registryTimestampMs;
-}
-
 export function hasTerminalMainSessionTranscriptNewerThanRegistrySync(
   params: TerminalMainSessionTranscriptRegistryParams,
 ): boolean {
@@ -348,10 +232,9 @@ export function hasTerminalMainSessionTranscriptNewerThanRegistrySync(
     if (mutation.updatedAt === null) {
       return false;
     }
-    return isTranscriptMutationNewerThanRegistry({
-      transcriptMutationAtMs: mutation.updatedAt,
-      registryTimestampMs: mutation.observedAt ?? check.registryTimestampMs,
-    });
+    const transcriptMutationAtMs = Math.floor(mutation.updatedAt);
+    const registryTimestampMs = Math.floor(mutation.observedAt ?? check.registryTimestampMs);
+    return Number.isFinite(transcriptMutationAtMs) && transcriptMutationAtMs > registryTimestampMs;
   } catch {
     return false;
   }

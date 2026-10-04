@@ -9,6 +9,8 @@ import { renderCopyButton } from "./copy-button.ts";
 import { type FileKind, fileKindForPath } from "./file-kind.ts";
 import { filePreviewModalStyles } from "./file-preview-modal.styles.ts";
 import { icons } from "./icons.ts";
+import { kbdStyles } from "./kbd-styles.ts";
+import { renderKbd } from "./kbd.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { renderPanelLoadingSkeleton } from "./panel-loading-skeleton.ts";
 import "./modal-dialog.ts";
@@ -30,7 +32,6 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
   @property() listLabel = "";
   @property() searchPlaceholder = "";
   @property() contextLabel = "";
-  @property() readOnlyLabel = "";
   @property() emptyTitle = "";
   @property() emptySubtitle = "";
   @property() copyLabel = "";
@@ -52,7 +53,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
   // Reconnection does not rerun firstUpdated; defer focus until shadow DOM is ready.
   private focusAfterUpdate = false;
 
-  static override styles = filePreviewModalStyles;
+  static override styles = [filePreviewModalStyles, kbdStyles];
 
   protected override willUpdate(changed: PropertyValues<this>) {
     const inputsChanged =
@@ -163,11 +164,12 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
             this.layout === "files"
               ? html`<footer class="foot">
                   <span class="foot-group"
-                    ><span class="kbd">↑↓</span> ${t("filePreview.navigate")}</span
+                    >${renderKbd(["↑", "↓"], { className: "kbd" })}
+                    ${t("filePreview.navigate")}</span
                   >
                   <span class="spacer"></span>
                   <button class="button" @click=${this.emitClose}>
-                    ${t("common.close")} <span class="kbd">esc</span>
+                    ${t("common.close")} ${renderKbd("esc", { className: "kbd" })}
                   </button>
                 </footer>`
               : ""
@@ -182,19 +184,11 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       class="item ${file.path === this.activeFile?.path ? "is-active" : ""}"
       data-path=${file.path}
       aria-current=${file.path === this.activeFile?.path ? "true" : "false"}
-      @pointerdown=${(event: Event) => {
-        if (this.layout === "files") {
-          this.preventItemPointerFocus(event);
-        }
-      }}
-      @mousedown=${(event: Event) => {
-        if (this.layout === "files") {
-          this.preventItemPointerFocus(event);
-        }
-      }}
+      @pointerdown=${this.preventItemPointerFocus}
+      @mousedown=${this.preventItemPointerFocus}
       @click=${() => this.emitSelect(file.path)}
     >
-      <span class="item-icon">${iconForFile(file.path)}</span
+      <span class="item-icon">${FILE_KIND_ICONS[fileKindForPath(file.path)]}</span
       ><span class="item-name" title=${file.path}
         >${this.layout === "document" ? file.path.split("/").pop() : file.path}</span
       >${this.layout === "files" ? html`<span class="item-meta">${file.size}</span>` : ""}
@@ -257,7 +251,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
                 <div class="chips">
                   <span class="chip accent">${fileKind(file.path)}</span>
                   <span class="chip">${file.size}</span>
-                  <span class="chip">${this.readOnlyLabel || t("filePreview.readOnly")}</span>
+                  <span class="chip">${t("filePreview.readOnly")}</span>
                   ${this.contextLabel ? html`<span class="chip ok">${this.contextLabel}</span>` : ""}
                 </div>
               </div>`
@@ -334,7 +328,9 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
   };
 
   private preventItemPointerFocus = (event: Event) => {
-    event.preventDefault();
+    if (this.layout === "files") {
+      event.preventDefault();
+    }
   };
 
   private handleKeydown = (event: KeyboardEvent) => {
@@ -444,7 +440,7 @@ function fileKind(path: string): string {
     py: "Python",
     sh: t("filePreview.kind.shell"),
   };
-  return map[ext] ?? (ext ? ext.toUpperCase() : t("filePreview.kind.file"));
+  return Object.hasOwn(map, ext) ? map[ext]! : ext ? ext.toUpperCase() : t("filePreview.kind.file");
 }
 
 // Same glyph vocabulary chat file links paint through CSS masks
@@ -461,10 +457,6 @@ const FILE_KIND_ICONS: Record<FileKind, TemplateResult> = {
   shell: icons.terminal,
   skill: icons.pencilSparkles,
 };
-
-function iconForFile(path: string) {
-  return FILE_KIND_ICONS[fileKindForPath(path)];
-}
 
 declare global {
   interface HTMLElementTagNameMap {

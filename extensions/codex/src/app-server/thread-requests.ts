@@ -1,16 +1,15 @@
 import crypto from "node:crypto";
-import {
-  isHostScopedAgentToolActive,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isHostScopedAgentToolActive } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessSessionRuntimeParamsV1 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { isIncognitoSessionKey } from "../incognito-session.js";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import type { CodexAppServerClient } from "./client.js";
 import {
   CODEX_SESSION_OVERRIDABLE_LAYER_TYPES,
   readCodexEffectiveConfig,
 } from "./config-layer-policy.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
+import { joinPresentSections } from "./developer-instruction-sections.js";
 import {
   isMessageOnlyCodexSourceReply,
   isSystemAgentOnlyCodexDynamicToolAllowlist,
@@ -30,6 +29,8 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import { isCodexResponsesOAuthRun } from "./responses-oauth.js";
+import type { CodexThreadConfigurationOptions } from "./thread-configuration-options.js";
 import { fingerprintJsonObject } from "./thread-fingerprints.js";
 import {
   CODEX_NATIVE_PERSONALITY_NONE,
@@ -156,32 +157,14 @@ const CODEX_RING_ZERO_RESTRICTED_FEATURE_ALIASES = new Map<string, string>([
 
 export type CodexThreadConfigurationContext = CodexThreadPromptContext &
   Pick<
-    EmbeddedRunAttemptParams,
+    AgentHarnessSessionRuntimeParamsV1,
     | "pluginHarnessToolPolicyRestricted"
     | "pluginHarnessToolPolicySafeDeniedTools"
     | "authoredContextTokenCap"
     | "bootstrapContextMode"
     | "scheduledRuntimeAuthority"
+    | "requireWorkspaceOnly"
   >;
-
-type CodexThreadConfigurationOptions = {
-  cwd?: string;
-  dynamicTools?: CodexDynamicToolSpec[];
-  appServer: CodexAppServerRuntimeOptions;
-  developerInstructions?: string;
-  config?: JsonObject;
-  nativeCodeModeEnabled?: boolean;
-  nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
-  nativeCodeModeOnlyEnabled?: boolean;
-  webSearchAllowed?: boolean;
-  environmentSelection?: CodexTurnEnvironmentParams[];
-  model?: string | null;
-  modelProvider?: string | null;
-  hostSystemAgentActive?: boolean;
-  restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
-  shellEnvironment?: Readonly<Record<string, string>>;
-  disableLoginShell?: boolean;
-};
 
 /** Common deterministic start/resume/fork fields; no run resources or unsupported setters. */
 export function buildCodexThreadConfiguration(
@@ -200,44 +183,33 @@ export function buildCodexThreadConfiguration(
       ? { serviceTier: options.appServer.serviceTier }
       : {}),
     config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
-      nativeCodeModeEnabled: options.nativeCodeModeEnabled,
-      nativeProviderWebSearchSupport: options.nativeProviderWebSearchSupport,
-      nativeCodeModeOnlyEnabled: options.nativeCodeModeOnlyEnabled,
+      ...options,
       directOnlyToolNamespaces: resolveDirectOnlyToolNamespaces(options.dynamicTools),
-      webSearchAllowed: options.webSearchAllowed,
-      appServer: options.appServer,
-      hostSystemAgentActive: options.hostSystemAgentActive,
-      restrictedToolSurfaceInheritedMcpServerNames:
-        options.restrictedToolSurfaceInheritedMcpServerNames,
-      shellEnvironment: options.shellEnvironment,
-      disableLoginShell: options.disableLoginShell,
     }),
-    developerInstructions:
+    // Catalog-owned collaboration messages replace caller collaboration instructions
+    // (codex-rs/core/src/context/world_state/collaboration_mode.rs), so refreshable
+    // workspace instructions ride the thread developer carrier after the immutable generic policy.
+    developerInstructions: joinPresentSections(
       options.developerInstructions ??
-      buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
+        buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
+      options.refreshableInstructions,
+    ),
   };
 }
 
 export function buildThreadStartParams(
-  params: EmbeddedRunAttemptParams,
+  params: AgentHarnessSessionRuntimeParamsV1,
   options: CodexThreadConfigurationOptions & { cwd: string; dynamicTools: CodexDynamicToolSpec[] },
 ): CodexThreadStartParams {
   const resolvedModelProvider = resolveCodexAppServerModelProvider({
+    ...params,
     homeScope: options.appServer.start.homeScope,
-    provider: params.provider,
-    authProfileId: params.authProfileId,
-    authProfileStore: params.authProfileStore,
-    agentDir: params.agentDir,
-    config: params.config,
   });
   const modelSelection = resolveCodexAppServerRequestModelSelection({
+    ...params,
     homeScope: options.appServer.start.homeScope,
     model: options.model ?? params.modelId,
     modelProvider: options.modelProvider ?? resolvedModelProvider,
-    authProfileId: params.authProfileId,
-    authProfileStore: params.authProfileStore,
-    agentDir: params.agentDir,
-    config: params.config,
   });
   return {
     model: modelSelection.model,
@@ -250,7 +222,9 @@ export function buildThreadStartParams(
     personality: CODEX_NATIVE_PERSONALITY_NONE,
     serviceName: "OpenClaw",
     threadSource: "openclaw",
-    ...resolveCodexThreadEnvironmentSelection(options),
+    ...resolveCodexThreadEnvironmentSelection(
+      params.requireWorkspaceOnly === true ? { nativeCodeModeEnabled: false } : options,
+    ),
     // Codex 0.146 accepts canonical typed function and namespace specs natively.
     dynamicTools: [...options.dynamicTools],
     experimentalRawEvents: true,
@@ -262,7 +236,7 @@ export function buildThreadStartParams(
 }
 
 export function buildThreadResumeParams(
-  params: EmbeddedRunAttemptParams,
+  params: AgentHarnessSessionRuntimeParamsV1,
   options: CodexThreadConfigurationOptions & {
     threadId: string;
     authProfileId?: string;
@@ -272,22 +246,17 @@ export function buildThreadResumeParams(
   const modelSelection = options.preserveNativeModel
     ? undefined
     : resolveCodexAppServerRequestModelSelection({
+        ...params,
         homeScope: options.appServer.start.homeScope,
         model: options.model ?? params.modelId,
         modelProvider:
           options.modelProvider ??
           resolveCodexAppServerModelProvider({
+            ...params,
             homeScope: options.appServer.start.homeScope,
-            provider: params.provider,
             authProfileId: options.authProfileId ?? params.authProfileId,
-            authProfileStore: params.authProfileStore,
-            agentDir: params.agentDir,
-            config: params.config,
           }),
         authProfileId: options.authProfileId ?? params.authProfileId,
-        authProfileStore: params.authProfileStore,
-        agentDir: params.agentDir,
-        config: params.config,
       });
   return {
     threadId: options.threadId,
@@ -340,27 +309,17 @@ export function buildCodexRuntimeThreadConfig(
     delete disabledConfig["features.apply_patch_streaming_events"];
     return disabledConfig;
   }
-  if (options.nativeCodeModeOnlyEnabled === true) {
-    const merged = expectDefined(
-      mergeCodexThreadConfigs(
-        codeModeConfig,
-        configured,
-        CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
-        CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
-        { "features.code_mode_only": true },
-      ),
-      "Codex code mode only config",
-    );
-    return ensureDirectOnlyToolNamespaces(merged, options.directOnlyToolNamespaces);
-  }
   const merged = expectDefined(
     mergeCodexThreadConfigs(
       codeModeConfig,
       configured,
       CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
       CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
+      options.nativeCodeModeOnlyEnabled === true ? { "features.code_mode_only": true } : undefined,
     ),
-    "Codex code mode config",
+    options.nativeCodeModeOnlyEnabled === true
+      ? "Codex code mode only config"
+      : "Codex code mode config",
   );
   return ensureDirectOnlyToolNamespaces(merged, options.directOnlyToolNamespaces);
 }
@@ -401,6 +360,21 @@ function resolveDirectOnlyToolNamespaces(
     .map((tool) => tool.name);
 }
 
+export function isCodexNativeDelegationDisabledForRun(
+  params: CodexThreadConfigurationContext,
+  hostSystemAgentActive = isHostScopedAgentToolActive("openclaw"),
+): boolean {
+  // Disabling only multi_agent still permits Codex's model-selected or explicit V2 tools.
+  return (
+    isCodexResponsesOAuthRun(params) ||
+    params.delegationCapability === "report_only" ||
+    params.requireWorkspaceOnly === true ||
+    params.pluginHarnessToolPolicyRestricted === true ||
+    isMessageOnlyCodexSourceReply(params) ||
+    (hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow))
+  );
+}
+
 export function buildCodexRuntimeThreadConfigForRun(
   params: CodexThreadConfigurationContext,
   config: JsonObject | undefined,
@@ -414,6 +388,7 @@ export function buildCodexRuntimeThreadConfigForRun(
     hostSystemAgentActive?: boolean;
     restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
     shellEnvironment?: Readonly<Record<string, string>>;
+    shellPathPrepend?: readonly string[];
     disableLoginShell?: boolean;
   } = {},
 ): JsonObject {
@@ -422,7 +397,10 @@ export function buildCodexRuntimeThreadConfigForRun(
     isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow);
   const messageOnlySourceReply = isMessageOnlyCodexSourceReply(params);
   const restrictedToolSurface =
-    ringZeroActive || messageOnlySourceReply || params.pluginHarnessToolPolicyRestricted === true;
+    ringZeroActive ||
+    messageOnlySourceReply ||
+    params.pluginHarnessToolPolicyRestricted === true ||
+    params.requireWorkspaceOnly === true;
   const restrictedTurnDisablesProjectDocs =
     ringZeroActive ||
     messageOnlySourceReply ||
@@ -440,7 +418,7 @@ export function buildCodexRuntimeThreadConfigForRun(
   const webSearchConfig = resolveCodexWebSearchPlan({
     config: params.config,
     disableTools: params.disableTools,
-    nativeToolSurfaceEnabled: options.nativeCodeModeEnabled,
+    nativeToolSurfaceEnabled: isCodexResponsesOAuthRun(params) || options.nativeCodeModeEnabled,
     nativeProviderWebSearchSupport: options.nativeProviderWebSearchSupport,
     webSearchAllowed: options.webSearchAllowed,
   }).threadConfig;
@@ -452,19 +430,35 @@ export function buildCodexRuntimeThreadConfigForRun(
     mergeCodexThreadConfigs(
       baseConfig,
       options.appServer?.networkProxy?.configPatch,
+      isCodexNativeDelegationDisabledForRun(params, options.hostSystemAgentActive)
+        ? CODEX_DELEGATION_DISABLED_THREAD_CONFIG
+        : undefined,
+      isCodexResponsesOAuthRun(params)
+        ? {
+            "features.apps": false,
+            "features.plugins": false,
+            "features.image_generation": false,
+            "features.memories": false,
+            "features.skill_search": false,
+            "orchestrator.skills.enabled": false,
+            "orchestrator.mcp.enabled": false,
+            "skills.bundled.enabled": false,
+          }
+        : undefined,
       params.pluginHarnessToolPolicySafeDeniedTools?.includes("image_generate")
         ? { "features.image_generation": false }
         : undefined,
       shouldDisableCodexToolSearchForModel(params.modelId)
         ? CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG
         : undefined,
-      params.delegationCapability === "report_only"
-        ? CODEX_DELEGATION_DISABLED_THREAD_CONFIG
-        : undefined,
-      messageOnlySourceReply || params.pluginHarnessToolPolicyRestricted === true
+      messageOnlySourceReply ||
+        params.pluginHarnessToolPolicyRestricted === true ||
+        params.requireWorkspaceOnly === true
         ? buildRestrictedToolConfigPatch(
             restrictedToolSurfaceMcpServerNames,
-            Boolean(params.scheduledRuntimeAuthority),
+            Boolean(params.scheduledRuntimeAuthority) &&
+              !isCodexResponsesOAuthRun(params) &&
+              params.requireWorkspaceOnly !== true,
           )
         : buildCodexRingZeroThreadConfigPatch(
             params,
@@ -484,11 +478,12 @@ export function buildCodexRuntimeThreadConfigForRun(
     contextConfig,
     options.shellEnvironment,
     options.disableLoginShell,
+    options.shellPathPrepend,
   );
 }
 
 export function buildCodexRingZeroThreadConfigPatch(
-  params: Pick<EmbeddedRunAttemptParams, "toolsAllow">,
+  params: Pick<AgentHarnessSessionRuntimeParamsV1, "toolsAllow">,
   hostSystemAgentActive = isHostScopedAgentToolActive("openclaw"),
   inheritedMcpServerNames: readonly string[] = [],
 ): JsonObject | undefined {

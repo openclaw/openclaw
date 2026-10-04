@@ -1,4 +1,4 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing } from "lit";
 import { styleMap } from "lit/directives/style-map.js";
 import { BUILTIN_THEMES } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { controlUiAccentInk } from "../../app/accent-contrast.ts";
@@ -7,7 +7,7 @@ import {
   UI_APPEARANCE_DEFAULTS,
   type TextScaleStop,
 } from "../../app/settings.ts";
-import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import type { ThemeName } from "../../app/theme.ts";
 import {
   loadTypefaceSpecimens,
@@ -169,10 +169,7 @@ function renderTypography(props: ConfigProps, theme: { id: ThemeName; label: str
   `;
 }
 
-export function renderAppearanceSection(
-  props: ConfigProps,
-  inputs: { customThemeImport: TemplateResult; chatMessageWidth: TemplateResult },
-) {
+export function renderAppearanceSection(props: ConfigProps) {
   const viewState = props.viewState;
   const showCustomThemeImport = props.hasCustomTheme || props.customThemeImportExpanded === true;
   if (
@@ -259,7 +256,7 @@ export function renderAppearanceSection(
             : t("configView.appearance.customAccent"),
         });
   return html`
-    <div class="settings-page">
+    <div class="settings-page" ${shellLayoutTraits({ settingsPage: true })}>
       ${renderLanguageSection(props)}
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.theme} class="settings-section">
         <div class="settings-section__header">
@@ -303,7 +300,7 @@ export function renderAppearanceSection(
                     }
                     title=${opt.description}
                     data-theme-id=${opt.id}
-                    @click=${(e: Event) => {
+                    @click=${() => {
                       if (opt.id === "custom" && !props.hasCustomTheme) {
                         props.onOpenCustomThemeImport?.();
                         return;
@@ -312,10 +309,7 @@ export function renderAppearanceSection(
                         opt.id !== props.theme ||
                         (opt.id === props.themeResetValue && props.themeOverridden)
                       ) {
-                        const context: ThemeTransitionContext = {
-                          element: (e.currentTarget as HTMLElement) ?? undefined,
-                        };
-                        props.setTheme(opt.id, context);
+                        props.setTheme(opt.id);
                       }
                     }}
                   >
@@ -342,10 +336,10 @@ export function renderAppearanceSection(
                 { value: "dark", label: t("common.dark") },
               ],
               ariaLabel: t("common.colorMode"),
-              onChange: (mode, element) => props.setThemeMode(mode, { element }),
-              onReselect: (mode, element) => {
+              onChange: (mode) => props.setThemeMode(mode),
+              onReselect: (mode) => {
                 if (props.themeModeOverridden && mode === props.themeModeResetValue) {
-                  props.setThemeMode(mode, { element });
+                  props.setThemeMode(mode);
                 }
               },
             }),
@@ -375,7 +369,19 @@ export function renderAppearanceSection(
                         <span class="settings-theme-import__label"
                           >${t("configView.appearance.themeLink")}</span
                         >
-                        ${inputs.customThemeImport}
+                        <input
+                          class="settings-theme-import__input"
+                          data-custom-theme-import-input
+                          type="text"
+                          spellcheck="false"
+                          placeholder="https://tweakcn.com/editor/theme?theme=... or amethyst-haze"
+                          .value=${props.customThemeImportUrl}
+                          @input=${(event: Event) =>
+                            props.onCustomThemeImportUrlChange(
+                              // SAFETY: The listener is bound directly to this input.
+                              (event.currentTarget as HTMLInputElement).value,
+                            )}
+                        />
                       </label>
                       <div class="settings-theme-import__actions">
                         <button
@@ -567,7 +573,7 @@ export function renderAppearanceSection(
       </section>
 
       ${renderSidebarPreferencesSection(props)} ${renderLobsterPetSection(props)}
-      ${renderChatPreferencesSection(props, inputs.chatMessageWidth)} ${renderSessionSources(props)}
+      ${renderChatPreferencesSection(props)} ${renderSessionSources(props)}
 
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.connection} class="settings-section">
         <div class="settings-section__header">

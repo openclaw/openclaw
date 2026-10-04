@@ -43,6 +43,13 @@ as `scripts/changed-lanes.mjs` and skips the shared helper implementation
 itself. `check:changed` runs this report for changed test paths as a
 warning-only CI signal (GitHub warning annotations, not failures).
 
+Copy fixture trees whose files a test later executes directly (stubs on `PATH`,
+shebang wrappers, native binaries) with `copyTreeCloseOnExec` from
+`test/helpers/close-on-exec-copy.ts`, not a recursive `fs.cpSync` without a
+`filter`. On Node 24 that copy path opens files without close-on-exec, so a
+child forked by another Vitest thread mid-copy keeps the file writable and a
+later `execve` fails with `ETXTBSY`.
+
 ## Agent reliability evals (skills)
 
 We already have a few CI-safe tests that behave like "agent reliability evals":
@@ -79,7 +86,7 @@ measured with `pnpm test <file> --maxWorkers=1` on one worker:
   deleting coverage.
 - The maintainer-tooling family uses `RELEASE_ONLY_TOOLING_SHARDS` and matching
   maintainer leaves in mixed fast configs: product-only PRs and main omit it,
-  tooling-owner PRs run the full family, and manual CI and Full Release Validation
+  tooling-owner PRs select their affected files (with full-family fallback for unresolved owners), and manual CI and Full Release Validation
   retain it. Keep tests in their canonical configs, with their process and timer
   policies, so new files inherit the same owner routing. Dedicated product E2E
   and live tests remain outside this tier. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
@@ -89,8 +96,81 @@ measured with `pnpm test <file> --maxWorkers=1` on one worker:
   booting per test; import the narrow test API of a plugin or module rather than
   its full barrel. Do not add a serial Vitest config or a worker pin: fix the
   shared state that would need one.
+- Load compiled-subprocess declarations (`scripts/lib/vitest-worker-declarations.mts`)
+  at collection. The first such load in a Vitest invocation prepares the whole
+  compiled worker generation (tens of seconds warm, minutes cold), so an
+  `await import()` in a test or hook whose graph reaches a declaration spends
+  that preparation inside the test or hook deadline. Import the subject
+  statically; suites that re-import it per test add a side-effect import of
+  `src/test-utils/prepare-compiled-subprocesses.ts` in core. Extension tests use
+  `import "openclaw/plugin-sdk/compiled-subprocess-testing";` instead. Add the
+  preload only to suites that already load a declaration.
 - State the measured cost in the PR for every new or materially changed test
   file, and the CI seconds once the run exists.
+
+`withTestTimeout` and `raceWithTimeoutResult` are grandfathered wall-clock races;
+`check:test-timeout-race-ratchet` keeps their per-file counts in
+`config/test-timeout-race-baseline.txt` shrink-only. Wait for the owned completion
+signal with `awaitGateBeforeSettlement(gate, operation, message)` or
+`withinTest(work, signal)` from `test/helpers/promise.ts`, or use `vi.useFakeTimers()`
+through the owner's injected clock seam. After removing sites, run
+`pnpm check:test-timeout-race-ratchet --prune` to shrink the baseline.
+
+## Module mocks and export completeness
+
+New first-party `vi.mock` and `vi.doMock` factories should preserve the real
+module's exports when the fixture only needs to override a few functions:
+
+```ts
+vi.mock("./runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime.js")>()),
+  start: vi.fn(),
+}));
+```
+
+Use pass-through for **export completeness** only. `importOriginal` and
+`vi.importActual` can return a separate module instance for stateful singletons;
+they do not guarantee shared state or lifecycle identity. Keep a closed mock when
+isolating real state or initialization is the fixture's purpose, and explain that
+contract on the line immediately above the mock call:
+
+```ts
+// mock-isolation: Keep the database and process-wide cache outside this fixture.
+vi.mock("./runtime.js", () => ({ start: vi.fn() }));
+```
+
+`pnpm check:test-mock-exports` checks literal first-party module registrations,
+including relative, workspace-package, and TypeScript-path aliases. Factories
+without a recognizable real-module return/spread need the annotation, including
+indirect factories the syntax check cannot prove. Existing unannotated factories
+have an exact source-target and token-fingerprint baseline; new or changed factories cannot borrow
+another site's allowance. After removing or annotating existing factories, run
+`pnpm check:test-mock-exports --prune` to shrink that baseline. This guard runs
+with the existing CI ratchets and `check:changed`; it does not rewrite tests.
+
+## Raw SQLite state access
+
+`closeOpenClawStateDatabaseForTest()` closes native handles synchronously, but
+worker-backed state writes (plugin state, deferred plugin migrations, and other
+worker stores) keep a worker connection whose retirement only starts at that
+call. Its final close checkpoints and deletes the WAL under an exclusive lock at
+an arbitrary later time. Before opening the database with a raw `DatabaseSync`,
+or copying, hashing, or snapshotting its files, `await
+closeOpenClawStateDatabaseAsync()` (or `closeStateDatabaseForTest()` from
+`src/test-utils/database-cleanup.ts`, which also clears failure latches).
+Otherwise the raw connection can fail with `SQLITE_BUSY`, or the snapshot can
+change underneath the test. `PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE` on
+a raw connection proves that no other connection remains.
+
+## Skills watchers
+
+`skills.status` and skill snapshot preparation start real `@openclaw/fs-safe`
+watchers. In shared-worker lanes, the non-isolated runner closes any watchers a
+file leaves open and fails that file with `skills watchers failed`; otherwise
+their re-armed timers land on a later file's fake clock and abort its
+`vi.runAllTimersAsync()`. Close them in `afterEach` with
+`closeSkillsWatchers(true)`, or set `skills.load.watch: false` when the test
+does not exercise watching.
 
 ## Flake triage
 

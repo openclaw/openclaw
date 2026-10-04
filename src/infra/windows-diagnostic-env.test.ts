@@ -36,28 +36,60 @@ afterEach(() => {
   vi.resetModules();
 });
 
-it("does not start the argv fallback after the ownership inspection deadline", async () => {
-  const { readWindowsProcessArgsSync } = await import("./windows-port-pids.js");
-  let elapsedMs = 0;
-  vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
-  mocks.spawn.mockImplementation((_file, _args, options) => {
-    elapsedMs += Number(options?.timeout ?? 0);
-    return { error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }), status: null };
+it.each(
+  [
+    {
+      kind: "literal",
+      command:
+        String.raw`"C:\Program Files\node.exe" "C:\Team Notes\\" "Office \"A\"" "" "%%PATH%% ^!value!"` +
+        ' "first\r\nsecond"',
+      expected: {
+        ok: true,
+        args: [
+          "C:\\Program Files\\node.exe",
+          "C:\\Team Notes\\",
+          'Office "A"',
+          "",
+          "%%PATH%% ^!value!",
+          "first\r\nsecond",
+        ],
+      },
+    },
+    { kind: "malformed", command: "node\0 gateway", expected: { ok: false, permanent: false } },
+  ].flatMap(({ kind, command, expected }) =>
+    [false, true].map((fallback) => ({ kind, command, expected, fallback })),
+  ),
+)("reads $kind native argv, WMIC fallback=$fallback", async ({ fallback, command, expected }) => {
+  const { readWindowsProcessArgsResultSync } = await import("./windows-port-pids.js");
+  if (fallback) {
+    mocks.spawn.mockReturnValueOnce({ status: 1, stdout: "" });
+  }
+  mocks.spawn.mockReturnValueOnce({
+    status: 0,
+    stdout: fallback ? `CommandLine=${command}\r\n` : command,
   });
 
-  expect(readWindowsProcessArgsSync(424242, 1_000, routing, 125)).toBeNull();
-  expect(elapsedMs).toBe(125);
-  expect(mocks.spawn).toHaveBeenCalledOnce();
+  expect(readWindowsProcessArgsResultSync(424242, 1_000, routing)).toEqual(expected);
 });
 
-it.each(["exhausted", "partial"] as const)(
-  "includes the %s cold-registry lookup in the argv allowance",
+it.each(["supplied", "exhausted", "partial"] as const)(
+  "bounds argv discovery including root resolution (%s)",
   async (registryBudget) => {
     const { readWindowsProcessArgsSync } = await import("./windows-port-pids.js");
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
     let elapsedMs = 0;
     vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+    mocks.spawn.mockImplementation((_file, _args, options) => {
+      elapsedMs += Number(options?.timeout ?? 0);
+      return { error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }), status: null };
+    });
+    if (registryBudget === "supplied") {
+      expect(readWindowsProcessArgsSync(424242, 1_000, routing, 125)).toBeNull();
+      expect(elapsedMs).toBe(125);
+      expect(mocks.spawn).toHaveBeenCalledOnce();
+      return;
+    }
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
     const registryRoot = "SystemRoot    REG_SZ    D:\\RegistryWindows\r\n";
     mocks.exec.mockImplementation((_file, _args, options) => {
       if (registryBudget === "exhausted") {
@@ -66,10 +98,6 @@ it.each(["exhausted", "partial"] as const)(
       }
       elapsedMs += 40;
       return registryRoot;
-    });
-    mocks.spawn.mockImplementation((_file, _args, options) => {
-      elapsedMs += Number(options?.timeout ?? 0);
-      return { error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }), status: null };
     });
 
     await withSyntheticDiagnosticEnv(routing, async () => {
@@ -187,8 +215,23 @@ async function withWindowsDiagnostics(
 }
 
 describe("Windows diagnostic child environments (mocked utilities)", () => {
-  it.each([false, true])("covers every port command family, WMIC fallback=%s", async (fallback) => {
-    await withWindowsDiagnostics(fallback, async ({ ports }) => {
+  it.each(
+    [false, true].flatMap((fallback) => ["ports", "process"].map((api) => ({ fallback, api }))),
+  )("isolates $api utility environments, fallback=$fallback", async ({ fallback, api }) => {
+    await withWindowsDiagnostics(fallback, async ({ ports, pids, start }) => {
+      if (api === "process") {
+        // Exercise utility forwarding without native inspection of the fixture PID.
+        vi.stubGlobal("SEALED_RUNTIME_BUILD", true);
+        expect(pids.readWindowsListeningPidsOnPortSync(43123)).toEqual([424242]);
+        expect(pids.readWindowsProcessArgsSync(424242)).toEqual(["node", "fixture-server"]);
+        expect(start.readWindowsProcessStartTimeSync(424242)).toBe(
+          Date.parse("2026-09-03T00:00:00Z"),
+        );
+        expect(new Set(mocks.spawn.mock.calls.map(([file]) => path.win32.basename(file)))).toEqual(
+          new Set(["powershell.exe", ...(fallback ? ["netstat.exe", "wmic.exe"] : [])]),
+        );
+        return;
+      }
       const single = await ports.inspectPortUsage(43123);
       const batch = await ports.inspectPortUsages([43123]);
       const connections = await ports.inspectPortConnections(43123);
@@ -255,22 +298,4 @@ describe("Windows diagnostic child environments (mocked utilities)", () => {
       expect(mocks.spawn.mock.calls[0]?.[0]).toBe("D:\\RegistryWindows\\System32\\cmd.exe");
     });
   });
-
-  it.each([false, true])(
-    "isolates synchronous listener/argv/start-time reads, fallback=%s",
-    async (fallback) => {
-      // Exercise utility environment forwarding without querying a real process with the fixture PID.
-      vi.stubGlobal("SEALED_RUNTIME_BUILD", true);
-      await withWindowsDiagnostics(fallback, async ({ pids, start }) => {
-        expect(pids.readWindowsListeningPidsOnPortSync(43123)).toEqual([424242]);
-        expect(pids.readWindowsProcessArgsSync(424242)).toEqual(["node", "fixture-server"]);
-        expect(start.readWindowsProcessStartTimeSync(424242)).toBe(
-          Date.parse("2026-09-03T00:00:00Z"),
-        );
-        expect(new Set(mocks.spawn.mock.calls.map(([file]) => path.win32.basename(file)))).toEqual(
-          new Set(["powershell.exe", ...(fallback ? ["netstat.exe", "wmic.exe"] : [])]),
-        );
-      });
-    },
-  );
 });

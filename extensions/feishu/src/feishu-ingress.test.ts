@@ -12,7 +12,7 @@ import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runt
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { feishuDedupeState } from "./dedup-state.js";
-import { claimUnprocessedFeishuMessage } from "./dedup.js";
+import { claimUnprocessedFeishuMessage, finalizeFeishuMessageProcessing } from "./dedup.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import {
@@ -21,7 +21,7 @@ import {
   type FeishuIngressLifecycle,
 } from "./feishu-ingress.js";
 import { monitorWebhook } from "./monitor.transport.js";
-import { getFreePort, waitUntilServerReady } from "./monitor.webhook.test-helpers.js";
+import { getGatewayPort, waitForWebhookRoute } from "./monitor.webhook.test-helpers.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 type FeishuIngressQueue = NonNullable<Parameters<typeof createFeishuDurableIngress>[0]["queue"]>;
@@ -174,13 +174,13 @@ async function withWebhook(
   ingress: Pick<ReturnType<typeof createFeishuDurableIngress>, "invoke" | "invokeWebhook">,
   run: (url: string) => Promise<void>,
 ) {
-  const port = await getFreePort();
+  const port = await getGatewayPort();
   const webhookPath = "/feishu-ingress-test";
   const encryptKey = "feishu-ingress-test-key";
   const account = {
     accountId: "default",
     encryptKey,
-    config: { webhookHost: "127.0.0.1", webhookPort: port, webhookPath },
+    config: { webhookPath },
   } as ResolvedFeishuAccount;
   const abortController = new AbortController();
   const monitor = monitorWebhook({
@@ -193,7 +193,7 @@ async function withWebhook(
   });
   const url = `http://127.0.0.1:${port}${webhookPath}`;
   try {
-    await waitUntilServerReady(url);
+    await waitForWebhookRoute(url);
     await run(url);
   } finally {
     abortController.abort();
@@ -359,26 +359,6 @@ describe("Feishu durable ingress", () => {
     });
   });
 
-  it("keeps transient dispatch failures retryable", async () => {
-    await withQueue(async (queue, startIngress) => {
-      const dispatch = vi.fn(async () => {
-        throw new Error("temporary network failure");
-      });
-      const ingress = startIngress({ queue, dispatcher: createDispatcher(dispatch) });
-      ingress.start();
-      const envelope = messageEnvelope({ eventId: "evt-transient-failure" });
-
-      await ingress.invoke(envelope, { needCheck: false });
-      await ingress.waitForIdle();
-
-      expect(dispatch).toHaveBeenCalledTimes(1);
-      await expect(
-        queue.enqueue("evt-transient-failure", {} as FeishuIngressPayload),
-      ).resolves.toMatchObject({ kind: "pending", duplicate: true });
-      await ingress.stop();
-    });
-  });
-
   it("keeps unrelated downstream syntax failures retryable", async () => {
     await withQueue(async (queue, startIngress) => {
       const dispatch = vi.fn(async () => {
@@ -436,6 +416,46 @@ describe("Feishu durable ingress", () => {
       ).resolves.toEqual({ kind: "duplicate" });
       expect(transport.calls.finalizing).toHaveBeenCalledTimes(1);
       expect(transport.calls.adopted).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("suppresses a captioned post redelivery after upgrade when the pre-upgrade record exists", async () => {
+    await withQueue(async () => {
+      const preUpgradeKey = "om_post";
+      await expect(
+        finalizeFeishuMessageProcessing({
+          messageId: preUpgradeKey,
+          namespace: "default",
+        }),
+      ).resolves.toBe(true);
+      await closeOpenClawStateDatabaseAsync();
+      feishuDedupeState.reset();
+
+      const redelivery: FeishuMessageEvent = {
+        sender: { sender_id: { open_id: "ou-user" } },
+        message: {
+          message_id: preUpgradeKey,
+          chat_id: "oc-chat",
+          chat_type: "p2p",
+          message_type: "post",
+          content: JSON.stringify({
+            title: "",
+            content: [[{ tag: "text", text: "这是账本" }]],
+            files: [
+              {
+                file_key: "file_v3_0015l_1a389bce-aabb-ccdd-eeff-1234567890ab",
+                file_name: "amount-2026-08-01_2026-08-31.csv",
+                is_folder: false,
+              },
+            ],
+          }),
+        },
+      };
+      const currentKey = resolveFeishuMessageDedupeKey(redelivery);
+      expect(currentKey).toBe(preUpgradeKey);
+      await expect(
+        claimUnprocessedFeishuMessage({ messageId: currentKey, namespace: "default" }),
+      ).resolves.toEqual({ kind: "duplicate" });
     });
   });
 

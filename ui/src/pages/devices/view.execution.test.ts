@@ -110,8 +110,9 @@ describe("devices exec approvals rendering", () => {
     const container = renderDevicesContainer({
       configForm: {
         agents: {
+          defaults: { systemAgent: { agentId: "main" } },
           entries: {
-            main: { name: "Main", default: true },
+            main: { name: "Main" },
             research: { name: "Research" },
           },
         },
@@ -262,8 +263,9 @@ describe("devices agent bindings", () => {
       ],
       configForm: {
         agents: {
+          defaults: { systemAgent: { agentId: "MAIN" } },
           entries: {
-            MAIN: { default: true },
+            MAIN: {},
             research: {},
           },
         },
@@ -299,7 +301,6 @@ describe("devices agent bindings", () => {
       ineligibleExact: true,
       unavailable: true,
     },
-    { name: "names", refs: ["Default worker", "Research worker"] },
     { name: "normalized names", refs: ["default_worker", "RESEARCH-WORKER"] },
     { name: "addresses", refs: ["192.0.2.10", "192.0.2.20"] },
     { name: "ID prefixes", refs: ["default", "agent-"] },
@@ -309,18 +310,6 @@ describe("devices agent bindings", () => {
       competitors: true,
       unavailable: true,
     },
-    {
-      name: "connected-name preference",
-      refs: ["Default worker", "Research worker"],
-      competitors: true,
-      connected: true,
-    },
-    {
-      name: "current-client preference",
-      refs: ["Default worker", "Research worker"],
-      competitors: true,
-      clientId: "openclaw-node",
-    },
   ])("preserves $name across node loss and recovery", (scenario) => {
     const [defaultRef, agentRef] = scenario.refs;
     const onBindDefault = vi.fn();
@@ -328,8 +317,9 @@ describe("devices agent bindings", () => {
     const configForm = {
       tools: { exec: { node: defaultRef } },
       agents: {
+        defaults: { systemAgent: { agentId: "main" } },
         entries: {
-          main: { default: true },
+          main: {},
           research: { name: "Research", tools: { exec: { node: agentRef } } },
         },
       },
@@ -341,8 +331,6 @@ describe("devices agent bindings", () => {
     ].map((node) =>
       Object.assign(node, {
         commands: ["system.run"],
-        connected: scenario.connected,
-        clientId: scenario.clientId,
       }),
     );
     const container = document.createElement("div");
@@ -379,7 +367,6 @@ describe("devices agent bindings", () => {
           nodeId: `${node.nodeId}-competitor`,
           commands: [],
           connected: false,
-          clientId: scenario.clientId ? "clawdbot-node" : undefined,
         }))
       : [];
     const initialNodes = scenario.ineligibleExact

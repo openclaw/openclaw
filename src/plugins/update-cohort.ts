@@ -68,16 +68,18 @@ async function convergePluginReleaseCohortWithLease(
 ): Promise<PluginCohortConvergenceResult> {
   const operatorManaged: PluginUpdateOutcome[] = [];
   const operatorManagedIds = new Set<string>();
-  // Resolve explicit source selection before channel sync can replace its shadowed record.
-  if (params.config.plugins?.load?.paths?.length) {
-    const index = withPluginCache(createPluginCache(), () =>
+  const loadFreshIndex = (config: OpenClawConfig) =>
+    withPluginCache(createPluginCache(), () =>
       loadInstalledPluginIndex({
-        config: params.config,
-        installRecords: params.config.plugins?.installs ?? {},
+        config,
+        installRecords: config.plugins?.installs ?? {},
         workspaceDir: params.workspaceDir,
         env: params.env,
       }),
     );
+  // Resolve explicit source selection before channel sync can replace its shadowed record.
+  if (params.config.plugins?.load?.paths?.length) {
+    const index = loadFreshIndex(params.config);
     const resolver = createInstalledPluginOwnershipResolver(index, params.env);
     for (const plugin of index.plugins) {
       if (plugin.origin !== "config") {
@@ -153,16 +155,7 @@ async function convergePluginReleaseCohortWithLease(
     installOwners = installOwners.filter((id) => !sourceBundledIds.has(id));
   }
   // Without prior package owners there is no retired child policy to reconcile.
-  const beforeIndex = installOwners.length
-    ? withPluginCache(createPluginCache(), () =>
-        loadInstalledPluginIndex({
-          config,
-          installRecords: config.plugins?.installs ?? {},
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-        }),
-      )
-    : undefined;
+  const beforeIndex = installOwners.length ? loadFreshIndex(config) : undefined;
   const packageUpdateSnapshot = beforeIndex
     ? capturePluginPackageUpdateSnapshot({
         index: beforeIndex,
@@ -185,12 +178,13 @@ async function convergePluginReleaseCohortWithLease(
     })
   ).filter((entry) => !operatorManagedIds.has(entry.pluginId));
   const repairedMissingPayloadIds = new Set(missingPayloads.map((entry) => entry.pluginId));
-  let repairOutcomes: PluginUpdateOutcome[] = [];
-  if (repairedMissingPayloadIds.size > 0) {
-    const repair = await updateNpmInstalledPlugins({
+  const updateInstalled = async (
+    selection: Pick<Parameters<typeof updateNpmInstalledPlugins>[0], "pluginIds" | "skipIds">,
+  ) => {
+    const result = await updateNpmInstalledPlugins({
       config,
       npmInstallSpecOverrides,
-      pluginIds: [...repairedMissingPayloadIds],
+      ...selection,
       timeoutMs: params.timeoutMs,
       workTimeoutMs: params.workTimeoutMs,
       updateChannel: params.channel,
@@ -205,20 +199,17 @@ async function convergePluginReleaseCohortWithLease(
       beforePersistentEffect: params.beforePersistentEffect,
     });
     params.beforePersistentEffect?.();
-    config = repair.config;
-    changed ||= repair.changed;
-    npmChanged ||= repair.changed;
-    repairOutcomes = repair.outcomes;
-    Object.assign(installOwnerMigrations, resolvePluginInstallOwnerMigrations(repair));
-  }
+    config = result.config;
+    changed ||= result.changed;
+    npmChanged ||= result.changed;
+    Object.assign(installOwnerMigrations, resolvePluginInstallOwnerMigrations(result));
+    return result.outcomes;
+  };
+  const repairOutcomes = repairedMissingPayloadIds.size
+    ? await updateInstalled({ pluginIds: [...repairedMissingPayloadIds] })
+    : [];
 
-  const update = await updateNpmInstalledPlugins({
-    config,
-    npmInstallSpecOverrides,
-    timeoutMs: params.timeoutMs,
-    workTimeoutMs: params.workTimeoutMs,
-    updateChannel: params.channel,
-    coreVersion: params.coreVersion,
+  const updateOutcomes = await updateInstalled({
     skipIds: new Set([
       ...operatorManagedIds,
       ...sync.summary.switchedToClawHub,
@@ -226,32 +217,12 @@ async function convergePluginReleaseCohortWithLease(
       ...repairedMissingPayloadIds,
       ...Object.values(installOwnerMigrations),
     ]),
-    versionBoundPluginIds: params.versionBoundPluginIds,
-    skipDisabledPlugins: true,
-    syncOfficialPluginInstalls: true,
-    retainOnUnavailable: true,
-    logger: params.logger,
-    onIntegrityDrift: params.onIntegrityDrift,
-    onCapabilityConsent: params.onCapabilityConsent,
-    beforePersistentEffect: params.beforePersistentEffect,
   });
-  params.beforePersistentEffect?.();
-  config = update.config;
-  changed ||= update.changed;
-  npmChanged ||= update.changed;
-  Object.assign(installOwnerMigrations, resolvePluginInstallOwnerMigrations(update));
 
   if (beforeIndex && packageUpdateSnapshot) {
     // Reinstall can restore the same path. Reconciliation needs new filesystem facts,
     // including formerly missing files, without retiring a retained runtime generation.
-    const afterIndex = withPluginCache(createPluginCache(), () =>
-      loadInstalledPluginIndex({
-        config,
-        installRecords: config.plugins?.installs ?? {},
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-      }),
-    );
+    const afterIndex = loadFreshIndex(config);
     const reconciled = reconcilePluginPackageUpdateConfig({
       config,
       beforeIndex,
@@ -277,7 +248,7 @@ async function convergePluginReleaseCohortWithLease(
     repairOutcomes,
     updateOutcomes: [
       ...operatorManaged,
-      ...update.outcomes.filter(
+      ...updateOutcomes.filter(
         (outcome) =>
           !operatorManagedIds.has(outcome.pluginId) &&
           (outcome.status !== "skipped" || !repairedMissingPayloadIds.has(outcome.pluginId)),

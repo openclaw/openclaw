@@ -13,6 +13,7 @@ import type { DiffFilePaths } from "../../../lib/chat/tool-call-diff.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import {
   isToolCardError,
+  resolveToolCardDisplay,
   resolveToolCardOutcome,
   type ToolPreview,
 } from "../../../lib/chat/tool-cards.ts";
@@ -25,7 +26,7 @@ import {
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import { renderHighlightedCommand } from "./chat-command-highlight.ts";
 import { renderDiffBlock } from "./chat-diff-render.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 
 function handleRawDetailsToggle(event: Event) {
   // SAFETY: This handler is attached only to the raw-details button below.
@@ -106,10 +107,12 @@ function formatKeyValue(value: unknown): string {
   if (typeof value === "string") {
     return truncateUtf16Safe(value, KV_MAX_VALUE_CHARS);
   }
-  if (value === null || value === undefined) {
-    return String(value);
-  }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+  if (
+    value == null ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
     return String(value);
   }
   try {
@@ -215,20 +218,12 @@ function renderToolWorkspaceFilePath(
 
 /** Neutral end-state line every expanded tool surface closes with. */
 export function renderToolOutcome(outcome: ToolCardOutcome, exitCode?: number) {
+  const key =
+    outcome === "succeeded" ? "completed" : outcome === "unknown" ? "outcomeUnknown" : outcome;
   const label =
-    outcome === "skipped"
-      ? t("chat.toolCards.skipped")
-      : outcome === "failed"
-        ? exitCode === undefined
-          ? t("chat.toolCards.failed")
-          : t("chat.toolCards.exitCode", { code: String(exitCode) })
-        : outcome === "running"
-          ? t("chat.toolCards.running")
-          : outcome === "succeeded"
-            ? t("chat.toolCards.completed")
-            : outcome === "blocked"
-              ? t("chat.toolCards.blocked")
-              : t("chat.toolCards.outcomeUnknown");
+    outcome === "failed" && exitCode !== undefined
+      ? t("chat.toolCards.exitCode", { code: String(exitCode) })
+      : t(`chat.toolCards.${key}`);
   return html`<div class="chat-tool-card__outcome">${label}</div>`;
 }
 
@@ -261,6 +256,17 @@ function renderToolCardModes(
   const id = `${messageKey}:${card.id}`;
   const active = isError || outcome === "skipped" ? "raw" : "diff";
   const modeLabel = t("chat.toolCards.viewMode");
+  const modes = [
+    ["diff", "chat.toolCards.diff", renderDiffBlock(diff, outcome, undefined, file)],
+    [
+      "raw",
+      "chat.toolCards.raw",
+      renderToolDataBlock({
+        ...(isError ? { label: t("chat.toolCards.toolError") } : {}),
+        text: card.outputText!,
+      }),
+    ],
+  ] as const;
   return html`
     <wa-tab-group
       class="chat-tool-card__modes"
@@ -270,43 +276,27 @@ function renderToolCardModes(
       without-scroll-controls
       ${ref((element) => syncTabGroupLabel(element, modeLabel))}
     >
-      <wa-tab
-        slot="nav"
-        id=${`${id}-diff-tab`}
-        aria-controls=${`${id}-diff-panel`}
-        panel="diff"
-        ?active=${active === "diff"}
-      >
-        ${t("chat.toolCards.diff")}
-      </wa-tab>
-      <wa-tab
-        slot="nav"
-        id=${`${id}-raw-tab`}
-        aria-controls=${`${id}-raw-panel`}
-        panel="raw"
-        ?active=${active === "raw"}
-      >
-        ${t("chat.toolCards.raw")}
-      </wa-tab>
-      <wa-tab-panel
-        id=${`${id}-diff-panel`}
-        aria-labelledby=${`${id}-diff-tab`}
-        name="diff"
-        ?active=${active === "diff"}
-      >
-        ${renderDiffBlock(diff, outcome, undefined, file)}
-      </wa-tab-panel>
-      <wa-tab-panel
-        id=${`${id}-raw-panel`}
-        aria-labelledby=${`${id}-raw-tab`}
-        name="raw"
-        ?active=${active === "raw"}
-      >
-        ${renderToolDataBlock({
-          ...(isError ? { label: t("chat.toolCards.toolError") } : {}),
-          text: card.outputText!,
-        })}
-      </wa-tab-panel>
+      ${modes.map(
+        ([mode, label]) => html`<wa-tab
+          slot="nav"
+          id=${`${id}-${mode}-tab`}
+          aria-controls=${`${id}-${mode}-panel`}
+          panel=${mode}
+          ?active=${active === mode}
+        >
+          ${t(label)}
+        </wa-tab>`,
+      )}
+      ${modes.map(
+        ([mode, , content]) => html`<wa-tab-panel
+          id=${`${id}-${mode}-panel`}
+          aria-labelledby=${`${id}-${mode}-tab`}
+          name=${mode}
+          ?active=${active === mode}
+        >
+          ${content}
+        </wa-tab-panel>`,
+      )}
     </wa-tab-group>
   `;
 }
@@ -345,18 +335,19 @@ export function renderExpandedToolCardContent(
     sessionKey,
     agentId,
   };
+  const displayCard = resolveToolCardDisplay(originalCard);
   const unavailable = isLegacyToolOutputUnavailable(originalCard);
-  const outputText = formatToolOutput(originalCard);
+  const outputText = formatToolOutput(displayCard);
   const outputIsLong =
     Math.max(outputText?.length ?? 0, originalCard.outputText?.length ?? 0) >
     TOOL_OUTPUT_PREVIEW_CHARS;
-  const card =
-    outputIsLong && onOpenSidebar && !unavailable
-      ? {
-          ...originalCard,
-          outputText: truncateUtf16Safe(outputText ?? "", TOOL_OUTPUT_PREVIEW_CHARS),
-        }
-      : { ...originalCard, outputText };
+  const card = {
+    ...displayCard,
+    outputText:
+      outputIsLong && onOpenSidebar && !unavailable
+        ? truncateUtf16Safe(outputText ?? "", TOOL_OUTPUT_PREVIEW_CHARS)
+        : outputText,
+  };
   const outputFooter = html`
     ${
       outputText !== originalCard.outputText &&

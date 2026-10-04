@@ -2,8 +2,13 @@ import { Type } from "typebox";
 import { vi } from "vitest";
 import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
-import type { NestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import {
+  buildToolLifecycleErrorResult,
+  prepareToolResult,
+} from "../../embedded-agent-tool-results.js";
+import { createMediaGenerationOperation } from "../../media-generation-activity.js";
+import { resetGeneratedMediaTaskActivityForTests } from "../../media-generation-activity.test-support.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -13,34 +18,48 @@ import {
 import { createResourceLoader } from "../../sessions/agent-session-loop-resource-loader.test-support.js";
 import type { AgentSession } from "../../sessions/agent-session.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { isToolResultError } from "../../tool-result-error.js";
+import { ACTIVE_EMBEDDED_RUNS } from "../run-state.js";
+import {
+  createAttemptNestedToolActivityState,
+  readAttemptNestedToolActivity,
+} from "./attempt-nested-tool-activity.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
 
-export function prepareCatalogExecutor(
-  projections: NestedToolActivity[],
-  options?: {
-    activeSession?: AgentSession;
-    hookRunner?: Parameters<typeof prepareEmbeddedAttemptStream>[0]["hookRunner"];
-    attempt?: Partial<Parameters<typeof prepareEmbeddedAttemptStream>[0]["attempt"]>;
-    getRunState?: () => {
-      aborted: boolean;
-      promptError: unknown;
-      timedOut: boolean;
-      yieldDetected: boolean;
-    };
-    runAbortController?: AbortController;
-    sandboxSessionKey?: string;
-    sessionKey?: string;
-    replyOperation?: ReplyOperation;
-    onAttemptAbort?: () => void;
-    abortRun?: (isTimeout?: boolean, reason?: unknown) => void;
-    markExternalAbort?: () => void;
-    toolProgressDetail?: "explain" | "raw";
-    onAgentEvent?: (event: { stream: string; data: Record<string, unknown> }) => void;
-    trustedLocalMediaToolNames?: ReadonlySet<string>;
-  },
-) {
+export function prepareCatalogExecutor(options?: {
+  activeSession?: AgentSession;
+  sessionManager?: SessionManager;
+  hookRunner?: Parameters<typeof prepareEmbeddedAttemptStream>[0]["agentSession"]["hookRunner"];
+  attempt?: Partial<Parameters<typeof prepareEmbeddedAttemptStream>[0]["attempt"]>;
+  getRunState?: () => {
+    aborted: boolean;
+    promptError: unknown;
+    timedOut: boolean;
+    yieldDetected: boolean;
+  };
+  runAbortController?: AbortController;
+  sandboxSessionKey?: string;
+  sessionKey?: string;
+  replyOperation?: ReplyOperation;
+  onAttemptAbort?: () => void;
+  abortRun?: (isTimeout?: boolean, reason?: unknown) => void;
+  markExternalAbort?: () => void;
+  toolProgressDetail?: "explain" | "raw";
+  onAgentEvent?: (event: { stream: string; data: Record<string, unknown> }) => void;
+  trustedLocalMediaToolNames?: ReadonlySet<string>;
+  streamReplies?: boolean;
+}) {
   const runAbortController = options?.runAbortController ?? new AbortController();
-  return prepareEmbeddedAttemptStream({
+  const nestedToolActivityState = createAttemptNestedToolActivityState();
+  const activeSession =
+    options?.activeSession ??
+    ({
+      agent: {},
+      isStreaming: false,
+      sessionManager: options?.sessionManager ?? SessionManager.inMemory(),
+      subscribe: () => () => {},
+    } as never);
+  const prepared = prepareEmbeddedAttemptStream({
     attempt: {
       runId: "run-output-schema",
       sessionId: "session-output-schema",
@@ -51,23 +70,27 @@ export function prepareCatalogExecutor(
       onAgentEvent: options?.onAgentEvent,
       ...options?.attempt,
     } as never,
-    activeSession:
-      options?.activeSession ??
-      ({
-        agent: {},
-        isStreaming: false,
-        sessionManager: SessionManager.inMemory(),
-        subscribe: () => () => {},
-      } as never),
-    hookRunner: options?.hookRunner ?? null,
+    agentSession: {
+      activeSession,
+      hookRunner: options?.hookRunner ?? null,
+      clientToolCallSlots: [],
+      hasDeliveredSourceReply: () => false,
+      markSourceReplyDelivered: vi.fn(),
+      builtinToolNames: new Set(),
+      sourceReplyCapableToolNames: new Set(),
+      coreBuiltinToolNames: new Set(),
+      replaySafeToolNames: new Set(),
+      codeModeExecToolNames: new Set(),
+      sideEffectToolOwners: new Map(),
+      trustedLocalMediaToolNames: new Set(options?.trustedLocalMediaToolNames),
+    },
     hookAgentId: "main",
     diagnosticTrace: {} as never,
     diagnosticOwner: createDiagnosticEmbeddedRunOwner({
       sessionId: "session-output-schema",
       runId: "run-output-schema",
     }),
-    clientToolCallSlots: [],
-    nestedToolActivities: projections,
+    nestedToolActivityState,
     isReplaySafeTool: () => false,
     runAbortController,
     abortRun: options?.abortRun ?? vi.fn(),
@@ -80,15 +103,15 @@ export function prepareCatalogExecutor(
         timedOut: false,
         yieldDetected: false,
       })),
-    hasDeliveredSourceReply: () => false,
-    markSourceReplyDelivered: vi.fn(),
-    onBlockReply: vi.fn(),
-    onBlockReplyFlush: vi.fn(),
-    sandboxSessionKey: options?.sandboxSessionKey ?? "agent:main:main",
-    builtinToolNames: new Set(),
-    replaySafeToolNames: new Set(),
-    trustedLocalMediaToolNames: options?.trustedLocalMediaToolNames ?? new Set(),
+    onBlockReply: options?.streamReplies === false ? undefined : vi.fn(),
+    onBlockReplyFlush: options?.streamReplies === false ? undefined : vi.fn(),
   });
+  return {
+    ...prepared,
+    nestedToolActivityState,
+    readActivities: () =>
+      readAttemptNestedToolActivity(activeSession.sessionManager, nestedToolActivityState),
+  };
 }
 
 export function createBeforeFinalizeEvent() {
@@ -106,6 +129,7 @@ export function createBeforeFinalizeEvent() {
     isError: false,
     incompleteTerminalAssistant: false,
     hadDeterministicSideEffect: false,
+    hasPendingContinuation: false,
   };
 }
 
@@ -177,4 +201,114 @@ export async function trackPreparedStreamSubscriptions(
   );
   setSubscribe(actual.subscribeEmbeddedAgentSession);
   return { session, listeners, releases };
+}
+
+export function createCatalogSubscription() {
+  return {
+    unsubscribe: vi.fn(),
+    toolMetas: [],
+    runToolLifecycle: vi.fn(async ({ args, execute, onTerminal }) => {
+      try {
+        const result = await execute(() => undefined);
+        await onTerminal?.({
+          result,
+          readSanitizedResult: prepareToolResult(result),
+          isError: isToolResultError(result),
+          executedArguments: structuredClone(args),
+          effectReceipt: { state: "uncertain" },
+        });
+        return result;
+      } catch (error) {
+        const result = buildToolLifecycleErrorResult(error);
+        await onTerminal?.({
+          result,
+          readSanitizedResult: prepareToolResult(result),
+          isError: true,
+          executedArguments: structuredClone(args),
+          effectReceipt: { state: "uncertain" },
+        });
+        throw error;
+      }
+    }),
+    isCompacting: vi.fn(() => false),
+  };
+}
+
+export async function observeTerminalRunActivity(
+  scenario: "ordinary" | "cancelled" | "deferred cancellation" | "pending task",
+  setSubscribe: Parameters<typeof trackPreparedStreamSubscriptions>[0],
+) {
+  resetGeneratedMediaTaskActivityForTests();
+  try {
+    const { session, listeners } = await trackPreparedStreamSubscriptions(setSubscribe);
+    const sessionKey = "agent:main:cron:terminal-ownership:run:run-output-schema";
+    const cancelled = scenario === "cancelled" || scenario === "deferred cancellation";
+    const deferred = scenario === "deferred cancellation";
+    const runAbortController = new AbortController();
+    if (cancelled) {
+      runAbortController.abort();
+    }
+    if (scenario === "pending task") {
+      createMediaGenerationOperation({
+        taskId: "tool:image_generate:terminal",
+        status: "running",
+        createdAt: 1,
+        taskKind: "image_generation",
+        sourceId: "image_generate:terminal",
+        requesterSessionKey: sessionKey,
+        runId: "tool:image_generate:terminal",
+        task: "finish image before releasing run",
+        startedAt: 1,
+        lastEventAt: 1,
+      });
+    }
+    const terminalEvents: Array<{ phase: unknown; active: boolean }> = [];
+    const prepared = prepareCatalogExecutor({
+      activeSession: session,
+      sessionKey,
+      runAbortController,
+      getRunState: () => ({
+        aborted: cancelled,
+        promptError: undefined,
+        timedOut: false,
+        yieldDetected: false,
+      }),
+      attempt: deferred
+        ? { deferTerminalLifecycle: true, onDeferredLifecycleOwner: () => {} }
+        : undefined,
+      onAgentEvent: (event) => {
+        if (event.stream === "lifecycle") {
+          terminalEvents.push({
+            phase: event.data.phase,
+            active: ACTIVE_EMBEDDED_RUNS.has("session-output-schema"),
+          });
+        }
+      },
+    });
+    try {
+      const activeBefore =
+        ACTIVE_EMBEDDED_RUNS.get("session-output-schema") === prepared.queueHandle;
+      for (const listener of listeners) {
+        await listener({ type: "agent_end", messages: [], willRetry: false });
+      }
+      await prepared.subscription.waitForPendingEvents();
+      return {
+        activeBefore,
+        terminalEvents,
+        activeAfter: ACTIVE_EMBEDDED_RUNS.has("session-output-schema"),
+      };
+    } finally {
+      try {
+        await prepared.subscription.waitForPendingEvents();
+      } finally {
+        prepared.deferredLifecycleOwner?.discard();
+        prepared.subscription.unsubscribe();
+        const { clearActiveEmbeddedRun } =
+          await vi.importActual<typeof import("../runs.js")>("../runs.js");
+        clearActiveEmbeddedRun("session-output-schema", prepared.queueHandle, sessionKey);
+      }
+    }
+  } finally {
+    resetGeneratedMediaTaskActivityForTests();
+  }
 }

@@ -2,7 +2,7 @@
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { parseVideoGenerationModelRef } from "../media-generation/model-ref.js";
+import { createMediaProviderLookup } from "../media-generation/provider-registry.js";
 import {
   getVideoGenerationProvider,
   listVideoGenerationProviders,
@@ -10,15 +10,9 @@ import {
 } from "../media-generation/registry.js";
 import {
   buildMediaGenerationNormalizationMetadata,
-  buildNoCapabilityModelConfiguredMessage,
-  resolveCapabilityModelCandidates,
   resolveMediaProviderRequestTimeoutMs,
   runMediaGenerationCandidates,
 } from "../media-generation/runtime-shared.js";
-import {
-  buildCapabilityProviderIndex,
-  normalizeCapabilityProviderId,
-} from "../plugins/provider-registry-shared.js";
 import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
 import {
@@ -45,19 +39,8 @@ type VideoGenerationRuntimeDeps = {
 export type { GenerateVideoParams, GenerateVideoRuntimeResult } from "./runtime-types.js";
 
 /**
- * Validate agent-supplied providerOptions against the candidate's declared
- * schema. Returns a human-readable skip reason when the candidate cannot
- * accept the supplied options, or undefined when everything checks out.
- *
- * Backward-compatible behavior:
- * - Provider declares no schema (undefined): pass options through as-is.
- *   The provider receives them and may silently ignore unknown keys. This is
- *   the safe default for legacy / not-yet-migrated providers.
- * - Provider explicitly declares an empty schema ({}): rejects any options.
- *   This is the opt-in signal that the provider has been audited and truly
- *   supports no options.
- * - Provider declares a typed schema: validates each key name and value type,
- *   skipping the candidate on any mismatch.
+ * Missing declarations preserve legacy providerOptions passthrough; an empty
+ * declaration rejects options. Declared keys require their specified types.
  */
 function validateProviderOptionsAgainstDeclaration(params: {
   providerId: string;
@@ -67,10 +50,7 @@ function validateProviderOptionsAgainstDeclaration(params: {
 }): string | undefined {
   const { providerId, model, providerOptions, declaration } = params;
   const keys = Object.keys(providerOptions);
-  if (keys.length === 0) {
-    return undefined;
-  }
-  if (declaration === undefined) {
+  if (keys.length === 0 || declaration === undefined) {
     return undefined;
   }
   if (Object.keys(declaration).length === 0) {
@@ -98,19 +78,6 @@ function validateProviderOptionsAgainstDeclaration(params: {
   return undefined;
 }
 
-function buildNoVideoGenerationModelConfiguredMessage(
-  cfg: OpenClawConfig,
-  deps: VideoGenerationRuntimeDeps,
-): string {
-  const listProviders = deps.listProviders ?? listVideoGenerationProviders;
-  return buildNoCapabilityModelConfiguredMessage({
-    capabilityLabel: "video-generation",
-    modelConfigKey: "mediaModels.video",
-    providers: listProviders(cfg),
-    getProviderEnvVars: deps.getProviderEnvVars,
-  });
-}
-
 export function listRuntimeVideoGenerationProviders(
   params?: { config?: OpenClawConfig },
   deps: VideoGenerationRuntimeDeps = {},
@@ -126,17 +93,11 @@ export async function generateVideo(
     return runVideoGeneration(params, deps);
   }
   return withVideoGenerationProviders(params.cfg, (providers) => {
-    const canonical = buildCapabilityProviderIndex(providers, "canonical");
-    const aliases = buildCapabilityProviderIndex(providers, "aliases");
+    const lookup = createMediaProviderLookup(providers);
     return runVideoGeneration(params, {
       ...deps,
-      getProvider:
-        deps.getProvider ??
-        ((id) => {
-          const normalized = normalizeCapabilityProviderId(id);
-          return normalized ? aliases.get(normalized) : undefined;
-        }),
-      listProviders: deps.listProviders ?? (() => [...canonical.values()]),
+      getProvider: deps.getProvider ?? lookup.getProvider,
+      listProviders: deps.listProviders ?? lookup.listProviders,
     });
   });
 }
@@ -151,25 +112,10 @@ async function runVideoGeneration(
   const requestedTimeoutMs =
     params.timeoutMs ??
     resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.mediaModels?.video);
-  const candidates = resolveCapabilityModelCandidates({
-    cfg: params.cfg,
-    modelConfig: params.cfg.agents?.defaults?.mediaModels?.video,
-    modelOverride: params.modelOverride,
-    parseModelRef: parseVideoGenerationModelRef,
-    agentDir: params.agentDir,
-    listProviders,
-    autoProviderFallback: params.autoProviderFallback,
-  });
-  if (candidates.length === 0) {
-    throw new Error(buildNoVideoGenerationModelConfiguredMessage(params.cfg, deps));
-  }
 
   let skipWarnEmitted = false;
   const warnOnFirstSkip = (reason: string) => {
-    // Skip events are common in normal fallback flow, so log the *first* one in
-    // a request at warn level with the reason, and leave the rest at debug.
-    // This gives the operator visible feedback that their primary provider was
-    // passed over without flooding logs on long fallback chains.
+    // Only the first skipped candidate warrants a warning; callers log the rest at debug.
     if (!skipWarnEmitted) {
       skipWarnEmitted = true;
       logger.warn(`video-generation candidate skipped: ${reason}`);
@@ -177,11 +123,15 @@ async function runVideoGeneration(
   };
 
   return runMediaGenerationCandidates({
-    candidates,
+    request: params,
+    listProviders,
+    getProviderEnvVars: deps.getProviderEnvVars,
     capability: "video",
     getProvider: (providerId) => getProvider(providerId, params.cfg),
     onFailure: (attempt) => {
-      logger.debug(`video-generation candidate failed: ${attempt.provider}/${attempt.model}`);
+      logger.warn(
+        `video-generation candidate failed: ${attempt.provider}/${attempt.model}: ${attempt.error}`,
+      );
     },
     async prepareCandidate(candidate, provider) {
       const timeoutMs = resolveMediaProviderRequestTimeoutMs({
@@ -220,26 +170,15 @@ async function runVideoGeneration(
         return capabilityMismatch;
       }
 
-      // Guard: skip candidates that do not accept the requested providerOptions keys,
-      // or whose declared providerOptions schema does not match the supplied value
-      // types. Same skip-in-fallback rationale as the audio guard above — we never
-      // want to silently forward provider-specific options to the wrong provider,
-      // but we also do not want to block valid fallback candidates that *do* accept
-      // them. Providers opt in by declaring `capabilities.providerOptions` on the
-      // active mode or on the flat provider capabilities.
-      if (
-        params.providerOptions &&
-        typeof params.providerOptions === "object" &&
-        Object.keys(params.providerOptions).length > 0
-      ) {
-        const { capabilities: optCaps } = resolveVideoGenerationModeCapabilities({
-          provider: activeProvider,
-          model: candidate.model,
-          inputImageCount,
-          inputVideoCount,
-        });
+      const { capabilities: modeCapabilities } = resolveVideoGenerationModeCapabilities({
+        provider: activeProvider,
+        model: candidate.model,
+        inputImageCount,
+        inputVideoCount,
+      });
+      if (params.providerOptions) {
         const declaredOptions =
-          optCaps?.providerOptions ?? activeProvider.capabilities.providerOptions ?? undefined;
+          modeCapabilities?.providerOptions ?? activeProvider.capabilities.providerOptions;
         const mismatch = validateProviderOptionsAgainstDeclaration({
           providerId: candidate.provider,
           model: candidate.model,
@@ -255,10 +194,7 @@ async function runVideoGeneration(
         }
       }
 
-      // Guard: skip candidates whose maxDurationSeconds hard cap is below the requested
-      // duration. Only applies when the provider uses a simple max with no explicit
-      // supported-durations list — when a list exists, runtime normalization snaps to the
-      // nearest valid value so skipping is not appropriate.
+      // Explicit duration lists use normalization's nearest-value snapping instead of this cap.
       const supportedDurations = resolveVideoGenerationSupportedDurations({
         provider: activeProvider,
         model: candidate.model,
@@ -267,14 +203,8 @@ async function runVideoGeneration(
       });
       const requestedDuration = params.durationSeconds;
       if (typeof requestedDuration === "number" && Number.isFinite(requestedDuration)) {
-        const { capabilities: durCaps } = resolveVideoGenerationModeCapabilities({
-          provider: activeProvider,
-          model: candidate.model,
-          inputImageCount,
-          inputVideoCount,
-        });
         const maxDuration =
-          durCaps?.maxDurationSeconds ?? activeProvider.capabilities.maxDurationSeconds;
+          modeCapabilities?.maxDurationSeconds ?? activeProvider.capabilities.maxDurationSeconds;
         if (
           !supportedDurations &&
           typeof maxDuration === "number" &&

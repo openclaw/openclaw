@@ -9,8 +9,10 @@ import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/sessio
 import type { SessionEntry } from "../config/sessions/types.js";
 import { MODEL_SELECTION_LOCKED_RESET_MESSAGE } from "../sessions/model-overrides.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import { createSessionMutationTestClient } from "./server-methods/sessions-mutations.owner.test-support.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsHandlerTestHarness,
@@ -33,9 +35,7 @@ test("sessions.reset stamps provenance when it materializes a missing row", asyn
     "sessions.reset",
     { key: "agent:main:subagent:missing" },
     {
-      client: {
-        authenticatedUserProfile: { profileId: "profile-reset-creator" },
-      } as never,
+      client: createSessionMutationTestClient("profile-reset-creator"),
     },
   );
 
@@ -47,7 +47,7 @@ test("sessions.reset stamps provenance when it materializes a missing row", asyn
   });
   expect(reset.payload?.entry).not.toHaveProperty("sandbox");
   expect(
-    listSessionStateEventsSince("agent:main:subagent:missing", "main", 0, 20).events,
+    (await listSessionStateEventsSince("agent:main:subagent:missing", "main", 0, 20)).events,
   ).toContainEqual(
     expect.objectContaining({
       kind: "created",
@@ -84,9 +84,7 @@ test("sessions.reset stamps the creator's required sandbox only when materializi
       "sessions.reset",
       { key },
       {
-        client: {
-          authenticatedUserProfile: { profileId: profile.id },
-        } as never,
+        client: createSessionMutationTestClient(profile.id),
       },
     );
 
@@ -590,6 +588,7 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
         createdVia: "spawn",
         createdActor: { type: "agent", id: "agent:main:main" },
         createdAt: 1_000,
+        inheritedGitContributorProfileIds: ["original-contributor"],
         forkSource: {
           sessionKey: "agent:main:root",
           sessionId: "root-session",
@@ -607,6 +606,7 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
 
   expect(reset.ok).toBe(true);
   expectOwnedChildMetadata(reset.payload?.entry);
+  expect(reset.payload?.entry).not.toHaveProperty("inheritedGitContributorProfileIds");
   expect(reset.payload?.entry).toMatchObject({
     createdVia: "spawn",
     createdActor: { type: "agent", id: "agent:main:main" },
@@ -624,6 +624,7 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
     createdVia: "spawn",
     createdActor: { type: "agent", id: "agent:main:main" },
     createdAt: 1_000,
+    inheritedGitContributorProfileIds: ["original-contributor"],
     forkSource: {
       sessionKey: "agent:main:root",
       sessionId: "root-session",

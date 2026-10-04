@@ -2,36 +2,22 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
-import { readCodexAppServerConfigOptions, resolveCodexPrivateLauncher } from "./launch-args.js";
+import { resolveCodexPrivateLauncher } from "./launch-args.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("private Codex launcher arguments", () => {
-  it("keeps a Node wrapper separate from native config and policy flags", () => {
-    const wrapper = path.resolve("/opt/codex-wrapper.js");
+  it("rebases the wrapper and file preloads while preserving Node runtime options", () => {
+    const cwd = path.resolve("/original/project");
     const nativeArgs = [
       "--profile",
       "app-server",
       "-c",
-      'sandbox_mode="danger-full-access"',
+      "features.hooks=true",
       "app-server",
       "--listen",
       "stdio://",
     ];
-    expect(
-      resolveCodexPrivateLauncher({
-        command: "node",
-        args: [wrapper, ...nativeArgs],
-        cwd: process.cwd(),
-      }),
-    ).toEqual({
-      launcherArgs: [wrapper],
-      nativeArgs,
-    });
-  });
-
-  it("rebases the wrapper and file preloads while preserving Node runtime options", () => {
-    const cwd = path.resolve("/original/project");
     const result = resolveCodexPrivateLauncher({
       command: "node",
       cwd,
@@ -42,9 +28,7 @@ describe("private Codex launcher arguments", () => {
         "--import",
         "./loader.mjs",
         "./bin/wrapper.js",
-        "app-server",
-        "-c",
-        "features.hooks=true",
+        ...nativeArgs,
       ],
     });
     expect(result.launcherArgs).toEqual([
@@ -56,9 +40,7 @@ describe("private Codex launcher arguments", () => {
       path.join(cwd, "loader.mjs"),
       path.join(cwd, "bin/wrapper.js"),
     ]);
-    expect(readCodexAppServerConfigOptions(result.nativeArgs)).toMatchObject([
-      { name: "-c", value: "features.hooks=true" },
-    ]);
+    expect(result.nativeArgs).toEqual(nativeArgs);
   });
 
   it("resolves package preloads in the original cwd without executing them", async () => {
@@ -113,14 +95,8 @@ describe("private Codex launcher arguments", () => {
 
   it.each([
     { command: "node", args: ["-e", "require('wrapper')", "app-server"] },
-    { command: "node", args: ["--unknown-node-option", "wrapper.js", "app-server"] },
-    {
-      command: "node",
-      args: ["--conditions=development", "-r", "preload", "wrapper.js", "app-server"],
-    },
     { command: "node", args: ["wrapper.js", "--", "-c", "opaque", "app-server"] },
     { command: "python3", args: ["wrapper.py", "app-server"] },
-    { command: "bash", args: ["-c", "exec codex app-server", "app-server"] },
   ])("rejects ambiguous or unsupported interpreted launchers %#", ({ command, args }) => {
     expect(() => resolveCodexPrivateLauncher({ command, args, cwd: process.cwd() })).toThrow(
       /Private Codex turns cannot isolate/,

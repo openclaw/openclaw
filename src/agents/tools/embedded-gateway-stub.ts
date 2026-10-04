@@ -1,9 +1,4 @@
-/**
- * Embedded-mode Gateway method stub.
- *
- * Implements only the Gateway calls needed by session tools and rejects unsupported methods.
- */
-import { normalizeFastMode, type FastMode } from "@openclaw/normalization-core/string-coerce";
+import { normalizeFastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionsListParams,
   SessionsResolveParams,
@@ -12,6 +7,7 @@ import type { CallGatewayOptions } from "../../gateway/call.js";
 import type { SessionRowProjection } from "../../gateway/session-row-projection.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { parseAgentSessionKey, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
 import {
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
@@ -22,9 +18,7 @@ type EmbeddedCallGateway = <T = Record<string, unknown>>(opts: CallGatewayOption
 
 const SESSIONS_SEARCH_MAX_QUERY_CHARS = 4096;
 
-type EmbeddedGatewayRuntime = typeof import("./embedded-gateway-stub.runtime.js");
-
-let runtimeMod: EmbeddedGatewayRuntime | undefined;
+const getRuntime = createLazyPromise(() => import("./embedded-gateway-stub.runtime.js"));
 let sessionProjection: Promise<SessionRowProjection> | undefined;
 
 export function bindEmbeddedSessionRowProjection(projection: Promise<SessionRowProjection>) {
@@ -48,14 +42,6 @@ async function borrowSessionRowProjection() {
   return projection;
 }
 
-async function getRuntime(): Promise<EmbeddedGatewayRuntime> {
-  if (!runtimeMod) {
-    // Lazy import keeps embedded tools cheap and gives tests a single mock boundary.
-    runtimeMod = await import("./embedded-gateway-stub.runtime.js");
-  }
-  return runtimeMod;
-}
-
 function readOffsetParam(params: Record<string, unknown>): number | undefined {
   const offset = readNonNegativeIntegerParam(params, "offset");
   if (params.offset !== undefined && offset === undefined) {
@@ -74,21 +60,27 @@ async function handleSessionsList(params: Record<string, unknown>) {
 
 async function handleSessionsResolve(params: Record<string, unknown>) {
   const rt = await getRuntime();
-  const resolved = rt.resolveSessionKeyFromResolveParams({
-    projection: await borrowSessionRowProjection(),
-    client: null,
-    p: params as SessionsResolveParams,
-  });
-  if (!resolved.ok) {
-    throw new Error(resolved.error.message);
-  }
-  if ("missing" in resolved) {
-    return { ok: false };
-  }
-  if ("ambiguous" in resolved) {
-    return { ok: false, candidates: resolved.candidates };
-  }
-  return { ok: true, key: resolved.key, agentId: resolved.agentId };
+  const publication = sessionProjection;
+  return await rt.withPreparedSessionResolve(
+    {
+      projection: await borrowSessionRowProjection(),
+      isCurrent: () => sessionProjection === publication,
+      client: null,
+      p: params as SessionsResolveParams,
+    },
+    (resolved) => {
+      if (!resolved.ok) {
+        throw new Error(resolved.error.message);
+      }
+      if ("missing" in resolved) {
+        return { ok: false };
+      }
+      if ("ambiguous" in resolved) {
+        return { ok: false, candidates: resolved.candidates };
+      }
+      return { ok: true, key: resolved.key, agentId: resolved.agentId };
+    },
+  );
 }
 
 async function handleSessionsSearch(params: Record<string, unknown>) {
@@ -157,18 +149,7 @@ async function handleSessionsSearch(params: Record<string, unknown>) {
   };
 }
 
-async function handleChatHistory(params: Record<string, unknown>): Promise<{
-  sessionKey: string;
-  sessionId: string | undefined;
-  messages: unknown[];
-  offset?: number;
-  nextOffset?: number;
-  hasMore?: boolean;
-  totalMessages?: number;
-  thinkingLevel?: string;
-  fastMode?: FastMode;
-  verboseLevel?: string;
-}> {
+async function handleChatHistory(params: Record<string, unknown>) {
   const rt = await getRuntime();
 
   const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey : "";
@@ -221,10 +202,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const historyEntry =
     requestedSessionId && requestedSessionId !== entry?.sessionId ? undefined : entry;
   const resolvedSessionModel = rt.resolveSessionModelRef(cfg, entry, sessionAgentId);
-  const hardMax = 1000;
-  const defaultLimit = 200;
-  const requested = typeof limit === "number" ? limit : defaultLimit;
-  const max = Math.min(hardMax, requested);
+  const max = Math.min(1000, limit ?? 200);
   const maxHistoryBytes = rt.getMaxChatHistoryMessagesBytes();
   const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars();
   const page = await rt.readChatHistoryPage({
@@ -256,7 +234,8 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
         messageCost: (message) => jsonUtf8Bytes(message) + 1,
       }) ?? rt.capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items)
     : rt.capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
-  const pagination = params.offset === undefined ? undefined : page.pagination;
+  const responseOffset = page.responseOffset ?? (params.offset === undefined ? undefined : offset);
+  const pagination = responseOffset === undefined ? undefined : page.pagination;
   const nextOffset =
     pagination !== undefined
       ? rt.resolveChatHistoryNextOffset({
@@ -265,19 +244,22 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
           offset: pagination.offset,
           rawPageMessages: pagination.rawPageMessages,
           projected: page.messages,
+          ...(pagination.messageSequences ? { messageSequences: pagination.messageSequences } : {}),
         })
       : 0;
-  const hasMore =
-    pagination !== undefined &&
-    pagination.exhausted !== true &&
-    nextOffset < pagination.totalMessages;
+  const hasMore = pagination !== undefined && nextOffset < pagination.totalMessages;
 
   return {
     sessionKey,
     sessionId,
     messages: capped,
-    ...(params.offset !== undefined
-      ? { offset, hasMore, totalMessages: pagination?.totalMessages ?? page.messages.length }
+    ...(page.windowReset ? { windowReset: true } : {}),
+    ...(responseOffset !== undefined
+      ? {
+          offset: responseOffset,
+          hasMore,
+          totalMessages: pagination?.totalMessages ?? page.messages.length,
+        }
       : {}),
     ...(hasMore ? { nextOffset } : {}),
     thinkingLevel: entry?.thinkingLevel,

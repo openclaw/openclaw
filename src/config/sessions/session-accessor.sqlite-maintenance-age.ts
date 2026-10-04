@@ -1,6 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
-import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
+import {
+  deferSqlitePostCommitPublication,
+  stageSqliteTransactionState,
+} from "../../infra/sqlite-post-commit.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readSessionMaintenanceAgeQueries } from "./session-accessor.sqlite-maintenance-age-queries.js";
 import { hasCanonicalSessionValidationProjection } from "./session-canonical-key.js";
@@ -17,6 +21,68 @@ export type SessionEntryMaintenanceAgeFact = {
   recheckAt: number;
 };
 export type SessionEntryMaintenanceAgeCapture = { fact?: SessionEntryMaintenanceAgeFact };
+type MaintenanceActivity = Pick<
+  SessionEntry,
+  "updatedAt" | "lastActivityAt" | "lastInteractionAt" | "sessionStartedAt" | "archivedAt"
+>;
+export type SessionEntryMaintenanceAgeChange = {
+  sessionKey: string;
+  entry: MaintenanceActivity;
+  previousEntry?: MaintenanceActivity;
+};
+const changeObservers = new Map<
+  string | symbol,
+  Set<(change: SessionEntryMaintenanceAgeChange) => void>
+>();
+
+export function captureSessionEntryMaintenanceAgeChange(
+  change: SessionEntryMaintenanceAgeChange,
+): SessionEntryMaintenanceAgeChange {
+  const pick = ({
+    updatedAt,
+    lastActivityAt,
+    lastInteractionAt,
+    sessionStartedAt,
+    archivedAt,
+  }: MaintenanceActivity) => ({
+    updatedAt,
+    lastActivityAt,
+    lastInteractionAt,
+    sessionStartedAt,
+    archivedAt,
+  });
+  return {
+    sessionKey: change.sessionKey,
+    entry: pick(change.entry),
+    previousEntry: change.previousEntry && pick(change.previousEntry),
+  };
+}
+
+export function observeSessionEntryMaintenanceAgeChanges(
+  identity: string | symbol,
+  observe: (change: SessionEntryMaintenanceAgeChange) => void,
+): () => void {
+  const observers = changeObservers.get(identity) ?? new Set();
+  observers.add(observe);
+  changeObservers.set(identity, observers);
+  return () => {
+    observers.delete(observe);
+    if (!observers.size && changeObservers.get(identity) === observers) {
+      changeObservers.delete(identity);
+    }
+  };
+}
+
+export function publishSessionEntryMaintenanceAgeChanges(
+  identity: string | symbol,
+  changes: readonly SessionEntryMaintenanceAgeChange[],
+): void {
+  for (const change of changes) {
+    for (const observe of changeObservers.get(identity) ?? []) {
+      observe(change);
+    }
+  }
+}
 
 type Activity = Parameters<typeof getSessionMaintenanceActivityAt>[0];
 
@@ -69,7 +135,7 @@ export function readSessionEntryMaintenanceAgeFact(
   return fact;
 }
 
-/** Capture identity stays local; only its scalar fact crosses the Worker boundary. */
+/** Capture identity stays on the connection that owns maintenance planning. */
 export function captureSessionEntryMaintenanceAgeFact(
   db: DatabaseSync,
   maintenance: ResolvedSessionMaintenanceConfig,
@@ -83,25 +149,6 @@ export function captureSessionEntryMaintenanceAgeFact(
   return capture;
 }
 
-export function isSessionEntryMaintenanceAgeCaptureCurrent(
-  db: DatabaseSync,
-  capture: SessionEntryMaintenanceAgeCapture,
-): boolean {
-  return ageFacts.get(db) === capture;
-}
-
-export function adoptSessionEntryMaintenanceAgeFact(
-  db: DatabaseSync,
-  capture: SessionEntryMaintenanceAgeCapture,
-  fact: SessionEntryMaintenanceAgeFact | undefined,
-): void {
-  // A synchronous writer can run after native commit but before parent settlement.
-  // Keep its newer state without turning an already committed result into failure.
-  if (isSessionEntryMaintenanceAgeCaptureCurrent(db, capture)) {
-    capture.fact = fact;
-  }
-}
-
 function isDashboardKey(key: string): boolean {
   return parseAgentSessionKey(key)?.rest.startsWith("dashboard:") === true;
 }
@@ -109,7 +156,24 @@ function isDashboardKey(key: string): boolean {
 /** Tracked writes can only bring the conservative age boundary forward. */
 export function advanceSessionEntryMaintenanceAgeFact(
   db: DatabaseSync,
-  update: { sessionKey: string; entry: SessionEntry; previousEntry?: SessionEntry },
+  update: SessionEntryMaintenanceAgeChange,
+): void {
+  if (changeObservers.size) {
+    const identity = findOpenClawAgentDatabaseIdentity({ db })?.identity;
+    if (identity !== undefined && changeObservers.has(identity)) {
+      const change = captureSessionEntryMaintenanceAgeChange(update);
+      const publish = () => publishSessionEntryMaintenanceAgeChanges(identity, [change]);
+      if (!deferSqlitePostCommitPublication(db, publish) && !db.isTransaction) {
+        publish();
+      }
+    }
+  }
+  applySessionEntryMaintenanceAgeChange(db, update);
+}
+
+export function applySessionEntryMaintenanceAgeChange(
+  db: DatabaseSync,
+  update: SessionEntryMaintenanceAgeChange,
 ): void {
   const fact = ageFacts.get(db)?.fact;
   if (!fact) {
@@ -167,11 +231,8 @@ function nextEntryAgeAt(
     [activityAt, isDashboardKey(key) ? maintenance.archiveDashboardAfterMs : null],
     [activityAt, maintenance.preserveRecentMs],
   ]) {
-    if (timestamp != null && age != null && age > 0) {
-      const at = timestamp + age + 1;
-      if (at > now) {
-        next = Math.min(next, at);
-      }
+    if (timestamp != null) {
+      next = Math.min(next, nextAgeAt(timestamp, age, now));
     }
   }
   return next;
@@ -198,10 +259,10 @@ function readActivityAt(row: {
 
 /** The caller's transaction keeps these indexed probes in one snapshot. */
 export function recordSessionEntryMaintenanceAgeFact(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   maintenance: ResolvedSessionMaintenanceConfig,
   plannedAt: number,
-): void {
+): SessionEntryMaintenanceAgeFact {
   const next = { at: Infinity };
   const fact: SessionEntryMaintenanceAgeFact = {
     maintenance,
@@ -249,6 +310,7 @@ export function recordSessionEntryMaintenanceAgeFact(
     }
   }
   stageSessionEntryMaintenanceAgeFact(database.db, fact);
+  return fact;
 }
 
 /** The kick uses the same periodic deadline as inline maintenance callers. */

@@ -129,6 +129,7 @@ vi.mock("./attempt-execution.shared.js", () => ({
   persistAgentSession: async ({ entry }: { entry?: SessionEntry }) => entry,
 }));
 vi.mock("./model-ref.js", () => ({
+  normalizeExplicitOverrideInput: (value: string) => value.trim() || undefined,
   normalizeAgentCommandModelRef: (_cfg: OpenClawConfig, provider: string, model: string) => ({
     provider,
     model,
@@ -144,9 +145,6 @@ vi.mock("./model-ref.js", () => ({
       ? { provider: raw.slice(0, slash), model: raw.slice(slash + 1) }
       : { provider: defaultProvider, model: raw };
   },
-}));
-vi.mock("./prepare.js", () => ({
-  normalizeExplicitOverrideInput: (value: string) => value.trim() || undefined,
 }));
 vi.mock("./runtime-loaders.js", () => ({
   loadTranscriptResolveRuntime: async () => ({

@@ -9,7 +9,7 @@ import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 
-const { executionParams, mocks, successfulUpdate } =
+const { bindExecutionGuards, executionParams, mocks, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
 
 describe("update target admission", () => {
@@ -88,7 +88,7 @@ describe("update target admission", () => {
           mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admitExecutor) => {
             admitExecutor(await executor.enter(dir));
           });
-          return executeMutableUpdate(params);
+          return executeMutableUpdate(await bindExecutionGuards(params));
         });
         expect(result?.result).toMatchObject({
           status: "error",

@@ -1,5 +1,6 @@
-import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { releaseCompletionCustody } from "./native-subagent-admission-custody.js";
+import type { CodexNativeSubagentAssignmentInventory } from "./native-subagent-assignment-inventory.js";
 import type { CodexNativeSubagentCloseOwner } from "./native-subagent-close-owner.js";
 import { CodexNativeSubagentDeliveryReceipts } from "./native-subagent-delivery-receipts.js";
 import {
@@ -7,23 +8,24 @@ import {
   notifyNativeModelSourceWaiters,
 } from "./native-subagent-model-source.js";
 import type {
-  ChildState,
-  NativeModelMapping,
   NativeModelBinding,
   NativeModelSource,
   NativeSubagentMonitorRuntime,
   ParentOwner,
+  ParentRegistrationHandle,
   ParentState,
 } from "./native-subagent-monitor-types.js";
 import type { CodexNativeSubagentSubmissionOwner } from "./native-subagent-submission-owner.js";
+import { isJsonObject, type CodexServerNotification } from "./protocol.js";
 
 export type NativeParentRegistration = Pick<
   ParentState,
   | "parentThreadId"
   | "requesterSessionKey"
-  | "taskRuntimeScope"
+  | "completionScope"
   | "historyOwner"
   | "submissionStore"
+  | "assignmentStore"
   | "agentId"
 > &
   Pick<
@@ -32,24 +34,23 @@ export type NativeParentRegistration = Pick<
     | "rejectPendingDirectChild"
     | "onDirectChildAccepted"
     | "configurationQualification"
+    | "isTurnYielded"
   > & {
     /** Explicit undefined records System; omission leaves model custody unknown. */
     modelSource?: NativeModelSource;
+    assertCurrent?: () => void;
     unqualifiedModelExecution?: true;
     onUnqualifiedModelCancelled?: (reason: unknown) => void;
   };
 
 type ParentDependencies = {
   states: Map<string, ParentState>;
-  children: ReadonlyMap<string, ChildState>;
   isClosed: () => boolean;
   isRetired: (state: ParentState) => boolean;
   runtime: Pick<NativeSubagentMonitorRuntime, "captureAgentHarnessCompletionCustody">;
-  prepare: (state: ParentState) => void;
-  reconcile: (state: ParentState, owner: ParentOwner) => Promise<void>;
+  assignments: Pick<CodexNativeSubagentAssignmentInventory, "restore" | "drain">;
   submissions: Pick<CodexNativeSubagentSubmissionOwner, "restore" | "bind" | "drain">;
   closes: Pick<CodexNativeSubagentCloseOwner, "bind" | "prune" | "settlements">;
-  deliverPending: (state: ParentState, child: ChildState) => Promise<void>;
   deliverDetached: (state: ParentState) => void;
   drainAdmissions: (state: ParentState, owner: ParentOwner, turnId: string) => void;
   clearAdmissions: () => void;
@@ -57,37 +58,58 @@ type ParentDependencies = {
   interruptModelExecution?: (threadId: string, turnId: string) => void;
 };
 
+export function canNativeParentConsumeCompletion(state: ParentState, turnId?: string): boolean {
+  if (
+    !turnId ||
+    !state.turnIds.has(turnId) ||
+    state.completedModelTurnsBeforeBinding?.has(turnId)
+  ) {
+    return false;
+  }
+  const owners = [...state.owners.values()];
+  const bound = owners.find((owner) => owner.turnId === turnId);
+  const candidates = bound ? [bound] : owners.filter((owner) => !owner.turnId);
+  const owner = candidates.length === 1 ? candidates[0] : undefined;
+  // Native input queues without starting a turn. Keep unconsumed completions
+  // pending for detached delivery when the foreground owner can no longer run.
+  return Boolean(
+    owner &&
+    !owner.modelExecutionSettled &&
+    !owner.modelExecutionCancelled &&
+    !owner.isTurnYielded?.(),
+  );
+}
+
 export function observeNativeParentTurn(
   state: ParentState,
-  method: string,
-  turnId: string | undefined,
+  notification: CodexServerNotification,
 ): void {
+  const params = isJsonObject(notification.params) ? notification.params : undefined;
+  const turnId = isJsonObject(params?.turn) ? readString(params.turn, "id") : undefined;
   if (!turnId || !state.owners.size) {
     return;
   }
-  if (method === "turn/started") {
+  if (notification.method === "turn/started") {
     state.turnIds.add(turnId);
-  } else if (method === "turn/completed") {
+  } else if (notification.method === "turn/completed") {
     for (const owner of state.owners.values()) {
       if (owner.turnId === turnId) {
         owner.modelExecutionSettled = true;
         owner.nativeReviewRequirement = undefined;
       }
     }
-    if ([...state.owners.values()].some((owner) => owner.modelSource && !owner.turnId)) {
+    if ([...state.owners.values()].some((owner) => !owner.turnId)) {
       (state.completedModelTurnsBeforeBinding ??= new Set()).add(turnId);
     }
   }
 }
 
 /** Registers one foreground admission without owning later admissions to the same thread. */
-export function registerNativeSubagentParent(
-  params: NativeParentRegistration,
+export async function registerNativeSubagentParent(
+  input: NativeParentRegistration,
   dependencies: ParentDependencies,
-): {
-  bindTurn: (turnId: string, mapping?: NativeModelMapping) => void;
-  unregister: () => Promise<void>;
-} {
+): Promise<ParentRegistrationHandle> {
+  const params = { ...input };
   const parentThreadId = params.parentThreadId.trim();
   if (!parentThreadId) {
     throw new Error("Codex native subagent monitor requires a parent thread id");
@@ -106,6 +128,7 @@ export function registerNativeSubagentParent(
   if (!state) {
     state = {
       parentThreadId,
+      preparing: true,
       owners: new Map(),
       turnIds: new Set(),
       deliveryReceipts: new CodexNativeSubagentDeliveryReceipts(),
@@ -113,10 +136,8 @@ export function registerNativeSubagentParent(
     dependencies.states.set(parentThreadId, state);
   }
   state.requesterSessionKey ??= params.requesterSessionKey;
-  state.taskRuntimeScope ??= params.taskRuntimeScope;
-  state.historyOwner ??= params.historyOwner;
-  state.submissionStore ??= params.submissionStore;
-  state.agentId ??= params.agentId;
+  const requesterSessionKey = state.requesterSessionKey;
+  state.pendingRegistrations = (state.pendingRegistrations ?? 0) + 1;
   const registeredState = state;
   const ownerKey = Symbol("codex-native-subagent-owner");
   let owner: ParentOwner = {
@@ -126,24 +147,8 @@ export function registerNativeSubagentParent(
     claimDirectChild: params.claimDirectChild,
     rejectPendingDirectChild: params.rejectPendingDirectChild,
     onDirectChildAccepted: params.onDirectChildAccepted,
+    isTurnYielded: params.isTurnYielded,
   };
-  if (Object.hasOwn(params, "modelSource")) {
-    owner.modelSource = createNativeModelSourceOwner(
-      params.modelSource,
-      state,
-      () => {
-        if (
-          dependencies.isClosed() ||
-          dependencies.isRetired(registeredState) ||
-          dependencies.states.get(parentThreadId) !== registeredState
-        ) {
-          throw new Error("Codex native model source owner is no longer current");
-        }
-      },
-      () => dependencies.prune(registeredState),
-    );
-  }
-  state.owners.set(ownerKey, owner);
   let rootModelBinding: NativeModelBinding | undefined;
   let cancellationReported = false;
   let interruptedTurnId: string | undefined;
@@ -171,9 +176,36 @@ export function registerNativeSubagentParent(
     rootModelBinding = undefined;
   };
   try {
-    owner.completionCustody = params.taskRuntimeScope
-      ? dependencies.runtime.captureAgentHarnessCompletionCustody(params.taskRuntimeScope)
+    owner.completionCustody = params.completionScope
+      ? await dependencies.runtime.captureAgentHarnessCompletionCustody(params.completionScope)
       : undefined;
+    if (
+      dependencies.isClosed() ||
+      dependencies.isRetired(state) ||
+      dependencies.states.get(parentThreadId) !== state ||
+      state.requesterSessionKey !== requesterSessionKey ||
+      (owner.completionCustody && !owner.completionCustody.isCurrent())
+    ) {
+      throw new Error("Codex native subagent parent registration is no longer current");
+    }
+    params.assertCurrent?.();
+    params.modelSource?.assertCurrent();
+    if (Object.hasOwn(params, "modelSource")) {
+      owner.modelSource = createNativeModelSourceOwner(
+        params.modelSource,
+        state,
+        () => {
+          if (
+            dependencies.isClosed() ||
+            dependencies.isRetired(registeredState) ||
+            dependencies.states.get(parentThreadId) !== registeredState
+          ) {
+            throw new Error("Codex native model source owner is no longer current");
+          }
+        },
+        () => dependencies.prune(registeredState),
+      );
+    }
     if (owner.unqualifiedModelExecution && params.modelSource) {
       rootModelBinding = params.modelSource.bindModelExecution?.(undefined);
       if (!rootModelBinding) {
@@ -184,31 +216,35 @@ export function registerNativeSubagentParent(
         cancelUnqualifiedRoot();
       }
     }
-    dependencies.prepare(state);
-    for (const child of dependencies.children.values()) {
-      if (child.parentThreadId === parentThreadId && child.pendingCompletion) {
-        void dependencies.deliverPending(state, child);
-      }
-    }
-    // History recovery remains independent of the foreground start path.
-    void dependencies.reconcile(state, owner).catch((error: unknown) => {
-      embeddedAgentLog.warn("Failed to reconcile Codex native subagent task rows", {
-        parentThreadId,
-        error: formatErrorMessage(error),
-      });
-    });
+    params.assertCurrent?.();
+    state.completionScope ??= params.completionScope;
+    state.historyOwner ??= params.historyOwner;
+    state.submissionStore ??= params.submissionStore;
+    state.agentId ??= params.agentId;
+    state.assignmentStore ??= params.assignmentStore;
+    state.owners.set(ownerKey, owner);
+    state.preparing = undefined;
+    dependencies.deliverDetached(state);
     dependencies.submissions.restore(state, owner);
   } catch (error) {
     releaseRootModelBinding();
     state.owners.delete(ownerKey);
     releaseCompletionCustody(owner);
-    owner.modelSource?.release();
-    dependencies.prune(registeredState);
+    if (owner.modelSource) {
+      owner.modelSource.release();
+    } else {
+      params.modelSource?.release();
+    }
     throw error;
+  } finally {
+    state.pendingRegistrations -= 1;
+    dependencies.prune(registeredState);
   }
+  const ready = dependencies.assignments.restore(state, owner);
   let registered = true;
   let settlement: Promise<void> | undefined;
   return {
+    ready,
     bindTurn: (turnIdInput, mapping) => {
       const turnId = turnIdInput.trim();
       if (!turnId || dependencies.states.get(parentThreadId) !== registeredState) {
@@ -296,10 +332,13 @@ export function registerNativeSubagentParent(
       owner.modelSource?.release();
       notifyNativeModelSourceWaiters(registeredState);
       dependencies.prune(registeredState);
-      settlement = Promise.allSettled([
-        dependencies.submissions.drain(registeredState),
-        ...dependencies.closes.settlements(registeredState),
-      ]).then(() => {});
+      settlement = (async () => {
+        // A confirmed close can enqueue writes after unregister starts.
+        await Promise.allSettled([ready, ...dependencies.closes.settlements(registeredState)]);
+        await Promise.allSettled([dependencies.submissions.drain(registeredState)]);
+        await Promise.allSettled([dependencies.assignments.drain(registeredState)]);
+        dependencies.prune(registeredState);
+      })();
       return settlement;
     },
   };

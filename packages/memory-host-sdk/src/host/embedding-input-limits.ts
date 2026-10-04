@@ -1,3 +1,4 @@
+import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 import type { EmbeddingInput } from "./embedding-inputs.js";
 
 // Helpers for enforcing embedding model input size limits.
@@ -7,9 +8,6 @@ import type { EmbeddingInput } from "./embedding-inputs.js";
 // token_count <= utf8_byte_length.
 
 export function estimateUtf8Bytes(text: string): number {
-  if (!text) {
-    return 0;
-  }
   return Buffer.byteLength(text, "utf8");
 }
 
@@ -61,23 +59,10 @@ export function splitTextToUtf8ByteLimit(text: string, maxUtf8Bytes: number): st
       best = Math.min(text.length, cursor + 1);
     }
 
-    // Avoid splitting inside a surrogate pair.
-    if (
-      best < text.length &&
-      best > cursor &&
-      text.charCodeAt(best - 1) >= 0xd800 &&
-      text.charCodeAt(best - 1) <= 0xdbff &&
-      text.charCodeAt(best) >= 0xdc00 &&
-      text.charCodeAt(best) <= 0xdfff
-    ) {
-      best -= 1;
-    }
+    // An indivisible code point may exceed the cap, but must never discard the remaining input.
+    best = avoidTrailingHighSurrogateBreak(text, cursor, best);
 
-    const part = text.slice(cursor, best);
-    if (!part) {
-      break;
-    }
-    parts.push(part);
+    parts.push(text.slice(cursor, best));
     cursor = best;
   }
 

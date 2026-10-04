@@ -1,81 +1,50 @@
-/** Selection helpers for filtering migration plan items before apply. */
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { markMigrationItemSkipped, summarizeMigrationItems } from "../../plugin-sdk/migration.js";
 import type { MigrationItem, MigrationPlan } from "../../plugins/types.js";
+import { applyMigrationItemSelection } from "./item-selection.js";
 import { MIGRATION_CONFLICT_REASON_PHRASES } from "./output.js";
+import type { MigrateCommonOptions } from "./types.js";
 
-// Selection tokens are shared with the command and prompt implementations.
 const MIGRATION_NOT_SELECTED_REASON = "not selected for migration";
 export const MIGRATION_SELECTION_ACCEPT = "__openclaw_migrate_accept_recommended__";
 export const MIGRATION_SELECTION_TOGGLE_ALL_ON = "__openclaw_migrate_toggle_all_on__";
 export const MIGRATION_SELECTION_TOGGLE_ALL_OFF = "__openclaw_migrate_toggle_all_off__";
 
-type InteractiveMigrationSelection = { action: "select"; selectedItemIds: Set<string> };
+type MigrationSelectionKind = "skill" | "plugin";
 
-function normalizeSelectionRef(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-function readMigrationSkillName(item: MigrationItem): string | undefined {
-  return normalizeOptionalString(item.details?.skillName);
-}
-
-function readMigrationSkillSourceLabel(item: MigrationItem): string | undefined {
-  return normalizeOptionalString(item.details?.sourceLabel);
-}
-
-function readMigrationPluginName(item: MigrationItem): string | undefined {
-  return normalizeOptionalString(item.details?.pluginName);
-}
-
-function readMigrationPluginConfigKey(item: MigrationItem): string | undefined {
-  return normalizeOptionalString(item.details?.configKey);
-}
-
-function readMigrationPluginMarketplaceName(item: MigrationItem): string | undefined {
-  return normalizeOptionalString(item.details?.marketplaceName);
-}
-
-function migrationSkillRefs(item: MigrationItem): string[] {
-  const skillName = readMigrationSkillName(item);
-  const idSuffix = item.id.startsWith("skill:") ? item.id.slice("skill:".length) : undefined;
+function migrationItemRefs(item: MigrationItem, kind: "skill" | "plugin"): string[] {
+  const prefix = `${kind}:`;
+  const idSuffix = item.id.startsWith(prefix) ? item.id.slice(prefix.length) : undefined;
   const sourceBase = item.source ? path.basename(item.source) : undefined;
   const targetBase = item.target ? path.basename(item.target) : undefined;
-  return [item.id, idSuffix, skillName, sourceBase, targetBase].filter(
-    (value): value is string => typeof value === "string" && value.trim().length > 0,
-  );
-}
-
-function migrationPluginRefs(item: MigrationItem): string[] {
-  const pluginName = readMigrationPluginName(item);
-  const configKey = readMigrationPluginConfigKey(item);
-  const idSuffix = item.id.startsWith("plugin:") ? item.id.slice("plugin:".length) : undefined;
-  const sourceBase = item.source ? path.basename(item.source) : undefined;
-  const targetBase = item.target ? path.basename(item.target) : undefined;
-  return [item.id, idSuffix, pluginName, configKey, sourceBase, targetBase].filter(
-    (value): value is string => typeof value === "string" && value.trim().length > 0,
-  );
+  return [
+    item.id,
+    idSuffix,
+    normalizeOptionalString(item.details?.[`${kind}Name`]),
+    ...(kind === "plugin" ? [normalizeOptionalString(item.details?.configKey)] : []),
+    sourceBase,
+    targetBase,
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
 }
 
 function formatSelectionRefList(values: readonly string[]): string {
-  if (values.length === 0) {
-    return "none";
-  }
-  return values.map((value) => `"${value}"`).join(", ");
+  return values.length === 0 ? "none" : values.map((value) => `"${value}"`).join(", ");
 }
 
 function buildSelectionIndex(
   items: readonly MigrationItem[],
-  refsForItem: (item: MigrationItem) => readonly string[],
+  kind: "skill" | "plugin",
 ): Map<string, ReadonlySet<string>> {
   const index = new Map<string, Set<string>>();
   for (const item of items) {
-    for (const ref of refsForItem(item)) {
-      const normalized = normalizeSelectionRef(ref);
+    for (const ref of migrationItemRefs(item, kind)) {
+      const normalized = normalizeOptionalLowercaseString(ref);
       if (!normalized) {
         continue;
       }
@@ -90,17 +59,14 @@ function buildSelectionIndex(
 function resolveSelectedMigrationItemIds(params: {
   items: readonly MigrationItem[];
   selectedRefs: readonly string[];
-  refsForItem: (item: MigrationItem) => readonly string[];
-  formatSelectionLabel: (item: MigrationItem) => string;
-  kindLabel: "skill" | "plugin";
-  availableLabel: "skills" | "plugins";
+  kind: "skill" | "plugin";
 }): Set<string> {
-  const index = buildSelectionIndex(params.items, params.refsForItem);
+  const index = buildSelectionIndex(params.items, params.kind);
   const selectedIds = new Set<string>();
   const unknownRefs: string[] = [];
   const ambiguousRefs: string[] = [];
   for (const ref of params.selectedRefs) {
-    const normalized = normalizeSelectionRef(ref);
+    const normalized = normalizeOptionalLowercaseString(ref);
     if (!normalized) {
       continue;
     }
@@ -121,22 +87,18 @@ function resolveSelectedMigrationItemIds(params: {
 
   if (unknownRefs.length > 0 || ambiguousRefs.length > 0) {
     const available = params.items
-      .map(params.formatSelectionLabel)
+      .map((item) => formatMigrationSelectionLabel(item, params.kind))
       .toSorted((a, b) => a.localeCompare(b));
-    const titleKind =
-      expectDefined(params.kindLabel[0], "kind label entry at 0").toUpperCase() +
-      params.kindLabel.slice(1);
+    const titleKind = params.kind === "skill" ? "Skill" : "Plugin";
     const parts: string[] = [];
     if (unknownRefs.length > 0) {
-      parts.push(
-        `No migratable ${params.kindLabel} matched ${formatSelectionRefList(unknownRefs)}.`,
-      );
+      parts.push(`No migratable ${params.kind} matched ${formatSelectionRefList(unknownRefs)}.`);
     }
     if (ambiguousRefs.length > 0) {
       parts.push(`${titleKind} selection ${formatSelectionRefList(ambiguousRefs)} was ambiguous.`);
     }
     parts.push(
-      `Available ${params.availableLabel}: ${available.length > 0 ? available.join(", ") : "none"}.`,
+      `Available ${params.kind}s: ${available.length > 0 ? available.join(", ") : "none"}.`,
     );
     throw new Error(parts.join(" "));
   }
@@ -144,183 +106,111 @@ function resolveSelectedMigrationItemIds(params: {
   return selectedIds;
 }
 
-/** Returns skill copy items that can still be selected or deselected. */
-export function getSelectableMigrationSkillItems(plan: MigrationPlan): MigrationItem[] {
+export function getSelectableMigrationItems(
+  plan: MigrationPlan,
+  kind: MigrationSelectionKind,
+): MigrationItem[] {
+  // Manual-review bundles and aggregate config writes are not install selections.
   return plan.items.filter(
     (item) =>
-      item.kind === "skill" &&
-      item.action === "copy" &&
+      item.kind === kind &&
+      item.action === (kind === "skill" ? "copy" : "install") &&
       (item.status === "planned" || item.status === "conflict"),
   );
 }
 
-/** Returns plugin install items that can still be selected or deselected. */
-export function getSelectableMigrationPluginItems(plan: MigrationPlan): MigrationItem[] {
-  // Only source-installed curated Codex plugins become selectable install items.
-  // Cached/manual-review plugin bundles are emitted as manual items, the aggregate
-  // Codex plugin config write is a config item, and already skipped/applied/error
-  // items are no longer user-actionable in the selector. Conflicts stay selectable
-  // so the user can explicitly choose or deselect them before apply.
-  return plan.items.filter(
-    (item) =>
-      item.kind === "plugin" &&
-      item.action === "install" &&
-      (item.status === "planned" || item.status === "conflict"),
+export function formatMigrationSelectionLabel(
+  item: MigrationItem,
+  kind: MigrationSelectionKind,
+): string {
+  const prefix = `${kind}:`;
+  return (
+    normalizeOptionalString(item.details?.[`${kind}Name`]) ??
+    (item.id.startsWith(prefix) ? item.id.slice(prefix.length) : item.id)
   );
 }
 
-/** Formats the visible label for a plugin migration checkbox. */
-export function formatMigrationPluginSelectionLabel(item: MigrationItem): string {
-  return readMigrationPluginName(item) ?? item.id.replace(/^plugin:/u, "");
-}
-
-/** Defaults migration checkboxes to planned item ids in plan order. */
 export function getDefaultMigrationSelectionValues(items: readonly MigrationItem[]): string[] {
   return items.filter((item) => item.status === "planned").map((item) => item.id);
 }
 
-/** Formats the visible label for a skill migration checkbox. */
-export function formatMigrationSkillSelectionLabel(item: MigrationItem): string {
-  return readMigrationSkillName(item) ?? item.id.replace(/^skill:/u, "");
-}
-
-function humanizeMigrationConflictReason(reason: string | undefined): string {
-  if (!reason) {
-    return "conflict";
-  }
-  return MIGRATION_CONFLICT_REASON_PHRASES[reason] ?? reason;
-}
-
-/** Formats conflict helper text for a skill migration checkbox. */
-export function formatMigrationSkillSelectionHint(item: MigrationItem): string | undefined {
+export function formatMigrationSelectionHint(
+  item: MigrationItem,
+  kind: MigrationSelectionKind,
+): string | undefined {
   if (item.status !== "conflict") {
     return undefined;
   }
-  const sourceLabel = readMigrationSkillSourceLabel(item);
-  const reason = humanizeMigrationConflictReason(item.reason);
-  return sourceLabel ? `${sourceLabel} ${reason}` : reason;
-}
-
-/** Formats conflict helper text for a plugin migration checkbox. */
-export function formatMigrationPluginSelectionHint(item: MigrationItem): string | undefined {
-  if (item.status !== "conflict") {
-    return undefined;
-  }
-  const marketplace = readMigrationPluginMarketplaceName(item);
-  const reason = humanizeMigrationConflictReason(item.reason);
-  return marketplace ? `${marketplace} plugin ${reason}` : reason;
-}
-
-/** Keeps skill copies and their per-skill config patches inside the same selection. */
-export function applyMigrationSelectedSkillItemIds(
-  plan: MigrationPlan,
-  selectedItemIds: ReadonlySet<string>,
-): MigrationPlan {
-  const selectable = getSelectableMigrationSkillItems(plan);
-  const selectableIds = new Set(selectable.map((item) => item.id));
-  const selectedSkillNames = new Set(
-    selectable
-      .filter((item) => selectedItemIds.has(item.id))
-      .map(
-        (item) =>
-          readMigrationSkillName(item) ?? (item.source ? path.basename(item.source) : undefined),
-      )
-      .filter((name) => name !== undefined),
+  const label = normalizeOptionalString(
+    item.details?.[kind === "skill" ? "sourceLabel" : "marketplaceName"],
   );
-  const items = plan.items.map((item) => {
-    const configPath = item.kind === "config" ? item.details?.path : undefined;
-    // Per-skill patches keep conflicts independent, so a deselected skill's
-    // policy cannot mutate the target or block an otherwise valid import.
-    if (
-      Array.isArray(configPath) &&
-      configPath.length === 3 &&
-      configPath[0] === "skills" &&
-      configPath[1] === "entries" &&
-      !selectedSkillNames.has(configPath[2]) &&
-      (item.status === "planned" || item.status === "conflict")
-    ) {
-      return markMigrationItemSkipped(item, MIGRATION_NOT_SELECTED_REASON);
-    }
-    if (!selectableIds.has(item.id) || selectedItemIds.has(item.id)) {
-      return item;
-    }
-    return markMigrationItemSkipped(item, MIGRATION_NOT_SELECTED_REASON);
-  });
-  return {
-    ...plan,
-    items,
-    summary: summarizeMigrationItems(items),
-  };
+  const reason = item.reason
+    ? (MIGRATION_CONFLICT_REASON_PHRASES[item.reason] ?? item.reason)
+    : "conflict";
+  return label ? `${label}${kind === "plugin" ? " plugin" : ""} ${reason}` : reason;
 }
 
-/** Applies skill refs passed by CLI flags to a migration plan. */
-export function applyMigrationSkillSelection(
-  plan: MigrationPlan,
-  selectedSkillRefs: readonly string[] | undefined,
-): MigrationPlan {
-  if (selectedSkillRefs === undefined) {
-    return plan;
-  }
-  const selectable = getSelectableMigrationSkillItems(plan);
-  const selectedIds = resolveSelectedMigrationItemIds({
-    items: selectable,
-    selectedRefs: selectedSkillRefs,
-    refsForItem: migrationSkillRefs,
-    formatSelectionLabel: formatMigrationSkillSelectionLabel,
-    kindLabel: "skill",
-    availableLabel: "skills",
-  });
-  return applyMigrationSelectedSkillItemIds(plan, selectedIds);
-}
-
-/** Applies plugin refs passed by CLI flags to a migration plan. */
-export function applyMigrationPluginSelection(
-  plan: MigrationPlan,
-  selectedPluginRefs: readonly string[] | undefined,
-): MigrationPlan {
-  if (selectedPluginRefs === undefined) {
-    return plan;
-  }
-  const selectable = getSelectableMigrationPluginItems(plan);
-  const selectedIds = resolveSelectedMigrationItemIds({
-    items: selectable,
-    selectedRefs: selectedPluginRefs,
-    refsForItem: migrationPluginRefs,
-    formatSelectionLabel: formatMigrationPluginSelectionLabel,
-    kindLabel: "plugin",
-    availableLabel: "plugins",
-  });
-  return applyMigrationSelectedPluginItemIds(plan, selectedIds);
-}
-
-/** Marks unselected plugin items skipped and filters matching Codex plugin config writes. */
-export function applyMigrationSelectedPluginItemIds(
+/** Keep selected copies/installs and their corresponding config writes together. */
+export function applyMigrationSelectedItemIds(
   plan: MigrationPlan,
   selectedItemIds: ReadonlySet<string>,
+  kind: MigrationSelectionKind,
 ): MigrationPlan {
-  const selectable = getSelectableMigrationPluginItems(plan);
+  const selectable = getSelectableMigrationItems(plan, kind);
   const selectableIds = new Set(selectable.map((item) => item.id));
   const selectedConfigKeys = new Set(
     selectable
       .filter((item) => selectedItemIds.has(item.id))
-      .map(readMigrationPluginConfigKey)
-      .filter((value): value is string => value !== undefined),
+      .map((item) =>
+        kind === "plugin"
+          ? normalizeOptionalString(item.details?.configKey)
+          : (normalizeOptionalString(item.details?.skillName) ??
+            (item.source ? path.basename(item.source) : undefined)),
+      )
+      .filter((name) => name !== undefined),
   );
   const items = plan.items.map((item) => {
-    const selectedConfigItem = applyCodexPluginConfigSelection(item, selectedConfigKeys);
-    if (selectedConfigItem) {
-      return selectedConfigItem;
+    if (kind === "plugin") {
+      const selectedConfigItem = applyCodexPluginConfigSelection(item, selectedConfigKeys);
+      if (selectedConfigItem) {
+        return selectedConfigItem;
+      }
+    } else {
+      const configPath = item.kind === "config" ? item.details?.path : undefined;
+      // A deselected skill's policy cannot mutate the target or block another import.
+      if (
+        Array.isArray(configPath) &&
+        configPath.length === 3 &&
+        configPath[0] === "skills" &&
+        configPath[1] === "entries" &&
+        !selectedConfigKeys.has(configPath[2]) &&
+        (item.status === "planned" || item.status === "conflict")
+      ) {
+        return markMigrationItemSkipped(item, MIGRATION_NOT_SELECTED_REASON);
+      }
     }
-    if (!selectableIds.has(item.id) || selectedItemIds.has(item.id)) {
-      return item;
-    }
-    return markMigrationItemSkipped(item, MIGRATION_NOT_SELECTED_REASON);
+    return selectableIds.has(item.id) && !selectedItemIds.has(item.id)
+      ? markMigrationItemSkipped(item, MIGRATION_NOT_SELECTED_REASON)
+      : item;
   });
-  return {
-    ...plan,
-    items,
-    summary: summarizeMigrationItems(items),
-  };
+  return { ...plan, items, summary: summarizeMigrationItems(items) };
+}
+
+export function applyMigrationSelections(
+  plan: MigrationPlan,
+  opts: MigrateCommonOptions,
+): MigrationPlan {
+  let selectedPlan = plan;
+  for (const kind of ["skill", "plugin"] as const) {
+    const selectedRefs = opts[`${kind}s`];
+    if (selectedRefs === undefined) {
+      continue;
+    }
+    const items = getSelectableMigrationItems(selectedPlan, kind);
+    const selectedIds = resolveSelectedMigrationItemIds({ items, selectedRefs, kind });
+    selectedPlan = applyMigrationSelectedItemIds(selectedPlan, selectedIds, kind);
+  }
+  return applyMigrationItemSelection(selectedPlan, opts.itemIds);
 }
 
 function applyCodexPluginConfigSelection(
@@ -367,29 +257,17 @@ function applyCodexPluginConfigSelection(
   };
 }
 
-/** Resolves checkbox values into migration item ids for either selector. */
 export function resolveInteractiveMigrationSelection(
   items: readonly MigrationItem[],
   selectedValues: readonly string[],
-): InteractiveMigrationSelection {
+): Set<string> {
   const selectableIds = new Set(items.map((item) => item.id));
   const selectedItemIds = new Set(selectedValues.filter((value) => selectableIds.has(value)));
-  if (selectedItemIds.size > 0) {
-    return { action: "select", selectedItemIds };
-  }
-
-  const selectedValueSet = new Set(selectedValues);
-  if (selectedValueSet.has(MIGRATION_SELECTION_TOGGLE_ALL_OFF)) {
-    return { action: "select", selectedItemIds: new Set() };
-  }
-  if (selectedValueSet.has(MIGRATION_SELECTION_TOGGLE_ALL_ON)) {
-    return { action: "select", selectedItemIds: selectableIds };
-  }
-
-  return {
-    action: "select",
-    selectedItemIds,
-  };
+  return selectedItemIds.size === 0 &&
+    !selectedValues.includes(MIGRATION_SELECTION_TOGGLE_ALL_OFF) &&
+    selectedValues.includes(MIGRATION_SELECTION_TOGGLE_ALL_ON)
+    ? selectableIds
+    : selectedItemIds;
 }
 
 function isMigrationSelectionToggleValue(value: string): boolean {
@@ -415,7 +293,6 @@ function resolveMigrationSelectionBulkToggleValues(
   return undefined;
 }
 
-/** Reconciles all/none checkbox toggles for the skill-selection prompt. */
 export function reconcileInteractiveMigrationSkillToggleValues(
   selectedValues: readonly string[],
   activatedValue: string | undefined,
@@ -435,7 +312,6 @@ export function reconcileInteractiveMigrationSkillToggleValues(
   );
 }
 
-/** Reconciles Enter-key selection behavior for interactive migration prompts. */
 export function reconcileInteractiveMigrationEnterValues(
   selectedValues: readonly string[],
   activatedValue: string | undefined,
@@ -456,7 +332,6 @@ export function reconcileInteractiveMigrationEnterValues(
   return [...selectedValues];
 }
 
-/** Reconciles keyboard shortcuts for all/none migration prompt selections. */
 export function reconcileInteractiveMigrationShortcutValues(
   previousValues: readonly string[],
   selectedValues: readonly string[],

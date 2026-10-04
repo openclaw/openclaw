@@ -1,3 +1,11 @@
+export function isTextContentBlock(block: unknown): block is { type: "text"; text: string } {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const rec = block as { type?: unknown; text?: unknown };
+  return rec.type === "text" && typeof rec.text === "string";
+}
+
 /** Collects text block payloads from provider-style structured content arrays. */
 export function collectTextContentBlocks(content: unknown): string[] {
   if (!Array.isArray(content)) {
@@ -5,12 +13,8 @@ export function collectTextContentBlocks(content: unknown): string[] {
   }
   const parts: string[] = [];
   for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const rec = block as { type?: unknown; text?: unknown };
-    if (rec.type === "text" && typeof rec.text === "string") {
-      parts.push(rec.text);
+    if (isTextContentBlock(block)) {
+      parts.push(block.text);
     }
   }
   return parts;

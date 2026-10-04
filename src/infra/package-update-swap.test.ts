@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
+import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
+import { swapStagedPackageInstall } from "./package-update-swap.js";
 import {
   createPackageSwapFixture,
   createRetainedPackageSwap,
@@ -14,6 +16,41 @@ const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
 describe("retained package backup retirement", () => {
+  it.each(["missing", "verified", "advisory"] as const)(
+    "preserves historical backups without an activation transaction (%s)",
+    async (verification) => {
+      const base = await fs.realpath(dirs.make("openclaw-direct-historical-backup-"));
+      const { params, globalRoot, packageRoot } = await createPackageSwapFixture(base);
+      const historical = path.join(globalRoot, ".openclaw.package-backup-1-100");
+      await fs.mkdir(historical);
+      await fs.writeFile(path.join(historical, "sentinel"), "historical package");
+      const result = await swapStagedPackageInstall({
+        ...params,
+        postVerifyStep:
+          verification === "missing"
+            ? undefined
+            : async (root) => ({
+                name: "package-verify",
+                command: "verify fixture",
+                cwd: root,
+                durationMs: 0,
+                exitCode: verification === "verified" ? 0 : 1,
+                advisory:
+                  verification === "advisory"
+                    ? { kind: "recoverable-maintenance", message: "verification incomplete" }
+                    : undefined,
+              }),
+      });
+      expect(result.status, result.step.stderrTail ?? "").toBe("committed");
+      expect(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).toContain(
+        '"version":"2.0.0"',
+      );
+      expect(await fs.readFile(path.join(historical, "sentinel"), "utf8")).toBe(
+        "historical package",
+      );
+    },
+  );
+
   it("keeps launcher evidence with a published transaction when mutation admission throws", async () => {
     await withTestDir({ prefix: "openclaw-retained-admission-" }, async (base) => {
       const { params, packageRoot, globalRoot, launcher } = await createPackageSwapFixture(base);
@@ -72,7 +109,10 @@ describe("retained package backup retirement", () => {
         }
         expect(transaction).toBeDefined();
         expect(result).toMatchObject({ status: "failed", activePackageRoot: packageRoot });
+        const snapshots = `${transaction!.backupRoot}.databases`;
+        await fs.mkdir(snapshots);
         const completion = await transaction!.complete({ activationVerified }, () => {});
+        await expect(fs.stat(snapshots)).resolves.toBeDefined();
         await expect(fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8")).resolves.toBe(
           "export {};\n",
         );
@@ -88,36 +128,193 @@ describe("retained package backup retirement", () => {
     },
   );
 
-  it.each(["unverified activation", "verified activation", "verified rollback"] as const)(
-    "retires backups only after a proven outcome: %s",
-    async (outcome) => {
-      await withTestDir({ prefix: "openclaw-retained-outcome-" }, async (base) => {
-        const { result, transaction, packageRoot } = await createRetainedPackageSwap(base);
-        expect(result.status).toBe("committed");
-        if (outcome === "verified rollback") {
-          expect(await transaction.rollback(() => {})).toMatchObject({
-            exitCode: 0,
-            activePackageRoot: packageRoot,
-          });
-        }
-        const completion = await transaction.complete(
-          {
-            activationVerified: outcome === "verified activation",
-          },
-          () => {},
+  it.each([
+    "unverified activation",
+    "verified activation",
+    "verified rollback",
+    "refused rollback",
+  ] as const)("retires backups only after a proven outcome: %s", async (outcome) => {
+    await withTestDir({ prefix: "openclaw-retained-outcome-" }, async (base) => {
+      const checkout = path.join(base, "earlier-checkout");
+      await fs.mkdir(checkout);
+      await fs.writeFile(path.join(checkout, "sentinel"), "operator checkout");
+      const { result, transaction, packageRoot, globalRoot } = await createRetainedPackageSwap(
+        base,
+        async ({ globalRoot: fixtureGlobalRoot }) => {
+          const directory = path.join(fixtureGlobalRoot, ".openclaw.package-backup-1-100");
+          await fs.mkdir(directory);
+          await fs.writeFile(path.join(directory, "sentinel"), "earlier package");
+          for (const name of [".openclaw.package-backup-2-200", ".openclaw-package-backup-3-300"]) {
+            await fs.symlink(
+              checkout,
+              path.join(fixtureGlobalRoot, name),
+              process.platform === "win32" ? "junction" : "dir",
+            );
+          }
+          const snapshots = `${directory}.databases`;
+          await fs.mkdir(snapshots);
+          await fs.writeFile(path.join(snapshots, "snapshot.sqlite"), "pre-migration bytes");
+        },
+      );
+      const snapshots = `${transaction.backupRoot}.databases`;
+      const olderSnapshots = path.join(globalRoot, ".openclaw.package-backup-1-100.databases");
+      await fs.mkdir(snapshots);
+      await fs.writeFile(path.join(snapshots, "snapshot.sqlite"), "pre-migration bytes");
+      expect(result.status).toBe("committed");
+      if (outcome === "refused rollback") {
+        await fs.writeFile(path.join(transaction.backupRoot, "dist", "index.js"), "changed");
+        expect(await transaction.rollback(() => {})).toMatchObject({ exitCode: 1 });
+      }
+      if (outcome === "verified rollback") {
+        expect(await transaction.rollback(() => {})).toMatchObject({
+          exitCode: 0,
+          activePackageRoot: packageRoot,
+        });
+      }
+      const completion = await transaction.complete(
+        {
+          activationVerified: outcome === "verified activation",
+        },
+        () => {},
+      );
+      await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
+        `"version":"${outcome === "verified rollback" ? "1.0.0" : "2.0.0"}"`,
+      );
+      if (outcome === "unverified activation" || outcome === "refused rollback") {
+        expect(completion).toMatchObject({ exitCode: 1 });
+        await expect(fs.stat(transaction.backupRoot)).resolves.toBeDefined();
+      } else {
+        expect(completion).toBeUndefined();
+        await expect(fs.stat(transaction.backupRoot)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      if (outcome === "verified activation") {
+        await expect(fs.stat(snapshots)).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        await expect(fs.readFile(path.join(snapshots, "snapshot.sqlite"), "utf8")).resolves.toBe(
+          "pre-migration bytes",
         );
-        await expect(
-          fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
-        ).resolves.toContain(`"version":"${outcome === "verified rollback" ? "1.0.0" : "2.0.0"}"`);
-        if (outcome === "unverified activation") {
-          await expect(fs.stat(transaction.backupRoot)).resolves.toBeDefined();
+      }
+      await expect(fs.readFile(path.join(olderSnapshots, "snapshot.sqlite"), "utf8")).resolves.toBe(
+        "pre-migration bytes",
+      );
+      for (const name of [
+        ".openclaw.package-backup-1-100",
+        ".openclaw.package-backup-2-200",
+        ".openclaw-package-backup-3-300",
+      ]) {
+        if (outcome === "verified activation") {
+          await expect(fs.lstat(path.join(globalRoot, name))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
         } else {
-          expect(completion).toBeUndefined();
-          await expect(fs.stat(transaction.backupRoot)).rejects.toMatchObject({ code: "ENOENT" });
+          await expect(fs.lstat(path.join(globalRoot, name))).resolves.toBeDefined();
         }
-      });
-    },
-  );
+      }
+      await expect(fs.readFile(path.join(checkout, "sentinel"), "utf8")).resolves.toBe(
+        "operator checkout",
+      );
+    });
+  });
+
+  it("preserves replacement, later-created, and unrelated recovery artifacts after activation", async () => {
+    const base = await fs.realpath(dirs.make("openclaw-historical-backup-replaced-"));
+    const { transaction, globalRoot } = await createRetainedPackageSwap(
+      base,
+      async ({ globalRoot: fixtureGlobalRoot }) => {
+        await fs.mkdir(path.join(fixtureGlobalRoot, ".openclaw.package-backup-1-100"));
+        for (const name of [
+          ".openclaw.package-backup-1-100.candidate",
+          ".openclaw.package-backup-manual",
+        ]) {
+          await fs.mkdir(path.join(fixtureGlobalRoot, name));
+          await fs.writeFile(path.join(fixtureGlobalRoot, name, "sentinel"), "recovery bytes");
+        }
+      },
+    );
+    const replaced = path.join(globalRoot, ".openclaw.package-backup-1-100");
+    await fs.rename(replaced, path.join(base, "captured-backup"));
+    const later = path.join(globalRoot, ".openclaw.package-backup-2-200");
+    for (const directory of [replaced, later]) {
+      await fs.mkdir(directory);
+      await fs.writeFile(path.join(directory, "sentinel"), "successor bytes");
+    }
+
+    const completion = await transaction.complete({ activationVerified: true }, () => {});
+    expect(completion).toMatchObject({
+      advisory: { kind: "recoverable-maintenance", message: expect.stringContaining(replaced) },
+    });
+    for (const directory of [replaced, later]) {
+      expect(await fs.readFile(path.join(directory, "sentinel"), "utf8")).toBe("successor bytes");
+    }
+    for (const name of [
+      ".openclaw.package-backup-1-100.candidate",
+      ".openclaw.package-backup-manual",
+    ]) {
+      expect(await fs.readFile(path.join(globalRoot, name, "sentinel"), "utf8")).toBe(
+        "recovery bytes",
+      );
+    }
+    expect(await transaction.complete({ activationVerified: true }, () => {})).toBe(completion);
+  });
+
+  it("finishes activation with a warning when historical backup inspection fails", async () => {
+    const base = await fs.realpath(dirs.make("openclaw-historical-backup-inspection-"));
+    const readdir = fs.readdir.bind(fs);
+    const { transaction, globalRoot } = await createRetainedPackageSwap(
+      base,
+      async ({ globalRoot: fixtureGlobalRoot }) => {
+        await fs.mkdir(path.join(fixtureGlobalRoot, ".openclaw.package-backup-1-100"));
+        vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+          if (String(args[0]) === fixtureGlobalRoot) {
+            throw Object.assign(new Error("backup inspection denied"), { code: "EACCES" });
+          }
+          return readdir(...args);
+        });
+      },
+    );
+    const completion = await transaction.complete({ activationVerified: true }, () => {});
+    expect(completion).toMatchObject({
+      advisory: {
+        kind: "recoverable-maintenance",
+        message: expect.stringContaining("backup inspection denied"),
+      },
+    });
+    await expect(
+      fs.lstat(path.join(globalRoot, ".openclaw.package-backup-1-100")),
+    ).resolves.toBeDefined();
+  });
+
+  it("reports database cleanup failure as recoverable maintenance after verified activation", async () => {
+    const base = await fs.realpath(dirs.make("openclaw-database-retirement-"));
+    const { transaction } = await createRetainedPackageSwap(base);
+    const snapshots = `${transaction.backupRoot}.databases`;
+    await fs.mkdir(snapshots);
+    await fs.writeFile(path.join(snapshots, "snapshot.sqlite"), "pre-migration bytes");
+    const prototype = Object.getPrototypeOf(await fsSafeRoot(base)) as Root;
+    // oxlint-disable-next-line typescript/unbound-method -- Preserve the intercepted Root receiver for unrelated cleanup.
+    const removeEntry = prototype.remove;
+    vi.spyOn(prototype, "remove").mockImplementation(async function (
+      this: Root,
+      relativePath,
+      options,
+    ) {
+      const target = path.resolve(this.rootReal, relativePath);
+      if (target === snapshots || target.startsWith(`${snapshots}${path.sep}`)) {
+        throw Object.assign(new Error("snapshot cleanup denied"), { code: "EACCES" });
+      }
+      return removeEntry.call(this, relativePath, options);
+    });
+    const completion = await transaction.complete({ activationVerified: true }, () => {});
+    const retained = snapshots.replace(".openclaw.package-backup-", ".openclaw-package-backup-");
+    expect(completion).toMatchObject({
+      exitCode: 1,
+      advisory: { kind: "recoverable-maintenance", message: expect.stringContaining(retained) },
+    });
+    expect(await fs.readFile(path.join(retained, "snapshot.sqlite"), "utf8")).toBe(
+      "pre-migration bytes",
+    );
+    expect(await transaction.complete({ activationVerified: true }, () => {})).toBe(completion);
+  });
 });
 
 describe("launcher backup capture", () => {
@@ -177,7 +374,7 @@ describe("launcher backup capture", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32").each(["target", "type", "mode", "contents"] as const)(
+  it.runIf(process.platform !== "win32").each(["target", "type", "contents"] as const)(
     "names a changed backup %s and retains the failed copy before activation",
     async (field) => {
       const base = dirs.make("openclaw-launcher-backup-changed-");
@@ -204,8 +401,6 @@ describe("launcher backup capture", () => {
           } else {
             await fs.writeFile(backup, "different type");
           }
-        } else if (field === "mode") {
-          await fs.chmod(backup, 0o700);
         } else {
           await fs.writeFile(backup, "different contents");
         }
@@ -225,6 +420,8 @@ describe("launcher backup capture", () => {
       );
       expect(await fs.lstat(backup)).toBeDefined();
       if (field === "target") {
+        expect(result.step.stderrTail).toContain("../lib/node_modules/openclaw/package.json");
+        expect(result.step.stderrTail).toContain("different-target");
         expect(await fs.readlink(backup)).toBe("different-target");
       }
     },
@@ -244,30 +441,50 @@ describe("launcher backup capture", () => {
         const originals = await Promise.all(
           [packageRoot, launcher, secondLauncher].map(async (entry) => (await fs.lstat(entry)).ino),
         );
-        const copyFile = fs.copyFile.bind(fs);
-        const rm = fs.rm.bind(fs);
+        const prototype = Object.getPrototypeOf(await fsSafeRoot(base)) as Root;
+        // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted Root receiver to preserve its path and mutation authority.
+        const copyIn = prototype.copyIn;
+        // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted Root receiver to preserve its path and mutation authority.
+        const removeEntry = prototype.remove;
         const rename = fs.rename.bind(fs);
-        const remove = vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
+        let copyRefusals = 0;
+        let cleanupRefusals = 0;
+        let retirementRefusals = 0;
+        const remove = vi.spyOn(prototype, "remove").mockImplementation(async function (
+          this: Root,
+          relativePath,
+          options,
+        ) {
+          const target = path.resolve(this.rootReal, relativePath);
+          // Let each copy finish cleaning its private staging directory first.
           if (
             cleanupDenied &&
-            path.basename(String(args[0])).startsWith(".openclaw.shim-backup-")
+            path.basename(target) === path.basename(launcher) &&
+            path.basename(path.dirname(target)).startsWith(".openclaw.shim-backup-")
           ) {
+            cleanupRefusals += 1;
             throw Object.assign(new Error("backup cleanup denied"), { code: "EACCES" });
           }
-          return rm(...args);
+          return removeEntry.call(this, relativePath, options);
         });
         const move = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
           if (
             cleanupDenied &&
             path.basename(String(args[0])).startsWith(".openclaw.shim-backup-")
           ) {
+            retirementRefusals += 1;
             throw Object.assign(new Error("backup retirement denied"), { code: "EACCES" });
           }
           return rename(...args);
         });
         let firstBackup: string | undefined;
-        const copy = vi.spyOn(fs, "copyFile").mockImplementation(async (...args) => {
-          if (String(args[0]) === secondLauncher) {
+        const copy = vi.spyOn(prototype, "copyIn").mockImplementation(async function (
+          this: Root,
+          destination,
+          source,
+          options,
+        ) {
+          if (source === secondLauncher) {
             const backupDir = (await fs.readdir(globalRoot)).find((entry) =>
               entry.startsWith(".openclaw.shim-backup-"),
             );
@@ -275,9 +492,10 @@ describe("launcher backup capture", () => {
               throw new Error("missing partial launcher backup");
             }
             firstBackup = await fs.readFile(path.join(globalRoot, backupDir, "openclaw"), "utf8");
+            copyRefusals += 1;
             throw new Error("second launcher backup refused");
           }
-          return copyFile(...args);
+          await copyIn.call(this, destination, source, options);
         });
         const beforeActivate = vi.fn();
         const onLiveMutation = vi.fn();
@@ -295,6 +513,9 @@ describe("launcher backup capture", () => {
           remove.mockRestore();
           move.mockRestore();
         }
+        expect(copyRefusals).toBe(1);
+        expect(cleanupRefusals).toBe(cleanupDenied ? 1 : 0);
+        expect(retirementRefusals).toBe(cleanupDenied ? 1 : 0);
         expect(firstBackup).toBe("old launcher\n");
         expect(result).toMatchObject({
           status: "failed",

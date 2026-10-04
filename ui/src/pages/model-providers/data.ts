@@ -1,8 +1,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
-// Merges gateway provider signals (auth status, live usage/quota, local session
-// cost) into one card list for the Models settings page.
 import type {
   ProviderUsageSnapshot,
   UsageSummary,
@@ -28,7 +26,6 @@ export type ModelProviderAuthKind = "ok" | "expiring" | "expired" | "missing" | 
 
 type ModelProviderAuthSummary = {
   kind: ModelProviderAuthKind;
-  profileCount: number;
   expiryLabel?: string;
 };
 
@@ -108,25 +105,6 @@ type CardDraft = {
   catalogOutcome?: ModelCatalogProviderOutcome;
 };
 
-// Canonicalize alias provider ids (claude-cli → anthropic, minimax-* →
-// minimax) with the same table the gateway uses, so one subscription stays
-// one card even when the optional auth-status usage embed is missing.
-function canonicalProviderId(provider: string): string {
-  return canonicalModelAuthProviderId(provider);
-}
-
-function authKindForProvider(provider: ModelAuthStatusProvider): ModelProviderAuthKind {
-  switch (provider.status) {
-    case "ok":
-    case "expiring":
-    case "expired":
-    case "missing":
-      return provider.status;
-    default:
-      return "api-key";
-  }
-}
-
 const CATALOG_OUTCOME_PRIORITY = {
   provider: ["auth-rejected", "unavailable", "ready"],
   profile: ["ready", "auth-rejected", "unavailable"],
@@ -204,7 +182,7 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
   const profileOrdersByAuthProvider = new Map<string, string[]>();
   const explicitOrderProviders = new Set<string>();
   for (const capability of input.authStatus?.providerCapabilities ?? []) {
-    const id = canonicalProviderId(capability.provider);
+    const id = canonicalModelAuthProviderId(capability.provider);
     if (!id) {
       continue;
     }
@@ -212,13 +190,13 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
   }
 
   for (const provider of input.configProviderIds ?? []) {
-    const id = canonicalProviderId(provider);
+    const id = canonicalModelAuthProviderId(provider);
     if (id) {
       ensureDraft(drafts, id, providerDisplayLabel(id)).card.configKey ??= provider;
     }
   }
   for (const provider of input.configApiKeyProviderIds ?? []) {
-    const id = canonicalProviderId(provider);
+    const id = canonicalModelAuthProviderId(provider);
     if (id) {
       const card = ensureDraft(drafts, id, providerDisplayLabel(id)).card;
       card.configKey = provider;
@@ -227,21 +205,21 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     }
   }
   for (const [provider, authMode] of Object.entries(input.configProviderAuthModes ?? {})) {
-    const id = canonicalProviderId(provider);
+    const id = canonicalModelAuthProviderId(provider);
     if (id) {
       ensureDraft(drafts, id, providerDisplayLabel(id)).card.configAuthMode = authMode;
     }
   }
 
   for (const provider of input.pendingProviders ?? []) {
-    const id = canonicalProviderId(provider);
+    const id = canonicalModelAuthProviderId(provider);
     if (id) {
       ensureDraft(drafts, id, providerDisplayLabel(id)).card.checkingModels = true;
     }
   }
 
   for (const outcome of input.providerOutcomes ?? []) {
-    const id = canonicalProviderId(outcome.provider);
+    const id = canonicalModelAuthProviderId(outcome.provider);
     if (!id) {
       continue;
     }
@@ -262,7 +240,7 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
   }
 
   for (const entry of input.models ?? []) {
-    const id = canonicalProviderId(entry.provider);
+    const id = canonicalModelAuthProviderId(entry.provider);
     if (!id) {
       continue;
     }
@@ -274,13 +252,15 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
   }
 
   for (const provider of input.authStatus?.providers ?? []) {
-    const id = canonicalProviderId(provider.provider);
+    const id = canonicalModelAuthProviderId(provider.provider);
     if (!id) {
       continue;
     }
     // The usage embed names the id the payload was fetched under; keep both
     // ids matchable in case it diverges from the static alias table.
-    const canonicalId = provider.usage ? canonicalProviderId(provider.usage.providerId) : id;
+    const canonicalId = provider.usage
+      ? canonicalModelAuthProviderId(provider.usage.providerId)
+      : id;
     const ids = [...new Set([id, canonicalId])];
     const existing = findDraft(drafts, ids);
     // Fresh cards adopt the canonical usage id so icon/label lookups resolve
@@ -353,18 +333,17 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
   }
 
   for (const provider of listEffectiveModelAuthProviders(input.authStatus?.providers ?? [])) {
-    const draft = findDraft(drafts, [canonicalProviderId(provider.provider)]);
+    const draft = findDraft(drafts, [canonicalModelAuthProviderId(provider.provider)]);
     if (draft) {
       draft.card.auth = {
-        kind: authKindForProvider(provider),
-        profileCount: provider.profiles.length,
+        kind: provider.status === "static" ? "api-key" : provider.status,
         ...(provider.expiry?.label ? { expiryLabel: provider.expiry.label } : {}),
       };
     }
   }
 
   for (const snapshot of input.providerUsage?.providers ?? []) {
-    const id = canonicalProviderId(snapshot.provider);
+    const id = canonicalModelAuthProviderId(snapshot.provider);
     if (!id) {
       continue;
     }
@@ -378,31 +357,24 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
   }
 
   for (const entry of input.costByProvider ?? []) {
-    const id = canonicalProviderId(entry.provider ?? "");
+    const id = canonicalModelAuthProviderId(entry.provider ?? "");
     if (!id) {
       continue;
     }
-    const draft = findDraft(drafts, [id]) ?? ensureDraft(drafts, id, providerDisplayLabel(id));
-    const addition: ModelProviderLocalCost = {
-      totalCost: entry.totals.totalCost,
-      totalTokens: entry.totals.totalTokens,
-      messageCount: entry.count,
-    };
-    const current = draft.card.localCost;
-    draft.card.localCost = current
-      ? {
-          totalCost: current.totalCost + addition.totalCost,
-          totalTokens: current.totalTokens + addition.totalTokens,
-          messageCount: current.messageCount + addition.messageCount,
-        }
-      : addition;
+    const draft = ensureDraft(drafts, id, providerDisplayLabel(id));
+    const cost = (draft.card.localCost ??= { totalCost: 0, totalTokens: 0, messageCount: 0 });
+    cost.totalCost += entry.totals.totalCost;
+    cost.totalTokens += entry.totals.totalTokens;
+    cost.messageCount += entry.count;
   }
 
   return drafts
     .filter(
       (draft) =>
         draft.hasModelAuth ||
-        (input.configProviderIds ?? []).some((id) => canonicalProviderId(id) === draft.card.id) ||
+        (input.configProviderIds ?? []).some(
+          (id) => canonicalModelAuthProviderId(id) === draft.card.id,
+        ) ||
         Boolean(draft.card.usage) ||
         draft.card.modelCount > 0 ||
         Boolean(draft.catalogOutcome) ||
@@ -577,10 +549,10 @@ export function buildUnconfiguredProviderOptions(
   capabilities: ModelProviderCapability[] | undefined,
   configuredProviderIds: Iterable<string>,
 ): ProviderOption[] {
-  const configured = new Set(Array.from(configuredProviderIds, canonicalProviderId));
+  const configured = new Set(Array.from(configuredProviderIds, canonicalModelAuthProviderId));
   const options = new Map<string, ProviderOption>();
   for (const capability of capabilities ?? []) {
-    const id = canonicalProviderId(capability.provider);
+    const id = canonicalModelAuthProviderId(capability.provider);
     if (capability.quickApiKeySetup && id && !configured.has(id) && !options.has(id)) {
       options.set(id, { id, displayName: providerDisplayLabel(id) });
     }

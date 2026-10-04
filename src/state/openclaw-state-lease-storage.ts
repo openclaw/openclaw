@@ -1,11 +1,10 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
+import { setTimeout as sleep } from "node:timers/promises";
+import { computeBackoff } from "../infra/backoff.js";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
-import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
-import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
 import { runExistingOpenClawStateWriteTransaction } from "./openclaw-state-db-existing-write.js";
 import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import {
@@ -16,18 +15,20 @@ import {
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import {
-  OpenClawStateLeaseError,
+  createOpenClawStateLeaseLostError,
   toOpenClawStateLeaseVerificationError,
 } from "./openclaw-state-lease-error.js";
+import {
+  LEASE_CONTENTION_RETRY_MS,
+  LEASE_CONTENTION_RETRY_TIMEOUT_MS,
+} from "./openclaw-state-lease-heartbeat-shared.js";
 import {
   readOpenClawStateLeaseExpiry,
   releaseOpenClawStateLeaseInTransaction,
   renewOpenClawStateLeaseInTransaction,
 } from "./openclaw-state-lease-store.js";
-import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease-store.js";
+import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
-import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
-import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
 
 export type OpenClawStateLeaseDatabase = {
   scope: "shared";
@@ -55,7 +56,7 @@ export function resolveLeaseDatabasePath(database: OpenClawStateLeaseDatabase): 
     ? path.resolve(database.options?.path ?? resolveOpenClawStateSqlitePath(database.options?.env))
     : openOpenClawStateDatabase(database.options).path;
 }
-export function readLeaseDatabase<T>(
+function readLeaseDatabase<T>(
   database: OpenClawStateLeaseDatabase,
   operation: (db: DatabaseSync) => T,
 ): T {
@@ -64,57 +65,6 @@ export function readLeaseDatabase<T>(
     : operation(openOpenClawStateDatabase(database.options).db);
 }
 
-export async function acquireLease(
-  database: OpenClawStateLeaseDatabase,
-  input: { identity: OpenClawStateLeaseIdentity; leaseMs: number; operationLabel: string },
-  assertCurrent: () => void,
-  signal?: AbortSignal,
-) {
-  if (database.options?.readOnly) {
-    throw new Error("State lease acquisition requires writable storage");
-  }
-  if (database.schemaPolicy === "existing" && database.options?.database) {
-    throw new Error("Existing-state writes require their own tracked writable connection.");
-  }
-  const opened =
-    database.schemaPolicy === "existing" ? undefined : openOpenClawStateDatabase(database.options);
-  const context = captureOpenClawStateWorkerContext({
-    ...database.options,
-    path: opened?.path ?? resolveLeaseDatabasePath(database),
-  });
-  const assertAdmission = () => {
-    context.admission.assertCurrent();
-    assertCurrent();
-    // The worker cannot join a transaction held by the caller's verification handle.
-    if (opened?.db.isTransaction) {
-      throw new OpenClawStateLeaseError("State lease acquisition requires no active transaction", {
-        code: "OPENCLAW_STATE_LEASE_INVALID_INPUT",
-      });
-    }
-  };
-  const result = await runOpenClawStateWorkerOperation(
-    context,
-    (scope) =>
-      scope.execute(
-        {
-          type: "stateLease.acquire",
-          input: { ...input, schemaPolicy: database.schemaPolicy },
-        },
-        { signal },
-      ),
-    {
-      existingOnly: database.schemaPolicy === "existing",
-      assertCurrent: assertAdmission,
-      createAdmission: createSqliteWorkerWriteAdmission(assertAdmission, [
-        context.admission.databasePath,
-      ]),
-    },
-  );
-  if (!result) {
-    throw new Error("State lease acquisition requires an existing database");
-  }
-  return result;
-}
 export function withLeaseWriteTransaction<T>(
   database: OpenClawStateLeaseDatabase,
   operationLabel: string,
@@ -139,21 +89,11 @@ export function withLeaseWriteTransaction<T>(
 }
 
 export const STATE_LEASE_WRITE_BACKOFF = {
-  initialMs: 25,
+  initialMs: LEASE_CONTENTION_RETRY_MS,
   maxMs: 250,
   factor: 1.5,
   jitter: 0.25,
 } as const;
-const RELEASE_RETRY_TIMEOUT_MS = 2_000;
-
-// A competing lifecycle writer has not admitted the transaction. Retry within
-// the existing async budget, but never retry schema, handle, or release failures.
-export function isOpenClawStateLeaseWriteContention(error: unknown): boolean {
-  return (
-    isSqliteLockError(error) ||
-    (error instanceof StateDatabaseCoordinatorContentionError && error.family === "state-lifecycle")
-  );
-}
 
 export type OpenClawStateLeaseOwnerIdentity = OpenClawStateLeaseIdentity & { leaseLabel: string };
 
@@ -167,29 +107,19 @@ export function renewOpenClawStateLease(
   return withLeaseWriteTransaction(params.database, params.operationLabel, (db) => {
     const expiresAt = renewOpenClawStateLeaseInTransaction(db, params, params.leaseMs);
     if (expiresAt === undefined) {
-      throw new OpenClawStateLeaseError(
-        `${params.leaseLabel} ${params.scope}/${params.key} was lost`,
-        {
-          code: "OPENCLAW_STATE_LEASE_LOST",
-        },
-      );
+      throw createOpenClawStateLeaseLostError(params);
     }
     return expiresAt;
   });
 }
 
-export function assertOpenClawStateLeaseOwnedInDatabase(
+function assertOpenClawStateLeaseOwnedInDatabase(
   database: DatabaseSync,
   params: OpenClawStateLeaseOwnerIdentity,
 ): number {
   const expiresAt = readOpenClawStateLeaseExpiry(database, params);
   if (expiresAt === undefined) {
-    throw new OpenClawStateLeaseError(
-      `${params.leaseLabel} ${params.scope}/${params.key} was lost`,
-      {
-        code: "OPENCLAW_STATE_LEASE_LOST",
-      },
-    );
+    throw createOpenClawStateLeaseLostError(params);
   }
   return expiresAt;
 }
@@ -230,7 +160,7 @@ export async function releaseOpenClawStateLeaseBestEffort(
   params: Parameters<typeof releaseOpenClawStateLease>[0],
   execute?: () => Promise<void>,
 ): Promise<void> {
-  const deadline = performance.now() + RELEASE_RETRY_TIMEOUT_MS;
+  const deadline = performance.now() + LEASE_CONTENTION_RETRY_TIMEOUT_MS;
   let attempt = 0;
   while (true) {
     try {
@@ -242,7 +172,7 @@ export async function releaseOpenClawStateLeaseBestEffort(
       return;
     } catch (error) {
       const now = performance.now();
-      if (!isOpenClawStateLeaseWriteContention(error) || now >= deadline) {
+      if (!isSqliteLockError(error) || now >= deadline) {
         if (execute) {
           // The async resource owner retains failed cleanup for exact-owner retry.
           throw error;
@@ -250,10 +180,8 @@ export async function releaseOpenClawStateLeaseBestEffort(
         return;
       }
       attempt += 1;
-      // Cleanup gives competing writers a bounded async window to finish.
-      await sleepWithAbort(
-        Math.min(deadline - now, computeBackoff(STATE_LEASE_WRITE_BACKOFF, attempt)),
-      );
+      // Cleanup outlives caller scheduling; native timers let competing writers settle.
+      await sleep(Math.min(deadline - now, computeBackoff(STATE_LEASE_WRITE_BACKOFF, attempt)));
     }
   }
 }

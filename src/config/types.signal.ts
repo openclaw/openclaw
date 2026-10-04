@@ -1,11 +1,10 @@
-// Defines Signal channel configuration types.
 import type { ReplyToMode } from "./types.base.js";
 import type {
   ChannelReactionConfig,
   ChannelReadReceiptConfig,
+  CommonChannelGroupConfig,
   CommonChannelMessagingConfig,
 } from "./types.channel-messaging-common.js";
-import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
@@ -40,12 +39,12 @@ export type SignalTransportConfig =
       url: string;
     };
 
-export type SignalGroupConfig = {
-  requireMention?: boolean;
+export type SignalGroupConfig = Pick<
+  CommonChannelGroupConfig,
+  "requireMention" | "tools" | "toolsBySender"
+> & {
   /** Emit internal message hooks for mention-skipped group messages. */
   ingest?: boolean;
-  tools?: GroupToolPolicyConfig;
-  toolsBySender?: GroupToolPolicyBySenderConfig;
 };
 
 export type SignalAccountConfig = Omit<CommonChannelMessagingConfig, "mentionPatterns"> &

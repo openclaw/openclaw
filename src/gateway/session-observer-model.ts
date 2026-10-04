@@ -25,6 +25,7 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
@@ -49,10 +50,7 @@ type PrepareModel = typeof prepareUtilityCompletionForAgent;
 type CompleteModel = typeof runIsolatedCompletion;
 type PreparedModel = Awaited<ReturnType<PrepareModel>>;
 
-export type SessionObserverLifecycle = Pick<
-  SessionObserverDigest,
-  "sessionId" | "lifecycleRevision"
->;
+type SessionObserverLifecycle = Pick<SessionObserverDigest, "sessionId" | "lifecycleRevision">;
 
 export function isSameSessionObserverLifecycle(
   left: SessionObserverLifecycle | undefined,
@@ -136,6 +134,15 @@ export type SessionObserverRevisionFloor = Pick<
   "sessionId" | "lifecycleRevision" | "revision" | "previousDigest"
 >;
 
+export function snapshotSessionObserverRevisionFloor({
+  sessionId,
+  lifecycleRevision,
+  revision,
+  previousDigest,
+}: SessionObserverRevisionFloor): SessionObserverRevisionFloor {
+  return { sessionId, lifecycleRevision, revision, previousDigest };
+}
+
 export function rememberSessionObserverRevisionFloor(
   floors: Map<string, SessionObserverRevisionFloor>,
   sessionKey: string,
@@ -161,26 +168,18 @@ export function rememberSessionObserverDormantRun(
   runs.delete(run.runId);
   runs.set(run.runId, run);
   while (runs.size > MAX_DORMANT_RUNS) {
-    const oldest = runs.keys().next().value;
-    if (oldest === undefined) {
+    const oldest = runs.entries().next();
+    if (oldest.done) {
       break;
     }
-    const evicted = runs.get(oldest);
-    runs.delete(oldest);
-    if (evicted) {
-      // Evicted dormant runs keep revision continuity through the bounded floor
-      // map so a later resume cannot restart below an already broadcast revision.
-      rememberSessionObserverRevisionFloor(
-        floors,
-        resolveSessionSubscriptionKey(evicted.sessionKey, evicted.agentId),
-        {
-          sessionId: evicted.sessionId,
-          lifecycleRevision: evicted.lifecycleRevision,
-          revision: evicted.revision,
-          previousDigest: evicted.previousDigest,
-        },
-      );
-    }
+    const [runId, evicted] = oldest.value;
+    runs.delete(runId);
+    // Retain revision continuity so a later resume cannot restart below a broadcast revision.
+    rememberSessionObserverRevisionFloor(
+      floors,
+      resolveSessionSubscriptionKey(evicted.sessionKey, evicted.agentId),
+      snapshotSessionObserverRevisionFloor(evicted),
+    );
   }
 }
 
@@ -276,22 +275,20 @@ export const SESSION_OBSERVER_SYSTEM_PROMPT = [
   'Return one raw JSON object only, without Markdown fences or surrounding text, for example: {"headline":"Checking the fix","assessment":"Tests are passing.","health":"on-track","planProgress":{"completed":2,"total":3}}. Omit optional fields instead of setting them to null.',
 ].join(" ");
 
-const ModelDigestSchema = z
-  .strictObject({
-    headline: z.string().min(1),
-    assessment: z.string().min(1).optional(),
-    health: z.enum(SESSION_OBSERVER_HEALTH_VALUES),
-    planProgress: z
-      .strictObject({
-        completed: z.number().int().nonnegative(),
-        total: z.number().int().nonnegative(),
-      })
-      .refine((value) => value.completed <= value.total)
-      .optional(),
-  })
-  .strict();
+const ModelDigestSchema = z.strictObject({
+  headline: z.string().min(1),
+  assessment: z.string().min(1).optional(),
+  health: z.enum(SESSION_OBSERVER_HEALTH_VALUES),
+  planProgress: z
+    .strictObject({
+      completed: z.number().int().nonnegative(),
+      total: z.number().int().nonnegative(),
+    })
+    .refine((value) => value.completed <= value.total)
+    .optional(),
+});
 
-function sanitizeSessionObserverModelText(value: string, maxChars: number): string {
+export function sanitizeSessionObserverModelText(value: string, maxChars: number): string {
   const normalized = redactToolPayloadText(value).replace(/\s+/gu, " ").trim();
   return truncateUtf16Safe(normalized, maxChars);
 }
@@ -354,6 +351,7 @@ export async function defaultPersistDigest(params: {
           sessionKey: params.sessionKey,
           agentId: params.agentId,
           storePath: params.storePath,
+          facts: { kind: "unchanged" },
         }),
     },
   );
@@ -482,27 +480,23 @@ export function normalizeSessionObserverModelOutput(text: string): {
   health: SessionObserverHealth;
   planProgress?: SessionObserverPlanProgress;
 } | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text.trim()) as unknown;
-  } catch {
+  const trimmed = text.trim();
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/iu.exec(trimmed);
+  const digest = safeParseJsonWithSchema(ModelDigestSchema, fenced?.[1]?.trim() ?? trimmed);
+  if (!digest) {
     return null;
   }
-  const result = ModelDigestSchema.safeParse(parsed);
-  if (!result.success) {
-    return null;
-  }
-  const headline = sanitizeSessionObserverModelText(result.data.headline, HEADLINE_MAX_CHARS);
-  const assessment = result.data.assessment
-    ? sanitizeSessionObserverModelText(result.data.assessment, ASSESSMENT_MAX_CHARS)
+  const headline = sanitizeSessionObserverModelText(digest.headline, HEADLINE_MAX_CHARS);
+  const assessment = digest.assessment
+    ? sanitizeSessionObserverModelText(digest.assessment, ASSESSMENT_MAX_CHARS)
     : undefined;
-  if (!headline || (result.data.assessment && !assessment)) {
+  if (!headline || (digest.assessment && !assessment)) {
     return null;
   }
   return {
     headline,
     ...(assessment ? { assessment } : {}),
-    health: result.data.health,
-    ...(result.data.planProgress ? { planProgress: result.data.planProgress } : {}),
+    health: digest.health,
+    ...(digest.planProgress ? { planProgress: digest.planProgress } : {}),
   };
 }

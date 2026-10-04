@@ -7,13 +7,13 @@ import {
   type SessionUpstreamLink,
 } from "../../sessions/session-upstream-links.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
-import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { resolveSessionNativeRuntimeRestriction } from "./sessions-patch-model-selection.js";
 import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
-export type UpstreamForkHarness = {
+type UpstreamForkHarness = {
   harness: AgentHarness;
 } & (
   | {
@@ -25,11 +25,6 @@ export type UpstreamForkHarness = {
       sessionFork: NonNullable<AgentHarness["sessionForkV2"]>;
     }
 );
-
-export type UpstreamForkCurrentGuard = {
-  assertCurrent: () => void;
-  assertRollbackCurrent: () => void;
-};
 
 export function resolveUpstreamForkHarness(
   link: SessionUpstreamLink,
@@ -57,7 +52,7 @@ export function createUpstreamForkCurrentGuard(params: {
   sessionKey: string;
   source: ReturnType<typeof loadAccessorSessionEntryForGatewayTarget>;
   targetKey: string;
-}): UpstreamForkCurrentGuard {
+}) {
   const expectedEntry = params.source.entry;
   if (!expectedEntry) {
     throw new Error(`Session ${params.sessionKey} changed during fork initialization`);

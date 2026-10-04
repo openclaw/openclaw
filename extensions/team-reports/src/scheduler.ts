@@ -1,19 +1,13 @@
 import { randomUUID } from "node:crypto";
-import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
 import type { TeamReportsConfig } from "./config.js";
 import { DAY_MS, describePeriod } from "./periods.js";
-import {
-  createReportSources,
-  generateReportPeriods,
-  runPeriods,
-  type ReportSourceFactory,
-  type ResolvedTeamReportsConfig,
-} from "./run.js";
+import { REPORT_RUN_TIMEOUT_MS, type ReportRunRequest } from "./run-worker-contract.js";
+import type { ResolvedTeamReportsConfig } from "./run.js";
 import type { TeamReportsStore } from "./store.js";
 import type { SummaryLlm } from "./summaries.js";
 import type { Person, PeriodDescriptor, SourceStatus } from "./types.js";
 
-const RUN_DEADLINE_MS = 45 * 60_000;
 const STOP_TIMEOUT_MS = 30_000;
 type RunKind = "closed-day" | "intraday" | "manual";
 type ActiveRun = { id: string; controller: AbortController; done: Promise<void> };
@@ -42,14 +36,24 @@ function nextIntradayDue(nowMs: number, everyHours: number): number | undefined 
   return today + Math.min(DAY_MS, (Math.floor((nowMs - today) / interval) + 1) * interval);
 }
 
+function runPeriods(config: TeamReportsConfig, days: PeriodDescriptor[]): PeriodDescriptor[] {
+  const periods = new Map(days.map((day) => [`day/${day.key}`, day]));
+  for (const day of days) {
+    for (const period of ["week", "month"] as const) {
+      if (period === "week" ? config.schedule.weekly : config.schedule.monthly) {
+        const descriptor = describePeriod(period, day.sinceMs);
+        periods.set(`${period}/${descriptor.key}`, descriptor);
+      }
+    }
+  }
+  return [...periods.values()];
+}
+
 export class TeamReportsScheduler {
   private accepting = false;
-  private closed = false;
   private active?: ActiveRun;
   private stopPromise?: Promise<void>;
   private startPromise?: Promise<void>;
-  private scheduledWork = new Set<Promise<void>>();
-  private timers = new Set<ReturnType<typeof setTimeout>>();
   private due: { closedDay?: number; intraday?: number; catchUp?: number } = {};
   private deferred = new Set<"closed-day" | "intraday">();
   private roster: Person[];
@@ -60,15 +64,16 @@ export class TeamReportsScheduler {
       resolved: ResolvedTeamReportsConfig;
       store: TeamReportsStore;
       llm: SummaryLlm;
-      context: Pick<OpenClawPluginServiceContext, "logger" | "serviceHealth">;
-      sources?: ReportSourceFactory;
+      context: Pick<OpenClawPluginServiceContextV2, "logger" | "serviceHealth" | "scheduler">;
+      runReports: (params: ReportRunRequest) => Promise<Record<string, SourceStatus>>;
+      closeRunner: () => Promise<void>;
     },
   ) {
     this.roster = options.resolved.people;
   }
 
   async start(): Promise<void> {
-    if (this.closed || this.accepting || this.stopPromise) {
+    if (this.accepting || this.stopPromise || this.options.context.scheduler.signal.aborted) {
       throw new Error("Team Reports scheduler cannot be started again");
     }
     this.accepting = true;
@@ -88,7 +93,7 @@ export class TeamReportsScheduler {
     this.armIntraday();
     if (!completed) {
       this.due.catchUp = Date.now() + 60_000;
-      this.schedule(this.due.catchUp, () => {
+      this.schedule("catch-up", this.due.catchUp, () => {
         delete this.due.catchUp;
         return this.tick("closed-day", true);
       });
@@ -158,10 +163,7 @@ export class TeamReportsScheduler {
   private async stopOnce(): Promise<void> {
     this.accepting = false;
     this.due = {};
-    for (const timer of this.timers) {
-      clearTimeout(timer);
-    }
-    this.timers.clear();
+    this.options.context.scheduler.beginClose();
     this.deferred.clear();
     const active = this.active;
     const timeout = active
@@ -172,39 +174,36 @@ export class TeamReportsScheduler {
       : undefined;
     try {
       await this.startPromise?.catch(() => undefined);
-      await Promise.all(this.scheduledWork);
+      await this.options.context.scheduler.stop();
       await active?.done;
     } finally {
       clearTimeout(timeout);
-      this.closed = true;
+      await this.options.closeRunner();
       await this.options.store.close();
     }
   }
 
-  private schedule(atMs: number, callback: () => void | Promise<void>): void {
-    const timer = setTimeout(
-      () => {
-        this.timers.delete(timer);
-        if (this.accepting) {
-          const work = Promise.resolve()
-            .then(callback)
-            .catch((error: unknown) => {
-              this.options.context.logger.error(`team-reports: ${this.safeError(error)}`);
-            });
-          this.scheduledWork.add(work);
-          void work.finally(() => this.scheduledWork.delete(work));
+  private schedule(id: string, atMs: number, callback: () => void | Promise<void>): void {
+    if (this.options.context.scheduler.signal.aborted) {
+      return;
+    }
+    this.options.context.scheduler.schedule({
+      id,
+      atMs,
+      run: async () => {
+        try {
+          await callback();
+        } catch (error) {
+          this.options.context.logger.error(`team-reports: ${this.safeError(error)}`);
         }
       },
-      Math.max(0, atMs - Date.now()),
-    );
-    timer.unref?.();
-    this.timers.add(timer);
+    });
   }
 
   private armClosedDay(afterMs = Date.now()): void {
     const due = nextClosedDayDue(afterMs, this.options.config.schedule);
     this.due.closedDay = due;
-    this.schedule(due, async () => {
+    this.schedule("closed-day", due, async () => {
       await this.tick("closed-day");
       if (!this.accepting) {
         return;
@@ -219,7 +218,7 @@ export class TeamReportsScheduler {
       this.options.config.schedule.intradayEveryHours,
     );
     if (this.due.intraday !== undefined) {
-      this.schedule(this.due.intraday, async () => {
+      this.schedule("intraday", this.due.intraday, async () => {
         await this.tick("intraday");
         if (this.accepting) {
           this.armIntraday();
@@ -241,7 +240,7 @@ export class TeamReportsScheduler {
     if (this.active) {
       if (!this.deferred.has(kind)) {
         this.deferred.add(kind);
-        this.schedule(Date.now() + 60_000, () => {
+        this.schedule(`deferred:${kind}`, Date.now() + 60_000, () => {
           this.deferred.delete(kind);
           return this.tick(kind, catchUp);
         });
@@ -253,7 +252,7 @@ export class TeamReportsScheduler {
       kind === "closed-day"
         ? [describePeriod("day", now - DAY_MS), describePeriod("day", now)]
         : [describePeriod("day", now)];
-    await this.begin(kind, days);
+    await this.begin(kind, days, catchUp);
   }
 
   private async closedDayCompleted(key: string): Promise<boolean> {
@@ -266,8 +265,12 @@ export class TeamReportsScheduler {
     );
   }
 
-  private async begin(kind: RunKind, days: PeriodDescriptor[]): Promise<string> {
-    if (!this.accepting) {
+  private async begin(
+    kind: RunKind,
+    days: PeriodDescriptor[],
+    reuseCollectedDays = false,
+  ): Promise<string> {
+    if (!this.accepting || this.options.context.scheduler.signal.aborted) {
       throw new Error("Team Reports service is not running");
     }
     if (this.active) {
@@ -284,7 +287,7 @@ export class TeamReportsScheduler {
     });
     const deadline = setTimeout(
       () => controller.abort(new Error("Team Reports run exceeded its 45-minute deadline")),
-      RUN_DEADLINE_MS,
+      REPORT_RUN_TIMEOUT_MS,
     );
     const done = Promise.resolve().then(async () => {
       let stats: Record<string, SourceStatus> | undefined;
@@ -293,12 +296,10 @@ export class TeamReportsScheduler {
         await started;
         recorded = true;
         controller.signal.throwIfAborted();
-        stats = await generateReportPeriods({
+        stats = await this.options.runReports({
           ...this.options,
           periods,
-          sources:
-            this.options.sources ??
-            ((runtime) => createReportSources(runtime, Boolean(this.options.resolved.discord))),
+          reuseCollectedDays,
           runtime: { logger: this.options.context.logger, signal: controller.signal },
           onRoster: (people) => {
             this.roster = people;
@@ -309,10 +310,12 @@ export class TeamReportsScheduler {
           await this.options.store.prune(this.options.config.retention.days);
           controller.signal.throwIfAborted();
         }
-        const failed = Object.values(stats).some((source) => !source.ok);
-        if (failed) {
+        const failed = Object.entries(stats)
+          .filter(([, source]) => !source.ok)
+          .map(([sourceId]) => sourceId);
+        if (failed.length > 0) {
           throw new Error(
-            "An activity source failed; inspect report source warnings and check access",
+            `Activity sources failed (${failed.join(", ")}); inspect run source warnings and check access`,
           );
         }
         await this.options.store.finishRun(id, { status: "ok", finishedAtMs: Date.now(), stats });

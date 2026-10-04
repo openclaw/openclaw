@@ -1,4 +1,6 @@
 import { consume } from "@lit/context";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import {
@@ -7,6 +9,7 @@ import {
   type ApplicationGateway,
   type ApplicationGatewaySnapshot,
 } from "../../../app/context.ts";
+import { shellLayoutTraits } from "../../../app/shell-layout-traits.ts";
 import {
   showConfirmDialog,
   type ConfirmDialogOptions,
@@ -36,6 +39,7 @@ import {
   resolveConfiguredDreaming,
   updateDreamingEnabled,
   type DreamingState,
+  type WikiPagePreview,
 } from "./dreaming.ts";
 import { renderDreamingToggleConfirmation } from "./toggle-confirmation.ts";
 import {
@@ -47,57 +51,30 @@ import {
 
 registerDreamingEnglish();
 
-type WikiPagePreview = {
-  title: string;
-  path: string;
-  content: string;
-  totalLines?: number;
-  truncated?: boolean;
-  updatedAt?: string;
-};
-
 type DreamingTaskScope = {
   gateway: ApplicationGateway;
   epoch: number;
   state: DreamingState;
 };
 
-function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
+function resolveDreamingNextCycle(status: DreamingState["dreamingStatus"]): string | null {
+  const nextRunAtMs = Object.values(status?.phases ?? {})
+    .flatMap((phase) =>
+      phase.enabled && typeof phase.nextRunAtMs === "number" ? [phase.nextRunAtMs] : [],
+    )
+    .toSorted((a, b) => a - b)[0];
   return formatTimeMs(nextRunAtMs, { hour: "numeric", minute: "2-digit" }, "") || null;
 }
 
-function resolveDreamingNextCycle(status: DreamingState["dreamingStatus"]): string | null {
-  const nextRunAtMs = Object.values(status?.phases ?? {})
-    .filter((phase) => phase.enabled && typeof phase.nextRunAtMs === "number")
-    .map((phase) => phase.nextRunAtMs as number)
-    .toSorted((a, b) => a - b)[0];
-  return nextRunAtMs === undefined ? null : formatDreamNextCycle(nextRunAtMs);
-}
-
 function readWikiPagePreview(value: unknown, lookup: string): WikiPagePreview {
-  const payload =
-    value && typeof value === "object"
-      ? (value as {
-          title?: unknown;
-          path?: unknown;
-          content?: unknown;
-          updatedAt?: unknown;
-          totalLines?: unknown;
-          truncated?: unknown;
-        })
-      : null;
-  const title =
-    typeof payload?.title === "string" && payload.title.trim() ? payload.title.trim() : lookup;
-  const path =
-    typeof payload?.path === "string" && payload.path.trim() ? payload.path.trim() : lookup;
+  const payload = asOptionalObjectRecord(value);
+  const title = normalizeOptionalString(payload?.title) ?? lookup;
+  const path = normalizeOptionalString(payload?.path) ?? lookup;
   const content =
     typeof payload?.content === "string" && payload.content.length > 0
       ? payload.content
       : t("dreaming.wiki.noContent");
-  const updatedAt =
-    typeof payload?.updatedAt === "string" && payload.updatedAt.trim()
-      ? payload.updatedAt.trim()
-      : undefined;
+  const updatedAt = normalizeOptionalString(payload?.updatedAt);
   const totalLines =
     typeof payload?.totalLines === "number" && Number.isFinite(payload.totalLines)
       ? Math.max(0, Math.floor(payload.totalLines))
@@ -188,7 +165,6 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
       connected: snapshot.phase === "connected",
       hello: snapshot.hello,
       configSnapshot: this.context.runtimeConfig.state.configSnapshot,
-      applySessionKey: snapshot.sessionKey,
       selectedAgentId: this.selectedAgentId,
     });
   }
@@ -199,7 +175,6 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
   ) {
     const clientChanged = this.dreaming.client !== snapshot.client;
     const connectionChanged = this.dreaming.connected !== (snapshot.phase === "connected");
-    const becameConnected = snapshot.phase === "connected" && !this.dreaming.connected;
     const replaceState = sourceBind === "replacement" || clientChanged || connectionChanged;
     if (replaceState) {
       this.dreaming = this.createGatewayState(snapshot);
@@ -209,13 +184,8 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     } else {
       this.dreaming.connected = snapshot.phase === "connected";
       this.dreaming.hello = snapshot.hello;
-      this.dreaming.applySessionKey = snapshot.sessionKey;
     }
-    if (
-      snapshot.phase === "connected" &&
-      this.selectedAgentId &&
-      (replaceState || becameConnected)
-    ) {
+    if (snapshot.phase === "connected" && this.selectedAgentId && replaceState) {
       void this.loadAll();
     }
     this.requestUpdate();
@@ -415,7 +385,10 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     const selectedAgentId = dreaming.selectedAgentId ?? "";
 
     return html`
-      <section class="content-header content-header--page agent-memory-panel__header">
+      <section
+        class="content-header content-header--page agent-memory-panel__header"
+        ${shellLayoutTraits({ toolbarHeader: true })}
+      >
         <div class="page-meta">
           <div class="dreaming-header-controls">
             <button
@@ -487,7 +460,6 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
         phases: dreamingStatus?.phases ?? undefined,
         shortTermEntries: dreamingStatus?.shortTermEntries ?? [],
         promotedEntries: dreamingStatus?.promotedEntries ?? [],
-        dreamingOf: null,
         nextCycle: resolveDreamingNextCycle(dreamingStatus),
         timezone: dreamingStatus?.timezone ?? null,
         statusError: dreaming.dreamingStatusError,

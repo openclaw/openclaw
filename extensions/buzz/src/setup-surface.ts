@@ -32,14 +32,13 @@ type BuzzSetupDependencies = {
 };
 
 function validateRelayUrl(value: string): string | undefined {
-  try {
-    const url = new URL(value.trim());
-    return url.protocol === "ws:" || url.protocol === "wss:"
-      ? undefined
-      : "Use a ws:// or wss:// relay URL";
-  } catch {
+  const url = URL.parse(value.trim());
+  if (!url) {
     return "Enter a valid Buzz relay WebSocket URL";
   }
+  return url.protocol === "ws:" || url.protocol === "wss:"
+    ? undefined
+    : "Use a ws:// or wss:// relay URL";
 }
 
 function isRemoteInsecureRelayUrl(value: string): boolean {
@@ -54,53 +53,35 @@ function isRemoteInsecureRelayUrl(value: string): boolean {
   return url.protocol === "ws:" && !isLoopback;
 }
 
-async function promptRelayUrl(params: {
-  initialValue?: string;
-  prompter: Parameters<ChannelSetupWizardAdapter["configure"]>[0]["prompter"];
-}): Promise<string> {
-  while (true) {
-    const relayUrl = (
-      await params.prompter.text({
-        message: "Buzz relay WebSocket URL",
-        placeholder: "wss://buzz.example.com",
-        initialValue: params.initialValue,
-        validate: validateRelayUrl,
-      })
-    ).trim();
-    if (!isRemoteInsecureRelayUrl(relayUrl)) {
-      return relayUrl;
-    }
-    const continueInsecure = await params.prompter.confirm({
-      message: "This remote ws:// relay is unencrypted. Continue anyway?",
-      initialValue: false,
-    });
-    if (continueInsecure) {
-      return relayUrl;
-    }
-  }
-}
-
 async function resolveRelayUrl(params: {
   configuredValue?: string;
   prompter: BuzzSetupPrompter;
 }): Promise<string> {
   const configuredValue = params.configuredValue?.trim();
-  if (configuredValue && validateRelayUrl(configuredValue) === undefined) {
-    if (!isRemoteInsecureRelayUrl(configuredValue)) {
-      return configuredValue;
+  let relayUrl =
+    configuredValue && validateRelayUrl(configuredValue) === undefined
+      ? configuredValue
+      : undefined;
+  while (true) {
+    relayUrl ??= (
+      await params.prompter.text({
+        message: "Buzz relay WebSocket URL",
+        placeholder: "wss://buzz.example.com",
+        initialValue: configuredValue || undefined,
+        validate: validateRelayUrl,
+      })
+    ).trim();
+    if (
+      !isRemoteInsecureRelayUrl(relayUrl) ||
+      (await params.prompter.confirm({
+        message: "This remote ws:// relay is unencrypted. Continue anyway?",
+        initialValue: false,
+      }))
+    ) {
+      return relayUrl;
     }
-    const continueInsecure = await params.prompter.confirm({
-      message: "This remote ws:// relay is unencrypted. Continue anyway?",
-      initialValue: false,
-    });
-    if (continueInsecure) {
-      return configuredValue;
-    }
+    relayUrl = undefined;
   }
-  return await promptRelayUrl({
-    ...(configuredValue ? { initialValue: configuredValue } : {}),
-    prompter: params.prompter,
-  });
 }
 
 async function resolveSetupCredential(params: {

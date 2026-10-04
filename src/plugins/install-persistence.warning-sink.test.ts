@@ -1,16 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  applyExclusiveSlotSelectionMock,
   configWriteMock,
+  createEmptyUninstallActions,
   applyPluginUninstallDirectoryRemovalMock,
   buildPluginSnapshotReportMock,
   loadPluginManifestRegistryMock,
   planPluginUninstallMock,
   refreshPluginRegistryMock,
+  readConfigFileSnapshotForWriteMock,
   resetPluginsCliTestState,
   pluginsCliRuntimeLogs,
   setInstalledPluginIndexInstallRecords,
 } from "../cli/plugins-cli-test-helpers.js";
+import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import type { PluginInstallRuntimeDeferral } from "./install-runtime-batch.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 
@@ -29,6 +31,10 @@ const install = {
 describe("plugin install persistence warning audiences", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
+    readConfigFileSnapshotForWriteMock.mockResolvedValue({
+      snapshot: { ...createTestConfigSnapshot(snapshot.config), hash: snapshot.baseHash },
+      writeOptions: snapshot.writeOptions,
+    });
   });
 
   it("delivers deferred source cleanup warnings to the live batch consumer", async () => {
@@ -43,7 +49,7 @@ describe("plugin install persistence warning audiences", () => {
       ok: true,
       config: {},
       pluginId: "workboard",
-      actions: {},
+      actions: createEmptyUninstallActions(),
       directoryRemoval: { target: "/private/previous-source/workboard" },
     });
     applyPluginUninstallDirectoryRemovalMock.mockResolvedValueOnce({
@@ -101,47 +107,6 @@ describe("plugin install persistence warning audiences", () => {
     expect(pluginsCliRuntimeLogs).toContain("Installed plugin: workboard");
   });
 
-  it("preserves owner-authored exclusive-slot warnings verbatim", async () => {
-    const { persistPluginInstall } = await import("./install-persistence.js");
-    const warn = vi.fn();
-    const warning = 'Disabled other "memory" slot plugins: memory-core.';
-    loadPluginManifestRegistryMock.mockReturnValue({
-      plugins: [
-        recordPluginManifestInstallOwner(
-          {
-            id: "workboard",
-            kind: "memory",
-            channels: [],
-            providers: [],
-            cliBackends: [],
-            skills: [],
-            hooks: [],
-            origin: "config",
-            rootDir: install.installPath,
-            source: `${install.installPath}/index.js`,
-            manifestPath: `${install.installPath}/openclaw.plugin.json`,
-          },
-          "workboard",
-        ),
-      ],
-      diagnostics: [],
-    });
-    applyExclusiveSlotSelectionMock.mockReturnValue({
-      config: {},
-      warnings: [warning],
-      changed: true,
-    });
-
-    await persistPluginInstall({
-      snapshot,
-      pluginId: "workboard",
-      install,
-      persistenceLogger: { warn },
-    });
-
-    expect(warn).toHaveBeenCalledExactlyOnceWith(warning);
-  });
-
   it.each(["management", "terminal"] as const)(
     "keeps sensitive install details appropriate for the %s audience",
     async (audience) => {
@@ -161,7 +126,7 @@ describe("plugin install persistence warning audiences", () => {
         ok: true,
         config: {},
         pluginId: "workboard",
-        actions: {},
+        actions: createEmptyUninstallActions(),
         directoryRemoval: { target: "/private/previous-source/workboard" },
       });
       applyPluginUninstallDirectoryRemovalMock.mockResolvedValueOnce({

@@ -1,4 +1,8 @@
 import { html, nothing, type TemplateResult } from "lit";
+import {
+  PLUGIN_UI_CAPABILITIES,
+  type PluginUiCapability,
+} from "../../../../packages/gateway-protocol/src/plugin-ui-capabilities.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDateMs } from "../../lib/format.ts";
@@ -8,15 +12,8 @@ import { renderPluginAuthor, renderPluginOfficialBadge } from "./plugin-card.ts"
 import { renderPluginSecurityAudit } from "./security-audit.ts";
 
 function pluginWebUrl(value: string | undefined): URL | null {
-  if (!value) {
-    return null;
-  }
-  try {
-    const url = new URL(value);
-    return /^https?:$/u.test(url.protocol) && !url.username && !url.password ? url : null;
-  } catch {
-    return null;
-  }
+  const url = value ? URL.parse(value) : null;
+  return url && /^https?:$/u.test(url.protocol) && !url.username && !url.password ? url : null;
 }
 
 function pluginRepository(
@@ -158,7 +155,13 @@ export function renderPluginMetadata(
 
 export function renderPluginCapabilitySection(
   title: string,
-  values: Array<{ name: string; description?: string; onOpen?: () => void }>,
+  values: Array<{
+    name: string;
+    description?: string;
+    onOpen?: () => void;
+    trailing?: TemplateResult;
+    details?: TemplateResult;
+  }>,
   icon: TemplateResult,
 ): TemplateResult {
   return html`${
@@ -173,15 +176,109 @@ export function renderPluginCapabilitySection(
                 ><span class="plugin-capability__copy"
                   ><strong>${value.name}</strong
                   >${value.description ? html`<span>${value.description}</span>` : nothing}</span
-                >${open ? icons.chevronRight : nothing}`;
+                >${value.trailing ? html`<span class="plugin-capability__trailing">${value.trailing}</span>` : nothing}${open || value.details ? html`<span class="plugin-capability__chevron" aria-hidden="true">${icons.chevronRight}</span>` : nothing}`;
               return html`<div class="plugin-capability">
-                ${open ? html`<button type="button" @click=${open}>${content}</button>` : html`<div class="plugin-capability__static">${content}</div>`}
+                ${
+                  value.details
+                    ? html`<details class="plugin-capability__disclosure">
+                        <summary>${content}</summary>
+                        <div class="plugin-capability__details">${value.details}</div>
+                      </details>`
+                    : open
+                      ? html`<button type="button" @click=${open}>${content}</button>`
+                      : html`<div class="plugin-capability__static">${content}</div>`
+                }
               </div>`;
             })}
           </div>
         </section>`
       : nothing
   }`;
+}
+
+export function renderPluginMcpServers(
+  names: readonly string[],
+  details: PluginDiscoveryDetailResult["detail"]["mcpServerDetails"] = [],
+): TemplateResult {
+  return renderPluginCapabilitySection(
+    t(names.length === 1 ? "pluginsPage.detailMcpServer" : "pluginsPage.detailMcpServers"),
+    names.map((name) => {
+      const server = details.find((entry) => entry.name === name);
+      const fields = [
+        [
+          t("pluginsPage.mcpDetails.endpoint"),
+          server?.endpointRedacted ? t("pluginsPage.mcpDetails.endpointRedacted") : server?.url,
+        ],
+        [t("pluginsPage.mcpDetails.transport"), server?.transport],
+        [
+          t("pluginsPage.mcpDetails.authentication"),
+          server?.auth ? t(`pluginsPage.mcpDetails.auth.${server.auth}`) : undefined,
+        ],
+        [t("pluginsPage.mcpDetails.scope"), server?.scope],
+      ].filter(([, value]) => value);
+      return {
+        name,
+        details: html`
+          ${
+            fields.length
+              ? html`<dl class="plugin-mcp-details">
+                  ${fields.map(
+                    ([label, value]) =>
+                      html`<dt>${label}</dt>
+                        <dd>${value}</dd>`,
+                  )}
+                </dl>`
+              : nothing
+          }
+          ${server?.setup ? html`<p>${server.setup}</p>` : nothing}
+          ${!fields.length && !server?.setup ? html`<p>${t("pluginsPage.mcpDetails.unavailable")}</p>` : nothing}
+        `,
+      };
+    }),
+    icons.plug,
+  );
+}
+
+// Runtime plumbing is intentionally absent: the overview describes user capabilities.
+const overviewContractFamilies = [
+  "speechProviders",
+  "realtimeTranscriptionProviders",
+  "realtimeVoiceProviders",
+  "mediaUnderstandingProviders",
+  "imageGenerationProviders",
+  "videoGenerationProviders",
+  "musicGenerationProviders",
+  "embeddingProviders",
+  "webSearchProviders",
+  "webFetchProviders",
+  "webContentExtractors",
+  "documentExtractors",
+  "transcriptSourceProviders",
+  "migrationProviders",
+] as const;
+
+export function renderPluginDeclaredCapabilities(
+  contracts: Readonly<Record<string, readonly string[]>> | undefined,
+  uiCapabilities?: readonly PluginUiCapability[],
+): TemplateResult {
+  return renderPluginCapabilitySection(
+    t("pluginsPage.detailCapabilities"),
+    [
+      ...overviewContractFamilies
+        .filter((family) => contracts?.[family]?.length)
+        .map((family) => ({
+          name: t(`pluginsPage.capabilityFamilies.${family}.name`),
+          description: t(`pluginsPage.capabilityFamilies.${family}.description`),
+        })),
+      ...PLUGIN_UI_CAPABILITIES.filter((capability) => uiCapabilities?.includes(capability)).map(
+        (capability) => ({
+          name: t(`pluginsPage.uiCapabilities.${capability}.name`),
+          description: t(`pluginsPage.uiCapabilities.${capability}.description`),
+        }),
+      ),
+    ],
+    icons.layers,
+  );
 }
 
 export function renderPluginAskAction(onAsk?: () => void, primary = true) {

@@ -119,7 +119,7 @@ function buildAgentHarnessQuestionPresentation(params: {
             action: {
               type: "question" as const,
               questionId: params.questionId,
-              optionValue: option.label,
+              optionValue: option.value ?? option.label,
             },
           })),
           ...(question.isOther
@@ -157,7 +157,7 @@ export function buildAgentHarnessQuestionPromptPayload(params: {
   const [question] = params.questions;
   const candidateOptionValues =
     params.questions.length === 1 && question && !question.multiSelect && !question.isSecret
-      ? (question.options?.map((option) => option.label) ?? [])
+      ? (question.options?.map((option) => option.value ?? option.label) ?? [])
       : [];
   const normalizedOptionValues = candidateOptionValues.map((option) => option.trim().toLowerCase());
   const optionValues =
@@ -266,17 +266,17 @@ function normalizeAgentHarnessUserInputAnswers(
     return [declaredAnswer];
   }
   const normalized = answer
-    .split(/[,;\n]/u)
+    .split(question.answerFormat === "lines" ? /\r?\n/u : /[,;\n]/u)
     .map((part) => normalizeAgentHarnessUserInputAnswer(part, question))
     .filter((part): part is string => Boolean(part));
-  return [...new Set(normalized)];
+  return question.presentation === "form" ? normalized : [...new Set(normalized)];
 }
 
 export function normalizeAgentHarnessUserInputAnswer(
   answer: string,
   question: AgentHarnessUserInputQuestion,
 ): string | undefined {
-  const trimmed = answer.trim();
+  const trimmed = question.presentation === "form" ? answer : answer.trim();
   const declaredAnswer = normalizeAgentHarnessUserInputOption(trimmed, question);
   if (declaredAnswer) {
     return declaredAnswer;
@@ -298,13 +298,15 @@ function normalizeAgentHarnessUserInputOption(
   const optionIndex = /^\d+$/.test(trimmed) ? Number(trimmed) - 1 : -1;
   const indexed = optionIndex >= 0 ? options[optionIndex] : undefined;
   if (indexed) {
-    return indexed.label;
+    return indexed.value ?? indexed.label;
   }
-  const exact = options.find((option) => option.label.toLowerCase() === trimmed.toLowerCase());
-  if (exact) {
-    return exact.label;
-  }
-  return undefined;
+  const selected = options.find(
+    (option) =>
+      option.value === answer ||
+      ((!question.isOther || option.value === undefined) &&
+        option.label.toLowerCase() === trimmed.toLowerCase()),
+  );
+  return selected ? (selected.value ?? selected.label) : undefined;
 }
 
 function parseKeyedAnswers(inputText: string): Map<string, string> {

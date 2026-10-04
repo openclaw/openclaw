@@ -1,4 +1,3 @@
-/** Session awareness and transcript mirroring for direct cron delivery. */
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
@@ -17,7 +16,6 @@ import type {
   SourceDeliveryVisibleDelivery,
 } from "../../infra/outbound/source-delivery-plan.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
-import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { parseThreadSessionSuffix } from "../../routing/session-key.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -28,13 +26,12 @@ import {
   logCronDeliveryWarn,
   normalizeDeliveryTarget,
 } from "./delivery-dispatch-policy.js";
+import type { SuccessfulCronDeliveryTarget } from "./delivery-dispatch-types.js";
 import { selectCronRouteCurrentSessionKey } from "./delivery-route-session-key.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickLastNonEmptyTextFromPayloads } from "./helpers.js";
 import { resolveCronLifecycleRevisionIdentity } from "./run-session-state.js";
 import { loadCronSessionEntryLatest } from "./session.js";
-
-type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
 
 export type DirectCronTranscriptMirror = {
   sessionKey: string;
@@ -60,7 +57,7 @@ const transcriptRuntimeLoader = createLazyImportLoader(
 );
 export function shouldQueueCronAwareness(params: {
   job: CronJob;
-  delivery: SuccessfulDeliveryTarget;
+  delivery: SuccessfulCronDeliveryTarget;
   deliveryBestEffort: boolean;
 }): boolean {
   // Keep issue #52136 scoped to isolated runs with an explicit delivery target.
@@ -88,58 +85,17 @@ export function isSameSessionKey(left: string | undefined, right: string | undef
 }
 
 export function resolveCronAwarenessText(params: {
-  outputText?: string;
-  synthesizedText?: string;
-  deliveryPayloads?: ReplyPayload[];
-  outboundPayloads?: NormalizedOutboundPayload[];
+  deliveryPayloads: ReplyPayload[];
+  outboundPayloads: NormalizedOutboundPayload[];
 }): string | undefined {
-  if (params.outboundPayloads?.length) {
+  if (params.outboundPayloads.length) {
     const projection = projectDeliveredDirectCronPayloadsForMirror(params.outboundPayloads);
     const projectedText = resolveDirectCronTranscriptMirrorText(projection);
     if (projectedText) {
       return projectedText;
     }
   }
-  return params.deliveryPayloads
-    ? pickLastNonEmptyTextFromPayloads(params.deliveryPayloads)
-    : (normalizeOptionalString(params.outputText) ??
-        normalizeOptionalString(params.synthesizedText));
-}
-
-export function resolveDirectCronSummaryFallbackText(params: {
-  outputText?: string;
-  summary?: string;
-  synthesizedText?: string;
-}): string | undefined {
-  return (
-    normalizeOptionalString(params.outputText) ??
-    normalizeOptionalString(params.summary) ??
-    normalizeOptionalString(params.synthesizedText)
-  );
-}
-
-export function shouldAttachDirectCronFallbackText(payload: ReplyPayload): boolean {
-  return (
-    Boolean(payload.channelData) &&
-    !hasReplyPayloadContent(payload, { trimText: true, hasChannelData: false })
-  );
-}
-
-export function resolveDirectCronFallbackSourceIndex(
-  payloads: ReplyPayload[],
-  fallbackText: string | undefined,
-): number | undefined {
-  if (!fallbackText) {
-    return undefined;
-  }
-  const index = payloads.findLastIndex(
-    (payload) => normalizeOptionalString(payload.text) === fallbackText,
-  );
-  return index >= 0 ? index : undefined;
-}
-
-function formatTargetCronDeliveryAwarenessText(text: string): string {
-  return `A scheduled automation delivered this message to this channel:\n${text}`;
+  return pickLastNonEmptyTextFromPayloads(params.deliveryPayloads);
 }
 
 export function formatTargetCronDeliveryFailureAwarenessText(params: {
@@ -194,7 +150,9 @@ export async function queueCronAwarenessSystemEvent(params: {
       targetSessionKey &&
       (!isSameSessionKey(targetSessionKey, mainSessionKey) || !params.queueMainSession);
     if (shouldQueueTargetSession) {
-      const text = params.targetText ?? formatTargetCronDeliveryAwarenessText(params.text);
+      const text =
+        params.targetText ??
+        `A scheduled automation delivered this message to this channel:\n${params.text}`;
       const options = withSystemEventOwner(
         { sessionKey: targetSessionKey, contextKey: params.deliveryIdempotencyKey },
         params.agentId,
@@ -206,10 +164,6 @@ export async function queueCronAwarenessSystemEvent(params: {
       `[cron:${params.jobId}] failed to queue isolated cron awareness: ${formatErrorMessage(err)}`,
     );
   }
-}
-
-function isCustomCronSessionTarget(sessionTarget: CronJob["sessionTarget"]): boolean {
-  return typeof sessionTarget === "string" && sessionTarget.startsWith("session:");
 }
 
 export function buildDirectCronTranscriptMirrorPayloads(
@@ -249,24 +203,7 @@ export function resolveDirectCronTranscriptMirrorText(params: {
   if (text && mediaText) {
     return `${text}\n${mediaText}`;
   }
-  if (text || mediaText) {
-    return text ?? mediaText;
-  }
-  return undefined;
-}
-
-function pickDirectCronMirrorPayloadText(payload: NormalizedOutboundPayload): string | undefined {
-  return normalizeOptionalString(payload.hookContent) ?? normalizeOptionalString(payload.text);
-}
-
-function isTtsAudioMirrorOnly(params: {
-  payload: NormalizedOutboundPayload;
-  mediaUrl: string;
-}): boolean {
-  return (
-    (params.payload.audioAsVoice === true || Boolean(params.payload.hookContent)) &&
-    isAudioFileName(params.mediaUrl)
-  );
+  return text ?? mediaText;
 }
 
 export function projectDeliveredDirectCronPayloadsForMirror(
@@ -275,12 +212,16 @@ export function projectDeliveredDirectCronPayloadsForMirror(
   const textParts: string[] = [];
   const mediaUrls: string[] = [];
   for (const payload of payloads) {
-    const text = pickDirectCronMirrorPayloadText(payload);
+    const text =
+      normalizeOptionalString(payload.hookContent) ?? normalizeOptionalString(payload.text);
     if (text) {
       textParts.push(text);
     }
     for (const mediaUrl of payload.mediaUrls) {
-      if (isTtsAudioMirrorOnly({ payload, mediaUrl })) {
+      if (
+        (payload.audioAsVoice === true || Boolean(payload.hookContent)) &&
+        isAudioFileName(mediaUrl)
+      ) {
         continue;
       }
       mediaUrls.push(mediaUrl);
@@ -325,12 +266,12 @@ function canonicalizeDirectCronRouteSessionKey(params: {
 // Does NOT persist the route — the caller must commit it after successful
 // platform delivery, matching the post-success invariant in message-action-send
 // and gateway server-methods/send.
-async function resolveCronDeliveryRouteSessionKey(params: {
+export async function resolveCronDeliveryRouteSessionKey(params: {
   cfg: OpenClawConfig;
   job: CronJob;
   agentId: string;
   agentSessionKey: string;
-  delivery: SuccessfulDeliveryTarget;
+  delivery: SuccessfulCronDeliveryTarget;
   warningContext: string;
 }): Promise<{ sessionKey: string; route: OutboundSessionRoute | null }> {
   try {
@@ -388,7 +329,7 @@ async function resolveCronDeliveryRouteSessionKey(params: {
 export async function commitDirectCronOutboundRoute(params: {
   cfg: OpenClawConfig;
   runSessionKey: string;
-  delivery: SuccessfulDeliveryTarget;
+  delivery: SuccessfulCronDeliveryTarget;
   route: OutboundSessionRoute | null;
 }): Promise<void> {
   if (!params.route) {
@@ -411,36 +352,10 @@ export async function commitDirectCronOutboundRoute(params: {
   }
 }
 
-/** Resolves the transcript mirror session key and route for direct cron delivery.
- *  The route must be persisted by the caller after successful platform delivery
- *  via `commitDirectCronOutboundRoute`. */
-export async function resolveDirectCronDeliverySessionKey(params: {
-  cfg: OpenClawConfig;
-  job: CronJob;
-  agentId: string;
-  agentSessionKey: string;
-  delivery: SuccessfulDeliveryTarget;
-}): Promise<{ sessionKey: string; route: OutboundSessionRoute | null }> {
-  if (isCustomCronSessionTarget(params.job.sessionTarget)) {
-    // Custom session targets are already caller-selected; do not remap them
-    // through outbound routing or the explicit session identity would drift.
-    return { sessionKey: params.agentSessionKey, route: null };
-  }
-
-  return await resolveCronDeliveryRouteSessionKey({
-    cfg: params.cfg,
-    job: params.job,
-    agentId: params.agentId,
-    agentSessionKey: params.agentSessionKey,
-    delivery: params.delivery,
-    warningContext: "direct delivery mirror",
-  });
-}
-
 function resolveCronMessageToolAwarenessTarget(params: {
   delivery: SourceDeliveryVisibleDelivery;
   resolvedDelivery: DeliveryTargetResolution;
-}): (SuccessfulDeliveryTarget & { text: string }) | undefined {
+}): (SuccessfulCronDeliveryTarget & { text: string }) | undefined {
   const { target } = params.delivery;
   const text =
     normalizeOptionalString(target.text) ??
@@ -450,33 +365,22 @@ function resolveCronMessageToolAwarenessTarget(params: {
     return undefined;
   }
   const targetChannel = normalizeOptionalString(target.provider);
+  const verifiedTarget =
+    params.delivery.verifiedTarget && params.resolvedDelivery.ok
+      ? params.resolvedDelivery
+      : undefined;
   const channel =
-    targetChannel && targetChannel !== "message"
-      ? targetChannel
-      : params.delivery.verifiedTarget && params.resolvedDelivery.ok
-        ? params.resolvedDelivery.channel
-        : undefined;
-  const to =
-    normalizeOptionalString(target.to) ??
-    (params.delivery.verifiedTarget && params.resolvedDelivery.ok
-      ? params.resolvedDelivery.to
-      : undefined);
+    targetChannel && targetChannel !== "message" ? targetChannel : verifiedTarget?.channel;
+  const to = normalizeOptionalString(target.to) ?? verifiedTarget?.to;
   if (!channel || !to) {
     return undefined;
   }
-  const accountId =
-    target.accountId ??
-    (params.delivery.verifiedTarget && params.resolvedDelivery.ok
-      ? params.resolvedDelivery.accountId
-      : undefined);
+  const accountId = target.accountId ?? verifiedTarget?.accountId;
   const threadId =
-    target.threadId ??
-    (params.delivery.verifiedTarget && target.threadImplicit === true && params.resolvedDelivery.ok
-      ? params.resolvedDelivery.threadId
-      : undefined);
+    target.threadId ?? (target.threadImplicit === true ? verifiedTarget?.threadId : undefined);
   return {
     ok: true,
-    channel: channel as SuccessfulDeliveryTarget["channel"],
+    channel,
     to,
     ...(accountId ? { accountId } : {}),
     ...(threadId ? { threadId } : {}),
@@ -485,7 +389,6 @@ function resolveCronMessageToolAwarenessTarget(params: {
   };
 }
 
-/** Queues target-session context awareness for cron deliveries made via message tool. */
 export async function queueCronMessageToolDeliveryAwareness(params: {
   cfg: OpenClawConfig;
   runSessionKey: string;
@@ -594,26 +497,26 @@ export async function appendAdmittedDirectCronDeliveryTranscriptMirror(params: {
   mirror: DirectCronTranscriptMirror;
   abortSignal?: AbortSignal;
 }): Promise<void> {
-  const storePath = params.mirror.storePath;
-  const initial = storePath
-    ? loadCronSessionEntryLatest(storePath, params.mirror.sessionKey)
-    : undefined;
-  const expectedSessionId = params.mirror.expectedSessionId ?? initial?.sessionId;
-  const expectedLifecycleRevision =
-    params.mirror.expectedLifecycleRevision ?? initial?.lifecycleRevision;
-  if (!storePath || !expectedSessionId) {
-    await logCronDeliveryWarn(
-      `[cron:${params.job.id}] skipped transcript mirror without an exact session identity`,
-    );
-    return;
-  }
-  const admittedMirror = {
-    ...params.mirror,
-    expectedSessionId,
-    ...(expectedLifecycleRevision ? { expectedLifecycleRevision } : {}),
-  };
-
   try {
+    const storePath = params.mirror.storePath;
+    const initial = storePath
+      ? loadCronSessionEntryLatest(storePath, params.mirror.sessionKey)
+      : undefined;
+    const expectedSessionId = params.mirror.expectedSessionId ?? initial?.sessionId;
+    const expectedLifecycleRevision =
+      params.mirror.expectedLifecycleRevision ?? initial?.lifecycleRevision;
+    if (!storePath || !expectedSessionId) {
+      await logCronDeliveryWarn(
+        `[cron:${params.job.id}] skipped transcript mirror without an exact session identity`,
+      );
+      return;
+    }
+    const admittedMirror = {
+      ...params.mirror,
+      expectedSessionId,
+      ...(expectedLifecycleRevision ? { expectedLifecycleRevision } : {}),
+    };
+
     const admission = await beginSessionWorkAdmission({
       scope: storePath,
       identities: [

@@ -1,4 +1,3 @@
-// Pixverse provider module implements model/runtime integration.
 import { randomUUID } from "node:crypto";
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
@@ -14,7 +13,6 @@ import {
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
-  type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   asFiniteNumber,
@@ -22,7 +20,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
-  GeneratedVideoAsset,
+  VideoGenerationModeCapabilities,
   VideoGenerationProvider,
   VideoGenerationRequest,
   VideoGenerationSourceAsset,
@@ -30,6 +28,7 @@ import type {
 import {
   DEFAULT_PIXVERSE_MODEL_ID,
   DEFAULT_PIXVERSE_REGION,
+  normalizePixVerseRegion,
   PIXVERSE_BASE_URL_BY_REGION,
   PIXVERSE_PROVIDER_ID,
   type PixVerseApiRegion,
@@ -92,20 +91,11 @@ function resolvePixVerseBaseUrl(req: VideoGenerationRequest): string {
 
 function resolvePixVerseApiRegion(value: unknown): PixVerseApiRegion {
   const region = normalizeOptionalString(value)?.toLowerCase();
-  switch (region) {
-    case "cn":
-    case "china":
-    case "mainland":
-    case "pai":
-      return "cn";
-    case "global":
-    case "intl":
-    case "international":
-    case undefined:
-      return DEFAULT_PIXVERSE_REGION;
-    default:
-      throw new Error(`Unsupported PixVerse API region "${region}". Use "international" or "cn".`);
+  const normalized = normalizePixVerseRegion(region);
+  if (normalized || region === undefined) {
+    return normalized ?? DEFAULT_PIXVERSE_REGION;
   }
+  throw new Error(`Unsupported PixVerse API region "${region}". Use "international" or "cn".`);
 }
 
 function normalizePixVerseModel(model: string | undefined): string {
@@ -164,38 +154,21 @@ function readPixVerseSuccess<T>(payload: PixVerseEnvelope<T>, label: string): T 
   return payload.Resp;
 }
 
-// Reads a PixVerse JSON response through the shared provider JSON reader so a
-// provider that streams an unbounded body cannot force the runtime to buffer the
-// whole payload before parsing it on the success path. The shared helper applies
-// the established 16 MiB provider JSON cap and the standard malformed-JSON
-// wrapping; PixVerse envelope validation stays local via readPixVerseSuccess.
 async function readPixVerseJson<T>(response: Response, label: string): Promise<T> {
-  const payload = await readProviderJsonResponse(response, label);
-  return readPixVerseSuccess(payload as PixVerseEnvelope<T>, label);
+  const payload = await readProviderJsonResponse<PixVerseEnvelope<T>>(response, label);
+  return readPixVerseSuccess(payload, label);
 }
 
-function readPixVerseVideoId(payload: PixVerseVideoCreateResponse): number {
-  const videoId = asSafeIntegerInRange(payload.video_id, { min: 0 });
-  if (videoId == null) {
-    throw new Error("PixVerse video generation response missing video_id");
+function readPixVerseInteger(value: unknown, label: string): number {
+  const integer = asSafeIntegerInRange(value, { min: 0 });
+  if (integer === undefined) {
+    throw new Error(label);
   }
-  return videoId;
-}
-
-function readPixVerseImageId(payload: PixVerseUploadImageResponse): number {
-  const imageId = asSafeIntegerInRange(payload.img_id, { min: 0 });
-  if (imageId == null) {
-    throw new Error("PixVerse image upload response missing img_id");
-  }
-  return imageId;
+  return integer;
 }
 
 function readPixVerseStatus(payload: PixVerseVideoResultResponse): number {
-  const status = asSafeIntegerInRange(payload.status, { min: 0 });
-  if (status == null) {
-    throw new Error("PixVerse video status response missing status");
-  }
-  return status;
+  return readPixVerseInteger(payload.status, "PixVerse video status response missing status");
 }
 
 function buildUploadImageForm(asset: VideoGenerationSourceAsset): FormData {
@@ -276,48 +249,27 @@ function readPixVerseFailureMessage(payload: PixVerseVideoResultResponse): strin
   }
 }
 
-async function pollPixVerseVideo(params: {
-  videoId: number;
-  baseUrl: string;
-  deadline: ProviderOperationDeadline;
-  fetchFn: typeof fetch;
-  allowPrivateNetwork: boolean;
-  dispatcherPolicy?: Parameters<typeof postJsonRequest>[0]["dispatcherPolicy"];
-  headers: Headers;
-}): Promise<PixVerseVideoResultResponse> {
-  const readResult = (payload: PixVerseEnvelope<PixVerseVideoResultResponse>) =>
-    readPixVerseSuccess(payload, "PixVerse video status request failed");
-  const payload = await pollProviderOperationJson<PixVerseEnvelope<PixVerseVideoResultResponse>>({
-    url: `${params.baseUrl}/video/result/${params.videoId}`,
-    headers: () => buildPixVerseHeaders(params.headers),
-    deadline: params.deadline,
-    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-    fetchFn: params.fetchFn,
-    maxAttempts: MAX_POLL_ATTEMPTS,
-    pollIntervalMs: POLL_INTERVAL_MS,
-    requestFailedMessage: "PixVerse video status request failed",
-    timeoutMessage: `PixVerse video generation task ${params.videoId} did not finish in time`,
-    isComplete: (candidate) => readPixVerseStatus(readResult(candidate)) === 1,
-    getFailureMessage: (candidate) => readPixVerseFailureMessage(readResult(candidate)),
-    allowPrivateNetwork: params.allowPrivateNetwork,
-    dispatcherPolicy: params.dispatcherPolicy,
-  });
-  return readResult(payload);
-}
-
-function extractPixVerseVideo(payload: PixVerseVideoResultResponse): GeneratedVideoAsset {
-  const url = normalizeOptionalString(payload.url);
-  if (!url) {
-    throw new Error("PixVerse video generation completed without output URL");
-  }
+function buildPixVerseModeCapabilities(imageToVideo = false): VideoGenerationModeCapabilities {
   return {
-    url,
-    mimeType: "video/mp4",
-    fileName: "video-1.mp4",
-    metadata: {
-      sourceUrl: url,
-      outputWidth: asFiniteNumber(payload.outputWidth),
-      outputHeight: asFiniteNumber(payload.outputHeight),
+    maxVideos: 1,
+    ...(imageToVideo ? { maxInputImages: 1 } : {}),
+    maxDurationSeconds: MAX_DURATION_SECONDS,
+    supportedDurationSeconds: Array.from({ length: MAX_DURATION_SECONDS }, (_, index) => index + 1),
+    ...(!imageToVideo ? { aspectRatios: [...PIXVERSE_TEXT_ASPECT_RATIOS] } : {}),
+    resolutions: ["360P", "540P", "720P", "1080P"],
+    ...(!imageToVideo ? { supportsAspectRatio: true } : {}),
+    supportsResolution: true,
+    supportsAudio: true,
+    providerOptions: {
+      seed: "number",
+      negative_prompt: "string",
+      negativePrompt: "string",
+      quality: "string",
+      ...(imageToVideo ? { motion_mode: "string" as const, motionMode: "string" as const } : {}),
+      camera_movement: "string",
+      cameraMovement: "string",
+      template_id: "number",
+      templateId: "number",
     },
   };
 }
@@ -331,53 +283,10 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
     models: [...PIXVERSE_VIDEO_MODELS],
     isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: PIXVERSE_PROVIDER_ID, ...ctx }),
     capabilities: {
-      generate: {
-        maxVideos: 1,
-        maxDurationSeconds: MAX_DURATION_SECONDS,
-        supportedDurationSeconds: Array.from(
-          { length: MAX_DURATION_SECONDS },
-          (_, index) => index + 1,
-        ),
-        aspectRatios: [...PIXVERSE_TEXT_ASPECT_RATIOS],
-        resolutions: ["360P", "540P", "720P", "1080P"],
-        supportsAspectRatio: true,
-        supportsResolution: true,
-        supportsAudio: true,
-        providerOptions: {
-          seed: "number",
-          negative_prompt: "string",
-          negativePrompt: "string",
-          quality: "string",
-          camera_movement: "string",
-          cameraMovement: "string",
-          template_id: "number",
-          templateId: "number",
-        },
-      },
+      generate: buildPixVerseModeCapabilities(),
       imageToVideo: {
         enabled: true,
-        maxVideos: 1,
-        maxInputImages: 1,
-        maxDurationSeconds: MAX_DURATION_SECONDS,
-        supportedDurationSeconds: Array.from(
-          { length: MAX_DURATION_SECONDS },
-          (_, index) => index + 1,
-        ),
-        resolutions: ["360P", "540P", "720P", "1080P"],
-        supportsResolution: true,
-        supportsAudio: true,
-        providerOptions: {
-          seed: "number",
-          negative_prompt: "string",
-          negativePrompt: "string",
-          quality: "string",
-          motion_mode: "string",
-          motionMode: "string",
-          camera_movement: "string",
-          cameraMovement: "string",
-          template_id: "number",
-          templateId: "number",
-        },
+        ...buildPixVerseModeCapabilities(true),
       },
       videoToVideo: {
         enabled: false,
@@ -438,11 +347,13 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
         });
         try {
           await assertOkOrThrowHttpError(upload.response, "PixVerse image upload failed");
-          imageId = readPixVerseImageId(
-            await readPixVerseJson<PixVerseUploadImageResponse>(
-              upload.response,
-              "PixVerse image upload failed",
-            ),
+          const uploaded = await readPixVerseJson<PixVerseUploadImageResponse>(
+            upload.response,
+            "PixVerse image upload failed",
+          );
+          imageId = readPixVerseInteger(
+            uploaded.img_id,
+            "PixVerse image upload response missing img_id",
           );
         } finally {
           await upload.release();
@@ -464,23 +375,50 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
       });
       try {
         await assertOkOrThrowHttpError(create.response, "PixVerse video generation failed");
-        const videoId = readPixVerseVideoId(
-          await readPixVerseJson<PixVerseVideoCreateResponse>(
-            create.response,
-            "PixVerse video generation failed",
-          ),
+        const submitted = await readPixVerseJson<PixVerseVideoCreateResponse>(
+          create.response,
+          "PixVerse video generation failed",
         );
-        const completed = await pollPixVerseVideo({
-          videoId,
-          baseUrl,
+        const videoId = readPixVerseInteger(
+          submitted.video_id,
+          "PixVerse video generation response missing video_id",
+        );
+        const readResult = (payload: PixVerseEnvelope<PixVerseVideoResultResponse>) =>
+          readPixVerseSuccess(payload, "PixVerse video status request failed");
+        const completedEnvelope = await pollProviderOperationJson<
+          PixVerseEnvelope<PixVerseVideoResultResponse>
+        >({
+          url: `${baseUrl}/video/result/${videoId}`,
+          headers: () => buildPixVerseHeaders(headers),
           deadline,
+          defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
           fetchFn,
+          maxAttempts: MAX_POLL_ATTEMPTS,
+          pollIntervalMs: POLL_INTERVAL_MS,
+          requestFailedMessage: "PixVerse video status request failed",
+          timeoutMessage: `PixVerse video generation task ${videoId} did not finish in time`,
+          isComplete: (candidate) => readPixVerseStatus(readResult(candidate)) === 1,
+          getFailureMessage: (candidate) => readPixVerseFailureMessage(readResult(candidate)),
           allowPrivateNetwork,
           dispatcherPolicy,
-          headers,
         });
+        const completed = readResult(completedEnvelope);
+        const url = normalizeOptionalString(completed.url);
+        if (!url) {
+          throw new Error("PixVerse video generation completed without output URL");
+        }
+        const video = {
+          url,
+          mimeType: "video/mp4",
+          fileName: "video-1.mp4",
+          metadata: {
+            sourceUrl: url,
+            outputWidth: asFiniteNumber(completed.outputWidth),
+            outputHeight: asFiniteNumber(completed.outputHeight),
+          },
+        };
         return {
-          videos: [extractPixVerseVideo(completed)],
+          videos: [video],
           model,
           metadata: {
             endpoint,

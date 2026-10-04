@@ -3,7 +3,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionOwnerSessionCount,
+  SessionsListParams,
+} from "../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -15,11 +18,7 @@ import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { sessionActivityTimestamp } from "../shared/session-activity-timestamp.js";
-import {
-  isCronSessionDisplayKey,
-  isSystemCreatedSessionRow,
-} from "../shared/session-list-visibility.js";
-import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
+import type { SessionActivityPulse, SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import type { SynchronousWork } from "../shared/synchronous-work.js";
 import {
   projectSessionOwner,
@@ -48,22 +47,25 @@ export type SessionListFilteredEntries = {
   entries: SessionEntryPair[];
   ownerEntries: SessionEntryPair[];
   ownerFacet: SessionOwnerFacetIdentity[];
+  ownerSessionCounts?: SessionOwnerSessionCount[];
   people?: SessionsListResult["people"];
   peopleIncomplete?: boolean;
   peopleSessionCount?: number;
+  activityPulse?: SessionActivityPulse;
   involvingProfileId?: string;
 };
 
 export type SessionListFilterParams = {
   cfg: OpenClawConfig;
   entries: Iterable<SessionEntryPair>;
-  candidatesPrepared?: boolean;
+  entriesSorted?: boolean;
   getTarget: SessionListTargetLookup;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   opts: SessionsListParams;
   now: number;
   userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
   configuredAgentIds?: ReadonlySet<string>;
+  identityNames?: ReadonlyMap<string, string>;
   getRowContext: SessionListRowContextProvider;
   entryFilter?: (key: string, entry: SessionEntry) => boolean;
   restrictProfileReferences?: boolean;
@@ -73,33 +75,8 @@ export type SessionListFilterParams = {
   shouldYield?: () => boolean;
 };
 
-/** The predicate and its cache key consume the same membership dependencies. */
-export function projectSessionListCandidateOptions(opts: SessionsListParams) {
-  return {
-    includeGlobal: opts.includeGlobal,
-    includeUnknown: opts.includeUnknown,
-    spawnedBy: opts.spawnedBy,
-    label: opts.label,
-    boardFace: opts.boardFace,
-    agentId: opts.agentId,
-    excludeCron: opts.excludeCron,
-    excludeSystem: opts.excludeSystem,
-    excludeSubagents: opts.excludeSubagents,
-    archived: opts.archived,
-    requireLastInteraction: opts.requireLastInteraction,
-    projectId: opts.projectId,
-    workspaceDir: opts.workspaceDir,
-    group: opts.group,
-    pinned: opts.pinned,
-  };
-}
-
-export function* filterSessionCandidateEntries(
-  params: Omit<SessionListFilterParams, "opts"> & {
-    opts: ReturnType<typeof projectSessionListCandidateOptions>;
-  },
-): SynchronousWork<SessionEntryPair[]> {
-  const { opts, now, shouldYield } = params;
+function createSessionCandidateFilter(params: SessionListFilterParams) {
+  const { opts, now } = params;
   let rowContext: SessionListRowContext | undefined;
   const getRowContext = () => (rowContext ??= params.getRowContext());
   const includeGlobal = opts.includeGlobal === true;
@@ -108,22 +85,14 @@ export function* filterSessionCandidateEntries(
   const label = normalizeOptionalString(opts.label) ?? "";
   const boardFace = opts.boardFace;
   const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
-  const keepCandidate = ([key, entry]: SessionEntryPair) => {
+  return ([key, entry]: SessionEntryPair) => {
     const target = expectDefined(params.getTarget(key), "selection row owner");
     const { selection } = target;
     const storeKey = target.storeKey ?? key;
     if (
       selection.isCronRun ||
-      (opts.excludeCron === true && isCronSessionDisplayKey(key)) ||
-      (opts.excludeSystem === true &&
-        isSystemCreatedSessionRow({
-          key,
-          createdActor: entry.createdActor,
-          createdVia: entry.createdVia,
-          label: entry.label,
-          displayName: entry.displayName,
-          subject: entry.subject,
-        })) ||
+      (opts.excludeCron === true && selection.isCron) ||
+      (opts.excludeSystem === true && selection.isSystem) ||
       (opts.excludeSubagents === true && selection.isSubagent) ||
       (!includeGlobal && storeKey === "global") ||
       (!includeUnknown && storeKey === "unknown")
@@ -189,16 +158,21 @@ export function* filterSessionCandidateEntries(
     }
     return true;
   };
-  const candidateEntries: SessionEntryPair[] = [];
-  for (const pair of params.entries) {
-    if (keepCandidate(pair)) {
-      candidateEntries.push(pair);
-    }
-    if (shouldYield?.()) {
-      yield;
-    }
+}
+
+function createActivityPulse(opts: SessionsListParams): SessionActivityPulse | undefined {
+  const boundaries = opts.activityPulseBoundaries;
+  if (!boundaries) {
+    return undefined;
   }
-  return candidateEntries;
+  return {
+    since: boundaries[0]!,
+    until: boundaries[boundaries.length - 1]!,
+    buckets: Array.from({ length: boundaries.length - 1 }, () => 0),
+    sessions: 0,
+    ...(opts.activeMinutes === undefined ? {} : { started: 0 }),
+    running: 0,
+  };
 }
 
 export function* filterSessionEntries(
@@ -219,15 +193,21 @@ export function* filterSessionEntries(
   const entries: SessionEntryPair[] = [];
   const ownerEntries: SessionEntryPair[] = [];
   const ownerFacet = new Map<string, SessionOwnerFacetIdentity>();
+  const ownerSessionCounts = opts.includeOwnerSessionCounts
+    ? new Map<string, SessionOwnerSessionCount>()
+    : undefined;
   const people = new Map<string, NonNullable<SessionsListResult["people"]>[number]>();
   let peopleSessionCount = 0;
   let peopleIncomplete = false;
+  const activityPulse = createActivityPulse(opts);
+  const pulsePeople = activityPulse && opts.includePeople ? new Set<string>() : undefined;
   const configuredAgentIds = params.configuredAgentIds ?? new Set(listAgentIds(cfg));
   const identities =
     params.userProfileIdentityById ?? new Map<string, SessionActorProfileIdentity | undefined>();
   const identityProjection = getRowContext().identityProjection;
   const projectOwner = identityProjection?.owner ?? projectSessionOwner;
   const projectParticipants = identityProjection?.participants ?? projectSessionParticipants;
+  const projectInvolvement = identityProjection?.involvement ?? projectSessionProfileInvolvement;
   const projectPeople = identityProjection?.people ?? projectSessionPeople;
   const profileRelation = opts.profileRelation
     ? {
@@ -241,14 +221,16 @@ export function* filterSessionEntries(
     : undefined;
   const involvingActorId = normalizeOptionalString(params.involvingActorId);
 
-  // The caller owns these resident entries and their prepared visibility filter.
+  // Person references resolve before candidate filters; ordinary reads need no roster copy.
   const visibleEntries: SessionEntryPair[] = [];
-  for (const pair of params.entries) {
-    if (params.entryFilter?.(pair[0], pair[1]) ?? true) {
-      visibleEntries.push(pair);
-    }
-    if (shouldYield?.()) {
-      yield;
+  if (opts.involvingProfileId) {
+    for (const pair of params.entries) {
+      if (params.entryFilter?.(pair[0], pair[1]) ?? true) {
+        visibleEntries.push(pair);
+      }
+      if (shouldYield?.()) {
+        yield;
+      }
     }
   }
   const allowedProfileIds =
@@ -278,19 +260,14 @@ export function* filterSessionEntries(
   }
   const selectedProfileId = profileReference?.value;
 
-  const candidateEntries = params.candidatesPrepared
-    ? visibleEntries
-    : yield* filterSessionCandidateEntries({
-        ...params,
-        opts: projectSessionListCandidateOptions(opts),
-        entries: visibleEntries,
-        getRowContext,
-      });
+  const candidateEntries = opts.involvingProfileId ? visibleEntries : params.entries;
+  const keepCandidate = createSessionCandidateFilter({ ...params, getRowContext });
   // Excluded rows must not participate in search or ownership resolution.
   const matchesSearch = search
     ? createSessionListSearchMatcher({
         cfg,
         search,
+        identityNames: params.identityNames,
         now,
         getTarget: params.getTarget,
         modelCatalog: params.modelCatalog instanceof Map ? params.modelCatalog : undefined,
@@ -298,21 +275,25 @@ export function* filterSessionEntries(
         projectActiveRun: params.projectActiveRun,
       })
     : undefined;
+  const participantKeys = new Map<string, string>();
   const matchesInvolvement = (
     entry: SessionEntry,
     effectiveOwner: NonNullable<ReturnType<typeof projectOwner>>["actor"] | undefined,
     profileId: string,
     personal: boolean,
   ) => {
-    const state = projectSessionProfileInvolvement(entry, profileId, identities);
+    const state = projectInvolvement(entry, profileId, identities);
+    let participantKey = participantKeys.get(profileId);
+    if (!participantKey) {
+      participantKey = JSON.stringify({ type: "profile", id: profileId });
+      participantKeys.set(profileId, participantKey);
+    }
     return (
       !(personal && state?.hidden) &&
       (Boolean(state?.lastMention || (personal && state?.hidden === false)) ||
         (effectiveOwner?.identity?.type === "profile" &&
           effectiveOwner.identity.id === profileId) ||
-        projectParticipants(entry, identities, cfg).has(
-          JSON.stringify({ type: "profile", id: profileId }),
-        ))
+        projectParticipants(entry, identities, cfg).has(participantKey))
     );
   };
 
@@ -322,6 +303,12 @@ export function* filterSessionEntries(
     }
     const key = pair[0];
     const entry = pair[1];
+    if (
+      (!opts.involvingProfileId && params.entryFilter?.(key, entry) === false) ||
+      !keepCandidate(pair)
+    ) {
+      continue;
+    }
     if (matchesSearch && !matchesSearch(key, entry)) {
       continue;
     }
@@ -392,6 +379,43 @@ export function* filterSessionEntries(
           continue;
         }
       }
+      if (pulsePeople) {
+        for (const person of associated) {
+          pulsePeople.add(person.identity.id);
+        }
+      }
+    }
+    if (
+      ownerSessionCounts &&
+      entry.archivedAt === undefined &&
+      effectiveOwner?.identity?.type === "profile"
+    ) {
+      const profileId = effectiveOwner.identity.id;
+      const counts = ownerSessionCounts.get(profileId) ?? { profileId, open: 0, running: 0 };
+      const agentId = expectDefined(params.getTarget(key), "counted row owner").agentId;
+      const active = params.projectActiveRun?.(key, entry, agentId);
+      counts.open += 1;
+      counts.running += Number(active?.active === true && active.status !== "queued");
+      ownerSessionCounts.set(profileId, counts);
+    }
+    if (activityPulse) {
+      const agentId = expectDefined(params.getTarget(key), "pulse row owner").agentId;
+      activityPulse.sessions += 1;
+      activityPulse.running += Number(
+        params.projectActiveRun?.(key, entry, agentId)?.active === true,
+      );
+      if (activityPulse.started !== undefined && activeCutoff !== undefined) {
+        activityPulse.started += Number(
+          entry.createdAt !== undefined && entry.createdAt >= activeCutoff,
+        );
+      }
+      const activityTs = sessionActivityTimestamp(entry);
+      if (activityTs >= activityPulse.since && activityTs < activityPulse.until) {
+        const bucket = opts.activityPulseBoundaries!.findLastIndex(
+          (boundary) => boundary <= activityTs,
+        );
+        activityPulse.buckets[bucket] = (activityPulse.buckets[bucket] ?? 0) + 1;
+      }
     }
     if (
       effectiveOwner?.identity?.type === "profile" &&
@@ -402,16 +426,24 @@ export function* filterSessionEntries(
     entries.push(pair);
   }
 
-  const { people: visiblePeople, overflow } = projectSessionPeopleFacet(
-    people.values(),
-    selectedProfileId,
-  );
+  const { people: visiblePeople, overflow } = projectSessionPeopleFacet(people, selectedProfileId);
+  if (activityPulse && pulsePeople) {
+    activityPulse.people = pulsePeople.size;
+  }
   return {
     entries,
     ownerEntries,
     ownerFacet: sortSessionOwnerFacet(ownerFacet),
+    ...(ownerSessionCounts
+      ? {
+          ownerSessionCounts: [...ownerSessionCounts.values()].toSorted((a, b) =>
+            a.profileId.localeCompare(b.profileId),
+          ),
+        }
+      : {}),
     // Empty time/search windows do not invalidate a resolved person link.
     involvingProfileId: selectedProfileId,
+    ...(activityPulse ? { activityPulse } : {}),
     ...(opts.includePeople
       ? {
           people: visiblePeople,

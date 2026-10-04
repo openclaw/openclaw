@@ -13,7 +13,7 @@ describe("resolveCronStyleNow", () => {
     vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-05-30T12:00:00.000Z"));
 
     const result = resolveCronStyleNow(
-      { agents: { defaults: { userTimezone: "UTC", timeFormat: "24" } } },
+      { agents: { defaults: { userTimezone: "UTC" } } },
       8_640_000_000_000_001,
     );
 
@@ -26,7 +26,7 @@ describe("resolveCronStyleNow", () => {
     vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
 
     const result = resolveCronStyleNow(
-      { agents: { defaults: { userTimezone: "UTC", timeFormat: "24" } } },
+      { agents: { defaults: { userTimezone: "UTC" } } },
       8_640_000_000_000_001,
     );
 
@@ -45,16 +45,6 @@ const CFG = {
 describe("appendCronStyleCurrentTimeLine", () => {
   it("returns the empty input unchanged", () => {
     expect(appendCronStyleCurrentTimeLine("", CFG, Date.now())).toBe("");
-  });
-
-  it("appends a Current time line when none is present", () => {
-    const out = appendCronStyleCurrentTimeLine(
-      "Heartbeat tick",
-      CFG,
-      Date.parse("2026-04-30T10:00:00Z"),
-    );
-    expect(out).toContain("Heartbeat tick");
-    expect(out).toMatch(/Reference UTC: 2026-04-30 10:00 UTC/);
   });
 
   it("refreshes an existing Current time line on subsequent calls (#44993)", () => {

@@ -329,13 +329,13 @@ pub async fn observe_navigation_events(
 }
 
 #[derive(Clone, Copy)]
-enum Navigation {
+pub(crate) enum Navigation {
     Back,
     Forward,
     Stop,
 }
 
-async fn navigate(webview: &Webview, action: Navigation) -> Result<(), String> {
+pub(crate) async fn navigate(webview: &Webview, action: Navigation) -> Result<(), String> {
     native(webview, move |platform| {
         #[cfg(target_os = "windows")]
         unsafe {
@@ -377,16 +377,6 @@ async fn navigate(webview: &Webview, action: Navigation) -> Result<(), String> {
         }
     })
     .await
-}
-
-pub async fn go_back(webview: &Webview) -> Result<(), String> {
-    navigate(webview, Navigation::Back).await
-}
-pub async fn go_forward(webview: &Webview) -> Result<(), String> {
-    navigate(webview, Navigation::Forward).await
-}
-pub async fn stop(webview: &Webview) -> Result<(), String> {
-    navigate(webview, Navigation::Stop).await
 }
 
 async fn evaluate(webview: &Webview, script: String) -> Result<Value, String> {

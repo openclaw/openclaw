@@ -31,11 +31,7 @@ export function formatToolAggregateParts(
   // Group by directory and brace-collapse filenames to keep progress text short.
   const grouped: Record<string, string[]> = {};
   for (const m of filtered) {
-    if (!isPathLike(m)) {
-      rawSegments.push(m);
-      continue;
-    }
-    if (m.includes("→")) {
+    if (!isPathLike(m) || m.includes("→")) {
       rawSegments.push(m);
       continue;
     }
@@ -78,56 +74,31 @@ function formatMetaForDisplay(
 ): string {
   const normalized = normalizeLowercaseStringOrEmpty(toolName);
   if (normalized === "exec" || normalized === "bash") {
-    const { flags, body } = splitExecFlags(meta);
+    const flags: string[] = [];
+    const bodyParts: string[] = [];
+    for (const part of meta
+      .split(" · ")
+      .map((segment) => segment.trim())
+      .filter(Boolean)) {
+      (part === "elevated" || part === "pty" ? flags : bodyParts).push(part);
+    }
     if (flags.length > 0) {
+      const body = bodyParts.join(" · ");
       if (!body) {
         return flags.join(" · ");
       }
-      return `${flags.join(" · ")} · ${maybeWrapMarkdown(body, markdown)}`;
+      return `${flags.join(" · ")} · ${markdown ? formatInlineCodeSpan(body) : body}`;
     }
   }
-  return maybeWrapMarkdown(meta, markdown);
-}
-
-function splitExecFlags(meta: string): { flags: string[]; body: string } {
-  const parts = meta
-    .split(" · ")
-    .map((part) => part.trim())
-    .filter(Boolean);
-  if (parts.length === 0) {
-    return { flags: [], body: "" };
-  }
-  const flags: string[] = [];
-  const bodyParts: string[] = [];
-  for (const part of parts) {
-    if (part === "elevated" || part === "pty") {
-      flags.push(part);
-      continue;
-    }
-    bodyParts.push(part);
-  }
-  return { flags, body: bodyParts.join(" · ") };
+  return markdown ? formatInlineCodeSpan(meta) : meta;
 }
 
 function isPathLike(value: string): boolean {
-  if (!value) {
-    return false;
-  }
-  if (value.includes(" ")) {
-    return false;
-  }
-  if (value.includes("://")) {
-    return false;
-  }
-  if (value.includes("·")) {
-    return false;
-  }
-  if (value.includes("&&") || value.includes("||")) {
-    return false;
-  }
-  return /^~?(\/[^\s]+)+$/.test(value);
-}
-
-function maybeWrapMarkdown(value: string, markdown?: boolean): string {
-  return markdown ? formatInlineCodeSpan(value) : value;
+  return (
+    !value.includes("://") &&
+    !value.includes("·") &&
+    !value.includes("&&") &&
+    !value.includes("||") &&
+    /^~?(\/[^\s]+)+$/.test(value)
+  );
 }

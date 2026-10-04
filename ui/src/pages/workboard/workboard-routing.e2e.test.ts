@@ -109,7 +109,6 @@ suite.define(() => {
         methodResponses: {
           "config.get": configSnapshot(true),
           "sessions.list": sessionsListResponse(),
-          "tasks.list": { nextCursor: null, tasks: [] },
           "workboard.boards.list": { boards },
           "workboard.cards.list": { boards, cards: [], statuses: ["todo", "done"] },
         },
@@ -226,7 +225,6 @@ suite.define(() => {
             },
             "config.get": configSnapshot(true),
             "sessions.list": sessionsListResponse(),
-            "tasks.list": { nextCursor: null, tasks: [] },
             "workboard.boards.list": { boards },
             "workboard.cards.list": { boards, cards: [], statuses: ["todo", "done"] },
           },
@@ -306,7 +304,6 @@ suite.define(() => {
           methodResponses: {
             "config.get": configSnapshot(true),
             "sessions.list": sessionsListResponse(),
-            "tasks.list": { nextCursor: null, tasks: [] },
             "workboard.boards.list": { boards },
             "workboard.cards.list": { boards, cards: [], statuses: ["todo", "done"] },
           },

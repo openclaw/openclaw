@@ -1,10 +1,8 @@
-// Read-only session queries.
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
-  type SessionsListParams,
   validateSessionsListParams,
   validateSessionsPreviewParams,
   validateSessionsResolveParams,
@@ -26,11 +24,17 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
+import { errorShapeFromError } from "../error-shape.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
+import { registerSerializedJsonArray } from "../serialized-json.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
-import type { SessionRowReadView } from "../session-row-prepared-read.js";
-import { getSessionRowProjection } from "../session-row-projection-access.js";
+import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
+import { serializeSessionRow } from "../session-row-presentation.js";
+import {
+  getSessionRowProjection,
+  requireSessionRowProjection,
+} from "../session-row-projection-access.js";
 import type { MaterializedRow } from "../session-row-projection-record.js";
 import {
   canAccessIncognitoSession,
@@ -41,13 +45,13 @@ import {
 } from "../session-sharing.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { readSessionPreviewItemsFromTranscriptAsync } from "../session-transcript-preview.js";
-import type { GatewaySessionStoreDiscoveryCache } from "../session-utils-store-lookup.js";
+import type { GatewaySessionStoreDiscoveryCache } from "../session-utils-store-candidates.js";
 import {
   listProjectedSessions,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
 } from "../session-utils.js";
-import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
+import { withPreparedSessionResolve } from "../sessions-resolve.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { withSessionListDiagnostics } from "./sessions-list-diagnostics.js";
 import { sessionMaintenanceHandlers } from "./sessions-maintenance.js";
@@ -84,7 +88,13 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         if (error instanceof SessionMutationAuthorizationChangedError) {
           throw error;
         }
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+        respond(
+          false,
+          undefined,
+          errorShapeFromError(ErrorCodes.UNAVAILABLE, error, {
+            message: formatErrorMessage(error),
+          }),
+        );
       }
       return;
     }
@@ -257,7 +267,11 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         throw error;
       }
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+      respond(
+        false,
+        undefined,
+        errorShapeFromError(ErrorCodes.UNAVAILABLE, error, { message: formatErrorMessage(error) }),
+      );
     }
   },
   "sessions.list": withSessionListDiagnostics(async (args, diagnostics) => {
@@ -265,18 +279,27 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionsListParams, "sessions.list", respond)) {
       return;
     }
-    const projection = getSessionRowProjection(context);
-    if (!projection) {
-      throw new Error("Session projection is unavailable before Gateway startup completes");
-    }
+    const projection = requireSessionRowProjection(context);
     await listProjectedSessions({
       projection,
-      opts: params as SessionsListParams,
+      opts: params,
       context,
       client,
       diagnostics,
-      onResult: (result) => {
+      onResult: (result, sharedRows) => {
         args.sessionMutationAuthorization?.assertCurrent();
+        // An event delivered before roster admission may not have established its ancestor rows.
+        if (client?.connId) {
+          context.forgetConnectionAncestors(client.connId);
+        }
+        // The RPC snapshot is immutable; embedded list results retain private mutable wrappers.
+        for (const row of result.sessions) {
+          Object.freeze(row);
+        }
+        registerSerializedJsonArray(
+          Object.freeze(result.sessions),
+          sharedRows.map(serializeSessionRow),
+        );
         respond(true, result);
       },
     });
@@ -291,8 +314,8 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionsPreviewParams, "sessions.preview", respond)) {
       return;
     }
-    const keys = (Array.isArray(params.keys) ? params.keys : [])
-      .map((key) => normalizeOptionalString(key ?? ""))
+    const keys = params.keys
+      .map((key) => normalizeOptionalString(key))
       .filter((key): key is string => Boolean(key))
       .slice(0, 64);
     const limit = params.limit ?? 12;
@@ -303,31 +326,20 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const projection = getSessionRowProjection(context);
-    if (!projection) {
-      throw new Error("Session projection is unavailable before Gateway startup completes");
-    }
-    const withPreviewRows = async <T>(
+    const projection = requireSessionRowProjection(context);
+    const withPreviewRows = <T>(
       requestedKeys: readonly string[],
       consume: (read: SessionRowReadView) => T,
-    ): Promise<T> => {
-      while (true) {
-        const prepared = await projection.withPreparedExactRows(
-          (cfg) =>
-            requestedKeys.flatMap((key) => {
-              const agent = resolveRequestedGlobalAgentId(cfg, key);
-              return agent.ok ? [{ key, agentId: agent.agentId }] : [];
-            }),
-          consume,
-        );
-        if (prepared.kind === "complete") {
-          return prepared.value;
-        }
-        const { certifySessionCanonicalValidationPending } =
-          await import("../../config/sessions/session-canonical-validation-readiness.js");
-        await certifySessionCanonicalValidationPending(prepared.database);
-      }
-    };
+    ): Promise<T> =>
+      withReadySessionRows(
+        projection,
+        (cfg) =>
+          requestedKeys.flatMap((key) => {
+            const agent = resolveRequestedGlobalAgentId(cfg, key);
+            return agent.ok ? [{ key, agentId: agent.agentId }] : [];
+          }),
+        consume,
+      );
     const previews: SessionsPreviewEntry[] = [];
     const buffered: Array<{
       preview: SessionsPreviewEntry;
@@ -428,32 +440,41 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       },
     );
   },
-  "sessions.resolve": ({ params, respond, context, client }) => {
+  "sessions.resolve": async ({
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+  }) => {
     if (!assertValidParams(params, validateSessionsResolveParams, "sessions.resolve", respond)) {
       return;
     }
-    const projection = getSessionRowProjection(context);
-    if (!projection) {
-      throw new Error("Session projection is unavailable before Gateway startup completes");
-    }
-    const resolved = resolveSessionKeyFromResolveParams({
-      projection,
-      client,
-      p: params,
-    });
-    if (!resolved.ok) {
-      respond(false, undefined, resolved.error);
-      return;
-    }
-    if ("missing" in resolved) {
-      respond(true, { ok: false }, undefined);
-      return;
-    }
-    if ("ambiguous" in resolved) {
-      respond(true, { ok: false, candidates: resolved.candidates }, undefined);
-      return;
-    }
-    respond(true, resolved, undefined);
+    const projection = requireSessionRowProjection(context);
+    await withPreparedSessionResolve(
+      {
+        projection,
+        client,
+        p: params,
+        isCurrent: () => getSessionRowProjection(context) === projection,
+      },
+      (resolved) => {
+        sessionMutationAuthorization?.assertCurrent();
+        if (!resolved.ok) {
+          respond(false, undefined, resolved.error);
+          return;
+        }
+        if ("missing" in resolved) {
+          respond(true, { ok: false }, undefined);
+          return;
+        }
+        if ("ambiguous" in resolved) {
+          respond(true, { ok: false, candidates: resolved.candidates }, undefined);
+          return;
+        }
+        respond(true, resolved, undefined);
+      },
+    );
   },
   ...sessionByKeyReadHandlers,
   ...sessionMaintenanceHandlers,

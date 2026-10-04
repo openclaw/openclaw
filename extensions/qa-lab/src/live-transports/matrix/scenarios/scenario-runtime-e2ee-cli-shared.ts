@@ -1,10 +1,9 @@
-// Qa Matrix plugin module implements shared CLI scenario runtime E2EE behavior.
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { MatrixVerificationSummary } from "@openclaw/matrix/test-api.js";
+import { z } from "zod";
 import { createMatrixQaClient } from "../substrate/client.js";
-import { createMatrixQaE2eeScenarioClient } from "../substrate/e2ee-client.js";
 import type { MatrixQaE2eeScenarioId } from "./scenario-contract.js";
 import {
   formatMatrixQaCliCommand,
@@ -12,30 +11,41 @@ import {
   type MatrixQaCliRunResult,
 } from "./scenario-runtime-cli.js";
 import {
+  createMatrixQaE2eeAccountClient,
   formatMatrixQaSasEmoji,
-  requireMatrixQaE2eeOutputDir,
   requireMatrixQaRegistrationToken,
 } from "./scenario-runtime-e2ee-shared.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
-export type MatrixQaCliVerificationStatus = {
-  backup?: {
-    decryptionKeyCached?: boolean | null;
-    keyLoadError?: string | null;
-    matchesDecryptionKey?: boolean | null;
-    trusted?: boolean | null;
-  };
-  backupVersion?: string | null;
-  crossSigningVerified?: boolean;
-  encryptionEnabled?: boolean;
-  pendingVerifications?: number;
-  recoveryKeyStored?: boolean;
-  serverDeviceKnown?: boolean;
-  verified?: boolean;
-  signedByOwner?: boolean;
-  deviceId?: string | null;
-  userId?: string | null;
-};
+const matrixQaCliVerificationStatusSchema = z.looseObject({
+  backup: z
+    .looseObject({
+      decryptionKeyCached: z.boolean().nullish(),
+      keyLoadError: z.string().nullish(),
+      matchesDecryptionKey: z.boolean().nullish(),
+      trusted: z.boolean().nullish(),
+    })
+    .optional(),
+  backupVersion: z.string().nullish(),
+  crossSigningVerified: z.boolean().optional(),
+  encryptionEnabled: z.boolean().optional(),
+  pendingVerifications: z.number().optional(),
+  error: z.string().optional(),
+  recoveryKeyAccepted: z.boolean().optional(),
+  backupUsable: z.boolean().optional(),
+  deviceOwnerVerified: z.boolean().optional(),
+  recoveryKeyStored: z.boolean().optional(),
+  serverDeviceKnown: z.boolean().nullish(),
+  verified: z.boolean().optional(),
+  signedByOwner: z.boolean().optional(),
+  success: z.boolean().optional(),
+  deviceId: z.string().nullish(),
+  userId: z.string().nullish(),
+  imported: z.number().optional(),
+  loadedFromSecretStorage: z.boolean().optional(),
+  total: z.number().optional(),
+});
+export type MatrixQaCliVerificationStatus = z.infer<typeof matrixQaCliVerificationStatusSchema>;
 export type MatrixQaCliEncryptionSetupStatus = {
   accountId?: string;
   bootstrap?: {
@@ -58,11 +68,16 @@ export type MatrixQaCliAccountAddStatus = {
     success?: boolean;
   };
 };
-export type MatrixQaCliBackupRestoreStatus = {
-  success?: boolean;
-  backup?: MatrixQaCliVerificationStatus["backup"];
-  error?: string;
-};
+export type MatrixQaCliBackupRestoreStatus = Pick<
+  MatrixQaCliVerificationStatus,
+  | "success"
+  | "backup"
+  | "backupVersion"
+  | "error"
+  | "imported"
+  | "loadedFromSecretStorage"
+  | "total"
+>;
 
 export function isMatrixQaCliBackupUsable(
   backup: MatrixQaCliVerificationStatus["backup"],
@@ -94,6 +109,10 @@ export function parseMatrixQaCliJson(result: MatrixQaCliRunResult): unknown {
       { cause: error },
     );
   }
+}
+
+export function parseMatrixQaCliVerificationStatus(result: MatrixQaCliRunResult) {
+  return matrixQaCliVerificationStatusSchema.parse(parseMatrixQaCliJson(result));
 }
 
 export function buildMatrixQaPluginActivationConfig() {
@@ -145,21 +164,34 @@ export async function registerMatrixQaCliE2eeAccount(params: {
   return account;
 }
 
+export async function loginMatrixQaCliDevice(
+  baseUrl: string,
+  account: { password: string; userId: string },
+  deviceName: string,
+  label: string,
+) {
+  const device = await createMatrixQaClient({ baseUrl }).loginWithPassword({
+    deviceName,
+    password: account.password,
+    userId: account.userId,
+  });
+  if (!device.deviceId) {
+    throw new Error(`${label} login did not return a device id`);
+  }
+  return { ...device, deviceId: device.deviceId };
+}
+
 export async function createMatrixQaE2eeCliOwnerClient(params: {
   account: Awaited<ReturnType<typeof registerMatrixQaCliE2eeAccount>>;
   context: MatrixQaScenarioContext;
   scenarioId: MatrixQaE2eeScenarioId;
 }) {
-  return await createMatrixQaE2eeScenarioClient({
+  return await createMatrixQaE2eeAccountClient(params.context, {
     accessToken: params.account.accessToken,
     actorId: `cli-owner-${randomUUID().slice(0, 8)}`,
-    baseUrl: params.context.baseUrl,
     deviceId: params.account.deviceId,
-    observedEvents: params.context.observedEvents,
-    outputDir: requireMatrixQaE2eeOutputDir(params.context),
     password: params.account.password,
     scenarioId: params.scenarioId,
-    timeoutMs: params.context.timeoutMs,
     userId: params.account.userId,
   });
 }
@@ -201,29 +233,35 @@ export async function writeMatrixQaCliOutputArtifacts(params: {
   return { stderrPath, stdoutPath };
 }
 
+export async function runMatrixQaSetupCliJson(
+  cli: {
+    rootDir: string;
+    run: (args: string[], timeoutMs?: number, stdin?: string) => Promise<MatrixQaCliRunResult>;
+  },
+  label: string,
+  ...args: Parameters<typeof cli.run>
+) {
+  const result = await cli.run(...args);
+  const artifacts = await writeMatrixQaCliOutputArtifacts({ label, result, rootDir: cli.rootDir });
+  return { artifacts, payload: parseMatrixQaCliJson(result), result };
+}
+
 export function assertMatrixQaCliSasMatches(params: {
   cliSas: ReturnType<typeof parseMatrixQaCliSasText>;
   owner: MatrixVerificationSummary;
 }) {
-  if (params.cliSas.kind === "emoji") {
-    const ownerEmoji = formatMatrixQaSasEmoji(params.owner).join(" | ");
-    if (!ownerEmoji) {
-      throw new Error("Matrix owner client did not expose SAS emoji");
-    }
-    if (params.cliSas.value !== ownerEmoji) {
-      throw new Error("Matrix CLI SAS emoji did not match the owner client");
-    }
-    return ownerEmoji.split(" | ");
+  const emoji = params.cliSas.kind === "emoji";
+  const kind = emoji ? "emoji" : "decimals";
+  const ownerSas = emoji
+    ? formatMatrixQaSasEmoji(params.owner).join(" | ")
+    : params.owner.sas?.decimal?.join(" ");
+  if (!ownerSas) {
+    throw new Error(`Matrix owner client did not expose SAS ${kind}`);
   }
-
-  const ownerDecimal = params.owner.sas?.decimal?.join(" ");
-  if (!ownerDecimal) {
-    throw new Error("Matrix owner client did not expose SAS decimals");
+  if (params.cliSas.value !== ownerSas) {
+    throw new Error(`Matrix CLI SAS ${kind} did not match the owner client`);
   }
-  if (params.cliSas.value !== ownerDecimal) {
-    throw new Error("Matrix CLI SAS decimals did not match the owner client");
-  }
-  return [ownerDecimal];
+  return emoji ? ownerSas.split(" | ") : [ownerSas];
 }
 
 export function isMatrixQaCliOwnerSelfVerification(params: {

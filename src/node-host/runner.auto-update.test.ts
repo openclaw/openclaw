@@ -128,6 +128,8 @@ describe("node runner auto-update handoff", () => {
       ready: true,
       aborted: false,
       elapsedMs: 0,
+      maxDriftMs: 0,
+      checks: 1,
     });
     updateMocks.prepare.mockReset().mockResolvedValue(candidate);
     vi.stubEnv("OPENCLAW_STATE_DIR", temporary.make("node-runner-update-"));
@@ -244,32 +246,6 @@ describe("node runner auto-update handoff", () => {
     );
   });
 
-  it("closes the foreground runner only after its parent accepts the prepared runtime", async () => {
-    await withRunningNodeHost({}, async ({ running }) => {
-      hello();
-      await vi.waitFor(() =>
-        expect(updateMocks.send).toHaveBeenCalledWith(
-          {
-            type: "openclaw.node.restart",
-            runtimeRoot: candidate.runtimeRoot,
-            version: candidate.version,
-          },
-          expect.any(Function),
-        ),
-      );
-      expect(mocks.capturedGatewayClients[0]?.stop).not.toHaveBeenCalled();
-      expect(mocks.activeRuntime.close).not.toHaveBeenCalled();
-
-      process.emit("message", { type: "openclaw.node.restart-result", ok: true });
-      await running;
-
-      expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalledOnce();
-      expect(mocks.activeRuntime.close).toHaveBeenCalledOnce();
-      expect(mocks.activeRuntime.resumeAfterUpdate).not.toHaveBeenCalled();
-      expect(process.exitCode).toBe(0);
-    });
-  });
-
   it.each([
     { label: "service enrollment", stopAfterFirstConnect: true },
     { label: "an ephemeral worker", ephemeral: true },
@@ -285,38 +261,63 @@ describe("node runner auto-update handoff", () => {
     });
   });
 
-  it("keeps repeated shutdown signals handled until an in-flight update has settled", async () => {
-    const installing = createDeferred<PreparedNodeRuntimeUpdate>();
-    updateMocks.prepare.mockReturnValueOnce(installing.promise);
-    await withRunningNodeHost({}, async ({ running, stop }) => {
-      try {
-        hello();
-        await vi.waitFor(() => expect(updateMocks.prepare).toHaveBeenCalledOnce());
-        const updateSignal = updateMocks.prepare.mock.calls[0]?.[0].signal;
+  it.each(["parent acceptance", "shutdown signal"] as const)(
+    "joins the in-flight update before closing after %s",
+    async (completion) => {
+      const installing = createDeferred<PreparedNodeRuntimeUpdate>();
+      updateMocks.prepare.mockReturnValueOnce(installing.promise);
+      await withRunningNodeHost({}, async ({ running, stop }) => {
+        try {
+          hello();
+          await vi.waitFor(() => expect(updateMocks.prepare).toHaveBeenCalledOnce());
+          const updateSignal = updateMocks.prepare.mock.calls[0]?.[0].signal;
 
-        const onSigterm = stop();
-        expect(onSigterm).toBeDefined();
-        expect(process.listeners("SIGTERM")).toContain(onSigterm);
-        stop();
-        expect(process.listeners("SIGTERM")).toContain(onSigterm);
-        expect(updateSignal?.aborted).toBe(true);
-        expect(mocks.capturedGatewayClients[0]?.stop).not.toHaveBeenCalled();
-        expect(mocks.activeRuntime.close).not.toHaveBeenCalled();
+          let onSigterm: (() => void) | undefined;
+          if (completion === "shutdown signal") {
+            onSigterm = stop();
+            expect(onSigterm).toBeDefined();
+            expect(process.listeners("SIGTERM")).toContain(onSigterm);
+            stop();
+            expect(process.listeners("SIGTERM")).toContain(onSigterm);
+            expect(updateSignal?.aborted).toBe(true);
+          } else {
+            installing.resolve(candidate);
+            await vi.waitFor(() =>
+              expect(updateMocks.send).toHaveBeenCalledWith(
+                {
+                  type: "openclaw.node.restart",
+                  runtimeRoot: candidate.runtimeRoot,
+                  version: candidate.version,
+                },
+                expect.any(Function),
+              ),
+            );
+          }
+          expect(mocks.capturedGatewayClients[0]?.stopAndWait).not.toHaveBeenCalled();
+          expect(mocks.activeRuntime.close).not.toHaveBeenCalled();
 
-        installing.resolve(candidate);
-        await running;
+          installing.resolve(candidate);
+          if (completion === "parent acceptance") {
+            process.emit("message", { type: "openclaw.node.restart-result", ok: true });
+          }
+          await running;
 
-        expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalledOnce();
-        expect(mocks.activeRuntime.close).toHaveBeenCalledOnce();
-        expect(process.listeners("SIGTERM")).not.toContain(onSigterm);
-        expect(mocks.activeRuntime.tryPauseForUpdate).not.toHaveBeenCalled();
-        expect(updateMocks.send.mock.calls.map(([message]) => message)).not.toContainEqual(
-          expect.objectContaining({ type: "openclaw.node.restart" }),
-        );
-        expect(process.exitCode).toBe(143);
-      } finally {
-        installing.resolve(candidate);
-      }
-    });
-  });
+          expect(mocks.capturedGatewayClients[0]?.stopAndWait).toHaveBeenCalledOnce();
+          expect(mocks.activeRuntime.close).toHaveBeenCalledOnce();
+          if (completion === "shutdown signal") {
+            expect(process.listeners("SIGTERM")).not.toContain(onSigterm);
+            expect(mocks.activeRuntime.tryPauseForUpdate).not.toHaveBeenCalled();
+            expect(updateMocks.send.mock.calls.map(([message]) => message)).not.toContainEqual(
+              expect.objectContaining({ type: "openclaw.node.restart" }),
+            );
+          } else {
+            expect(mocks.activeRuntime.resumeAfterUpdate).not.toHaveBeenCalled();
+          }
+          expect(process.exitCode).toBe(completion === "shutdown signal" ? 143 : 0);
+        } finally {
+          installing.resolve(candidate);
+        }
+      });
+    },
+  );
 });

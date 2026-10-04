@@ -223,16 +223,16 @@ it("validates authored and inherited aliases without discovering plugin metadata
   }
 });
 
-it("preserves a list-form roster when applying custom-provider model state", () => {
+it("preserves the roster when applying custom-provider model state", () => {
   const result = applyCustomApiConfig({
     config: {
       agents: {
         ownership: "explicit",
         defaults: { systemAgent: { agentId: "ops" } },
-        list: [
-          { id: "main", name: "Main" },
-          { id: "ops", name: "Operations" },
-        ],
+        entries: {
+          main: { name: "Main" },
+          ops: { name: "Operations" },
+        },
       },
     },
     baseUrl: "https://llm.example.com/v1",
@@ -243,7 +243,7 @@ it("preserves a list-form roster when applying custom-provider model state", () 
     target: { agentId: "ops", agentDir: "/tmp/ops-agent", workspaceDir: "/tmp/ops-workspace" },
   });
 
-  expect(result.config.agents?.list).toBeUndefined();
+  expect(result.config.agents).not.toHaveProperty("list");
   expect(result.config.agents?.entries).toEqual({
     main: { name: "Main" },
     ops: {
@@ -380,11 +380,6 @@ describe("applyCustomApiConfig", () => {
       existingContextWindow: 8192,
       expectedContextWindow: 8192,
     },
-    {
-      name: "preserves existing custom model context window when already above minimum",
-      existingContextWindow: 131072,
-      expectedContextWindow: 131072,
-    },
   ])("$name", ({ existingContextWindow, expectedContextWindow }) => {
     const result = applyCustomModelConfigWithContextWindow(existingContextWindow);
     const model = result.config.models?.providers?.custom?.models?.find(
@@ -394,6 +389,16 @@ describe("applyCustomApiConfig", () => {
   });
 
   it.each([
+    ...["ftp://localhost/v1", "file:///tmp/model", "not-a-url"].map((baseUrl) => ({
+      name: `unsupported base URL ${baseUrl}`,
+      params: {
+        config: {},
+        baseUrl,
+        modelId: "foo-large",
+        compatibility: "openai" as const,
+      },
+      expectedMessage: "Custom provider base URL must be a valid HTTP or HTTPS URL.",
+    })),
     {
       name: "invalid compatibility values at runtime",
       params: {

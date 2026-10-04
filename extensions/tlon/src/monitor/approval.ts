@@ -1,50 +1,18 @@
-/**
- * Approval system for managing DM, channel mention, and group invite approvals.
- *
- * When an unknown ship tries to interact with the bot, the owner receives
- * a notification and can approve or deny the request.
- */
-
-// Extensions cannot import core internals directly, so use node:crypto here.
 import { randomBytes } from "node:crypto";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { PendingApproval } from "../settings.js";
 
-export type { PendingApproval };
-
-type ApprovalType = "dm" | "channel" | "group";
-
-type CreateApprovalParams = {
-  type: ApprovalType;
-  requestingShip: string;
-  channelNest?: string;
-  groupFlag?: string;
-  messagePreview?: string;
-  originalMessage?: {
-    messageId: string;
-    messageText: string;
-    messageContent: unknown;
-    timestamp: number;
-    parentId?: string;
-    isThreadReply?: boolean;
-  };
-};
-
-/**
- * Generate a unique approval ID in the format: {type}-{timestamp}-{shortHash}
- */
-function generateApprovalId(type: ApprovalType): string {
+function generateApprovalId(type: PendingApproval["type"]): string {
   const timestamp = Date.now();
   const randomPart = randomBytes(3).toString("hex");
   return `${type}-${timestamp}-${randomPart}`;
 }
 
-/**
- * Create a pending approval object.
- */
-export function createPendingApproval(params: CreateApprovalParams): PendingApproval {
+export function createPendingApproval(
+  params: Omit<PendingApproval, "id" | "timestamp">,
+): PendingApproval {
   return {
     id: generateApprovalId(params.type),
     type: params.type,
@@ -58,9 +26,6 @@ export function createPendingApproval(params: CreateApprovalParams): PendingAppr
   };
 }
 
-/**
- * Truncate text to a maximum length with ellipsis.
- */
 function truncate(text: string, maxLength: number): string {
   if (text.length <= maxLength) {
     return text;
@@ -68,9 +33,6 @@ function truncate(text: string, maxLength: number): string {
   return sliceUtf16Safe(text, 0, maxLength - 3) + "...";
 }
 
-/**
- * Format a notification message for the owner about a pending approval.
- */
 export function formatApprovalRequest(approval: PendingApproval): string {
   const preview = approval.messagePreview ? `\n"${truncate(approval.messagePreview, 100)}"` : "";
 
@@ -103,17 +65,9 @@ type ApprovalResponse = {
   id?: string;
 };
 
-/**
- * Parse an owner's response to an approval request.
- * Supports formats:
- *   - "approve" / "deny" / "block" (applies to most recent pending)
- *   - "approve dm-1234567890-abc" / "deny dm-1234567890-abc" (specific ID)
- *   - "block" permanently blocks the ship via Tlon's native blocking
- */
 export function parseApprovalResponse(text: string): ApprovalResponse | null {
   const trimmed = normalizeLowercaseStringOrEmpty(text);
 
-  // Match "approve", "deny", or "block" optionally followed by an ID
   const match = trimmed.match(/^(approve|deny|block)(?:\s+(.+))?$/);
   if (!match) {
     return null;
@@ -125,18 +79,6 @@ export function parseApprovalResponse(text: string): ApprovalResponse | null {
   return { action, id };
 }
 
-/**
- * Check if a message text looks like an approval response.
- * Used to determine if we should intercept the message before normal processing.
- */
-export function isApprovalResponse(text: string): boolean {
-  const trimmed = normalizeLowercaseStringOrEmpty(text);
-  return trimmed.startsWith("approve") || trimmed.startsWith("deny") || trimmed.startsWith("block");
-}
-
-/**
- * Find a pending approval by ID, or return the most recent if no ID specified.
- */
 export function findPendingApproval(
   pendingApprovals: PendingApproval[],
   id?: string,
@@ -144,13 +86,9 @@ export function findPendingApproval(
   if (id) {
     return pendingApprovals.find((a) => a.id === id);
   }
-  // Return most recent
   return pendingApprovals[pendingApprovals.length - 1];
 }
 
-/**
- * Remove a pending approval from the list by ID.
- */
 export function removePendingApproval(
   pendingApprovals: PendingApproval[],
   id: string,
@@ -158,9 +96,6 @@ export function removePendingApproval(
   return pendingApprovals.filter((a) => a.id !== id);
 }
 
-/**
- * Format a confirmation message after an approval action.
- */
 export function formatApprovalConfirmation(
   approval: PendingApproval,
   action: "approve" | "deny" | "block",
@@ -193,33 +128,19 @@ export function formatApprovalConfirmation(
   throw new Error("Unsupported approval type");
 }
 
-// ============================================================================
-// Admin Commands
-// ============================================================================
-
 type AdminCommand = { type: "unblock"; ship: string } | { type: "blocked" } | { type: "pending" };
 
-/**
- * Parse an admin command from owner message.
- * Supports:
- *   - "unblock ~ship" - unblock a specific ship
- *   - "blocked" - list all blocked ships
- *   - "pending" - list all pending approvals
- */
 export function parseAdminCommand(text: string): AdminCommand | null {
   const trimmed = normalizeLowercaseStringOrEmpty(text);
 
-  // "blocked" - list blocked ships
   if (trimmed === "blocked") {
     return { type: "blocked" };
   }
 
-  // "pending" - list pending approvals
   if (trimmed === "pending") {
     return { type: "pending" };
   }
 
-  // "unblock ~ship" - unblock a specific ship
   const unblockMatch = trimmed.match(/^unblock\s+(~[\w-]+)$/);
   if (unblockMatch) {
     return { type: "unblock", ship: expectDefined(unblockMatch[1], "unblock ship capture") };
@@ -228,16 +149,6 @@ export function parseAdminCommand(text: string): AdminCommand | null {
   return null;
 }
 
-/**
- * Check if a message text looks like an admin command.
- */
-export function isAdminCommand(text: string): boolean {
-  return parseAdminCommand(text) !== null;
-}
-
-/**
- * Format the list of blocked ships for display to owner.
- */
 export function formatBlockedList(ships: string[]): string {
   if (ships.length === 0) {
     return "No ships are currently blocked.";
@@ -245,9 +156,6 @@ export function formatBlockedList(ships: string[]): string {
   return `Blocked ships (${ships.length}):\n${ships.map((s) => `• ${s}`).join("\n")}`;
 }
 
-/**
- * Format the list of pending approvals for display to owner.
- */
 export function formatPendingList(approvals: PendingApproval[]): string {
   if (approvals.length === 0) {
     return "No pending approval requests.";

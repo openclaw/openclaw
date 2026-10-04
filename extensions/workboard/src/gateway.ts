@@ -1,15 +1,17 @@
-// Workboard plugin module implements gateway behavior.
-import type { WorkboardCard } from "@openclaw/workboard-contract";
+import type { WorkboardCard, WorkboardSessionsBoardView } from "@openclaw/workboard-contract";
+import { readStringParam } from "openclaw/plugin-sdk/core";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi } from "../api.js";
 import { redactClaimToken } from "./card-redaction.js";
 import {
   assertNoCursorAdvance,
   createWorkboardDispatchHandler,
-  listWorkboardCards,
   readId,
   readExpectedUpdatedAt,
   registerWorkboardResultMethods,
   respondError,
+  WorkboardUploadsDisabledError,
+  type GatewayMethodContext,
 } from "./gateway-helpers.js";
 import {
   registerWorkboardWorkspaceBoardMethod,
@@ -17,12 +19,75 @@ import {
   registerWorkboardWorkspaceCardMethods,
   registerWorkboardWorkspaceWorkflowMethods,
 } from "./gateway-workspace-methods.js";
+import type { WorkboardSessionsBoardService } from "./sessions-board.js";
 import { resolveWorkboardSqliteWorkerModuleUrl } from "./sqlite-store-paths.js";
 import { registerWorkboardStoreLifecycle } from "./store-lifecycle.js";
 import { WorkboardStore } from "./store.js";
 
 const READ_SCOPE = "operator.read" as const;
 const WRITE_SCOPE = "operator.write" as const;
+
+function sessionsBoardView(input: Record<string, unknown>): WorkboardSessionsBoardView | undefined {
+  const unknownParam = Object.keys(input).find((key) => key !== "boardId" && key !== "view");
+  if (unknownParam) {
+    throw new Error(`Unknown Sessions board read field: ${unknownParam}.`);
+  }
+  if (input.view === undefined) {
+    return undefined;
+  }
+  if (!isRecord(input.view)) {
+    throw new Error("view must be an object.");
+  }
+  const view: WorkboardSessionsBoardView = {};
+  for (const [key, value] of Object.entries(input.view)) {
+    switch (key) {
+      case "involvingMe":
+      case "includePeople":
+        if (typeof value !== "boolean") {
+          throw new Error(`view.${key} must be a boolean.`);
+        }
+        view[key] = value;
+        break;
+      case "involvingProfileId":
+        if (typeof value !== "string") {
+          throw new Error("view.involvingProfileId must be a string.");
+        }
+        view.involvingProfileId = value;
+        break;
+      default:
+        throw new Error(`Unknown Sessions board view field: ${key}.`);
+    }
+  }
+  return view;
+}
+
+/**
+ * Interactive Sessions-board writes wait in the store's mutation queue, so the
+ * caller's full Gateway authority (transport, role/scope/profile authorization,
+ * in-process lifetime) is rechecked immediately before the SQLite write.
+ */
+function sessionsBoardCaller(
+  context: Pick<
+    GatewayMethodContext,
+    | "hasCurrentClientAuthority"
+    | "sessionMutationAuthorization"
+    | "sessionAccessAuthority"
+    | "sessionMutationCommitGuard"
+    | "signal"
+  >,
+) {
+  return {
+    assertCurrent() {
+      context.signal?.throwIfAborted();
+      if (context.hasCurrentClientAuthority?.() === false) {
+        throw new Error("Caller authority is no longer active.");
+      }
+      context.sessionAccessAuthority?.assertCurrent();
+      context.sessionMutationAuthorization?.assertCurrent();
+      context.sessionMutationCommitGuard?.();
+    },
+  };
+}
 
 function redactDiagnosticsRows(result: Awaited<ReturnType<WorkboardStore["diagnostics"]>>) {
   return {
@@ -38,11 +103,32 @@ async function redactCardResult(card: Promise<WorkboardCard>) {
   return { card: redactClaimToken(await card) };
 }
 
+function cardMutation(
+  method: string,
+  mutate: (id: string, input: Record<string, unknown>) => Promise<WorkboardCard>,
+) {
+  return [
+    `workboard.cards.${method}`,
+    WRITE_SCOPE,
+    ({ params }: GatewayMethodContext) => redactCardResult(mutate(readId(params), params)),
+  ] as const;
+}
+
 export function registerWorkboardGatewayMethods(params: {
   api: OpenClawPluginApi;
   store?: WorkboardStore;
+  sessionsBoard?: Pick<WorkboardSessionsBoardService, "read" | "update" | "move">;
 }) {
   const { api: hostApi } = params;
+  const assertUploadsAllowed = (client: GatewayMethodContext["client"]) => {
+    if (
+      !client?.internal?.syntheticClient &&
+      !client?.internal?.agentRuntimeIdentity &&
+      hostApi.runtime.config.current().gateway?.uploads?.enabled === false
+    ) {
+      throw new WorkboardUploadsDisabledError();
+    }
+  };
   const store =
     params.store ??
     WorkboardStore.openSqlite(resolveWorkboardSqliteWorkerModuleUrl(hostApi.runtimeSource));
@@ -56,7 +142,12 @@ export function registerWorkboardGatewayMethods(params: {
         method,
         async (request) => {
           try {
-            return await store.runOperation(() => handler(request));
+            return await store.runOperation(() => {
+              if (method === "workboard.cards.attachments.add") {
+                assertUploadsAllowed(request.client);
+              }
+              return handler(request);
+            });
           } catch (error) {
             respondError(request.respond, error);
           }
@@ -67,19 +158,17 @@ export function registerWorkboardGatewayMethods(params: {
   const dispatchCards = createWorkboardDispatchHandler({
     api,
     store,
-    redactCard: redactClaimToken,
   });
 
   registerWorkboardResultMethods(api, [
     [
       "workboard.cards.list",
       READ_SCOPE,
-      async ({ params: requestParams }) =>
-        await listWorkboardCards(store, requestParams.boardId, redactClaimToken),
+      ({ params: requestParams }) => store.listCards(requestParams.boardId),
     ],
   ]);
 
-  registerWorkboardWorkspaceCardMethods({ api, store, redactCard: redactClaimToken });
+  registerWorkboardWorkspaceCardMethods({ api, store });
 
   api.registerGatewayMethod(
     "workboard.cards.start",
@@ -112,18 +201,8 @@ export function registerWorkboardGatewayMethods(params: {
           expectedUpdatedAt: readExpectedUpdatedAt(requestParams),
         }),
     ],
-    [
-      "workboard.cards.comment",
-      WRITE_SCOPE,
-      ({ params: requestParams }) =>
-        redactCardResult(store.addComment(readId(requestParams), requestParams)),
-    ],
-    [
-      "workboard.cards.link",
-      WRITE_SCOPE,
-      ({ params: requestParams }) =>
-        redactCardResult(store.addLink(readId(requestParams), requestParams)),
-    ],
+    cardMutation("comment", (id, input) => store.addComment(id, input)),
+    cardMutation("link", (id, input) => store.addLink(id, input)),
     [
       "workboard.cards.linkDependency",
       WRITE_SCOPE,
@@ -136,18 +215,8 @@ export function registerWorkboardGatewayMethods(params: {
         return redactCardResult(store.linkCards(parentId, childId));
       },
     ],
-    [
-      "workboard.cards.proof",
-      WRITE_SCOPE,
-      ({ params: requestParams }) =>
-        redactCardResult(store.addProof(readId(requestParams), requestParams)),
-    ],
-    [
-      "workboard.cards.artifact",
-      WRITE_SCOPE,
-      ({ params: requestParams }) =>
-        redactCardResult(store.addArtifact(readId(requestParams), requestParams)),
-    ],
+    cardMutation("proof", (id, input) => store.addProof(id, input)),
+    cardMutation("artifact", (id, input) => store.addArtifact(id, input)),
     [
       "workboard.cards.claim",
       WRITE_SCOPE,
@@ -156,56 +225,17 @@ export function registerWorkboardGatewayMethods(params: {
         return { ...claimed, card: redactClaimToken(claimed.card) };
       },
     ],
-    [
-      "workboard.cards.heartbeat",
-      WRITE_SCOPE,
-      ({ params: requestParams }) =>
-        redactCardResult(store.heartbeat(readId(requestParams), requestParams)),
-    ],
-    [
-      "workboard.cards.release",
-      WRITE_SCOPE,
-      ({ params: requestParams }) =>
-        redactCardResult(store.releaseClaim(readId(requestParams), requestParams)),
-    ],
-    [
-      "workboard.cards.promote",
-      WRITE_SCOPE,
-      ({ params: requestParams }) =>
-        redactCardResult(store.promote(readId(requestParams), requestParams, null)),
-    ],
-    [
-      "workboard.cards.reassign",
-      WRITE_SCOPE,
-      ({ params: requestParams }) =>
-        redactCardResult(store.reassign(readId(requestParams), requestParams, null)),
-    ],
-    [
-      "workboard.cards.reclaim",
-      WRITE_SCOPE,
-      ({ params: requestParams }) =>
-        redactCardResult(store.reclaim(readId(requestParams), requestParams, null)),
-    ],
-    [
-      "workboard.cards.complete",
-      WRITE_SCOPE,
-      ({ params: requestParams }) =>
-        redactCardResult(store.complete(readId(requestParams), requestParams, null)),
-    ],
-    [
-      "workboard.cards.block",
-      WRITE_SCOPE,
-      ({ params: requestParams }) =>
-        redactCardResult(store.block(readId(requestParams), requestParams, null)),
-    ],
-    [
-      "workboard.cards.unblock",
-      WRITE_SCOPE,
-      ({ params: requestParams }) => redactCardResult(store.unblock(readId(requestParams))),
-    ],
+    cardMutation("heartbeat", (id, input) => store.heartbeat(id, input)),
+    cardMutation("release", (id, input) => store.releaseClaim(id, input)),
+    cardMutation("promote", (id, input) => store.promote(id, input, null)),
+    cardMutation("reassign", (id, input) => store.reassign(id, input, null)),
+    cardMutation("reclaim", (id, input) => store.reclaim(id, input, null)),
+    cardMutation("complete", (id, input) => store.complete(id, input, null)),
+    cardMutation("block", (id, input) => store.block(id, input, null)),
+    cardMutation("unblock", (id) => store.unblock(id)),
   ]);
 
-  registerWorkboardWorkspaceBulkMethod({ api, store, redactCard: redactClaimToken });
+  registerWorkboardWorkspaceBulkMethod({ api, store });
 
   registerWorkboardResultMethods(api, [
     [
@@ -236,7 +266,51 @@ export function registerWorkboardGatewayMethods(params: {
     ["workboard.boards.list", READ_SCOPE, () => store.listBoards()],
   ]);
 
-  registerWorkboardWorkspaceBoardMethod({ api, store, redactCard: redactClaimToken });
+  registerWorkboardWorkspaceBoardMethod({ api, store });
+
+  const sessionsBoard = () => {
+    if (!params.sessionsBoard) {
+      throw new Error("Sessions board service is unavailable.");
+    }
+    return params.sessionsBoard;
+  };
+  registerWorkboardResultMethods(api, [
+    [
+      "workboard.sessionsBoard.read",
+      READ_SCOPE,
+      (context: GatewayMethodContext) =>
+        sessionsBoard().read(
+          readStringParam(context.params, "boardId", { required: true }),
+          sessionsBoardView(context.params),
+          sessionsBoardCaller(context),
+        ),
+    ],
+    [
+      "workboard.sessionsBoard.update",
+      WRITE_SCOPE,
+      async (context: GatewayMethodContext) => {
+        const input = context.params;
+        const boardId = readStringParam(input, "boardId", { required: true });
+        if (!isRecord(input.patch)) {
+          throw new Error("patch must be an object.");
+        }
+        return {
+          board: await sessionsBoard().update(boardId, input.patch, sessionsBoardCaller(context)),
+        };
+      },
+    ],
+    [
+      "workboard.sessionsBoard.move",
+      WRITE_SCOPE,
+      (context: GatewayMethodContext) =>
+        sessionsBoard().move(
+          readStringParam(context.params, "boardId", { required: true }),
+          readStringParam(context.params, "sessionKey", { required: true }),
+          readStringParam(context.params, "columnId", { required: true }),
+          sessionsBoardCaller(context),
+        ),
+    ],
+  ]);
 
   registerWorkboardResultMethods(api, [
     [
@@ -266,7 +340,7 @@ export function registerWorkboardGatewayMethods(params: {
     ],
   ]);
 
-  registerWorkboardWorkspaceWorkflowMethods({ api, store, redactCard: redactClaimToken });
+  registerWorkboardWorkspaceWorkflowMethods({ api, store });
 
   registerWorkboardResultMethods(api, [
     [
@@ -321,8 +395,10 @@ export function registerWorkboardGatewayMethods(params: {
     [
       "workboard.cards.attachments.add",
       WRITE_SCOPE,
-      ({ params: requestParams }) =>
-        redactCardResult(store.addAttachment(readId(requestParams), requestParams)),
+      ({ params: input, client }: GatewayMethodContext) =>
+        redactCardResult(
+          store.addAttachment(readId(input), input, undefined, () => assertUploadsAllowed(client)),
+        ),
     ],
     [
       "workboard.cards.attachments.delete",
@@ -335,18 +411,8 @@ export function registerWorkboardGatewayMethods(params: {
         return redactCardResult(store.deleteAttachment(readId(requestParams), attachmentId.trim()));
       },
     ],
-    [
-      "workboard.cards.workerLog",
-      WRITE_SCOPE,
-      ({ params: requestParams }) =>
-        redactCardResult(store.addWorkerLog(readId(requestParams), requestParams)),
-    ],
-    [
-      "workboard.cards.protocolViolation",
-      WRITE_SCOPE,
-      ({ params: requestParams }) =>
-        redactCardResult(store.recordProtocolViolation(readId(requestParams), requestParams)),
-    ],
+    cardMutation("workerLog", (id, input) => store.addWorkerLog(id, input)),
+    cardMutation("protocolViolation", (id, input) => store.recordProtocolViolation(id, input)),
     [
       "workboard.cards.archive",
       WRITE_SCOPE,

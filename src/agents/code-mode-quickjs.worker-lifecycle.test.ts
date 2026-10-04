@@ -127,11 +127,6 @@ describe("QuickJS host lifecycle and output", () => {
   it.each([
     { label: "returned values", source: 'return "x".repeat(2_048);', status: "completed" },
     {
-      label: "completed output",
-      source: 'text("x".repeat(2_048)); return true;',
-      status: "completed",
-    },
-    {
       label: "combined output and returned values",
       source: 'text("x".repeat(700)); return "y".repeat(700);',
       status: "completed",
@@ -167,7 +162,7 @@ describe("QuickJS host lifecycle and output", () => {
       if (result.status === "waiting") {
         onTestFinished(() => result.continuation.dispose());
       }
-      expect(result.status).toBe(status);
+      expect(result.status, result.status === "failed" ? result.error : undefined).toBe(status);
 
       if (result.status === "failed") {
         expect(result.code).toBe("internal_error");

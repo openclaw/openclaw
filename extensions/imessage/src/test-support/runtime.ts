@@ -22,8 +22,9 @@ import { setIMessageRuntime } from "../runtime.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 
 afterAll(async () => {
-  const { closeOpenClawStateDatabaseAsync } =
+  const { closeOpenClawAgentDatabasesAsync, closeOpenClawStateDatabaseAsync } =
     await import("openclaw/plugin-sdk/sqlite-runtime-testing");
+  await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
 });
 
@@ -47,9 +48,8 @@ export function createIMessagePluginStateSyncStoreForTest<T>(
 }
 
 export function installIMessageStateRuntimeForTest(): void {
-  closeOpenClawStateDatabaseForTest();
   imessageTestEnv = createIMessageTestEnv();
-  resetPluginStateStoreForTests();
+  resetPluginStateStoreForTests({ closeDatabase: false });
   setIMessageRuntime({
     state: {
       resolveStateDir: () => imessageTestEnv.OPENCLAW_STATE_DIR,

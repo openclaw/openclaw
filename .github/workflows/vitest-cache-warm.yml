@@ -10,7 +10,7 @@ on:
   repository_dispatch:
     types: [vitest-cache-warm]
   schedule:
-    - cron: "17 8 * * *"
+    - cron: "17 * * * *"
 
 permissions:
   contents: read
@@ -19,11 +19,11 @@ jobs:
   dependencies:
     # Shared CI cache publication is isolated from pull-request execution.
     # Trusted release/proof workflows may save only through the same authority contract.
-    if: ${{ github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' }}
+    if: ${{ github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && (github.event_name != 'push' || vars.OPENCLAW_CI_ON_PUSH == 'true') }}
     runs-on: ${{ matrix.platform == 'macos' && 'macos-15' || ((matrix.platform == 'linux-hosted' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'github') && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404') }}
     timeout-minutes: 20
     concurrency:
-      group: ${{ format('vitest-cache-warm-dependencies-{0}-{1}', matrix.platform == 'linux' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'linux-hosted' || matrix.platform, github.ref) }}
+      group: ${{ format('vitest-cache-warm-dependencies-{0}-{1}', matrix.platform == 'linux' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'linux-hosted' || matrix.platform, format('{0}-{1}', github.event_name, github.ref)) }}
       cancel-in-progress: false
     strategy:
       # Each platform publishes its own cache namespace independently.
@@ -77,11 +77,11 @@ jobs:
           key: ${{ steps.setup-node-env.outputs.pnpm-store-cache-key }}
 
   warm:
-    if: ${{ github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' }}
+    if: ${{ github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && (github.event_name != 'push' || vars.OPENCLAW_CI_ON_PUSH == 'true') }}
     runs-on: ${{ (matrix.platform == 'linux-hosted' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'github') && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     concurrency:
-      group: ${{ format('vitest-cache-warm-code-{0}-{1}', matrix.platform == 'linux' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'linux-hosted' || matrix.platform, github.ref) }}
+      group: ${{ format('vitest-cache-warm-code-{0}-{1}', matrix.platform == 'linux' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'linux-hosted' || matrix.platform, format('{0}-{1}', github.event_name, github.ref)) }}
       cancel-in-progress: false
     strategy:
       fail-fast: false
@@ -97,6 +97,7 @@ jobs:
         id: setup-node-env
         uses: ./.github/actions/setup-node-env
         with:
+          semantic-checks: "true"
           build-all-cache-scope: ${{ matrix.platform == 'linux' && 'full' || '' }}
           cache-mode: read-write
           dependency-cache: ${{ matrix.platform == 'linux' && 'true' || 'false' }}
@@ -124,36 +125,30 @@ jobs:
           path: .artifacts/vitest-worker-cache
           key: ${{ steps.setup-node-env.outputs.vitest-worker-cache-key }}
 
-      # Seal this owner before the full build creates sibling package dist trees.
-      # Those trees are resolution topology, but intentionally are not in this payload.
+      # Hosted Linux SDK publication belongs to CI lint stripe 1. Other owners seal
+      # before the full build changes resolution topology outside this payload.
       - name: Restore native SDK boundary cache
         id: extension-package-boundary-cache
-        if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' }}
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && (matrix.platform == 'macos' || runner.environment != 'github-hosted') }}
+        uses: ./.github/actions/sdk-declarations
         with:
-          path: |
-            packages/plugin-sdk/dist
-            .artifacts/extension-package-boundary/plugins
-            .artifacts/extension-package-boundary/*.json
-            .artifacts/extension-package-boundary/compile
-          key: ${{ runner.os }}-extension-package-boundary-v4-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-extension-package-boundary-v4-
+          mode: restore-main
+          cache-mode: ${{ steps.setup-node-env.outputs.cache-mode }}
 
       - name: Prepare native SDK boundary cache
+        if: ${{ matrix.platform == 'macos' || runner.environment != 'github-hosted' }}
         run: node --import ./scripts/tsx.mjs scripts/prepare-extension-package-boundary-artifacts.mts --mode=package-boundary
 
       - name: Save native SDK boundary cache
-        if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.extension-package-boundary-cache.outputs.cache-hit != 'true' }}
+        if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && (matrix.platform == 'macos' || runner.environment != 'github-hosted') && steps.extension-package-boundary-cache.outputs.cache-hit != 'true' }}
         continue-on-error: true
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: ./.github/actions/sdk-declarations
         with:
-          path: |
-            packages/plugin-sdk/dist
-            .artifacts/extension-package-boundary/plugins
-            .artifacts/extension-package-boundary/*.json
-            .artifacts/extension-package-boundary/compile
-          key: ${{ runner.os }}-extension-package-boundary-v4-${{ github.sha }}
+          mode: save-main
+          candidate-trust: main
+          cache-mode: ${{ steps.setup-node-env.outputs.cache-mode }}
+          cache-write-allowed: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' }}
+          cache-hit: ${{ steps.extension-package-boundary-cache.outputs.cache-hit }}
 
       # Packaged declarations must see the same tree as ordinary build consumers.
       # The native lint output belongs only in its completed cache archive.

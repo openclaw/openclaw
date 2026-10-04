@@ -571,7 +571,12 @@ describe("SystemAgentChatEngine operations", () => {
       ...baseConfig,
       agents: {
         ...baseConfig.agents,
-        list: baseConfig.agents.list.map((agent) => ({ ...agent, model: "openai/gpt-5.6-sol" })),
+        entries: Object.fromEntries(
+          Object.entries(baseConfig.agents.entries).map(([id, agent]) => [
+            id,
+            { ...agent, model: "openai/gpt-5.6-sol" },
+          ]),
+        ),
       },
     } satisfies OpenClawConfig;
     const verifiedInference = await createAmbientVerifiedBinding(baseConfig);
@@ -611,41 +616,44 @@ describe("SystemAgentChatEngine operations", () => {
     );
   });
 
-  it.each(["preapproved", "operator"] as const)(
-    "returns a failed %s config write to one repair turn",
-    async (approval) => {
-      useTempStateDir();
-      const runAgentTurn = vi.fn<SystemAgentTurnRunner>(async () => ({
-        text: "Proposed correction.",
-      }));
-      const runConfigSet = vi.fn(async () => {
-        throw new Error("fixture schema error");
-      });
-      const engine = new SystemAgentChatEngine({
-        yes: approval === "preapproved",
-        operatorApprovalOnly: approval === "operator",
-        runAgentTurn,
-        deps: { runConfigSet, loadOverview: fakeOverviewLoader() },
-      });
-      const proposal = await engine.handle("config set gateway.port banana");
-      const reply =
-        approval === "preapproved"
-          ? proposal
-          : expectDefined(
-              await engine.resolveOperatorApproval(
-                "allow-once",
-                expectDefined(engine.getPendingOperatorProposal(), "config proposal").hash,
-              ),
-              "operator reply",
-            );
-      expect(reply.applied).toBe(false);
-      expect(reply.text).toContain("The config write failed");
-      expect(runConfigSet).toHaveBeenCalledOnce();
-      expect(runAgentTurn).toHaveBeenCalledOnce();
-      expect(runAgentTurn.mock.calls[0]?.[0]?.input).toContain("fixture schema error");
-      expect(runAgentTurn.mock.calls[0]?.[0]?.approvalArmed).toBe(false);
-    },
-  );
+  it.each(
+    (["preapproved", "operator"] as const).flatMap((approval) =>
+      ["config set gateway.port banana", "config unset agents.defaults.fastModeDefault"].map(
+        (command) => ({ approval, command }),
+      ),
+    ),
+  )("returns a failed $approval $command to one repair turn", async ({ approval, command }) => {
+    useTempStateDir();
+    const runAgentTurn = vi.fn<SystemAgentTurnRunner>(async () => ({
+      text: "Proposed correction.",
+    }));
+    const runConfigSet = vi.fn(async () => {
+      throw new Error("fixture schema error");
+    });
+    const engine = new SystemAgentChatEngine({
+      yes: approval === "preapproved",
+      operatorApprovalOnly: approval === "operator",
+      runAgentTurn,
+      deps: { runConfigSet, runConfigUnset: runConfigSet, loadOverview: fakeOverviewLoader() },
+    });
+    const proposal = await engine.handle(command);
+    const reply =
+      approval === "preapproved"
+        ? proposal
+        : expectDefined(
+            await engine.resolveOperatorApproval(
+              "allow-once",
+              expectDefined(engine.getPendingOperatorProposal(), "config proposal").hash,
+            ),
+            "operator reply",
+          );
+    expect(reply.applied).toBe(false);
+    expect(reply.text).toContain("The config write failed");
+    expect(runConfigSet).toHaveBeenCalledOnce();
+    expect(runAgentTurn).toHaveBeenCalledOnce();
+    expect(runAgentTurn.mock.calls[0]?.[0]?.input).toContain("fixture schema error");
+    expect(runAgentTurn.mock.calls[0]?.[0]?.approvalArmed).toBe(false);
+  });
 
   it.each([false, true])(
     "preserves the captured CLI error when repair is unavailable=%s",

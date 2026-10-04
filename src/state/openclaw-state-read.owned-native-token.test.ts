@@ -88,17 +88,6 @@ it("moves owned-native artifact token SQL off the caller while retaining its sou
       const changedOffsets = [...shmBefore.keys()].filter(
         (offset) => shmBefore[offset] !== shmAfter[offset],
       );
-      const observation = {
-        tokenSql,
-        before,
-        beforeBackup,
-        afterBackup,
-        after,
-        changedOffsets,
-        readMarksBefore: shmBefore.subarray(100, 120).toString("hex"),
-        readMarksAfter: shmAfter.subarray(100, 120).toString("hex"),
-      };
-      console.info("owned-native-token observation", JSON.stringify(observation));
       expect(beforeBackup).toEqual(before);
       expect(after).toEqual(afterBackup);
       expect(after.filter((entry) => entry.suffix !== "-shm")).toEqual(

@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { fakeQuicksilverMediaSocket } from "./realtime-quicksilver-socket.test-support.js";
 
-const { captureWsEventMock } = vi.hoisted(() => ({
-  captureWsEventMock: vi.fn(),
+const { captureWsEventAsyncMock } = vi.hoisted(() => ({
+  captureWsEventAsyncMock: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/proxy-capture")>();
-  return { ...actual, captureWsEvent: captureWsEventMock };
+  return { ...actual, captureWsEventAsync: captureWsEventAsyncMock };
 });
 
 import { openAIRealtimeHost } from "./realtime-host.js";
@@ -818,7 +818,7 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
   });
 
   it("captures only fixed metadata for private transport activity", async () => {
-    captureWsEventMock.mockClear();
+    captureWsEventAsyncMock.mockClear();
     const model = "sensitive-model-marker";
     const transcript = "sensitive-frame-marker";
     const harness = createHarness({ model });
@@ -831,8 +831,8 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
     });
 
     expect(harness.connections[0]?.options).not.toHaveProperty("agent");
-    expect(captureWsEventMock).toHaveBeenCalled();
-    const captureCalls = captureWsEventMock.mock.calls as Array<[Record<string, unknown>]>;
+    expect(captureWsEventAsyncMock).toHaveBeenCalled();
+    const captureCalls = captureWsEventAsyncMock.mock.calls as Array<[Record<string, unknown>]>;
     for (const [event] of captureCalls) {
       expect(event).toEqual({
         url: "wss://realtime.invalid/private",

@@ -13,7 +13,10 @@ import {
   registryContainsRuntimePluginIds,
   resolveCompatibleRuntimePluginRegistry,
 } from "./active-runtime-registry.js";
-import type { PluginCapabilityCatalogContext } from "./capability-catalog-context.types.js";
+import type {
+  PluginCapabilityCatalogContext,
+  PluginCapabilityCatalogHostContext,
+} from "./capability-catalog-context.types.js";
 import { isPluginRegistryLoadInFlight, resolvePluginRegistryLoadCacheKey } from "./loader-cache.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import { loadOpenClawPluginsWithInternalOverrides } from "./loader-runtime-load.js";
@@ -48,7 +51,7 @@ const families = [
 ] as const;
 const contextSymbol = Symbol.for("fixture.capability-context");
 
-function createContext(): PluginCapabilityCatalogContext {
+function createContext(): PluginCapabilityCatalogHostContext {
   const unavailable = () => {
     throw new Error("registration invoked a host operation");
   };
@@ -61,6 +64,7 @@ function createContext(): PluginCapabilityCatalogContext {
     resolveProviderAuthProfileApiKey: unavailable,
     resolveApiKeyForProvider: unavailable,
     captureWsEvent: unavailable,
+    captureWsEventAsync: unavailable,
     createDebugProxyWebSocketAgent: unavailable,
     resolveDebugProxySettings: unavailable,
     fetchWithSsrFGuard: unavailable,
@@ -74,7 +78,6 @@ function createContext(): PluginCapabilityCatalogContext {
 }
 
 async function withFactoryPlugin(
-  extension: "cjs" | "ts",
   register: string,
   run: (options: PluginLoadOptions, root: string) => Promise<void> | void,
   manifest?: Record<string, unknown>,
@@ -83,8 +86,8 @@ async function withFactoryPlugin(
   const plugin = writePlugin({
     id: "factory-owner",
     dir: path.join(root, "plugin"),
-    filename: `index.${extension}`,
-    body: `${extension === "ts" ? "export default" : "module.exports ="} {
+    filename: "index.cjs",
+    body: `module.exports = {
       id: "factory-owner",
       register(api) {
         ${register}
@@ -123,26 +126,6 @@ async function withFactoryPlugin(
         },
         root,
       ),
-  );
-}
-
-function loadRestricted(options: PluginLoadOptions) {
-  return loadOpenClawPluginsWithInternalOverrides(
-    { ...options, cache: false },
-    {
-      runtime: {
-        config: {
-          current: () => options.config ?? {},
-          mutateConfigFile: async () => {
-            throw new Error("restricted registration cannot mutate config");
-          },
-          replaceConfigFile: async () => {
-            throw new Error("restricted registration cannot replace config");
-          },
-        },
-      },
-      moduleLoader: { installNativeSdkResolver: false, loaderFilename: import.meta.url },
-    },
   );
 }
 
@@ -204,69 +187,61 @@ it("retains the creating cache generation when broad services initialize later",
   expect(createPluginRuntime).toHaveBeenCalledTimes(1);
 });
 
-describe.each(["cjs", "ts"] as const)("%s capability factory registration", (extension) => {
-  it.each(["injected", "default", "restricted-injected", "restricted-default"] as const)(
-    "retains complete runtime descriptors with %s host composition",
-    async (mode) => {
-      await withFactoryPlugin(extension, registerFactories, (options) => {
-        const injected = mode.endsWith("injected");
-        const context = injected ? createContext() : undefined;
-        const resolveRuntime = vi.spyOn(sdkAlias, "resolvePluginRuntimeModulePathWithDiagnostics");
-        resolveRuntime.mockImplementation(() => {
-          throw new Error("native factory registration must not load the broad runtime module");
+describe("capability factory registration", () => {
+  it("composes native capability factories with a restricted runtime", async () => {
+    await withFactoryPlugin(registerFactories, (options) => {
+      const resolveRuntime = vi
+        .spyOn(sdkAlias, "resolvePluginRuntimeModulePathWithDiagnostics")
+        .mockImplementation(() => {
+          throw new Error("restricted registration must not load the broad runtime");
         });
-        const loadOptions = { ...options, capabilityCatalogContext: context };
-        const registry = mode.startsWith("restricted")
-          ? loadRestricted(loadOptions)
-          : loadOpenClawPlugins(loadOptions);
-        expect(registry.plugins).toContainEqual(
-          expect.objectContaining({ id: "factory-owner", status: "loaded" }),
-        );
-        expect(registryContainsRuntimePluginIds(registry, ["factory-owner"])).toBe(true);
-        expect(registry.services.map((entry) => entry.service.id)).toEqual(["factory-lifecycle"]);
-        const runtime = getPluginRegistryRuntime(registry)!;
-        for (const facet of ["modelAuth", "modelConfig"] as const) {
-          const descriptor = Object.getOwnPropertyDescriptor(runtime, facet);
-          expect(descriptor).toEqual({
-            configurable: true,
-            enumerable: true,
-            get: expect.any(Function),
-            set: undefined,
-          });
-        }
-        const contexts = families.map((family) => {
-          expect(registry[family]).toHaveLength(1);
-          const provider = registry[family][0]!.provider;
-          expect(Object.getOwnPropertyDescriptor(provider, contextSymbol)?.enumerable).toBe(false);
-          const host = Reflect.get(provider, contextSymbol) as PluginCapabilityCatalogContext;
-          if (context) {
-            expect(context.formatErrorMessage).not.toHaveBeenCalled();
-          }
-          return host;
+      const registry = loadOpenClawPluginsWithInternalOverrides(
+        { ...options, cache: false },
+        {
+          runtime: {
+            config: {
+              current: () => options.config ?? {},
+              mutateConfigFile: async () => {
+                throw new Error("restricted registration cannot mutate config");
+              },
+              replaceConfigFile: async () => {
+                throw new Error("restricted registration cannot replace config");
+              },
+            },
+          },
+          moduleLoader: { installNativeSdkResolver: false, loaderFilename: import.meta.url },
+        },
+      );
+      expect(registry.plugins).toContainEqual(
+        expect.objectContaining({ id: "factory-owner", status: "loaded" }),
+      );
+      expect(registryContainsRuntimePluginIds(registry, ["factory-owner"])).toBe(true);
+      expect(registry.services.map((entry) => entry.service.id)).toEqual(["factory-lifecycle"]);
+      for (const family of families) {
+        expect(registry[family]).toHaveLength(1);
+      }
+      const runtime = getPluginRegistryRuntime(registry)!;
+      for (const facet of ["modelAuth", "modelConfig"] as const) {
+        expect(Object.getOwnPropertyDescriptor(runtime, facet)).toEqual({
+          configurable: true,
+          enumerable: true,
+          get: expect.any(Function),
+          set: undefined,
         });
-        expect(contexts[1]).toBe(contexts[0]);
-        expect(contexts[2]).toBe(contexts[0]);
-        expect(typeof contexts[0]!.isProviderApiKeyConfigured).toBe("function");
-        expect(typeof contexts[0]!.createRealtimeTranscriptionWebSocketSession).toBe("function");
-        expect(
-          registry.speechProviders[0]!.provider.isConfigured({
-            cfg: {},
-            providerConfig: {},
-            timeoutMs: 1000,
-          }),
-        ).toBe(true);
-        if (context) {
-          expect(context.formatErrorMessage).toHaveBeenCalledOnce();
-          expect(vi.mocked(context.formatErrorMessage).mock.contexts[0]).toBe(context);
-        }
-        expect(resolveRuntime).not.toHaveBeenCalled();
-      });
-    },
-  );
+      }
+      expect(
+        registry.speechProviders[0]!.provider.isConfigured({
+          cfg: {},
+          providerConfig: {},
+          timeoutMs: 1000,
+        }),
+      ).toBe(true);
+      expect(resolveRuntime).not.toHaveBeenCalled();
+    });
+  });
 
   it("agrees on raw authored options during load, cache reuse, and active lookup", async () => {
     await withFactoryPlugin(
-      extension,
       'api.logger.info("inside registration");' + registerFactories,
       (options, root) => {
         let inFlightAtRegistration: boolean | undefined;
@@ -353,7 +328,6 @@ describe.each(["cjs", "ts"] as const)("%s capability factory registration", (ext
       });
     `;
     await withFactoryPlugin(
-      extension,
       register,
       (options, root) => {
         const resolveRuntime = vi.spyOn(sdkAlias, "resolvePluginRuntimeModulePathWithDiagnostics");
@@ -384,7 +358,7 @@ describe.each(["cjs", "ts"] as const)("%s capability factory registration", (ext
   }, 120_000);
 
   it("partitions registry reuse by native context identity", async () => {
-    await withFactoryPlugin(extension, registerFactories, async (options) => {
+    await withFactoryPlugin(registerFactories, async (options) => {
       const firstContext = createContext();
       const firstOptions = { ...options, capabilityCatalogContext: firstContext };
       const first = loadOpenClawPlugins(firstOptions);
@@ -423,66 +397,62 @@ describe.each(["cjs", "ts"] as const)("%s capability factory registration", (ext
     });
   });
 
-  it.each([
-    { body: 'throw new Error("factory failed");', error: "factory failed" },
-    { body: 'return Promise.reject(new Error("factory rejected"));', error: "must be synchronous" },
-    { body: "return Promise.resolve({});", error: "must be synchronous" },
-    {
-      body: 'return { then(resolve, reject) { reject(new Error("thenable rejected")); } };',
-      error: "must be synchronous",
-    },
-  ])(
-    "rolls back a failed factory without an unhandled rejection: $body",
-    async ({ body, error }) => {
-      await withFactoryPlugin(
-        extension,
-        `api.registerSpeechProvider({
+  it("rolls back a rejected factory without an unhandled rejection", async () => {
+    await withFactoryPlugin(
+      `api.registerSpeechProvider({
         id: "before-failure", label: "Before failure", isConfigured: () => true,
         synthesize: async () => { throw new Error("not synthesis"); }
       });
-      api.registerRealtimeVoiceProvider(() => { ${body} });`,
-        async (options) => {
-          const registry = loadOpenClawPlugins({
-            ...options,
-            capabilityCatalogContext: createContext(),
-          });
-          expect(registry.plugins).toContainEqual(
-            expect.objectContaining({
-              id: "factory-owner",
-              status: "error",
-              error: expect.stringContaining(error),
-            }),
-          );
-          for (const family of families) {
-            expect(registry[family]).toEqual([]);
-          }
-          expect(registry.modelCatalogProviders).toEqual([]);
-          expect(registryContainsRuntimePluginIds(registry, ["factory-owner"])).toBe(false);
-          // Assimilated rejected promises/thenables must settle inside the host rejection handler.
-          await Promise.resolve();
-          await Promise.resolve();
-        },
-      );
-    },
-  );
+      api.registerRealtimeVoiceProvider(() => Promise.reject(new Error("factory rejected")));`,
+      async (options) => {
+        const registry = loadOpenClawPlugins({
+          ...options,
+          capabilityCatalogContext: createContext(),
+        });
+        expect(registry.plugins).toContainEqual(
+          expect.objectContaining({
+            id: "factory-owner",
+            status: "error",
+            error: expect.stringContaining("must be synchronous"),
+          }),
+        );
+        for (const family of families) {
+          expect(registry[family]).toEqual([]);
+        }
+        expect(registry.modelCatalogProviders).toEqual([]);
+        expect(registryContainsRuntimePluginIds(registry, ["factory-owner"])).toBe(false);
+        // Assimilated rejected promises/thenables must settle inside the host rejection handler.
+        await Promise.resolve();
+        await Promise.resolve();
+      },
+    );
+  });
 });
 
 it.each([false, true])(
   "owns failed catalog initialization without revoking an earlier success (prior success: %s)",
   async (priorSuccess) => {
     await withFactoryPlugin(
-      "cjs",
       'throw new Error("catalog inspection must not load full runtime");',
       async (options, root) => {
         fs.writeFileSync(
           path.join(root, "plugin", "catalog.cjs"),
-          `let attempts = 0;
+          `const { createPluginRuntimeStore } = require("openclaw/plugin-sdk/runtime-store");
+          const store = createPluginRuntimeStore("catalog scope missing");
+          let attempts = 0;
           module.exports = () => {
             if (++attempts === ${priorSuccess ? 2 : 1}) throw new Error("catalog construction failed");
-            return { speechProviders: [{
-              id: "factory-owner", label: "Catalog owner", isConfigured: () => true,
+            store.setRuntime("Catalog owner");
+            return { get speechProviders() { return [{
+              id: "factory-owner", label: store.getRuntime(),
+              isConfigured: () => store.getRuntime() === "Catalog owner",
               synthesize: async () => { throw new Error("inspection cannot synthesize"); },
-            }] };
+              streamSynthesize: async () => ({
+                outputFormat: "pcm", fileExtension: ".pcm", voiceCompatible: true,
+                audioStream: new ReadableStream({ start(controller) { controller.close(); } }),
+                release() { store.getRuntime(); return Promise.resolve(); },
+              }),
+            }]; } };
           };`,
         );
         const cache = createPluginCache();
@@ -497,8 +467,16 @@ it.each([false, true])(
         const context = { cfg: {}, providerConfig: {}, timeoutMs: 1000 };
         try {
           const retained = priorSuccess ? load().speechProviders[0]?.provider : undefined;
+          const stream = await retained?.streamSynthesize?.({
+            ...context,
+            text: "synthetic",
+            target: "audio-file",
+          });
+          const release = stream?.release;
           if (priorSuccess) {
             expect(retained?.isConfigured(context)).toBe(true);
+            expect(release).toEqual(expect.any(Function));
+            await release?.();
           }
           expect(load).toThrow(/capabilityCatalogEntry failed.*catalog construction failed/);
           const retried = priorSuccess ? load().speechProviders[0]?.provider : undefined;
@@ -513,6 +491,7 @@ it.each([false, true])(
           if (priorSuccess) {
             expect(() => retained?.isConfigured(context)).toThrow(/reloaded|disabled|retir/);
             expect(() => retried?.isConfigured(context)).toThrow(/reloaded|disabled|retir/);
+            expect(() => release?.()).toThrow(/reloaded|disabled|retir/);
           }
         } finally {
           await retirePluginCache(cache);

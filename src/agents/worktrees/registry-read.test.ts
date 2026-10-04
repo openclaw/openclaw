@@ -8,14 +8,20 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { readLiveRegistryWorktreeIds } from "./registry-read.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { insertRegistryWorktreeProvisionedChunk } from "./provisioned-snapshot.test-support.js";
+import {
+  getRegistryWorktreeProvisionedChunk,
+  readLiveRegistryWorktreeByOwner,
+  readLiveRegistryWorktreeIds,
+  readRegistryWorktrees,
+} from "./registry-read.js";
 import {
   getRegistryWorktree,
-  getRegistryWorktreeProvisionedChunk,
   getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
   insertRegistryWorktree,
-  insertRegistryWorktreeProvisionedChunk,
   updateRegistryWorktree,
 } from "./registry.js";
 import { ManagedWorktreeService } from "./service.js";
@@ -57,32 +63,9 @@ describe("managed worktree registry worker reads", () => {
     const stateDir = tempDirs.make("worktree-registry-worker-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     const service = new ManagedWorktreeService({ env });
-    const native = requireNodeSqlite();
-    const counters = [
-      vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-      vi.spyOn(native.DatabaseSync.prototype, "exec"),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(native.StatementSync.prototype, method),
-      ),
-    ];
-    const clearCounters = () => {
-      for (const counter of counters) {
-        counter.mockClear();
-      }
-    };
-    const calibration = new native.DatabaseSync(":memory:");
-    try {
-      calibration.exec("CREATE TABLE calibration (value INTEGER)");
-      calibration.prepare("INSERT INTO calibration VALUES (?)").run(1);
-      const read = calibration.prepare("SELECT value FROM calibration");
-      read.get();
-      read.all();
-      expect([...read.iterate()]).toHaveLength(1);
-      expect(counters.every((counter) => counter.mock.calls.length > 0)).toBe(true);
-    } finally {
-      calibration.close();
-      clearCounters();
-    }
+    requireNodeSqlite();
+    const sql = observeMainThreadSql();
+    sql.calibrate();
 
     expect(await getRegistryWorktreeProvisionedPaths(env, "missing")).toBeUndefined();
     expect(await getRegistryWorktreeProvisionedState(env, "missing")).toBeUndefined();
@@ -96,7 +79,7 @@ describe("managed worktree registry worker reads", () => {
     expect(await service.listRegistryRecords()).toEqual([]);
     expect(await readLiveRegistryWorktreeIds(env)).toEqual([]);
     expect((await fs.stat(path.join(stateDir, "state", "openclaw.sqlite"))).isFile()).toBe(true);
-    expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+    sql.expectIdle();
 
     const older: ManagedWorktreeRecord = {
       id: "older",
@@ -137,7 +120,7 @@ describe("managed worktree registry worker reads", () => {
     updateRegistryWorktree(env, older.id, { provisionedState });
     const chunks = [Uint8Array.from([0, 255, 10]), Uint8Array.from([127, 0, 1])];
     for (const [chunkIndex, data] of chunks.entries()) {
-      insertRegistryWorktreeProvisionedChunk(env, {
+      await insertRegistryWorktreeProvisionedChunk(env, {
         worktreeId: older.id,
         path: "synthetic.bin",
         chunkIndex,
@@ -148,13 +131,21 @@ describe("managed worktree registry worker reads", () => {
       .db.prepare("UPDATE worktrees SET provisioned_paths_json = ? WHERE id = ?")
       .run("{malformed", removed.id);
     await closeOpenClawStateDatabaseAsync();
-    clearCounters();
+    sql.clear();
 
     const pending = service.listRegistryRecords();
     env.OPENCLAW_STATE_DIR = path.join(stateDir, "unused-state");
     expect(await pending).toEqual([removed, newer, older]);
     await closeOpenClawStateDatabaseAsync();
-    expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+    sql.expectIdle();
+
+    env.OPENCLAW_STATE_DIR = stateDir;
+    const listOptions = { liveOnly: true };
+    const liveRecords = readRegistryWorktrees(env, listOptions);
+    listOptions.liveOnly = false;
+    env.OPENCLAW_STATE_DIR = path.join(stateDir, "unused-state");
+    expect(await liveRecords).toEqual([newer, older]);
+    sql.expectIdle();
 
     env.OPENCLAW_STATE_DIR = stateDir;
     const snapshotReads = Promise.all([
@@ -192,7 +183,7 @@ describe("managed worktree registry worker reads", () => {
     expect(await getRegistryWorktreeProvisionedPaths(env, removed.id)).toBeUndefined();
     expect(await getRegistryWorktreeProvisionedState(env, removed.id)).toBeUndefined();
     await closeOpenClawStateDatabaseAsync();
-    expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+    sql.expectIdle();
     await expect(fs.stat(path.join(stateDir, "unused-state"))).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -200,13 +191,23 @@ describe("managed worktree registry worker reads", () => {
     const liveIds = readLiveRegistryWorktreeIds(env);
     env.OPENCLAW_STATE_DIR = path.join(stateDir, "unused-state");
     expect((await liveIds).toSorted()).toEqual([older.id, newer.id]);
-    expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+    sql.expectIdle();
+
+    env.OPENCLAW_STATE_DIR = stateDir;
+    const context = captureOpenClawStateWorkerContext({ env });
+    const owned = readLiveRegistryWorktreeByOwner(context, "session", older.ownerId!);
+    env.OPENCLAW_STATE_DIR = path.join(stateDir, "unused-state");
+    expect(await owned).toEqual(newer);
+    expect(
+      await readLiveRegistryWorktreeByOwner(context, "manual", older.ownerId!),
+    ).toBeUndefined();
+    sql.expectIdle();
 
     env.OPENCLAW_STATE_DIR = stateDir;
     updateRegistryWorktree(env, older.id, { removedAt: 50 });
     updateRegistryWorktree(env, removed.id, { removedAt: undefined });
-    clearCounters();
+    sql.clear();
     expect((await readLiveRegistryWorktreeIds(env)).toSorted()).toEqual([removed.id, newer.id]);
-    expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+    sql.expectIdle();
   });
 });

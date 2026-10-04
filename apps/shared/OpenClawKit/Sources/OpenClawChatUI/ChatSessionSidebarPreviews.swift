@@ -36,7 +36,10 @@ final class ChatSessionSidebarPreviews {
             let agentID = viewModel.selectedAgentID
             self.agentID = agentID
             var seen = Set<Target>()
-            self.targets = Array(sessions.compactMap {
+            self.targets = Array(sessions.filter {
+                !viewModel.usesWebConversation || !viewModel.matchesCurrentSessionKey(
+                    incoming: $0.key, agentId: $0.agentId, current: viewModel.sessionKey)
+            }.compactMap {
                 Target(session: $0, fallbackAgentID: agentID)
             }.filter { seen.insert($0).inserted }.prefix(32))
         }

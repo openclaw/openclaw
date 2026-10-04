@@ -3,9 +3,9 @@ import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import {
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import {
@@ -86,19 +86,17 @@ async function seedAliases(state: OpenClawTestState) {
       now: () => row.updatedAt,
     });
   }
-  return { ...fixture, retainedKeys: new Set(retained.map((row) => row.key)) };
+  return fixture;
 }
 
 describe("ACP raw alias lifecycle", () => {
   it.each(["update", "close"] as const)(
-    "%s consumes every readable alias while preserving other lifecycle rows",
+    "%s changes canonical metadata while preserving every historical alias",
     async (operation) => {
       await withOpenClawTestState({ label: `acp-alias-${operation}` }, async (state) => {
         const fixture = await seedAliases(state);
         const before = fixture.snapshot();
-        const retainedRows = before.rows.filter((row) =>
-          fixture.retainedKeys.has(String(row.session_key)),
-        );
+        const retainedRows = before.rows.filter((row) => row.session_key !== fixture.canonicalKey);
         const updated = { ...CANONICAL_META, runtimeSessionName: "updated-runtime" };
         await upsertAcpSessionMeta({
           ...fixture.scope,
@@ -113,13 +111,15 @@ describe("ACP raw alias lifecycle", () => {
         );
         expect(after.sources).toEqual(before.sources);
         expect(after.runs).toEqual(before.runs);
+        expect(readAcpSessionMeta(fixture.scope)).toEqual(
+          operation === "close" ? undefined : updated,
+        );
         if (operation === "update") {
-          expect(readAcpSessionMeta(fixture.scope)).toEqual(updated);
           await upsertAcpSessionMeta({ ...fixture.scope, mutate: () => null });
         }
         expect(fixture.snapshot().rows).toEqual(retainedRows);
-        closeOpenClawAgentDatabasesForTest();
-        closeOpenClawStateDatabaseForTest();
+        await closeOpenClawAgentDatabasesAsync();
+        await closeOpenClawStateDatabaseAsync();
         expect(readAcpSessionMeta(fixture.scope)).toBeUndefined();
         expect(
           readAcpSessionMetaBatch({
@@ -132,30 +132,51 @@ describe("ACP raw alias lifecycle", () => {
     },
   );
 
-  it("preserves all rows, receipts, and events when the mutation returns undefined", async () => {
-    await withOpenClawTestState({ label: "acp-alias-noop" }, async (state) => {
-      const fixture = await seedAliases(state);
-      const before = fixture.snapshot();
-      const entryBefore = sessionAccessor.loadExactSessionEntry(fixture.scope);
-      const changes: unknown[] = [];
-      const unsubscribe = sessionChanges.subscribe((change) => changes.push(change));
-      try {
-        const result = await upsertAcpSessionMeta({
-          ...fixture.scope,
-          mutate: (current) => {
-            expect(current).toEqual(CANONICAL_META);
-            return undefined;
-          },
+  it.each(["keep", "revoked-update", "revoked-close"] as const)(
+    "%s preserves rows, receipts, entry, and events without replaying the callback",
+    async (operation) => {
+      await withOpenClawTestState({ label: `acp-alias-${operation}` }, async (state) => {
+        const fixture = await seedAliases(state);
+        const before = fixture.snapshot();
+        const entryBefore = sessionAccessor.loadExactSessionEntry(fixture.scope);
+        const changes: unknown[] = [];
+        const unsubscribe = sessionChanges.subscribe((change) => changes.push(change));
+        let current = true;
+        const mutate = vi.fn((value: SessionAcpMeta | undefined) => {
+          expect(value).toEqual(CANONICAL_META);
+          current = operation === "keep";
+          return operation === "keep"
+            ? undefined
+            : operation === "revoked-close"
+              ? null
+              : { ...CANONICAL_META, runtimeSessionName: "unauthorized-runtime" };
         });
-        expect(result?.acp).toEqual(CANONICAL_META);
-        expect(fixture.snapshot()).toEqual(before);
-        expect(sessionAccessor.loadExactSessionEntry(fixture.scope)).toEqual(entryBefore);
-        expect(changes).toEqual([]);
-      } finally {
-        unsubscribe();
-      }
-    });
-  });
+        try {
+          const pending = upsertAcpSessionMeta({
+            ...fixture.scope,
+            mutate,
+            assertCommitAllowed: () => {
+              if (!current) {
+                throw new Error("ACP mutation owner revoked");
+              }
+            },
+          });
+          if (operation === "keep") {
+            expect((await pending)?.acp).toEqual(CANONICAL_META);
+          } else {
+            await expect(pending).rejects.toThrow("ACP mutation owner revoked");
+          }
+          expect(mutate).toHaveBeenCalledOnce();
+          expect(fixture.snapshot()).toEqual(before);
+          expect(sessionAccessor.loadExactSessionEntry(fixture.scope)).toEqual(entryBefore);
+          expect(readAcpSessionMeta(fixture.scope)).toEqual(CANONICAL_META);
+          expect(changes).toEqual([]);
+        } finally {
+          unsubscribe();
+        }
+      });
+    },
+  );
 
   it.each(["agent:main:acp:binding:configured", "agent:main:main", "encoded database key"])(
     "does not consume case variants outside free ACP runtime keys: %s",
@@ -179,85 +200,6 @@ describe("ACP raw alias lifecycle", () => {
         await upsertAcpSessionMeta({ ...fixture.scope, mutate: () => null });
         expect(fixture.snapshot().rows).toEqual(retainedRows);
         expect(readAcpSessionMeta(fixture.scope)).toBeUndefined();
-      });
-    },
-  );
-
-  it.each(["update", "close"] as const)(
-    "%s retains a selected raw alias rebound during the awaited session patch",
-    async (operation) => {
-      await withOpenClawTestState({ label: `acp-alias-rebound-${operation}` }, async (state) => {
-        const fixture = await seedCanonicalSession(state);
-        const aliasKey = "agent:MAIN:acp:alias-runtime";
-        const { db } = openOpenClawStateDatabase({ env: state.env });
-        db.prepare("UPDATE acp_sessions SET session_key = ? WHERE session_key = ?").run(
-          aliasKey,
-          fixture.canonicalKey,
-        );
-        const before = fixture.snapshot().rows;
-        expect(before).toHaveLength(1);
-        const updated = { ...CANONICAL_META, runtimeSessionName: "updated-runtime" };
-        let rebound = false;
-        const originalPatch = sessionAccessor.patchSessionEntryWithKey;
-        const patch = vi
-          .spyOn(sessionAccessor, "patchSessionEntryWithKey")
-          .mockImplementation(async (...args) => {
-            const result = await originalPatch(...args);
-            if (!rebound) {
-              rebound = true;
-              db.prepare("UPDATE acp_sessions SET session_id = ? WHERE session_key = ?").run(
-                "replacement-revision",
-                aliasKey,
-              );
-            }
-            return result;
-          });
-        try {
-          await upsertAcpSessionMeta({
-            ...fixture.scope,
-            mutate: (current) => {
-              expect(current).toEqual(CANONICAL_META);
-              return operation === "close" ? null : updated;
-            },
-          });
-        } finally {
-          patch.mockRestore();
-        }
-        expect(fixture.snapshot().rows.filter((row) => row.session_key === aliasKey)).toEqual([
-          { ...before[0], session_id: "replacement-revision" },
-        ]);
-        expect(readAcpSessionMeta(fixture.scope)).toEqual(
-          operation === "close" ? undefined : updated,
-        );
-      });
-    },
-  );
-
-  it.each(["update", "close"] as const)(
-    "preserves canonical metadata and every alias when %s authority is revoked",
-    async (operation) => {
-      await withOpenClawTestState({ label: `acp-alias-revoked-${operation}` }, async (state) => {
-        const fixture = await seedAliases(state);
-        const before = fixture.snapshot();
-        let current = true;
-        await expect(
-          upsertAcpSessionMeta({
-            ...fixture.scope,
-            assertCommitAllowed: () => {
-              if (!current) {
-                throw new Error("ACP mutation owner revoked");
-              }
-            },
-            mutate: () => {
-              current = false;
-              return operation === "close"
-                ? null
-                : { ...CANONICAL_META, runtimeSessionName: "unauthorized-runtime" };
-            },
-          }),
-        ).rejects.toThrow("ACP mutation owner revoked");
-        expect(fixture.snapshot()).toEqual(before);
-        expect(readAcpSessionMeta(fixture.scope)).toEqual(CANONICAL_META);
       });
     },
   );

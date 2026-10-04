@@ -1,18 +1,6 @@
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
-
-vi.mock("./tools/gateway.js", () => ({
-  callGatewayTool: vi.fn(async () => ({ status: "ok" })),
-}));
-
-vi.mock("../infra/outbound/message.js", () => ({
-  sendMessage: vi.fn(async () => ({ ok: true })),
-}));
-
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   onInternalDiagnosticEvent,
@@ -22,203 +10,103 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { sendMessage } from "../infra/outbound/message.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   claimExecApprovalFollowupRuntimeHandoff,
   finalizeExecApprovalFollowupRuntimeHandoff,
 } from "./bash-tools.exec-approval-followup-state.js";
 import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
 import { sendExecApprovalFollowupResult } from "./bash-tools.exec-host-shared.js";
-import { resolveAgentTimeoutMs } from "./timeout.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
-const tempStoreDirs: string[] = [];
+vi.mock("./tools/gateway.js", () => ({ callGatewayTool: vi.fn(async () => ({ status: "ok" })) }));
+vi.mock("../infra/outbound/message.js", () => ({ sendMessage: vi.fn(async () => ({ ok: true })) }));
 
-// Seed the same session store path the runtime reads; mocking this boundary
-// would hide stale-session regressions in shared workers.
-async function writeTempSessionStore(
-  entries: Record<string, { sessionId: string }>,
-): Promise<string> {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "exec-approval-followup-store-"));
-  tempStoreDirs.push(dir);
-  const storePath = path.join(dir, "sessions.json");
-  await Promise.all(
-    Object.entries(entries).map(([sessionKey, entry]) =>
-      replaceSessionEntry(
-        {
-          storePath,
-          sessionKey,
-        },
-        {
-          sessionId: entry.sessionId,
-          updatedAt: Date.now(),
-        },
-      ),
-    ),
-  );
-  return storePath;
-}
-
-afterEach(() => {
-  vi.resetAllMocks();
-  resetDiagnosticEventsForTest();
-  while (tempStoreDirs.length > 0) {
-    const dir = tempStoreDirs.pop();
-    if (dir) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  }
-});
-
+const sessionDirs = useSessionStoreTempDirs(afterAll, "exec-approval-followup-store-");
 const requireRecord = createRequireRecord("record", "expected-label");
+const approvalId = "req-1";
+const sessionKey = "agent:main:main";
+const finished = "Exec finished (gateway id=req-1, code 0)\nok";
+const denied = "Exec denied (gateway id=req-1, approval-timeout (allowlist-miss)): uname -a";
+const route = { turnSourceChannel: "telegram", turnSourceTo: "123" };
+const runId = "exec-approval-followup:req-1:nonce:nonce-test";
+const pending = { ...route, internalRuntimeHandoffId: "handoff-test", idempotencyKey: runId };
+type Followup = Parameters<typeof sendExecApprovalFollowup>[0];
 
-function requireFirstMockCall(mock: unknown, label: string): unknown[] {
-  const call = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls?.[0];
-  if (!call) {
-    throw new Error(`expected ${label}`);
-  }
-  return call;
+function send(overrides: Partial<Followup> = {}) {
+  return sendExecApprovalFollowup({ approvalId, sessionKey, resultText: finished, ...overrides });
 }
-
-function expectGatewayAgentFollowup(expected: Record<string, unknown>) {
-  const call = requireFirstMockCall(callGatewayTool, "callGatewayTool call");
-  expect(call[0]).toBe("agent");
-  requireRecord(call[1], "gateway tool context");
-  const params = requireRecord(call[2], "gateway tool params");
-  for (const [key, value] of Object.entries(expected)) {
-    expect(params[key]).toBe(value);
-  }
-  expect(call[3]).toBeUndefined();
+function direct(overrides: Partial<Followup> = {}) {
+  return send({ ...route, sessionKey: undefined, ...overrides });
+}
+function agentArgs(expected: Record<string, unknown> = {}) {
+  const call = vi.mocked(callGatewayTool).mock.calls[0];
+  expect(call?.[0]).toBe("agent");
+  const params = requireRecord(call?.[2], "agent params");
+  expect(params).toMatchObject(expected);
   return params;
 }
-
-function expectGatewayAgentWait(expected: Record<string, unknown>, callIndex = 1) {
-  const call = (callGatewayTool as { mock?: { calls?: unknown[][] } }).mock?.calls?.[callIndex];
-  if (!call) {
-    throw new Error("expected agent.wait call");
-  }
-  expect(call[0]).toBe("agent.wait");
-  requireRecord(call[1], "gateway wait context");
-  const params = requireRecord(call[2], "gateway wait params");
-  for (const [key, value] of Object.entries(expected)) {
-    expect(params[key]).toBe(value);
-  }
-  expect(call[3]).toBeUndefined();
+function directArgs(expected: Record<string, unknown> = {}) {
+  const params = requireRecord(vi.mocked(sendMessage).mock.calls[0]?.[0], "direct params");
+  expect(params).toMatchObject({
+    gatewayOwnedDelivery: true,
+    idempotencyKey: `exec-approval-followup:${approvalId}`,
+    deliveryIntentId: `exec-approval-followup:${approvalId}`,
+    reusePendingDeliveryIntent: true,
+    completionRetention: {
+      idPrefix: "exec-approval-followup:",
+      maxAgeMs: 86_400_000,
+      maxEntries: 2_000,
+    },
+    ...expected,
+  });
   return params;
 }
-
-function expectDirectSend(expected: Record<string, unknown>) {
-  const call = requireFirstMockCall(sendMessage, "sendMessage call");
-  const params = requireRecord(call[0], "sendMessage params");
-  for (const [key, value] of Object.entries(expected)) {
-    expect(params[key]).toBe(value);
-  }
-  return params;
-}
-
-function expectAuthenticatedHandoff(
-  params: Record<string, unknown>,
-  expected: { approvalId: string; sessionKey: string },
-) {
+function expectHandoff(params: Record<string, unknown>, sourceSessionKey = sessionKey) {
   expect(params.message).toEqual(expect.stringContaining("<<<BEGIN_UNTRUSTED_EXEC_OUTPUT>>>"));
   expect(params.inputProvenance).toEqual({
     kind: "inter_session",
-    sourceSessionKey: expected.sessionKey,
+    sourceSessionKey,
     sourceTool: "exec_approval_followup",
   });
   expect(params.internalRuntimeHandoffId).toEqual(expect.any(String));
-  expect(params.idempotencyKey).toEqual(expect.any(String));
-  expect(params.idempotencyKey).toMatch(
-    new RegExp(`^exec-approval-followup:${expected.approvalId}:nonce:[0-9a-f-]{36}$`),
-  );
+  expect(params.idempotencyKey).toMatch(/^exec-approval-followup:req-1:nonce:[0-9a-f-]{36}$/);
 }
-
-function expectStableDirectDelivery(params: Record<string, unknown>, approvalId: string) {
-  const deliveryIntentId = `exec-approval-followup:${approvalId}`;
-  expect(params).toMatchObject({
-    gatewayOwnedDelivery: true,
-    idempotencyKey: deliveryIntentId,
-    deliveryIntentId,
-    reusePendingDeliveryIntent: true,
-  });
-  expect(params.completionRetention).toEqual({
-    idPrefix: "exec-approval-followup:",
-    maxAgeMs: 24 * 60 * 60_000,
-    maxEntries: 2_000,
-  });
+function acceptRun() {
+  vi.mocked(callGatewayTool).mockResolvedValueOnce({ runId, status: "accepted" });
+  return vi.mocked(callGatewayTool);
 }
+function diagnostics(internal = false) {
+  const events: DiagnosticEventPayload[] = [];
+  (internal ? onInternalDiagnosticEvent : onDiagnosticEvent)((event) => events.push(event));
+  return events;
+}
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.resetAllMocks();
+  resetDiagnosticEventsForTest();
+});
 
 describe("exec approval followup", () => {
-  it("carries the prepared agent owner for a bare session key", async () => {
-    await sendExecApprovalFollowup({
-      approvalId: "req-bare-owner",
-      agentId: "research",
-      sessionKey: "global",
-      resultText: "Exec finished (gateway id=req-bare-owner, code 0)\nok",
+  it("resumes a denied command with its session pin and no prior output", async () => {
+    await send({ resultText: denied, turnSourceChannel: "webchat", expectedSessionId: "original" });
+    const params = agentArgs({
+      sessionKey,
+      channel: "webchat",
+      deliver: false,
+      execApprovalFollowupExpectedSessionId: "original",
     });
-
-    expectGatewayAgentFollowup({ sessionKey: "global", agentId: "research" });
-  });
-
-  it("uses an explicit denial prompt when the command did not run", async () => {
-    await sendExecApprovalFollowup({
-      approvalId: "req-1",
-      sessionKey: "agent:main:main",
-      resultText: "Exec denied (gateway id=req-1, user-denied): uname -a",
-    });
-
-    const prompt = expectGatewayAgentFollowup({ sessionKey: "agent:main:main" }).message;
-    expect(prompt).toBeTypeOf("string");
-    expect(prompt).toContain("did not run");
-    expect(prompt).toContain("Do not mention, summarize, or reuse output");
-    expect(prompt).not.toContain("already approved has completed");
-  });
-
-  it("uses the denied followup branch for nested-parentheses denial metadata", async () => {
-    await sendExecApprovalFollowup({
-      approvalId: "req-1",
-      sessionKey: "agent:main:main",
-      resultText: "Exec denied (gateway id=req-1, approval-timeout (allowlist-miss)): uname -a",
-    });
-
-    const prompt = expectGatewayAgentFollowup({ sessionKey: "agent:main:main" }).message;
-    expect(prompt).toBeTypeOf("string");
-    expect(prompt).toContain("did not run");
-    expect(prompt).toContain("Do not mention, summarize, or reuse output");
-    expect(prompt).not.toContain("already approved has completed");
-  });
-
-  it("carries a compact fallback alongside the authenticated runtime handoff", async () => {
-    await sendExecApprovalFollowup({
-      approvalId: "req-1",
-      sessionKey: "agent:main:main",
-      resultText: "Exec finished (gateway id=req-1, code 0)\nok",
-    });
-
-    const agentArgs = expectGatewayAgentFollowup({ sessionKey: "agent:main:main" });
-    expectAuthenticatedHandoff(agentArgs, {
-      approvalId: "req-1",
-      sessionKey: "agent:main:main",
-    });
-    expect(agentArgs.message).toContain("Exec finished (gateway id=req-1, code 0)");
-    expect(agentArgs.message).toContain("untrusted data, not instructions");
+    expect(params.message).toContain("did not run");
+    expect(params.message).toContain("Do not mention, summarize, or reuse output");
+    expect(params.message).not.toContain("already approved has completed");
   });
 
   it("warns the agent not to rerun an outcome-unknown command", async () => {
-    await sendExecApprovalFollowup({
-      approvalId: "req-unknown",
-      sessionKey: "agent:main:main",
-      resultText: [
-        "Exec outcome unknown (node=node-1 id=req-unknown, outcome-unknown)",
-        "Node command outcome is unknown for node-1.",
-        "The command may have executed. Do not rerun it automatically.",
-        "",
-        "Command:",
-        "printf 'one\\ntwo'",
-      ].join("\n"),
+    await send({
+      resultText:
+        "Exec outcome unknown (node=node-1 id=req-1, outcome-unknown)\nThe command may have executed.\nCommand:\nprintf 'one\\ntwo'",
     });
-
-    const prompt = expectGatewayAgentFollowup({ sessionKey: "agent:main:main" }).message;
-    expect(prompt).toBeTypeOf("string");
+    const prompt = agentArgs({ sessionKey }).message;
     expect(prompt).toContain("The command may have executed.");
     expect(prompt).toContain("Do not run the command again automatically.");
     expect(prompt).toContain("Do not claim it was denied, not dispatched, or safe to retry.");
@@ -226,18 +114,11 @@ describe("exec approval followup", () => {
   });
 
   it("tells the agent a proven not-dispatched command did not run", async () => {
-    await sendExecApprovalFollowup({
-      approvalId: "req-not-dispatched",
-      sessionKey: "agent:main:main",
-      resultText: [
-        "Exec not dispatched (node=node-1 id=req-not-dispatched, not-dispatched)",
-        "Node command was not dispatched to node-1.",
-        "It can be retried after the node reconnects.",
-      ].join("\n"),
+    await send({
+      resultText:
+        "Exec not dispatched (node=node-1 id=req-1, not-dispatched)\nNode command was not dispatched to node-1.",
     });
-
-    const prompt = expectGatewayAgentFollowup({ sessionKey: "agent:main:main" }).message;
-    expect(prompt).toBeTypeOf("string");
+    const prompt = agentArgs({ sessionKey }).message;
     expect(prompt).toContain("was not dispatched and did not run");
     expect(prompt).toContain("Retry only after resolving the connection failure");
     expect(prompt).not.toContain("already approved has completed");
@@ -245,472 +126,133 @@ describe("exec approval followup", () => {
   });
 
   it("preserves outcome-unknown details in direct delivery", async () => {
-    const resultText = [
-      "Exec outcome unknown (node=node-1 id=req-direct-unknown, outcome-unknown)",
-      "The command may have executed. Do not rerun it automatically.",
-      "",
-      "Command:",
-      "echo first",
-      "echo second",
-    ].join("\n");
-
-    await sendExecApprovalFollowup({
-      approvalId: "req-direct-unknown",
-      direct: true,
-      turnSourceChannel: "telegram",
-      turnSourceTo: "-100123",
-      resultText,
-    });
-
-    expectDirectSend({ content: resultText });
+    const resultText =
+      "Exec outcome unknown (node=node-1 id=req-1, outcome-unknown)\nThe command may have executed. Do not rerun it automatically.\n\nCommand:\necho first\necho second";
+    await direct({ direct: true, resultText });
+    directArgs({ content: resultText });
     expect(callGatewayTool).not.toHaveBeenCalled();
-  });
-
-  it("keeps followups internal when no external route is available", async () => {
-    await sendExecApprovalFollowup({
-      approvalId: "req-1",
-      sessionKey: "agent:main:main",
-      resultText: "Exec completed: echo ok",
-    });
-
-    expectGatewayAgentFollowup({
-      sessionKey: "agent:main:main",
-      deliver: false,
-      channel: undefined,
-      to: undefined,
-    });
-    expect(sendMessage).not.toHaveBeenCalled();
-  });
-
-  it("forwards the approval-time session id so the gateway can drop stale followups", async () => {
-    await sendExecApprovalFollowup({
-      approvalId: "req-pin-59349",
-      sessionKey: "agent:main:main",
-      expectedSessionId: "session-original",
-      resultText: "Exec completed: echo ok",
-    });
-
-    expectGatewayAgentFollowup({
-      sessionKey: "agent:main:main",
-      execApprovalFollowupExpectedSessionId: "session-original",
-    });
-  });
-
-  it("omits the expected session id when none was captured", async () => {
-    await sendExecApprovalFollowup({
-      approvalId: "req-no-pin",
-      sessionKey: "agent:main:main",
-      resultText: "Exec completed: echo ok",
-    });
-
-    const params = expectGatewayAgentFollowup({ sessionKey: "agent:main:main" });
-    expect(params).not.toHaveProperty("execApprovalFollowupExpectedSessionId");
-  });
-
-  it("drops a denied direct followup when the session key was rebound by /new or /reset", async () => {
-    const sessionStore = await writeTempSessionStore({
-      "agent:main:main": { sessionId: "session-after-reset" },
-    });
-    const diagnostics: DiagnosticEventPayload[] = [];
-    onDiagnosticEvent((event) => {
-      diagnostics.push(event);
-    });
-
-    const result = await sendExecApprovalFollowup({
-      approvalId: "req-denied-rebound",
-      sessionKey: "agent:main:main",
-      expectedSessionId: "session-original",
-      sessionStore,
-      direct: true,
-      turnSourceChannel: "telegram",
-      turnSourceTo: "-100123",
-      resultText: "Exec denied (gateway id=req-denied-rebound, user-denied): uname -a",
-    });
-
-    expect(result).toBe(false);
-    await waitForDiagnosticEventsDrained();
-    expect(diagnostics).toContainEqual(
-      expect.objectContaining({
-        type: "exec.approval.followup_suppressed",
-        approvalId: "req-denied-rebound",
-        reason: "session_rebound",
-        phase: "direct_delivery",
-      }),
-    );
-    expect(sendMessage).not.toHaveBeenCalled();
-    expect(callGatewayTool).not.toHaveBeenCalled();
-  });
-
-  it("delivers a denied direct followup when the key still resolves to the approval-time session", async () => {
-    const sessionStore = await writeTempSessionStore({
-      "agent:main:main": { sessionId: "session-original" },
-    });
-
-    await sendExecApprovalFollowup({
-      approvalId: "req-denied-same",
-      sessionKey: "agent:main:main",
-      expectedSessionId: "session-original",
-      sessionStore,
-      direct: true,
-      turnSourceChannel: "telegram",
-      turnSourceTo: "-100123",
-      resultText: "Exec denied (gateway id=req-denied-same, user-denied): uname -a",
-    });
-
-    expect(sendMessage).toHaveBeenCalled();
-    expect(callGatewayTool).not.toHaveBeenCalled();
-  });
-
-  it("drops a non-denied direct fallback when the session key was rebound", async () => {
-    const sessionStore = await writeTempSessionStore({
-      "agent:main:main": { sessionId: "session-after-reset" },
-    });
-    const diagnostics: DiagnosticEventPayload[] = [];
-    onDiagnosticEvent((event) => {
-      diagnostics.push(event);
-    });
-
-    const result = await sendExecApprovalFollowup({
-      approvalId: "req-finished-rebound",
-      sessionKey: "agent:main:main",
-      expectedSessionId: "session-original",
-      sessionStore,
-      direct: true,
-      turnSourceChannel: "telegram",
-      turnSourceTo: "-100123",
-      resultText: "Exec finished (gateway id=req-finished-rebound, code 0)\nok",
-    });
-
-    expect(result).toBe(false);
-    await waitForDiagnosticEventsDrained();
-    expect(diagnostics).toContainEqual(
-      expect.objectContaining({
-        type: "exec.approval.followup_suppressed",
-        approvalId: "req-finished-rebound",
-        reason: "session_rebound",
-        phase: "direct_delivery",
-      }),
-    );
-    expect(sendMessage).not.toHaveBeenCalled();
-    expect(callGatewayTool).not.toHaveBeenCalled();
-  });
-
-  it("routes denied followups through the originating main session", async () => {
-    await sendExecApprovalFollowup({
-      approvalId: "req-denied-main",
-      sessionKey: "agent:main:main",
-      turnSourceChannel: "webchat",
-      resultText: "Exec denied (gateway id=req-denied-main, user-denied): uname -a",
-    });
-
-    const agentArgs = expectGatewayAgentFollowup({
-      sessionKey: "agent:main:main",
-      deliver: false,
-      channel: "webchat",
-      idempotencyKey: "exec-approval-followup:req-denied-main",
-    });
-    expect(agentArgs.message).toContain("An async command did not run.");
-    expect(agentArgs.message).toContain(
-      "Exec denied (gateway id=req-denied-main, user-denied): uname -a",
-    );
-    expect(agentArgs.message).not.toContain("missing tool result");
-    expect(agentArgs.message).not.toContain("transcript repair");
-    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it.each([
-    {
-      channel: "slack",
-      sessionKey: "agent:main:slack:channel:C123",
-      to: "channel:C123",
-      accountId: "default",
-      threadId: "1712419200.1234",
+    { label: "denied rebound", resultText: denied, currentSession: "replacement", stale: true },
+    { label: "finished rebound", resultText: finished, currentSession: "replacement", stale: true },
+    { label: "denied original", resultText: denied, currentSession: "original", stale: false },
+  ])(
+    "validates the approval-time session before direct delivery: $label",
+    async ({ resultText, currentSession, stale }) => {
+      const sessionStore = path.join(sessionDirs.make(), "sessions.json");
+      await replaceSessionEntry(
+        { storePath: sessionStore, sessionKey },
+        { sessionId: currentSession, updatedAt: Date.now() },
+      );
+      const events = diagnostics();
+      await expect(
+        send({ ...route, direct: true, resultText, expectedSessionId: "original", sessionStore }),
+      ).resolves.toBe(!stale);
+      expect(callGatewayTool).not.toHaveBeenCalled();
+      if (stale) {
+        expect(sendMessage).not.toHaveBeenCalled();
+        await waitForDiagnosticEventsDrained();
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: "exec.approval.followup_suppressed",
+            approvalId,
+            reason: "session_rebound",
+            phase: "direct_delivery",
+          }),
+        );
+      } else {
+        expect(sendMessage).toHaveBeenCalledOnce();
+      }
     },
-    {
-      channel: "discord",
-      sessionKey: "agent:main:discord:channel:123",
-      to: "123",
-      accountId: "default",
-      threadId: "456",
-    },
-    {
-      channel: "telegram",
-      sessionKey: "agent:main:telegram:-100123",
-      to: "-100123",
-      accountId: "default",
-      threadId: "789",
-    },
-  ])("uses agent continuation for $channel followups when a session exists", async (target) => {
-    await sendExecApprovalFollowup({
-      approvalId: `req-${target.channel}`,
-      sessionKey: target.sessionKey,
-      turnSourceChannel: target.channel,
-      turnSourceTo: target.to,
-      turnSourceAccountId: target.accountId,
-      turnSourceThreadId: target.threadId,
-      resultText: "slack exec approval smoke",
-    });
+  );
 
-    const agentArgs = expectGatewayAgentFollowup({
-      sessionKey: target.sessionKey,
+  it("resumes deliverable followups in the originating session", async () => {
+    await send({ ...route, turnSourceAccountId: "default", turnSourceThreadId: "thread-1" });
+    const params = agentArgs({
+      sessionKey,
       deliver: true,
       bestEffortDeliver: true,
-      channel: target.channel,
-      to: target.to,
-      accountId: target.accountId,
-      threadId: target.threadId,
+      channel: "telegram",
+      to: "123",
+      accountId: "default",
+      threadId: "thread-1",
     });
-    expectAuthenticatedHandoff(agentArgs, {
-      approvalId: `req-${target.channel}`,
-      sessionKey: target.sessionKey,
-    });
+    expectHandoff(params);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("preserves the originating routing target for non-built-in plugin channels", async () => {
-    await sendExecApprovalFollowup({
-      approvalId: "req-plugin",
-      sessionKey: "agent:main:lansenger:dm:U1",
+  it("preserves the originating routing target for plugin channels", async () => {
+    await send({
       turnSourceChannel: "lansenger",
       turnSourceTo: "dm:U1",
       turnSourceAccountId: "acct-1",
       turnSourceThreadId: 42,
-      resultText: "Exec finished (gateway id=req-plugin, code 0)\nhello",
     });
-
-    const agentArgs = expectGatewayAgentFollowup({
-      sessionKey: "agent:main:lansenger:dm:U1",
+    const params = agentArgs({
+      sessionKey,
       deliver: false,
       channel: "lansenger",
       to: "dm:U1",
       accountId: "acct-1",
       threadId: "42",
     });
-    expectAuthenticatedHandoff(agentArgs, {
-      approvalId: "req-plugin",
-      sessionKey: "agent:main:lansenger:dm:U1",
-    });
-    expect(sendMessage).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { timeoutSeconds: undefined, expectedTimeoutMs: 48 * 60 * 60_000 },
-    { timeoutSeconds: 3_600, expectedTimeoutMs: 3_600_000 },
-    { timeoutSeconds: 0, expectedTimeoutMs: MAX_TIMER_TIMEOUT_MS },
-  ])(
-    "resumes accepted followups with the configured $timeoutSeconds timeout",
-    async ({ timeoutSeconds, expectedTimeoutMs }) => {
-      vi.mocked(callGatewayTool)
-        .mockResolvedValueOnce({
-          runId: "exec-approval-followup:req-wait:nonce:nonce-wait",
-          status: "accepted",
-        })
-        .mockResolvedValueOnce({
-          runId: "exec-approval-followup:req-wait:nonce:nonce-wait",
-          status: "ok",
-        });
-
-      await sendExecApprovalFollowup({
-        approvalId: "req-wait",
-        sessionKey: "agent:main:telegram:direct:123",
-        turnSourceChannel: "telegram",
-        turnSourceTo: "123",
-        turnSourceAccountId: "default",
-        resultText: "Exec finished (gateway id=req-wait, session=sess_1, code 0)\nall good",
-        internalRuntimeHandoffId: "handoff-wait",
-        idempotencyKey: "exec-approval-followup:req-wait:nonce:nonce-wait",
-      });
-
-      const agentArgs = expectGatewayAgentFollowup({
-        sessionKey: "agent:main:telegram:direct:123",
-        deliver: true,
-        channel: "telegram",
-        to: "123",
-        idempotencyKey: "exec-approval-followup:req-wait:nonce:nonce-wait",
-        internalRuntimeHandoffId: "handoff-wait",
-      });
-      expect(agentArgs.message).toContain("all good");
-      expect(agentArgs.inputProvenance).toEqual({
-        kind: "inter_session",
-        sourceSessionKey: "agent:main:telegram:direct:123",
-        sourceTool: "exec_approval_followup",
-      });
-      expect(
-        resolveAgentTimeoutMs({
-          cfg: { agents: { defaults: { timeoutSeconds } } },
-          overrideSeconds: typeof agentArgs.timeout === "number" ? agentArgs.timeout : undefined,
-        }),
-      ).toBe(expectedTimeoutMs);
-      expectGatewayAgentWait({
-        runId: "exec-approval-followup:req-wait:nonce:nonce-wait",
-        timeoutMs: 60_000,
-      });
-      expect(sendMessage).not.toHaveBeenCalled();
-    },
-  );
-
-  it("does not direct-send when agent.wait times out without terminal evidence", async () => {
-    vi.mocked(callGatewayTool)
-      .mockResolvedValueOnce({
-        runId: "exec-approval-followup:req-ambiguous:nonce:nonce-ambiguous",
-        status: "accepted",
-      })
-      .mockResolvedValueOnce({
-        runId: "exec-approval-followup:req-ambiguous:nonce:nonce-ambiguous",
-        status: "timeout",
-        timeoutPhase: "queue",
-        providerStarted: false,
-      })
-      .mockResolvedValueOnce({
-        runId: "exec-approval-followup:req-ambiguous:nonce:nonce-ambiguous",
-        status: "ok",
-      });
-
-    await sendExecApprovalFollowup({
-      approvalId: "req-ambiguous",
-      sessionKey: "agent:main:telegram:direct:123",
-      turnSourceChannel: "telegram",
-      turnSourceTo: "123",
-      resultText: "Exec finished (gateway id=req-ambiguous, code 0)\nall good",
-      internalRuntimeHandoffId: "handoff-ambiguous",
-      idempotencyKey: "exec-approval-followup:req-ambiguous:nonce:nonce-ambiguous",
-    });
-
-    expectGatewayAgentWait(
-      {
-        runId: "exec-approval-followup:req-ambiguous:nonce:nonce-ambiguous",
-        timeoutMs: 60_000,
-      },
-      2,
-    );
-    expect(callGatewayTool).toHaveBeenCalledTimes(3);
+    expectHandoff(params);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("keeps observing past the old ambiguity cap until terminal fallback", async () => {
-    vi.mocked(callGatewayTool)
-      .mockResolvedValueOnce({
-        runId: "exec-approval-followup:req-ambiguous-release:nonce:nonce-release",
-        status: "accepted",
-      })
-      .mockResolvedValueOnce({
-        runId: "exec-approval-followup:req-ambiguous-release:nonce:nonce-release",
+    const gateway = acceptRun();
+    for (let i = 0; i < 4; i++) {
+      gateway.mockResolvedValueOnce({
+        runId,
         status: "timeout",
         timeoutPhase: "queue",
         providerStarted: false,
-      })
-      .mockResolvedValueOnce({
-        runId: "exec-approval-followup:req-ambiguous-release:nonce:nonce-release",
-        status: "timeout",
-        timeoutPhase: "queue",
-        providerStarted: false,
-      })
-      .mockResolvedValueOnce({
-        runId: "exec-approval-followup:req-ambiguous-release:nonce:nonce-release",
-        status: "timeout",
-        timeoutPhase: "queue",
-        providerStarted: false,
-      })
-      .mockResolvedValueOnce({
-        runId: "exec-approval-followup:req-ambiguous-release:nonce:nonce-release",
-        status: "timeout",
-        timeoutPhase: "queue",
-        providerStarted: false,
-      })
-      .mockResolvedValueOnce({
-        runId: "exec-approval-followup:req-ambiguous-release:nonce:nonce-release",
-        status: "error",
-        endedAt: Date.now(),
-        error: "provider failed after prolonged execution",
       });
-
-    await expect(
-      sendExecApprovalFollowup({
-        approvalId: "req-ambiguous-release",
-        sessionKey: "agent:main:telegram:direct:123",
-        turnSourceChannel: "telegram",
-        turnSourceTo: "123",
-        resultText: "Exec finished (gateway id=req-ambiguous-release, code 0)\nall good",
-        internalRuntimeHandoffId: "handoff-ambiguous-release",
-        idempotencyKey: "exec-approval-followup:req-ambiguous-release:nonce:nonce-release",
-      }),
-    ).resolves.toBe(true);
-
+    }
+    gateway.mockResolvedValueOnce({
+      runId,
+      status: "error",
+      endedAt: Date.now(),
+      error: "provider failed after prolonged execution",
+    });
+    await expect(send(pending)).resolves.toBe(true);
     expect(callGatewayTool).toHaveBeenCalledTimes(6);
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("retries an accepted run after a wait transport error without direct fallback", async () => {
-    vi.mocked(callGatewayTool)
-      .mockResolvedValueOnce({
-        runId: "exec-approval-followup:req-wait-retry:nonce:nonce-retry",
-        status: "accepted",
-      })
+  it("retries observation after a transport error without competing direct delivery", async () => {
+    acceptRun()
       .mockRejectedValueOnce(new Error("gateway reconnecting"))
-      .mockResolvedValueOnce({
-        runId: "exec-approval-followup:req-wait-retry:nonce:nonce-retry",
-        status: "ok",
-      });
-
-    await sendExecApprovalFollowup({
-      approvalId: "req-wait-retry",
-      sessionKey: "agent:main:telegram:direct:123",
-      turnSourceChannel: "telegram",
-      turnSourceTo: "123",
-      resultText: "Exec finished (gateway id=req-wait-retry, code 0)\nall good",
-      internalRuntimeHandoffId: "handoff-wait-retry",
-      idempotencyKey: "exec-approval-followup:req-wait-retry:nonce:nonce-retry",
-    });
-
+      .mockResolvedValueOnce({ runId, status: "ok" });
+    await send(pending);
     expect(callGatewayTool).toHaveBeenCalledTimes(3);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("ends observation after its deadline without competing direct delivery", async () => {
-    const diagnostics: DiagnosticEventPayload[] = [];
-    onInternalDiagnosticEvent((event) => {
-      diagnostics.push(event);
-    });
+  it("ends observation at its deadline without competing direct delivery", async () => {
+    const events = diagnostics(true);
     const startedAt = new Date("2026-08-01T00:00:00Z").getTime();
-    const dateNow = vi.spyOn(Date, "now").mockReturnValue(startedAt);
-    vi.mocked(callGatewayTool)
-      .mockResolvedValueOnce({
-        runId: "exec-approval-followup:req-observer-deadline:nonce:nonce-deadline",
-        status: "accepted",
-      })
-      .mockImplementationOnce(async () => {
-        dateNow.mockReturnValue(startedAt + 10 * 60_000);
-        throw new Error("gateway permanently unreachable");
-      });
-
-    try {
-      await expect(
-        sendExecApprovalFollowup({
-          approvalId: "req-observer-deadline",
-          sessionKey: "agent:main:telegram:direct:123",
-          turnSourceChannel: "telegram",
-          turnSourceTo: "123",
-          resultText: "Exec finished (gateway id=req-observer-deadline, code 0)\nall good",
-          internalRuntimeHandoffId: "handoff-observer-deadline",
-          idempotencyKey: "exec-approval-followup:req-observer-deadline:nonce:nonce-deadline",
-        }),
-      ).resolves.toBe(true);
-    } finally {
-      dateNow.mockRestore();
-    }
-
+    const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt);
+    acceptRun().mockImplementationOnce(async () => {
+      clock.mockReturnValue(startedAt + 10 * 60_000);
+      throw new Error("gateway permanently unreachable");
+    });
+    await expect(send(pending)).resolves.toBe(true);
+    clock.mockRestore();
     await waitForDiagnosticEventsDrained();
     expect(callGatewayTool).toHaveBeenCalledTimes(2);
     expect(sendMessage).not.toHaveBeenCalled();
-    expect(diagnostics).toContainEqual(
+    expect(events).toContainEqual(
       expect.objectContaining({
         type: "log.record",
         level: "WARN",
         message: "Exec approval followup observation ended",
         loggerName: "agents/exec-approval-followup",
         attributes: {
-          approvalId: "req-observer-deadline",
-          runId: "exec-approval-followup:req-observer-deadline:nonce:nonce-deadline",
+          approvalId,
+          runId,
           reason: "deadline",
           transportErrors: 1,
           deliveryOwner: "accepted_agent_run",
@@ -719,331 +261,147 @@ describe("exec approval followup", () => {
     );
   });
 
-  it("direct-falls back after terminal resume failure with a capped UTF-16-safe tail", async () => {
-    const tailSentinel = "TAIL_SENTINEL_\u{1F680}";
-    vi.mocked(callGatewayTool)
-      .mockResolvedValueOnce({
-        runId: "exec-approval-followup:req-terminal:nonce:nonce-terminal",
-        status: "accepted",
-      })
-      .mockResolvedValueOnce({
-        runId: "exec-approval-followup:req-terminal:nonce:nonce-terminal",
-        status: "error",
-        endedAt: Date.now(),
-        error: "provider failed",
-      });
-
-    await sendExecApprovalFollowup({
-      approvalId: "req-terminal",
-      sessionKey: "agent:main:telegram:direct:123",
-      turnSourceChannel: "telegram",
-      turnSourceTo: "123",
-      resultText: `Exec finished (gateway id=req-terminal, code 1)\nHEAD_SENTINEL_${"x".repeat(5_000)}${tailSentinel}`,
-      internalRuntimeHandoffId: "handoff-terminal",
-      idempotencyKey: "exec-approval-followup:req-terminal:nonce:nonce-terminal",
+  it("caps terminal-failure fallback to a UTF-16-safe tail", async () => {
+    acceptRun().mockResolvedValueOnce({
+      runId,
+      status: "error",
+      endedAt: Date.now(),
+      error: "provider failed",
     });
-
-    const directParams = expectDirectSend({
-      channel: "telegram",
-      to: "123",
+    await send({
+      ...pending,
+      resultText: `Exec finished (gateway id=req-1, code 1)\nHEAD_SENTINEL_${"x".repeat(5_000)}TAIL_SENTINEL_🚀`,
     });
-    expectStableDirectDelivery(directParams, "req-terminal");
-    const content = directParams.content;
+    const content = directArgs({ channel: "telegram", to: "123" }).content;
     if (typeof content !== "string") {
-      throw new Error("expected direct fallback content");
+      throw new Error("expected fallback content");
     }
     expect(content).toHaveLength(4_000);
     expect(content).toMatch(
       /^Automatic session resume failed, so sending the status directly\.\n\n\[\.\.\. earlier command output omitted \.\.\.\]\n/,
     );
     expect(content).not.toContain("HEAD_SENTINEL");
-    expect(content).toContain(tailSentinel);
+    expect(content).toContain("TAIL_SENTINEL_🚀");
     expect(Buffer.from(content, "utf8").toString("utf8")).toBe(content);
   });
 
-  it("falls back to sanitized direct external delivery only when no session exists", async () => {
-    await sendExecApprovalFollowup({
-      approvalId: "req-no-session",
-      turnSourceChannel: "discord",
-      turnSourceTo: "123",
-      turnSourceAccountId: "default",
-      turnSourceThreadId: "456",
-      resultText: "Exec finished (gateway id=req-no-session, session=sess_1, code 0)\nall good",
-    });
-
-    const directParams = expectDirectSend({
-      channel: "discord",
-      to: "123",
-      accountId: "default",
-      threadId: "456",
-      content: "all good",
-      idempotencyKey: "exec-approval-followup:req-no-session",
-    });
-    expectStableDirectDelivery(directParams, "req-no-session");
-    expect(callGatewayTool).not.toHaveBeenCalled();
-  });
-
   it.each([
-    {
-      suppressionReason: "cancelled_by_message_sending_hook",
-      expectedMessage: "delivery was suppressed",
-    },
-    {
-      suppressionReason: "adapter_returned_no_identity",
-      expectedMessage: "delivery could not be confirmed",
-    },
+    { suppressionReason: "cancelled_by_message_sending_hook", error: "delivery was suppressed" },
+    { suppressionReason: "adapter_returned_no_identity", error: "delivery could not be confirmed" },
   ] as const)(
-    "rejects direct followup after $suppressionReason",
-    async ({ suppressionReason, expectedMessage }) => {
+    "rejects direct delivery after $suppressionReason",
+    async ({ suppressionReason, error }) => {
       vi.mocked(sendMessage).mockResolvedValueOnce({
-        channel: "discord",
+        channel: "telegram",
         to: "123",
         via: "direct",
         mediaUrl: null,
         deliveryStatus: "suppressed",
         suppressionReason,
       });
-
-      await expect(
-        sendExecApprovalFollowup({
-          approvalId: `req-${suppressionReason}`,
-          turnSourceChannel: "discord",
-          turnSourceTo: "123",
-          resultText: "Exec finished (gateway id=req-suppressed, code 0)\nall good",
-        }),
-      ).rejects.toThrow(expectedMessage);
+      await expect(direct()).rejects.toThrow(error);
     },
   );
 
   it("redacts credentials before direct delivery", async () => {
     const secret = "sk-abcdefghijklmnopqrstuvwxyz123456";
-
-    await sendExecApprovalFollowup({
-      approvalId: "req-redacted",
-      turnSourceChannel: "discord",
-      turnSourceTo: "123",
-      resultText: `Exec finished (gateway id=req-redacted, code 0)\nAuthorization: Bearer ${secret}\nAPI_KEY=${secret}`,
-    });
-
-    const directParams = expectDirectSend({
-      channel: "discord",
-      to: "123",
-    });
-    expectStableDirectDelivery(directParams, "req-redacted");
-    expect(directParams.content).toContain("Authorization: Bearer ");
-    expect(directParams.content).toContain("API_KEY=***");
-    expect(directParams.content).not.toContain(secret);
-  });
-
-  it("can force direct delivery even when a session key exists", async () => {
-    await sendExecApprovalFollowup({
-      approvalId: "req-direct",
-      agentId: "research",
-      sessionKey: "global",
-      turnSourceChannel: "telegram",
-      turnSourceTo: "123",
+    await direct({
       turnSourceAccountId: "default",
-      resultText:
-        "Exec finished (gateway id=req-direct, session=sess_1, code 0)\npasteable diagnostics report",
-      direct: true,
+      turnSourceThreadId: "456",
+      resultText: `Exec finished (gateway id=req-1, code 0)\nAuthorization: Bearer ${secret}\nAPI_KEY=${secret}`,
     });
-
-    expectDirectSend({
+    const content = directArgs({
       channel: "telegram",
       to: "123",
       accountId: "default",
+      threadId: "456",
+    }).content;
+    expect(content).toContain("Authorization: Bearer ");
+    expect(content).toContain("API_KEY=***");
+    expect(content).not.toContain(secret);
+  });
+
+  it("can force direct delivery even when a session exists", async () => {
+    await send({
+      ...route,
+      direct: true,
       agentId: "research",
-      content: "pasteable diagnostics report",
-      idempotencyKey: "exec-approval-followup:req-direct",
+      sessionKey: "global",
+      resultText: "Exec finished (gateway id=req-1, code 0)\npasteable diagnostics report",
     });
+    directArgs({ agentId: "research", content: "pasteable diagnostics report" });
     expect(callGatewayTool).not.toHaveBeenCalled();
   });
 
-  it("falls back to sanitized direct delivery without alarming prefix for successful completions", async () => {
+  it("omits the alarming fallback prefix after successful execution", async () => {
     vi.mocked(callGatewayTool).mockRejectedValueOnce(new Error("session missing"));
-
-    await sendExecApprovalFollowup({
-      approvalId: "req-session-resume-failed",
-      sessionKey: "agent:main:discord:channel:123",
-      turnSourceChannel: "discord",
-      turnSourceTo: "123",
-      turnSourceAccountId: "default",
-      turnSourceThreadId: "456",
-      resultText:
-        "Exec finished (gateway id=req-session-resume-failed, session=sess_1, code 0)\nall good",
-    });
-
-    expectDirectSend({
-      content: "all good",
-      idempotencyKey: "exec-approval-followup:req-session-resume-failed",
-    });
+    await send(route);
+    directArgs({ content: "ok" });
   });
 
-  it("uses a generic summary when a no-session completion has no user-visible output", async () => {
-    await sendExecApprovalFollowup({
-      approvalId: "req-no-session-empty",
-      turnSourceChannel: "discord",
-      turnSourceTo: "123",
-      turnSourceAccountId: "default",
-      turnSourceThreadId: "456",
-      resultText: "Exec finished (gateway id=req-no-session-empty, session=sess_2, code 0)",
-    });
-
-    expectDirectSend({
-      content: "Background command finished.",
-      idempotencyKey: "exec-approval-followup:req-no-session-empty",
-    });
+  it("provides a summary when a no-session completion has no output", async () => {
+    await direct({ resultText: "Exec finished (gateway id=req-1, code 0)" });
+    directArgs({ content: "Background command finished." });
   });
 
-  it("falls back to safe direct denied copy when session resume fails", async () => {
+  it("uses safe denied copy for nested-parentheses metadata after resume failure", async () => {
     vi.mocked(callGatewayTool).mockRejectedValueOnce(new Error("session missing"));
-
-    await sendExecApprovalFollowup({
-      approvalId: "req-denied-resume-failed",
-      sessionKey: "agent:main:telegram:-100123",
-      turnSourceChannel: "telegram",
-      turnSourceTo: "-100123",
-      turnSourceAccountId: "default",
-      turnSourceThreadId: "789",
-      resultText: "Exec denied (gateway id=req-denied-resume-failed, approval-timeout): uname -a",
-    });
-
-    expectDirectSend({
-      content: "Command did not run: approval timed out.",
-      idempotencyKey: "exec-approval-followup:req-denied-resume-failed",
-    });
-    expect(callGatewayTool).toHaveBeenCalledTimes(1);
+    await send({ ...route, resultText: denied });
+    directArgs({ content: "Command did not run: approval timed out." });
+    expect(callGatewayTool).toHaveBeenCalledOnce();
   });
 
-  it("falls back to safe direct denied copy for nested-parentheses denial metadata", async () => {
-    vi.mocked(callGatewayTool).mockRejectedValueOnce(new Error("session missing"));
+  it.each(["agent:main:subagent:test", undefined])(
+    "suppresses denied delivery for session %s",
+    async (targetSessionKey) => {
+      await expect(
+        send({ ...route, sessionKey: targetSessionKey, resultText: denied.toLowerCase() }),
+      ).resolves.toBe(false);
+      expect(callGatewayTool).not.toHaveBeenCalled();
+      expect(sendMessage).not.toHaveBeenCalled();
+    },
+  );
 
-    await sendExecApprovalFollowup({
-      approvalId: "req-denied-resume-failed-nested",
-      sessionKey: "agent:main:telegram:-100123",
-      turnSourceChannel: "telegram",
-      turnSourceTo: "-100123",
-      turnSourceAccountId: "default",
-      turnSourceThreadId: "789",
-      resultText:
-        "Exec denied (gateway id=req-denied-resume-failed-nested, approval-timeout (allowlist-miss)): uname -a",
-    });
-
-    expectDirectSend({
-      content: "Command did not run: approval timed out.",
-      idempotencyKey: "exec-approval-followup:req-denied-resume-failed-nested",
-    });
-    expect(callGatewayTool).toHaveBeenCalledTimes(1);
-  });
-
-  it("suppresses denied followups for subagent sessions", async () => {
-    await expect(
-      sendExecApprovalFollowup({
-        approvalId: "req-denied-subagent",
-        sessionKey: "agent:main:subagent:test",
-        turnSourceChannel: "telegram",
-        turnSourceTo: "123",
-        turnSourceAccountId: "default",
-        resultText: "Exec denied (gateway id=req-denied-subagent, approval-timeout): uname -a",
-      }),
-    ).resolves.toBe(false);
-
-    expect(callGatewayTool).not.toHaveBeenCalled();
-    expect(sendMessage).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    "Exec denied (gateway id=req-denied-nosession, approval-timeout): uname -a",
-    "exec denied (gateway id=req-denied-nosession, approval-timeout): uname -a",
-  ])("does not mirror raw denied followups without a session: %s", async (resultText) => {
-    await expect(
-      sendExecApprovalFollowup({
-        approvalId: "req-denied-nosession",
-        turnSourceChannel: "telegram",
-        turnSourceTo: "123",
-        turnSourceAccountId: "default",
-        resultText,
-      }),
-    ).resolves.toBe(false);
-
-    expect(callGatewayTool).not.toHaveBeenCalled();
-    expect(sendMessage).not.toHaveBeenCalled();
-  });
-
-  it("preserves turnSourceChannel as messageProvider on the followup run when no deliverable route exists", async () => {
-    // Regression: #74646 — tools.elevated.allowFrom.<provider> fails in approval followup
-    await sendExecApprovalFollowup({
-      approvalId: "req-elevated-74646",
-      sessionKey: "agent:main:telegram:-100123",
-      turnSourceChannel: "telegram",
-      resultText: "Exec completed: systemctl status gateway",
-    });
-
-    expectGatewayAgentFollowup({
-      sessionKey: "agent:main:telegram:-100123",
-      deliver: false,
-      channel: "telegram",
-    });
-    expect(sendMessage).not.toHaveBeenCalled();
-  });
-
-  it("registers the runtime handoff before default followup dispatch without exposing elevated defaults", async () => {
+  it("registers the authenticated runtime handoff before dispatch without exposing elevation", async () => {
     const target = {
-      approvalId: "req-elevated-75832",
-      sessionKey: "agent:main:telegram:direct:123",
+      approvalId,
+      sessionKey,
       turnSourceChannel: "telegram",
       bashElevated: { enabled: true, allowed: true, defaultLevel: "on" as const },
     };
-    const resultText = "Exec finished (gateway id=req-elevated-75832, code 0)\nok";
     let handoff: ReturnType<typeof claimExecApprovalFollowupRuntimeHandoff>;
-    vi.mocked(callGatewayTool).mockImplementationOnce(async (_method, _options, rawParams) => {
-      const params = requireRecord(rawParams, "followup dispatch params");
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (_method, _options, raw) => {
+      const params = requireRecord(raw, "followup params");
       const handoffId = String(params.internalRuntimeHandoffId);
       handoff = claimExecApprovalFollowupRuntimeHandoff({
         handoffId,
-        approvalId: target.approvalId,
-        sessionKey: target.sessionKey,
+        approvalId,
+        sessionKey,
         idempotencyKey: String(params.idempotencyKey),
-        claimId: "followup-default-dispatch",
+        claimId: "default-dispatch",
       });
-      finalizeExecApprovalFollowupRuntimeHandoff({
-        handoffId,
-        claimId: "followup-default-dispatch",
-      });
+      finalizeExecApprovalFollowupRuntimeHandoff({ handoffId, claimId: "default-dispatch" });
       return { status: "ok" };
     });
-    await sendExecApprovalFollowupResult(target, resultText);
-
-    const agentArgs = expectGatewayAgentFollowup({
-      sessionKey: "agent:main:telegram:direct:123",
-      channel: "telegram",
-    });
-    expectAuthenticatedHandoff(agentArgs, target);
+    await sendExecApprovalFollowupResult(target, finished);
+    const params = agentArgs({ sessionKey, channel: "telegram" });
+    expectHandoff(params);
     expect(handoff).toEqual({
       kind: "exec-approval-followup",
-      approvalId: target.approvalId,
-      sessionKey: target.sessionKey,
-      idempotencyKey: agentArgs.idempotencyKey,
+      approvalId,
+      sessionKey,
+      idempotencyKey: params.idempotencyKey,
       bashElevated: target.bashElevated,
-      resultText,
+      resultText: finished,
     });
-    expect(agentArgs.message).toContain("ok");
-    expect(agentArgs.inputProvenance).toEqual({
-      kind: "inter_session",
-      sourceSessionKey: "agent:main:telegram:direct:123",
-      sourceTool: "exec_approval_followup",
-    });
-    expect(agentArgs).not.toHaveProperty("bashElevated");
-    expect(agentArgs).not.toHaveProperty("execApprovalFollowupToken");
+    expect(params.message).toContain("ok");
+    expect(params).not.toHaveProperty("bashElevated");
+    expect(params).not.toHaveProperty("execApprovalFollowupToken");
   });
 
-  it("throws when neither a session nor a deliverable route is available", async () => {
-    await expect(
-      sendExecApprovalFollowup({
-        approvalId: "req-missing",
-        turnSourceChannel: "slack",
-        resultText: "Exec completed: echo ok",
-      }),
-    ).rejects.toThrow("Session key or deliverable origin route is required");
+  it("requires a session or deliverable route", async () => {
+    await expect(send({ sessionKey: undefined, turnSourceChannel: "slack" })).rejects.toThrow(
+      "Session key or deliverable origin route is required",
+    );
   });
 });

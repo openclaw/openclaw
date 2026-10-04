@@ -1,4 +1,4 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing } from "lit";
 import {
   BUILTIN_THEMES,
   resolveThemeBranding,
@@ -6,6 +6,7 @@ import {
 import type { ServerUiPrefProvenance } from "../../app/server-prefs.ts";
 import {
   normalizeCatalogOpenTarget,
+  normalizeChatMessageMaxWidth,
   normalizeChatFollowUpMode,
   normalizeChatSendShortcut,
   UI_APPEARANCE_DEFAULTS,
@@ -175,10 +176,7 @@ function renderSettingsCameraField(props: ConfigProps) {
   });
 }
 
-export function renderChatPreferencesSection(
-  props: ConfigProps,
-  messageWidthInput: TemplateResult,
-) {
+export function renderChatPreferencesSection(props: ConfigProps) {
   const followUpSelection = props.chatFollowUpMode ?? "server";
   const serverQueueMode = props.serverQueueMode ?? t("chat.followUpModeLoading");
   const followUpDescription = props.chatFollowUpMode
@@ -202,8 +200,7 @@ export function renderChatPreferencesSection(
   );
   const holdToRecordDefaultDescription = renderSettingsDefaultDescription(
     t("common.enabled"),
-    (props.composerHoldToRecord ?? UI_APPEARANCE_DEFAULTS.composerHoldToRecord) !==
-      UI_APPEARANCE_DEFAULTS.composerHoldToRecord,
+    props.composerHoldToRecord !== UI_APPEARANCE_DEFAULTS.composerHoldToRecord,
   );
   const showTaskProgressDefaultDescription = renderSettingsDefaultDescription(
     t("common.enabled"),
@@ -223,7 +220,30 @@ export function renderChatPreferencesSection(
           title: t("configView.chatPrefs.messageWidth"),
           description: html`${t("configView.chatPrefs.messageWidthHint")}<br />
             ${messageWidthDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
-          control: messageWidthInput,
+          control: html`
+            <input
+              class="settings-input"
+              data-settings-chat-message-width
+              aria-label=${t("configView.chatPrefs.messageWidth")}
+              type="text"
+              spellcheck="false"
+              placeholder="48rem"
+              .value=${props.chatMessageMaxWidth ?? ""}
+              @change=${(event: Event) => {
+                // SAFETY: The listener is bound directly to this input.
+                const input = event.currentTarget as HTMLInputElement;
+                const normalized = normalizeChatMessageMaxWidth(input.value);
+                if (input.value.trim() && !normalized) {
+                  input.setCustomValidity(t("configView.chatPrefs.messageWidthInvalid"));
+                  input.reportValidity();
+                  return;
+                }
+                input.setCustomValidity("");
+                input.value = normalized ?? "";
+                props.setChatMessageMaxWidth(normalized);
+              }}
+            />
+          `,
         })}
         ${renderSettingsToggleRow({
           title: t("configView.chatPrefs.showTaskProgress"),
@@ -302,31 +322,28 @@ export function renderChatPreferencesSection(
           ],
           onChange: (value) => props.setCatalogOpenTarget(normalizeCatalogOpenTarget(value)),
         })}
+        ${renderSettingsToggleRow({
+          title: t("configView.chatPrefs.openLinksExternally"),
+          description: html`${t("configView.chatPrefs.openLinksExternallyHint")}<br />
+            ${t("configView.chatPrefs.openLinksExternallyStorage")}`,
+          checked: props.openLinksExternally,
+          onChange: props.setOpenLinksExternally,
+        })}
         ${renderSettingsMicrophoneField(props)} ${renderSettingsCameraField(props)}
-        ${
-          props.setComposerHoldToRecord
-            ? renderSettingsToggleRow({
-                title: t("chat.composer.holdToRecordSetting"),
-                description: html`${t("chat.composer.holdToRecordSettingDescription")}<br />
-                  ${holdToRecordDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
-                checked: props.composerHoldToRecord ?? UI_APPEARANCE_DEFAULTS.composerHoldToRecord,
-                onChange: props.setComposerHoldToRecord,
-              })
-            : nothing
-        }
+        ${renderSettingsToggleRow({
+          title: t("chat.composer.holdToRecordSetting"),
+          description: html`${t("chat.composer.holdToRecordSettingDescription")}<br />
+            ${holdToRecordDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
+          checked: props.composerHoldToRecord,
+          onChange: props.setComposerHoldToRecord,
+        })}
       </div>
     </section>
   `;
 }
 
-// Lobster pet toggles and the Lobsterdex live with the rest of the appearance
-// prefs; the toggles are browser-local, so embedded editors omit this section.
 export function renderLobsterPetSection(props: ConfigProps) {
-  if (!props.setLobsterPetVisits || !props.setLobsterPetSounds) {
-    return nothing;
-  }
-  const lobsterPetVisits = props.lobsterPetVisits ?? UI_APPEARANCE_DEFAULTS.lobsterPetVisits;
-  const lobsterPetSounds = props.lobsterPetSounds ?? UI_APPEARANCE_DEFAULTS.lobsterPetSounds;
+  const { lobsterPetVisits, lobsterPetSounds } = props;
   const activeTheme =
     BUILTIN_THEMES.find((theme) => theme.id === props.theme) ??
     props.themeCatalog?.themes.find((theme) => theme.id === props.theme);
@@ -357,25 +374,26 @@ export function renderLobsterPetSection(props: ConfigProps) {
       <div class="settings-group">
         ${renderSettingsToggleRow({
           title: t("quickSettings.appearance.lobsterVisits"),
-          description: lobsterPetVisits
-            ? html`${t("quickSettings.appearance.lobsterVisitsOn")}<br />
-                ${lobsterVisitsDefaultDescription}
-                ${t("quickSettings.personal.browserOnly")}${themeHiddenDescription}`
-            : html`${t("quickSettings.appearance.lobsterVisitsOff")}<br />
-                ${lobsterVisitsDefaultDescription}
-                ${t("quickSettings.personal.browserOnly")}${themeHiddenDescription}`,
+          description: html`${t(
+              lobsterPetVisits
+                ? "quickSettings.appearance.lobsterVisitsOn"
+                : "quickSettings.appearance.lobsterVisitsOff",
+            )}<br />
+            ${lobsterVisitsDefaultDescription}
+            ${t("quickSettings.personal.browserOnly")}${themeHiddenDescription}`,
           checked: lobsterPetVisits,
-          onChange: (enabled) => props.setLobsterPetVisits?.(enabled),
+          onChange: props.setLobsterPetVisits,
         })}
         ${renderSettingsToggleRow({
           title: t("quickSettings.appearance.lobsterSounds"),
-          description: lobsterPetSounds
-            ? html`${t("quickSettings.appearance.lobsterSoundsOn")}<br />
-                ${lobsterSoundsDefaultDescription} ${t("quickSettings.personal.browserOnly")}`
-            : html`${t("quickSettings.appearance.lobsterSoundsOff")}<br />
-                ${lobsterSoundsDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
+          description: html`${t(
+              lobsterPetSounds
+                ? "quickSettings.appearance.lobsterSoundsOn"
+                : "quickSettings.appearance.lobsterSoundsOff",
+            )}<br />
+            ${lobsterSoundsDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
           checked: lobsterPetSounds,
-          onChange: (enabled) => props.setLobsterPetSounds?.(enabled),
+          onChange: props.setLobsterPetSounds,
           onAct: (enabled) => {
             if (enabled) {
               previewLobsterChirp();
@@ -470,9 +488,7 @@ export function renderSidebarPreferencesSection(props: ConfigProps) {
   );
   // The delete dialog's "Don't ask me again" writes this off; this row is where
   // the operator turns it back on, so it has to stay next to the session prefs.
-  const setSessionDeleteConfirm = props.setSessionDeleteConfirm;
-  const sessionDeleteConfirm =
-    props.sessionDeleteConfirm ?? UI_APPEARANCE_DEFAULTS.sessionDeleteConfirm;
+  const sessionDeleteConfirm = props.sessionDeleteConfirm;
   const deleteConfirmDefaultDescription = renderSettingsDefaultDescription(
     t("common.enabled"),
     sessionDeleteConfirm !== UI_APPEARANCE_DEFAULTS.sessionDeleteConfirm,
@@ -491,17 +507,13 @@ export function renderSidebarPreferencesSection(props: ConfigProps) {
           checked: props.sidebarLiveActivity,
           onChange: props.setSidebarLiveActivity,
         })}
-        ${
-          setSessionDeleteConfirm
-            ? renderSettingsToggleRow({
-                title: t("configView.sidebarPrefs.deleteConfirm"),
-                description: html`${t("configView.sidebarPrefs.deleteConfirmHint")}<br />
-                  ${deleteConfirmDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
-                checked: sessionDeleteConfirm,
-                onChange: setSessionDeleteConfirm,
-              })
-            : nothing
-        }
+        ${renderSettingsToggleRow({
+          title: t("configView.sidebarPrefs.deleteConfirm"),
+          description: html`${t("configView.sidebarPrefs.deleteConfirmHint")}<br />
+            ${deleteConfirmDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
+          checked: sessionDeleteConfirm,
+          onChange: props.setSessionDeleteConfirm,
+        })}
       </div>
       ${
         hiddenCatalogIds.length > 0

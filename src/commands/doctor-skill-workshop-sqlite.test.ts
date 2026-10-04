@@ -93,7 +93,7 @@ describe("doctor Skill Workshop SQLite migration", () => {
       `skill-workshop/proposals/${record.id}/${record.draftFile}`,
       skillContent,
     );
-    importLegacySkillProposal({
+    await importLegacySkillProposal({
       record,
       ownerAgentId: "main",
       store: { env: testState.env },
@@ -302,7 +302,7 @@ describe("doctor Skill Workshop SQLite migration", () => {
         config: {
           agents: {
             entries: {
-              main: { default: true, workspace: workspaceDir },
+              main: { workspace: workspaceDir },
             },
           },
         },
@@ -411,7 +411,7 @@ describe("doctor Skill Workshop SQLite migration", () => {
         config: {
           agents: {
             entries: {
-              main: { default: true, workspace: workspaceDir },
+              main: { workspace: workspaceDir },
             },
           },
         },

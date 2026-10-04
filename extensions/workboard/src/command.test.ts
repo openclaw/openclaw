@@ -6,10 +6,7 @@ import type { OpenClawPluginApi } from "../api.js";
 import { registerWorkboardCommand } from "./command.js";
 import type { WorkboardStore } from "./store.js";
 import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
-import {
-  resolveAgentWorkboardWorkspaceRuntime,
-  resolveCommandWorkboardWorkspaceAccess,
-} from "./workspace-access.js";
+import { resolveCommandWorkboardWorkspaceAccess } from "./workspace-access.js";
 
 function createApi(run = vi.fn().mockResolvedValue({ runId: "run-1" })): OpenClawPluginApi {
   return {
@@ -79,22 +76,27 @@ async function createAmbiguousPrefix(store: WorkboardStore): Promise<string> {
 }
 
 describe("handleWorkboardCommand", () => {
-  it("uses the configured default agent workspace for unscoped local commands", () => {
+  it("requires an explicit agent workspace for multi-agent local commands", () => {
+    const config = {
+      tools: { fs: { workspaceOnly: true } },
+      agents: {
+        entries: {
+          first: {
+            workspace: "/first",
+            tools: { fs: { workspaceOnly: false } },
+          },
+          chosen: { workspace: "/chosen" },
+        },
+      },
+    };
+
+    expect(() => resolveCommandWorkboardWorkspaceAccess({ config })).toThrow(
+      "Multiple agents are configured",
+    );
     expect(
       resolveCommandWorkboardWorkspaceAccess({
-        config: {
-          tools: { fs: { workspaceOnly: true } },
-          agents: {
-            list: [
-              {
-                id: "first",
-                workspace: "/first",
-                tools: { fs: { workspaceOnly: false } },
-              },
-              { id: "chosen", default: true, workspace: "/chosen" },
-            ],
-          },
-        },
+        config,
+        agentId: "chosen",
       }),
     ).toEqual({ unrestricted: false, roots: ["/chosen"], writable: true });
   });
@@ -103,7 +105,7 @@ describe("handleWorkboardCommand", () => {
     const config = {
       agents: {
         defaults: { sandbox: { mode: "all" as const, workspaceAccess: "ro" as const } },
-        list: [{ id: "main", default: true, workspace: "/workspace" }],
+        entries: { main: { workspace: "/workspace" } },
       },
     };
 
@@ -120,38 +122,15 @@ describe("handleWorkboardCommand", () => {
     ).toEqual({ unrestricted: false, roots: ["/workspace"], writable: false });
   });
 
-  it("projects target sandbox authority into Workboard roots", async () => {
-    const safeConfig = {
-      agents: {
-        defaults: { sandbox: { mode: "all" as const, workspaceAccess: "rw" as const } },
-        list: [{ id: "main", default: true, workspace: "/workspace" }],
-      },
-    };
-    await expect(
-      resolveAgentWorkboardWorkspaceRuntime({
-        config: safeConfig,
-        agentId: "main",
-        sessionKey: "agent:main:subagent:workboard-card",
-        workspaceDir: "/workspace",
-        prepareSandboxWorkspaceAuthority: async () => ({
-          sandboxed: true,
-          workspaceAccess: "rw",
-        }),
-      }),
-    ).resolves.toEqual({
-      sandboxed: true,
-      workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
-    });
-  });
-
-  it("attests the default agent for an unassigned slash-command card", async () => {
+  it("attests the card's assigned agent independently of the slash-command caller", async () => {
     const store = createWorkboardSqliteTestStore();
     await store.create({
-      title: "Unassigned slash card",
+      title: "Assigned slash card",
       status: "ready",
+      agentId: "main",
       workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
     });
-    const run = vi.fn().mockResolvedValue({ runId: "run-default-agent" });
+    const run = vi.fn().mockResolvedValue({ runId: "run-assigned-agent" });
     const prepareWorkspaceAuthority = vi.fn().mockResolvedValue({
       sandboxed: true,
       workspaceAccess: "rw" as const,
@@ -187,10 +166,10 @@ describe("handleWorkboardCommand", () => {
       config: {
         agents: {
           defaults: { sandbox: { mode: "all", workspaceAccess: "rw" } },
-          list: [
-            { id: "main", default: true, workspace: "/workspace" },
-            { id: "secondary", workspace: "/workspace" },
-          ],
+          entries: {
+            main: { workspace: "/workspace" },
+            secondary: { workspace: "/workspace" },
+          },
         },
       },
       agentId: "secondary",
@@ -492,16 +471,17 @@ describe("handleWorkboardCommand", () => {
     await store.create({
       title: "Denied checkout",
       status: "ready",
+      agentId: "main",
       workspace: { kind: "worktree", path: "/repo-denied" },
     });
 
     const restrictedConfig = {
       tools: { fs: { workspaceOnly: true } },
       agents: {
-        list: [
-          { id: "main", default: true, workspace: "/workspace" },
-          { id: "restricted", workspace: "/workspace" },
-        ],
+        entries: {
+          main: { workspace: "/workspace" },
+          restricted: { workspace: "/workspace" },
+        },
       },
     };
     vi.mocked(api.runtime.sandbox.resolveWorkspaceAuthority).mockReturnValue({
@@ -576,7 +556,7 @@ describe("handleWorkboardCommand", () => {
       args: "dispatch",
       context: {
         gatewayClientScopes: ["operator.admin"],
-        config: { agents: { list: [{ id: "admin", default: true, workspace: "/repo-allowed" }] } },
+        config: { agents: { entries: { admin: { workspace: "/repo-allowed" } } } },
         agentId: "admin",
       },
     });

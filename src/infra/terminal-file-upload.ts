@@ -11,6 +11,7 @@ import {
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
+import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isCanonicalTerminalUploadBase64,
@@ -22,7 +23,9 @@ import {
 import type { TerminalUploadResult as ProtocolTerminalUploadResult } from "../../packages/gateway-protocol/src/schema/terminal.js";
 import { logWarn } from "../logger.js";
 import { BoundedSerialQueue } from "../shared/bounded-serial-queue.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { hasErrnoCode } from "./errno.js";
 import { createFileLockManager } from "./file-lock-manager.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
@@ -33,8 +36,6 @@ const TERMINAL_UPLOAD_CLEANUP_RETRY_MS = 60 * 60 * 1000;
 const MAX_RETAINED_BYTES = 256 * 1024 * 1024;
 const MAX_RETAINED_DIRECTORIES = 64;
 const MAX_STAGED_NAME_BYTES = 180;
-const PORTABLE_NAME_FORBIDDEN = new RegExp(String.raw`[\u0000-\u001f\u007f<>:"/\\|?*%!]`, "g");
-const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/iu;
 const uploadLocks = createFileLockManager("openclaw.terminal-upload");
 const pendingUploadLockReleases = new Map<string, () => Promise<void>>();
 const uploadQueue = new BoundedSerialQueue({
@@ -69,34 +70,17 @@ function resolveTerminalUploadRoot(options?: TerminalUploadRootOptions): string 
 export type TerminalUploadFile = {
   name: string;
   contentBase64: string;
+  /** Host-only client policy, carried unchanged through the terminal staging adapter. */
+  assertCommitAllowed?: () => void;
 };
 
 export type TerminalUploadResult = ProtocolTerminalUploadResult;
 
-function truncateUtf8(value: string, maxBytes: number): string {
-  let result = "";
-  let bytes = 0;
-  for (const character of value) {
-    const nextBytes = Buffer.byteLength(character, "utf8");
-    if (bytes + nextBytes > maxBytes) {
-      break;
-    }
-    result += character;
-    bytes += nextBytes;
-  }
-  return result;
-}
-
 function sanitizeTerminalUploadName(name: string): string {
-  const basename = path.posix.basename(name.replaceAll("\\", "/"));
-  const cleaned = basename
-    .replace(PORTABLE_NAME_FORBIDDEN, "_")
-    .trim()
-    .replace(/[. ]+$/u, "");
-  const portable = WINDOWS_RESERVED_NAME.test(cleaned) ? `_${cleaned}` : cleaned;
-  const safe = portable && portable !== "." && portable !== ".." ? portable : "upload";
-  const truncated = truncateUtf8(safe, MAX_STAGED_NAME_BYTES).replace(/[. ]+$/u, "");
-  return (WINDOWS_RESERVED_NAME.test(truncated) ? `_${truncated}` : truncated) || "upload";
+  const safe = sanitizeUntrustedFileName(name, "upload").replace(/[!%]/gu, "_");
+  const truncated = truncateUtf8Prefix(safe, MAX_STAGED_NAME_BYTES).replace(/[. ]+$/u, "");
+  // Truncation can expose a device name hidden by trailing padding.
+  return sanitizeUntrustedFileName(truncated, "upload");
 }
 
 function validateTerminalUpload(contentBase64: string): number {
@@ -138,13 +122,15 @@ function scheduleCleanup(root: string, state: CleanupState, at: number): void {
     clearTimeout(state.timer);
   }
   state.nextAt = at;
-  state.timer = setTimeout(
-    () => {
-      state.timer = undefined;
-      state.nextAt = undefined;
-      void ensureTerminalUploadCleanup({ tempRoot: root, retentionMs: state.retentionMs });
-    },
-    Math.max(0, at - Date.now()),
+  state.timer = runInDetachedAsyncContext(() =>
+    setTimeout(
+      () => {
+        state.timer = undefined;
+        state.nextAt = undefined;
+        void ensureTerminalUploadCleanup({ tempRoot: root, retentionMs: state.retentionMs });
+      },
+      Math.max(0, at - Date.now()),
+    ),
   );
   state.timer.unref?.();
 }
@@ -327,15 +313,13 @@ async function scanUploads(
             await assertHeld();
             try {
               await rmdir(directory);
-              state.deadlines.delete(directory);
-              continue;
             } catch (error) {
-              if (hasErrnoCode(error, "ENOENT")) {
-                state.deadlines.delete(directory);
-                continue;
+              if (!hasErrnoCode(error, "ENOENT")) {
+                throw error;
               }
-              throw error;
             }
+            state.deadlines.delete(directory);
+            continue;
           }
           bytes += usage.bytes;
         }
@@ -415,10 +399,11 @@ export async function stageTerminalUpload(
   file: TerminalUploadFile,
   options?: TerminalUploadRootOptions & { tempRoot?: string; cleanupAfterMs?: number },
 ): Promise<TerminalUploadResult> {
-  const { name, contentBase64 } = file;
+  const { name, contentBase64, assertCommitAllowed } = file;
   const size = validateTerminalUpload(contentBase64);
   const admitted = uploadQueue.enqueue(
     async () => {
+      assertCommitAllowed?.();
       const tempRoot = options?.tempRoot ?? resolveTerminalUploadRoot(options);
       if ((options?.platform ?? process.platform) === "win32" && !options?.tempRoot) {
         // The user profile supplies the restrictive DACL, including for the root lock.
@@ -435,6 +420,7 @@ export async function stageTerminalUpload(
           throw stagingLimitError();
         }
         await assertHeld();
+        assertCommitAllowed?.();
         const directory = await mkdtemp(path.join(root, TERMINAL_UPLOAD_PREFIX));
         const targetPath = path.join(directory, sanitizeTerminalUploadName(name));
         let identity: { dev: bigint; ino: bigint } | undefined;
@@ -442,6 +428,7 @@ export async function stageTerminalUpload(
           const { dev, ino } = await lstat(directory, { bigint: true });
           identity = { dev, ino };
           await assertHeld();
+          assertCommitAllowed?.();
           await writeFile(targetPath, Buffer.from(contentBase64, "base64"), {
             flag: "wx",
             mode: 0o600,

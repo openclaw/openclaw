@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect } from "vitest";
+import { expectedNpmCommand, npmCommandArgs } from "./npm-command.js";
 
 // macOS exposes /tmp through /private/var; normalize both spellings for assertions.
 function normalizeDarwinTmpPath(filePath: string): string {
@@ -24,21 +25,24 @@ export function expectSingleNpmInstallIgnoreScriptsCall(params: {
   calls: Array<[unknown, { cwd?: string } | undefined]>;
   expectedTargetDir: string;
 }) {
-  const npmCalls = params.calls.filter((call) => Array.isArray(call[0]) && call[0][0] === "npm");
+  const npmCalls = params.calls.filter(
+    (call) => Array.isArray(call[0]) && npmCommandArgs(call[0]) !== undefined,
+  );
   expect(npmCalls.length).toBe(1);
   const first = npmCalls[0];
   if (!first) {
     throw new Error("expected npm install call");
   }
   const [argv, opts] = first;
-  expect(argv).toEqual([
-    "npm",
-    "install",
-    "--omit=dev",
-    "--loglevel=error",
-    "--ignore-scripts",
-    "--workspaces=false",
-  ]);
+  expect(argv).toEqual(
+    expectedNpmCommand([
+      "install",
+      "--omit=dev",
+      "--loglevel=error",
+      "--ignore-scripts",
+      "--workspaces=false",
+    ]),
+  );
   expect(opts?.cwd).toBeTruthy();
   const cwd = String(opts?.cwd);
   const expectedTargetDir = params.expectedTargetDir;

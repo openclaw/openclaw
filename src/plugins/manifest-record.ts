@@ -3,11 +3,12 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeOptionalTrimmedStringList,
-  uniqueStrings,
+  normalizeUniqueTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { PluginCandidate } from "./discovery.js";
+import { normalizeManifestCatalog } from "./manifest-capability-normalizers.js";
 import { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
 import type {
   BundledChannelConfigCollector,
@@ -17,7 +18,6 @@ import { loadManifestThemeDefinitions } from "./manifest-theme-definitions.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import {
   type OpenClawPackageManifest,
-  type PluginManifestCatalog,
   type PluginManifest,
   type PluginManifestChannelConfig,
   type PluginManifestContracts,
@@ -210,10 +210,6 @@ function resolvePortablePluginIcons(params: {
   };
 }
 
-function normalizePreferredPluginIds(raw: unknown): string[] | undefined {
-  return normalizeOptionalTrimmedStringList(raw);
-}
-
 function mergePackageChannelMetaIntoChannelConfigs(params: {
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
   packageChannel?: OpenClawPackageManifest["channel"];
@@ -236,7 +232,7 @@ function mergePackageChannelMetaIntoChannelConfigs(params: {
   const description =
     existing.description ?? normalizeOptionalString(params.packageChannel?.blurb) ?? "";
   const preferOver =
-    existing.preferOver ?? normalizePreferredPluginIds(params.packageChannel?.preferOver);
+    existing.preferOver ?? normalizeOptionalTrimmedStringList(params.packageChannel?.preferOver);
   const commands =
     existing.commands ?? normalizeManifestChannelCommandDefaults(params.packageChannel?.commands);
 
@@ -256,18 +252,6 @@ function mergePackageChannelMetaIntoChannelConfigs(params: {
   return merged;
 }
 
-function mergeContractLists(
-  left: readonly string[] | undefined,
-  right: readonly string[] | undefined,
-): string[] | undefined {
-  const merged = uniqueStrings(
-    [...(left ?? []), ...(right ?? [])]
-      .map((value) => value.trim())
-      .filter((value) => value.length > 0),
-  );
-  return merged.length > 0 ? merged : undefined;
-}
-
 function mergeManifestContracts(
   manifestContracts: PluginManifestContracts | undefined,
   catalogContracts: PluginManifestContracts | undefined,
@@ -277,8 +261,11 @@ function mergeManifestContracts(
   }
   const contracts: PluginManifestContracts = {};
   for (const key of PLUGIN_MANIFEST_CONTRACT_KEYS) {
-    const merged = mergeContractLists(manifestContracts?.[key], catalogContracts[key]);
-    if (merged) {
+    const merged = normalizeUniqueTrimmedStringList([
+      ...(manifestContracts?.[key] ?? []),
+      ...(catalogContracts[key] ?? []),
+    ]);
+    if (merged.length > 0) {
       contracts[key] = merged;
     }
   }
@@ -336,26 +323,6 @@ function mergeCatalogChannelConfigs(params: {
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
-function mergeManifestCatalog(
-  manifestCatalog: PluginManifestCatalog | undefined,
-  officialCatalog: PluginManifestCatalog | undefined,
-): PluginManifestCatalog | undefined {
-  const featuredCandidate = manifestCatalog?.featured ?? officialCatalog?.featured;
-  const orderCandidate = manifestCatalog?.order ?? officialCatalog?.order;
-  const featured = typeof featuredCandidate === "boolean" ? featuredCandidate : undefined;
-  const order =
-    typeof orderCandidate === "number" && Number.isFinite(orderCandidate)
-      ? orderCandidate
-      : undefined;
-  if (featured === undefined && order === undefined) {
-    return undefined;
-  }
-  return {
-    ...(featured !== undefined ? { featured } : {}),
-    ...(order !== undefined ? { order } : {}),
-  };
-}
-
 export function buildPluginManifestRecord(params: {
   manifest: PluginManifest;
   candidate: PluginCandidate;
@@ -368,13 +335,20 @@ export function buildPluginManifestRecord(params: {
   trust: PluginTrust;
 }): PluginManifestRecord {
   const pluginId = params.candidate.effectivePluginId ?? params.manifest.id;
-  const providerSourceEntry =
-    params.manifest.providerCatalogEntry !== undefined
-      ? {
-          entryName: "providerCatalogEntry" as const,
-          entry: params.manifest.providerCatalogEntry,
-        }
-      : undefined;
+  const resolveCatalogEntry = (entryName: "providerCatalogEntry" | "capabilityCatalogEntry") => {
+    const entry = params.manifest[entryName];
+    return entry === undefined
+      ? undefined
+      : resolveManifestPluginSourcePath({
+          rootDir: params.candidate.rootDir,
+          manifestPath: params.manifestPath,
+          pluginId,
+          entryName,
+          entry,
+          rejectHardlinks: params.rejectHardlinks,
+          diagnostics: params.diagnostics,
+        });
+  };
   const manifestChannelConfigs =
     params.candidate.origin === "bundled" && params.bundledChannelConfigCollector
       ? params.bundledChannelConfigCollector({
@@ -409,7 +383,10 @@ export function buildPluginManifestRecord(params: {
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.packageName,
     description:
       normalizeOptionalString(params.manifest.description) ?? params.candidate.packageDescription,
-    catalog: mergeManifestCatalog(params.manifest.catalog, officialCatalogManifest?.catalog),
+    catalog: normalizeManifestCatalog({
+      featured: params.manifest.catalog?.featured ?? officialCatalogManifest?.catalog?.featured,
+      order: params.manifest.catalog?.order ?? officialCatalogManifest?.catalog?.order,
+    }),
     ...resolvePortablePluginIcons({
       rootDir: params.candidate.rootDir,
       rejectHardlinks: params.rejectHardlinks,
@@ -428,29 +405,11 @@ export function buildPluginManifestRecord(params: {
     channels: params.manifest.channels ?? [],
     channelAccountKeyPolicies: params.manifest.channelAccountKeyPolicies,
     providers: params.manifest.providers ?? [],
-    providerDiscoverySource: providerSourceEntry
-      ? resolveManifestPluginSourcePath({
-          rootDir: params.candidate.rootDir,
-          manifestPath: params.manifestPath,
-          pluginId,
-          entryName: providerSourceEntry.entryName,
-          entry: providerSourceEntry.entry,
-          rejectHardlinks: params.rejectHardlinks,
-          diagnostics: params.diagnostics,
-        })
-      : undefined,
+    providerDiscoverySource: resolveCatalogEntry("providerCatalogEntry"),
     capabilityCatalogSource:
       params.manifest.capabilityCatalogEntry === undefined
         ? undefined
-        : (resolveManifestPluginSourcePath({
-            rootDir: params.candidate.rootDir,
-            manifestPath: params.manifestPath,
-            pluginId,
-            entryName: "capabilityCatalogEntry",
-            entry: params.manifest.capabilityCatalogEntry,
-            rejectHardlinks: params.rejectHardlinks,
-            diagnostics: params.diagnostics,
-          }) ?? null),
+        : (resolveCatalogEntry("capabilityCatalogEntry") ?? null),
     modelSupport: params.manifest.modelSupport,
     modelCatalog: params.manifest.modelCatalog,
     modelPricing: params.manifest.modelPricing,
@@ -478,6 +437,7 @@ export function buildPluginManifestRecord(params: {
     qaRunners: params.manifest.qaRunners,
     dashboard: params.manifest.dashboard,
     controlUi: params.manifest.controlUi,
+    uiCapabilities: params.manifest.uiCapabilities,
     themes: params.manifest.themes,
     themeDefinitions: loadManifestThemeDefinitions({
       pluginId,
@@ -540,6 +500,7 @@ export function buildBundleManifestRecord(params: {
     description?: string;
     version?: string;
     skills: string[];
+    onboardingSkill?: string;
     settingsFiles?: string[];
     hooks: string[];
     capabilities: string[];
@@ -569,6 +530,9 @@ export function buildBundleManifestRecord(params: {
     format: "bundle",
     bundleFormat: params.candidate.bundleFormat,
     bundleCapabilities: params.manifest.capabilities,
+    ...(params.manifest.onboardingSkill
+      ? { onboardingSkill: params.manifest.onboardingSkill }
+      : {}),
     activation: params.manifest.activation,
     channels: [],
     providers: [],

@@ -53,9 +53,10 @@ export function describeModelProviderAuth(
     return {
       kind: "subscription",
       label:
+        active?.displayName ||
         (subscriptionCount === 1 ? provider.usage?.plan : undefined) ||
         t("chat.modelControls.subscription"),
-      detail: subscriptions.length > 1 || showCredentials ? account?.email : undefined,
+      detail: account?.email,
     };
   }
   return hasApiKey ? { kind: "api", label: t("chat.modelControls.api") } : undefined;

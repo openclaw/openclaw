@@ -1,4 +1,3 @@
-// Resolves the configured default agent route shared by OpenClaw inference calls.
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -87,11 +86,10 @@ function projectSystemAgentExecutionConfig(
       ...(routeAgent?.tools !== undefined ? { tools: structuredClone(routeAgent.tools) } : {}),
     },
   ];
-  const { list: _legacyList, ...agentsConfig } = config.agents ?? {};
   const projected = {
     ...config,
     agents: {
-      ...agentsConfig,
+      ...config.agents,
       entries: toAgentEntriesRecord(projectedAgents),
     },
   };
@@ -312,7 +310,6 @@ export async function projectInferenceRoute(
           modelId: route?.model,
           rawModel,
         }),
-        agentRuntime: structuredClone(agent.agentRuntime),
       }
     : undefined;
   const hasAgentRouteOverrides =
@@ -348,7 +345,6 @@ export async function projectInferenceRoute(
         modelId: route?.model,
         rawModel,
       }),
-      agentRuntime: structuredClone(defaults?.agentRuntime),
     },
     ...(agent && hasAgentRouteOverrides
       ? {

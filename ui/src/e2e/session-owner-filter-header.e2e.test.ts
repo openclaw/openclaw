@@ -1,4 +1,3 @@
-import type { Locator } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -7,19 +6,13 @@ import {
   openSidebarSortMenu,
   routeAvatarFixtures,
 } from "./session-ownership-visuals.test-support.ts";
+import {
+  chooseSidebarMenuOption,
+  chooseSidebarOwner,
+  closeSidebarMenu,
+} from "./sidebar-session-menu.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "Control UI person header owner filter" });
-
-async function selectMenuValue(menu: Locator, value: string) {
-  await menu.evaluate((element, selectedValue) => {
-    element.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        detail: { item: { value: selectedValue } },
-      }),
-    );
-  }, value);
-}
+const suite = createControlUiE2eSuite({ name: "Control UI toolbar owner filter" });
 
 function sessionsList() {
   const ada = {
@@ -64,7 +57,7 @@ function sessionsList() {
 }
 
 suite.define(() => {
-  it("filters to a person from the group header and clears from the toolbar", async () => {
+  it("filters grouped sessions from the toolbar without duplicate header controls", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const page = await context.newPage();
     const response = sessionsList();
@@ -92,21 +85,19 @@ suite.define(() => {
       ]);
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
       const menu = await openSidebarSortMenu(page);
-      await selectMenuValue(menu, "grouping:person");
+      await chooseSidebarMenuOption(menu.page(), "Group by", "Person");
+      await closeSidebarMenu(page);
       const adaSection = page.locator('[data-session-section="person:profile:profile-ada"]');
       const bobSection = page.locator('[data-session-section="person:profile:profile-bob"]');
       await expectBrowser(adaSection).toBeVisible();
       await expectBrowser(bobSection).toBeVisible();
 
       const header = adaSection.locator(".sidebar-recent-sessions__head");
-      const action = header.locator(".sidebar-session-person-filter");
       await header.hover();
-      await expectBrowser(action).toHaveAccessibleName("Show only Ada");
-      await expectBrowser
-        .poll(() => action.evaluate((button) => Number(getComputedStyle(button).opacity)))
-        .toBeGreaterThan(0);
+      await expectBrowser(header.locator(".sidebar-session-group-actions")).toHaveCount(0);
       const beforeFilter = (await gateway.getRequests("sessions.list")).length;
-      await action.click();
+      await chooseSidebarOwner(page, "owner:profile-ada");
+      await closeSidebarMenu(page);
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).slice(beforeFilter))
         .toEqual(
@@ -119,13 +110,12 @@ suite.define(() => {
       await expectBrowser(bobSection).toHaveCount(0);
       await expectBrowser(adaSection.getByText("Ada research", { exact: true })).toBeVisible();
       const summary = page.locator(".sidebar-session-filter-summary");
-      const funnel = page.locator(".sidebar-session-sort");
+      const funnel = page.getByRole("button", { name: "Filter & sort", exact: true });
       await expectBrowser(summary).toBeVisible();
       await expectBrowser(summary).toContainText("Ada");
       await expectBrowser(summary).toHaveAccessibleName("Ada · Show all sessions");
       await expectBrowser(funnel).toHaveClass(/sidebar-session-sort--filtered/);
-      await expectBrowser(action).toHaveAttribute("aria-pressed", "true");
-      await expectBrowser(action).toHaveAccessibleName("Show everyone");
+      await expectBrowser(header.locator(".sidebar-session-group-actions")).toHaveCount(0);
 
       const beforeClear = (await gateway.getRequests("sessions.list")).length;
       await summary.click();
@@ -140,7 +130,7 @@ suite.define(() => {
       await expectBrowser(bobSection).toBeVisible();
       await expectBrowser(summary).toHaveCount(0);
       await expectBrowser(funnel).not.toHaveClass(/sidebar-session-sort--filtered/);
-      await expectBrowser(action).toHaveAttribute("aria-pressed", "false");
+      await expectBrowser(header.locator(".sidebar-session-group-actions")).toHaveCount(0);
     } finally {
       await context.close();
     }

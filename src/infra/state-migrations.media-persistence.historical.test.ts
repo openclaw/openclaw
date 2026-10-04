@@ -9,7 +9,10 @@ import {
   closeOpenClawAgentDatabasesForTest,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   historicalV14AgentSchemaSql,
@@ -26,6 +29,55 @@ afterEach(() => {
 });
 
 describe("legacy media persistence Doctor migration from historical schemas", () => {
+  it("preserves an unreleased session database and its misplaced copy before Doctor repairs", async () => {
+    const stateDir = makeTempDir(tempDirs, "media-persistence-unreleased-session-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    openOpenClawStateDatabase({ env });
+    const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(databasePath);
+    try {
+      database.exec(`
+        CREATE TABLE schema_meta (
+          meta_key TEXT PRIMARY KEY, role TEXT, schema_version INTEGER,
+          agent_id TEXT, app_version TEXT, created_at INTEGER, updated_at INTEGER
+        );
+        INSERT INTO schema_meta VALUES ('primary', 'agent', 6, 'main', NULL, 1, 1);
+        CREATE TABLE transcript_events (
+          session_id TEXT, seq INTEGER, event_json TEXT, created_at INTEGER
+        );
+        INSERT INTO transcript_events VALUES (
+          'retained-session', 0,
+          '{"type":"message","message":{"role":"user","content":"retained","MediaPath":"/media/retained.png"}}', 1
+        );
+        PRAGMA user_version = 6;
+      `);
+    } finally {
+      database.close();
+    }
+    const before = fs.readFileSync(databasePath);
+    const copyPath = path.join(stateDir, "agents", "copy", "agent", "openclaw-agent.sqlite");
+    fs.mkdirSync(path.dirname(copyPath), { recursive: true });
+    fs.copyFileSync(databasePath, copyPath);
+
+    const result = await migrateLegacyMediaPersistence({
+      env,
+      configuredAgentDatabaseTargets: [
+        { agentId: "main", path: databasePath },
+        { agentId: "copy", path: copyPath },
+      ],
+    });
+
+    expect(result.warnings).toEqual([
+      expect.stringContaining("contains an unreleased session schema (version 6)"),
+      expect.stringContaining("contains an unreleased session schema (version 6)"),
+    ]);
+    expect(fs.readFileSync(databasePath)).toEqual(before);
+    expect(fs.readFileSync(copyPath)).toEqual(before);
+    expect(fs.readdirSync(path.dirname(copyPath))).toEqual(["openclaw-agent.sqlite"]);
+  });
+
   it.each([
     {
       version: 14,
@@ -50,6 +102,7 @@ describe("legacy media persistence Doctor migration from historical schemas", ()
 
       const stateDir = makeTempDir(tempDirs, `media-persistence-historical-v${version}-`);
       const env = { OPENCLAW_STATE_DIR: stateDir };
+      openOpenClawStateDatabase({ env });
       const pristinePath = path.join(stateDir, "historical", `v${version}-pristine.sqlite`);
       const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
       fs.mkdirSync(path.dirname(pristinePath), { recursive: true });

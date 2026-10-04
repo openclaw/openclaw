@@ -6,9 +6,10 @@ import {
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
 import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
-import { withStateSchemaFence } from "../infra/state-database-coordinator.js";
+import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
 import { migrateLegacyCronRunLogsToTaskRuns } from "../infra/state-migrations.cron-run-logs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { hasPreJournalStateSchema } from "./agent-deletion-journal-history.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -20,6 +21,7 @@ import {
   assertNoLegacyStateRuntimeRepair,
   isOpenClawStateSchemaFastPathEligible,
 } from "./openclaw-state-db-fast-path.js";
+import type { StateDatabaseInitialization } from "./openclaw-state-db-initialization.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
   executeCanonicalStateSchema,
@@ -32,6 +34,7 @@ import {
   ensureAdditiveStateColumns,
   ensureFirstUseAdditiveStateColumnsForStrictMigration,
 } from "./openclaw-state-db-schema-additive.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import {
   assertCanonicalStateSchemaShape,
@@ -60,6 +63,7 @@ export function ensureOpenClawStateRuntimeSchema(
   db: DatabaseSync,
   pathname: string,
   env: NodeJS.ProcessEnv,
+  initialization: StateDatabaseInitialization,
   busyTimeoutMs = OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   initializeNativeOnly = false,
 ): string[] {
@@ -81,7 +85,7 @@ export function ensureOpenClawStateRuntimeSchema(
     // Preserve transactional schema convergence and its diagnostics after a clean rollback.
   }
 
-  return withStateSchemaFence({ databasePath: pathname }, () => {
+  return withStateDatabaseSchemaMaintenance({ databasePath: pathname, busyTimeoutMs }, () => {
     const now = Date.now();
     const retiredTableChanges: string[] = [];
     const applied = runStateSchemaMigrationTransaction(
@@ -94,6 +98,10 @@ export function ensureOpenClawStateRuntimeSchema(
           return [];
         }
         const previousVersion = readStateSchemaMigrationVersion(db);
+        const includeAgentDeletionJournal =
+          tableExists(db, "agent_deletion_journal") ||
+          hasPreJournalStateSchema(db) ||
+          (initialization.kind === "fresh" && isUninitializedNativeStartupDatabase(db));
         if (previousVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
           assertNoLegacyStateRuntimeRepair(db, pathname);
           const indexes = verifyAndRepairCanonicalSqliteIndexes(
@@ -102,7 +110,11 @@ export function ensureOpenClawStateRuntimeSchema(
             OPENCLAW_STATE_SCHEMA_SQL,
             {
               allowMissingColumns: true,
-              validateAfterRepair: () => assertCurrentStateRuntimeSchema(db, pathname),
+              validateAfterRepair: () => {
+                // Index repair precedes additive-column convergence in this transaction.
+                assertCanonicalStateSchemaShape(db, pathname);
+                assertOpenClawStateDatabaseForMaintenance(db, { pathname });
+              },
             },
           );
           ensureAdditiveStateColumns(db, "runtime");
@@ -136,14 +148,20 @@ export function ensureOpenClawStateRuntimeSchema(
         }
         migrateSessionWatchCursorProvenance(db);
         assertCanonicalStateSchemaShape(db, pathname);
-        executeCanonicalStateSchema(db, { includeVersionLazyAdditiveTables: true });
+        executeCanonicalStateSchema(db, {
+          includeVersionLazyAdditiveTables: true,
+          includeAgentDeletionJournal,
+        });
         migrateLegacyCronRunLogsToTaskRuns(db);
         if (previousVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {
           repairLegacyGatewayRestartHandoffsForStrictMigration(db);
           ensureFirstUseAdditiveStateColumnsForStrictMigration(db);
           const strict = migrateSqliteSchemaToStrictInTransaction(
             db,
-            getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: true }),
+            getOpenClawStateRuntimeSchema({
+              includeVersionLazyAdditiveTables: true,
+              includeAgentDeletionJournal,
+            }),
             { databaseLabel: pathname },
           );
           if (strict.migratedTables.length > 0) {

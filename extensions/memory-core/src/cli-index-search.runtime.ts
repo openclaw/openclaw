@@ -1,12 +1,25 @@
 import path from "node:path";
 import { resolveMemorySearchStaleness } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
+  defaultRuntime,
+  formatErrorMessage,
+  setVerbose,
+  shortenHomeInString,
+  shortenHomePath,
+  theme,
+  withProgressTotals,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingWorkspace,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { resolveForeignMemorySlotOwner } from "./cli-memory-slot.js";
 import {
-  buildCliMemorySearchSessionKey,
+  emitMemoryCoreSidecarNotice,
   formatAuditCounts,
   formatExtraPaths,
   formatMemoryIndexOutcome,
@@ -15,16 +28,6 @@ import {
   scanMemoryManagerSources,
   withMemoryCommand,
 } from "./cli-runtime-common.js";
-import {
-  defaultRuntime,
-  formatErrorMessage,
-  getRuntimeConfig,
-  setVerbose,
-  shortenHomeInString,
-  shortenHomePath,
-  theme,
-  withProgressTotals,
-} from "./cli.host.runtime.js";
 import type {
   MemoryCommandOptions,
   MemoryForgetCommandOptions,
@@ -206,6 +209,7 @@ export async function runMemorySearch(
     agent: opts.agent,
     diagnosticsToStderr: Boolean(opts.json),
     onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
+    requiresMemorySlot: true,
     purpose: "cli",
     inspectSources: true,
     ...hostOptions,
@@ -219,7 +223,12 @@ export async function runMemorySearch(
         pluginConfig: memoryPluginConfig,
         cfg,
       });
-      const sessionKey = buildCliMemorySearchSessionKey(agentId);
+      const sessionKey = buildAgentSessionKey({
+        agentId,
+        channel: "cli",
+        peer: { kind: "direct", id: "memory-search" },
+        dmScope: "per-channel-peer",
+      });
       let readRebuildWarning: () => string | undefined = () => undefined;
       let results: Awaited<ReturnType<typeof manager.search>>;
       try {
@@ -281,6 +290,10 @@ export async function runMemoryForget(opts: MemoryForgetCommandOptions) {
   try {
     const cfg = getRuntimeConfig({ skipPluginValidation: true });
     const agentId = resolveMemoryAgent(cfg, opts.agent);
+    const slotOwner = resolveForeignMemorySlotOwner(cfg);
+    if (slotOwner) {
+      emitMemoryCoreSidecarNotice(slotOwner, { json: Boolean(opts.json) });
+    }
     const report = await forgetMemoryEntries({
       cfg,
       agentId,
@@ -357,7 +370,6 @@ function matchesPromotionSelector(
     return false;
   }
   return (
-    candidate.key.toLowerCase() === trimmed ||
     candidate.key.toLowerCase().includes(trimmed) ||
     candidate.path.toLowerCase().includes(trimmed) ||
     candidate.snippet.toLowerCase().includes(trimmed)
@@ -434,10 +446,7 @@ export async function runMemoryPromote(
           });
         }
       }
-      const outputLimit =
-        typeof opts.limit === "number" && Number.isFinite(opts.limit)
-          ? Math.max(0, Math.floor(opts.limit))
-          : candidates.length;
+      const outputLimit = resolveNonNegativeIntegerOption(opts.limit, candidates.length);
       const rejectedCandidates = applyResult
         ? applyResult.rejectedCandidates.slice(
             0,

@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
@@ -9,7 +10,8 @@ import {
 import { onUserProfilesChanged } from "./user-profile-events.js";
 import { readUserProfileIdentity, retainUserProfileCatalog } from "./user-profile-list.js";
 import { setCanonicalUserProfileRole } from "./user-profile-writes.js";
-import { ensureProfileForEmail, getUserProfileRole, setUserProfileRole } from "./user-profiles.js";
+import { setUserProfileRole } from "./user-profile-writes.worker.js";
+import { ensureProfileForEmail, getUserProfileRole } from "./user-profiles.js";
 
 const delivery = vi.hoisted(() => ({
   afterResult: undefined as ((index: number) => Promise<void>) | undefined,
@@ -117,74 +119,53 @@ it.each(["ordered", "reversed", "recovery first", "native successor", "native AB
   },
 );
 
-it("keeps all six host SQLite methods idle and publishes the role before observers", async () => {
-  const state = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "canonical-role-placement-",
-  });
-  let release = () => {};
-  let stop = () => {};
-  try {
-    const profile = ensureProfileForEmail("role-placement@example.test");
-    release = retainUserProfileCatalog();
-    const observed: Array<string | null | undefined> = [];
-    stop = onUserProfilesChanged(() => {
-      observed.push(readUserProfileIdentity(profile.id)?.role);
+it.each(["delivered", "lost during close"] as const)(
+  "publishes committed roles before observers when the reply is %s",
+  async (reply) => {
+    const state = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "canonical-role-placement-",
     });
-    const { DatabaseSync, StatementSync } = requireNodeSqlite();
-    const calls = [
-      vi.spyOn(DatabaseSync.prototype, "prepare"),
-      vi.spyOn(DatabaseSync.prototype, "exec"),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(StatementSync.prototype, method),
-      ),
-    ];
-    await expect(setCanonicalUserProfileRole(profile.id, "guest")).resolves.toMatchObject({
-      id: profile.id,
-      role: "guest",
-    });
-    expect(observed).toEqual(["guest"]);
-    expect(calls.map((call) => call.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
-  } finally {
-    vi.restoreAllMocks();
-    stop();
-    release();
-    await state.cleanup();
-  }
-});
-
-it("settles a committed role and its catalog when result delivery fails during close", async () => {
-  const state = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "canonical-role-result-loss-",
-  });
-  const lostDelivery = new Error("synthetic committed role result delivery failure");
-  let release = () => {};
-  let stop = () => {};
-  let closing: ReturnType<typeof closeOpenClawStateDatabaseByPathAsync> | undefined;
-  try {
-    const profile = ensureProfileForEmail("role-result-loss@example.test");
-    const pathname = openOpenClawStateDatabase().path;
-    release = retainUserProfileCatalog();
-    const observed: Array<string | null | undefined> = [];
-    stop = onUserProfilesChanged(() => {
-      observed.push(readUserProfileIdentity(profile.id)?.role);
-    });
-    delivery.afterResult = async () => {
-      closing = closeOpenClawStateDatabaseByPathAsync(pathname);
-      void closing.catch(() => {});
-      throw lostDelivery;
-    };
-    await expect(setCanonicalUserProfileRole(profile.id, "guest")).rejects.toBe(lostDelivery);
-    await closing;
-    expect(delivery.roleCommands).toBe(1);
-    expect(observed).toEqual(["guest"]);
-    expect(readUserProfileIdentity(profile.id)?.role).toBe("guest");
-    expect(getUserProfileRole(profile.id)).toBe("guest");
-  } finally {
-    await Promise.allSettled([closing]);
-    stop();
-    release();
-    await state.cleanup();
-  }
-});
+    const lostDelivery = new Error("synthetic committed role result delivery failure");
+    let release = () => {};
+    let stop = () => {};
+    let closing: ReturnType<typeof closeOpenClawStateDatabaseByPathAsync> | undefined;
+    try {
+      const profile = ensureProfileForEmail("role-placement@example.test");
+      const pathname = openOpenClawStateDatabase().path;
+      release = retainUserProfileCatalog();
+      const observed: Array<string | null | undefined> = [];
+      stop = onUserProfilesChanged(() => {
+        observed.push(readUserProfileIdentity(profile.id)?.role);
+      });
+      if (reply === "lost during close") {
+        delivery.afterResult = async () => {
+          closing = closeOpenClawStateDatabaseByPathAsync(pathname);
+          void closing.catch(() => {});
+          throw lostDelivery;
+        };
+        await expect(setCanonicalUserProfileRole(profile.id, "guest")).rejects.toBe(lostDelivery);
+        await closing;
+        expect(delivery.roleCommands).toBe(1);
+      } else {
+        requireNodeSqlite();
+        const sql = observeMainThreadSql();
+        await expect(setCanonicalUserProfileRole(profile.id, "guest")).resolves.toMatchObject({
+          id: profile.id,
+          role: "guest",
+        });
+        sql.expectIdle();
+      }
+      expect(observed).toEqual(["guest"]);
+      vi.restoreAllMocks();
+      expect(readUserProfileIdentity(profile.id)?.role).toBe("guest");
+      expect(getUserProfileRole(profile.id)).toBe("guest");
+    } finally {
+      vi.restoreAllMocks();
+      await Promise.allSettled([closing]);
+      stop();
+      release();
+      await state.cleanup();
+    }
+  },
+);

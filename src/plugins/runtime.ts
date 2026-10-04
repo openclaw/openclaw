@@ -28,17 +28,20 @@ import {
   preparePluginRunContextCleanup,
   publishPluginSessionSchedulerJobs,
 } from "./host-hook-runtime.js";
+import { notifyPluginHttpRoutesChanged } from "./http-route-owner.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { settlePreparedMessageToolCatalog } from "./prepared-message-tool-catalog.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   adoptPluginRegistryRecords,
+  bindPluginRegistryGatewayOwner,
   getPluginRegistryResourceOwner,
   markPluginRegistryActive,
   markPluginRegistryRetired,
   preparePluginRegistryCacheShutdown,
   quiescePluginRegistry,
+  type PluginRegistryGatewayOwner,
 } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getActivePluginChannelRegistrySnapshotFromState } from "./runtime-channel-state.js";
@@ -395,6 +398,7 @@ function installActivePluginRegistry(
       return installedVersion;
     }
     syncPluginAgentEventBridge();
+    notifyPluginHttpRoutesChanged();
   } catch (error) {
     if (params.retirePrevious === false && isCurrent()) {
       rollbackStagedPluginRegistry(previousSnapshot);
@@ -421,6 +425,10 @@ export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir
     activeRegistry: registry,
   };
   registryOwners.add(owner);
+  const gatewayOwner: PluginRegistryGatewayOwner = {
+    current: () => (registryOwners.has(owner) && !owner.closing ? owner.activeRegistry : undefined),
+  };
+  bindPluginRegistryGatewayOwner(registry, gatewayOwner);
   return {
     get registry() {
       return owner.activeRegistry;
@@ -431,6 +439,8 @@ export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir
       }
       const previous = owner.activeRegistry;
       Object.assign(owner, captureActivePluginRegistrySnapshot());
+      bindPluginRegistryGatewayOwner(next, gatewayOwner);
+      notifyPluginHttpRoutesChanged();
       retirePluginRegistryIfUnused(previous, () =>
         registryOwners.has(owner) ? owner.activeRegistry : null,
       );
@@ -468,7 +478,11 @@ export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir
           };
           let memoryErrors: readonly unknown[] = [];
           try {
-            if (previous.memoryCapabilities.some(({ capability }) => capability.runtime)) {
+            if (
+              previous.memoryCapabilities.some(
+                ({ capability }) => capability.runtime || capability.providerRuntime,
+              )
+            ) {
               const { prepareMemoryRuntimeReload } = await loadMemoryRuntime();
               const memory = prepareMemoryRuntimeReload(previous, retainedMemory());
               memoryErrors = (await memory.close()).errors;
@@ -502,7 +516,11 @@ export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir
                 await clearActivePluginRegistry(previous);
               } else {
                 const retainedRegistry = survivor?.activeRegistry ?? null;
-                retirePluginRegistryIfUnused(previous, () => retainedRegistry);
+                preparePluginRegistryRetirement(
+                  previous,
+                  () => retainedRegistry,
+                  false,
+                )?.retireIfUnused();
               }
               return await waitForPluginRegistryRetirement(previous);
             }));
@@ -595,10 +613,6 @@ export function getActivePluginRegistryKey(): string | null {
   return state.key;
 }
 
-export function getActivePluginRuntimeSubagentMode(): "default" | "explicit" | "gateway-bindable" {
-  return state.runtimeSubagentMode;
-}
-
 export function getActivePluginRegistryVersion(): number {
   return state.activeVersion;
 }
@@ -649,11 +663,11 @@ export async function clearActivePluginRegistry(
         if (previousRegistry) {
           await waitForPluginCommandExecutions(previousRegistry);
           if (registryHasPluginHostCleanupWork(previousRegistry)) {
+            // Gateway shutdown releases runtime resources; only disable/removal erases session state.
             await cleanupWork.track(() =>
               disposePluginRegistryInstances(previousRegistry, () => state.activeRegistry, {
                 cfg,
                 runContextCleanup,
-                cleanupPersistentState: true,
               }),
             );
           }

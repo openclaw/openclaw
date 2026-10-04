@@ -15,7 +15,6 @@ import {
 } from "../cli-auth-epoch.js";
 import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
 import { shouldClearInterruptedCliSessionBinding } from "../cli-session.js";
-import { claudeCliSessionTranscriptHasContent as claudeCliSessionTranscriptHasContentImpl } from "../command/attempt-execution.helpers.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent-runner.js";
 import { resolveExplicitFinalSourceReplyDeliveryEvidence } from "../embedded-agent-runner/delivery-evidence.js";
 import { resolveAuthProfileFailureReason } from "../embedded-agent-runner/run/auth-profile-failure-policy.js";
@@ -39,18 +38,6 @@ export function formatCliTerminalInterruption(interruption: CliTerminalInterrupt
   return `CLI turn ${interruption.reason} after partial output`;
 }
 
-export const cliRunSettlementDeps = {
-  claudeCliSessionTranscriptHasContent: claudeCliSessionTranscriptHasContentImpl,
-  delay: async (delayMs: number) => {
-    await new Promise((resolve) => {
-      setTimeout(resolve, delayMs);
-    });
-  },
-  loadAuthProfileStoreForRuntime,
-  markAuthProfileFailure,
-  markAuthProfileSuccess,
-};
-
 async function settleCliAuthProfile(params: {
   store: AuthProfileStore;
   profileId: string;
@@ -68,7 +55,7 @@ async function settleCliAuthProfile(params: {
 }): Promise<void> {
   try {
     if (params.terminal.outcome === "success") {
-      await cliRunSettlementDeps.markAuthProfileSuccess({
+      await markAuthProfileSuccess({
         store: params.store,
         profileId: params.profileId,
         provider: params.provider,
@@ -85,7 +72,7 @@ async function settleCliAuthProfile(params: {
           : undefined,
     });
     if (reason) {
-      await cliRunSettlementDeps.markAuthProfileFailure({
+      await markAuthProfileFailure({
         store: params.store,
         profileId: params.profileId,
         reason,
@@ -141,28 +128,61 @@ export async function settleCliPreparationError(
   error: unknown,
   params: RunCliAgentParams,
 ): Promise<void> {
-  if (!(error instanceof CliAuthProfilePreparationError)) {
+  try {
+    params.assertCurrent?.();
+    if (!(error instanceof CliAuthProfilePreparationError)) {
+      return;
+    }
+    const store = loadAuthProfileStoreForRuntime(error.agentDir, {
+      externalCli: externalCliDiscoveryForProviderAuth({
+        cfg: params.config,
+        provider: error.provider,
+        profileId: error.profileId,
+      }),
+    });
+    await settleCliAuthProfile({
+      store,
+      profileId: error.profileId,
+      provider: error.provider,
+      agentDir: error.agentDir,
+      terminal: {
+        outcome: "failure",
+        error,
+        config: params.config,
+        runId: params.runId,
+        modelId: params.model,
+      },
+    });
+  } finally {
+    const reportCleanupError = (cleanupError: unknown) => {
+      recordAgentCleanupFailure();
+      log.warn(`bundle-mcp preparation cleanup failed: ${formatErrorMessage(cleanupError)}`);
+    };
+    try {
+      await retireCliRunMcpRuntime(params, reportCleanupError);
+    } catch (cleanupError) {
+      reportCleanupError(cleanupError);
+    }
+  }
+}
+
+async function retireCliRunMcpRuntime(
+  params: RunCliAgentParams,
+  onError: (error: unknown) => void,
+): Promise<void> {
+  if (params.cleanupBundleMcpOnRunEnd !== true) {
     return;
   }
-  const store = cliRunSettlementDeps.loadAuthProfileStoreForRuntime(error.agentDir, {
-    externalCli: externalCliDiscoveryForProviderAuth({
-      cfg: params.config,
-      provider: error.provider,
-      profileId: error.profileId,
-    }),
-  });
-  await settleCliAuthProfile({
-    store,
-    profileId: error.profileId,
-    provider: error.provider,
-    agentDir: error.agentDir,
-    terminal: {
-      outcome: "failure",
-      error,
-      config: params.config,
-      runId: params.runId,
-      modelId: params.model,
-    },
+  // Preparation can open native-policy transports before an execution context exists.
+  // The exact run session owns retirement even if its admission was revoked.
+  const { retireSessionMcpRuntime } = await import("../agent-bundle-mcp-tools.js");
+  await runCliCleanup(params, "cli-bundle-mcp-retire", async () => {
+    await retireSessionMcpRuntime({
+      sessionId: params.sessionId,
+      reason: "cli-run-end",
+      preserveActiveLeases: true,
+      onError,
+    });
   });
 }
 
@@ -194,21 +214,10 @@ export async function settlePreparedCliRun(params: {
       recordCleanupError(error);
     }
   }
-  if (runParams.cleanupBundleMcpOnRunEnd === true) {
-    // The run's session ID is immutable; its session key can already belong to
-    // a newer run. Never retire the newer runtime or close the shared listener.
-    try {
-      const { retireSessionMcpRuntime } = await import("../agent-bundle-mcp-tools.js");
-      await runCliCleanup(runParams, "cli-bundle-mcp-retire", async () => {
-        await retireSessionMcpRuntime({
-          sessionId: runParams.sessionId,
-          reason: "cli-run-end",
-          onError: recordCleanupError,
-        });
-      });
-    } catch (error) {
-      recordCleanupError(error);
-    }
+  try {
+    await retireCliRunMcpRuntime(runParams, recordCleanupError);
+  } catch (error) {
+    recordCleanupError(error);
   }
   if (cleanupError) {
     if (runError || result?.didSendViaMessagingTool === true) {
@@ -546,12 +555,8 @@ export function buildCliRunResult(params: {
     meta: {
       durationMs: Date.now() - context.started,
       ...(output.finalPromptText ? { finalPromptText: output.finalPromptText } : {}),
-      ...(finalAssistantVisibleText || rawText
-        ? {
-            ...(finalAssistantVisibleText ? { finalAssistantVisibleText } : {}),
-            ...(rawText ? { finalAssistantRawText: rawText } : {}),
-          }
-        : {}),
+      ...(finalAssistantVisibleText ? { finalAssistantVisibleText } : {}),
+      ...(rawText ? { finalAssistantRawText: rawText } : {}),
       systemPromptReport: context.systemPromptReport,
       ...(terminalInterruption
         ? {

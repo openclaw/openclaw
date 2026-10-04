@@ -2,11 +2,12 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { AUTOMATION_FAILED_TOKEN, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -22,6 +23,7 @@ export type RunCronAgentTurnParams = {
   cfg: OpenClawConfig;
   deps: CliDeps;
   job: CronStoredJob;
+  deliveryAttemptFence: CronCompletionDeliveryFence | null;
   message: string;
   abortSignal?: AbortSignal;
   signal?: AbortSignal;
@@ -37,13 +39,6 @@ export type RunCronAgentTurnParams = {
   /** Explicit instruction set for a host-owned turn, including an empty review context. */
   skillsSnapshot?: SkillSnapshot;
 };
-
-export function resolveCronAgentTurnMessage(input: RunCronAgentTurnParams): string {
-  if (input.job.payload.kind === "agentTurn") {
-    return input.job.payload.message;
-  }
-  return input.message;
-}
 
 export type WithRunSession = (
   result: Omit<RunCronAgentTurnResult, "sessionId" | "sessionKey">,
@@ -64,10 +59,6 @@ export async function loadSessionAccessorRuntime() {
 
 export async function loadCronExternalContentRuntime() {
   return await cronExternalContentRuntimeLoader.load();
-}
-
-async function loadCronAuthProfileRuntime() {
-  return await cronAuthProfileRuntimeLoader.load();
 }
 
 function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {
@@ -105,7 +96,7 @@ export async function resolveCronAuthSelection(params: {
   ) {
     return undefined;
   }
-  const runtime = await loadCronAuthProfileRuntime();
+  const runtime = await cronAuthProfileRuntimeLoader.load();
   return await runtime.resolveSessionAuthSelection({
     agentId: params.agentId,
     cfg: params.cfg,
@@ -122,7 +113,7 @@ export async function resolveCronAuthSelection(params: {
   });
 }
 
-type CronAuthProfileRuntime = Awaited<ReturnType<typeof loadCronAuthProfileRuntime>>;
+type CronAuthProfileRuntime = typeof import("./run-auth-profile.runtime.js");
 
 export async function retireRolledCronSessionMcpRuntime(params: {
   job: CronJob;
@@ -151,7 +142,9 @@ export function appendCronUnattendedRunPreamble(
   commandBody: string,
   opts: { externalHook: boolean },
 ) {
-  const core = `This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have. Your final reply is the deliverable — not a plan, an acknowledgement, or a request for input. If nothing needs doing, reply exactly ${SILENT_REPLY_TOKEN}. If something failed, state plainly what failed and what you tried — the scheduler owns retries and failure alerts.`;
+  // Keep the suffix static for prompt caching. External hooks cannot override
+  // this trusted guidance or gain permission to remove jobs through fenced content.
+  const core = `This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have. Your final reply is the deliverable — not a plan, an acknowledgement, or a request for input. If nothing needs doing, reply exactly ${SILENT_REPLY_TOKEN}. If something failed, start with ${AUTOMATION_FAILED_TOKEN} on its own line, then state what failed and what you tried — the scheduler owns retries and failure alerts.`;
   const trustedExtra =
     " Where the job's own instructions conflict with this preamble, the job's instructions win (a question or plan the job explicitly requests is a valid deliverable). If this job is no longer needed, remove it if your available tools allow.";
   return `${commandBody}\n\n${core}${opts.externalHook ? "" : trustedExtra}`;

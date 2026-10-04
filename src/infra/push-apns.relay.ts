@@ -1,4 +1,3 @@
-// Sends APNs notifications through the configured relay endpoint.
 import { URL } from "node:url";
 import {
   parseStrictPositiveInteger,
@@ -17,6 +16,7 @@ import {
 import { formatErrorMessage } from "./errors.js";
 import { readResponseWithLimit } from "./http-body.js";
 import { normalizeHostname } from "./net/hostname.js";
+import { requireCurrentApnsSend } from "./push-apns-send-current.js";
 
 type ApnsRelayPushType = "alert" | "background";
 type ApnsRelayEnvironment = "production" | "sandbox";
@@ -73,24 +73,6 @@ const GATEWAY_DEVICE_ID_HEADER = "x-openclaw-gateway-device-id";
 const GATEWAY_SIGNATURE_HEADER = "x-openclaw-gateway-signature";
 const GATEWAY_SIGNED_AT_HEADER = "x-openclaw-gateway-signed-at-ms";
 
-function throwIfApnsRelaySendAborted(signal: AbortSignal | undefined): void {
-  if (!signal?.aborted) {
-    return;
-  }
-  throw signal.reason instanceof Error ? signal.reason : new Error("APNs send invalidated");
-}
-
-async function requireCurrentApnsRelaySend(params: {
-  signal?: AbortSignal;
-  isCurrent?: () => Promise<boolean>;
-}): Promise<void> {
-  throwIfApnsRelaySendAborted(params.signal);
-  if (params.isCurrent && !(await params.isCurrent())) {
-    throw new Error("APNs send invalidated");
-  }
-  throwIfApnsRelaySendAborted(params.signal);
-}
-
 function normalizeTimeoutMs(value: string | number | undefined): number {
   const parsed = typeof value === "number" ? value : parseStrictPositiveInteger(value);
   return resolveTimerTimeoutMs(parsed, DEFAULT_APNS_RELAY_TIMEOUT_MS, 1000);
@@ -112,11 +94,8 @@ function isLoopbackRelayHostname(hostname: string): boolean {
 }
 
 function parseRelayEnvironment(value: unknown): ApnsRelayEnvironment | undefined {
-  const normalized = typeof value === "string" ? normalizeLowercaseStringOrEmpty(value) : "";
-  if (normalized === "sandbox" || normalized === "production") {
-    return normalized;
-  }
-  return undefined;
+  const normalized = normalizeLowercaseStringOrEmpty(value);
+  return normalized === "sandbox" || normalized === "production" ? normalized : undefined;
 }
 
 function normalizeApnsRelayBaseUrlWithPolicy(
@@ -271,7 +250,7 @@ class ApnsRelayResponseTooLargeError extends Error {
 async function sendApnsRelayRequest(
   params: Parameters<ApnsRelayRequestSender>[0],
 ): Promise<ApnsRelayPushResponse> {
-  await requireCurrentApnsRelaySend(params);
+  await requireCurrentApnsSend(params);
   const timeoutSignal = AbortSignal.timeout(params.relayConfig.timeoutMs);
   const signal = params.signal ? AbortSignal.any([params.signal, timeoutSignal]) : timeoutSignal;
   const response = await fetch(`${params.relayConfig.baseUrl}/v1/push/send`, {
@@ -350,7 +329,7 @@ export async function sendApnsRelayPush(params: {
   signal?: AbortSignal;
   isCurrent?: () => Promise<boolean>;
 }): Promise<ApnsRelayPushResponse> {
-  await requireCurrentApnsRelaySend(params);
+  await requireCurrentApnsSend(params);
   const sender = params.requestSender ?? sendApnsRelayRequest;
   const gatewayIdentity = params.gatewayIdentity ?? loadOrCreateProcessDeviceIdentity();
   const signedAtMs = Date.now();

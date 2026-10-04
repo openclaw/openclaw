@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { expressionBuilder } from "kysely";
 import {
   type DeviceAuthEntry,
   normalizeDeviceAuthRole,
@@ -20,12 +21,31 @@ type DeviceAuthDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "device_auth_tokens" | "gateway_origin_device_tokens"
 >;
-type DeviceAuthRow = {
-  token: string;
-  role: string;
-  scopes_json: string;
-  updated_at_ms: number;
-};
+type DeviceAuthRow = Pick<
+  DeviceAuthDatabase["device_auth_tokens"],
+  "token" | "role" | "scopes_json" | "updated_at_ms"
+>;
+type DeviceAuthLookup = { deviceId: string; role: string };
+type DeviceAuthWrite = DeviceAuthLookup &
+  Parameters<typeof createDeviceAuthEntry>[0] & { expectedToken?: string | null };
+type DeviceAuthClear = DeviceAuthLookup & { expectedToken?: string; observedToken?: string };
+
+function tokenTarget(params: DeviceAuthLookup, origin?: { gatewayScope: string }) {
+  const key = { device_id: params.deviceId, role: normalizeDeviceAuthRole(params.role) };
+  const eb = expressionBuilder<DeviceAuthDatabase, keyof DeviceAuthDatabase>();
+  const match = eb.and([
+    ...(origin === undefined ? [] : [eb("gateway_scope", "=", origin.gatewayScope)]),
+    eb("device_id", "=", key.device_id),
+    eb("role", "=", key.role),
+  ]);
+  return origin === undefined
+    ? { table: "device_auth_tokens" as const, key, match }
+    : {
+        table: "gateway_origin_device_tokens" as const,
+        key: { gateway_scope: origin.gatewayScope, ...key },
+        match,
+      };
+}
 
 function fromRow(row: DeviceAuthRow): DeviceAuthEntry | null {
   try {
@@ -46,31 +66,28 @@ function fromRow(row: DeviceAuthRow): DeviceAuthEntry | null {
 
 export function readDeviceAuthTokenObservationFromDatabase(
   db: DatabaseSync,
-  params: { deviceId: string; role: string },
+  params: DeviceAuthLookup,
 ): DeviceAuthTokenObservation {
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<DeviceAuthDatabase>(db)
-      .selectFrom("device_auth_tokens")
-      .select(["token", "role", "scopes_json", "updated_at_ms"])
-      .where("device_id", "=", params.deviceId)
-      .where("role", "=", normalizeDeviceAuthRole(params.role)),
-  );
-  return { entry: row ? fromRow(row) : null, expectedToken: row ? row.token : null };
+  return readTokenObservation(db, tokenTarget(params));
 }
 
 export function readOriginDeviceTokenObservationFromDatabase(
   db: DatabaseSync,
-  params: { gatewayScope: string; deviceId: string; role: string },
+  params: DeviceAuthLookup & { gatewayScope: string },
+): DeviceAuthTokenObservation {
+  return readTokenObservation(db, tokenTarget(params, params));
+}
+
+function readTokenObservation(
+  db: DatabaseSync,
+  target: ReturnType<typeof tokenTarget>,
 ): DeviceAuthTokenObservation {
   const row = executeSqliteQueryTakeFirstSync(
     db,
     getNodeSqliteKysely<DeviceAuthDatabase>(db)
-      .selectFrom("gateway_origin_device_tokens")
+      .selectFrom(target.table)
       .select(["token", "role", "scopes_json", "updated_at_ms"])
-      .where("gateway_scope", "=", params.gatewayScope)
-      .where("device_id", "=", params.deviceId)
-      .where("role", "=", normalizeDeviceAuthRole(params.role)),
+      .where(target.match),
   );
   return { entry: row ? fromRow(row) : null, expectedToken: row ? row.token : null };
 }
@@ -108,17 +125,30 @@ export function readDeviceAuthTokensFromDatabase(
 
 export function storeDeviceAuthTokenInDatabase(
   db: DatabaseSync,
-  params: {
-    deviceId: string;
-    role: string;
-    token: string;
-    scopes?: string[];
-    updatedAtMs?: number;
-    expectedToken?: string | null;
-  },
+  params: DeviceAuthWrite,
+): DeviceAuthEntry | null {
+  return storeToken(db, params, tokenTarget(params));
+}
+
+export function storeOriginDeviceTokenInDatabase(
+  db: DatabaseSync,
+  params: DeviceAuthWrite & { gatewayScope: string },
+): DeviceAuthEntry | null {
+  return storeToken(db, params, tokenTarget(params, params));
+}
+
+function storeToken(
+  db: DatabaseSync,
+  params: DeviceAuthWrite,
+  target: ReturnType<typeof tokenTarget>,
 ): DeviceAuthEntry | null {
   const entry = createDeviceAuthEntry(params);
   const kysely = getNodeSqliteKysely<DeviceAuthDatabase>(db);
+  const values = {
+    token: entry.token,
+    scopes_json: JSON.stringify(entry.scopes),
+    updated_at_ms: entry.updatedAtMs,
+  };
   // A comparison replaces only its observed token or inserts only its observed
   // absence; it cannot overwrite a row that another request rotated or created.
   const result =
@@ -126,35 +156,23 @@ export function storeDeviceAuthTokenInDatabase(
       ? executeSqliteQuerySync(
           db,
           kysely
-            .insertInto("device_auth_tokens")
-            .values({
-              device_id: params.deviceId,
-              role: entry.role,
-              token: entry.token,
-              scopes_json: JSON.stringify(entry.scopes),
-              updated_at_ms: entry.updatedAtMs,
-            })
-            .onConflict((conflict) =>
-              params.expectedToken === null
-                ? conflict.columns(["device_id", "role"]).doNothing()
-                : conflict.columns(["device_id", "role"]).doUpdateSet({
-                    token: entry.token,
-                    scopes_json: JSON.stringify(entry.scopes),
-                    updated_at_ms: entry.updatedAtMs,
-                  }),
-            ),
+            .insertInto(target.table)
+            .values({ ...target.key, ...values })
+            .onConflict((conflict) => {
+              const keyed = conflict.columns(
+                target.table === "device_auth_tokens"
+                  ? ["device_id", "role"]
+                  : ["gateway_scope", "device_id", "role"],
+              );
+              return params.expectedToken === null ? keyed.doNothing() : keyed.doUpdateSet(values);
+            }),
         )
       : executeSqliteQuerySync(
           db,
           kysely
-            .updateTable("device_auth_tokens")
-            .set({
-              token: entry.token,
-              scopes_json: JSON.stringify(entry.scopes),
-              updated_at_ms: entry.updatedAtMs,
-            })
-            .where("device_id", "=", params.deviceId)
-            .where("role", "=", entry.role)
+            .updateTable(target.table)
+            .set(values)
+            .where(target.match)
             .where("token", "=", params.expectedToken),
         );
   return result.numAffectedRows === 1n ? entry : null;
@@ -162,91 +180,26 @@ export function storeDeviceAuthTokenInDatabase(
 
 export function clearDeviceAuthTokenFromDatabase(
   db: DatabaseSync,
-  params: { deviceId: string; role: string; expectedToken?: string; observedToken?: string },
+  params: DeviceAuthClear,
 ): boolean {
-  const baseQuery = getNodeSqliteKysely<DeviceAuthDatabase>(db)
-    .deleteFrom("device_auth_tokens")
-    .where("device_id", "=", params.deviceId)
-    .where("role", "=", normalizeDeviceAuthRole(params.role));
-  const query =
-    params.expectedToken === undefined
-      ? baseQuery
-      : params.observedToken !== undefined && params.observedToken.trim() === params.expectedToken
-        ? baseQuery.where("token", "in", [params.expectedToken, params.observedToken])
-        : baseQuery.where("token", "=", params.expectedToken);
-  return executeSqliteQuerySync(db, query).numAffectedRows === 1n;
-}
-
-export function storeOriginDeviceTokenInDatabase(
-  db: DatabaseSync,
-  params: {
-    gatewayScope: string;
-    deviceId: string;
-    role: string;
-    token: string;
-    scopes?: string[];
-    updatedAtMs?: number;
-    expectedToken?: string | null;
-  },
-): DeviceAuthEntry | null {
-  const entry = createDeviceAuthEntry(params);
-  const kysely = getNodeSqliteKysely<DeviceAuthDatabase>(db);
-  const result =
-    params.expectedToken == null
-      ? executeSqliteQuerySync(
-          db,
-          kysely
-            .insertInto("gateway_origin_device_tokens")
-            .values({
-              gateway_scope: params.gatewayScope,
-              device_id: params.deviceId,
-              role: entry.role,
-              token: entry.token,
-              scopes_json: JSON.stringify(entry.scopes),
-              updated_at_ms: entry.updatedAtMs,
-            })
-            .onConflict((conflict) =>
-              params.expectedToken === null
-                ? conflict.columns(["gateway_scope", "device_id", "role"]).doNothing()
-                : conflict.columns(["gateway_scope", "device_id", "role"]).doUpdateSet({
-                    token: entry.token,
-                    scopes_json: JSON.stringify(entry.scopes),
-                    updated_at_ms: entry.updatedAtMs,
-                  }),
-            ),
-        )
-      : executeSqliteQuerySync(
-          db,
-          kysely
-            .updateTable("gateway_origin_device_tokens")
-            .set({
-              token: entry.token,
-              scopes_json: JSON.stringify(entry.scopes),
-              updated_at_ms: entry.updatedAtMs,
-            })
-            .where("gateway_scope", "=", params.gatewayScope)
-            .where("device_id", "=", params.deviceId)
-            .where("role", "=", entry.role)
-            .where("token", "=", params.expectedToken),
-        );
-  return result.numAffectedRows === 1n ? entry : null;
+  return clearToken(db, params, tokenTarget(params));
 }
 
 export function clearOriginDeviceTokenInDatabase(
   db: DatabaseSync,
-  params: {
-    gatewayScope: string;
-    deviceId: string;
-    role: string;
-    expectedToken?: string;
-    observedToken?: string;
-  },
+  params: DeviceAuthClear & { gatewayScope: string },
+): boolean {
+  return clearToken(db, params, tokenTarget(params, params));
+}
+
+function clearToken(
+  db: DatabaseSync,
+  params: DeviceAuthClear,
+  target: ReturnType<typeof tokenTarget>,
 ): boolean {
   const baseQuery = getNodeSqliteKysely<DeviceAuthDatabase>(db)
-    .deleteFrom("gateway_origin_device_tokens")
-    .where("gateway_scope", "=", params.gatewayScope)
-    .where("device_id", "=", params.deviceId)
-    .where("role", "=", normalizeDeviceAuthRole(params.role));
+    .deleteFrom(target.table)
+    .where(target.match);
   const query =
     params.expectedToken === undefined
       ? baseQuery

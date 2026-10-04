@@ -328,6 +328,62 @@ it("preserves a conflicting existing dependency instead of replacing it", async 
   expect(await fs.readFile(conflicting, "utf8")).toBe(privateContent);
 });
 
+it.each(["undeclared", "dependencies", "optionalDependencies", "peerDependencies"])(
+  "isolates an ancestor package lookup with %s metadata during published-driver rehearsal",
+  async (declaration) => {
+    const f = await fixture();
+    const name = "rehearsal-optional-vendor";
+    const ancestor = path.join(f.root, "node_modules", name);
+    await fs.mkdir(ancestor, { recursive: true });
+    await fs.writeFile(
+      path.join(ancestor, "package.json"),
+      JSON.stringify({ name, main: "index.cjs" }),
+    );
+    await fs.writeFile(path.join(ancestor, "index.cjs"), "module.exports = 'foreign';");
+    const vendor = path.join(f.copiedPlugin, "node_modules", "vendor");
+    await fs.mkdir(vendor, { recursive: true });
+    await fs.writeFile(
+      path.join(vendor, "package.json"),
+      JSON.stringify({
+        name: "vendor",
+        main: "index.cjs",
+        ...(declaration === "undeclared" ? {} : { [declaration]: { [name]: "1.0.0" } }),
+      }),
+    );
+    await fs.writeFile(
+      path.join(vendor, "index.cjs"),
+      `exports.optional = () => { try { return require(${JSON.stringify(name)}); } catch { return 'fallback'; } };`,
+    );
+    await fs.writeFile(path.join(f.copiedPlugin, "index.mjs"), 'import "vendor";');
+
+    if (declaration !== "undeclared") {
+      await expect(completeUpdateCandidatePluginRehearsal(f)).rejects.toThrow(
+        "outside the temporary update copy",
+      );
+      return;
+    }
+    const result = await completeUpdateCandidatePluginRehearsal(f);
+    expect(result.copiedFiles).toBe(0);
+    expect(result.warnings).toEqual([
+      expect.stringContaining(
+        `Plugin dependency ${name} is unresolvable inside the temporary update copy`,
+      ),
+    ]);
+    // Rehearsal inspection must never acquire or parse unrelated ancestor source.
+    await fs.writeFile(path.join(ancestor, "index.cjs"), "invalid JavaScript {{{");
+    expect(await completeUpdateCandidatePluginRehearsal(f)).toEqual(result);
+
+    const internal = path.join(vendor, "node_modules", name);
+    await fs.mkdir(internal, { recursive: true });
+    await fs.copyFile(path.join(ancestor, "package.json"), path.join(internal, "package.json"));
+    await fs.writeFile(path.join(internal, "index.cjs"), "module.exports = 'private';");
+    expect(await completeUpdateCandidatePluginRehearsal(f)).toEqual({
+      copiedFiles: 0,
+      warnings: [],
+    });
+  },
+);
+
 it.each(["relative", "package", "absolute", "file URL"])(
   "never follows a private %s dependency link into the serving tree",
   async (kind) => {

@@ -327,6 +327,18 @@ openclaw-board-widget-cell {
   display: none;
 }
 
+.board-widget__frame-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.board-widget__frame-pane > .board-widget__frame {
+  flex: 1;
+  min-height: 0;
+}
+
 .board-widget__frame {
   background: var(--board-surface);
   border: 0;
@@ -371,7 +383,6 @@ openclaw-board-widget-cell {
 }
 
 .board-widget__mcp-app-view {
-  display: block;
   flex: 1 1 0;
   min-height: 0;
   width: 100%;
@@ -621,10 +632,6 @@ openclaw-board-widget-cell {
     border-radius: 0;
     box-shadow: none;
 
-    &.board-widget--card {
-      --board-widget-height-trim: calc(2px + var(--widget-frame-inset) * 2);
-    }
-
     &:focus-visible {
       outline: 2px solid var(--accent);
       outline-offset: -2px;
@@ -632,7 +639,6 @@ openclaw-board-widget-cell {
 
     .board-widget__body {
       border-radius: 0;
-      padding: 0;
     }
   }
 

@@ -4,6 +4,17 @@ import { toErrorObject } from "../../infra/errors.js";
 import type { ServiceChildRelayRetirement } from "./service-child-protocol.js";
 import type { ProcessCleanupResult } from "./types.js";
 
+/** Transport loss asks a native owner to drain; killing it would abandon descendant custody. */
+export function stopServiceChildOwner(child: ChildProcess, retainDescendantCustody: boolean): void {
+  if (retainDescendantCustody) {
+    if (child.connected) {
+      child.disconnect();
+    }
+  } else {
+    child.kill("SIGKILL");
+  }
+}
+
 /** The relay reaps its anchor before the host releases the retained relay handle. */
 export function createServiceChildRelayRetirement(params: {
   child: ChildProcess;

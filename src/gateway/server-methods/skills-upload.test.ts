@@ -1,18 +1,16 @@
-/**
- * Tests for skill upload gateway methods and archive validation.
- */
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { closeSkillsWatchers } from "../../skills/runtime/refresh.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -43,8 +41,8 @@ vi.mock("../../plugins/install-security-scan.js", () => ({
   evaluateSkillInstallPolicy: installSecurityScanState.evaluateSkillInstallPolicy,
 }));
 
-vi.mock("../../infra/replace-file.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/replace-file.js")>();
+vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/fs-safe/atomic")>();
   return {
     ...actual,
     movePathWithCopyFallback: async (
@@ -64,7 +62,6 @@ vi.mock("../../infra/replace-file.js", async (importOriginal) => {
   };
 });
 
-let tempDirs: string[] = [];
 let testStates: OpenClawTestState[] = [];
 
 type CallResult = {
@@ -179,14 +176,6 @@ function observeCommitSql() {
   };
 }
 
-function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }, _type?: (value: T) => T): T {
-  const callLocal = mock.mock.calls.at(0);
-  if (!callLocal) {
-    throw new Error("Expected first mock call");
-  }
-  return callLocal[0] as T;
-}
-
 async function makeSkillArchive(params: {
   name?: string;
   description?: string;
@@ -254,7 +243,6 @@ async function uploadArchive(
 
 describe("skill upload gateway handlers", () => {
   beforeEach(() => {
-    tempDirs = [];
     testStates = [];
     replaceFileState.publishFailureTarget = "";
     replaceFileState.publishFailures = 0;
@@ -265,102 +253,84 @@ describe("skill upload gateway handlers", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     closeOpenClawStateDatabaseForTest();
-    await Promise.all([
-      ...tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-      ...testStates.splice(0).map((state) => state.cleanup()),
-    ]);
+    // Close real skills.status watchers before retiring their workspace and state roots.
+    await closeSkillsWatchers(true);
+    await Promise.all(testStates.splice(0).map((state) => state.cleanup()));
   });
 
-  it("stages uploads through the registered handlers without caller-thread SQLite", async () => {
-    const { handlers } = await makeHarness(true);
-    await closeOpenClawStateDatabaseAsync();
-    const sql = observeCommitSql();
-    try {
-      const archive = Buffer.from("worker-owned upload staging");
-      const begin = await call(handlers, "skills.upload.begin", {
-        kind: "skill-archive",
-        slug: "worker-staging",
-        sizeBytes: archive.length,
+  it.each([true, false])(
+    "stages and commits without caller-thread SQLite (upload-only: %s)",
+    async (uploadOnly) => {
+      const { handlers, stateDir } = await makeHarness(uploadOnly);
+      const archive = Buffer.from("worker-owned archive commit");
+      const digest = sha256(archive);
+      await closeOpenClawStateDatabaseAsync();
+      const sql = observeCommitSql();
+      let uploadId: string;
+      try {
+        const begin = await call(handlers, "skills.upload.begin", {
+          kind: "skill-archive",
+          slug: "worker-commit",
+          sizeBytes: archive.length,
+          ...(uploadOnly ? {} : { sha256: digest }),
+        });
+        expect(begin.ok).toBe(true);
+        sql.expectIdle();
+        uploadId = (begin.payload as { uploadId: string }).uploadId;
+        expect(
+          await call(handlers, "skills.upload.chunk", {
+            uploadId,
+            offset: 0,
+            dataBase64: archive.toString("base64"),
+          }),
+        ).toMatchObject({ ok: true });
+        if (!uploadOnly) {
+          closeOpenClawStateDatabaseForTest();
+        }
+        const committed = await call(handlers, "skills.upload.commit", {
+          uploadId,
+          ...(uploadOnly ? {} : { sha256: digest }),
+        });
+        expect(committed).toMatchObject({
+          ok: true,
+          payload: { uploadId, receivedBytes: archive.length, sha256: digest },
+        });
+        if (!uploadOnly) {
+          expect(await call(handlers, "skills.upload.commit", { uploadId })).toEqual(committed);
+          const mismatch = await call(handlers, "skills.upload.commit", {
+            uploadId,
+            sha256: "0".repeat(64),
+          });
+          expectError(mismatch, "INVALID_REQUEST", "upload sha256 mismatch");
+        }
+        await closeOpenClawStateDatabaseAsync();
+        sql.expectIdle();
+      } finally {
+        sql.restore();
+      }
+      if (uploadOnly) {
+        return;
+      }
+      const { db } = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
       });
-      expect(begin.ok).toBe(true);
-      sql.expectIdle();
-      const uploadId = (begin.payload as { uploadId: string }).uploadId;
+      const stored = db
+        .prepare(
+          "SELECT archive_blob, actual_sha256, committed FROM skill_uploads WHERE upload_id = ?",
+        )
+        .get(uploadId);
+      expect(stored).toMatchObject({
+        archive_blob: new Uint8Array(archive),
+        actual_sha256: digest,
+        committed: 1,
+      });
       expect(
-        await call(handlers, "skills.upload.chunk", {
-          uploadId,
-          offset: 0,
-          dataBase64: archive.toString("base64"),
-        }),
-      ).toMatchObject({ ok: true });
-      expect(await call(handlers, "skills.upload.commit", { uploadId })).toMatchObject({
-        ok: true,
-      });
-      await closeOpenClawStateDatabaseAsync();
-      sql.expectIdle();
-    } finally {
-      sql.restore();
-    }
-  });
-
-  it("commits and replays staged archives without caller-thread SQLite", async () => {
-    const { handlers, stateDir } = await makeHarness();
-    const archive = Buffer.from("worker-owned archive commit");
-    const digest = sha256(archive);
-    const begin = await call(handlers, "skills.upload.begin", {
-      kind: "skill-archive",
-      slug: "worker-commit",
-      sizeBytes: archive.length,
-      sha256: digest,
-    });
-    expect(begin.ok).toBe(true);
-    const uploadId = (begin.payload as { uploadId: string }).uploadId;
-    expect(
-      (
-        await call(handlers, "skills.upload.chunk", {
-          uploadId,
-          offset: 0,
-          dataBase64: archive.toString("base64"),
-        })
-      ).ok,
-    ).toBe(true);
-    closeOpenClawStateDatabaseForTest();
-    const sql = observeCommitSql();
-    try {
-      const committed = await call(handlers, "skills.upload.commit", { uploadId, sha256: digest });
-      expect(committed).toMatchObject({
-        ok: true,
-        payload: { uploadId, receivedBytes: archive.length, sha256: digest },
-      });
-      expect(await call(handlers, "skills.upload.commit", { uploadId })).toEqual(committed);
-      const mismatch = await call(handlers, "skills.upload.commit", {
-        uploadId,
-        sha256: "0".repeat(64),
-      });
-      expectError(mismatch, "INVALID_REQUEST", "upload sha256 mismatch");
-      await closeOpenClawStateDatabaseAsync();
-      sql.expectIdle();
-    } finally {
-      sql.restore();
-    }
-    const { db } = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
-    const stored = db
-      .prepare(
-        "SELECT archive_blob, actual_sha256, committed FROM skill_uploads WHERE upload_id = ?",
-      )
-      .get(uploadId);
-    expect(stored).toMatchObject({
-      archive_blob: new Uint8Array(archive),
-      actual_sha256: digest,
-      committed: 1,
-    });
-    expect(
-      db
-        .prepare("SELECT count(*) AS count FROM skill_upload_chunks WHERE upload_id = ?")
-        .get(uploadId),
-    ).toEqual({ count: 0 });
-  });
+        db
+          .prepare("SELECT count(*) AS count FROM skill_upload_chunks WHERE upload_id = ?")
+          .get(uploadId),
+      ).toEqual({ count: 0 });
+    },
+  );
 
   it.each([false, true])(
     "settles an expired commit without caller SQLite with external install lease=%s",
@@ -470,294 +440,135 @@ describe("skill upload gateway handlers", () => {
     expect(JSON.stringify(status.payload)).toContain("Uploaded Demo");
   });
 
-  it("rejects install before commit and missing upload ids", async () => {
+  it("rejects traversal slugs before staging", async () => {
     const { handlers } = await makeHarness();
-    const archive = await makeSkillArchive({});
-    const begin = await call(handlers, "skills.upload.begin", {
-      kind: "skill-archive",
-      slug: "pending-skill",
-      sizeBytes: archive.length,
-    });
-    const uploadId = (begin.payload as { uploadId: string }).uploadId;
-
-    const pending = await call(handlers, "skills.install", {
-      source: "upload",
-      uploadId,
-      slug: "pending-skill",
-    });
-    expect(pending.ok).toBe(false);
-    expect(pending.error?.message).toContain("upload is not committed");
-
-    const missing = await call(handlers, "skills.install", {
-      source: "upload",
-      uploadId: randomUUID(),
-      slug: "missing-skill",
-    });
-    expect(missing.ok).toBe(false);
-    expect(missing.error?.message).toContain("upload not found");
-  });
-
-  it("binds slug and force to begin parameters", async () => {
-    const { handlers } = await makeHarness();
-    const archive = await makeSkillArchive({});
-    const first = await uploadArchive(handlers, {
-      archive,
-      slug: "bound-skill",
-    });
-
-    const slugSwitch = await call(handlers, "skills.install", {
-      source: "upload",
-      uploadId: first.uploadId,
-      slug: "other-skill",
-    });
-    expect(slugSwitch.ok).toBe(false);
-    expect(slugSwitch.error?.message).toContain("install slug does not match upload slug");
-
-    const second = await uploadArchive(handlers, {
-      archive,
-      slug: "forced-skill",
-      force: true,
-    });
-    const forceSwitch = await call(handlers, "skills.install", {
-      source: "upload",
-      uploadId: second.uploadId,
-      slug: "forced-skill",
-    });
-    expect(forceSwitch.ok).toBe(false);
-    expect(forceSwitch.error?.message).toContain("install force does not match upload force");
-  });
-
-  it("rejects install sha mismatch and removes the terminal upload", async () => {
-    const { handlers, stateDir } = await makeHarness();
-    const upload = await uploadArchive(handlers, {
-      archive: await makeSkillArchive({}),
-      slug: "sha-bound-skill",
-    });
-
-    const install = await call(handlers, "skills.install", {
-      source: "upload",
-      uploadId: upload.uploadId,
-      slug: "sha-bound-skill",
-      sha256: "0".repeat(64),
-    });
-
-    expect(install.ok).toBe(false);
-    expectError(install, "INVALID_REQUEST", "install sha256 does not match uploaded archive");
-    expect(skillUploadExists(stateDir, upload.uploadId)).toBe(false);
-  });
-
-  it("rejects expired committed uploads through skills.install", async () => {
-    const { handlers, stateDir } = await makeHarness();
-    const upload = await uploadArchive(handlers, {
-      archive: await makeSkillArchive({}),
-      slug: "expired-skill",
-    });
-    openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } })
-      .db.prepare("UPDATE skill_uploads SET expires_at = ? WHERE upload_id = ?")
-      .run(Date.now() - 1, upload.uploadId);
-
-    const install = await call(handlers, "skills.install", {
-      source: "upload",
-      uploadId: upload.uploadId,
-      slug: "expired-skill",
-    });
-
-    expect(install.ok).toBe(false);
-    expectError(install, "INVALID_REQUEST", "upload has expired");
-    expect(skillUploadExists(stateDir, upload.uploadId)).toBe(false);
-  });
-
-  it("rejects invalid slugs, missing SKILL.md, and archive traversal", async () => {
-    const { handlers, stateDir, workspaceDir } = await makeHarness();
-    const invalidSlug = await call(handlers, "skills.upload.begin", {
+    const result = await call(handlers, "skills.upload.begin", {
       kind: "skill-archive",
       slug: "../escape",
       sizeBytes: 1,
     });
-    expect(invalidSlug.ok).toBe(false);
-    expect(invalidSlug.error?.message).toContain("Invalid skill slug");
-
-    const missingSkill = await uploadArchive(handlers, {
-      archive: await makeSkillArchive({ missingSkill: true }),
-      slug: "missing-skill-md",
-    });
-    const missingInstall = await call(handlers, "skills.install", {
-      source: "upload",
-      uploadId: missingSkill.uploadId,
-      slug: "missing-skill-md",
-    });
-    expect(missingInstall.ok).toBe(false);
-    expect(missingInstall.error?.code).toBe("INVALID_REQUEST");
-    expect(missingInstall.error?.message).toContain("SKILL.md");
-    expect(skillUploadExists(stateDir, missingSkill.uploadId)).toBe(false);
-
-    const legacyMarker = await uploadArchive(handlers, {
-      archive: await makeSkillArchive({
-        rootDir: "legacy-root",
-        skillFileName: "skills.md",
-      }),
-      slug: "legacy-marker",
-    });
-    const legacyMarkerInstall = await call(handlers, "skills.install", {
-      source: "upload",
-      uploadId: legacyMarker.uploadId,
-      slug: "legacy-marker",
-    });
-    expect(legacyMarkerInstall.ok).toBe(false);
-    expect(legacyMarkerInstall.error?.code).toBe("INVALID_REQUEST");
-    expect(legacyMarkerInstall.error?.message).toContain("SKILL.md");
-    expect(skillUploadExists(stateDir, legacyMarker.uploadId)).toBe(false);
-
-    const traversal = await uploadArchive(handlers, {
-      archive: await makeSkillArchive({ traversal: true }),
-      slug: "traversal-skill",
-    });
-    const traversalInstall = await call(handlers, "skills.install", {
-      source: "upload",
-      uploadId: traversal.uploadId,
-      slug: "traversal-skill",
-    });
-    expect(traversalInstall.ok).toBe(false);
-    expect(traversalInstall.error?.code).toBe("INVALID_REQUEST");
-    expect(traversalInstall.error?.message).toMatch(
-      /escapes destination|absolute|extract archive/i,
-    );
-    await expectPathMissing(path.join(workspaceDir, "skills", "traversal-skill"));
+    expect(result.ok).toBe(false);
+    expect(result.error?.message).toContain("Invalid skill slug");
   });
 
-  it("treats install policy blocks as terminal invalid uploads", async () => {
-    const { handlers, stateDir } = await makeHarness();
-    installSecurityScanState.evaluateSkillInstallPolicy.mockResolvedValueOnce({
-      blocked: {
-        code: "security_scan_blocked",
-        reason: 'blocked by install policy: Skill "scan-blocked" is not approved.',
-      },
+  it.each([
+    ["pending", "upload is not committed"],
+    ["missing", "upload not found"],
+    ["slug", "install slug does not match upload slug"],
+    ["force", "install force does not match upload force"],
+    ["sha", "install sha256 does not match uploaded archive"],
+    ["expired", "upload has expired"],
+    ["missing-skill", "SKILL.md"],
+    ["legacy-marker", "SKILL.md"],
+    ["traversal", /escapes destination|absolute|extract archive/i],
+    ["policy", "blocked by install policy"],
+  ] as const)("rejects %s installs and preserves terminal cleanup", async (kind, message) => {
+    const { handlers, stateDir, workspaceDir } = await makeHarness();
+    const slug = kind === "policy" ? "scan-blocked" : "rejected-skill";
+    const archive = await makeSkillArchive({
+      missingSkill: kind === "missing-skill",
+      traversal: kind === "traversal",
+      ...(kind === "legacy-marker" ? { rootDir: "legacy-root", skillFileName: "skills.md" } : {}),
     });
-    const upload = await uploadArchive(handlers, {
-      archive: await makeSkillArchive({}),
-      slug: "scan-blocked",
-    });
-
+    let uploadId: string;
+    if (kind === "missing") {
+      uploadId = randomUUID();
+    } else if (kind === "pending") {
+      const begin = await call(handlers, "skills.upload.begin", {
+        kind: "skill-archive",
+        slug,
+        sizeBytes: archive.length,
+      });
+      uploadId = (begin.payload as { uploadId: string }).uploadId;
+    } else {
+      ({ uploadId } = await uploadArchive(handlers, { archive, slug, force: kind === "force" }));
+    }
+    if (kind === "expired") {
+      openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } })
+        .db.prepare("UPDATE skill_uploads SET expires_at = ? WHERE upload_id = ?")
+        .run(Date.now() - 1, uploadId);
+    }
+    if (kind === "policy") {
+      installSecurityScanState.evaluateSkillInstallPolicy.mockResolvedValueOnce({
+        blocked: {
+          code: "security_scan_blocked",
+          reason: 'blocked by install policy: Skill "scan-blocked" is not approved.',
+        },
+      });
+    }
     const install = await call(handlers, "skills.install", {
       source: "upload",
-      uploadId: upload.uploadId,
-      slug: "scan-blocked",
+      uploadId,
+      slug: kind === "slug" ? "other-skill" : slug,
+      ...(kind === "sha" ? { sha256: "0".repeat(64) } : {}),
     });
-
     expect(install.ok).toBe(false);
     expect(install.error?.code).toBe("INVALID_REQUEST");
-    expect(install.error?.message).toContain("blocked by install policy");
-    const scanInput = firstCallArg<{
-      origin?: { type?: string; uploadId?: string };
-      skillName?: string;
-    }>(installSecurityScanState.evaluateSkillInstallPolicy);
-    expect(scanInput.origin?.type).toBe("upload");
-    expect(scanInput.origin?.uploadId).toBe(upload.uploadId);
-    expect(scanInput.skillName).toBe("scan-blocked");
-    expect(skillUploadExists(stateDir, upload.uploadId)).toBe(false);
+    if (kind === "sha" || kind === "expired") {
+      expect(install.error?.message).toBe(message);
+    } else if (typeof message === "string") {
+      expect(install.error?.message).toContain(message);
+    } else {
+      expect(install.error?.message).toMatch(message);
+    }
+    if (["sha", "expired", "missing-skill", "legacy-marker", "policy"].includes(kind)) {
+      expect(skillUploadExists(stateDir, uploadId)).toBe(false);
+    }
+    if (kind === "traversal") {
+      await expectPathMissing(path.join(workspaceDir, "skills", slug));
+    }
+    if (kind === "policy") {
+      expect(installSecurityScanState.evaluateSkillInstallPolicy.mock.calls[0]?.[0]).toMatchObject({
+        origin: { type: "upload", uploadId },
+        skillName: "scan-blocked",
+      });
+    }
   });
 
-  it("preserves existing installs unless force was bound at begin", async () => {
-    const { handlers, stateDir, workspaceDir } = await makeHarness();
-    const first = await uploadArchive(handlers, {
-      archive: await makeSkillArchive({
-        name: "Replace Demo",
-        body: "first version",
-      }),
-      slug: "replace-demo",
-    });
-    expect(
-      (
-        await call(handlers, "skills.install", {
+  it.each([false, true])(
+    "replaces only with bound force and rolls back publication failure=%s",
+    async (publishFails) => {
+      const { handlers, stateDir, workspaceDir } = await makeHarness();
+      const slug = "replace-demo";
+      const uploadVersion = async (body: string, force = false) =>
+        uploadArchive(handlers, {
+          archive: await makeSkillArchive({ name: "Replace Demo", body }),
+          slug,
+          force,
+        });
+      const installVersion = (uploadId: string, force = false) =>
+        call(handlers, "skills.install", {
           source: "upload",
-          uploadId: first.uploadId,
-          slug: "replace-demo",
-        })
-      ).ok,
-    ).toBe(true);
-
-    const blocked = await uploadArchive(handlers, {
-      archive: await makeSkillArchive({
-        name: "Replace Demo",
-        body: "second version",
-      }),
-      slug: "replace-demo",
-    });
-    const blockedInstall = await call(handlers, "skills.install", {
-      source: "upload",
-      uploadId: blocked.uploadId,
-      slug: "replace-demo",
-    });
-    expect(blockedInstall.ok).toBe(false);
-    expect(blockedInstall.error?.code).toBe("INVALID_REQUEST");
-    expect(blockedInstall.error?.message).toContain("already exists");
-    expect(skillUploadExists(stateDir, blocked.uploadId)).toBe(false);
-
-    const forced = await uploadArchive(handlers, {
-      archive: await makeSkillArchive({
-        name: "Replace Demo",
-        body: "second version",
-      }),
-      slug: "replace-demo",
-      force: true,
-    });
-    const forcedInstall = await call(handlers, "skills.install", {
-      source: "upload",
-      uploadId: forced.uploadId,
-      slug: "replace-demo",
-      force: true,
-    });
-    expect(forcedInstall.ok).toBe(true);
-    await expect(
-      fs.readFile(path.join(workspaceDir, "skills", "replace-demo", "SKILL.md"), "utf8"),
-    ).resolves.toContain("second version");
-  });
-
-  it("keeps the previous skill when force replacement publish fails", async () => {
-    const { handlers, stateDir, workspaceDir } = await makeHarness();
-    const first = await uploadArchive(handlers, {
-      archive: await makeSkillArchive({
-        name: "Rollback Demo",
-        body: "first version",
-      }),
-      slug: "rollback-demo",
-    });
-    expect(
-      (
-        await call(handlers, "skills.install", {
-          source: "upload",
-          uploadId: first.uploadId,
-          slug: "rollback-demo",
-        })
-      ).ok,
-    ).toBe(true);
-    replaceFileState.publishFailureTarget = path.join(
-      await fs.realpath(path.join(workspaceDir, "skills")),
-      "rollback-demo",
-    );
-
-    const forced = await uploadArchive(handlers, {
-      archive: await makeSkillArchive({
-        name: "Rollback Demo",
-        body: "second version",
-      }),
-      slug: "rollback-demo",
-      force: true,
-    });
-
-    const install = await call(handlers, "skills.install", {
-      source: "upload",
-      uploadId: forced.uploadId,
-      slug: "rollback-demo",
-      force: true,
-    });
-
-    expect(install.ok).toBe(false);
-    expect(install.error?.code).toBe("UNAVAILABLE");
-    expect(install.error?.message).toContain("publish boom");
-    await expect(
-      fs.readFile(path.join(workspaceDir, "skills", "rollback-demo", "SKILL.md"), "utf8"),
-    ).resolves.toContain("first version");
-    expect(skillUploadExists(stateDir, forced.uploadId)).toBe(true);
-  });
+          uploadId,
+          slug,
+          force,
+        });
+      const first = await uploadVersion("first version");
+      expect((await installVersion(first.uploadId)).ok).toBe(true);
+      if (publishFails) {
+        replaceFileState.publishFailureTarget = path.join(
+          await fs.realpath(path.join(workspaceDir, "skills")),
+          slug,
+        );
+      } else {
+        const blocked = await uploadVersion("second version");
+        const install = await installVersion(blocked.uploadId);
+        expect(install.ok).toBe(false);
+        expect(install.error?.code).toBe("INVALID_REQUEST");
+        expect(install.error?.message).toContain("already exists");
+        expect(skillUploadExists(stateDir, blocked.uploadId)).toBe(false);
+      }
+      const forced = await uploadVersion("second version", true);
+      const install = await installVersion(forced.uploadId, true);
+      expect(install.ok).toBe(!publishFails);
+      if (publishFails) {
+        expect(install.error?.code).toBe("UNAVAILABLE");
+        expect(install.error?.message).toContain("publish boom");
+        expect(skillUploadExists(stateDir, forced.uploadId)).toBe(true);
+      }
+      await expect(
+        fs.readFile(path.join(workspaceDir, "skills", slug, "SKILL.md"), "utf8"),
+      ).resolves.toContain(publishFails ? "first version" : "second version");
+    },
+  );
 });

@@ -1,8 +1,9 @@
+import { captureRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import { registryContainsRuntimePluginIds } from "../plugins/active-runtime-registry.js";
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
-import { resolveAgentRuntimePluginLoadPlan } from "./harness/runtime-plugin-load-plan.js";
+import { resolveAgentRuntimePluginSelectionOwners } from "./harness/runtime-plugin-load-plan.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import { ownPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import type {
@@ -74,7 +75,7 @@ export function preparedPluginGenerationSupportsSelections(
     return true;
   }
   const registry = generation.pluginRegistry;
-  const plan = resolveAgentRuntimePluginLoadPlan({
+  const selection = resolveAgentRuntimePluginSelectionOwners({
     config: input.config,
     workspaceDir:
       generation.pluginMetadataSnapshot.workspaceDir ?? input.workspaceDir ?? process.cwd(),
@@ -83,9 +84,10 @@ export function preparedPluginGenerationSupportsSelections(
   });
   // Failed and disabled loads are recorded generation outcomes, not missing owners.
   // Borrowing preserves those outcomes; downstream model resolution owns availability.
+  // Shared capabilities retain their admitted outcome, including context-engine fallback.
   return (
     registry !== undefined &&
-    (plan.pluginIds ?? []).every(
+    selection.pluginIds.every(
       (id) =>
         registry.plugins.some(
           (plugin) =>
@@ -144,6 +146,7 @@ export function createPreparedPluginGeneration(params: {
     return derived;
   }
   const generation = Object.freeze({
+    remoteCatalog: captureRemoteModelCatalogSnapshot(),
     pluginMetadataSnapshot: params.pluginMetadataSnapshot,
     inlineProviderModels: Object.freeze([...params.inlineProviderModels]),
     configuredCatalogEntries: Object.freeze([...params.configuredCatalogEntries]),

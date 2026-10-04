@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SqliteReadOnlyOperationResult } from "./sqlite-readonly-operation-types.js";
 import type { SqliteAuthProfileRows } from "./sqlite-readonly-worker-protocol.js";
 import {
   SQLITE_WORKER_TRANSFER_FRAME_BYTES,
@@ -6,14 +7,24 @@ import {
   type SqliteWorkerTransferFrame,
 } from "./sqlite-worker-transfer.js";
 
-export type SqliteAuthTransferRequest = { type: "next" | "end"; transferId: number };
+type SqliteAuthTransferRequest = { type: "next" | "end"; transferId: number };
 
 /** JSON IPC carries only one bounded byte frame; aggregate records retain the transfer contract. */
 export function encodeSqliteAuthTransferFrame(frame: SqliteWorkerTransferFrame) {
-  return frame.done ? frame : { ...frame, bytes: Buffer.from(frame.bytes).toString("base64") };
+  // Encoding is synchronous; only the string escapes, so the owned frame needs no copy.
+  return frame.done
+    ? frame
+    : {
+        ...frame,
+        bytes: Buffer.from(
+          frame.bytes.buffer,
+          frame.bytes.byteOffset,
+          frame.bytes.byteLength,
+        ).toString("base64"),
+      };
 }
 
-function decodeFrame(value: unknown): SqliteWorkerTransferFrame {
+function decodeFrame(value: unknown, label: string): SqliteWorkerTransferFrame {
   if (
     !isRecord(value) ||
     typeof value.id !== "number" ||
@@ -21,7 +32,7 @@ function decodeFrame(value: unknown): SqliteWorkerTransferFrame {
     typeof value.sequence !== "number" ||
     !Number.isSafeInteger(value.sequence)
   ) {
-    throw new Error("Invalid auth profile transfer frame");
+    throw new Error(`Invalid ${label} transfer frame`);
   }
   const { id, sequence } = value;
   if (value.done === true && Array.isArray(value.counts)) {
@@ -35,7 +46,7 @@ function decodeFrame(value: unknown): SqliteWorkerTransferFrame {
         !Number.isSafeInteger(entry[1]) ||
         entry[1] < 0
       ) {
-        throw new Error("Invalid auth profile transfer counts");
+        throw new Error(`Invalid ${label} transfer counts`);
       }
       counts.push([entry[0], entry[1]]);
     }
@@ -50,11 +61,11 @@ function decodeFrame(value: unknown): SqliteWorkerTransferFrame {
     typeof value.bytes !== "string" ||
     value.bytes.length > 4 * Math.ceil(SQLITE_WORKER_TRANSFER_FRAME_BYTES / 3)
   ) {
-    throw new Error("Invalid auth profile transfer bytes");
+    throw new Error(`Invalid ${label} transfer bytes`);
   }
   const bytes = Buffer.from(value.bytes, "base64");
   if (bytes.toString("base64") !== value.bytes) {
-    throw new Error("Invalid auth profile transfer encoding");
+    throw new Error(`Invalid ${label} transfer encoding`);
   }
   return {
     id,
@@ -68,19 +79,21 @@ function decodeFrame(value: unknown): SqliteWorkerTransferFrame {
   };
 }
 
-export function createSqliteAuthTransferReceiver() {
+function createSqliteReadOnlyTransferReceiver<T>(options: {
+  kinds: string[];
+  label: string;
+  readHandle?: (handle: Record<string, unknown>) => void;
+  readResult: (records: Map<string, unknown>) => T;
+}) {
   let receiver: ReturnType<typeof createSqliteWorkerTransferReceiver> | undefined;
   let transferId: number | undefined;
-  let cacheable = false;
   let ending = false;
   let completed = false;
   const records = new Map<string, unknown>();
   return {
-    accept(
-      value: unknown,
-    ): { request: SqliteAuthTransferRequest } | { rows: SqliteAuthProfileRows } {
+    accept(value: unknown): { request: SqliteAuthTransferRequest } | { value: T } {
       if (!isRecord(value) || completed) {
-        throw new Error("Invalid auth profile transfer response");
+        throw new Error(`Invalid ${options.label} transfer response`);
       }
       if (value.type === "start" && !receiver) {
         const handle = value.handle;
@@ -89,21 +102,19 @@ export function createSqliteAuthTransferReceiver() {
           typeof handle.id !== "number" ||
           !Number.isSafeInteger(handle.id) ||
           handle.id < 1 ||
-          typeof handle.cacheable !== "boolean" ||
           !Array.isArray(handle.kinds) ||
-          handle.kinds.length !== 2 ||
-          handle.kinds[0] !== "store" ||
-          handle.kinds[1] !== "state"
+          handle.kinds.length !== options.kinds.length ||
+          handle.kinds.some((kind, index) => kind !== options.kinds[index])
         ) {
-          throw new Error("Invalid auth profile transfer handle");
+          throw new Error(`Invalid ${options.label} transfer handle`);
         }
         transferId = handle.id;
-        cacheable = handle.cacheable;
+        options.readHandle?.(handle);
         receiver = createSqliteWorkerTransferReceiver(
-          { id: transferId, kinds: ["store", "state"] },
+          { id: transferId, kinds: options.kinds },
           ({ kind, value: record }) => {
             if (records.has(kind)) {
-              throw new Error("Duplicate auth profile transfer record");
+              throw new Error(`Duplicate ${options.label} transfer record`);
             }
             records.set(kind, record);
           },
@@ -111,13 +122,18 @@ export function createSqliteAuthTransferReceiver() {
         return { request: { type: "next", transferId } };
       }
       if (!receiver || transferId === undefined) {
-        throw new Error("Auth profile transfer has not started");
+        throw new Error(
+          `${options.label.charAt(0).toUpperCase()}${options.label.slice(1)} transfer has not started`,
+        );
       }
       if (value.type === "frame" && !ending) {
-        const counts = receiver.accept(decodeFrame(value.frame));
+        const counts = receiver.accept(decodeFrame(value.frame, options.label));
         if (counts) {
-          if (!records.has("store") || !records.has("state") || records.size !== 2) {
-            throw new Error("Incomplete auth profile transfer result");
+          if (
+            records.size !== options.kinds.length ||
+            options.kinds.some((kind) => !records.has(kind))
+          ) {
+            throw new Error(`Incomplete ${options.label} transfer result`);
           }
           ending = true;
         }
@@ -125,11 +141,46 @@ export function createSqliteAuthTransferReceiver() {
       }
       if (value.type === "complete" && ending) {
         completed = true;
-        const rows = { store: records.get("store"), state: records.get("state"), cacheable };
+        const result = options.readResult(records);
         records.clear();
-        return { rows };
+        return { value: result };
       }
-      throw new Error("Auth profile transfer response is out of order");
+      throw new Error(
+        `${options.label.charAt(0).toUpperCase()}${options.label.slice(1)} transfer response is out of order`,
+      );
     },
   };
+}
+
+export function createSqliteAuthTransferReceiver() {
+  let cacheable = false;
+  return createSqliteReadOnlyTransferReceiver<SqliteAuthProfileRows>({
+    kinds: ["store", "state"],
+    label: "auth profile",
+    readHandle(handle) {
+      if (typeof handle.cacheable !== "boolean") {
+        throw new Error("Invalid auth profile transfer handle");
+      }
+      cacheable = handle.cacheable;
+    },
+    readResult: (records) => ({
+      store: records.get("store"),
+      state: records.get("state"),
+      cacheable,
+    }),
+  });
+}
+
+export function createSqliteOperationTransferReceiver(operation: string) {
+  return createSqliteReadOnlyTransferReceiver<SqliteReadOnlyOperationResult>({
+    kinds: ["result"],
+    label: "SQLite operation",
+    readResult(records) {
+      const result = records.get("result");
+      if (!isRecord(result) || result.operation !== operation || !("value" in result)) {
+        throw new Error("SQLite read-only worker returned a different operation");
+      }
+      return { operation, value: result.value };
+    },
+  });
 }

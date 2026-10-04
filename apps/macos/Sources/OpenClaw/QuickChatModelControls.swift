@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawChatUI
+import OpenClawKit
 import OpenClawProtocol
 
 struct QuickChatModelControlSnapshot: Sendable {
@@ -21,7 +22,7 @@ enum QuickChatModelPatchDecision: Equatable {
 
 enum QuickChatModelControlLogic {
     static func snapshot(
-        target: QuickChatRoutingTarget,
+        target: OpenClawChatSessionTarget,
         models: [OpenClawChatModelChoice],
         sessions: OpenClawChatSessionsListResponse,
         agents: AgentsListResult?,
@@ -29,11 +30,11 @@ enum QuickChatModelControlLogic {
     {
         let entry = self.sessionEntry(target: target, sessions: sessions.sessions)
         let agent = self.agent(target: target, agents: agents)
-        let entryProvider = self.normalized(entry?.modelProvider)
-        let entryModel = self.normalized(entry?.model)
-        let agentModel = self.normalized(agent?.model?["primary"]?.value as? String)
-        let defaultProvider = self.normalized(sessions.defaults?.modelProvider)
-        let defaultModel = self.normalized(sessions.defaults?.model)
+        let entryProvider = entry?.modelProvider?.trimmedNonEmpty
+        let entryModel = entry?.model?.trimmedNonEmpty
+        let agentModel = (agent?.model?["primary"]?.value as? String)?.trimmedNonEmpty
+        let defaultProvider = sessions.defaults?.modelProvider?.trimmedNonEmpty
+        let defaultModel = sessions.defaults?.model?.trimmedNonEmpty
         let automaticModel = if let policy = modelSelectionPolicy, policy.restricted {
             policy.defaultModel
         } else {
@@ -55,7 +56,7 @@ enum QuickChatModelControlLogic {
             defaults: selectionID == defaultModel.map { self.selectionID(model: $0, provider: defaultProvider) }
                 ? sessions.defaults : nil,
             model: models.first { $0.selectionID == selectionID })
-        let thinkingLevel = self.normalized(entry?.thinkingLevel) ?? profile?.defaultLevel
+        let thinkingLevel = entry?.thinkingLevel?.trimmedNonEmpty ?? profile?.defaultLevel
         return QuickChatModelControlSnapshot(
             models: models,
             currentModelSelectionID: selectionID,
@@ -108,7 +109,7 @@ enum QuickChatModelControlLogic {
     }
 
     private static func sessionEntry(
-        target: QuickChatRoutingTarget,
+        target: OpenClawChatSessionTarget,
         sessions: [OpenClawChatSessionEntry]) -> OpenClawChatSessionEntry?
     {
         let key = target.sessionKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -116,16 +117,16 @@ enum QuickChatModelControlLogic {
             return exact
         }
         guard key == "global",
-              let agentID = self.normalized(target.agentID)?.lowercased()
+              let agentID = target.agentID?.trimmedNonEmpty?.lowercased()
         else { return nil }
         return sessions.first(where: { $0.key.lowercased() == "agent:\(agentID):global" })
     }
 
-    private static func agent(target: QuickChatRoutingTarget, agents: AgentsListResult?) -> AgentSummary? {
+    private static func agent(target: OpenClawChatSessionTarget, agents: AgentsListResult?) -> AgentSummary? {
         guard let agents else { return nil }
-        let targetAgentID = self.normalized(target.agentID) ??
+        let targetAgentID = target.agentID?.trimmedNonEmpty ??
             OpenClawChatSessionKey.agentID(from: target.sessionKey) ??
-            self.normalized(agents.defaultid)
+            agents.defaultid.trimmedNonEmpty
         guard let targetAgentID else { return nil }
         return agents.agents.first(where: { $0.id.caseInsensitiveCompare(targetAgentID) == .orderedSame })
     }
@@ -142,10 +143,5 @@ enum QuickChatModelControlLogic {
               separator != selectionID.startIndex
         else { return nil }
         return String(selectionID[..<separator])
-    }
-
-    private static func normalized(_ value: String?) -> String? {
-        let value = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return value?.isEmpty == false ? value : nil
     }
 }

@@ -10,6 +10,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginRuntimeCapabilityLease } from "../../plugins/capability-lease.js";
 import { createPluginServiceGatewayEvents } from "../../plugins/gateway-events.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
+import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createGatewayConnectionState } from "../server-connection-state.js";
@@ -25,12 +27,19 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each(["capture", "preparation", "canonical deferral"] as const)(
-  "keeps private %s fallback fanout free of row reads and refreshes subscribers",
+it.each(["ready", "capture", "preparation", "canonical deferral"] as const)(
+  "publishes private repository facts or refreshes subscribers after %s preparation",
   async (failure) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = { agents: { entries: { main: {} } } };
       const sessionKey = "agent:main:dashboard:incognito-fallback";
+      const repository = await getSessionRepositoryWorkspaceStore().create({
+        agentId: "main",
+        sessionKey,
+        url: "https://github.com/synthetic/private-event.git",
+        branch: "private-event",
+        assertCurrent: () => {},
+      });
       replaceSessionEntrySync(
         { agentId: "main", sessionKey },
         {
@@ -38,17 +47,22 @@ it.each(["capture", "preparation", "canonical deferral"] as const)(
           updatedAt: 1,
           incognito: true,
           label: "Private label",
+          repositoryWorkspaceId: repository.workspaceId,
         },
       );
       const projection = await createSessionRowProjection({ cfg });
-      const connection = createGatewayConnectionState({ bootId: "fallback-proof", cfg });
+      const connection = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
+        bootId: "fallback-proof",
+        cfg,
+      });
       const detach = connection.attachSessionRowProjection(projection);
       const request = vi.fn(async () => sessionsResult([], 1));
       const client = createTestGatewayClient(request);
       const { sessions, emitEvent } = createSessionCapabilityHarness(client.request.bind(client));
       const frames: unknown[] = [];
-      const send = vi.fn((frame: string) => {
-        const decoded = JSON.parse(frame);
+      const send = vi.fn((frame: string | Buffer) => {
+        const decoded = JSON.parse(frame.toString());
         frames.push(decoded);
         emitEvent(decoded);
       });
@@ -126,7 +140,7 @@ it.each(["capture", "preparation", "canonical deferral"] as const)(
           vi.spyOn(projection, "withPreparedExactRows").mockRejectedValueOnce(
             new Error("synthetic preparation failure"),
           );
-        } else {
+        } else if (failure === "canonical deferral") {
           vi.spyOn(projection, "withPreparedExactRows").mockResolvedValueOnce({
             kind: "pending",
             database: {
@@ -135,7 +149,9 @@ it.each(["capture", "preparation", "canonical deferral"] as const)(
             },
           });
         }
-        vi.useFakeTimers();
+        if (failure !== "ready") {
+          vi.useFakeTimers();
+        }
         emitSessionsChanged(context, {
           sessionKey,
           sessionId: "private-session",
@@ -144,6 +160,30 @@ it.each(["capture", "preparation", "canonical deferral"] as const)(
           catalogChanged: true,
         });
         await flushPendingSessionsChangedEvents(context);
+        if (failure === "ready") {
+          expect(
+            reads.map(({ describe: describeCount, snapshot: snapshotCount }) => ({
+              describe: describeCount,
+              snapshot: snapshotCount,
+            })),
+          ).toEqual([{ describe: 0, snapshot: 0 }]);
+          expect(frames).toEqual([
+            expect.objectContaining({
+              event: "sessions.changed",
+              payload: expect.objectContaining({
+                sessionKey,
+                reason: "patch",
+                session: expect.objectContaining({
+                  sessionId: "private-session",
+                  repository: { url: repository.url, branch: repository.branch },
+                }),
+              }),
+            }),
+          ]);
+          expect(noRead).not.toHaveBeenCalled();
+          expect(projection.selectEntries()).toEqual([]);
+          return;
+        }
         await vi.advanceTimersByTimeAsync(5_000);
         expect(reads).toEqual([
           { describe: 0, snapshot: 0, sql: 0 },
@@ -178,7 +218,7 @@ it.each(["capture", "preparation", "canonical deferral"] as const)(
         sessions.dispose();
         lease.revoke();
         detach();
-        connection.mentionInbox.dispose();
+        await connection.mentionInbox.dispose();
         projection.dispose();
         vi.useRealTimers();
       }

@@ -4,6 +4,10 @@ import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";
 import { useQueuedCollectorFixture } from "./session-utils.queued-collector.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
+import {
+  getCurrentSubagentRunOwner,
+  subagentRuns,
+} from "../agents/subagents/registry/subagent-registry-memory.js";
 import { isSubagentRunQueued } from "../agents/subagents/registry/subagent-registry-read.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
 import { handleGatewayRequest } from "./server-methods.js";
@@ -82,7 +86,11 @@ it.each(["active", "queued", "pending-chat", "agent"] as const)(
       { ok: true, status: "aborted", abortedRunId: entry.runId },
     ]);
     expect(isSubagentRunQueued(entry)).toBe(false);
-    expect(entry.collectorCompletion?.status).toBe("killed");
+    const stopped = expectDefined(
+      getCurrentSubagentRunOwner(subagentRuns, entry),
+      "stopped reserved collector",
+    );
+    expect(stopped.collectorCompletion?.status).toBe("killed");
     expect(old.controller.signal.aborted).toBe(false);
     if (kind === "active") {
       expect(context.chatAbortControllers.get(oldRunId)).toBe(old);

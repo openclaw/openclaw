@@ -1,6 +1,4 @@
-// Video generation normalization helpers map user inputs to provider requests.
 import { resolveMediaGeometryOverrides } from "../media-generation/geometry-normalization.js";
-import { hasMediaNormalizationEntry } from "../media-generation/runtime-shared.js";
 import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
 import {
   normalizeVideoGenerationDuration,
@@ -113,12 +111,6 @@ export function resolveVideoGenerationOverrides(params: {
     audio,
     watermark,
     ignoredOverrides,
-    normalization:
-      hasMediaNormalizationEntry(normalization.size) ||
-      hasMediaNormalizationEntry(normalization.aspectRatio) ||
-      hasMediaNormalizationEntry(normalization.resolution) ||
-      hasMediaNormalizationEntry(normalization.durationSeconds)
-        ? normalization
-        : undefined,
+    normalization: Object.keys(normalization).length ? normalization : undefined,
   };
 }

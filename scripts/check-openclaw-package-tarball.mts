@@ -466,11 +466,7 @@ function readTarEntry(entryPath: string): string {
   return "";
 }
 
-const extractedPackageRoot = fs.realpathSync(
-  fs.existsSync(path.join(extractDir, "package", "package.json"))
-    ? path.join(extractDir, "package")
-    : extractDir,
-);
+const extractedPackageRoot = fs.realpathSync(path.join(extractDir, "package"));
 
 if (!entrySet.has("package.json")) {
   errors.push("missing package.json");

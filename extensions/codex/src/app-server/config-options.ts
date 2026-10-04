@@ -12,7 +12,6 @@ import type {
   CodexAppServerHomeScope,
   CodexAppServerRemoteAppsSubstrate,
   CodexAppServerRuntimeOptions,
-  CodexAppServerSandboxMode,
   CodexAppServerStartOptions,
   CodexManagedCommandOrder,
   CodexComputerUseConfig,
@@ -42,10 +41,7 @@ import {
   assertCodexAppServerCommandHasNoInlineArgs,
   readCodexPluginConfig,
 } from "./config-parsing.js";
-import {
-  parseAllowedApprovalPoliciesFromCodexRequirements,
-  readCodexRequirementsToml,
-} from "./config-requirements.js";
+import { parseCodexRequirementsPolicy, readCodexRequirementsToml } from "./config-requirements.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexConfigEnablesNativeComputerUse,
@@ -67,7 +63,7 @@ import {
   resolveArgs,
 } from "./config-utils.js";
 import { readCodexAppServerConfigOptions } from "./launch-args.js";
-import type { CodexSandboxPolicy } from "./protocol.js";
+import type { CodexSandboxMode, CodexSandboxPolicy } from "./protocol.js";
 
 /**
  * Sole owner of the app-server home-scope decision. Ordinary harness connections
@@ -210,7 +206,7 @@ export function createCodexAppServerConfig({
     if (
       forcePerCommandApprovals &&
       requirementsToml &&
-      parseAllowedApprovalPoliciesFromCodexRequirements(requirementsToml)?.has("untrusted") ===
+      parseCodexRequirementsPolicy(requirementsToml).allowedApprovalPolicies?.has("untrusted") ===
         false
     ) {
       throw new Error("tools.exec.ask=always requires Codex app-server per-command approvals");
@@ -350,6 +346,7 @@ export function createCodexAppServerConfig({
         defaultPolicy?.approvalsReviewer ??
         (policyMode === "guardian" ? "auto_review" : "user"),
       ...(serviceTier ? { serviceTier } : {}),
+      enableUltrafast: config.enableUltrafast !== false,
       ...resolveCodexAppServerNetworkProxy(config.networkProxy, resolvedSandbox),
     };
   }
@@ -572,7 +569,7 @@ export function codexAppServerStartOptionsKey(
 }
 
 export function codexSandboxPolicyForTurn(
-  mode: CodexAppServerSandboxMode,
+  mode: CodexSandboxMode,
   cwd: string,
   nativeArgs: readonly string[] = [],
 ): CodexSandboxPolicy {

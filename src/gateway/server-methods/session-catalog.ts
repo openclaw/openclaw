@@ -1,10 +1,9 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
-  type SessionCatalogLocator,
   validateSessionsCatalogArchiveParams,
   validateSessionsCatalogContinueParams,
+  validateSessionsCatalogImportParams,
   validateSessionsCatalogReadParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -13,9 +12,9 @@ import type {
   SessionCatalogProvider,
 } from "../../plugins/session-catalog.js";
 import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
-import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { authorizeSessionCatalogThread } from "./session-catalog-authorization.js";
 import { continueAuthorizedSessionCatalog } from "./session-catalog-continue.js";
+import { importAuthorizedSessionCatalog } from "./session-catalog-import.js";
 import { retireSessionCatalogLists } from "./session-catalog-list-operations.js";
 import { listSessionCatalogHandler } from "./session-catalog-list.js";
 import {
@@ -25,12 +24,7 @@ import {
 import { readAuthorizedSessionCatalog } from "./session-catalog-read.js";
 import { catalogError } from "./session-catalog-result.js";
 import { catalogStartHandler } from "./session-catalog-terminal-start.js";
-import type {
-  GatewayClient,
-  GatewayRequestContext,
-  GatewayRequestHandlers,
-  RespondFn,
-} from "./types.js";
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
 export function resolveSessionCatalogProvider(
@@ -65,35 +59,6 @@ export function resolveRegisteredCatalogCreateTarget(
     : resolved;
 }
 
-async function authorizeCatalogRequest(params: {
-  access: "read" | "mutate";
-  request: SessionCatalogLocator & { agentId?: string };
-  provider: SessionCatalogProvider;
-  respond: RespondFn;
-  context: GatewayRequestContext;
-  client: GatewayClient | null;
-}): Promise<{ agentId: string; allowProcessHomeFallback: boolean } | null> {
-  const resolvedAgent = resolveAgentIdOrRespondError({
-    rawAgentId: params.request.agentId,
-    respond: params.respond,
-    cfg: params.context.getRuntimeConfig(),
-    normalize: normalizeOptionalString,
-  });
-  if (!resolvedAgent) {
-    return null;
-  }
-  const authorization = await authorizeSessionCatalogThread({
-    access: params.access,
-    agentId: resolvedAgent.agentId,
-    client: params.client,
-    context: params.context,
-    provider: params.provider,
-    request: params.request,
-    respond: params.respond,
-  });
-  return authorization ? { agentId: resolvedAgent.agentId, ...authorization } : null;
-}
-
 function registrationOrRespond(catalogId: string, respond: RespondFn) {
   const registration = catalogRegistrationSnapshot().registrations.find(
     (candidate) => candidate.provider.id === catalogId,
@@ -125,7 +90,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
         return;
       }
       try {
-        const authorization = await authorizeCatalogRequest({
+        const authorization = await authorizeSessionCatalogThread({
           access: "read",
           request,
           provider,
@@ -168,7 +133,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
         return;
       }
       try {
-        const authorization = await authorizeCatalogRequest({
+        const authorization = await authorizeSessionCatalogThread({
           access: "mutate",
           request,
           provider,
@@ -210,6 +175,71 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
 
   "sessions.catalog.startTerminal": catalogStartHandler(resolveSessionCatalogProvider),
 
+  "sessions.catalog.import": defineValidatedGatewayHandler(
+    "sessions.catalog.import",
+    validateSessionsCatalogImportParams,
+    async ({ params: request, respond, client, context, sessionMutationCommitGuard }) => {
+      const provider = registrationOrRespond(request.catalogId, respond)?.provider;
+      if (!provider) {
+        return;
+      }
+      try {
+        const authorize = () =>
+          authorizeSessionCatalogThread({
+            access: "read",
+            request,
+            provider,
+            respond,
+            context,
+            client,
+          });
+        const authorization = await authorize();
+        if (!authorization) {
+          return;
+        }
+        const creationError = authorizeGatewaySessionCreation({
+          cfg: context.getRuntimeConfig(),
+          client,
+          agentId: authorization.agentId,
+        });
+        if (creationError) {
+          respond(false, undefined, creationError);
+          return;
+        }
+        const imported = await importAuthorizedSessionCatalog({
+          request,
+          provider,
+          ...authorization,
+          client,
+          context,
+          reauthorize: async () => {
+            const current = await authorize();
+            if (!current) {
+              return null;
+            }
+            if (
+              current.agentId !== authorization.agentId ||
+              current.allowProcessHomeFallback !== authorization.allowProcessHomeFallback
+            ) {
+              throw new Error("Session catalog source ownership changed; retry the import");
+            }
+            return current.sourceVisibility;
+          },
+          commitGuard: sessionMutationCommitGuard,
+        });
+        if (imported) {
+          if (imported.ok) {
+            respond(true, imported.result);
+          } else {
+            respond(false, undefined, imported.error);
+          }
+        }
+      } catch (error) {
+        respondCatalogError(error, respond);
+      }
+    },
+  ),
+
   "sessions.catalog.archive": defineValidatedGatewayHandler(
     "sessions.catalog.archive",
     validateSessionsCatalogArchiveParams,
@@ -223,7 +253,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
         return;
       }
       try {
-        const authorization = await authorizeCatalogRequest({
+        const authorization = await authorizeSessionCatalogThread({
           access: "mutate",
           request,
           provider,

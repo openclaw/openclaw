@@ -6,6 +6,7 @@ import type {
   SessionsListParams,
 } from "@openclaw/gateway-protocol";
 import type { ControlUiComponents } from "./control-ui-components.js";
+export { createSessionHeaderLink } from "./control-ui-session-link.js";
 export type {
   ControlUiAgentPickerProps,
   ControlUiComponentHandle,
@@ -134,14 +135,26 @@ export type ControlUiPage = {
   mount: ControlUiView;
 };
 
+type ControlUiNavigationAction = {
+  id: string;
+  label: string;
+  icon?: string;
+  destructive?: boolean;
+  run: () => void | Promise<void>;
+};
+
 export type ControlUiNavigationItem = {
   id: string;
+  /** Navigation item ID in this plugin whose active section displays this child. */
+  parent?: string;
   label: string;
   page: ControlUiPageTarget;
   icon?: string;
   order?: number;
   /** False offers the destination in the pin editor without adding it to the sidebar. */
   defaultVisible?: boolean;
+  /** Context menu actions, available by right-click or the keyboard menu shortcut. */
+  actions?: ControlUiNavigationAction[];
 };
 
 export type ControlUiPanel = {
@@ -171,7 +184,7 @@ export type ControlUiAction = {
 export type ControlUiAccessory = {
   id: string;
   placement: "session-header";
-  mount: ControlUiView<BoardGetParams>;
+  mount: ControlUiView<BoardGetParams & { session?: ControlUiSession }>;
 };
 
 export type ControlUiWidget = {
@@ -238,6 +251,19 @@ export type ControlUiHost = {
     setScope: (agentId: string | null) => void;
     refresh: () => Promise<void>;
   };
+  dock?: {
+    /** Dock a conversation beside the current page; replaces a conversation dock already open. */
+    openSession: (params: {
+      sessionKey: string;
+      agentId: string;
+      /** Dock tab title. */
+      label: string;
+      /** Untrusted ambient reference data, never instructions or access authority. */
+      context?: { page: string; detail?: Readonly<Record<string, string>> };
+    }) => void;
+    close: () => void;
+    readonly openSessionKey: string | null;
+  };
   navigation: {
     openPage: (target: ControlUiPageTarget, options?: ControlUiPageNavigationOptions) => void;
     pageHref: (
@@ -250,7 +276,15 @@ export type ControlUiHost = {
     invalidate: () => void;
     registerPage: (page: ControlUiPage) => ControlUiDisposer;
     registerNavigation: (item: ControlUiNavigationItem) => ControlUiDisposer;
+    /** Pin an already registered navigation item once; unknown or pinned IDs are a no-op. */
+    pinNavigation: (id: string) => void;
+    /** Remove this plugin's saved navigation pin; an absent pin is a no-op. */
+    unpinNavigation: (id: string) => void;
+    /** Whether this plugin's navigation ID is in the saved sidebar entries. */
+    isNavigationPinned: (id: string) => boolean;
     registerPanel: (panel: ControlUiPanel) => ControlUiDisposer;
+    /** Open an owned registered panel beside the supplied or currently selected session. */
+    openPanel: (id: string, session?: BoardGetParams) => void;
     registerAction: (action: ControlUiAction) => ControlUiDisposer;
     registerAccessory: (accessory: ControlUiAccessory) => ControlUiDisposer;
     registerWidget: (widget: ControlUiWidget) => ControlUiDisposer;

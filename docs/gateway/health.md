@@ -76,17 +76,30 @@ Channel connectivity and inbound admission are separate failure domains. A chann
 
 The Gateway exposes three unauthenticated `GET`/`HEAD` probe pairs:
 
-| Endpoints               | Meaning                                                                                                                                              | Use                                        |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `/health`, `/healthz`   | The HTTP server is live.                                                                                                                             | Process liveness and restart decisions.    |
-| `/startup`, `/startupz` | Startup sidecars have settled and the Gateway is not draining. Agent and channel health are not consulted.                                           | Startup-phase monitoring.                  |
-| `/ready`, `/readyz`     | Startup is complete, the Gateway is not draining, required agent databases are admitted, and configured channel accounts pass deep readiness checks. | Traffic admission and operator monitoring. |
+| Endpoints               | Meaning                                                                                                                                                                      | Use                                               |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `/health`, `/healthz`   | The HTTP server is live.                                                                                                                                                     | Process liveness and restart decisions.           |
+| `/startup`, `/startupz` | Startup sidecars and agent database inspection/preparation have settled, and the Gateway is not draining. Channel health is not consulted.                                   | Startup-phase monitoring and update verification. |
+| `/ready`, `/readyz`     | Startup sidecars have settled, the Gateway is not draining, required agent databases have no confirmed failures, and configured channel accounts pass deep readiness checks. | Traffic admission and operator monitoring.        |
 
-`/startupz` returns `503` with `status: "starting"` while startup sidecars are pending, `503` with `status: "draining"` during drain, and `200` with `status: "started"` otherwise. Use `/readyz` when traffic admission requires usable agents. A refused default or system agent database keeps readiness false after any migration outcome, with `failing: ["agent-database:<id>"]` and the exact admission reason and repair hint in `agentDatabases`. A refused optional agent can remain isolated while healthy agents serve requests. Gateway ready announcements use the same readiness decision.
+`/startupz` returns `503` with `status: "starting"` while startup sidecars or agent database inspection/preparation are pending, `503` with `status: "draining"` during drain, and `200` with `status: "started"` otherwise. After sidecars settle, pending inspection for any agent, including an optional agent, reports `pendingReason: "agent-database-inspection"`. This lets `openclaw update` candidate verification wait within its startup budget before checking readiness. A settled inspection failure does not keep startup pending; readiness and per-agent admission report the failure.
+
+A default or system agent database with a confirmed admission failure keeps readiness false, with `failing: ["agent-database:<id>"]` and the exact admission reason and repair hint in `agentDatabases`. Pending startup inspection is reported there with code `agent-database-inspection-pending` while the Gateway can report ready and serve the Control UI and healthy agents. RPC requests refused for pending inspection return `UNAVAILABLE` with `retryable: true` and `retryAfterMs: 250`; callers can retry the same request after that delay. Inspection failures and ownership mismatches remain non-retryable. A refused optional agent can remain isolated while healthy agents serve requests. Gateway ready announcements use the same readiness decision.
 
 A broken Telegram or other channel account can also make `/readyz` return `503` while `/startupz` remains started. Neither probe replaces the other: startup completion alone does not certify agent or channel availability.
 
 Remote unauthenticated startup responses contain only `ok` and `status`. Local-direct and authenticated callers also receive `version`, `uptimeMs`, and `pendingReason` while startup is pending. Readiness details follow the same local-or-authenticated gate because they can name failing subsystems.
+
+### Shared-state integrity failure
+
+A terminal shared-state admission failure immediately makes `/ready` and `/readyz`
+return `503`, including failures discovered by a SQLite worker after startup.
+Detailed responses include `failing: ["state-database"]` and `stateDatabase.reason`
+with the recorded refusal. This bypasses cached channel health;
+probes read the admission owner's recorded result without querying SQLite.
+
+`/healthz` still reports HTTP liveness. Supervisors that need to detect a Gateway
+that is running but cannot admit work must monitor `/readyz`.
 
 ### Plugin replacement recovery
 

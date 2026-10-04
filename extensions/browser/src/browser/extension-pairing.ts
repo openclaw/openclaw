@@ -1,4 +1,4 @@
-import type { BrowserConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -17,14 +17,10 @@ type BrowserExtensionPairing = {
   topology: "local" | "browser-node" | "direct-remote";
 };
 
-type PairingConfig = OpenClawConfig & { browser?: BrowserConfig };
-
 /** Resolve a safe Gateway relay URL with the v2-bound route path. */
-function buildGatewayExtensionRelayUrl(raw: string): string {
-  let url: URL;
-  try {
-    url = new URL(raw.trim());
-  } catch {
+function buildGatewayExtensionRelayUrl(raw: string): URL {
+  const url = URL.parse(raw.trim());
+  if (!url) {
     throw new Error("--gateway-url must be a valid ws:// or wss:// URL");
   }
   const secure = url.protocol === "wss:";
@@ -41,7 +37,7 @@ function buildGatewayExtensionRelayUrl(raw: string): string {
     );
   }
   url.pathname = GATEWAY_EXTENSION_RELAY_PATH;
-  return url.toString();
+  return url;
 }
 
 /**
@@ -50,7 +46,7 @@ function buildGatewayExtensionRelayUrl(raw: string): string {
  * to the remote Gateway rather than the browser host.
  */
 export async function buildBrowserExtensionPairing(params: {
-  cfg: PairingConfig;
+  cfg: OpenClawConfig;
   gatewayUrl?: string;
   localTransport?: "relay" | "gateway";
   profile?: string;
@@ -66,7 +62,7 @@ export async function buildBrowserExtensionPairing(params: {
   const token = await (params.ensureToken ?? ensureExtensionRelayToken)();
   const gateway = params.gatewayUrl?.trim();
   if (gateway) {
-    const relayUrl = new URL(buildGatewayExtensionRelayUrl(gateway));
+    const relayUrl = buildGatewayExtensionRelayUrl(gateway);
     relayUrl.searchParams.set("gateway", gateway);
     return {
       pairingString: `${relayUrl.toString()}#${token}`,
@@ -85,7 +81,7 @@ export async function buildBrowserExtensionPairing(params: {
   // local pairing and browser nodes target an already-running host relay.
   const relayUrl =
     !configuredRemote && params.localTransport === "gateway"
-      ? new URL(buildGatewayExtensionRelayUrl(gatewayHint))
+      ? buildGatewayExtensionRelayUrl(gatewayHint)
       : new URL(`ws://127.0.0.1:${relayPort}/extension`);
   if (params.profile && relayUrl.pathname === GATEWAY_EXTENSION_RELAY_PATH) {
     relayUrl.searchParams.set("profile", params.profile);

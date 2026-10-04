@@ -107,6 +107,9 @@ Harnesses can adapt these hooks. The Codex app-server harness keeps OpenClaw plu
 ## Streaming
 
 - Assistant deltas stream from the agent runtime as `assistant` events.
+- Adjacent text appends already waiting in the provider event queue can merge before
+  agent delivery. This adds no buffering delay; snapshots, content-block changes,
+  reasoning, tools, and terminal events remain separate boundaries.
 - Block streaming can emit partial replies on `text_end` or `message_end`.
 - Reasoning streaming can be a separate stream or block replies.
 - See [Streaming](/concepts/streaming) for chunking and block reply behavior.
@@ -127,7 +130,9 @@ Final payloads are assembled from assistant text (plus optional reasoning), inli
 
 The host decides whether an input requires a visible reply. Direct requests and accepted group/channel requests require an answer by default. Unaddressed group requests remain optional only when the operator explicitly allows the [silence policy](/concepts/messages#silent-replies); mentions and authorized commands still require a response. Ambient room events and internal helper turns remain optional. Model-authored `NO_REPLY` is empty output, not permission to waive a required response; required turns with no delivered reply still need an answer.
 
-If a required-reply turn ends after a fully settled tool batch without a composed answer, OpenClaw can make a tool-free finalization pass. Earlier tool errors, pre-tool progress, and superseded, undelivered confirmations do not count as a final answer. This pass uses the settled results and does not repeat completed tools. Fatal automation failures, including denied execution, remain failures even when finalization produces an answer.
+If a required-reply turn ends after a fully settled tool batch without a composed answer, OpenClaw can make a tool-free finalization pass. Earlier tool errors, pre-tool progress, and superseded, undelivered confirmations do not count as a final answer. A progress message fully delivered to the current conversation counts as the answer only when it is the last tool batch of the settled turn and the turn then produces no output: the model wrote it after every other tool result, so a finalization pass could only repeat it. Any later tool work, including work after an asynchronous progress send, still gets a finalization pass. This pass uses the settled results and does not repeat completed tools. Fatal automation failures, including denied execution, remain failures even when finalization produces an answer.
+
+An optional turn that explicitly finishes with `NO_REPLY` does not need a finalization pass, even after a settled tool failure. The failure remains recorded; a rejected Skill Workshop review still fails without making extra model requests to compose a reply.
 
 A confirmed delivery prevents duplicate generation. Pending delivery or continuation work retains completion ownership without being marked delivered; rejected sends, unflushed deferred text, and missing delivery callbacks are not delivery proof. `NO_REPLY` does not retract text already delivered. Pending tools, accepted child runs, and yielded work keep their existing owners, and assistant errors and aborts are not intentional silence.
 
@@ -237,6 +242,12 @@ With diagnostics enabled, a built-in two-minute threshold classifies long `proce
 - `session.stuck` is reserved for recoverable stale session bookkeeping, including idle queued sessions with stale ownerless model/tool activity.
 
 The abort threshold is at least 5 minutes and 3x the warning threshold. Stale session bookkeeping releases the affected session lane immediately after recovery gates pass; stalled embedded runs are abort-drained only after the abort threshold, so queued work resumes without cutting off merely slow runs. Recovery emits structured requested/completed outcomes; diagnostic state is marked idle only if the same processing generation is still current, and repeated `session.stuck` diagnostics back off while the session stays unchanged.
+
+Attention and recovery log lines read optional session context only when their
+log level is enabled. Transcript enrichment runs in the background read worker
+and returns at most 140 characters; it never delays classification or recovery.
+Session replacement discards pending enrichment, and stopping diagnostics retires
+pending log publications. Incognito replies remain excluded.
 
 Pending human-input questions protect their exact active owner from stale-work
 recovery. If checking a question expires it, or diagnostic reporting resumes or

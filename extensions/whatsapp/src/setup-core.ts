@@ -1,5 +1,4 @@
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
-// Whatsapp plugin module implements setup core behavior.
 import {
   createPatchedAccountSetupAdapter,
   type ChannelSetupAdapter,
@@ -18,6 +17,7 @@ export const whatsappSetupAdapter: ChannelSetupAdapter = {
     alwaysUseAccounts: true,
     buildPatch: (input) => (input.authDir ? { authDir: input.authDir } : {}),
   }),
+  configPromotion: "preserve-root",
   singleAccountKeysToMove: ["authDir"],
 };
 

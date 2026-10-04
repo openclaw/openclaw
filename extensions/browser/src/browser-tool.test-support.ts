@@ -225,30 +225,33 @@ const toolCommonMocks = vi.hoisted(() => ({
     running: true,
     source: "gateway-host",
   })),
-  imageResultFromFile: vi.fn<typeof import("./sdk-setup-tools.js").imageResultFromFile>(),
+  imageResultFromFile:
+    vi.fn<typeof import("openclaw/plugin-sdk/channel-actions").imageResultFromFile>(),
   describeImageFile: vi.fn(async () => ({ text: undefined, decision: { outcome: "skipped" } })),
   normalizeBrowserScreenshot: vi.fn(async (buffer: Buffer) => ({ buffer })),
   saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/openclaw-media/resized.jpg" })),
   stageBrowserScreenshotForSharing: vi.fn(async () => "/tmp/openclaw-media/outbound/share.png"),
 }));
-vi.mock("./sdk-setup-tools.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./sdk-setup-tools.js")>("./sdk-setup-tools.js");
-  return {
-    ...actual,
-    callGatewayTool: gatewayMocks.callGatewayTool,
-    hasGatewayToolRoutingContext: gatewayMocks.hasGatewayToolRoutingContext,
-    imageResultFromFile: toolCommonMocks.imageResultFromFile,
-    describeImageFile: toolCommonMocks.describeImageFile,
-    saveMediaBuffer: toolCommonMocks.saveMediaBuffer,
-    stageBrowserScreenshotForSharing: toolCommonMocks.stageBrowserScreenshotForSharing,
-    listNodes: nodesUtilsMocks.listNodes,
-  };
-});
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>()),
+  callGatewayTool: gatewayMocks.callGatewayTool,
+  hasGatewayToolRoutingContext: gatewayMocks.hasGatewayToolRoutingContext,
+  listNodes: nodesUtilsMocks.listNodes,
+}));
+vi.mock("openclaw/plugin-sdk/channel-actions", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-actions")>()),
+  imageResultFromFile: toolCommonMocks.imageResultFromFile,
+}));
+vi.mock("openclaw/plugin-sdk/media-understanding-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-understanding-runtime")>()),
+  describeImageFile: toolCommonMocks.describeImageFile,
+}));
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
+  saveMediaBuffer: toolCommonMocks.saveMediaBuffer,
+}));
 
 vi.mock("./browser-tool.runtime.js", async () => {
-  const { BrowserToolOutputSchema, createBrowserToolSchema, resolveBrowserToolCapabilities } =
-    await vi.importActual<typeof import("./browser-tool.schema.js")>("./browser-tool.schema.js");
   const actualClient =
     await vi.importActual<typeof import("./browser/client.js")>("./browser/client.js");
   const actualActions = await vi.importActual<typeof import("./browser/client-actions.js")>(
@@ -270,9 +273,9 @@ vi.mock("./browser-tool.runtime.js", async () => {
         ),
     ]),
   );
-  const { wrapExternalContent } = await vi.importActual<typeof import("./sdk-security-runtime.js")>(
-    "./sdk-security-runtime.js",
-  );
+  const { wrapExternalContent } = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/security-runtime")
+  >("openclaw/plugin-sdk/security-runtime");
   const readRawStringValue = (value: unknown) => (typeof value === "string" ? value : undefined);
   const normalizeMockOptionalString = (value: unknown) =>
     readRawStringValue(value)?.trim() || undefined;
@@ -294,9 +297,6 @@ vi.mock("./browser-tool.runtime.js", async () => {
   return {
     DEFAULT_AI_SNAPSHOT_MAX_CHARS: 40_000,
     DEFAULT_UPLOAD_DIR: "/tmp/openclaw-browser-uploads",
-    BrowserToolOutputSchema,
-    createBrowserToolSchema,
-    resolveBrowserToolCapabilities,
     ...routedClients,
     ...browserConfigMocks,
     ...configMocks,

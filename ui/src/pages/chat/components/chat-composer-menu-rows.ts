@@ -7,6 +7,12 @@ export function menuDivider(): TemplateResult {
   return html`<div class="agent-chat__capability-menu-divider" role="separator"></div>`;
 }
 
+export function renderCapabilityMenuState(message: string, role?: "status" | "alert") {
+  return html`<div class="agent-chat__capability-menu-state" role=${role ?? nothing}>
+    ${message}
+  </div>`;
+}
+
 export function renderBackRow() {
   return html`
     <wa-dropdown-item class="agent-chat__capability-menu-item" value="back">
@@ -22,7 +28,7 @@ export function renderCapabilityToggleRow(options: {
   label: string;
   checked: boolean;
   disabled: boolean;
-  title: string | null | undefined;
+  title?: string | null;
   icon?: TemplateResult;
   note?: TemplateResult | typeof nothing;
   checkbox?: boolean;

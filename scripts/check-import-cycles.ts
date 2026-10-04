@@ -1,14 +1,15 @@
 #!/usr/bin/env node
-// Check Import Cycles script supports OpenClaw repository automation.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import {
   collectSourceFiles,
   collectStronglyConnectedComponents,
   formatCycle,
 } from "./lib/import-cycle-graph.ts";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
+import { visitModuleSpecifiers } from "./lib/ts-guard-utils.mts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scanRoots = ["src", "extensions", "scripts"] as const;
@@ -81,7 +82,7 @@ function importDeclarationHasRuntimeEdge(node: ts.ImportDeclaration): boolean {
   if (!node.importClause) {
     return true;
   }
-  if (node.importClause.isTypeOnly) {
+  if (node.importClause.phaseModifier === ts.SyntaxKind.TypeKeyword) {
     return false;
   }
   const bindings = node.importClause.namedBindings;
@@ -105,41 +106,25 @@ function exportDeclarationHasRuntimeEdge(node: ts.ExportDeclaration): boolean {
 function collectRuntimeStaticImports(
   file: string,
   resolveSource: ReturnType<typeof createSourceResolver>,
+  sourceFile: ts.SourceFile,
 ) {
-  const sourceFile = ts.createSourceFile(
-    file,
-    readFileSync(path.join(repoRoot, file), "utf8"),
-    ts.ScriptTarget.Latest,
-    false,
-  );
   const imports: string[] = [];
-  const visit = (node: ts.Node) => {
-    let specifier: string | undefined;
-    let include = false;
-    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
-      specifier = node.moduleSpecifier.text;
-      include = importDeclarationHasRuntimeEdge(node);
-    } else if (
-      ts.isExportDeclaration(node) &&
-      node.moduleSpecifier &&
-      ts.isStringLiteral(node.moduleSpecifier)
-    ) {
-      specifier = node.moduleSpecifier.text;
-      include = exportDeclarationHasRuntimeEdge(node);
-    }
+  visitModuleSpecifiers(sourceFile, ({ node, specifier }) => {
+    const include =
+      (ts.isImportDeclaration(node) && importDeclarationHasRuntimeEdge(node)) ||
+      (ts.isExportDeclaration(node) && exportDeclarationHasRuntimeEdge(node));
     if (include && specifier) {
       const resolved = resolveSource(file, specifier);
       if (resolved) {
         imports.push(resolved);
       }
     }
-    ts.forEachChild(node, visit);
-  };
-  visit(sourceFile);
+  });
   return imports.toSorted((left, right) => left.localeCompare(right));
 }
 
 function main(): number {
+  using parser = createNativeTypeScriptParser({ cwd: repoRoot });
   const files = scanRoots.flatMap((root) =>
     collectSourceFiles(path.join(repoRoot, root), {
       repoRoot,
@@ -148,12 +133,22 @@ function main(): number {
     }),
   );
   const resolveSource = createSourceResolver(files);
-  const graph = new Map(
-    files.map((file): [string, string[]] => [
-      file,
-      collectRuntimeStaticImports(file, resolveSource),
-    ]),
-  );
+  const graph = new Map<string, string[]>();
+  // Native snapshots reload their root list. Keep only one bounded batch of syntax trees.
+  const batchSize = 32;
+  for (let offset = 0; offset < files.length; offset += batchSize) {
+    const batch = files.slice(offset, offset + batchSize);
+    const sourceFiles = parser.parseSourceFiles(
+      batch.map((file) => ({
+        fileName: file,
+        text: readFileSync(path.join(repoRoot, file), "utf8"),
+      })),
+    );
+    for (const [index, sourceFile] of sourceFiles.entries()) {
+      const file = batch[index]!;
+      graph.set(file, collectRuntimeStaticImports(file, resolveSource, sourceFile));
+    }
+  }
   const components = collectStronglyConnectedComponents(graph);
 
   console.log(`Import cycle check: ${components.length} runtime value cycle(s).`);

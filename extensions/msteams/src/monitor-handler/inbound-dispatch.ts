@@ -1,3 +1,4 @@
+import { resolveAllowlistMatchSimple } from "openclaw/plugin-sdk/allow-from";
 import {
   createChannelInboundEnvelopeBuilder,
   hasFinalInboundReplyDispatch,
@@ -11,7 +12,7 @@ import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { RuntimeEnv } from "../../runtime-api.js";
 import { formatUnknownError } from "../errors.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
-import { resolveMSTeamsAllowlistMatch, resolveMSTeamsReplyPolicy } from "../policy.js";
+import { resolveMSTeamsReplyPolicy } from "../policy.js";
 import { createMSTeamsReplyDispatcher } from "../reply-dispatcher.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { recordMSTeamsSentMessage } from "../sent-message-cache.js";
@@ -28,7 +29,6 @@ type MSTeamsInboundDispatchResult =
 export async function dispatchMSTeamsInboundTurn(params: {
   cfg: MSTeamsMessageHandlerDeps["cfg"];
   runtime: RuntimeEnv;
-  appId: string;
   app: MSTeamsMessageHandlerDeps["app"];
   tokenProvider: MSTeamsMessageHandlerDeps["tokenProvider"];
   textLimit: number;
@@ -50,7 +50,6 @@ export async function dispatchMSTeamsInboundTurn(params: {
   const {
     cfg,
     runtime,
-    appId,
     app,
     tokenProvider,
     textLimit,
@@ -130,7 +129,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
           groupPolicy,
           allowFrom: effectiveGroupAllowFrom,
           isSenderAllowed: (allowFrom) =>
-            resolveMSTeamsAllowlistMatch({
+            resolveAllowlistMatchSimple({
               allowFrom,
               senderId: quoteSenderId ?? "",
               senderName: quoteSenderName,
@@ -249,7 +248,6 @@ export async function dispatchMSTeamsInboundTurn(params: {
     runtime,
     log,
     app,
-    appId,
     conversationRef,
     context,
     replyStyle,

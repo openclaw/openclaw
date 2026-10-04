@@ -12,10 +12,14 @@ export * from "./transports/openai-compatible-conversation-turn.js";
 export * from "./transports/openai-completions-compat.js";
 export { applyCompletionsAnthropicCacheControl } from "./transports/openai-completions-cache-control.js";
 export * from "./transports/openai-completions-string-content.js";
-export * from "./transports/openai-completions-transport.js";
+export {
+  buildOpenAICompletionsParams,
+  createOpenAICompletionsTransportStreamFn,
+} from "./transports/openai-completions-transport.js";
 export * from "./transports/openai-reasoning-compat.js";
 export * from "./transports/openai-responses-payload-policy.js";
 export * from "./transports/openai-responses-replay.js";
+export * from "./transports/openai-responses-tool-call-id-shape.js";
 export * from "./transports/openai-responses-transport.js";
 export * from "./transports/openai-transport-params.js";
 export * from "./transports/openai-transport-shared.js";

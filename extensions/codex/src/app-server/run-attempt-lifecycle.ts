@@ -4,7 +4,8 @@ import { emitAgentHarnessAttemptEvent } from "openclaw/plugin-sdk/agent-harness-
 import {
   awaitAgentEndSideEffects,
   embeddedAgentLog,
-  runAgentEndSideEffects,
+  formatErrorMessage,
+  runAgentEndSideEffectsAsync,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
@@ -31,18 +32,18 @@ export function shouldKeepCodexSharedAbortOpen(params: {
 
 export function withCodexAppServerFastModeServiceTier(
   appServer: CodexAppServerRuntimeOptions,
-  params: EmbeddedRunAttemptParams,
+  params: Pick<EmbeddedRunAttemptParams, "fastMode">,
+  configuredAppServer: Pick<CodexAppServerRuntimeOptions, "serviceTier"> = appServer,
 ): CodexAppServerRuntimeOptions {
   const fastMode = typeof params.fastMode === "function" ? params.fastMode() : params.fastMode;
-  const serviceTier =
-    fastMode === undefined ? appServer.serviceTier : fastMode ? "priority" : undefined;
+  // Ultrafast starts from Fast; the actual turn revalidates native account/model access.
+  const configuredServiceTier =
+    configuredAppServer.serviceTier === "ultrafast" ? "priority" : configuredAppServer.serviceTier;
+  const serviceTier = fastMode === undefined ? configuredServiceTier : fastMode ? "priority" : null;
   if (serviceTier === appServer.serviceTier) {
     return appServer;
   }
-  if (serviceTier) {
-    return { ...appServer, serviceTier };
-  }
-  return { ...appServer, serviceTier: null };
+  return { ...appServer, serviceTier: serviceTier || null };
 }
 
 export function estimateCodexAppServerProjectedTurnTokens(params: {
@@ -73,7 +74,7 @@ export function emitCodexAppServerEvent(
   });
 }
 
-type CodexAgentEndHookParams = Parameters<typeof runAgentEndSideEffects>[0];
+type CodexAgentEndHookParams = Parameters<typeof runAgentEndSideEffectsAsync>[0];
 
 export async function runCodexAgentEndHook(
   params: EmbeddedRunAttemptParams,
@@ -87,5 +88,21 @@ export async function runCodexAgentEndHook(
     await awaitAgentEndSideEffects(sideEffectParams);
     return;
   }
-  runAgentEndSideEffects(sideEffectParams);
+  await runAgentEndSideEffectsAsync(sideEffectParams);
+}
+
+export function reportCodexBackgroundCleanupFailure(
+  params: EmbeddedRunAttemptParams,
+  error: unknown,
+): void {
+  const message = formatErrorMessage(error);
+  embeddedAgentLog.warn("codex native background work remains unsettled", {
+    runId: params.runId,
+    sessionId: params.sessionId,
+    error: message,
+  });
+  void emitCodexAppServerEvent(params, {
+    stream: "codex_app_server.lifecycle",
+    data: { phase: "background_cleanup_failed", error: message },
+  });
 }

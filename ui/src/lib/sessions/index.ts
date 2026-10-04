@@ -1,4 +1,6 @@
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../../src/gateway/control-ui-contract.js";
+import { registerListener } from "../../../../src/shared/listeners.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
 import { formatUiError } from "../format-error.ts";
@@ -19,6 +21,7 @@ import { sessionRetryDelayMs } from "./session-retry.ts";
 import { createSessionRosterCacheLifecycle } from "./session-roster-cache-lifecycle.ts";
 import type { SessionRosterCacheOptions } from "./session-roster-cache.ts";
 import { createSessionRosterRefresh } from "./session-roster-refresh.ts";
+import { sanitizeSessionRow } from "./session-row-reconcile.ts";
 import type { SessionRunTerminal } from "./session-run-terminal.ts";
 import { createSessionScopedOperations } from "./session-scoped-operations.ts";
 import { createSessionThinkingClaims } from "./session-thinking-claims.ts";
@@ -122,6 +125,7 @@ export function createSessionCapability(
   const listeners = new Set<(next: SessionState) => void>();
   const createdListeners = new Set<(key: string) => void>();
   const thinkingClaims = createSessionThinkingClaims(gateway, () => roster.requestRevision);
+  let publicationRevision = 0;
   let canonicalListRevision = 0;
   let hydratedClient: SessionGateway["snapshot"]["client"] = null;
   let hydratedSelfUserId: string | null = null;
@@ -130,6 +134,7 @@ export function createSessionCapability(
   let publishedErrorSource: "session-observer" | "operation" | null = null;
 
   const notifySubscribers = () => {
+    publicationRevision += 1;
     for (const listener of listeners) {
       listener(state);
     }
@@ -141,7 +146,7 @@ export function createSessionCapability(
     } else if (errorSource || next.error !== state.error) {
       publishedErrorSource = errorSource ?? "operation";
     }
-    roster.bindOwner(next.result, next.agentId);
+    roster.observations.bindOwner(next.result, next.agentId);
     state = next;
     if (reconnectListRevision === null || canonicalListRevision >= reconnectListRevision) {
       presentation = {
@@ -172,15 +177,19 @@ export function createSessionCapability(
     owner = roster.primaryList(),
   ): SessionsListResult | null => {
     // Row selection cannot undo a newer field fact; pending local choices apply last.
-    const projected = permissions.apply(result, roster.rowRevision, owner.scope.agentId);
+    const projected = permissions.apply(
+      result,
+      roster.observations.rowRevision,
+      owner.scope.agentId,
+    );
     const annotated = swarmActivity.decorate(projected);
     // Preserve receipts before a pending intent makes another tracked copy.
-    roster.inherit(annotated, projected);
+    roster.observations.inherit(annotated, projected);
     const decorated = deletions.apply(
       mutations.applyPendingRows(mutations.applyConfirmedArchives(annotated), owner.scope.agentId),
       owner,
     );
-    roster.inherit(decorated, result);
+    roster.observations.inherit(decorated, result);
     return decorated;
   };
 
@@ -195,12 +204,16 @@ export function createSessionCapability(
       sessionEventSubscriptionError = error;
       if (error !== null) {
         roster.retireWarmLists();
+        roster.observations.descriptions.clear();
       }
       const observerOwnsVisibleError = publishedErrorSource === "session-observer";
       if (error !== null && (state.error === null || observerOwnsVisibleError)) {
         publish({ ...state, error }, "session-observer");
       } else if (error === null && observerOwnsVisibleError) {
         publish({ ...state, error: null });
+      } else if (previousError !== error) {
+        // Query and operation errors must not hide observer transitions from other views.
+        notifySubscribers();
       }
       if (previousError !== null && error === null) {
         // Observer outages do not replay events; every held query must close the gap.
@@ -232,14 +245,22 @@ export function createSessionCapability(
     observerError: () => sessionEventSubscriptionError,
     decorate: decorateRows,
     reconcileList: (result, revision, agentId) => {
-      const admitted = deletions.reconcileList(result, revision, agentId);
-      const sources = roster.observeReadRows(admitted?.sessions ?? [], revision, agentId);
+      const admitted = deletions.reconcileList(
+        result ? { ...result, sessions: result.sessions.map(sanitizeSessionRow) } : result,
+        revision,
+        agentId,
+      );
+      const sources = roster.observations.observeReadRows(
+        admitted?.sessions ?? [],
+        revision,
+        agentId,
+      );
       const projected = permissions.reconcileList(admitted, revision, agentId);
-      roster.inherit(projected, admitted);
+      roster.observations.inherit(projected, admitted);
       if (!projected) {
         return projected;
       }
-      const sessions = roster.projectRows(projected.sessions);
+      const sessions = roster.observations.projectRows(projected.sessions);
       sessions.forEach((row, index) => {
         const source = sources[index];
         if (source) {
@@ -283,6 +304,7 @@ export function createSessionCapability(
     // A local mutation can complete without an event or successful refresh.
     // Retire inactive windows before exposing its publication to selection.
     roster.retireWarmLists();
+    roster.observations.descriptions.clear();
     publish(next, errorSource);
   };
 
@@ -290,20 +312,22 @@ export function createSessionCapability(
     connection,
     snapshot: () => gateway.snapshot,
     findRow: (matches) => {
-      const row = roster.publishedRow(matches);
-      return row ? roster.projectFields(row) : undefined;
+      const row = roster.observations.publishedRow(matches);
+      return row ? roster.observations.projectFields(row) : undefined;
     },
     readState: () => state,
     publish: publishMutation,
-    copyRow: roster.copyRow,
-    stageManagedResults: roster.stageManagedResults,
+    copyRow: roster.observations.copyRow,
+    stageManagedResults: roster.observations.stageManagedResults,
     reconcileMutation: roster.reconcileMutation,
-    publishedRow: (key) => roster.publishedRow((row) => row.key === key),
-    archiveFields: roster,
+    publishedRow: (key) => roster.observations.publishedRow((row) => row.key === key),
+    archiveFields: roster.observations,
     readRevision: () => roster.requestRevision,
     redecorateLists: roster.redecorateLists,
+    notifyPendingChange: notifySubscribers,
     notifyCreated,
     clearThink: thinkingClaims.clear,
+    suspendThink: thinkingClaims.suspend,
     claimPermissionProjection: permissions.claim,
     capturePatchFields: (target) => capturePatchFields(target),
     retirePullRequestSummary,
@@ -315,7 +339,7 @@ export function createSessionCapability(
     requestRevision: () => roster.requestRevision,
     readState: () => state,
     publish: publishMutation,
-    publishedRow: roster.publishedRow,
+    publishedRow: roster.observations.publishedRow,
     redecorateLists: roster.redecorateLists,
     invalidateLists: roster.scheduleEvent,
     reconcileMutation: roster.reconcileMutation,
@@ -400,7 +424,7 @@ export function createSessionCapability(
       }
     }
     const previous = state.result;
-    const { result, changed, notify } = roster.stageRunTerminal(terminal, captured);
+    const { result, changed, notify } = roster.observations.stageRunTerminal(terminal, captured);
     if (result !== previous) {
       publishReconciledState({ ...state, result });
     }
@@ -435,6 +459,7 @@ export function createSessionCapability(
         deletions.clear();
       }
       const hadPullRequestSummaries = pullRequestSummaries.size > 0;
+      const hadSubscriptionError = sessionEventSubscriptionError !== null;
       thinkingClaims.reset();
       permissions.clear();
       roster.reset();
@@ -447,7 +472,7 @@ export function createSessionCapability(
       pullRequestSummaries.clear();
       pullRequestEpochs.clear();
       // Client replacement needs a publish; disconnect publishes cleared state below.
-      if (hadPullRequestSummaries && connected && next.client) {
+      if ((hadPullRequestSummaries || hadSubscriptionError) && connected && next.client) {
         publish({ ...state });
       }
     }
@@ -460,6 +485,7 @@ export function createSessionCapability(
         agentId: state.resultCached ? state.agentId : null,
         loading: false,
         error: null,
+        startupPending: false,
         deletedSessions: [],
       });
       return;
@@ -510,6 +536,13 @@ export function createSessionCapability(
   });
 
   const stopEvents = gateway.subscribeEvents((event) => {
+    if (event.event === CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT) {
+      githubPublication.observePullRequests(event.payload);
+      return;
+    }
+    if (event.event === "config.changed" || event.event === "chat.metadata.changed") {
+      roster.observations.descriptions.clear();
+    }
     if (event.event === "config.changed") {
       // Config can change configured-agent membership even with no chat pane mounted.
       roster.scheduleEvent();
@@ -518,6 +551,7 @@ export function createSessionCapability(
     if (event.event !== "sessions.changed" && event.event !== "session.message") {
       return;
     }
+    roster.observations.descriptions.invalidateEvent(event.payload);
     const payload = event.payload as {
       agentId?: unknown;
       reason?: unknown;
@@ -588,8 +622,14 @@ export function createSessionCapability(
   });
 
   return {
+    get revision() {
+      return publicationRevision;
+    },
     get state() {
       return state;
+    },
+    get eventSubscriptionError() {
+      return sessionEventSubscriptionError;
     },
     get presentation() {
       return presentation.result
@@ -600,9 +640,13 @@ export function createSessionCapability(
       return canonicalListRevision;
     },
     githubPublication,
+    get cachedRoutingDefaults() {
+      return cacheLifecycle.routingDefaults;
+    },
     whenCachedRosterSettled: () => cacheLifecycle.settled,
     captureConnectionScope: connection.capture,
     isConnectionScopeCurrent: connection.isCurrent,
+    describe: roster.observations.descriptions.describe,
     list: roster.list,
     observeList: roster.observeList,
     listSnapshot: roster.listSnapshot,
@@ -610,16 +654,14 @@ export function createSessionCapability(
       if (!roster.isPrimaryList(scope)) {
         return roster.subscribeList(scope, listener);
       }
-      const notify = () => listener(roster.listSnapshot(scope));
-      listeners.add(notify);
-      return () => listeners.delete(notify);
+      return registerListener(listeners, () => listener(roster.listSnapshot(scope)));
     },
     refreshList: roster.refreshList,
     reconcile,
     captureReconcile,
     observeRow,
-    inheritRow: roster.inheritRow,
-    projectRows: roster.projectRows,
+    inheritRow: roster.observations.inheritRow,
+    projectRows: roster.observations.projectRows,
     reconcileRunTerminal,
     refresh: roster.refresh,
     invalidate: roster.scheduleEvent,
@@ -636,6 +678,7 @@ export function createSessionCapability(
     assignOwner: mutations.assignOwner,
     retireModelOverride: mutations.retireModelOverride,
     think: thinkingClaims.get,
+    settingsPreview: mutations.settingsPreview,
     patchRowLocal: mutations.patchRowLocal,
     isPreparedWorkSession: mutations.isPreparedWorkSession,
     pullRequestSummary,
@@ -653,14 +696,8 @@ export function createSessionCapability(
     groupsRename: groups.rename,
     groupsUpdate: groups.update,
     groupsDelete: groups.delete,
-    subscribeCreated(listener) {
-      createdListeners.add(listener);
-      return () => createdListeners.delete(listener);
-    },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribeCreated: (listener) => registerListener(createdListeners, listener),
+    subscribe: (listener) => registerListener(listeners, listener),
     dispose() {
       retirePresentation();
       cacheLifecycle.dispose();

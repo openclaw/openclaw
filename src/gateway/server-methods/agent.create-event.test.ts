@@ -2,11 +2,11 @@
  * Tests agent creation event emission from gateway agent methods.
  */
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   forgetActiveSessionForShutdown,
   listActiveSessionsForShutdown,
@@ -60,10 +60,6 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: {},
 }));
 
-vi.mock("../../tasks/detached-task-runtime.js", () => ({
-  prepareRunningTaskRun: vi.fn(() => ({ kind: "receipt", create: async () => null })),
-}));
-
 import { agentHandlers } from "./agent.js";
 
 function firstMockCall<T extends readonly unknown[]>(mock: { mock: { calls: readonly T[] } }) {
@@ -71,11 +67,12 @@ function firstMockCall<T extends readonly unknown[]>(mock: { mock: { calls: read
 }
 
 describe("agent handler session create events", () => {
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-agent-create-event-");
   let tempDir: string;
   let storePath: string;
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-create-event-"));
+    tempDir = sessionDirs.make();
     storePath = path.join(tempDir, "sessions.json");
     configMocks.storePath = storePath;
     configMocks.workspaceDir = tempDir;
@@ -85,11 +82,10 @@ describe("agent handler session create events", () => {
     await fs.writeFile(storePath, "{}\n", "utf8");
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     for (const entry of listActiveSessionsForShutdown()) {
       forgetActiveSessionForShutdown(entry.sessionId);
     }
-    await fs.rm(tempDir, { recursive: true, force: true });
     vi.restoreAllMocks();
   });
 

@@ -35,10 +35,8 @@ export const NATIVE_HOOK_RELAY_EVENTS = [
   "before_agent_finalize",
 ] as const;
 
-const NATIVE_HOOK_RELAY_PROVIDERS = ["codex"] as const;
-
 export type NativeHookRelayEvent = (typeof NATIVE_HOOK_RELAY_EVENTS)[number];
-export type NativeHookRelayProvider = (typeof NATIVE_HOOK_RELAY_PROVIDERS)[number];
+export type NativeHookRelayProvider = "codex";
 
 export type NativeHookRelayInvocation = {
   provider: NativeHookRelayProvider;
@@ -182,23 +180,6 @@ export type NativeHookRelayInvocationMetadata = Partial<
 
 type NativeHookRelayPermissionDecision = "allow" | "deny";
 
-export type NativeHookRelayProviderAdapter = {
-  normalizeMetadata: (rawPayload: JsonValue) => NativeHookRelayInvocationMetadata;
-  readToolInput: (rawPayload: JsonValue) => Record<string, JsonValue>;
-  readToolResponse: (rawPayload: JsonValue) => unknown;
-  renderNoopResponse: (event: NativeHookRelayEvent) => NativeHookRelayProcessResponse;
-  renderPreToolUseBlockResponse: (
-    reason: string,
-    failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">,
-  ) => NativeHookRelayProcessResponse;
-  renderBeforeAgentFinalizeReviseResponse: (reason: string) => NativeHookRelayProcessResponse;
-  renderBeforeAgentFinalizeStopResponse: (reason?: string) => NativeHookRelayProcessResponse;
-  renderPermissionDecisionResponse: (
-    decision: NativeHookRelayPermissionDecision,
-    message?: string,
-  ) => NativeHookRelayProcessResponse;
-};
-
 export type NativeHookRelayPermissionApprovalResult =
   | NativeHookRelayPermissionDecision
   | "allow-always"
@@ -306,11 +287,12 @@ type NativeHookRelayRetention = Readonly<{
 /** Records bundled native execution custody without granting action permission. */
 export type NativeHookRelayExecutionAdmission = Readonly<{
   toolNames: readonly string[];
+  /** A returned guard runs after async admission; a reason denies execution before allow. */
   admit: (
     invocation: NativeHookRelayInvocation,
     assertCurrent: () => void,
     preparation: Readonly<{ signal?: AbortSignal; assertCurrent: () => void }>,
-  ) => void | Promise<void>;
+  ) => void | (() => string | void) | Promise<void | (() => string | void)>;
 }>;
 
 export type NativeHookRelayOwnerOptions = {

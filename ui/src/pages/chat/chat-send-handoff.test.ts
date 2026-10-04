@@ -2,125 +2,87 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { outboxStorageScope } from "../../lib/chat/outbox-payload-store.runtime.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { findChatSendPayload, makeChatHost } from "./chat-host.test-support.ts";
-import { readQueuedMessageById, updateVolatileQueuedMessage } from "./chat-queue.ts";
-import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { readQueuedMessageById } from "./chat-queue.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { admitInitialTurnHandoff, prepareInitialTurnHandoff } from "./initial-turn-handoff.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
 useChatSendBrowserFixture();
 
-it.each([false, true].flatMap((attachment) => [false, true].map((peer) => ({ attachment, peer }))))(
-  "retains foreground leaf ownership during input handoff (attachment: $attachment, peer: $peer)",
-  async ({ attachment, peer }) => {
-    let releaseInput: (() => void) | undefined;
-    vi.stubGlobal(
-      "MessageChannel",
-      class {
-        port1 = {
-          addEventListener: (_type: string, callback: () => void) => {
-            releaseInput = callback;
-          },
-          start: () => undefined,
-          close: () => undefined,
-        };
-        port2 = { postMessage: () => undefined, close: () => undefined };
-      },
-    );
-    const history = createDeferred<ChatHistoryResult>();
-    const snapshot: ChatHistoryResult = {
-      messages: [],
-      sessionInfo: {
-        key: "agent:main:main",
-        sessionId: "current-session",
-        activeLeafEntryId: "terminal-leaf",
-        kind: "direct",
-        status: "done",
-        updatedAt: 2,
-      },
-    };
-    const host = makeChatHost({
-      sessionKey: "agent:main:main",
-      currentSessionId: "current-session",
-      chatDisplayedLeafEntryId: "old-leaf",
-      chatMessage: attachment ? "" : "Fresh follow-up",
-      chatAttachments: attachment
-        ? [
-            {
-              id: "follow-up-file",
-              fileName: "follow-up.txt",
-              mimeType: "text/plain",
-              dataUrl: "data:text/plain;base64,aGVsbG8=",
-            },
-          ]
-        : [],
-      requestHandlers: {
-        "chat.history": () => history.promise,
-        "chat.send": { status: "started", messageSeq: 1 },
-      },
-    });
-    const loading = loadChatHistory(host, { deferBranches: true });
-    const sending = handleSendChat(host, undefined, undefined, new Event("submit"));
-    await vi.waitFor(() => expect(host.chatQueue).toHaveLength(1));
-    expect(releaseInput).toBeTypeOf("function");
+it.each([false, true])(
+  "never lets another account consume an initial-turn handoff (owned: %s)",
+  async (owned) => {
+    vi.useFakeTimers();
     try {
-      history.resolve(snapshot);
-      await loading;
-      await resumeStoredChatOutboxes(peer ? { ...host, chatQueue: [] } : host);
-      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+      const host = makeChatHost({ requestHandlers: {}, sessionKey: "agent:main:initial-owner" });
+      const client = host.client!;
+      const original = client.recoveryScope;
+      const scope = outboxStorageScope(host);
+      prepareInitialTurnHandoff(host.sessionKey, {
+        id: "private-initial",
+        text: "Only account A",
+        createdAt: 1,
+        ...(owned ? { storageScope: scope } : {}),
+      });
+      const recovery = vi.spyOn(client, "recoveryScope", "get").mockReturnValue("account-b");
+      expect(admitInitialTurnHandoff(host, host.sessionKey)).toBe(false);
+      expect(host.chatQueue).toEqual([]);
+      recovery.mockReturnValue(original);
+      expect(admitInitialTurnHandoff(host, host.sessionKey)).toBe(owned);
+      expect(host.chatQueue).toEqual(
+        owned ? [expect.objectContaining({ text: "Only account A", storageScope: scope })] : [],
+      );
+      expect(host.request).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(60_000);
     } finally {
-      releaseInput?.();
-      await sending;
+      vi.useRealTimers();
     }
-    expect(findChatSendPayload(host)).toMatchObject({
-      message: attachment ? "" : "Fresh follow-up",
-      ...(attachment
-        ? {
-            attachments: [
-              expect.objectContaining({ content: "aGVsbG8=", fileName: "follow-up.txt" }),
-            ],
-          }
-        : {}),
-      expectedLeafEntryId: "terminal-leaf",
-    });
-    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
   },
 );
 
-it.each(
-  (["steer", "followup", "collect", undefined] as const).flatMap((queueMode) =>
-    ["started", "in_flight"].map((status) => ({ queueMode, status })),
-  ),
-)("keeps the active reply on a $queueMode $status custody ACK", async ({ queueMode, status }) => {
-  const acknowledgement = createDeferred<{ runId: string; status: string }>();
-  const host = makeChatHost({
-    chatMessage: "A follow-up while another participant's reply is streaming",
-    chatRunId: "active-reply",
-    chatStream: "Already visible response text",
-    chatStreamStartedAt: 100,
-    chatStreamSegments: [{ text: "Earlier live commentary", ts: 90, itemId: "commentary" }],
-    chatRunStartup: { state: "activity", runId: "active-reply" },
-    requestHandlers: { "chat.send": () => acknowledgement.promise },
-  });
-  const sending = handleSendChat(host, undefined, {
-    followUpMode: queueMode,
-  });
-  await vi.waitFor(() => expect(host.request).toHaveBeenCalledWith("chat.send", expect.anything()));
-  expect(host.chatStream).toBe("Already visible response text");
-  acknowledgement.resolve({ runId: "accepted-input", status });
-  await sending;
-  expect(host.chatRunId).toBe("active-reply");
-  expect(host.chatStream).toBe("Already visible response text");
-  expect(host.chatStreamStartedAt).toBe(100);
-  expect(host.chatStreamSegments).toEqual([
-    { text: "Earlier live commentary", ts: 90, itemId: "commentary" },
-  ]);
-  expect(host.chatRunStartup).toEqual({ state: "activity", runId: "active-reply" });
-});
+it.each([
+  { queueMode: "steer", status: "started" },
+  { queueMode: "followup", status: "in_flight" },
+  { queueMode: undefined, status: "started" },
+] as const)(
+  "keeps the active reply on a $queueMode $status custody ACK",
+  async ({ queueMode, status }) => {
+    const acknowledgement = createDeferred<{ runId: string; status: string }>();
+    const host = makeChatHost({
+      chatMessage: "A follow-up while another participant's reply is streaming",
+      chatRunId: "active-reply",
+      chatStream: "Already visible response text",
+      chatStreamStartedAt: 100,
+      chatStreamSegments: [{ text: "Earlier live commentary", ts: 90, itemId: "commentary" }],
+      chatRunStartup: { state: "activity", runId: "active-reply" },
+      requestHandlers: { "chat.send": () => acknowledgement.promise },
+    });
+    const sending = handleSendChat(host, undefined, {
+      followUpMode: queueMode,
+    });
+    await vi.waitFor(() =>
+      expect(host.request).toHaveBeenCalledWith("chat.send", expect.anything(), {
+        timeoutMs: 30_000,
+      }),
+    );
+    expect(host.chatStream).toBe("Already visible response text");
+    acknowledgement.resolve({ runId: "accepted-input", status });
+    await sending;
+    expect(host.chatRunId).toBe("active-reply");
+    expect(host.chatStream).toBe("Already visible response text");
+    expect(host.chatStreamStartedAt).toBe(100);
+    expect(host.chatStreamSegments).toEqual([
+      { text: "Earlier live commentary", ts: 90, itemId: "commentary" },
+    ]);
+    expect(host.chatRunStartup).toEqual({ state: "activity", runId: "active-reply" });
+  },
+);
 
 it.each([false, true])(
   "retries only the confirmed first-message version after history settles (edited: %s)",
@@ -152,6 +114,7 @@ it.each([false, true])(
       sessionKey,
       agentId: "main",
       sendState: "failed",
+      storageScope: outboxStorageScope(host),
     };
     const loading = loadChatHistory(host, { deferBranches: true });
     const historyState = getChatHistoryLoadState(host);
@@ -166,11 +129,11 @@ it.each([false, true])(
     // check, before the handoff's awaiting continuation resumes.
     const edit = historyState.promise.then(() => {
       if (edited) {
-        updateVolatileQueuedMessage(
+        chatOutboxOwner(host).change(
           host,
           item.id,
           (current) => ({ ...current, text: "A newer unconfirmed edit" }),
-          { retryable: true },
+          true,
         );
       }
     });

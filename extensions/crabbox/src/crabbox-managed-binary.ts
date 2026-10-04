@@ -4,12 +4,13 @@ import path from "node:path";
 import type { root } from "openclaw/plugin-sdk/file-access-runtime";
 import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
+import { crabboxExecutionError, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
 
-export const CRABBOX_MIN_VERSION = "0.56.0";
+export const CRABBOX_MIN_VERSION = "0.69.0";
 const RELEASE_URL = `https://github.com/openclaw/crabbox/releases/download/v${CRABBOX_MIN_VERSION}`;
 const MAX_ARCHIVE_BYTES = 128 * 1024 * 1024;
-const VERSION_TIMEOUT_MS = 5_000;
+// Gateway startup contention can delay an otherwise healthy executable probe.
+const VERSION_TIMEOUT_MS = 30_000;
 const DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
 const DOWNLOAD_TOTAL_TIMEOUT_MS = 10 * 60_000;
 
@@ -34,9 +35,12 @@ export async function probeCrabboxVersion(
       timeoutMs: VERSION_TIMEOUT_MS,
       ...(signal ? { signal } : {}),
     });
-  } catch {
+  } catch (error) {
     signal?.throwIfAborted();
-    return { status: "indeterminate", reason: "version command could not start" };
+    return {
+      status: "indeterminate",
+      reason: crabboxExecutionError("version command", error).message,
+    };
   }
   signal?.throwIfAborted();
   if (result.termination !== "exit" || result.code !== 0 || result.outputLimitExceeded) {
@@ -156,7 +160,7 @@ async function downloadReleaseFile(
 async function probeInstallation(
   binary: string,
   runCommand: CrabboxCommandRunner,
-  signal: AbortSignal,
+  signal: AbortSignal | undefined,
 ): Promise<CrabboxBinary | undefined> {
   const stat = await fs.lstat(binary).catch(() => undefined);
   if (!stat?.isFile()) {
@@ -164,6 +168,23 @@ async function probeInstallation(
   }
   const result = await probeCrabboxVersion(binary, runCommand, signal);
   return result.status === "supported" ? { binary, version: result.version } : undefined;
+}
+
+export async function findManagedCrabboxBinary(
+  params: {
+    env?: NodeJS.ProcessEnv;
+    runCommand?: CrabboxCommandRunner;
+    signal?: AbortSignal;
+  } = {},
+): Promise<CrabboxBinary | undefined> {
+  const runCommand =
+    params.runCommand ??
+    ((argv, options) => runCommandWithTimeout(argv, { ...options, baseEnv: params.env }));
+  const binary = resolveManagedCrabboxBinaryPath(params.env);
+  if (await inspectInstallationDirectory(path.dirname(binary))) {
+    return probeInstallation(binary, runCommand, params.signal);
+  }
+  return undefined;
 }
 
 async function inspectInstallationDirectory(destination: string) {
@@ -357,6 +378,10 @@ export async function ensureManagedCrabboxBinary(
   const preferred = await probeCrabboxVersion(candidate, runCommand, signal);
   if (preferred.status === "supported") {
     return { binary: candidate, version: preferred.version };
+  }
+  const cached = await findManagedCrabboxBinary({ env: params.env, runCommand, signal });
+  if (cached) {
+    return cached;
   }
   const { toErrorObject } = await import("openclaw/plugin-sdk/error-runtime");
   signal?.throwIfAborted();

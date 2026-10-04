@@ -1,29 +1,13 @@
-// Shares plugin activation state helpers across config and registry code.
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  resolveChannelConfigEnablement,
+  type NormalizedPluginsConfig,
+} from "./config-normalization-shared.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 
 type PluginKindLike = string | readonly string[] | undefined;
 
 export type PluginActivationSource = "disabled" | "explicit" | "auto" | "default";
-
-type PluginExplicitSelectionCause =
-  | "enabled-in-config"
-  | "bundled-channel-enabled-in-config"
-  | "selected-memory-slot"
-  | "selected-context-engine-slot"
-  | "selected-in-allowlist";
-
-type PluginActivationCause =
-  | PluginExplicitSelectionCause
-  | "plugins-disabled"
-  | "blocked-by-denylist"
-  | "disabled-in-config"
-  | "channel-disabled-in-config"
-  | "workspace-disabled-by-default"
-  | "not-in-allowlist"
-  | "enabled-by-effective-config"
-  | "bundled-channel-configured"
-  | "bundled-default-enablement"
-  | "bundled-disabled-by-default";
 
 export type PluginActivationStateLike = {
   enabled: boolean;
@@ -33,218 +17,152 @@ export type PluginActivationStateLike = {
   reason?: string;
 };
 
-type PluginActivationDecision = PluginActivationStateLike & {
-  cause?: PluginActivationCause;
+export type PluginActivationConfigSourceLike = {
+  plugins: NormalizedPluginsConfig;
+  rootConfig?: OpenClawConfig;
 };
 
-type PluginActivationConfigLike = {
-  enabled: boolean;
-  allow: readonly string[];
-  deny: readonly string[];
-  slots: {
-    memory?: string | null;
-    contextEngine?: string | null;
-  };
-  entries: Record<string, { enabled?: boolean } | undefined>;
-};
-
-export type PluginActivationConfigSourceLike<TRootConfig> = {
-  plugins: PluginActivationConfigLike;
-  rootConfig?: TRootConfig;
-};
-
-const PLUGIN_ACTIVATION_REASON_BY_CAUSE: Record<PluginActivationCause, string> = {
-  "enabled-in-config": "enabled in config",
-  "bundled-channel-enabled-in-config": "channel enabled in config",
-  "selected-memory-slot": "selected memory slot",
-  "selected-context-engine-slot": "selected context engine slot",
-  "selected-in-allowlist": "selected in allowlist",
-  "plugins-disabled": "plugins disabled",
-  "blocked-by-denylist": "blocked by denylist",
-  "disabled-in-config": "disabled in config",
-  "channel-disabled-in-config": "channel disabled in config",
-  "workspace-disabled-by-default": "workspace plugin (disabled by default)",
-  "not-in-allowlist": "not in allowlist",
-  "enabled-by-effective-config": "enabled by effective config",
-  "bundled-channel-configured": "channel configured",
-  "bundled-default-enablement": "bundled default enablement",
-  "bundled-disabled-by-default": "bundled (disabled by default)",
-};
-
-function resolvePluginActivationReason(
-  cause?: PluginActivationCause,
-  reason?: string,
-): string | undefined {
-  if (reason) {
-    return reason;
-  }
-  return cause ? PLUGIN_ACTIVATION_REASON_BY_CAUSE[cause] : undefined;
-}
-
-export function toPluginActivationState(
-  decision: PluginActivationDecision,
-): PluginActivationStateLike {
-  return {
-    enabled: decision.enabled,
-    activated: decision.activated,
-    explicitlyEnabled: decision.explicitlyEnabled,
-    source: decision.source,
-    reason: resolvePluginActivationReason(decision.cause, decision.reason),
-  };
-}
-
-function resolveExplicitPluginSelectionShared<TRootConfig>(params: {
+function resolveExplicitPluginSelectionShared(params: {
   id: string;
   origin: string;
-  config: PluginActivationConfigLike;
-  rootConfig?: TRootConfig;
+  config: NormalizedPluginsConfig;
+  rootConfig?: OpenClawConfig;
   /** Manifest-owned channel ids; the plugin id alone cannot resolve `channels.<id>` for every owner. */
   channelIds?: readonly string[];
-  resolveChannelConfigEnablement: (
-    rootConfig: TRootConfig | undefined,
-    pluginId: string,
-    channelIds?: readonly string[],
-  ) => boolean | undefined;
-}): { explicitlyEnabled: boolean; cause?: PluginExplicitSelectionCause } {
+}): string | undefined {
   const policyId = normalizePluginPolicyId(params.id);
   if (params.config.entries[policyId]?.enabled === true) {
-    return { explicitlyEnabled: true, cause: "enabled-in-config" };
+    return "enabled in config";
   }
   if (
     params.origin === "bundled" &&
-    params.resolveChannelConfigEnablement(params.rootConfig, params.id, params.channelIds) === true
+    resolveChannelConfigEnablement(params.rootConfig, params.id, params.channelIds) === true
   ) {
-    return { explicitlyEnabled: true, cause: "bundled-channel-enabled-in-config" };
+    return "channel enabled in config";
   }
   if (params.config.slots.memory === params.id) {
-    return { explicitlyEnabled: true, cause: "selected-memory-slot" };
+    return "selected memory slot";
   }
   if (params.config.slots.contextEngine === params.id) {
-    return { explicitlyEnabled: true, cause: "selected-context-engine-slot" };
+    return "selected context engine slot";
   }
   if (params.origin !== "bundled" && params.config.allow.includes(policyId)) {
-    return { explicitlyEnabled: true, cause: "selected-in-allowlist" };
+    return "selected in allowlist";
   }
-  return { explicitlyEnabled: false };
+  return undefined;
 }
 
-export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
+export function resolvePluginActivationStateShared(params: {
   id: string;
   origin: string;
-  config: PluginActivationConfigLike;
-  rootConfig?: TRootConfig;
+  config: NormalizedPluginsConfig;
+  rootConfig?: OpenClawConfig;
   enabledByDefault?: boolean;
-  activationSource?: PluginActivationConfigSourceLike<TRootConfig>;
+  activationSource?: PluginActivationConfigSourceLike;
   autoEnabledReason?: string;
   allowBundledChannelExplicitBypassesAllowlist?: boolean;
   /** Manifest-owned channel ids; the plugin id alone cannot resolve `channels.<id>` for every owner. */
   channelIds?: readonly string[];
-  resolveChannelConfigEnablement: (
-    rootConfig: TRootConfig | undefined,
-    pluginId: string,
-    channelIds?: readonly string[],
-  ) => boolean | undefined;
-}): PluginActivationDecision {
+}): PluginActivationStateLike {
   const activationSource = params.activationSource ?? {
     plugins: params.config,
     rootConfig: params.rootConfig,
   };
-  const explicitSelection = resolveExplicitPluginSelectionShared({
+  const explicitReason = resolveExplicitPluginSelectionShared({
     id: params.id,
     origin: params.origin,
     config: activationSource.plugins,
     rootConfig: activationSource.rootConfig,
     channelIds: params.channelIds,
-    resolveChannelConfigEnablement: params.resolveChannelConfigEnablement,
   });
 
   // Keep result construction shared; policy precedence stays in the ordered branches below.
   const decision = (
     source: PluginActivationSource,
-    details: Partial<Pick<PluginActivationDecision, "explicitlyEnabled" | "cause" | "reason">> = {},
-  ): PluginActivationDecision => ({
+    details: Partial<Pick<PluginActivationStateLike, "explicitlyEnabled" | "reason">> = {},
+  ): PluginActivationStateLike => ({
     enabled: source !== "disabled",
     activated: source !== "disabled",
-    explicitlyEnabled: explicitSelection.explicitlyEnabled,
+    explicitlyEnabled: explicitReason !== undefined,
     source,
+    reason: undefined,
     ...details,
   });
 
   if (!params.config.enabled) {
-    return decision("disabled", { cause: "plugins-disabled" });
+    return decision("disabled", { reason: "plugins disabled" });
   }
   const policyId = normalizePluginPolicyId(params.id);
   if (params.config.deny.includes(policyId)) {
-    return decision("disabled", { cause: "blocked-by-denylist" });
+    return decision("disabled", { reason: "blocked by denylist" });
   }
   const entry = params.config.entries[policyId];
   if (entry?.enabled === false) {
-    return decision("disabled", { cause: "disabled-in-config" });
+    return decision("disabled", { reason: "disabled in config" });
   }
   // An owner-wide channel disable wins over plugin enablement left by install/enable flows.
   // Enabled or unspecified sibling channels must still be able to load their shared plugin.
   if (
-    params.resolveChannelConfigEnablement(
+    resolveChannelConfigEnablement(
       activationSource.rootConfig ?? params.rootConfig,
       params.id,
       params.channelIds,
     ) === false
   ) {
-    return decision("disabled", { cause: "channel-disabled-in-config" });
+    return decision("disabled", { reason: "channel disabled in config" });
   }
   const explicitlyAllowed = params.config.allow.includes(policyId);
   if (
     params.origin === "workspace" &&
     !explicitlyAllowed &&
     entry?.enabled !== true &&
-    explicitSelection.cause !== "selected-context-engine-slot"
+    explicitReason !== "selected context engine slot"
   ) {
-    return decision("disabled", { cause: "workspace-disabled-by-default" });
+    return decision("disabled", { reason: "workspace plugin (disabled by default)" });
   }
   if (params.config.slots.memory === params.id) {
-    return decision("explicit", { explicitlyEnabled: true, cause: "selected-memory-slot" });
+    return decision("explicit", { explicitlyEnabled: true, reason: "selected memory slot" });
   }
   if (params.config.slots.contextEngine === params.id) {
-    return decision("explicit", { explicitlyEnabled: true, cause: "selected-context-engine-slot" });
+    return decision("explicit", {
+      explicitlyEnabled: true,
+      reason: "selected context engine slot",
+    });
   }
   if (
     params.allowBundledChannelExplicitBypassesAllowlist === true &&
-    explicitSelection.cause === "bundled-channel-enabled-in-config"
+    explicitReason === "channel enabled in config"
   ) {
-    return decision("explicit", { explicitlyEnabled: true, cause: explicitSelection.cause });
+    return decision("explicit", { explicitlyEnabled: true, reason: explicitReason });
   }
   if (params.config.allow.length > 0 && !explicitlyAllowed) {
-    return decision("disabled", { cause: "not-in-allowlist" });
+    return decision("disabled", { reason: "not in allowlist" });
   }
-  if (explicitSelection.explicitlyEnabled) {
-    return decision("explicit", { explicitlyEnabled: true, cause: explicitSelection.cause });
+  if (explicitReason) {
+    return decision("explicit", { explicitlyEnabled: true, reason: explicitReason });
   }
   if (params.autoEnabledReason) {
     return decision("auto", { explicitlyEnabled: false, reason: params.autoEnabledReason });
   }
   if (entry?.enabled === true) {
-    return decision("auto", { explicitlyEnabled: false, cause: "enabled-by-effective-config" });
+    return decision("auto", { explicitlyEnabled: false, reason: "enabled by effective config" });
   }
   if (
     params.origin === "bundled" &&
-    params.resolveChannelConfigEnablement(params.rootConfig, params.id, params.channelIds) === true
+    resolveChannelConfigEnablement(params.rootConfig, params.id, params.channelIds) === true
   ) {
-    return decision("auto", { explicitlyEnabled: false, cause: "bundled-channel-configured" });
+    return decision("auto", { explicitlyEnabled: false, reason: "channel configured" });
   }
   if (params.origin === "bundled" && params.enabledByDefault === true) {
-    return decision("default", { explicitlyEnabled: false, cause: "bundled-default-enablement" });
+    return decision("default", { explicitlyEnabled: false, reason: "bundled default enablement" });
   }
   if (params.origin === "bundled") {
-    return decision("disabled", { explicitlyEnabled: false, cause: "bundled-disabled-by-default" });
+    return decision("disabled", {
+      explicitlyEnabled: false,
+      reason: "bundled (disabled by default)",
+    });
   }
   return decision("default");
-}
-
-function hasKind(kind: PluginKindLike, target: string): boolean {
-  if (!kind) {
-    return false;
-  }
-  return Array.isArray(kind) ? kind.includes(target) : kind === target;
 }
 
 export function resolveMemorySlotDecisionShared(params: {
@@ -253,7 +171,7 @@ export function resolveMemorySlotDecisionShared(params: {
   slot: string | null | undefined;
   selectedId: string | null;
 }): { enabled: boolean; reason?: string; selected?: boolean } {
-  if (!hasKind(params.kind, "memory")) {
+  if (!(Array.isArray(params.kind) ? params.kind.includes("memory") : params.kind === "memory")) {
     return { enabled: true };
   }
   // A dual-kind plugin (e.g. ["memory", "context-engine"]) that lost the

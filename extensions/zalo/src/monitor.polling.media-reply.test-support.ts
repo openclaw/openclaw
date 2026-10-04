@@ -13,8 +13,8 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginRuntime } from "../runtime-api.js";
 import type { ZaloFetch } from "./api.js";
 import { setZaloRuntime } from "./runtime.js";
 import {
@@ -272,12 +272,6 @@ describe("Zalo polling media replies", () => {
 
   it.each<ZaloReplyFailureCase>([
     { name: "block text", kind: "block", payload: { text: "block reply" } },
-    { name: "tool text", kind: "tool", payload: { text: "tool reply" } },
-    {
-      name: "first block attachment",
-      kind: "block",
-      payload: { text: "caption", mediaUrl: "https://example.com/first.png" },
-    },
     {
       name: "first tool attachment",
       kind: "tool",

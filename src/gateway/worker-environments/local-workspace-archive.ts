@@ -10,6 +10,7 @@ import {
   serializeWorkerWorkspaceManifest,
   type WorkerWorkspaceManifest,
 } from "./workspace-manifest.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import {
   workerWorkspaceResultRef,
   readStagedWorkerWorkspaceResult,
@@ -47,11 +48,7 @@ async function stageLocalWorkspaceArchive(params: {
   );
   const directories = new Set<string>();
   for (const entry of entries) {
-    for (
-      let parent = path.posix.dirname(entry.path);
-      parent !== ".";
-      parent = path.posix.dirname(parent)
-    ) {
+    for (const parent of workspacePathAncestors(entry.path)) {
       directories.add(parent);
     }
   }
@@ -144,9 +141,7 @@ export function localWorkspaceArchiveOperations(params: {
         accepted: accepted.manifest,
         acceptedRef: accepted.manifestRef,
         signal,
-        assertCurrent: () => {
-          current();
-        },
+        assertCurrent: current,
         reserve: (base, baseRef, resultRef) => {
           update({
             baseline_json: base,
@@ -201,9 +196,7 @@ export function localWorkspaceArchiveOperations(params: {
       current();
       // Once expiry starts, an older restore must not find a usable Git snapshot
       // after its accepted overlay has been retired.
-      await retireSnapshot?.(() => {
-        current();
-      });
+      await retireSnapshot?.(current);
       current();
       if (selected.pending_ref && accepted) {
         update({ baseline_json: accepted.raw, baseline_ref: accepted.ref, pending_target: null });

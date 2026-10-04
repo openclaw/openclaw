@@ -1,5 +1,8 @@
-/** Handles inline slash commands, skill invocations, and abort actions before model runs. */
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeNullableString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunker.js";
@@ -51,15 +54,10 @@ import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { createSkillCommandLoaders } from "./skill-command-loaders.js";
 import type { TypingController } from "./typing.js";
 
-type SkillToolDispatchRuntime = typeof import("../../skills/runtime/tool-dispatch.js");
-type SkillToolDispatchDependencies = Parameters<
-  SkillToolDispatchRuntime["resolveSkillDispatchTools"]
->[1];
-
 const skillCommandsRuntimeLoader = createLazyImportLoader(
   () => import("../../skills/discovery/chat-commands.runtime.js"),
 );
-const skillToolDispatchRuntimeLoader = createLazyImportLoader<SkillToolDispatchRuntime>(
+const skillToolDispatchRuntimeLoader = createLazyImportLoader(
   () => import("../../skills/runtime/tool-dispatch.js"),
 );
 const abortCutoffRuntimeLoader = createLazyImportLoader(() => import("./abort-cutoff.runtime.js"));
@@ -85,13 +83,8 @@ function getBuiltinSlashCommands(): Set<string> {
 }
 
 function resolveSlashCommandName(commandBodyNormalized: string): string | null {
-  const trimmed = commandBodyNormalized.trim();
-  if (!trimmed.startsWith("/")) {
-    return null;
-  }
-  const match = trimmed.match(/^\/([^\s:]+)(?::|\s|$)/);
-  const name = normalizeOptionalLowercaseString(match?.[1]) ?? "";
-  return name ? name : null;
+  const match = commandBodyNormalized.trim().match(/^\/([^\s:]+)(?::|\s|$)/);
+  return normalizeOptionalLowercaseString(match?.[1]) ?? null;
 }
 
 function isMentionOnlyResidualText(text: string, wasMentioned: boolean | undefined): boolean {
@@ -105,7 +98,6 @@ function isMentionOnlyResidualText(text: string, wasMentioned: boolean | undefin
   return /^(?:<@[!&]?[A-Za-z0-9._:-]+>|<!(?:here|channel|everyone)>|[:,.!?-]|\s)+$/u.test(trimmed);
 }
 
-/** Result of attempting to handle an inbound message as an inline action. */
 type InlineActionResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
   | {
@@ -118,29 +110,15 @@ type InlineActionResult =
     };
 
 function extractTextFromToolResult(result: unknown): string | null {
-  if (!result || typeof result !== "object") {
-    return null;
-  }
-  const content = (result as { content?: unknown }).content;
-  const text = typeof content === "string" ? content : collectTextContentBlocks(content).join("");
-  const trimmed = text.trim();
-  return trimmed ? trimmed : null;
+  const content = asOptionalObjectRecord(result)?.content;
+  return normalizeNullableString(
+    typeof content === "string" ? content : collectTextContentBlocks(content).join(""),
+  );
 }
 
 function extractBlockedToolReason(result: unknown): string | null {
-  if (!result || typeof result !== "object") {
-    return null;
-  }
-  const details = (result as { details?: unknown }).details;
-  if (!details || typeof details !== "object") {
-    return null;
-  }
-  const status = (details as { status?: unknown }).status;
-  if (status !== "blocked") {
-    return null;
-  }
-  const reason = (details as { reason?: unknown }).reason;
-  return typeof reason === "string" && reason.trim() ? reason.trim() : null;
+  const details = asOptionalObjectRecord(asOptionalObjectRecord(result)?.details);
+  return details?.status === "blocked" ? normalizeNullableString(details.reason) : null;
 }
 
 /** Handles inline actions or returns continue when the message should become a model turn. */
@@ -191,7 +169,6 @@ export async function handleInlineActions(params: {
   directiveAck?: ReplyPayload;
   abortedLastRun: boolean;
   skillFilter?: string[];
-  skillToolDispatchDependencies?: SkillToolDispatchDependencies;
 }): Promise<InlineActionResult> {
   const {
     ctx,
@@ -237,6 +214,10 @@ export async function handleInlineActions(params: {
     abortedLastRun: initialAbortedLastRun,
     skillFilter,
   } = params;
+  const finishCommand = (reply?: ReplyPayload | ReplyPayload[]): InlineActionResult => {
+    typing.cleanup();
+    return { kind: "reply", reply: markCommandReplyForDelivery(reply) };
+  };
   const notifyInlineCommandSessionMetadataChanges = () => {
     const changes = takeCommandSessionMetadataChangesFromTargets([sessionCtx, ctx]);
     if (changes) {
@@ -259,19 +240,18 @@ export async function handleInlineActions(params: {
   let skillSelections: ExplicitSkillSelection[] | undefined;
   const targetSessionEntry = sessionStore?.[sessionKey] ?? sessionEntry;
 
-  const isStopLikeInbound = isAbortRequestText(command.rawBodyNormalized);
-  if (!isStopLikeInbound && targetSessionEntry) {
+  if (targetSessionEntry && !isAbortRequestText(command.rawBodyNormalized)) {
     const cutoff = readAbortCutoffFromSessionEntry(targetSessionEntry);
     const incoming = resolveAbortCutoffFromContext(ctx);
-    const shouldSkip = cutoff
-      ? shouldSkipMessageByAbortCutoff({
-          cutoffMessageSid: cutoff.messageSid,
-          cutoffTimestamp: cutoff.timestamp,
-          messageSid: incoming?.messageSid,
-          timestamp: incoming?.timestamp,
-        })
-      : false;
-    if (shouldSkip) {
+    if (
+      cutoff &&
+      shouldSkipMessageByAbortCutoff({
+        cutoffMessageSid: cutoff.messageSid,
+        cutoffTimestamp: cutoff.timestamp,
+        messageSid: incoming?.messageSid,
+        timestamp: incoming?.timestamp,
+      })
+    ) {
       const runState = resolveReplyOperationRunState(opts);
       if (runState) {
         // The stop owner cancelled this queued input; no answer remains due.
@@ -280,8 +260,7 @@ export async function handleInlineActions(params: {
           "blocked",
         );
       }
-      typing.cleanup();
-      return { kind: "reply", reply: undefined };
+      return finishCommand();
     }
     if (cutoff) {
       await (
@@ -295,19 +274,17 @@ export async function handleInlineActions(params: {
     }
   }
 
-  const isEmptyConfig = Object.keys(cfg).length === 0;
   const skipWhenConfigEmpty = command.channelId
     ? Boolean(getChannelPlugin(command.channelId)?.commands?.skipWhenConfigEmpty)
     : false;
   if (
     skipWhenConfigEmpty &&
-    isEmptyConfig &&
+    Object.keys(cfg).length === 0 &&
     command.from &&
     command.to &&
     command.from !== command.to
   ) {
-    typing.cleanup();
-    return { kind: "reply", reply: undefined };
+    return finishCommand();
   }
 
   const slashCommandName = getStandaloneSlashCommandName(command.commandBodyNormalized);
@@ -353,7 +330,7 @@ export async function handleInlineActions(params: {
       : skillCommands;
 
   const skillInvocation =
-    allowTextCommands && skillCommands.length > 0
+    skillCommands.length > 0
       ? resolveSkillCommandInvocation({
           commandBodyNormalized: command.commandBodyNormalized,
           skillCommands,
@@ -364,16 +341,14 @@ export async function handleInlineActions(params: {
       logVerbose(
         `Ignoring /${skillInvocation.command.name} from unauthorized sender: ${command.senderId || "<unknown>"}`,
       );
-      typing.cleanup();
-      return { kind: "reply", reply: undefined };
+      return finishCommand();
     }
 
     const dispatch = skillInvocation.command.dispatch;
     if (dispatch?.kind === "tool") {
       const rawArgs = (skillInvocation.args ?? "").trim();
       const { resolveSkillDispatchTools } = await skillToolDispatchRuntimeLoader.load();
-      const dependencies =
-        params.skillToolDispatchDependencies ?? (await import("../../agents/openclaw-tools.js"));
+      const dependencies = await import("../../agents/openclaw-tools.js");
       const authorizedTools = resolveSkillDispatchTools(
         {
           message: {
@@ -419,13 +394,7 @@ export async function handleInlineActions(params: {
 
       const tool = authorizedTools.find((candidate) => candidate.name === dispatch.toolName);
       if (!tool) {
-        typing.cleanup();
-        return {
-          kind: "reply",
-          reply: markCommandReplyForDelivery({
-            text: `❌ Tool not available: ${dispatch.toolName}`,
-          }),
-        };
+        return finishCommand({ text: `❌ Tool not available: ${dispatch.toolName}` });
       }
 
       const toolCallId = `cmd_${generateSecureToken(8)}`;
@@ -448,22 +417,13 @@ export async function handleInlineActions(params: {
         const result = await tool.execute(toolCallId, toolArgs, opts?.abortSignal);
         const blockedReason = extractBlockedToolReason(result);
         if (blockedReason) {
-          typing.cleanup();
-          return {
-            kind: "reply",
-            reply: markCommandReplyForDelivery({ text: `❌ Tool call blocked: ${blockedReason}` }),
-          };
+          return finishCommand({ text: `❌ Tool call blocked: ${blockedReason}` });
         }
         const text = extractTextFromToolResult(result) ?? "✅ Done.";
-        typing.cleanup();
-        return { kind: "reply", reply: markCommandReplyForDelivery({ text }) };
+        return finishCommand({ text });
       } catch (err) {
         const message = formatErrorMessage(err);
-        typing.cleanup();
-        return {
-          kind: "reply",
-          reply: markCommandReplyForDelivery({ text: `❌ ${message}` }),
-        };
+        return finishCommand({ text: `❌ ${message}` });
       }
     }
 
@@ -515,11 +475,7 @@ export async function handleInlineActions(params: {
 
   if (referenced) {
     if (referenced.error) {
-      typing.cleanup();
-      return {
-        kind: "reply",
-        reply: markCommandReplyForDelivery({ text: referenced.error }),
-      };
+      return finishCommand({ text: referenced.error });
     }
     if (referenced.skills.length > 0) {
       skillSelections = mergeSelections(skillSelections, toSelections(referenced.skills));
@@ -631,8 +587,7 @@ export async function handleInlineActions(params: {
     notifyInlineCommandSessionMetadataChanges();
     if (inlineResult.reply) {
       if (!cleanedBody) {
-        typing.cleanup();
-        return { kind: "reply", reply: markCommandReplyForDelivery(inlineResult.reply) };
+        return finishCommand(inlineResult.reply);
       }
       await sendInlineReply(inlineResult.reply);
     }
@@ -662,20 +617,16 @@ export async function handleInlineActions(params: {
       ...(skillSelections ? { explicitSkillSelections: skillSelections } : {}),
     };
   }
-  const remainingBodyAfterInlineStatus = (() => {
-    const stripped = stripStructuralPrefixes(cleanedBody);
-    if (!isGroup) {
-      return stripped.trim();
-    }
-    return stripMentions(stripped, ctx, cfg, agentId).trim();
-  })();
+  const strippedBody = stripStructuralPrefixes(cleanedBody);
+  const remainingBodyAfterInlineStatus = (
+    isGroup ? stripMentions(strippedBody, ctx, cfg, agentId) : strippedBody
+  ).trim();
   if (
     didSendInlineStatus &&
     (remainingBodyAfterInlineStatus.length === 0 ||
       isMentionOnlyResidualText(remainingBodyAfterInlineStatus, ctx.WasMentioned))
   ) {
-    typing.cleanup();
-    return { kind: "reply", reply: undefined };
+    return finishCommand();
   }
 
   const commandBodyBeforeRun = command.commandBodyNormalized;
@@ -685,8 +636,7 @@ export async function handleInlineActions(params: {
   skillSelections = mergeSelections(skillSelections, commandResult.explicitSkillSelections);
   notifyInlineCommandSessionMetadataChanges();
   if (!commandResult.shouldContinue) {
-    typing.cleanup();
-    return { kind: "reply", reply: markCommandReplyForDelivery(commandResult.reply) };
+    return finishCommand(commandResult.reply);
   }
   if (command.commandBodyNormalized !== commandBodyBeforeRun) {
     cleanedBody = command.commandBodyNormalized;

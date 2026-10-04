@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { root, type Root } from "@openclaw/fs-safe";
+import { configureFsSafeNative } from "@openclaw/fs-safe/config";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +22,7 @@ import {
 describe("doctor legacy migration source contract", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(() => {
+      configureFsSafeNative({ mode: "auto" });
       __setFsSafeTestHooksForTest(undefined);
       vi.restoreAllMocks();
       cleanup();
@@ -49,6 +51,12 @@ describe("doctor legacy migration source contract", () => {
           label: "test",
         }),
     });
+  }
+
+  async function createRootSource() {
+    const source = createSource();
+    const stateRoot = await root(source.stateDir, { hardlinks: "reject", symlinks: "reject" });
+    return { ...source, stateRoot };
   }
 
   it("detects an interrupted claim without accepting absent source state", () => {
@@ -80,8 +88,7 @@ describe("doctor legacy migration source contract", () => {
   });
 
   it("shares the same pinned source identity across root-bound and sync readers", async () => {
-    const { sourcePath, stateDir } = createSource();
-    const stateRoot = await root(stateDir, { hardlinks: "reject", symlinks: "reject" });
+    const { sourcePath, stateDir, stateRoot } = await createRootSource();
     const bounded = await readLegacyMigrationSourceSnapshot({
       stateRoot,
       stateDir,
@@ -115,8 +122,7 @@ describe("doctor legacy migration source contract", () => {
   });
 
   it("recovers interrupted claims without discarding a matching active source", async () => {
-    const { sourcePath, stateDir } = createSource();
-    const stateRoot = await root(stateDir, { hardlinks: "reject", symlinks: "reject" });
+    const { sourcePath, stateDir, stateRoot } = await createRootSource();
     const claim = createClaim(stateRoot, stateDir, sourcePath);
     fs.copyFileSync(sourcePath, claim.claimPath);
 
@@ -132,25 +138,67 @@ describe("doctor legacy migration source contract", () => {
     expect(fs.existsSync(claim.claimPath)).toBe(false);
   });
 
-  it.each(["EINVAL", "ENOTSUP"])(
-    "claims and restores the same inode when native no-replace rename returns %s",
-    async (code) => {
+  it.each([
+    {
+      message: "native no-replace move is unavailable",
+      cause: Object.assign(new Error("unsupported rename flags"), { code: "EINVAL" }),
+    },
+    {
+      message: "native no-replace move is unavailable",
+      cause: Object.assign(new Error("unsupported rename flags"), { code: "ENOTSUP" }),
+    },
+    { message: "native fs-safe helper is unavailable", cause: undefined },
+    {
+      message: "native fs-safe helper is unavailable",
+      cause: Object.assign(new Error("Cannot find module @openclaw/fs-safe-platform"), {
+        code: "MODULE_NOT_FOUND",
+      }),
+    },
+  ])("claims and restores the same inode after $message ($cause)", async ({ message, cause }) => {
+    const { sourcePath, stateDir, stateRoot } = await createRootSource();
+    vi.spyOn(stateRoot, "move").mockRejectedValue(
+      new FsSafeError("helper-unavailable", message, { cause }),
+    );
+    const claim = createClaim(stateRoot, stateDir, sourcePath);
+    const snapshot = await claim.read();
+    const claimed = await claim.claim({ snapshot, mismatchMessage: "source changed" });
+    expect(legacyMigrationSourceSnapshotsMatch(claimed, snapshot)).toBe(true);
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.statSync(claim.claimPath).nlink).toBe(1);
+    expect(await claim.restore()).toBeNull();
+    expect(fs.readFileSync(sourcePath)).toEqual(snapshot.buffer);
+    expect(fs.statSync(sourcePath).ino).toBe(snapshot.ino);
+    expect(fs.existsSync(claim.claimPath)).toBe(false);
+  });
+
+  it.each([
+    { code: "EIO", required: false, guarded: false },
+    { code: "ERR_DLOPEN_FAILED", required: true, guarded: false },
+    { code: "EINVAL", required: false, guarded: true },
+  ])(
+    "leaves source untouched when fallback is forbidden: %j",
+    async ({ code, required, guarded }) => {
       const { sourcePath, stateDir } = createSource();
-      const stateRoot = await root(stateDir, { hardlinks: "reject", symlinks: "reject" });
-      vi.spyOn(stateRoot, "move").mockRejectedValue(
-        new FsSafeError("helper-unavailable", "native no-replace move is unavailable", {
-          cause: Object.assign(new Error("unsupported rename flags"), { code }),
-        }),
+      const stateRoot = await root(stateDir, {
+        hardlinks: "reject",
+        symlinks: "reject",
+        ...(guarded ? { assertBeforeMutation: () => {} } : {}),
+      });
+      const refusal = new FsSafeError(
+        "helper-unavailable",
+        required ? "native fs-safe helper is unavailable" : "native no-replace move is unavailable",
+        { cause: Object.assign(new Error("native operation failed"), { code }) },
       );
+      vi.spyOn(stateRoot, "move").mockRejectedValue(refusal);
+      if (required) {
+        configureFsSafeNative({ mode: "require" });
+      }
       const claim = createClaim(stateRoot, stateDir, sourcePath);
       const snapshot = await claim.read();
-
-      const claimed = await claim.claim({ snapshot, mismatchMessage: "source changed" });
-
-      expect(legacyMigrationSourceSnapshotsMatch(claimed, snapshot)).toBe(true);
-      expect(fs.existsSync(sourcePath)).toBe(false);
-      expect(fs.statSync(claim.claimPath).nlink).toBe(1);
-      expect(await claim.restore()).toBeNull();
+      await expect(claim.claim({ snapshot, mismatchMessage: "source changed" })).rejects.toBe(
+        refusal,
+      );
+      expect(fs.existsSync(sourcePath)).toBe(true);
       expect(fs.readFileSync(sourcePath)).toEqual(snapshot.buffer);
       expect(fs.statSync(sourcePath).ino).toBe(snapshot.ino);
       expect(fs.existsSync(claim.claimPath)).toBe(false);
@@ -158,8 +206,7 @@ describe("doctor legacy migration source contract", () => {
   );
 
   it("preserves a competing claim created before portable publication", async () => {
-    const { sourcePath, stateDir } = createSource();
-    const stateRoot = await root(stateDir, { hardlinks: "reject", symlinks: "reject" });
+    const { sourcePath, stateDir, stateRoot } = await createRootSource();
     const claim = createClaim(stateRoot, stateDir, sourcePath);
     const snapshot = await claim.read();
     vi.spyOn(stateRoot, "move").mockImplementationOnce(async () => {
@@ -177,8 +224,7 @@ describe("doctor legacy migration source contract", () => {
 
   it("retains the source when portable publication cannot sync its directory", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    const { sourcePath, stateDir } = createSource();
-    const stateRoot = await root(stateDir, { hardlinks: "reject", symlinks: "reject" });
+    const { sourcePath, stateDir, stateRoot } = await createRootSource();
     vi.spyOn(stateRoot, "move").mockRejectedValue(
       new FsSafeError("helper-unavailable", "unsupported rename", {
         cause: Object.assign(new Error("unsupported rename flags"), { code: "EINVAL" }),
@@ -198,28 +244,6 @@ describe("doctor legacy migration source contract", () => {
 
     expect(fs.readFileSync(sourcePath)).toEqual(snapshot.buffer);
     expect(fs.statSync(claim.claimPath).ino).toBe(snapshot.ino);
-  });
-
-  it("keeps a Root's mutation authority instead of bypassing it with portable publication", async () => {
-    const { sourcePath, stateDir } = createSource();
-    const stateRoot = await root(stateDir, {
-      hardlinks: "reject",
-      symlinks: "reject",
-      assertBeforeMutation: () => {},
-    });
-    const refusal = new FsSafeError("helper-unavailable", "unsupported rename", {
-      cause: Object.assign(new Error("unsupported rename flags"), { code: "EINVAL" }),
-    });
-    vi.spyOn(stateRoot, "move").mockRejectedValue(refusal);
-    const claim = createClaim(stateRoot, stateDir, sourcePath);
-    const snapshot = await claim.read();
-
-    await expect(claim.claim({ snapshot, mismatchMessage: "source changed" })).rejects.toBe(
-      refusal,
-    );
-
-    expect(fs.readFileSync(sourcePath)).toEqual(snapshot.buffer);
-    expect(fs.existsSync(claim.claimPath)).toBe(false);
   });
 
   it("preserves a linked claim when the Root revokes recovery authority", async () => {
@@ -297,8 +321,7 @@ describe("doctor legacy migration source contract", () => {
   );
 
   it("rejects an inode replacement with matching bytes and restores its source", async () => {
-    const { sourcePath, stateDir } = createSource();
-    const stateRoot = await root(stateDir, { hardlinks: "reject", symlinks: "reject" });
+    const { sourcePath, stateDir, stateRoot } = await createRootSource();
     const claim = createClaim(stateRoot, stateDir, sourcePath);
     const snapshot = await claim.read();
     const replacementPath = path.join(stateDir, "replacement.json");

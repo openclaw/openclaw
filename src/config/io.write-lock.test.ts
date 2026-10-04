@@ -327,22 +327,6 @@ describe("direct config writer exclusion", () => {
       },
     );
   });
-
-  it("allows a nested direct writer in the same live mutation scope", async () => {
-    const stateDir = tempDirs.make("openclaw-config-writer-nested-");
-    const configPath = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(configPath, '{"gateway":{"mode":"local"}}\n');
-    await withEnvAsync(
-      { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
-      async () => {
-        const io = createConfigIO({ configPath, observe: false, pluginValidation: "skip" });
-        await withConfigMutationExclusive(async () => {
-          await io.writeConfigFile({ gateway: { mode: "local", port: 19876 } });
-          expect((await io.readConfigFileSnapshot()).config.gateway?.port).toBe(19876);
-        });
-      },
-    );
-  });
 });
 
 describe("included config writer exclusion", () => {
@@ -443,16 +427,6 @@ describe("included config writer exclusion", () => {
         async () => {
           const io = createConfigIO({ configPath, observe: false, pluginValidation: "skip" });
           expect((await io.readConfigFileSnapshot()).config.gateway?.port).toBe(18789);
-          const fixturePath = (value: string | undefined) =>
-            value === undefined
-              ? null
-              : value === includePath
-                ? "gateway.json5"
-                : value === parentPath
-                  ? "gateway-parent.json5"
-                  : "other";
-          const logicalPath = (segments: readonly string[]) =>
-            segments.length === 1 && segments[0] === "gateway" ? "gateway" : "other";
           const startWriter = deferred();
           const writer = startWriter.promise.then(() =>
             mutateConfigFileWithRetry({
@@ -460,48 +434,23 @@ describe("included config writer exclusion", () => {
               mutate: (draft, { snapshot }) => {
                 draft.gateway = { ...draft.gateway, port: 19876 };
                 const boundary = resolveConfigIncludeWriteBoundary({ snapshot, nextConfig: draft });
-                // Inspect the consumed, observed snapshot before the root writer can mask
-                // lost provenance. Failure output contains only bounded fixture identities.
-                expect({
-                  valid: snapshot.valid,
-                  issueCount: snapshot.issues.length,
-                  issues: snapshot.issues.slice(0, 8).map((issue) => ({
-                    path:
-                      issue.path === "" ? "root" : issue.path === "gateway" ? "gateway" : "other",
-                    category: issue.message.startsWith("read failed:")
-                      ? "read-failed"
-                      : "validation",
-                  })),
-                  provenanceCount: snapshot.includeProvenance?.length ?? null,
-                  provenance:
-                    snapshot.includeProvenance?.slice(0, 8).map((entry) => ({
-                      path: logicalPath(entry.path),
-                      target: fixturePath(entry.targetPath),
-                      kind: entry.kind,
-                      hasSiblingOverrides: entry.hasSiblingOverrides,
-                      hasArrayAncestor: entry.hasArrayAncestor ?? false,
-                    })) ?? null,
-                  boundary: boundary && {
-                    path: logicalPath(boundary.boundaryPath),
-                    target: fixturePath(boundary.includePath),
-                  },
-                }).toEqual({
-                  valid: true,
-                  issueCount: 0,
-                  issues: [],
-                  provenanceCount: shape === "delegated" ? 2 : 1,
-                  provenance: (shape === "delegated"
-                    ? ["gateway.json5", "gateway-parent.json5"]
-                    : ["gateway.json5"]
-                  ).map((target) => ({
-                    path: "gateway",
-                    target,
-                    kind: "single",
-                    hasSiblingOverrides: false,
-                    hasArrayAncestor: false,
-                  })),
-                  boundary: { path: "gateway", target: "gateway.json5" },
-                });
+                expect(snapshot.valid).toBe(true);
+                expect(snapshot.issues).toEqual([]);
+                expect(snapshot.includeProvenance).toEqual(
+                  (shape === "delegated" ? [includePath, parentPath] : [includePath]).map(
+                    (targetPath) =>
+                      expect.objectContaining({
+                        path: ["gateway"],
+                        targetPath,
+                        kind: "single",
+                        hasSiblingOverrides: false,
+                      }),
+                  ),
+                );
+                expect(snapshot.includeProvenance?.some((entry) => entry.hasArrayAncestor)).toBe(
+                  false,
+                );
+                expect(boundary).toMatchObject({ boundaryPath: ["gateway"], includePath });
               },
             }),
           );

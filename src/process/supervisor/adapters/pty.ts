@@ -1,20 +1,13 @@
-// PTY adapter wraps pseudo-terminal processes for the process supervisor.
+import { resolveEnvironmentValue } from "../../../infra/process-env.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { signalPtySessionTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
-import {
-  readPtyTerminalName,
-  resolvePtyTerminalName,
-  setPtyTerminalName,
-} from "../../pty-terminal-name.js";
+import { resolvePtyTerminalName, setPtyTerminalName } from "../../pty-terminal-name.js";
 import type { TerminalPtySubscription } from "../../terminal-pty.js";
 import type { ManagedRunStdin, ProcessAdapterConstruction, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
 
 const FORCE_KILL_WAIT_FALLBACK_MS = 4000;
 declare const WORKER_DEPLOY_BUILD: boolean;
-
-type PtyAdapter = SpawnProcessAdapter;
 
 export async function createPtyAdapter(
   params: ProcessAdapterConstruction & {
@@ -26,19 +19,19 @@ export async function createPtyAdapter(
     rows?: number;
     name?: string;
   },
-): Promise<PtyAdapter> {
+): Promise<SpawnProcessAdapter> {
   // Worker deploys are portable JavaScript artifacts; exec falls back to the child adapter
   // instead of binding the Gateway host's native PTY binary into the bundle.
   if (typeof WORKER_DEPLOY_BUILD === "boolean" && WORKER_DEPLOY_BUILD) {
     throw new Error("PTY is unavailable in the portable worker runtime");
   }
-  const { spawnTerminalPty } = await import("../../terminal-pty.js");
+  const { signalTerminalPtyTree, spawnTerminalPty } = await import("../../terminal-pty.js");
   const baseEnv = params.env ? toStringEnv(params.env) : undefined;
   const preparedSpawn = prepareOomScoreAdjustedSpawn(params.shell, params.args, { env: baseEnv });
   const terminalName = resolvePtyTerminalName(
     params.name ??
-      readPtyTerminalName(preparedSpawn.env, process.platform) ??
-      readPtyTerminalName(process.env, process.platform),
+      resolveEnvironmentValue(preparedSpawn.env, "TERM", process.platform) ??
+      resolveEnvironmentValue(process.env, "TERM", process.platform),
   );
   const spawnEnv = preparedSpawn.env
     ? toStringEnv(preparedSpawn.env)
@@ -171,67 +164,37 @@ export async function createPtyAdapter(
     },
   };
 
-  const onStdout = (listener: (chunk: string) => void) => {
-    dataListener =
-      pty.onData((chunk) => {
-        listener(chunk);
-      }) ?? null;
-  };
-
-  const onStderr = (_listener: (chunk: string) => void) => {
-    // PTY gives a unified output stream.
-  };
-
-  const wait = async () => await completion.promise;
-
-  const kill = (signal: NodeJS.Signals = "SIGKILL") => {
-    try {
-      if (
-        (signal === "SIGKILL" || signal === "SIGTERM") &&
-        typeof pty.pid === "number" &&
-        pty.pid > 0
-      ) {
-        signalPtySessionTree(pty.pid, signal);
-      } else {
-        pty.kill(signal);
-      }
-    } catch {
-      // ignore kill errors
-    }
-
-    if (signal === "SIGKILL") {
-      scheduleForceKillWaitFallback(signal);
-    }
-  };
-
-  const dispose = () => {
-    stdinDestroyed = true;
-    stdinEnded = true;
-    try {
-      dataListener?.dispose();
-    } catch {
-      // ignore disposal errors
-    }
-    try {
-      exitListener?.dispose();
-    } catch {
-      // ignore disposal errors
-    }
-    clearForceKillWaitFallback();
-    dataListener = null;
-    exitListener = null;
-    settleWait({ code: null, signal: null });
-  };
-
   return {
     pid: pty.pid || undefined,
     stdin,
     oomScoreWrapperSelected: preparedSpawn.wrapped,
     supportsRawOutput: false,
-    onStdout,
-    onStderr,
-    wait,
-    kill,
-    dispose,
+    onStdout: (listener) => {
+      dataListener = pty.onData(listener) ?? null;
+    },
+    onStderr: () => {}, // PTY output is unified.
+    wait: async () => await completion.promise,
+    kill: (signal = "SIGKILL") => {
+      signalTerminalPtyTree(pty.pid, signal, (directSignal) => pty.kill(directSignal));
+
+      if (signal === "SIGKILL") {
+        scheduleForceKillWaitFallback(signal);
+      }
+    },
+    dispose: () => {
+      stdinDestroyed = true;
+      stdinEnded = true;
+      for (const listener of [dataListener, exitListener]) {
+        try {
+          listener?.dispose();
+        } catch {
+          // Both subscriptions must be released even if one disposal fails.
+        }
+      }
+      clearForceKillWaitFallback();
+      dataListener = null;
+      exitListener = null;
+      settleWait({ code: null, signal: null });
+    },
   };
 }

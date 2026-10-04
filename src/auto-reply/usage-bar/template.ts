@@ -1,6 +1,10 @@
-import { type FSWatcher, readFileSync, watch } from "node:fs";
+import { readFileSync } from "node:fs";
+import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
+import { root } from "@openclaw/fs-safe/root";
+import { watch, type WatchSubscription } from "@openclaw/fs-safe/watch";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { isRecord as isPlainObject } from "@openclaw/normalization-core/record-coerce";
 import { createDedupeCache } from "../../infra/dedupe.js";
 import { expandHomePrefix } from "../../infra/home-dir.js";
@@ -10,9 +14,12 @@ import type { UsageBarTemplate } from "./translator.js";
 
 type UsageTemplateConfig = string | Record<string, unknown> | undefined;
 
-type CacheEntry = { template: UsageBarTemplate | undefined; watcher?: FSWatcher };
+type CacheEntry = {
+  template: UsageBarTemplate | undefined;
+  watcher?: Promise<WatchSubscription | undefined>;
+  abort: AbortController;
+};
 const fileCache = new Map<string, CacheEntry>();
-/** Maximum number of template file paths to cache concurrently. */
 const MAX_CACHED_TEMPLATE_FILES = 64;
 const MAX_WARNED_TEMPLATE_OVERRIDES = 256;
 // Retain recent warning keys without accumulating every historical config value.
@@ -42,10 +49,7 @@ function hasOutputPieces(output: unknown): boolean {
     return true;
   }
   const surfaces = output.surfaces;
-  return (
-    isPlainObject(surfaces) &&
-    Object.values(surfaces).some((surfacePieces) => hasPieces(surfacePieces))
-  );
+  return isPlainObject(surfaces) && Object.values(surfaces).some(hasPieces);
 }
 
 function isEmptyTemplate(value: unknown): boolean {
@@ -55,7 +59,7 @@ function isEmptyTemplate(value: unknown): boolean {
   if (Object.keys(value).length === 0) {
     return true;
   }
-  if ("segments" in value && Array.isArray(value.segments)) {
+  if (Array.isArray(value.segments)) {
     return value.segments.length === 0;
   }
   const output = value.output;
@@ -78,14 +82,6 @@ function isUsableTemplate(value: unknown): value is UsageBarTemplate {
 
 type InvalidTemplateReason = "invalid-json" | "unreadable" | "unsupported-shape";
 type TemplateReadResult = { template?: UsageBarTemplate; reason?: InvalidTemplateReason };
-
-function getErrorCode(error: unknown): string | undefined {
-  if (typeof error !== "object" || error === null || !("code" in error)) {
-    return undefined;
-  }
-  const code = error.code;
-  return typeof code === "string" ? code : undefined;
-}
 
 function warnInvalidUsageTemplate(source: "inline" | "file", reason: string, path?: string): void {
   const key = `${source}:${reason}:${path ?? ""}`;
@@ -111,7 +107,7 @@ function readTemplateFile(path: string): TemplateReadResult {
   try {
     raw = readFileSync(path, "utf8");
   } catch (error) {
-    return getErrorCode(error) === "ENOENT" ? {} : { reason: "unreadable" };
+    return extractErrorCode(error) === "ENOENT" ? {} : { reason: "unreadable" };
   }
   if (raw.trim().length === 0) {
     return {};
@@ -128,36 +124,53 @@ function cacheTemplateFile(path: string): UsageBarTemplate | undefined {
   if (result.reason) {
     warnInvalidUsageTemplate("file", result.reason, path);
   }
-  // Only evict when inserting a new key that would exceed the limit.
-  // Eviction must happen before watcher allocation so we don't create a
-  // watcher only to close it immediately. Retries for an existing key
-  // (same-path re-read after a prior miss) must not evict other entries.
+  // Evict before allocating a watcher, but preserve other entries on same-path retries.
   if (!fileCache.has(path) && fileCache.size >= MAX_CACHED_TEMPLATE_FILES) {
     const oldestKey = fileCache.keys().next().value;
     if (oldestKey !== undefined) {
-      fileCache.get(oldestKey)?.watcher?.close();
+      fileCache.get(oldestKey)?.abort.abort();
       fileCache.delete(oldestKey);
     }
   }
-  const entry: CacheEntry = { template: result.template };
+  const entry: CacheEntry = { template: result.template, abort: new AbortController() };
   if (entry.template) {
-    try {
-      const watcher = watch(path, { persistent: false }, () => {
-        const next = readTemplateFile(path);
-        if (next.reason) {
-          warnInvalidUsageTemplate("file", next.reason, path);
-        }
-        entry.template = next.template;
+    entry.watcher = (async () => {
+      // Preserve configured symlink targets, including links in parent directories.
+      const canonical = await realpath(path);
+      const authority = await root(dirname(canonical), { hardlinks: "allow" });
+      if (entry.abort.signal.aborted) {
+        return undefined;
+      }
+      const watcher = watch(authority, {
+        mode: "auto",
+        persistent: false,
+        scopes: [{ path: basename(canonical), kind: "entry" }],
+        signal: entry.abort.signal,
+        onInvalidate: () => {
+          const next = readTemplateFile(path);
+          if (next.reason) {
+            warnInvalidUsageTemplate("file", next.reason, path);
+          }
+          if (JSON.stringify(next.template) !== JSON.stringify(entry.template)) {
+            entry.template = next.template;
+          }
+        },
+        onHealth: (health) => {
+          if (health.state === "unavailable") {
+            entry.abort.abort();
+            entry.watcher = undefined;
+            entry.template = undefined;
+          }
+        },
       });
-      watcher.on("error", () => {
-        watcher.close();
-        entry.watcher = undefined;
-        entry.template = undefined;
-      });
-      entry.watcher = watcher;
-    } catch {
-      // Cache remains valid without live refresh.
-    }
+      await watcher.ready;
+      return watcher;
+    })().catch(() => {
+      entry.abort.abort();
+      entry.watcher = undefined;
+      entry.template = undefined;
+      return undefined;
+    });
   }
   fileCache.set(path, entry);
   return entry.template;
@@ -177,18 +190,20 @@ export function loadUsageBarTemplate(configured: UsageTemplateConfig): UsageBarT
   const path = expandPath(configured);
   const cached = fileCache.get(path);
   return (
-    (cached
-      ? (cached.template ?? (cached.watcher ? undefined : cacheTemplateFile(path)))
-      : cacheTemplateFile(path)) ?? DEFAULT_USAGE_BAR_TEMPLATE
+    cached?.template ??
+    (cached?.watcher ? undefined : cacheTemplateFile(path)) ??
+    DEFAULT_USAGE_BAR_TEMPLATE
   );
 }
 
-function clearUsageBarTemplateCacheForTest(): void {
-  for (const entry of fileCache.values()) {
-    entry.watcher?.close();
-  }
+async function clearUsageBarTemplateCacheForTest(): Promise<void> {
+  const entries = [...fileCache.values()];
   fileCache.clear();
   warnedTemplateOverrides.clear();
+  for (const entry of entries) {
+    entry.abort.abort();
+  }
+  await Promise.all(entries.map(async (entry) => (await entry.watcher)?.close()));
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

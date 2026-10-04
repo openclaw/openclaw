@@ -20,10 +20,15 @@ import {
   type SessionSourceVerification,
 } from "../infra/deferred-plugin-session-sources.js";
 import * as migrationArtifact from "../infra/session-sqlite-migration-artifact.js";
+import { isSessionSqliteMigrationWarning } from "../infra/session-sqlite-migration-issues.js";
 import * as migrationRun from "../infra/session-sqlite-migration-manifest.js";
 import { ExitError } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readSessionSqliteMigrationWarnings } from "./doctor-session-sqlite-warnings.js";
 import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
@@ -38,7 +43,7 @@ describe("retained session source verification", () => {
     "rebuilds a missing receipt index and protects changed sources without their owner index (changed: %s)",
     async (changed) => {
       await withOpenClawTestState({ label: "deferred-missing-index" }, async (state) => {
-        const { cfg, storePath, scope } = seedDeferredPluginSessionSource(
+        const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(
           state,
           "default",
           "brave",
@@ -90,7 +95,7 @@ describe("retained session source verification", () => {
           archiveTranscript: false,
           deleteTranscriptWithoutArchive: true,
         });
-        recordDeferredPluginMigrations({
+        await recordDeferredPluginMigrations({
           env: state.env,
           pending: [],
           resolvedPluginIds: ["brave"],
@@ -117,7 +122,7 @@ describe("retained session source verification", () => {
 
   it("preserves and names a changed index archive while verifying the other receipt sources", async () => {
     await withOpenClawTestState({ label: "deferred-changed-index-archive" }, async (state) => {
-      const { cfg, storePath, scope } = seedDeferredPluginSessionSource(state, "default");
+      const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(state, "default");
       const run = () =>
         runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
       await run();
@@ -184,7 +189,8 @@ describe("retained session source verification", () => {
     "preserves an empty-index receipt for an existing database (unindexed history: %s)",
     async (history) => {
       await withOpenClawTestState({ label: "deferred-empty-index" }, async (state) => {
-        const cfg: OpenClawConfig = { agents: { entries: { main: { default: true } } } };
+        openOpenClawStateDatabase({ env: state.env });
+        const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
         const directory = state.sessionsDir("main");
         fs.mkdirSync(directory, { recursive: true });
         const storePath = path.join(directory, "sessions.json");
@@ -211,7 +217,7 @@ describe("retained session source verification", () => {
               .join("\n") + "\n",
           );
         }
-        recordDeferredPluginMigrations({
+        await recordDeferredPluginMigrations({
           env: state.env,
           pending: [
             {
@@ -308,8 +314,13 @@ describe("retained session source verification", () => {
           },
         },
         async (state) => {
+          openOpenClawStateDatabase({ env: state.env });
           const cfg: OpenClawConfig = {
-            agents: { entries: { main: { default: true }, ops: {} } },
+            agents: {
+              ownership: "explicit",
+              defaults: { systemAgent: { agentId: "main" }, sessionStore: { agentId: "main" } },
+              entries: { main: {}, ops: {} },
+            },
             gateway: { mode: "local" },
           };
           const historyIds =
@@ -451,7 +462,7 @@ describe("retained session source verification", () => {
             entries: { [pluginId]: { enabled: true, config: { fixture: true } } },
           };
           await state.writeConfig(cfg);
-          recordDeferredPluginMigrations({
+          await recordDeferredPluginMigrations({
             env: state.env,
             pending: [
               {
@@ -518,7 +529,34 @@ describe("retained session source verification", () => {
               expect(fs.existsSync(target.storePath)).toBe(false);
               for (const move of target.completedMoves) {
                 if (move.kind === "transcript") {
-                  expect(fs.readFileSync(move.sourcePath)).toEqual(originals.get(move.archivePath));
+                  if (history === "missing-index") {
+                    expect(fs.readFileSync(move.sourcePath)).toEqual(
+                      originals.get(move.archivePath),
+                    );
+                  } else {
+                    expect(fs.existsSync(move.sourcePath)).toBe(false);
+                    const settledMoves = migrationRun
+                      .listSessionSqliteMigrationManifestPaths(state.env)
+                      .flatMap(
+                        (file) =>
+                          migrationRun.readSessionSqliteMigrationManifest(file)?.targets ?? [],
+                      )
+                      .flatMap((owner) => owner.completedMoves)
+                      .filter(
+                        (settled) =>
+                          settled.sourcePath === move.sourcePath &&
+                          settled.archivePath !== move.archivePath,
+                      );
+                    expect(settledMoves).toHaveLength(1);
+                    expect(settledMoves[0]!.artifact).toMatchObject({
+                      classification: "protected",
+                      reason: "indexed-historical-primary",
+                      disposal: { state: "retained" },
+                    });
+                    expect(fs.readFileSync(settledMoves[0]!.archivePath)).toEqual(
+                      originals.get(move.archivePath),
+                    );
+                  }
                 }
               }
             }
@@ -532,7 +570,7 @@ describe("retained session source verification", () => {
     "reads each archive manifest once per verification of %s retained transcripts",
     async (transcriptCount) => {
       await withOpenClawTestState({ label: "deferred-plugin-manifest-reads" }, async (state) => {
-        const { cfg, storePath, scope } = seedDeferredPluginSessionSource(state);
+        const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(state);
         const entries = JSON.parse(fs.readFileSync(storePath, "utf8"));
         for (let index = 2; index < transcriptCount; index++) {
           const sessionId = `legacy-volume-${index}`;
@@ -547,7 +585,7 @@ describe("retained session source verification", () => {
         const run = () =>
           runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
         expect((await run()).totals.importedEntries).toBe(transcriptCount);
-        recordDeferredPluginMigrations({
+        await recordDeferredPluginMigrations({
           env: state.env,
           pending: [],
           resolvedPluginIds: ["fixture-plugin"],
@@ -556,6 +594,15 @@ describe("retained session source verification", () => {
         expect(archived.totals.importedEntries).toBe(0);
         expect(archived.totals.archivedTranscriptFiles).toBe(transcriptCount);
         expect(fs.existsSync(storePath)).toBe(false);
+        // Older releases left this receipt active even after its originals were archived.
+        runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            db.prepare(
+              "UPDATE migration_sources SET removed_source = 0 WHERE migration_kind = 'deferred-plugin-session-import'",
+            ).run();
+          },
+          { env: state.env },
+        );
         const manifestPaths = migrationRun.listSessionSqliteMigrationManifestPaths(state.env);
         const manifestPath = archived.migrationRun!.manifestPath;
         const manifestBytes = fs.readFileSync(manifestPath);
@@ -669,4 +716,32 @@ describe("retained session source verification", () => {
       });
     },
   );
+  it("reverifies a changed retained index without replaying current canonical metadata", async () => {
+    await withOpenClawTestState({ label: "deferred-plugin-source-conflict" }, async (state) => {
+      const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(state);
+      await runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
+      await upsertSessionEntryCore(
+        { ...scope, sessionKey: "agent:main:kept" },
+        { label: "current" },
+      );
+      fs.appendFileSync(storePath, "\n");
+      const retry = await runDoctorSessionSqlite({
+        cfg,
+        env: state.env,
+        allAgents: true,
+        mode: "import",
+      });
+      expect(retry.totals.importedEntries).toBe(0);
+      const issues = retry.targets.flatMap((target) => target.issues);
+      expect(issues).toContainEqual(
+        expect.objectContaining({ code: "retained_plugin_source_index_rebuilt" }),
+      );
+      expect(issues.every(isSessionSqliteMigrationWarning)).toBe(true);
+      expect(loadExactSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.label).toBe(
+        "current",
+      );
+      expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).not.toThrow();
+      expect(fs.existsSync(storePath)).toBe(true);
+    });
+  });
 });

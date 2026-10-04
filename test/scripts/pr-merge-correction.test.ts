@@ -63,31 +63,36 @@ function correctionFixture() {
 }
 
 describePosix("correction authority through native merge admission", () => {
-  it("merges an exactly reviewed and qualified correction while retaining original NEEDS WORK", () => {
+  it.each([
+    "correction-review.json",
+    "prep-context.env",
+    "gates.env",
+    "final-review",
+    "LOCAL_PREP_HEAD_SHA",
+    "PREP_HEAD_SHA",
+    "missing",
+  ] as const)("refuses changed correction authority: %s", (fault) => {
     const f = correctionFixture();
-    const result = f.run();
-    expect(result.status, result.output).toBe(0);
-    expect(f.state().mutations).toBe(1);
-  });
-  it.each(["correction-review.json", "prep-context.env", "gates.env", "prep.env", "pr-meta.env"])(
-    "refuses changed %s after CI checks and before intent",
-    (artifact) => {
-      const f = correctionFixture();
-      f.save({ ...f.state(), duringChecks: { artifact } });
-      const result = f.run();
-      expect(result.status, result.output).toBe(1);
-      expect(f.state().mutations).toBe(0);
-      expect(() => f.record()).toThrow();
-    },
-  );
-  it("refuses correction approval changed during final remote review admission", () => {
-    const f = correctionFixture();
-    f.save({ ...f.state(), tamperCorrectionAtFinalReview: true });
-    const result = f.run();
+    const receipt = fault === "LOCAL_PREP_HEAD_SHA" || fault === "PREP_HEAD_SHA";
+    const direct = receipt || fault === "missing";
+    if (receipt) {
+      f.save({ ...f.state(), duringChecks: { receiptField: fault } });
+    } else if (fault === "missing") {
+      rmSync(join(f.worktree, ".local/correction-review.json"));
+    } else if (fault === "final-review") {
+      f.save({ ...f.state(), tamperCorrectionAtFinalReview: true });
+    } else {
+      f.save({ ...f.state(), duringChecks: { artifact: fault } });
+    }
+    const result = direct ? f.verify() : f.run();
     expect(result.status, result.output).toBe(1);
-    expect(result.output).toContain("Correction review authority changed");
+    if (receipt || fault === "final-review") {
+      expect(result.output).toContain("Correction review authority changed");
+    }
     expect(f.state().mutations).toBe(0);
-    expect(() => f.record()).toThrow();
+    if (!direct) {
+      expect(() => f.record()).toThrow();
+    }
   });
 
   it("accepts the verified GraphQL local/hosted correction pair", () => {
@@ -173,25 +178,6 @@ describePosix("correction authority through native merge admission", () => {
     },
   );
 
-  it.each(["LOCAL_PREP_HEAD_SHA", "PREP_HEAD_SHA"] as const)(
-    "direct verify rejects changed receipt %s after checks",
-    (receiptField) => {
-      const f = correctionFixture();
-      f.save({ ...f.state(), duringChecks: { receiptField } });
-      const result = f.verify();
-      expect(result.status, result.output).toBe(1);
-      expect(result.output).toContain("Correction review authority changed");
-      expect(f.state().mutations).toBe(0);
-    },
-  );
-
-  it("direct merge-verify refuses missing correction approval", () => {
-    const f = correctionFixture();
-    rmSync(join(f.worktree, ".local/correction-review.json"));
-    const result = f.verify();
-    expect(result.status, result.output).toBe(1);
-    expect(f.state().mutations).toBe(0);
-  });
   it("reconciles an accepted correction merge without disposable review files", () => {
     const f = correctionFixture();
     f.save({ ...f.state(), mode: "applied-merged" });

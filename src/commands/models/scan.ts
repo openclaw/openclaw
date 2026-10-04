@@ -1,4 +1,3 @@
-/** OpenRouter free-model scanner and fallback updater for model commands. */
 import { cancel, type CANCEL_SYMBOL, multiselect as clackMultiselect } from "@clack/prompts";
 import { getEnvApiKey } from "@openclaw/ai/internal/runtime";
 import {
@@ -35,7 +34,7 @@ function guardPromptCancel<T>(value: T | typeof CANCEL_SYMBOL, runtime: RuntimeE
 }
 
 function sortScanResults(results: ModelScanResult[]): ModelScanResult[] {
-  return results.slice().toSorted((a, b) => {
+  return results.toSorted((a, b) => {
     const aImage = a.image.ok ? 1 : 0;
     const bImage = b.image.ok ? 1 : 0;
     if (aImage !== bImage) {
@@ -53,7 +52,7 @@ function sortScanResults(results: ModelScanResult[]): ModelScanResult[] {
 }
 
 function sortImageResults(results: ModelScanResult[]): ModelScanResult[] {
-  return results.slice().toSorted((a, b) => {
+  return results.toSorted((a, b) => {
     const aLatency = a.image.latencyMs ?? Number.POSITIVE_INFINITY;
     const bLatency = b.image.latencyMs ?? Number.POSITIVE_INFINITY;
     if (aLatency !== bLatency) {
@@ -150,24 +149,17 @@ function printScanTable(results: ModelScanResult[], runtime: RuntimeEnv) {
   }
 }
 
-function parseOptionalNonNegativeFiniteOption(raw: unknown, label: string): number | undefined {
+function parseOptionalFiniteOption(
+  raw: unknown,
+  label: string,
+  allowZero = false,
+): number | undefined {
   if (raw === undefined || raw === null) {
     return undefined;
   }
   const parsed = parseStrictFiniteNumber(raw);
-  if (parsed === undefined || parsed < 0) {
-    throw new Error(`${label} must be >= 0`);
-  }
-  return parsed;
-}
-
-function parseOptionalPositiveFiniteOption(raw: unknown, label: string): number | undefined {
-  if (raw === undefined || raw === null) {
-    return undefined;
-  }
-  const parsed = parseStrictFiniteNumber(raw);
-  if (parsed === undefined || parsed <= 0) {
-    throw new Error(`${label} must be > 0`);
+  if (parsed === undefined || (allowZero ? parsed < 0 : parsed <= 0)) {
+    throw new Error(`${label} must be ${allowZero ? ">=" : ">"} 0`);
   }
   return parsed;
 }
@@ -183,7 +175,6 @@ function parsePositiveIntegerOption(raw: unknown, label: string, fallback: numbe
   return parsed;
 }
 
-/** Scans OpenRouter candidates, optionally probes them, then writes fallback defaults. */
 export async function modelsScanCommand(
   opts: {
     minParams?: string;
@@ -201,10 +192,10 @@ export async function modelsScanCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  const minParams = parseOptionalNonNegativeFiniteOption(opts.minParams, "--min-params");
-  const maxAgeDays = parseOptionalNonNegativeFiniteOption(opts.maxAgeDays, "--max-age-days");
+  const minParams = parseOptionalFiniteOption(opts.minParams, "--min-params", true);
+  const maxAgeDays = parseOptionalFiniteOption(opts.maxAgeDays, "--max-age-days", true);
   const maxCandidates = parsePositiveIntegerOption(opts.maxCandidates, "--max-candidates", 6);
-  const timeout = parseOptionalPositiveFiniteOption(opts.timeout, "--timeout");
+  const timeout = parseOptionalFiniteOption(opts.timeout, "--timeout");
   const concurrency =
     opts.concurrency === undefined
       ? undefined
@@ -354,12 +345,7 @@ export async function modelsScanCommand(
 
   await updateConfig((cfg) => {
     const nextModels = { ...cfg.agents?.defaults?.models };
-    for (const entry of selected) {
-      if (!nextModels[entry]) {
-        nextModels[entry] = {};
-      }
-    }
-    for (const entry of selectedImages) {
+    for (const entry of [...selected, ...selectedImages]) {
       if (!nextModels[entry]) {
         nextModels[entry] = {};
       }

@@ -1,4 +1,3 @@
-// Control UI tests cover control ui e2e behavior.
 import { EventEmitter } from "node:events";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -10,6 +9,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.ts"
 import { captureSidebarUiProof } from "../e2e/sidebar-customization.test-support.ts";
 import { createControlUiE2eArtifactDir } from "./control-ui-e2e-artifacts.ts";
 import { installControlUiE2ePageDiagnosticRing } from "./control-ui-e2e-diagnostics.ts";
+import { installControlUiE2eRendererStallProbe } from "./control-ui-e2e-renderer-stall.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
   installControlUiRpcDiagnostics,
@@ -115,127 +115,206 @@ describe("shared proof capture", () => {
     },
   );
 
-  it("retains first observed lifecycle facts through close without reattaching listeners", async () => {
+  it.each([
+    { stall: "script", paused: true },
+    { stall: "native", paused: false },
+  ])("publishes $stall renderer stall evidence without page origins", async ({ paused }) => {
     vi.useFakeTimers();
-    const parent = tempDirs.make("control-ui-lifecycle-proof-");
+    const parent = tempDirs.make("control-ui-renderer-stall-");
     vi.stubEnv("OPENCLAW_UI_E2E_DIAGNOSTIC_DIR", parent);
-    const logs = vi.spyOn(console, "error").mockImplementation(() => {});
-    const browserEvents = new EventEmitter();
-    let connected = true;
-    let closed = false;
-    const reads: string[] = [];
-    const browser = Object.assign(browserEvents, {
-      isConnected: () => {
-        reads.push("browser-connected");
-        return connected;
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const sent: string[] = [];
+    let samples = 0;
+    const session = Object.assign(new EventEmitter(), {
+      send: async (method: string) => {
+        sent.push(method);
+        if (method === "Performance.getMetrics") {
+          samples += 1;
+          const elapsed = samples === 1 ? 0 : 0.5;
+          return {
+            metrics: [
+              { name: "TaskDuration", value: 10 + elapsed },
+              { name: "ScriptDuration", value: 4 + elapsed },
+              { name: "LayoutDuration", value: 1 },
+            ],
+          };
+        }
+        if (method === "Debugger.pause" && paused) {
+          queueMicrotask(() =>
+            session.emit("Debugger.paused", {
+              callFrames: [
+                {
+                  functionName: "layoutPins",
+                  url: "http://127.0.0.1:4173/assets/index-private.js?token=private",
+                  location: { lineNumber: 9, columnNumber: 3 },
+                },
+                {
+                  functionName: "",
+                  url: "blob:https://private.invalid/id",
+                  location: { lineNumber: 0, columnNumber: 0 },
+                },
+              ],
+            }),
+          );
+        }
+        return {};
+      },
+      detach: async () => {
+        sent.push("detach");
       },
     });
-    const registeredAt = new Date().toISOString();
-    const pageEvents = new EventEmitter();
-    // SAFETY: event emitters model the supported Playwright host-side lifecycle boundary.
-    const page = Object.assign(pageEvents, {
-      context: () => ({ browser: () => browser }),
-      isClosed: () => {
-        reads.push("page-closed");
-        return closed;
-      },
-      frames: () => [],
-      url: () => "https://fixture.invalid/chat",
-      evaluate: async () => {
-        reads.push("evaluate");
-        throw new Error("private-renderer-error");
-      },
+    const stalled = createDeferredCore<unknown>();
+    // SAFETY: a never-settling read models a renderer whose main thread stays busy.
+    const page = {
+      addInitScript: async () => {},
+      evaluate: () => stalled.promise,
       screenshot: async () => Buffer.from("proof"),
-    }) as unknown as Page;
-    const events = installControlUiE2ePageDiagnosticRing(page);
-    expect(installControlUiE2ePageDiagnosticRing(page)).toBe(events);
-    expect(browserEvents.listenerCount("disconnected")).toBe(1);
-    expect(logs).not.toHaveBeenCalled();
-    vi.setSystemTime(Date.now() + 1_000);
-    const firstCrashAt = new Date().toISOString();
-    pageEvents.emit("crash", page);
-    vi.setSystemTime(Date.now() + 1_000);
-    const firstBrowserDisconnectAt = new Date().toISOString();
-    connected = false;
-    browserEvents.emit("disconnected", browser);
-    vi.setSystemTime(Date.now() + 1_000);
-    const firstCloseAt = new Date().toISOString();
-    closed = true;
-    pageEvents.emit("close", page);
-    expect(pageEvents.listenerCount("crash")).toBe(0);
-    expect(pageEvents.listenerCount("console")).toBe(0);
-    expect(browserEvents.listenerCount("disconnected")).toBe(0);
-    installControlUiE2ePageDiagnosticRing(page);
-    expect(browserEvents.listenerCount("disconnected")).toBe(0);
-    vi.setSystemTime(Date.now() + 1_000);
-    pageEvents.emit("crash", page);
-    pageEvents.emit("close", page);
-    browserEvents.emit("disconnected", browser);
-    expect(logs).not.toHaveBeenCalled();
-    reads.length = 0;
-    await captureControlUiE2eFailureDiagnostics(page, {
-      error: new Error("failure"),
-      label: "test",
+      frames: () => [],
+      context: () => ({
+        browser: () => ({ isConnected: () => true }),
+        newCDPSession: async () => session,
+      }),
+      isClosed: () => false,
+      url: () => "http://127.0.0.1:4173/chat",
+    } as unknown as Page;
+    await installControlUiE2eRendererStallProbe(page);
+    const capture = captureControlUiE2eFailureDiagnostics(page, {
+      error: new Error("click timed out"),
+      label: "comment pin",
     });
+    await vi.advanceTimersByTimeAsync(5_000 + 3_000);
+    await capture;
     const root = path.join(parent, readdirSync(parent)[0]!);
     const report = JSON.parse(readFileSync(path.join(root, "failure.public.json"), "utf8"));
     expect(report).toMatchObject({
-      hostBeforeRead: { pageClosed: true, browserConnected: false },
-      lifecycle: { registeredAt, firstCrashAt, firstCloseAt, firstBrowserDisconnectAt },
-      rendererRead: "rejected",
+      rendererRead: "deadline",
+      rendererStall: {
+        busyMs: { task: 500, script: 500, layout: 0, style: 0 },
+        sampleMs: 500,
+        stack: paused
+          ? [
+              {
+                functionName: "layoutPins",
+                script: "/assets/index-private.js",
+                line: 10,
+                column: 4,
+              },
+              { functionName: "(anonymous)", script: "", line: 1, column: 1 },
+            ]
+          : null,
+      },
     });
-    expect(reads.slice(0, 3)).toEqual(["page-closed", "browser-connected", "evaluate"]);
-    expect(JSON.stringify(report)).not.toContain("private-");
+    expect(JSON.stringify(report)).not.toMatch(/token=private|private\.invalid/u);
+    expect(sent).toContain("Debugger.pause");
+    expect(sent.slice(-2)).toEqual(["Debugger.resume", "detach"]);
     expect(vi.getTimerCount()).toBe(0);
+    stalled.resolve(null);
   });
 
   it.each([
-    { closed: true, connected: false },
-    { closed: false, connected: false },
-    { closed: false, connected: null },
-    { closed: false, connected: true },
+    { observed: true, closed: false, connected: true },
+    { observed: false, closed: true, connected: false },
+    { observed: false, closed: false, connected: false },
+    { observed: false, closed: false, connected: null },
+    { observed: false, closed: false, connected: true },
   ])(
-    "does not invent earlier lifecycle events for $closed/$connected",
-    async ({ closed, connected }) => {
-      const parent = tempDirs.make("control-ui-unobserved-proof-");
+    "retains only observed lifecycle facts ($observed/$closed/$connected)",
+    async ({ observed, closed: initiallyClosed, connected: initiallyConnected }) => {
+      let closed = initiallyClosed;
+      let connected = initiallyConnected;
+      vi.useFakeTimers();
+      const parent = tempDirs.make("control-ui-lifecycle-proof-");
       vi.stubEnv("OPENCLAW_UI_E2E_DIAGNOSTIC_DIR", parent);
-      vi.spyOn(console, "error").mockImplementation(() => {});
-      const browser = Object.assign(new EventEmitter(), { isConnected: () => connected });
+      const logs = vi.spyOn(console, "error").mockImplementation(() => {});
+      const browserEvents = new EventEmitter();
+      const reads: string[] = [];
+      const browser = Object.assign(browserEvents, {
+        isConnected: () => {
+          reads.push("browser-connected");
+          return connected;
+        },
+      });
+      const registeredAt = new Date().toISOString();
       const pageEvents = new EventEmitter();
-      // SAFETY: the missing browser models Playwright's supported null browser context.
+      // SAFETY: event emitters model the supported Playwright host-side lifecycle boundary.
       const page = Object.assign(pageEvents, {
         context: () => ({ browser: () => (connected === null ? null : browser) }),
-        isClosed: () => closed,
+        isClosed: () => {
+          reads.push("page-closed");
+          return closed;
+        },
         frames: () => [],
         url: () => "https://fixture.invalid/chat",
-        evaluate: async () => ({ failureSummary: { available: true } }),
+        evaluate: async () => {
+          reads.push("evaluate");
+          if (observed) {
+            throw new Error("private-renderer-error");
+          }
+          return { failureSummary: { available: true } };
+        },
         screenshot: async () => Buffer.from("proof"),
       }) as unknown as Page;
-      installControlUiE2ePageDiagnosticRing(page);
-      installControlUiE2ePageDiagnosticRing(page);
-      expect(browser.listenerCount("disconnected")).toBe(connected ? 1 : 0);
+      const events = installControlUiE2ePageDiagnosticRing(page);
+      const reinstalled = installControlUiE2ePageDiagnosticRing(page);
+      expect(browserEvents.listenerCount("disconnected")).toBe(connected ? 1 : 0);
       if (closed) {
         expect(pageEvents.eventNames()).toEqual([]);
       }
+      const lifecycle: {
+        registeredAt: string;
+        firstCrashAt: string | null;
+        firstCloseAt: string | null;
+        firstBrowserDisconnectAt: string | null;
+      } = {
+        registeredAt,
+        firstCrashAt: null,
+        firstCloseAt: null,
+        firstBrowserDisconnectAt: null,
+      };
+      if (observed) {
+        expect(reinstalled).toBe(events);
+        expect(logs).not.toHaveBeenCalled();
+        vi.setSystemTime(Date.now() + 1_000);
+        lifecycle.firstCrashAt = new Date().toISOString();
+        pageEvents.emit("crash", page);
+        vi.setSystemTime(Date.now() + 1_000);
+        lifecycle.firstBrowserDisconnectAt = new Date().toISOString();
+        connected = false;
+        browserEvents.emit("disconnected", browser);
+        vi.setSystemTime(Date.now() + 1_000);
+        lifecycle.firstCloseAt = new Date().toISOString();
+        closed = true;
+        pageEvents.emit("close", page);
+        expect(pageEvents.listenerCount("crash")).toBe(0);
+        expect(pageEvents.listenerCount("console")).toBe(0);
+        expect(browserEvents.listenerCount("disconnected")).toBe(0);
+        installControlUiE2ePageDiagnosticRing(page);
+        expect(browserEvents.listenerCount("disconnected")).toBe(0);
+        vi.setSystemTime(Date.now() + 1_000);
+        pageEvents.emit("crash", page);
+        pageEvents.emit("close", page);
+        browserEvents.emit("disconnected", browser);
+      }
+      expect(logs).not.toHaveBeenCalled();
+      reads.length = 0;
       await captureControlUiE2eFailureDiagnostics(page, {
         error: new Error("failure"),
         label: "test",
       });
       const root = path.join(parent, readdirSync(parent)[0]!);
-      expect(
-        JSON.parse(readFileSync(path.join(root, "failure.public.json"), "utf8")),
-      ).toMatchObject({
+      const report = JSON.parse(readFileSync(path.join(root, "failure.public.json"), "utf8"));
+      expect(report).toMatchObject({
         hostBeforeRead: { pageClosed: closed, browserConnected: connected },
-        lifecycle: {
-          registeredAt: expect.any(String),
-          firstCrashAt: null,
-          firstCloseAt: null,
-          firstBrowserDisconnectAt: null,
-        },
-        rendererRead: "completed",
+        lifecycle,
+        rendererRead: observed ? "rejected" : "completed",
       });
+      if (observed) {
+        expect(reads.slice(0, 3)).toEqual(["page-closed", "browser-connected", "evaluate"]);
+      }
+      expect(JSON.stringify(report)).not.toContain("private-");
+      expect(vi.getTimerCount()).toBe(0);
       pageEvents.emit("close", page);
-      expect(browser.listenerCount("disconnected")).toBe(0);
+      expect(browserEvents.listenerCount("disconnected")).toBe(0);
     },
   );
 
@@ -705,27 +784,25 @@ describe("shared proof capture", () => {
 });
 
 describe("resolvePlaywrightChromiumExecutablePath", () => {
-  it("uses a runnable system Chromium when the cached Playwright executable cannot start", () => {
-    const systemExecutable = systemChromiumExecutableCandidates[1];
-
-    expect(
-      resolvePlaywrightChromiumExecutablePath(
-        "/cache/chromium/chrome",
-        {},
-        (candidate) => candidate === systemExecutable,
-      ),
-    ).toBe(systemExecutable);
-  });
-
-  it("keeps explicit Chromium overrides authoritative", () => {
-    expect(
-      resolvePlaywrightChromiumExecutablePath(
-        "/cache/chromium/chrome",
-        { PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: " /custom/chromium " },
-        () => false,
-      ),
-    ).toBe("/custom/chromium");
-  });
+  it.each([
+    {
+      override: undefined,
+      runnable: systemChromiumExecutableCandidates[1],
+      expected: systemChromiumExecutableCandidates[1],
+    },
+    { override: " /custom/chromium ", runnable: undefined, expected: "/custom/chromium" },
+  ])(
+    "selects the override $override or runnable system browser $runnable",
+    ({ override, runnable, expected }) => {
+      expect(
+        resolvePlaywrightChromiumExecutablePath(
+          "/cache/chromium/chrome",
+          { PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: override },
+          (candidate) => candidate === runnable,
+        ),
+      ).toBe(expected);
+    },
+  );
 });
 
 describe("waitForControlUiRoute", () => {
@@ -733,13 +810,17 @@ describe("waitForControlUiRoute", () => {
     document.body.replaceChildren();
   });
 
-  it("keeps polling while a new tab has no app element", async () => {
+  it.each([false, true])("waits for the app or preserves readiness failure (%s)", async (fails) => {
+    const cause = new Error("Route readiness failed");
     // SAFETY: this fixture implements the Page methods used by the route helper.
     const page = {
       async waitForFunction(
         predicate: (target: { routeId: string }) => boolean,
         target: { routeId: string },
       ) {
+        if (fails) {
+          throw cause;
+        }
         expect(predicate(target)).toBe(false);
         const app = document.createElement("openclaw-app");
         Object.assign(app, {
@@ -761,20 +842,14 @@ describe("waitForControlUiRoute", () => {
       evaluate: (read: () => unknown) => read(),
     } as unknown as Page;
 
-    await waitForControlUiRoute(page, { routeId: "chat" });
-  });
-
-  it("preserves readiness failures when the app is still absent", async () => {
-    const cause = new Error("Route readiness failed");
-    // SAFETY: this fixture implements the Page methods used by the route helper.
-    const page = {
-      waitForFunction: vi.fn().mockRejectedValue(cause),
-      evaluate: (read: () => unknown) => read(),
-    } as unknown as Page;
-
-    await expect(waitForControlUiRoute(page, { routeId: "chat" })).rejects.toMatchObject({
-      cause,
-      message: expect.stringContaining('"router":null'),
-    });
+    const ready = waitForControlUiRoute(page, { routeId: "chat" });
+    if (fails) {
+      await expect(ready).rejects.toMatchObject({
+        cause,
+        message: expect.stringContaining('"router":null'),
+      });
+    } else {
+      await ready;
+    }
   });
 });

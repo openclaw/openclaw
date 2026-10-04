@@ -1,12 +1,18 @@
-// Google Meet composes platform strategies with the shared meeting session runtime.
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createMeetingSession,
+  endMeetingVoiceCallGatewayCall,
+  getMeetingVoiceCallGatewayCall,
+  isMeetingVoiceCallMissingError,
+  speakMeetingViaVoiceCallGateway,
+  type MeetingVoiceCallGateway,
   MeetingPlatformAdapter,
   MeetingSessionRuntime,
   type MeetingSessionLeaveResult,
+  type MeetingParticipationAttempt,
+  type MeetingParticipationRequest,
   type MeetingSessionRuntimeHandles,
   type MeetingSessionRuntimeJoinContext,
 } from "openclaw/plugin-sdk/meeting-runtime";
@@ -50,20 +56,8 @@ import type {
   GoogleMeetJoinResult,
   GoogleMeetSession,
 } from "./transports/types.js";
-import {
-  createVoiceCallGateway,
-  endMeetVoiceCallGatewayCall,
-  getMeetVoiceCallGatewayCall,
-  isVoiceCallMissingError,
-  joinMeetViaVoiceCallGateway,
-  speakMeetViaVoiceCallGateway,
-  type VoiceCallGateway,
-} from "./voice-call-gateway.js";
+import { createVoiceCallGateway, joinMeetViaVoiceCallGateway } from "./voice-call-gateway.js";
 
-type ChromeAudioBridgeResult = NonNullable<
-  | Awaited<ReturnType<typeof launchChromeMeet>>["audioBridge"]
-  | Awaited<ReturnType<typeof launchChromeMeetOnNode>>["audioBridge"]
->;
 type ChromeLaunchResult =
   | Awaited<ReturnType<typeof launchChromeMeet>>
   | Awaited<ReturnType<typeof launchChromeMeetOnNode>>;
@@ -91,7 +85,7 @@ const nowIso = () => new Date().toISOString();
 
 export class GoogleMeetRuntime {
   readonly #createdBrowserTabs = new Map<string, string>();
-  readonly #voiceCallGateway: VoiceCallGateway;
+  readonly #voiceCallGateway: MeetingVoiceCallGateway;
   readonly #sessions: GoogleMeetSessionRuntime;
 
   reconcileTranscriptPolicy(enabled: boolean): Promise<void> {
@@ -108,7 +102,32 @@ export class GoogleMeetRuntime {
   ) {
     const adapter = GOOGLE_MEET_PLATFORM_ADAPTER;
     this.#voiceCallGateway = createVoiceCallGateway(params);
+    let participationStore:
+      | ReturnType<typeof params.runtime.state.openKeyedStore<MeetingParticipationAttempt>>
+      | undefined;
+    const getParticipationStore = () =>
+      (participationStore ??= params.runtime.state.openKeyedStore<MeetingParticipationAttempt>({
+        namespace: "meeting-participation",
+        maxEntries: 10_000,
+        overflowPolicy: "reject-new",
+      }));
     this.#sessions = new MeetingSessionRuntime({
+      participation: {
+        store: {
+          entries: async () => await getParticipationStore().entries(),
+          delete: async (key) => await getParticipationStore().delete(key),
+          lookup: async (key) => await getParticipationStore().lookup(key),
+          registerIfAbsent: async (key, attempt) =>
+            await getParticipationStore().registerIfAbsent(key, attempt),
+          register: async (key, attempt) => await getParticipationStore().register(key, attempt),
+        },
+        capabilities: () => [],
+        validateAction: () => undefined,
+        execute: async () => ({
+          status: "unsupported",
+          message: "Participation requires a supported tracked browser meeting.",
+        }),
+      },
       logger: params.logger,
       logScope: "[google-meet]",
       formatError: formatErrorMessage,
@@ -207,6 +226,14 @@ export class GoogleMeetRuntime {
 
   async status(sessionId?: string) {
     return await this.#sessions.status(sessionId);
+  }
+
+  participationContext(sessionId: string) {
+    return this.#sessions.participationContext(sessionId);
+  }
+
+  participate(sessionId: string, request: MeetingParticipationRequest) {
+    return this.#sessions.participate(sessionId, request);
   }
 
   async transcript(sessionId: string, options: { sinceIndex?: number } = {}) {
@@ -419,7 +446,7 @@ export class GoogleMeetRuntime {
     if (voiceCallResult?.callId) {
       context.attachRuntimeHandles(session, {
         stop: async () => {
-          await endMeetVoiceCallGatewayCall({
+          await endMeetingVoiceCallGatewayCall({
             gateway: this.#voiceCallGateway,
             callId: voiceCallResult.callId,
           });
@@ -438,7 +465,7 @@ export class GoogleMeetRuntime {
 
   #attachChromeAudioBridge(
     session: GoogleMeetSession,
-    audioBridge: ChromeAudioBridgeResult | undefined,
+    audioBridge: ChromeLaunchResult["audioBridge"],
   ): MeetingSessionRuntimeHandles<GoogleMeetChromeHealth> | undefined {
     if (!session.chrome || !audioBridge) {
       return undefined;
@@ -546,7 +573,7 @@ export class GoogleMeetRuntime {
       return;
     }
     try {
-      const status = await getMeetVoiceCallGatewayCall({
+      const status = await getMeetingVoiceCallGatewayCall({
         gateway: this.#voiceCallGateway,
         callId,
       });
@@ -570,7 +597,7 @@ export class GoogleMeetRuntime {
       return undefined;
     }
     try {
-      await speakMeetViaVoiceCallGateway({
+      await speakMeetingViaVoiceCallGateway({
         gateway: this.#voiceCallGateway,
         callId: session.twilio.voiceCallId,
         message:
@@ -580,7 +607,7 @@ export class GoogleMeetRuntime {
           "",
       });
     } catch (error) {
-      if (!isVoiceCallMissingError(error)) {
+      if (!isMeetingVoiceCallMissingError(error)) {
         throw error;
       }
       this.#sessions.markSessionEnded(session, "Voice Call is no longer active.");

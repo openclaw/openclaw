@@ -12,8 +12,10 @@ import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.
 import { isReplyPayloadStatusNotice } from "../../auto-reply/reply-payload.js";
 import { isInternalSourceReplyChannel } from "../../auto-reply/reply/source-reply-delivery-mode.js";
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
+import { onAgentEventForRun } from "../../infra/agent-events.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { updateChatRunProvider } from "../chat-abort.js";
@@ -120,6 +122,18 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
   let { messageInjectionAttempt } = injection;
   const { chatSendAckedAtMs, chatSendTiming } = timing;
 
+  // The first release wins: true when reply progress frees naming while the turn still runs.
+  const titleReady = createDeferredCore<boolean>();
+  const turnSettled = createDeferredCore();
+  let titleWaiting = true;
+  let stopTitleWait: (() => void) | undefined;
+  const releaseTitle = (duringTurn: boolean) => {
+    stopTitleWait?.();
+    stopTitleWait = undefined;
+    titleWaiting = false;
+    titleReady.resolve(duringTurn);
+  };
+
   const jobSessionBinding = admission.sessionBinding;
   let agentRunStarted = false;
   let replyDispatchRun: ReplyDispatchRun | undefined;
@@ -170,6 +184,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     session,
     hasCronCreatorAuthority: cronCreatorAuthority !== undefined,
     suppressReplies: progressRefresh,
+    releaseSourceWorkAdmission: admission.releaseSourceWorkAdmission,
     retainWorkAdmission: retainGatewayWorkAdmission,
     armOperatorRunCancellation: admission.armOperatorRunCancellation,
     retireOperatorRunCancellation: admission.retireOperatorRunCancellation,
@@ -379,6 +394,20 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 ...(restartSafeAdmission ? { suppressNextUserMessagePersistence: true } : {}),
                 fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
                 onAgentRunStart: (runId, _identity, options) => {
+                  if (titleWaiting) {
+                    stopTitleWait?.();
+                    stopTitleWait = onAgentEventForRun(runId, (event) => {
+                      if (
+                        event.stream === "assistant" ||
+                        event.stream === "item" ||
+                        event.stream === "tool" ||
+                        event.stream === "thinking" ||
+                        event.stream === "approval"
+                      ) {
+                        releaseTitle(true);
+                      }
+                    });
+                  }
                   replyDispatchRun = options;
                   if (activeRunAbort.markExecutionStarted()) {
                     admission.armOperatorRunCancellation();
@@ -666,6 +695,9 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     try {
       await dispatch;
     } finally {
+      // Empty, rejected, and interrupted turns still receive an independent title.
+      releaseTitle(false);
+      turnSettled.resolve();
       await dispatchErrorLifecycle.finalize();
       // Terminal lifecycle can precede owner release; publish exact liveness after cleanup.
       emitSessionsChanged(
@@ -682,17 +714,8 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
       }
     }
   })();
-  // Title work starts at turn admission, concurrently with the launched run. It must never run
-  // serially before dispatch (a cold utility runtime can starve the turn) or wait for completion
-  // (long or interrupted first turns would silently remain untitled, and restart loses the chain).
-  scheduleChatDashboardSessionTitle({
-    admittedSessionId,
-    agentId,
-    cfg,
-    context,
-    request,
-    sessionKey,
-    sessionLoadOptions: session.sessionLoadOptions,
-    storePath: session.storePath,
-  });
+  scheduleChatDashboardSessionTitle(
+    { admittedSessionId, agentId, cfg, context, request, sessionKey, storePath },
+    { released: titleReady.promise, settled: turnSettled.promise },
+  );
 }

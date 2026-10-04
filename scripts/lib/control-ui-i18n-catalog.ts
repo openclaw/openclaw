@@ -6,9 +6,9 @@ import { configHintTranslationKey } from "../../ui/src/i18n/lib/config-hint-tran
 import { registerActivityEnglish } from "../../ui/src/i18n/locales/en-activity.ts";
 import { registerAgentsHomeEnglish } from "../../ui/src/i18n/locales/en-agents-home.ts";
 import { registerAppsEnglish } from "../../ui/src/i18n/locales/en-apps.ts";
-import { registerBackgroundTasksEnglish } from "../../ui/src/i18n/locales/en-background-tasks.ts";
 import { registerBoardWebsiteEnglish } from "../../ui/src/i18n/locales/en-board-website.ts";
 import { registerBrowserEnglish } from "../../ui/src/i18n/locales/en-browser.ts";
+import { registerChatCameraEnglish } from "../../ui/src/i18n/locales/en-chat-camera.ts";
 import { registerChatCiEnglish } from "../../ui/src/i18n/locales/en-chat-ci.ts";
 import { registerChatGoalsEnglish } from "../../ui/src/i18n/locales/en-chat-goals.ts";
 import { registerChatMessageMetadataEnglish } from "../../ui/src/i18n/locales/en-chat-message-metadata.ts";
@@ -22,8 +22,11 @@ import { registerDevicesEnglish } from "../../ui/src/i18n/locales/en-devices.ts"
 import { registerDreamingEnglish } from "../../ui/src/i18n/locales/en-dreaming.ts";
 import { registerFilePreviewEnglish } from "../../ui/src/i18n/locales/en-file-preview.ts";
 import { registerGitHubEnglish } from "../../ui/src/i18n/locales/en-github.ts";
+import { registerLabsEnglish } from "../../ui/src/i18n/locales/en-labs.ts";
 import { registerLinkReaderEnglish } from "../../ui/src/i18n/locales/en-link-reader.ts";
 import { registerLoginEnglish } from "../../ui/src/i18n/locales/en-login.ts";
+import { registerMcpAppEnglish } from "../../ui/src/i18n/locales/en-mcp-app.ts";
+import { registerMcpEnglish } from "../../ui/src/i18n/locales/en-mcp.ts";
 import { registerMeetingsEnglish } from "../../ui/src/i18n/locales/en-meetings.ts";
 import { registerMemoryImportEnglish } from "../../ui/src/i18n/locales/en-memory-import.ts";
 import { registerModelAccountsEnglish } from "../../ui/src/i18n/locales/en-model-accounts.ts";
@@ -34,6 +37,7 @@ import { registerPersonalInstructionsEnglish } from "../../ui/src/i18n/locales/e
 import { registerPluginConsentEnglish } from "../../ui/src/i18n/locales/en-plugin-consent.ts";
 import { registerPluginManagementEnglish } from "../../ui/src/i18n/locales/en-plugin-management.ts";
 import { registerPortalsEnglish } from "../../ui/src/i18n/locales/en-portals.ts";
+import { registerProcessesEnglish } from "../../ui/src/i18n/locales/en-processes.ts";
 import { registerProfileEnglish } from "../../ui/src/i18n/locales/en-profile.ts";
 import { registerSessionPeopleEnglish } from "../../ui/src/i18n/locales/en-session-people.ts";
 import { registerSessionPlacementEnglish } from "../../ui/src/i18n/locales/en-session-placement.ts";
@@ -43,6 +47,7 @@ import { registerSkillLibraryEnglish } from "../../ui/src/i18n/locales/en-skill-
 import { registerSkillWorkshopEnglish } from "../../ui/src/i18n/locales/en-skill-workshop.ts";
 import { registerSkillsBrowserEnglish } from "../../ui/src/i18n/locales/en-skills-browser.ts";
 import { registerSystemsEnglish } from "../../ui/src/i18n/locales/en-systems.ts";
+import { registerToolDiagnosticsEnglish } from "../../ui/src/i18n/locales/en-tool-diagnostics.ts";
 import { registerTranscriptsEnglish } from "../../ui/src/i18n/locales/en-transcripts.ts";
 import { registerUpdateActionsEnglish } from "../../ui/src/i18n/locales/en-update-actions.ts";
 import { registerUsageEnglish } from "../../ui/src/i18n/locales/en-usage.ts";
@@ -65,9 +70,9 @@ const sourceFiles = [
   "en-activity.ts",
   "en-agents-home.ts",
   "en-apps.ts",
-  "en-background-tasks.ts",
   "en-board-website.ts",
   "en-browser.ts",
+  "en-chat-camera.ts",
   "en-chat-ci.ts",
   "en-chat-goals.ts",
   "en-chat-message-metadata.ts",
@@ -80,9 +85,13 @@ const sourceFiles = [
   "en-devices.ts",
   "en-dreaming.ts",
   "en-file-preview.ts",
+  "en-processes.ts",
+  "en-labs.ts",
   "en-login.ts",
   "en-link-reader.ts",
   "en-github.ts",
+  "en-mcp.ts",
+  "en-mcp-app.ts",
   "en-meetings.ts",
   "en-memory-import.ts",
   "en-model-accounts.ts",
@@ -103,6 +112,7 @@ const sourceFiles = [
   "en-skills-browser.ts",
   "en-systems.ts",
   "en-update-actions.ts",
+  "en-tool-diagnostics.ts",
   "en-transcripts.ts",
   "en-usage.ts",
 ];
@@ -152,7 +162,11 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         welcome: registerCommandPaletteEnglish.catalog.chat.welcome,
         messages: registerChatMessageMetadataEnglish.catalog.chat.messages,
       },
-      agentTools: { ...registerGitHubEnglish.catalog.agentTools, ...en.agentTools },
+      agentTools: {
+        ...registerGitHubEnglish.catalog.agentTools,
+        ...en.agentTools,
+        ...registerToolDiagnosticsEnglish.catalog.agentTools,
+      },
       board: { ...en.board, widget: boardWidget },
       newSession,
       sessionsView,
@@ -170,8 +184,8 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerActivityEnglish.catalog,
     registerAgentsHomeEnglish.catalog,
     registerAppsEnglish.catalog,
-    registerBackgroundTasksEnglish.catalog,
     registerBrowserEnglish.catalog,
+    registerChatCameraEnglish.catalog,
     registerChatCiEnglish.catalog,
     registerChatGoalsEnglish.catalog,
     registerChatProviderReviewEnglish.catalog,
@@ -180,8 +194,12 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerDevicesEnglish.catalog,
     registerDreamingEnglish.catalog,
     registerFilePreviewEnglish.catalog,
+    registerProcessesEnglish.catalog,
+    registerLabsEnglish.catalog,
     registerLoginEnglish.catalog,
     registerLinkReaderEnglish.catalog,
+    registerMcpEnglish.catalog,
+    registerMcpAppEnglish.catalog,
     registerMeetingsEnglish.catalog,
     registerMemoryImportEnglish.catalog,
     registerModelAccountsEnglish.catalog,

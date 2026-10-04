@@ -1,4 +1,3 @@
-// Read-model helpers that merge gateway channel status with local config snapshots.
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";

@@ -65,9 +65,11 @@ another agent. Only the owning setup operation can test the selected credential.
 After one successful tool-free turn, setup asks whether to activate it. Declining
 or failing the test keeps the saved credential inactive and preserves the current
 connection. Model Setup offers the same saved sign-in for a fresh test without
-another login. Gateway activation waits for config application; a required restart
-keeps the replacement inactive until setup is retried. Ordinary login remains
-immediate. The descriptor retains the selected model and connection settings for retry after
+another login. If applying a replacement fails, recovery restores its inactive
+state before rebuilding the previous connection. Gateway activation waits for
+config application; a required restart keeps the replacement inactive until setup
+is retried. Ordinary login remains immediate. The descriptor retains the selected
+model and connection settings for retry after
 restart, without caching a verification result. This adds no database schema or
 migration; older runtimes do not enforce the inactive state. Before downgrading,
 remove saved inactive replacements or restore the state from before setup.
@@ -81,6 +83,8 @@ and first-run noninteractive setup retain their existing behavior.
 ## Agent copy portability
 
 Agent auth inheritance is read-through. When an agent has no local profile, it resolves profiles from the shared auth store at runtime without copying secret material into its own credential store (`agents/<agentId>/agent/openclaw-agent.sqlite`). The shared store lives in `state/openclaw.sqlite` after `openclaw doctor --fix` performs the one-time relocation. Until then, doctor reports the legacy `agents/main/agent/openclaw-agent.sqlite` owner and leaves that agent undeletable.
+
+OAuth sibling synchronization writes the selected primary profile first, then the discovered shared owner before other siblings. This preserves read-through inheritance regardless of filesystem directory order. A shared owner outside the selected agents tree is not added to the synchronization targets.
 
 Auth usage and cooldown updates wait for write admission on their actual agent
 database owner, including the legacy shared store. Relocated shared-state auth
@@ -104,6 +108,14 @@ Gateway model metadata refreshes when credentials, profile ordering or ownership
 or model availability changes, including cooldown and blocked-state transitions.
 Usage timestamps, success history, and failure counters remain recorded without
 invalidating chat metadata or broadcasting a change to connected clients.
+
+Gateway model-auth status reads share provider preparation across clients for the
+same agent and published config/auth generation. Credential warning and expiry
+boundaries also invalidate preparation; explicit refresh bypasses it. Each reply
+still computes current expiry durations, reads auxiliary usage from its existing
+cache, and applies the requesting client's profile-identity visibility.
+File-backed external CLI bootstrap health stays with its reader's freshness
+lifecycle because external login can change without a Gateway publication.
 
 Repeated model resolution reuses persisted auth rows while the owning database's
 write generation and file identity remain unchanged. Committed auth writes and
@@ -199,6 +211,8 @@ Personal pins keep the existing same-provider failover policy: ordered shared ac
 Do not write `type: "aws-sdk"` into the credential store; stored credentials are only `api_key`, `token`, or `oauth`. If a legacy `auth-profiles.json` has such a marker, `openclaw doctor --fix` moves it to `auth.profiles` and removes the marker from the store.
 
 When a selected stored profile is removed, credential-scoped model discovery reports `selected_auth_profile_unavailable` before consulting dynamic model metadata. Restore the credential or select another configured profile; registering the model does not repair missing authentication. Config-only AWS SDK profiles remain valid without a stored credential. Chat admission and agent commands retain an explicit same-provider selection when its credential disappears so authentication can report recovery. Stale automatic selections and selections for incompatible providers are still cleared.
+
+OAuth re-authentication preserves an existing profile id only when the provider's account-identity matcher proves that the new credential belongs to the same account. A different or ambiguous account keeps the provider's new profile id, so explicit session pins do not cross account boundaries. Unavailable pins remain strict and emit a session-scoped warning. For a credential already removed before re-login, deliberately select a configured account with `model@profile`, or reconnect the intended account with `openclaw models auth login --provider <provider> --profile-id <selected-profile-id>`. No session rows or stored credentials are rewritten during upgrade.
 
 ## Explicit auth order filtering
 

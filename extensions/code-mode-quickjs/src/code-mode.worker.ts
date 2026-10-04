@@ -44,7 +44,11 @@ type CodeModeWorkerThreadResult = SharedWorkerThreadResult<Snapshot>;
 class CodeModeWorkerFailure extends Error {
   readonly code: Extract<CodeModeWorkerResult, { status: "failed" }>["code"];
 
-  constructor(code: Extract<CodeModeWorkerResult, { status: "failed" }>["code"], message: string) {
+  constructor(
+    code: Extract<CodeModeWorkerResult, { status: "failed" }>["code"],
+    message: string,
+    readonly failurePhase?: "bridge",
+  ) {
     super(message);
     this.name = "CodeModeWorkerFailure";
     this.code = code;
@@ -146,6 +150,7 @@ function createHostRequestHandler(params: {
       method !== "agentSpawn" &&
       method !== "agentWait" &&
       method !== "skillsList" &&
+      method !== "skillsSearch" &&
       method !== "skillsRead" &&
       method !== "sleep" &&
       method !== "swarmNote"
@@ -320,12 +325,13 @@ function failedWorkerResult(
   code: Extract<CodeModeWorkerResult, { status: "failed" }>["code"],
   error: string,
   output: unknown[] = [],
+  failurePhase?: "bridge",
 ): Extract<CodeModeWorkerResult, { status: "failed" }> {
   return {
     status: "failed",
     code,
     error,
-    failurePhase: code === "invalid_input" ? "input" : "guest",
+    failurePhase: failurePhase ?? (code === "invalid_input" ? "input" : "guest"),
     bridgeDispatchStarted: false,
     output,
   };
@@ -343,7 +349,12 @@ function workerFailureResult(params: {
     return failedWorkerResult("timeout", "code mode timeout exceeded", output);
   }
   if (params.error instanceof CodeModeWorkerFailure) {
-    return failedWorkerResult(params.error.code, params.error.message, output);
+    return failedWorkerResult(
+      params.error.code,
+      params.error.message,
+      output,
+      params.error.failurePhase,
+    );
   }
   // Return while the VM still owns the source coordinates and provenance, even
   // when the guest throws before emitting output.
@@ -362,10 +373,19 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
       // format it like the synchronous path so async rejections keep their cause
       // and location instead of collapsing to the bare message.
       const dumped = vm.dump(error);
+      const bridgeCode = vm.global.getProp("__openclawBridgeFailureCode").consume((read) =>
+        vm
+          .callFunction(read, vm.undefined, error)
+          .consume((value): "invalid_input" | "internal_error" | undefined => {
+            const code: unknown = vm.dump(value);
+            return code === "invalid_input" || code === "internal_error" ? code : undefined;
+          }),
+      );
       // Node module globals are deliberately absent from the WASI guest. Keep
       // aliases fail-closed at that runtime boundary rather than guessing source
       // provenance or installing a host-backed loader.
       if (
+        bridgeCode === undefined &&
         dumped instanceof Error &&
         dumped.name === "ReferenceError" &&
         /^(?:require|module|process) is not defined$/u.test(dumped.message)
@@ -376,7 +396,11 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
         dumped instanceof Error
           ? formatQuickJsError(dumped.name, dumped.message, dumped.stack, readSourceLocation(vm))
           : errorMessage(dumped);
-      throw new Error(text);
+      throw new CodeModeWorkerFailure(
+        bridgeCode ?? "internal_error",
+        text,
+        bridgeCode === undefined ? undefined : "bridge",
+      );
     });
   }
   return settled.value.consume((value) => JSON.parse(value.toString()));

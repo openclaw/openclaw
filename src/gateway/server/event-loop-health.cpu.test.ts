@@ -2,6 +2,10 @@ import { cpus } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getTrackedWorkerCpuSources } from "../../infra/worker-cpu.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
 import { createGatewayEventLoopHealthMonitor } from "./event-loop-health.js";
 
 vi.mock("node:os", async (importOriginal) => ({
@@ -16,6 +20,7 @@ vi.mock("../../infra/worker-cpu.js", () => ({ getTrackedWorkerCpuSources: vi.fn(
 
 const monitors: ReturnType<typeof createGatewayEventLoopHealthMonitor>[] = [];
 let now = 10_000;
+let clock: ReturnType<typeof createGatewaySchedulerClock>;
 let revision = 0;
 let workers: ReturnType<typeof getTrackedWorkerCpuSources>["workers"];
 const workerUsage = vi.fn<() => Promise<NodeJS.CpuUsage | undefined>>();
@@ -26,8 +31,9 @@ function hostCpu(user: number, idle: number) {
 }
 
 beforeEach(() => {
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"] });
+  vi.stubGlobal("process", { ...process, versions: { ...process.versions, bun: undefined } });
   now = 10_000;
+  clock = createGatewaySchedulerClock(now);
   revision = 0;
   workers = [{ cpuUsage: workerUsage }];
   workerUsage.mockReset().mockImplementation(async () => ({ user: now * 500, system: 0 }));
@@ -44,42 +50,44 @@ afterEach(() => {
   }
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  vi.useRealTimers();
 });
 
 async function createMonitor() {
   const monitor = createGatewayEventLoopHealthMonitor({
+    scheduler: createTestGatewayScheduler(clock.clock),
     now: () => now,
     cpuUsage: (previous) => ({ user: now * 2_000 - (previous?.user ?? 0), system: 0 }),
     eventLoopUtilization: () => ({ idle: now, active: 0, utilization: 0.05 }),
   });
   monitors.push(monitor);
-  await vi.advanceTimersByTimeAsync(0);
+  await clock.wake();
   return monitor;
 }
 
 async function sample(elapsedMs = 1_000) {
   now += elapsedMs;
-  await vi.advanceTimersByTimeAsync(20);
+  await clock.advanceTo(now);
 }
 
 describe("CPU breakdown sampling", () => {
-  it("measures host, main and tracked workers independently without changing process units", async () => {
+  it.each(["Node", "Bun"])("measures independent CPU counters supported by %s", async (runtime) => {
+    if (runtime === "Bun") {
+      vi.stubGlobal("process", { ...process, versions: { ...process.versions, bun: "1.4.2" } });
+    }
     const monitor = await createMonitor();
     expect(monitor.snapshot()).toBeUndefined();
     await sample();
-    expect(monitor.snapshot()).toMatchObject({
-      cpuCoreRatio: 2,
-      utilization: 0.05,
-      cpuBreakdown: {
-        mainThreadCoreRatio: 0.25,
-        workerCoreRatio: 0.5,
-        otherThreadsCoreRatio: 1.25,
-        hostUtilization: 0.75,
-        hostCpuCount: 2,
-      },
-    });
     const snapshot = monitor.snapshot();
+    expect(snapshot).toMatchObject({ cpuCoreRatio: 2, utilization: 0.05 });
+    expect(snapshot?.cpuBreakdown).toEqual({
+      mainThreadCoreRatio: 0.25,
+      hostUtilization: 0.75,
+      hostCpuCount: 2,
+      ...(runtime === "Node" ? { workerCoreRatio: 0.5, otherThreadsCoreRatio: 1.25 } : {}),
+    });
+    if (runtime === "Bun") {
+      expect(workerUsage).not.toHaveBeenCalled();
+    }
     const counts = [workerUsage.mock.calls.length, vi.mocked(cpus).mock.calls.length];
     for (let index = 0; index < 50; index++) {
       expect(monitor.snapshot()).toBe(snapshot);
@@ -156,53 +164,37 @@ describe("CPU breakdown sampling", () => {
     expect(monitor.snapshot()?.cpuBreakdown?.workerCoreRatio).toBe(0);
   });
 
-  it("times out slow worker capture without delaying process samples or accepting late results", async () => {
-    const monitor = await createMonitor();
-    const slow = createDeferredCore<NodeJS.CpuUsage>();
-    workerUsage.mockReturnValueOnce(slow.promise);
-    await sample();
-    const health = monitor.snapshot();
-    expect(health?.cpuCoreRatio).toBe(2);
-    expect(health?.cpuBreakdown?.workerCoreRatio).toBeUndefined();
-    await vi.advanceTimersByTimeAsync(101);
-    slow.resolve({ user: now * 500, system: 0 });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(monitor.snapshot()).toBe(health);
-    await sample();
-    expect(monitor.snapshot()?.cpuBreakdown?.workerCoreRatio).toBeUndefined();
-    await sample();
-    expect(monitor.snapshot()?.cpuBreakdown?.workerCoreRatio).toBe(0.5);
-  });
-
-  it.each(["reset", "stop"] as const)(
-    "fences pending replies and releases timers on %s",
+  it.each(["timeout", "reset", "stop"] as const)(
+    "fences pending worker replies after %s without delaying process samples",
     async (action) => {
       const monitor = await createMonitor();
       const slow = createDeferredCore<NodeJS.CpuUsage>();
       workerUsage.mockReturnValueOnce(slow.promise);
       await sample();
-      monitor[action]();
+      const health = monitor.snapshot();
+      expect(health?.cpuCoreRatio).toBe(2);
+      expect(health?.cpuBreakdown?.workerCoreRatio).toBeUndefined();
+      if (action === "timeout") {
+        now += 101;
+        await clock.advanceTo(now);
+      } else {
+        monitor[action]();
+      }
       slow.resolve({ user: now * 500, system: 0 });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(monitor.snapshot()).toBeUndefined();
+      await clock.wake();
+      if (action === "timeout") {
+        expect(monitor.snapshot()).toBe(health);
+        await sample();
+        expect(monitor.snapshot()?.cpuBreakdown?.workerCoreRatio).toBeUndefined();
+      } else {
+        expect(monitor.snapshot()).toBeUndefined();
+      }
       if (action === "stop") {
-        expect(vi.getTimerCount()).toBe(0);
+        expect(clock.armedAtMs).toBeNull();
       } else {
         await sample();
         expect(monitor.snapshot()?.cpuBreakdown?.workerCoreRatio).toBe(0.5);
       }
     },
   );
-
-  it("omits unreliable Bun worker counters while retaining independent host and main counters", async () => {
-    vi.stubGlobal("process", { ...process, versions: { ...process.versions, bun: "1.4.2" } });
-    const monitor = await createMonitor();
-    await sample();
-    expect(monitor.snapshot()?.cpuBreakdown).toEqual({
-      mainThreadCoreRatio: 0.25,
-      hostUtilization: 0.75,
-      hostCpuCount: 2,
-    });
-    expect(workerUsage).not.toHaveBeenCalled();
-  });
 });

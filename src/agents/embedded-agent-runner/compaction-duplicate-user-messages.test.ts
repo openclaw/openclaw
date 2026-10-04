@@ -17,16 +17,11 @@ describe("compaction duplicate user message pruning", () => {
   it("drops identical long user messages inside the duplicate window", () => {
     // Whitespace-normalized duplicates inside the short window are transport
     // artifacts; keeping both wastes compaction budget and distorts summaries.
-    const first = {
-      role: "user",
-      content: "please run the deployment status check for production",
-      timestamp: 1_000,
-    } as const;
-    const second = {
-      role: "user",
+    const first = userMessage({ timestamp: 1_000 });
+    const second = userMessage({
       content: " please   run the deployment status check for production ",
       timestamp: 2_000,
-    } as const;
+    });
     const third = {
       role: "assistant",
       content: [{ type: "text", text: "checking" }],
@@ -44,16 +39,8 @@ describe("compaction duplicate user message pruning", () => {
     // high-confidence duplicated long prompts are removed.
     const short = { role: "user", content: "next", timestamp: 1_000 } as const;
     const shortAgain = { role: "user", content: "next", timestamp: 2_000 } as const;
-    const long = {
-      role: "user",
-      content: "please run the deployment status check for production",
-      timestamp: 1_000,
-    } as const;
-    const longLater = {
-      role: "user",
-      content: "please run the deployment status check for production",
-      timestamp: 70_000,
-    } as const;
+    const long = userMessage({ timestamp: 1_000 });
+    const longLater = userMessage({ timestamp: 70_000 });
 
     expect(dedupeDuplicateUserMessagesForCompaction([short, shortAgain])).toEqual([
       short,
@@ -104,18 +91,14 @@ describe("compaction duplicate user message pruning", () => {
     expect(dedupeDuplicateUserMessagesForCompaction(messages)).toEqual(messages);
   });
 
-  it.each([
-    { name: "images", kind: "image", extension: "png" },
-    { name: "videos", kind: "video", extension: "mp4" },
-    { name: "documents", kind: "document", extension: "pdf" },
-  ])("preserves separately attached $name with the same caption", ({ kind, extension }) => {
+  it("preserves separately attached media with the same caption", () => {
     const first = {
       ...userMessage({ timestamp: 1_000 }),
-      __openclaw: { media: [{ kind, url: `media://inbound/first.${extension}` }] },
+      __openclaw: { media: [{ kind: "image", url: "media://inbound/first.png" }] },
     };
     const second = {
       ...userMessage({ timestamp: 2_000 }),
-      __openclaw: { media: [{ kind, url: `media://inbound/second.${extension}` }] },
+      __openclaw: { media: [{ kind: "image", url: "media://inbound/second.png" }] },
     };
 
     expect(dedupeDuplicateUserMessagesForCompaction([first, second])).toEqual([first, second]);

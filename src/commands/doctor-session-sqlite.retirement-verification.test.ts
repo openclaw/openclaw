@@ -1,16 +1,15 @@
 import fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../agents/sessions/session-manager.js";
-import {
-  readSessionTranscriptHistoryEventCount,
-  readSessionTranscriptHistoryEventPage,
-} from "../config/sessions/session-accessor.sqlite-history-events.js";
+import { readSessionTranscriptHistoryEventPage } from "../config/sessions/session-accessor.sqlite-history-events.js";
 import {
   readSessionTranscriptHistoryEvents,
+  readSessionTranscriptHistoryEventCount,
   readSessionTranscriptHistoryEventById,
 } from "../config/sessions/session-accessor.sqlite-history.test-support.js";
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
 import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
+import { writeSessionSqliteMigrationManifest } from "../infra/session-sqlite-migration-manifest.js";
 import * as sqliteReaders from "../infra/session-sqlite-migration-readers.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
@@ -94,67 +93,6 @@ describe("runDoctorSessionSqlite", () => {
     expect(fs.readFileSync(move?.archivePath ?? store.transcriptPath)).toEqual(original);
   });
 
-  it("archives identical indexed and leaf replays after normalized history verification", async () => {
-    const repeatedMessage = {
-      type: "message",
-      id: "reply",
-      parentId: "root",
-      message: { role: "assistant", content: "same replay" },
-    };
-    const repeatedLeaf = {
-      type: "leaf",
-      id: "selection",
-      parentId: "reply",
-      targetId: "reply",
-    };
-    const store = createLegacyStore({
-      transcriptLines: [
-        JSON.stringify({ type: "session", id: "session-1", version: 3 }),
-        JSON.stringify({
-          type: "message",
-          id: "root",
-          parentId: null,
-          message: { role: "user", content: "root" },
-        }),
-        JSON.stringify(repeatedMessage),
-        JSON.stringify(repeatedMessage),
-        JSON.stringify(repeatedLeaf),
-        JSON.stringify(repeatedLeaf),
-      ],
-    });
-
-    const imported = await importLegacyStore(store);
-
-    expect(imported.targets[0]?.issues).toEqual([]);
-    const move = readMigrationManifest(
-      imported.migrationRun?.manifestPath,
-    ).targets[0]!.completedMoves.find((item) => item.kind === "transcript");
-    expect(move).toBeDefined();
-    expect(fs.existsSync(store.transcriptPath)).toBe(false);
-    expect(
-      loadTranscriptEventsSync({
-        agentId: "main",
-        env: store.env,
-        sessionId: "session-1",
-      }).map((event) => (event as { id?: string }).id),
-    ).toEqual(["session-1", "root", "reply", "selection"]);
-
-    const scope = { agentId: "main", env: store.env, sessionId: "session-1" };
-    const history = readSessionTranscriptHistoryEvents(scope);
-    expect(history.map((row) => (row.event as { id?: string }).id)).toEqual(["root", "reply"]);
-    expect(readSessionTranscriptHistoryEventCount(scope)).toBe(2);
-    expect(
-      readSessionTranscriptHistoryEventPage(scope, { maxMessages: 1, offset: 0 }),
-    ).toMatchObject({
-      activeLeafEntryId: "reply",
-      totalMessages: 2,
-      events: [expect.objectContaining({ event: expect.objectContaining({ id: "reply" }) })],
-    });
-    expect(readSessionTranscriptHistoryEventById(scope, "reply")).toMatchObject({
-      event: expect.objectContaining({ id: "reply" }),
-    });
-  });
-
   it("retains complete recovery when durable transcript verification is short", async () => {
     const store = createLegacyStore({
       transcriptLines: [
@@ -202,49 +140,48 @@ describe("runDoctorSessionSqlite", () => {
     ).toBe(false);
   });
 
-  it.each([
-    {
-      name: "identical",
-      repeated: { role: "assistant", content: "same replay" },
-      archived: true,
-    },
-    {
-      name: "divergent",
-      repeated: { role: "assistant", content: "different replay" },
-      archived: false,
-    },
-  ])(
-    "handles a $name replay against an existing destination and retry",
-    async ({ repeated, archived }) => {
+  it.each(["fresh", "identical", "divergent"] as const)(
+    "verifies duplicate replay history against a %s destination",
+    async (kind) => {
+      const fresh = kind === "fresh";
+      const archived = kind !== "divergent";
       const first = {
         type: "message",
         id: "reply",
         parentId: "root",
-        message: { role: "assistant", content: "same replay" },
-      };
-      const sourceEvents = [
-        { type: "session", id: "session-1", version: 3 },
-        {
-          type: "message",
-          id: "root",
-          parentId: null,
-          message: { role: "user", content: "root" },
+        message: {
+          role: "assistant",
+          content: fresh ? "same replay" : [{ type: "text", text: "same replay" }],
         },
+      };
+      const leaf = { type: "leaf", id: "selection", parentId: "reply", targetId: "reply" };
+      const sourceEvents = [
+        fresh
+          ? { type: "session", id: "session-1", version: 3 }
+          : { type: "session", id: "session-1", version: 3, timestamp: "", cwd: "" },
+        { type: "message", id: "root", parentId: null, message: { role: "user", content: "root" } },
         first,
-        { ...first, message: repeated },
+        archived
+          ? first
+          : {
+              ...first,
+              message: { role: "assistant", content: [{ type: "text", text: "different replay" }] },
+            },
+        ...(fresh ? [leaf, leaf] : []),
       ];
       const store = createLegacyStore({
         transcriptLines: sourceEvents.map((event) => JSON.stringify(event)),
       });
-      await importSqliteSessionRows({
-        agentId: "main",
-        env: store.env,
-        sessionKey: "agent:main:main",
-        storePath: store.storePath,
-        entry: { sessionId: "session-1", updatedAt: 1000 },
-        readTranscriptEvents: (append) => sourceEvents.slice(0, 3).forEach(append),
-      });
-
+      const scope = { agentId: "main", env: store.env, sessionId: "session-1" };
+      if (!fresh) {
+        await importSqliteSessionRows({
+          ...scope,
+          sessionKey: "agent:main:main",
+          storePath: store.storePath,
+          entry: { sessionId: "session-1", updatedAt: 1000 },
+          readTranscriptEvents: (append) => sourceEvents.slice(0, 3).forEach(append),
+        });
+      }
       const run = () => importLegacyStore(store);
       const imported = await run();
       expect(fs.existsSync(store.transcriptPath)).toBe(!archived);
@@ -258,15 +195,26 @@ describe("runDoctorSessionSqlite", () => {
           (issue) => issue.code === "sqlite_transcript_count_mismatch",
         ),
       ).toBe(!archived);
-      expect(
-        loadTranscriptEventsSync({
-          agentId: "main",
-          env: store.env,
-          sessionId: "session-1",
-        }).map((event) => (event as { id?: string }).id),
-      ).toEqual(["session-1", "root", "reply"]);
-
-      if (!archived) {
+      expect(loadTranscriptEventsSync(scope).map((event) => (event as { id?: string }).id)).toEqual(
+        ["session-1", "root", "reply", ...(fresh ? ["selection"] : [])],
+      );
+      if (fresh) {
+        expect(imported.targets[0]?.issues).toEqual([]);
+        expect(
+          readSessionTranscriptHistoryEvents(scope).map((row) => (row.event as { id?: string }).id),
+        ).toEqual(["root", "reply"]);
+        expect(readSessionTranscriptHistoryEventCount(scope)).toBe(2);
+        expect(
+          readSessionTranscriptHistoryEventPage(scope, { maxMessages: 1, offset: 0 }),
+        ).toMatchObject({
+          activeLeafEntryId: "reply",
+          totalMessages: 2,
+          events: [expect.objectContaining({ event: expect.objectContaining({ id: "reply" }) })],
+        });
+        expect(readSessionTranscriptHistoryEventById(scope, "reply")).toMatchObject({
+          event: expect.objectContaining({ id: "reply" }),
+        });
+      } else if (!archived) {
         const retried = await run();
         expect(
           retried.targets[0]?.issues.some(
@@ -278,7 +226,7 @@ describe("runDoctorSessionSqlite", () => {
     },
   );
 
-  it("retires verified exact originals while preserving current SQLite and unknown archives", async () => {
+  it("retires verified originals after remount while preserving current SQLite and unknown archives", async () => {
     const store = createLegacyStore({
       transcriptLines: [
         JSON.stringify({ type: "session", id: "session-1", version: 3 }),
@@ -310,6 +258,17 @@ describe("runDoctorSessionSqlite", () => {
     const imported = await importLegacyStore(store);
     expect(imported.targets[0]?.issues).toEqual([]);
     const manifest = readMigrationManifest(imported.migrationRun?.manifestPath);
+    for (const target of manifest.targets) {
+      for (const move of [...target.plannedMoves, ...target.completedMoves]) {
+        if (move.artifact) {
+          move.artifact.identity.dev = String(BigInt(move.artifact.identity.dev) + 1n);
+        }
+      }
+    }
+    writeSessionSqliteMigrationManifest({
+      manifest,
+      manifestPath: imported.migrationRun!.manifestPath,
+    });
     const originalMove = manifest.targets[0]!.completedMoves.find(
       (move) => move.kind === "transcript",
     )!;

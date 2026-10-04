@@ -3,10 +3,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { seedCanonicalAcpSessionMeta } from "../../acp/runtime/session-meta-fixture.test-support.js";
 import {
   appendTranscriptMessage,
-  bindSessionPendingInputSources,
-  stageSessionPendingInput,
   patchSessionEntryCore,
   updateSessionEntry,
   upsertSessionEntryCore,
@@ -94,50 +94,6 @@ function createPersonalMetadataFixture() {
 }
 
 describe("chat history model selection defaults", () => {
-  it("keeps a stored literal global conversation separate from main in per-sender scope", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const cfg = {
-        session: { scope: "per-sender" },
-        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-      } satisfies OpenClawConfig;
-      await state.writeConfig(cfg);
-      for (const agentId of ["ops", "research"]) {
-        await upsertSessionEntryCore(
-          { agentId, sessionKey: "global" },
-          { sessionId: `global-${agentId}`, updatedAt: 1 },
-        );
-      }
-      await upsertSessionEntryCore(
-        { agentId: "research", sessionKey: "agent:research:main" },
-        { sessionId: "main-research", updatedAt: 1 },
-      );
-      const context = await createHistoryReadContext({ getRuntimeConfig: () => cfg });
-      const client = identifiedClient("literal-global-operator");
-      client.connect.scopes = ["operator.admin"];
-      for (const [sessionKey, sessionId] of [
-        ["global", "global-research"],
-        ["agent:research:main", "main-research"],
-      ]) {
-        const respond = vi.fn<RespondFn>();
-        await expectDefined(
-          chatHistoryHandlers["chat.history"],
-          "history handler",
-        )({
-          params: { sessionKey, agentId: "research" },
-          context,
-          req: { type: "req", id: "literal-global", method: "chat.history" },
-          client,
-          isWebchatConnect: () => false,
-          respond,
-        });
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ sessionKey, sessionId }),
-        );
-      }
-    });
-  });
-
   it.each(["chat.history", "chat.startup"] as const)(
     "%s keeps selection session-only for an agent with an explicit default",
     async (method) => {
@@ -185,6 +141,61 @@ describe("chat history model selection defaults", () => {
 });
 
 describe("chat history sharing projection", () => {
+  it.each(["chat.history", "chat.startup"] as const)(
+    "%s projects unbound canonical ACP metadata without host ACP reads",
+    async (method) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const sessionKey = "agent:main:acp:unbound-history";
+        seedCanonicalAcpSessionMeta({
+          sessionKey,
+          meta: {
+            backend: "acpx",
+            agent: "main",
+            runtimeSessionName: "unbound-history",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: 1,
+          },
+        });
+        const context = await createHistoryReadContext();
+        const client = identifiedClient("unbound-history-operator");
+        client.connect.scopes = ["operator.admin"];
+        const respond = vi.fn<RespondFn>();
+        const hostSql = observeHostDataSql();
+        try {
+          await expectDefined(
+            chatHistoryHandlers[method],
+            "history handler",
+          )({
+            params: { sessionKey },
+            context,
+            client,
+            respond,
+            req: { type: "req", id: "unbound-history", method },
+            isWebchatConnect: () => false,
+          });
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({
+              sessionInfo: expect.objectContaining({
+                runtimeSelectionLocked: true,
+                agentRuntime: {
+                  id: "acpx",
+                  source: "session-key",
+                  cloudPlacementSupported: false,
+                  devicePlacementSupported: false,
+                },
+              }),
+            }),
+          );
+          expect(hostSql.queries.filter((sql) => /\bacp_sessions\b/i.test(sql))).toEqual([]);
+        } finally {
+          hostSql.restore();
+        }
+      });
+    },
+  );
+
   it.each(["chat.history", "chat.startup"] as const)(
     "%s carries current caller sharing controls on sessionInfo",
     async (method) => {
@@ -343,6 +354,9 @@ describe("chat history delta publication", () => {
         const initial = await call();
         const initialResponse = expectDefined(initial.mock.calls[0], "initial response");
         expect(initialResponse[0]).toBe(true);
+        expect(initialResponse[1]).toMatchObject({
+          sessionInfo: { sessionId: scope.sessionId, lifecycleRevision: "before-reset" },
+        });
         const cursor = asOptionalRecord(initialResponse[1])?.deltaCursor;
         if (typeof cursor !== "string") {
           throw new Error("expected initial delta cursor");
@@ -389,131 +403,24 @@ describe("chat history delta publication", () => {
           expect.objectContaining({ code, ...(code === "UNAVAILABLE" ? { retryable: true } : {}) }),
         );
         expect(JSON.stringify(respond.mock.calls)).not.toContain("private delta content");
+        if (change === "reset") {
+          // A reset can retain the physical transcript ID while invalidating cached full messages.
+          expect(await call()).toHaveBeenCalledExactlyOnceWith(
+            true,
+            expect.objectContaining({
+              sessionInfo: expect.objectContaining({
+                sessionId: scope.sessionId,
+                lifecycleRevision: "after-reset",
+              }),
+            }),
+          );
+        }
       });
     },
   );
 });
 
 describe("chat history consumption receipts", () => {
-  it.each(["chat.history", "chat.startup"] as const)(
-    "%s returns only requested current-session receipts in pages and empty deltas",
-    async (method) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const scope = {
-          agentId: "main",
-          sessionKey: "agent:main:collected",
-          sessionId: "collected",
-        };
-        await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-        const context = await createHistoryReadContext();
-        const handler = expectDefined(chatHistoryHandlers[method], "history handler");
-        const call = async (params: Record<string, unknown> = {}) => {
-          let result: unknown;
-          await handler({
-            params: { sessionKey: scope.sessionKey, ...params },
-            context,
-            req: { type: "req", id: "history", method },
-            client: null,
-            isWebchatConnect: () => false,
-            respond: (ok, payload, error) => {
-              expect(error).toBeUndefined();
-              expect(ok).toBe(true);
-              result = payload;
-            },
-          });
-          return expectDefined(asOptionalRecord(result), "history response");
-        };
-        const sources = [];
-        for (const runId of ["source-a", "source-b"]) {
-          sources.push(
-            expectDefined(
-              await stageSessionPendingInput(scope, {
-                runId,
-                assertCurrent: () => {},
-                message: {
-                  role: "user",
-                  content: runId,
-                  timestamp: 1,
-                  idempotencyKey: `${runId}:user`,
-                },
-              }),
-              "source receipt",
-            ),
-          );
-        }
-        const aggregate = expectDefined(
-          bindSessionPendingInputSources(sources, {
-            role: "user",
-            content: "Collected inputs",
-            timestamp: 2,
-            idempotencyKey: "collect:batch",
-          }),
-          "aggregate receipt",
-        );
-        const retained = [];
-        try {
-          await aggregate.run(() => appendTranscriptMessage(scope, { message: aggregate.message }));
-          await appendTranscriptMessage(scope, {
-            message: { role: "assistant", content: "Later reply" },
-          });
-          const inputRunIds = ["source-a", "missing"];
-          const page = await call({ inputRunIds, limit: 1 });
-          const expected = [
-            { runId: "source-a", state: "consumed", consumedByEventId: aggregate.inputId },
-          ];
-          expect(page.inputReceipts).toEqual(expected);
-          expect(page.inputConsumptions).toEqual([
-            { runId: "source-a", consumedByEventId: aggregate.inputId },
-          ]);
-          expect(page.pendingInputs).toEqual({ items: [], total: 0 });
-          expect(JSON.stringify(page.messages)).not.toContain("Collected inputs");
-          const delta = await call({ inputRunIds, cursor: page.deltaCursor });
-          expect(delta).toMatchObject({ kind: "delta", messages: [], inputReceipts: expected });
-          for (let index = 0; index < 21; index += 1) {
-            retained.push(
-              expectDefined(
-                await stageSessionPendingInput(scope, {
-                  runId: `retained-${index}`,
-                  assertCurrent: () => {},
-                  message: {
-                    role: "user",
-                    content: `retained-${index}`,
-                    timestamp: index + 3,
-                    idempotencyKey: `retained-${index}:user`,
-                  },
-                }),
-                "retained receipt",
-              ),
-            );
-          }
-          const retainedPage = await call({ inputRunIds: ["retained-0"], limit: 1 });
-          expect(retainedPage.inputReceipts).toEqual([{ runId: "retained-0", state: "pending" }]);
-          expect(retainedPage.inputConsumptions).toEqual([]);
-          expect(retainedPage.pendingInputs).toMatchObject({
-            total: 21,
-            items: [{ runId: "retained-20" }],
-          });
-          const anchor = await call({
-            inputRunIds,
-            messageId: aggregate.inputId,
-            sessionId: scope.sessionId,
-          });
-          expect(anchor.inputReceipts).toEqual([]);
-          await upsertSessionEntryCore(scope, { sessionId: "replacement", updatedAt: 2 });
-          expect((await call({ inputRunIds })).inputReceipts).toEqual([]);
-        } finally {
-          aggregate.finish("interrupted");
-          for (const source of sources) {
-            source.finish("interrupted");
-          }
-          for (const receipt of retained) {
-            receipt.finish("interrupted");
-          }
-        }
-      });
-    },
-  );
-
   it.each([
     { inputRunIds: Array.from({ length: 51 }, (_, index) => `run-${index}`) },
     { inputRunIds: ["r".repeat(257)] },

@@ -4,8 +4,8 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { SpawnBrokerError } from "./protocol.js";
 
 const FRAME_BYTES = 1024 * 1024;
-const MAX_PENDING_BYTES = 256 * 1024 * 1024;
-const MAX_PENDING_MESSAGES = 1024;
+export const MAX_PENDING_BYTES = 256 * 1024 * 1024;
+export const MAX_PENDING_MESSAGES = 1024;
 const FRAME_KIND = "openclaw-spawn-broker-frame";
 
 type IpcSender = (

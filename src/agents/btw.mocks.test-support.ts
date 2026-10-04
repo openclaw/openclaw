@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import type { AgentHarnessHostCapabilities } from "./harness/host-capability-types.js";
@@ -261,8 +262,8 @@ vi.mock("./embedded-agent-runner/runs.js", () => ({
 
 vi.mock("./agent-scope.js", () => ({
   listAgentEntries: (...args: unknown[]) => listAgentEntriesMock(...args),
-  resolveAgentConfig: (cfg: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
-    cfg.agents?.list?.find((entry) => entry.id === agentId),
+  listAgentEntriesWithSource: () => [],
+  resolveAgentConfig: (cfg: OpenClawConfig, agentId: string) => cfg.agents?.entries?.[agentId],
   resolveSessionAgentIds: (...args: unknown[]) => resolveSessionAgentIdsMock(...args),
   resolveSessionAgentId: (...args: unknown[]) => resolveSessionAgentIdMock(...args),
   resolveAgentWorkspaceDir: (...args: unknown[]) => resolveAgentWorkspaceDirMock(...args),

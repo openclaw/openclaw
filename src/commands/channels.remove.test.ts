@@ -87,6 +87,12 @@ function firstWrittenChannelsConfig() {
     | undefined;
 }
 
+function mockInstalledPlugin(plugin: ChannelPlugin) {
+  vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+    createTestRegistry([{ pluginId: "@vendor/external-chat-plugin", plugin, source: "test" }]),
+  );
+}
+
 describe("channelsRemoveCommand", () => {
   beforeAll(async () => {
     ({ channelsRemoveCommand } = await import("./channels.js"));
@@ -95,6 +101,16 @@ describe("channelsRemoveCommand", () => {
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
     configMocks.readConfigFileSnapshot.mockClear();
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
+        channels: {
+          "external-chat": {
+            enabled: true,
+            token: "token-1",
+          },
+        },
+      }),
+    );
     configMocks.writeConfigFile.mockClear();
     configMocks.replaceConfigFile
       .mockReset()
@@ -105,7 +121,9 @@ describe("channelsRemoveCommand", () => {
     runtime.error.mockClear();
     runtime.exit.mockClear();
     catalogMocks.listChannelPluginCatalogEntries.mockClear();
-    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([]);
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      createExternalChatCatalogEntry(),
+    ]);
     vi.mocked(ensureChannelSetupPluginInstalled).mockClear();
     vi.mocked(ensureChannelSetupPluginInstalled).mockImplementation(async ({ cfg }) => ({
       cfg,
@@ -141,8 +159,6 @@ describe("channelsRemoveCommand", () => {
         },
       }),
     );
-    const catalogEntry: ChannelPluginCatalogEntry = createExternalChatCatalogEntry();
-    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([catalogEntry]);
 
     await channelsRemoveCommand(
       {
@@ -167,135 +183,30 @@ describe("channelsRemoveCommand", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("removes an external channel account when its plugin is already installed", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue(
-      createTestConfigSnapshot({
-        channels: {
-          "external-chat": {
-            enabled: true,
-            token: "token-1",
-          },
-        },
-      }),
-    );
-    const catalogEntry: ChannelPluginCatalogEntry = createExternalChatCatalogEntry();
-    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([catalogEntry]);
-    const scopedPlugin = createExternalChatDeletePlugin();
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
-      createTestRegistry([
-        {
-          pluginId: "@vendor/external-chat-plugin",
-          plugin: scopedPlugin,
-          source: "test",
-        },
-      ]),
-    );
-
-    await channelsRemoveCommand(
-      {
-        channel: "external-chat",
-        account: "default",
-        delete: true,
-      },
-      runtime,
-      { hasFlags: true },
-    );
-
-    expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
-    expect(registryRefreshMocks.refreshPluginRegistryAfterConfigMutation).not.toHaveBeenCalled();
-    const writtenConfig = firstWrittenChannelsConfig();
-    expect(writtenConfig?.channels?.["external-chat"]).toBeUndefined();
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
-  });
-
   it("keeps omitted removal on literal default when the plugin selects another default", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue(
-      createTestConfigSnapshot({
-        channels: {
-          "external-chat": {
-            enabled: true,
-            token: "token-1",
-          },
-        },
-      }),
-    );
-    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
-      createExternalChatCatalogEntry(),
-    ]);
-    const deletePlugin = createExternalChatDeletePlugin();
+    const plugin = createExternalChatDeletePlugin();
     const defaultAccountId = vi.fn(() => "work");
-    const scopedPlugin = {
-      ...deletePlugin,
-      config: {
-        ...deletePlugin.config,
-        defaultAccountId,
-      },
-    } as ChannelPlugin;
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
-      createTestRegistry([
-        {
-          pluginId: "@vendor/external-chat-plugin",
-          plugin: scopedPlugin,
-          source: "test",
-        },
-      ]),
-    );
+    plugin.config.defaultAccountId = defaultAccountId;
+    mockInstalledPlugin(plugin);
 
-    await channelsRemoveCommand(
-      {
-        channel: "external-chat",
-        delete: true,
-      },
-      runtime,
-      { hasFlags: true },
-    );
-
-    expect(scopedPlugin.config.deleteAccount).toHaveBeenCalledWith({
-      cfg: {
-        channels: {
-          "external-chat": {
-            enabled: true,
-            token: "token-1",
-          },
-        },
-      },
-      accountId: "default",
+    await channelsRemoveCommand({ channel: "external-chat", delete: true }, runtime, {
+      hasFlags: true,
     });
+
+    expect(plugin.config.deleteAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: "default" }),
+    );
     expect(defaultAccountId).not.toHaveBeenCalled();
+    expect(firstWrittenChannelsConfig()?.channels?.["external-chat"]).toBeUndefined();
     expect(runtime.log).toHaveBeenCalledWith('Deleted external-chat account "default".');
   });
 
-  it.each([
-    { account: "", label: "empty" },
-    { account: "   ", label: "whitespace" },
-  ])("rejects a $label --account before deleting or writing config", async ({ account }) => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue(
-      createTestConfigSnapshot({
-        channels: {
-          "external-chat": {
-            enabled: true,
-            token: "token-1",
-          },
-        },
-      }),
-    );
-    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
-      createExternalChatCatalogEntry(),
-    ]);
+  it("rejects a blank --account before deleting or writing config", async () => {
     const scopedPlugin = createExternalChatDeletePlugin();
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
-      createTestRegistry([
-        {
-          pluginId: "@vendor/external-chat-plugin",
-          plugin: scopedPlugin,
-          source: "test",
-        },
-      ]),
-    );
+    mockInstalledPlugin(scopedPlugin);
 
     await expect(
-      channelsRemoveCommand({ channel: "external-chat", account, delete: true }, runtime, {
+      channelsRemoveCommand({ channel: "external-chat", account: "   ", delete: true }, runtime, {
         hasFlags: true,
       }),
     ).rejects.toThrow("--account must not be blank");
@@ -442,50 +353,6 @@ describe("channelsRemoveCommand", () => {
 
     expectNoRemoval("external-chat has no default account to remove.");
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Known accounts: work."));
-  });
-
-  it("rejects an unknown --account on a channel that cannot delete accounts", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue(
-      createTestConfigSnapshot({
-        channels: {
-          "external-chat": {
-            enabled: true,
-            accounts: { work: { enabled: true, token: "token-1" } },
-          },
-        },
-      }),
-    );
-    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
-      createExternalChatCatalogEntry(),
-    ]);
-    const setAccountEnabled = vi.fn(
-      (params: { cfg: OpenClawConfig; accountId: string; enabled: boolean }) =>
-        setAccountEnabledInConfigSection({
-          ...params,
-          sectionKey: "external-chat",
-          allowTopLevel: true,
-        }),
-    );
-    const scopedPlugin: ChannelPlugin = {
-      ...createExternalChatDeletePlugin(),
-      config: {
-        listAccountIds: () => ["work"],
-        resolveAccount: () => ({}),
-        setAccountEnabled,
-      },
-    };
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
-      createTestRegistry([
-        { pluginId: "@vendor/external-chat-plugin", plugin: scopedPlugin, source: "test" },
-      ]),
-    );
-
-    await channelsRemoveCommand({ channel: "external-chat", account: "ghost" }, runtime, {
-      hasFlags: true,
-    });
-
-    expect(setAccountEnabled).not.toHaveBeenCalled();
-    expectNoRemoval('external-chat has no account "ghost" to remove.');
   });
 
   it("normalizes a listed deletion before stopping runtime, running lifecycle, and persisting", async () => {

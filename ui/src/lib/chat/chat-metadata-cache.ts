@@ -10,6 +10,8 @@ import {
   invalidateModelCatalogCache,
   modelCatalogKey,
   modelCatalogParams,
+  type ModelCatalogInvalidation,
+  type ModelCatalogRead,
 } from "../model-catalog-cache.ts";
 import { readSessionChangedEvent } from "../sessions/reconcile.ts";
 import type { UiSessionDefaultsHost } from "../sessions/session-key.ts";
@@ -29,10 +31,10 @@ export type ChatMetadataPublication = {
   fail: (error: unknown) => void;
 };
 export type ChatMetadataRequest = {
+  controller: AbortController;
   promise: Promise<ChatMetadataResult>;
   publication: ChatMetadataPublication;
   revalidation: boolean;
-  setStartupRetryDeadline: (deadlineAt?: number) => void;
   start: () => void;
 };
 export type ChatMetadataRefresh = {
@@ -41,6 +43,7 @@ export type ChatMetadataRefresh = {
   isCurrent: () => boolean;
 };
 export type ChatMetadataRefreshRecord = ChatMetadataRefresh & {
+  controller: AbortController;
   phase: "waiting" | "admitted" | "inactive";
   revision: number;
   catalogRevision: number;
@@ -50,13 +53,14 @@ export type ChatMetadataRefreshRecord = ChatMetadataRefresh & {
 };
 export type ChatMetadataEntry = {
   scope: ChatMetadataParams;
+  catalogController: AbortController;
   result?: ChatMetadataResult;
   activeRequest?: ChatMetadataRequest;
   queuedRequest?: ChatMetadataRequest;
   writer?: object;
   refreshRevision: number;
   refreshAfter?: number;
-  validateCatalog?: boolean;
+  validateCatalog?: ReadonlySet<ModelCatalogRead>;
   catalogRevision: number;
   refresh?: ChatMetadataRefreshRecord;
   listeners: Map<(update: ChatMetadataUpdate) => void, () => boolean>;
@@ -79,12 +83,12 @@ export function invalidateChatMetadataStore(
   client: GatewayBrowserClient,
   scope?: ChatMetadataParams,
   sessionDefaults?: UiSessionDefaultsHost,
-  retireCatalog = false,
+  catalogInvalidation: ModelCatalogInvalidation | "preserve" = "refresh",
 ): void {
   // Catalog readers share this lifecycle; retire their copies before metadata listeners reload.
-  if (retireCatalog) {
+  if (catalogInvalidation === "clear") {
     clearModelCatalogCache(client, { requireSnapshot: true });
-  } else {
+  } else if (catalogInvalidation === "refresh") {
     invalidateModelCatalogCache(client, scope, sessionDefaults);
   }
   chatMetadataCache.get(client)?.invalidate(scope, sessionDefaults);

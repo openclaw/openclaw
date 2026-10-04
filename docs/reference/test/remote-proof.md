@@ -23,15 +23,30 @@ Crabbox instead.
 Do not pre-warm for anticipated work. Acquire the backend lazily when the
 first environment-sensitive command is ready, reuse the returned `tbx_...` id
 for later remote commands, sync the current checkout on every run, and stop it
-before handoff.
+before handoff. Let the previous command and its cleanup finish before
+another synchronization or reuse of that lease.
 
-After the first successful reuse, the wrapper records the lease's base,
-dependency, and Testbox workflow fingerprint under `.crabbox/testbox-leases/`.
-Source-only edits keep reusing the warmed box. A changed merge base, lockfile,
-package-manager input, wrapper, or Testbox workflow fails closed and requires a
-fresh lease. Every run still syncs the current checkout.
-`OPENCLAW_TESTBOX_ALLOW_STALE=1` is only for intentional diagnostics, not
-release proof.
+Testbox `run` and `warmup` use the workflow from `main` so new allocations
+inherit the maintained spending limits. The wrapper overrides configured workflow
+refs and rejects an explicit `--blacksmith-ref` other than `main`. Choose the
+source revision in your local checkout; its source capsule and frozen dependency
+install preserve that selection independently of the workflow ref. Explicit
+workflow and job selection still support the high-memory profile.
+
+At allocation, the wrapper records the caller task, physical checkout, HEAD,
+base, dependency inputs, and Testbox preparation fingerprint under
+`.crabbox/testbox-leases/`. Reuse requires the same task, checkout, base,
+dependencies, preparation, and workflow inputs, including immediately before
+delegation. Source-only edits and commits can reuse that prepared box. The
+allocation receipt remains unchanged, while each command records its current
+source revision and syncs the checkout. A HEAD change during that command's
+preparation still stops delegation; rerun from the current candidate.
+This source-refresh contract belongs to the OpenClaw wrapper's trusted task
+path; it does not permit raw native callers or untrusted proof to reuse a
+lease across revisions.
+Older or missing receipts require stopping the owned lease and allocating a
+fresh one through the wrapper. `OPENCLAW_TESTBOX_ALLOW_STALE` cannot bypass
+these checks. All providers require Crabbox 0.69.0 or newer.
 
 The Testbox workflow registers a separate disposable checkout for native sync.
 The hydrated execution workspace stays at its original absolute path, so native
@@ -104,6 +119,35 @@ Unset all `CRABBOX_TAILSCALE*` overrides, force `--network public
 --tailscale=false`, clear exit-node/LAN flags, and require `crabbox inspect` to
 report public networking with no Tailscale state before uploading any script.
 
+## Testbox runner sizing
+
+Use the default 16-class workflow for routine remote proof, with a 60-minute
+total-job deadline including hydration. Keep the 32-class
+rare: record the command and its measured memory need, a smaller-runner OOM,
+or a controlled comparison showing lower total billed cost before selecting it.
+Existing memory-heavy full-suite Testbox PR gates use this exception. A generic
+failure, queue delay, or timeout is not a sizing signal. Keep resource-based
+worker limits; do not force higher parallelism on the smaller machine.
+
+Select the exception explicitly with a fresh lease:
+
+```bash
+node scripts/crabbox-wrapper.mjs run \
+  --blacksmith-workflow .github/workflows/ci-check-high-memory-testbox.yml \
+  --blacksmith-job check --idle-timeout 15m \
+  --label <task-and-memory-reason> --timing-json -- <command>
+```
+
+The high-memory profile uses at most four of the shared 32 Testbox concurrency
+slots. Both profiles cap idle time at 15 minutes. Routine proof defaults to
+60 minutes; the explicit high-memory workflow retains its four-hour deadline
+for known heavy gates. The standard workflow accepts an explicit
+`timeout_minutes` input up to 240 minutes, but Crabbox does not forward arbitrary
+workflow inputs and `--ttl` does not extend a Testbox job. Do not select a larger
+runner merely for more time. Direct-provider `--class` and `--type` flags do not size Testboxes;
+workflow selection owns the runner. A profile change needs a fresh lease.
+See [runner limits](/ci/runners#testbox-spending-limits) for queue behavior.
+
 ## Crabbox repository setup
 
 The shared [Crabbox skill](https://github.com/openclaw/agent-skills/tree/main/skills/crabbox)
@@ -155,20 +199,29 @@ For a selected trusted Testbox lane:
 ```bash
 node scripts/crabbox-wrapper.mjs run --timing-json -- \
   CI=1 NODE_OPTIONS=--max-old-space-size=4096 \
-  OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 \
+  OPENCLAW_VITEST_MAX_WORKERS=1 \
   OPENCLAW_TESTBOX=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 \
   pnpm test <path-or-filter>
 ```
 
-For several commands, warm once with
-`node scripts/crabbox-wrapper.mjs warmup --keep --timing-json`, save the returned
-lease ID, and reuse it with `run --id <tbx_id>`. Stop the owned lease with
-`node scripts/crabbox-wrapper.mjs stop --id <tbx_id>`; stop has no `--timing-json`.
+For several commands, use a unique task label and retain the first allocation:
+
+```bash
+node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --keep --label <task-name> -- <first-command>
+node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --id <tbx_id> --label <task-name> -- <next-command>
+node scripts/crabbox-wrapper.mjs stop --provider blacksmith-testbox <tbx_id>
+```
+
+Use the returned lease ID and the same label throughout the task. Codex, Claude
+Code, and GitHub Actions also bind reuse to their session or run identity.
+Session-owned `warmup --timing-json` can allocate without a label; human shells
+use the labeled `run --keep` flow above. Stop has no `--timing-json`.
 
 - Warm from the task checkout. Claims belong to checkout paths; `--reclaim`
   deliberately transfers that ownership and never changes repository identity.
-  Sparse staging uses the wrapper's ownership path. Do not sync or reclaim
-  while another command owns the lease.
+  After a temporary-source run, the wrapper restores retained Blacksmith and
+  AWS lease claims to the invoking checkout. A claim transferred elsewhere is
+  left untouched. Do not sync or reclaim while another command owns the lease.
 - Wrapper reuse requires the local SSH key created by Crabbox. A missing key
   requires a fresh warmup. Leases created directly by Blacksmith remain usable
   through `blacksmith testbox run --id <tbx_id>`, not Crabbox wrapper reuse.
@@ -186,9 +239,64 @@ lease ID, and reuse it with `run --id <tbx_id>`. Stop the owned lease with
   `--shell`. Active `--script` and `--script-stdin` uploads are rejected before
   source preparation or lease work.
 
-When remote sync uses a temporary checkout, the wrapper preserves native
+Blacksmith source capsules keep one private mirror per physical source worktree
+under the configured sync root. Later runs enumerate source eligibility again,
+compare file identity, size, timestamps, mode, and kind, and copy and hash changed
+files. Unchanged source stays in place with warm Git index stat data. Git's staged
+tracking and the final raw transport tree use separate indexes, preserving the
+same ignored-file and untracked-file selection rules. The wrapper reports copied
+and reused file counts and preparation time.
+Commits on the same retained source ref keep the mirror reusable; each command
+still records its full current witness and rechecks the source revision before sealing.
+
+The mirror remains exclusively locked for the entire command, including artifact
+preservation and lease-claim restoration. An overlapping run from the same worktree
+prints a message and builds an independent fresh capsule. Only completed cleanup
+records an idle mirror for reuse; a missing witness, unsupported staging location,
+or unresolved owner uses fresh staging. Changed source during freezing fails the
+run. Cache metadata, payload, witness repository or ref, or Git-version mismatches
+rebuild cold before upload. Source enumeration and metadata checks still scale with the repository;
+source-byte copying and hashing scale with changed files on warm runs.
+Private mirrors disable Git hooks and fsmonitor; source enumeration also disables
+fsmonitor in mirror mode. Other active Git callbacks retain the preparation hold
+and cannot make a reusable cache. Ordinary fresh-capsule behavior is unchanged.
+
+Different worktrees share a short allocation lock. A busy allocator prints
+`[crabbox] waiting for source mirror allocation...` and waits up to 120 seconds
+before falling back to a fresh capsule. Per-mirror validation, cold preparation,
+and eviction's payload deletion run under the slot lock without holding allocation.
+
+The sync root admits at most 32 mirror slots. Allocation evicts the least
+recently used idle mirror; active, corrupt-ownership, or interrupted slots remain
+protected and count toward the limit. If no slot can be safely reclaimed, the run
+uses ordinary fresh staging. `staging inspect` identifies idle mirrors, and
+`staging recover <id>` can remove one under its exclusive lock. Automatic abandoned
+staging recovery leaves idle mirrors available for reuse. Interrupted commands
+retain the existing witness, claim, and diagnostic recovery requirements.
+An eviction records disposal before deleting bytes and keeps its slot reserved
+until deletion finishes. If interrupted, `staging inspect` reports the recorded
+disposal as a recovery candidate; automatic recovery or `staging recover <id>`
+can resume it after acquiring the exclusive slot lock. Replaced directories and
+unknown metadata remain protected. Concurrent allocators recheck capacity after
+deletion; a slot being disposed still counts toward the 32-slot limit.
+A separate disposal receipt survives the final directory and lock removal, so
+recovery can finish interrupted namespace cleanup even after the payload receipt
+is gone. Recovery preserves an already-recorded disposal instead of rewriting it.
+Slots whose producer already removed the payload also receive a cleanup record;
+that record requires the payload root to stay absent and never authorizes deleting
+a replacement root. Both forms block slot reuse until cleanup completes.
+Private Git objects reaching 256 MiB trigger a cold rebuild on the next reuse,
+bounding retained object history without pruning objects behind saved indexes.
+
+When remote sync uses an isolated checkout, the wrapper preserves native
 `.crabbox/runs` and `.crabbox/captures` outputs together beneath a fresh
-`.crabbox/wrapper-artifacts/run-*` directory before removing that checkout.
+`.crabbox/wrapper-artifacts/run-*` directory before removing that checkout or
+returning its mirror to the idle cache. Verified native outputs are removed from
+an idle mirror so later runs retain only their own diagnostics.
+Other native `.crabbox` state uses ordinary full checkout disposal after artifact
+preservation; the next run builds a cold mirror. Mirror locks release automatically
+when their process exits, but an unresolved admitted consumer still requires the
+existing staging recovery checks before its snapshot can be removed.
 Repeated runs retain separate evidence even when native filenames match. The
 wrapper prints the old-to-new root mapping; native logs and generated proof may
 still reference the old paths. A preservation error fails the wrapper and retains
@@ -260,6 +368,15 @@ that snapshot in an independent Git repository and named ref, select it explicit
 node scripts/crabbox-wrapper.mjs staging recover <id> \
   --witness-repo /path/to/retained-repository --witness-ref refs/heads/saved-source
 ```
+
+Witness verification proves that the selected ref's objects are present and connected.
+On Git 2.50+, it skips unrelated reference-database checks, so stray files such as
+Finder `.DS_Store` under `.git/refs` do not block recovery. Explicit `staging recover`
+scales its work budget with witness object storage: 120 seconds plus 30 seconds per
+GiB, at most 30 minutes. Automatic recovery after a wrapper command keeps the
+120-second bound.
+Failure reasons distinguish an exhausted budget, reference-database errors, and
+missing or unconnected objects.
 
 Recovery does not create backup repositories, archives, or permanent refs. A stage's
 own Git objects or bundle do not count as another copy. Live or uncertain owners,

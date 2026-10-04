@@ -15,14 +15,13 @@ function tool(name: string, overrides: Partial<AnyAgentTool> = {}): AnyAgentTool
   };
 }
 
-function setup(options: { target?: string; registeredSpecs?: CodexDynamicToolSpec[] } = {}) {
-  const target = options.target ?? "automations";
+function setup(options: { registeredSpecs?: CodexDynamicToolSpec[] } = {}) {
   const execute = vi.fn(async (_id: string, args: unknown) => ({
     content: [{ type: "text" as const, text: "observed" }],
     details: args,
   }));
   const tools = [
-    tool("automations"),
+    tool("automations", { execute }),
     tool("read"),
     tool("sandbox_exec", { catalogMode: "direct-only" }),
     tool("fixture__lookup_note"),
@@ -30,11 +29,6 @@ function setup(options: { target?: string; registeredSpecs?: CodexDynamicToolSpe
     tool("openclaw_direct__read"),
     tool("_probe"),
   ];
-  for (const entry of tools) {
-    if (entry.name === target) {
-      entry.execute = execute;
-    }
-  }
   const bridge = createCodexDynamicToolBridge({
     tools,
     registeredSpecs: options.registeredSpecs,
@@ -47,7 +41,7 @@ function setup(options: { target?: string; registeredSpecs?: CodexDynamicToolSpe
       turnId: "turn-1",
       callId: "call-1",
       namespace: "openclaw",
-      tool: target,
+      tool: "automations",
       arguments: args,
     });
   }
@@ -95,40 +89,22 @@ describe("Codex automation tool references", () => {
     );
   });
 
-  it("leaves unknown, wrong-namespace, malformed, wildcard and non-string values unchanged", async () => {
+  it("leaves unknown, wrong-namespace and non-string values unchanged", async () => {
     const { call, execute } = setup();
     const input = automationArgs([
       "openclaw__missing",
       "openclaw__sandbox_exec",
       "openclaw_direct__fixture__lookup_note",
-      "openclaw___probe",
-      "tools.openclaw__read",
-      "*",
       7,
-      null,
-      { name: "openclaw__read" },
       "read",
     ]);
     await call(input);
     expect(received(execute)).toEqual(input);
   });
 
-  it.each<JsonValue>([null, "openclaw__read", 7, { name: "openclaw__read" }])(
-    "leaves a non-array allowlist for the automation validator: %j",
-    async (value) => {
-      const { call, execute } = setup();
-      const input = automationArgs(value);
-      await call(input);
-      expect(received(execute)).toEqual(input);
-    },
-  );
-
-  it("does not translate the same argument structure for another tool", async () => {
-    const { call, execute } = setup({ target: "read" });
-    const input = automationArgs([
-      "openclaw__fixture__lookup_note",
-      "openclaw_direct__sandbox_exec",
-    ]);
+  it("leaves a non-array allowlist for the automation validator", async () => {
+    const { call, execute } = setup();
+    const input = automationArgs(null);
     await call(input);
     expect(received(execute)).toEqual(input);
   });
@@ -154,64 +130,37 @@ describe("Codex automation tool references", () => {
   });
 });
 
-it.each<{
-  label: string;
-  input: JsonValue;
-  expected: JsonValue;
-}>([
-  {
-    label: "flat job",
-    input: { action: "add", payload: { toolsAllow: ["openclaw__fixture__lookup_note"] } },
-    expected: { action: "add", payload: { toolsAllow: ["fixture__lookup_note"] } },
-  },
+it.each<{ label: string; wrap: (toolsAllow: string[]) => JsonValue }>([
+  { label: "flat job", wrap: (toolsAllow) => ({ action: "add", payload: { toolsAllow } }) },
   {
     label: "empty job with flat fields",
-    input: { action: "add", job: {}, toolsAllow: ["openclaw__fixture__lookup_note"] },
-    expected: { action: "add", job: {}, toolsAllow: ["fixture__lookup_note"] },
+    wrap: (toolsAllow) => ({ action: "add", job: {}, toolsAllow }),
   },
   {
     label: "flat payload in a job",
-    input: { action: "add", job: { toolsAllow: ["openclaw__fixture__lookup_note"] } },
-    expected: { action: "add", job: { toolsAllow: ["fixture__lookup_note"] } },
-  },
-  {
-    label: "flat update",
-    input: { action: "update", jobId: "job-1", toolsAllow: ["openclaw__fixture__lookup_note"] },
-    expected: { action: "update", jobId: "job-1", toolsAllow: ["fixture__lookup_note"] },
+    wrap: (toolsAllow) => ({ action: "add", job: { toolsAllow } }),
   },
   {
     label: "data-wrapped job",
-    input: {
-      action: "add",
-      job: { data: { payload: { toolsAllow: ["openclaw__fixture__lookup_note"] } } },
-    },
-    expected: {
-      action: "add",
-      job: { data: { payload: { toolsAllow: ["fixture__lookup_note"] } } },
-    },
+    wrap: (toolsAllow) => ({ action: "add", job: { data: { payload: { toolsAllow } } } }),
   },
   {
     label: "job-wrapped patch",
-    input: { action: "update", job: { job: { toolsAllow: ["openclaw__fixture__lookup_note"] } } },
-    expected: { action: "update", job: { job: { toolsAllow: ["fixture__lookup_note"] } } },
+    wrap: (toolsAllow) => ({ action: "update", job: { job: { toolsAllow } } }),
   },
   {
     label: "recoverable padded field",
-    input: { action: "add", job: { "toolsAllow ": ["openclaw__fixture__lookup_note"] } },
-    expected: { action: "add", job: { "toolsAllow ": ["fixture__lookup_note"] } },
+    wrap: (toolsAllow) => ({ action: "add", job: { "toolsAllow ": toolsAllow } }),
   },
   {
     label: "recoverable concatenated payload",
-    input: { action: "add", namePayload: { toolsAllow: ["openclaw__fixture__lookup_note"] } },
-    expected: { action: "add", namePayload: { toolsAllow: ["fixture__lookup_note"] } },
+    wrap: (toolsAllow) => ({ action: "add", namePayload: { toolsAllow } }),
   },
-])(
-  "resolves references without rewriting the supported $label shape",
-  async ({ input, expected }) => {
-    const { call, execute } = setup();
-    const original = structuredClone(input);
-    await call(input);
-    expect(received(execute)).toEqual(expected);
-    expect(input).toEqual(original);
-  },
-);
+])("resolves references without rewriting the supported $label shape", async ({ wrap }) => {
+  const { call, execute } = setup();
+  const input = wrap(["openclaw__fixture__lookup_note"]);
+  const original = structuredClone(input);
+  await call(input);
+  expect(received(execute)).toEqual(wrap(["fixture__lookup_note"]));
+  expect(input).toEqual(original);
+});

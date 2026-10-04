@@ -3,8 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { assertClawHubArtifactMetadata } from "../clawhub-artifact-assertions.mjs";
+import {
+  assertClawHubArtifactMetadata,
+  assertClawHubExternalInstallContract,
+} from "../clawhub-artifact-assertions.mjs";
 import { readPositiveIntEnvWithEmptyFallback } from "../env-limits.mjs";
+import { readJson } from "../fixtures/common.mjs";
 import { assertRealPathInside, resolveHomePath } from "../openclaw-state-paths.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { hasExpectedPluginUninstallConfigState } from "../plugin-uninstall-assertions.mjs";
@@ -27,7 +31,6 @@ const EXPECT_FAILURE_OUTPUT_MAX_BYTES = readPositiveIntEnvWithEmptyFallback(
   1024 * 1024,
 );
 
-const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const scratchFile = (name) => path.join(scratchRoot, name);
 const normalizedPath = (filePath) => filePath.replaceAll("\\", "/");
 
@@ -347,24 +350,13 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
   const optionalErrorMessages = new Set([
     "agent event subscription registration requires id and handle",
   ]);
-  const frozenTargetErrorMessages = new Set();
-  if (process.env.OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT === "legacy") {
-    frozenTargetErrorMessages.add(
-      "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider",
-    );
-  }
   const allowedErrorMessages = new Set([...expectedErrorMessages, ...optionalErrorMessages]);
   if (!INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES.has(surfaceMode)) {
-    const unexpected = [...errorMessages].filter(
-      (message) => !frozenTargetErrorMessages.has(message),
-    );
+    const unexpected = [...errorMessages];
     if (unexpected.length > 0) {
       throw new Error(`unexpected kitchen-sink diagnostic errors: ${unexpected.join(", ")}`);
     }
     return;
-  }
-  for (const message of frozenTargetErrorMessages) {
-    allowedErrorMessages.add(message);
   }
   for (const message of errorMessages) {
     if (!allowedErrorMessages.has(message)) {
@@ -383,26 +375,6 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
         throw new Error(`missing expected kitchen-sink diagnostic error: ${message}`);
       }
     }
-  }
-}
-
-function assertClawHubExternalInstallContract(installPath) {
-  const openclawPeerPath = path.join(installPath, "node_modules", "openclaw");
-  if (!fs.existsSync(openclawPeerPath)) {
-    throw new Error(`missing kitchen-sink openclaw peer symlink: ${openclawPeerPath}`);
-  }
-  if (!fs.lstatSync(openclawPeerPath).isSymbolicLink()) {
-    throw new Error(`kitchen-sink openclaw peer is not a symlink: ${openclawPeerPath}`);
-  }
-  const hostRoot = fs.realpathSync(process.cwd());
-  const linkedHostRoot = fs.realpathSync(openclawPeerPath);
-  if (linkedHostRoot !== hostRoot) {
-    throw new Error(`expected kitchen-sink openclaw peer ${linkedHostRoot} to target ${hostRoot}`);
-  }
-
-  const dependencyPackagePath = path.join(installPath, "node_modules", "is-number", "package.json");
-  if (fs.existsSync(dependencyPackagePath)) {
-    assertRealPathInside(installPath, dependencyPackagePath, "kitchen-sink isolated dependency");
   }
 }
 
@@ -653,7 +625,7 @@ async function assertInstalled() {
     assertRealPathInside(extensionsRoot, installPath, "kitchen-sink ClawHub install path");
   }
   if (source === "clawhub" && record.artifactKind === "npm-pack") {
-    assertClawHubExternalInstallContract(installPath);
+    assertClawHubExternalInstallContract(installPath, "kitchen-sink");
   }
   fs.writeFileSync(scratchFile(`kitchen-sink-${label}-install-path.txt`), installPath, "utf8");
 }

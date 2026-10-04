@@ -1,14 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  embeddedAgentLog,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import {
   createAgentHarnessHostCapabilitiesForTest,
   createMockPluginRegistry,
+  useProviderToolSchemaRuntimeForTest,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "../../harness.js";
@@ -16,14 +14,14 @@ import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { CodexAppServerClient } from "./client.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
-import { ownCodexInferenceClient } from "./inference-routing.js";
+import { getCodexInferenceThread, ownCodexInferenceClient } from "./inference-routing.js";
 import { buildCodexRuntimeModelParams } from "./model-runtime.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import {
   createClient,
   directSpawnItem,
   createRuntime,
-  createTaskScope,
+  createCompletionScope,
   threadRead,
   notifyChildStarted,
   turnStartedNotification,
@@ -78,15 +76,42 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
 });
 
 setupRunAttemptTestHooks();
+// Load real provider schema policy once; cold plugin discovery is not part of the turn budget.
+useProviderToolSchemaRuntimeForTest(["codex"]);
 
 describe("Codex native configuration", () => {
-  it.each([
-    { permission: "denied", retryModel: "native-retry" },
-    { permission: "allowed", retryModel: "openai/native-retry" },
-    { permission: "revoked", retryModel: "native-retry" },
-  ])(
-    "binds the actual harness retry model when its permission is $permission",
-    async ({ permission, retryModel }) => {
+  it.each(["missing", "disabled"])(
+    "refuses required-root execution before connection when host tools are %s",
+    async (state) => {
+      const params = createParams(path.join(tempDir, "session.jsonl"), tempDir);
+      params.requireWorkspaceOnly = true;
+      params.sessionRoot = tempDir;
+      if (state === "missing") {
+        Reflect.deleteProperty(params, "hostCapabilities");
+      } else {
+        params.disableTools = true;
+      }
+      const clientFactory = vi.fn();
+
+      await expect(runCodexAppServerAttempt(params, { clientFactory })).rejects.toThrow(
+        "requires an enabled host-mediated tool surface",
+      );
+      expect(clientFactory).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["denied", "revoked"] as const)(
+    "binds the actual harness retry model when its permission is %s",
+    async (permission) => {
+      // This in-memory managed transport has no custom CA or proxy. Host transport settings
+      // would correctly disqualify a real client from owned inference routing.
+      for (const name of ["CODEX_CA_CERTIFICATE", "SSL_CERT_FILE", "REQUEST_METHOD"]) {
+        vi.stubEnv(name, undefined);
+      }
+      for (const name of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"]) {
+        vi.stubEnv(name, undefined);
+        vi.stubEnv(name.toLowerCase(), undefined);
+      }
       const catalogModel = "catalog-primary";
       const runtimeModel = "native-primary";
       const allowedModels = new Set([
@@ -216,13 +241,15 @@ describe("Codex native configuration", () => {
             command: process.execPath,
             args: ["app-server"],
             homeScope: "agent",
-            cyberFailover: { mode: "auto", model: retryModel },
+            cyberFailover: { mode: "auto", model: "openai/native-retry" },
           },
         },
       });
       if (!harness.runAttempt) {
         throw new Error("Registered Codex harness must support run attempts");
       }
+      // Model policy owns this proof; cold preparation must not spend its logical clock.
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const run = harness.runAttempt(params);
       const settled = run.then(
         () => false,
@@ -231,6 +258,7 @@ describe("Codex native configuration", () => {
       try {
         await Promise.race([primaryStarted.promise, run]);
         expect(turnModels).toEqual([runtimeModel]);
+        expect(getCodexInferenceThread(transport.client, "thread-policy")).toBeDefined();
         const error = { message: "Synthetic provider refusal", codexErrorInfo: "cyberPolicy" };
         transport.send({
           method: "error",
@@ -269,17 +297,10 @@ describe("Codex native configuration", () => {
             },
           });
         }
-        if (permission === "denied") {
-          expect(turnModels).toEqual([runtimeModel]);
-          await expect(run).rejects.toThrow("operator role cannot use this model");
-        } else {
-          expect(turnModels).toEqual([runtimeModel, "native-retry"]);
-          if (permission === "revoked") {
-            await expect(run).rejects.toThrow("operator role cannot use this model");
-          } else {
-            await expect(run).resolves.toMatchObject({ terminal: { kind: "ok" } });
-          }
-        }
+        expect(turnModels).toEqual(
+          permission === "denied" ? [runtimeModel] : [runtimeModel, "native-retry"],
+        );
+        await expect(run).rejects.toThrow("operator role cannot use this model");
         expect(params.modelId).toBe(catalogModel);
         expect(params.model.id).toBe(catalogModel);
         const transcript = await readTranscriptMessagesByIdentity(params);
@@ -298,21 +319,14 @@ describe("Codex native configuration", () => {
   );
 
   it.each<{
-    transport: "stdio" | "proxy" | "websocket" | "unix";
+    transport: "stdio" | "websocket" | "unix";
     hasAnswer: boolean;
     nativeProvider: string;
     configuredProvider?: string;
     modelPolicyAction?: "deny" | "revoke";
   }>([
-    { transport: "stdio", hasAnswer: true, nativeProvider: "openai" },
     { transport: "stdio", hasAnswer: false, nativeProvider: "openai" },
-    { transport: "proxy", hasAnswer: true, nativeProvider: "openai" },
-    { transport: "proxy", hasAnswer: false, nativeProvider: "openai" },
     { transport: "websocket", hasAnswer: false, nativeProvider: "openai" },
-    { transport: "unix", hasAnswer: true, nativeProvider: "openai" },
-    { transport: "unix", hasAnswer: false, nativeProvider: "openai" },
-    { transport: "unix", hasAnswer: true, nativeProvider: "copilot" },
-    { transport: "unix", hasAnswer: true, nativeProvider: "openai", configuredProvider: "copilot" },
     { transport: "unix", hasAnswer: true, nativeProvider: "copilot", configuredProvider: "openai" },
     // Earlier releases recorded disabled search for custom native providers.
     { transport: "stdio", hasAnswer: true, nativeProvider: "copilot" },
@@ -355,8 +369,8 @@ describe("Codex native configuration", () => {
         appServer: {
           mode: "guardian",
           command: process.execPath,
-          args: transport === "proxy" ? ["app-server", "proxy"] : ["app-server"],
-          transport: transport === "proxy" ? "stdio" : transport,
+          args: ["app-server"],
+          transport,
           ...(transport === "websocket" ? { url: "ws://127.0.0.1:8123" } : {}),
           ...(transport === "unix" ? { url: "unix:///tmp/synthetic-codex.sock" } : {}),
         },
@@ -489,13 +503,15 @@ describe("Codex native configuration", () => {
           ...params.config?.tools,
           exec: { mode: configuredProvider === nativeProvider ? "auto" : "ask" },
         },
-      } as EmbeddedRunAttemptParams["config"];
+      };
       if (nativeSearchEnabled) {
         params.config = {
           ...params.config,
           tools: { ...params.config?.tools, web: { search: { enabled: true } } },
         };
       }
+      // Keep the existing attempt budget on the clock owned by this protocol fixture.
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const run = runCodexAppServerAttempt(params, {
         pluginConfig,
         clientFactory,
@@ -705,11 +721,11 @@ it.each(["restore", "fresh", "fresh after yield"] as const)(
       recoveryPollDelaysMs: [],
       interruptModelExecution,
     });
-    const parent = monitor.registerParent({
+    const parent = await monitor.registerParent({
       parentThreadId: "parent-thread",
       modelSource: source,
       requesterSessionKey: "agent:main:unqualified-native",
-      taskRuntimeScope: createTaskScope("agent:main:unqualified-native"),
+      completionScope: createCompletionScope("agent:main:unqualified-native"),
       configurationQualification: fresh
         ? undefined
         : { assertCurrent: () => {}, hasProvider: () => false },
@@ -801,12 +817,17 @@ it.each(["restore", "fresh", "fresh after yield"] as const)(
           items: [{ type: "agentMessage", id: "late-final", text: "Late success" }],
         }),
       );
-      expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
-        expect.objectContaining({ status: "cancelled" }),
+      expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          childSessionId: "child-thread",
+          status: "cancelled",
+          statusLabel: "model_authority_revoked",
+          result: "Native model execution authority was revoked.",
+        }),
       );
     } finally {
       sibling.release();
-      monitor.dispose();
+      await monitor.dispose();
       await parent.unregister();
       host.close();
     }

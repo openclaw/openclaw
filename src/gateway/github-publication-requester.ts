@@ -103,7 +103,12 @@ function prepareRequesterPolicy(
   };
   const assertRole = (profile: UserProfileAccessFacts | undefined, config: OpenClawConfig) => {
     const role = profile
-      ? resolveOperatorRolePolicyForAssignment(profile.profileId, profile.assignedRole, config)
+      ? resolveOperatorRolePolicyForAssignment(
+          profile.profileId,
+          profile.assignedRole,
+          config,
+          profile.githubLogin ?? null,
+        )
       : undefined;
     if (
       !roleScopesAllow({
@@ -191,7 +196,7 @@ export async function captureGitHubPublicationRequester(
 ): Promise<{ requester: GitHubPublicationRequester; release: () => void }> {
   options.signal?.throwIfAborted();
   options.sessionMutationAuthorization?.assertCurrent();
-  const source = captureGatewayOperatorRunAuthority(options);
+  const source = await captureGatewayOperatorRunAuthority(options);
   let identity: PreparedProfileIdentity | undefined;
   let sessionFacts: PreparedPublicationSession | undefined;
   const release = () => {

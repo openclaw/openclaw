@@ -1,8 +1,3 @@
-/**
- * Guarded fetch wrappers for web tools.
- *
- * Applies SSRF policy, timeout normalization, and trusted/self-hosted endpoint modes.
- */
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import {
   fetchWithSsrFGuard,
@@ -36,18 +31,14 @@ function resolveTimeoutMs(params: {
   timeoutMs?: number;
   timeoutSeconds?: number;
 }): number | undefined {
-  const timeoutMs = readPositiveIntegerParam(params as Record<string, unknown>, "timeoutMs");
+  const timeoutMs = readPositiveIntegerParam(params, "timeoutMs");
   if (timeoutMs !== undefined) {
     return timeoutMs;
   }
-  const timeoutSeconds = readPositiveIntegerParam(
-    params as Record<string, unknown>,
-    "timeoutSeconds",
-  );
-  if (timeoutSeconds !== undefined) {
-    return finiteSecondsToTimerSafeMilliseconds(timeoutSeconds, { floorSeconds: true });
-  }
-  return undefined;
+  const timeoutSeconds = readPositiveIntegerParam(params, "timeoutSeconds");
+  return timeoutSeconds === undefined
+    ? undefined
+    : finiteSecondsToTimerSafeMilliseconds(timeoutSeconds, { floorSeconds: true });
 }
 
 /** Runs a guarded fetch with strict or trusted-env-proxy web tool policy. */

@@ -33,6 +33,35 @@ afterEach(() => {
 });
 
 describe("createApplicationConfigCapability", () => {
+  it("publishes upload policy changes and keeps the default enabled", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ uploadsEnabled: false }))
+      .mockResolvedValueOnce(Response.json({ uploadsEnabled: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    const config = createApplicationConfigCapability({ resourceBasePath: "" });
+    const listener = vi.fn();
+    config.subscribe(listener);
+    expect(config.current.uploadsEnabled).toBe(true);
+    await config.refresh();
+    expect(config.current.uploadsEnabled).toBe(false);
+    await config.refresh();
+    expect(config.current.uploadsEnabled).toBe(true);
+    expect(listener.mock.calls.map(([value]) => value.uploadsEnabled)).toEqual([false, true]);
+  });
+
+  it.each([undefined, "configured", "last-used"] as const)(
+    "loads fresh-session model defaults %s",
+    async (policy) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(Response.json({ newSessionModelDefaults: policy })),
+      );
+      const config = createApplicationConfigCapability({ resourceBasePath: "" });
+      await config.refresh();
+      expect(config.current.newSessionModelDefaults).toBe(policy ?? "last-used");
+    },
+  );
   it("keeps capabilities available when development plugin grants contain invalid URLs", async () => {
     vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", {
       gatewayUrl: "ws://gateway.example/mount",

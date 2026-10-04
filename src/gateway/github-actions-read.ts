@@ -86,16 +86,16 @@ export async function prepareBoardGitHubIdentity(
 ) {
   try {
     const config = context.getRuntimeConfig();
-    const identity = await prepareGitHubReadIdentity({
+    return await prepareGitHubReadIdentity({
       config,
       sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? config,
       agentId: authority.boardSession.agentId,
+      issuer: "github.com",
       getCurrentConfig: () => context.getRuntimeConfig(),
       assertActive: authority.assertActive,
       startActive: authority.useCurrent,
       refresh: () => requestCurrentGitHubOAuthRefresh(authority.boardSession.agentId),
     });
-    return identity;
   } catch (error) {
     if (
       error instanceof GitHubIdentityError ||
@@ -154,6 +154,11 @@ export async function readBoardGitHubActions(
                 "GitHub Actions redirected the request; verify the repository/workflow, update the widget grant if needed, and retry.",
               );
             },
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            gitHubPublicApi.GITHUB_API_ORIGIN,
           );
           const raw = await gitHubPublicApi.readGitHubJsonResponse(
             response,

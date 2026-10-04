@@ -7,13 +7,15 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { snapshotGatewayStartupEnv } from "../../../../src/gateway/test-helpers.env.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
-import { waitForFile } from "../../../helpers/process-wait.js";
+import { isProcessAlive } from "../../../helpers/process-wait.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../../../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
-import { runGatewaySshTunnels } from "./gateway-ssh-tunnels.js";
+import { runGatewaySshTunnels, sshTrustPreparedMarker } from "./gateway-ssh-tunnels.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const describeOnTestbox = process.env.OPENCLAW_TESTBOX === "1" ? describe : describe.skip;
@@ -104,10 +106,14 @@ function startProducer(
     resolveReady = resolve;
     rejectReady = reject;
   });
+  const trustPrepared = createDeferred();
   child.stdout.on("data", (chunk) => {
     stdout += String(chunk);
     if (stdout.includes(producerReadyMarker)) {
       resolveReady();
+    }
+    if (stdout.includes(sshTrustPreparedMarker)) {
+      trustPrepared.resolve();
     }
   });
   child.stderr.on("data", (chunk) => {
@@ -137,7 +143,28 @@ function startProducer(
     kill: () => terminateChild(child),
     ready,
     start: () => child.stdin.end("start\n"),
+    waitForTrustPrepared: () =>
+      awaitGateBeforeSettlement(
+        trustPrepared.promise,
+        completion,
+        `timeout waiting for ${fixture?.readyPath}`,
+      ),
   };
+}
+
+// SIGKILL deliberately removes the namespace's ChildProcess owner; only its PID remains.
+async function waitForNamespaceExit(pid: number, signal: AbortSignal) {
+  try {
+    while (isProcessAlive(pid)) {
+      signal.throwIfAborted();
+      await delay(5, undefined, { signal });
+    }
+  } catch (error) {
+    if (signal.aborted) {
+      throw new Error(`process still alive: ${pid}`, { cause: error });
+    }
+    throw error;
+  }
 }
 
 async function killPrivilegedProcessGroup(pid: number) {
@@ -196,7 +223,9 @@ describeOnTestbox("Gateway SSH tunnel QA producer", () => {
     expect(summary.unreachableDiagnostic).toMatch(/Connection refused|connect to host|ssh exited/i);
   }, 120_000);
 
-  it("keeps overlapping and killed producers isolated from account SSH state", async () => {
+  it("keeps overlapping and killed producers isolated from account SSH state", async ({
+    signal,
+  }) => {
     const accountKnownHostsBefore = await readOptionalFile(accountKnownHostsPath);
     const firstArtifactBase = tempDirs.make("openclaw-gateway-ssh-overlap-first-");
     const secondArtifactBase = tempDirs.make("openclaw-gateway-ssh-overlap-second-");
@@ -226,13 +255,49 @@ describeOnTestbox("Gateway SSH tunnel QA producer", () => {
     });
     await killed.ready;
     killed.start();
-    await waitForFile(fixtureReadyPath, 10_000);
+    await withinTest(killed.waitForTrustPrepared(), signal);
     const namespacePid = Number.parseInt(await fs.readFile(fixtureProcessPath, "utf8"), 10);
     expect(namespacePid).toBeGreaterThan(1);
     await killPrivilegedProcessGroup(namespacePid);
     await expect(killed.completion).rejects.toThrow(
-      /namespaced Gateway SSH tunnel producer exited/,
+      "namespaced Gateway SSH tunnel producer exited null/SIGKILL",
     );
+
+    for (const failureMode of ["readiness-write", "parent-exit"]) {
+      const artifactBase = tempDirs.make(`openclaw-gateway-ssh-${failureMode}-`);
+      const root = tempDirs.make(`openclaw-gateway-ssh-${failureMode}-root-`);
+      const processPath = path.join(artifactBase, "namespace-pid");
+      const readyPath =
+        failureMode === "readiness-write"
+          ? artifactBase
+          : path.join(artifactBase, "trust-prepared");
+      const failed = startProducer(artifactBase, { processPath, readyPath, root });
+      await failed.ready;
+      failed.start();
+      if (failureMode === "parent-exit") {
+        await withinTest(failed.waitForTrustPrepared(), signal);
+        const pid = Number.parseInt(await fs.readFile(processPath, "utf8"), 10);
+        expect(pid).toBeGreaterThan(1);
+        await failed.kill();
+        await waitForNamespaceExit(pid, signal);
+      } else {
+        await expect(failed.completion).rejects.toThrow(
+          "Gateway SSH tunnel producer exited 1/none",
+        );
+      }
+      const failureEvidence: Awaited<ReturnType<typeof runGatewaySshTunnels>> = JSON.parse(
+        await fs.readFile(path.join(artifactBase, "qa-evidence.json"), "utf8"),
+      );
+      expect(failureEvidence.entries[0]?.result).toMatchObject({
+        status: "fail",
+        failure: {
+          reason: expect.stringContaining(
+            failureMode === "readiness-write" ? "EISDIR" : "lost its parent before termination",
+          ),
+        },
+      });
+      await expect(fs.access(root)).rejects.toMatchObject({ code: "ENOENT" });
+    }
     expect(await readOptionalFile(accountKnownHostsPath)).toEqual(accountKnownHostsBefore);
   }, 180_000);
 });

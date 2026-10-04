@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import {
   loadTranscriptEvents,
@@ -6,15 +7,10 @@ import {
   replaceTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { captureTaskDeliveryWork } from "../../tasks/task-registry-delivery.test-support.js";
-import { listTasksForOwnerKey } from "../../tasks/task-registry.js";
-import {
-  resetTaskFlowRegistryForTests,
-  resetTaskRegistryForTests,
-} from "../../tasks/task-runtime.test-helpers.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { SessionManager } from "../sessions/index.js";
 import {
@@ -43,37 +39,28 @@ async function withTranscriptOwners(
   run: (owners: Awaited<ReturnType<typeof createTranscriptOwners>>) => Promise<void>,
 ) {
   await withStateDirEnv("openclaw-maintenance-owners-", async ({ stateDir }) => {
-    using deliveries = captureTaskDeliveryWork();
     resetCommandQueueStateForTest();
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
     const owners = await createTranscriptOwners(stateDir);
     try {
       await run(owners);
     } finally {
-      try {
-        await waitForDeferredTurnMaintenanceForSession(owners.target.sessionKey);
-      } finally {
-        try {
-          await deliveries.settle();
-        } finally {
-          resetCommandQueueStateForTest();
-          resetTaskRegistryForTests({ persist: false });
-          resetTaskFlowRegistryForTests({ persist: false });
-        }
-      }
+      await waitForDeferredTurnMaintenanceForSession(owners.target.sessionKey);
+      resetCommandQueueStateForTest();
     }
   });
 }
 
 async function createTranscriptOwners(stateDir: string) {
   const memory = SessionManager.inMemory(stateDir);
-  const entryId = memory.appendMessage({
-    role: "user",
-    content: "memory ".repeat(40),
-    timestamp: 1,
-  });
-  memory.appendMessage({ role: "user", content: "memory tail", timestamp: 2 });
+  const entryId = expectDefined(
+    await memory.appendMessageAsync({
+      role: "user",
+      content: "memory ".repeat(40),
+      timestamp: 1,
+    }),
+    "memory owner entry id",
+  );
+  await memory.appendMessageAsync({ role: "user", content: "memory tail", timestamp: 2 });
   const target = {
     agentId: "main",
     sessionId: memory.getSessionId(),
@@ -89,7 +76,7 @@ async function createTranscriptOwners(stateDir: string) {
     }
   }
   await replaceTranscriptEvents(target, [memory.getHeader(), ...durableEntries]);
-  const durable = SessionManager.open(target, stateDir);
+  const durable = await SessionManager.openAsync(target, stateDir);
   const durableBefore = await loadTranscriptEvents(target);
   return {
     memory,
@@ -117,7 +104,7 @@ describe("context-engine maintenance transcript ownership", () => {
       const events: string[] = [];
       const published = vi.fn();
       const unsubscribe = onSessionTranscriptUpdate(published);
-      const open = vi.spyOn(SessionManager, "open");
+      const openAsync = vi.spyOn(SessionManager, "openAsync");
       const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async ({ runtimeContext }) => {
         await release.promise;
         expect.soft(runtimeContext?.allowDeferredCompactionExecution).toBeUndefined();
@@ -159,15 +146,14 @@ describe("context-engine maintenance transcript ownership", () => {
           .soft(manager.getBranch().map((entry) => entry.type === "message" && entry.message))
           .toEqual([replacement, { role: "user", content: "memory tail", timestamp: 2 }]);
         expect.soft(events).toEqual(["locked", "unlocked", "maintained", "returned"]);
-        expect.soft(open).not.toHaveBeenCalled();
+        expect.soft(openAsync).not.toHaveBeenCalled();
         expect.soft(published).not.toHaveBeenCalled();
         expect.soft(await loadTranscriptEvents(target)).toEqual(durableBefore);
         expect.soft(deferred).toHaveLength(0);
-        expect.soft(listTasksForOwnerKey(target.sessionKey)).toHaveLength(0);
       } finally {
         release.resolve();
         await Promise.allSettled([run, ...deferred]);
-        open.mockRestore();
+        openAsync.mockRestore();
         unsubscribe();
       }
     });
@@ -180,7 +166,7 @@ describe("context-engine maintenance transcript ownership", () => {
         const deferred: Promise<void>[] = [];
         const published = vi.fn();
         const unsubscribe = onSessionTranscriptUpdate(published);
-        const open = vi.spyOn(SessionManager, "open");
+        const openAsync = vi.spyOn(SessionManager, "openAsync");
         const lock = vi.fn();
         const run = runContextEngineMaintenance({
           ...params,
@@ -201,7 +187,7 @@ describe("context-engine maintenance transcript ownership", () => {
         try {
           await run;
           await Promise.all(deferred);
-          expect(open).toHaveBeenCalledExactlyOnceWith(target);
+          expect(openAsync).toHaveBeenCalledExactlyOnceWith(target);
           expect(lock).not.toHaveBeenCalled();
           expect(published).toHaveBeenCalledExactlyOnceWith({
             agentId: target.agentId,
@@ -213,31 +199,30 @@ describe("context-engine maintenance transcript ownership", () => {
               sessionKey: target.sessionKey,
             },
           });
-          expect(SessionManager.open(target).getBranch()[0]).toMatchObject({
+          expect((await SessionManager.openAsync(target)).getBranch()[0]).toMatchObject({
             message: replacement,
           });
           expect(durable.getBranch()[0]).toMatchObject({
             message: { content: "durable-only sentinel" },
           });
           expect(deferred).toHaveLength(executionMode ? 0 : 1);
-          expect(listTasksForOwnerKey(target.sessionKey).map((task) => task.status)).toEqual(
-            executionMode ? [] : ["succeeded"],
-          );
         } finally {
           await Promise.allSettled([run, ...deferred]);
-          open.mockRestore();
+          openAsync.mockRestore();
           unsubscribe();
         }
       });
     },
   );
 
-  it.each(modes)(
+  it.for(modes)(
     "does not coalesce or wait for foreign durable work with executionMode=%s",
-    async (executionMode) => {
-      await withTranscriptOwners(async ({ memory, durable, params, target }) => {
+    async (executionMode, { signal }) => {
+      await withTranscriptOwners(async ({ memory, durable, params }) => {
         const release = createDeferredCore();
+        const foreignStarted = createDeferredCore();
         const foreignMaintain = vi.fn(async () => {
+          foreignStarted.resolve();
           await release.promise;
           return { changed: false, rewrittenEntries: 0, bytesFreed: 0 };
         });
@@ -250,8 +235,11 @@ describe("context-engine maintenance transcript ownership", () => {
         });
         let run: Promise<unknown> | undefined;
         try {
-          await vi.waitFor(() => expect(foreignMaintain).toHaveBeenCalledOnce());
-          const tasksBefore = listTasksForOwnerKey(target.sessionKey);
+          await racePromiseWithAbortSignal(
+            Promise.race([foreignStarted.promise, ...deferred]),
+            signal,
+          );
+          expect(foreignMaintain).toHaveBeenCalledOnce();
           const maintain = vi.fn(async () => ({
             changed: false,
             rewrittenEntries: 0,
@@ -267,14 +255,10 @@ describe("context-engine maintenance transcript ownership", () => {
           await expect(run).resolves.toMatchObject({ changed: false });
           expect(maintain).toHaveBeenCalledOnce();
           expect(deferred).toHaveLength(1);
-          expect(listTasksForOwnerKey(target.sessionKey)).toEqual(tasksBefore);
         } finally {
           release.resolve();
           await Promise.allSettled([...(run ? [run] : []), ...deferred]);
         }
-        expect(listTasksForOwnerKey(target.sessionKey).map((task) => task.status)).toEqual([
-          "succeeded",
-        ]);
       });
     },
   );

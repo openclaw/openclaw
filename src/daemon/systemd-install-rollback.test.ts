@@ -55,13 +55,20 @@ async function createInstallFixture() {
     await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
     await fs.writeFile(file, contents, { mode: 0o600 });
   }
-  return { env, unit, environment, originals };
+  const installArgs = {
+    env,
+    stdout: new PassThrough(),
+    programArguments: ["/usr/bin/node", "/prefix-b/openclaw/dist/index.js", "gateway"],
+    environment: { SERVICE_VALUE: "candidate" },
+    environmentValueSources: { SERVICE_VALUE: "file" as const },
+  };
+  return { env, unit, environment, originals, installArgs };
 }
 
 it.each([false, true])(
   "retains generated input referenced by a concurrent unit edit (replacement=%s)",
   async (replacement) => {
-    const { env, unit, environment } = await createInstallFixture();
+    const { unit, environment, installArgs } = await createInstallFixture();
     await fs.rm(environment);
     const rename = fs.rename.bind(fs);
     let edited = false;
@@ -78,15 +85,7 @@ it.each([false, true])(
       }
     });
 
-    await expect(
-      stageSystemdService({
-        env,
-        stdout: new PassThrough(),
-        programArguments: ["/usr/bin/node", "/prefix-b/openclaw/dist/index.js", "gateway"],
-        environment: { SERVICE_VALUE: "candidate" },
-        environmentValueSources: { SERVICE_VALUE: "file" },
-      }),
-    ).rejects.toThrow("changed during publication");
+    await expect(stageSystemdService(installArgs)).rejects.toThrow("changed during publication");
     expect(await fs.readFile(unit, "utf8")).toContain("# concurrent edit");
     expect(await fs.readFile(unit, "utf8")).toContain(environment);
     expect(await fs.readFile(environment, "utf8")).toContain("SERVICE_VALUE=candidate");
@@ -96,7 +95,7 @@ it.each([false, true])(
 it.each(["success", "failure", "interruption"] as const)(
   "keeps cached candidate inputs until rollback reload confirms restoration (%s)",
   async (reload) => {
-    const { env, unit, environment, originals } = await createInstallFixture();
+    const { unit, environment, originals, installArgs } = await createInstallFixture();
     await fs.rm(environment);
     let cachedUnit = originals.get(unit)!;
     let activationFailed = false;
@@ -138,12 +137,8 @@ it.each(["success", "failure", "interruption"] as const)(
       };
     });
     const installation = installSystemdService({
-      env,
-      stdout: new PassThrough(),
+      ...installArgs,
       warn: (message) => warnings.push(message),
-      programArguments: ["/usr/bin/node", "/prefix-b/openclaw/dist/index.js", "gateway"],
-      environment: { SERVICE_VALUE: "candidate" },
-      environmentValueSources: { SERVICE_VALUE: "file" },
     });
     await expect(installation).rejects.toThrow("candidate failed");
     expect(await fs.readFile(unit, "utf8")).toBe(originals.get(unit));
@@ -204,7 +199,7 @@ it.each([
   { enabled: "enabled", running: true, failure: "definition-read" },
   { enabled: "enabled", running: true, failure: "policy-read" },
 ])("preserves the previous prefix and native policy after $failure ($enabled)", async (prior) => {
-  const { env, unit, originals } = await createInstallFixture();
+  const { unit, originals, installArgs } = await createInstallFixture();
   let enabled = prior.enabled;
   let running = prior.running;
   let failed = false;
@@ -258,14 +253,7 @@ it.each([
         throw new Error("Doctor custody revoked during service preparation");
       }
     },
-    () =>
-      installSystemdService({
-        env,
-        stdout: new PassThrough(),
-        programArguments: ["/usr/bin/node", "/prefix-b/openclaw/dist/index.js", "gateway"],
-        environment: { SERVICE_VALUE: "candidate" },
-        environmentValueSources: { SERVICE_VALUE: "file" },
-      }),
+    () => installSystemdService(installArgs),
     { updateOwned: false, assertRecoveryCurrent: () => {} },
   );
   if (prior.failure === "activation") {
@@ -287,7 +275,7 @@ it.each([
 it.each(["publication", "activation"])(
   "leaves %s interruption recovery to the definition transaction",
   async (failure) => {
-    const { env, unit, environment, originals } = await createInstallFixture();
+    const { unit, environment, originals, installArgs } = await createInstallFixture();
     let current = true;
     const revoke = () => {
       current = false;
@@ -311,11 +299,7 @@ it.each(["publication", "activation"])(
       },
       () =>
         installSystemdService({
-          env,
-          stdout: new PassThrough(),
-          programArguments: ["/usr/bin/node", "/prefix-b/openclaw/dist/index.js", "gateway"],
-          environment: { SERVICE_VALUE: "candidate" },
-          environmentValueSources: { SERVICE_VALUE: "file" },
+          ...installArgs,
           definitionTransaction: {
             assertCurrent: assertGatewayServiceUpdateCurrent,
             beforeWrite: check,

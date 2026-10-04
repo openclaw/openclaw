@@ -24,7 +24,7 @@ const CALLERS = [
   ["extensions/telegram/src/bot-message-context.session.ts", "channelIngress,"],
   ["extensions/tlon/src/monitor/index.ts", "channelIngress,"],
   ["extensions/twitch/src/monitor.ts", "channelIngress,"],
-  ["extensions/whatsapp/src/auto-reply/monitor/prepared-inbound.ts", '| "channelIngress"'],
+  ["extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.ts", "channelIngress,"],
   ["extensions/zalo/src/monitor.ts", "channelIngress,"],
   ["extensions/zalouser/src/monitor.ts", "channelIngress: accessDecision"],
   ["src/channels/direct-dm.ts", "channelIngress: params.channelIngress"],
@@ -96,14 +96,17 @@ const HOST_BUILDERS = [
     "ctx.buildContext ?? buildChannelInboundEventContext",
   ],
   ["extensions/sms/src/inbound.ts", "params.channelRuntime.inbound.buildContext"],
-  ["extensions/synology-chat/src/inbound-event.ts", "resolved.rt.channel.inbound.buildContext"],
+  ["extensions/synology-chat/src/inbound-event.ts", "rt.channel.inbound.buildContext"],
   [
     "extensions/telegram/src/bot-message-context.session.ts",
     "sessionRuntime.buildChannelInboundEventContext",
   ],
   ["extensions/tlon/src/monitor/index.ts", "core.channel.inbound.buildContext"],
   ["extensions/twitch/src/monitor.ts", "channelRuntime.inbound.buildContext"],
-  ["extensions/whatsapp/src/auto-reply/monitor/prepared-inbound.ts", "params.buildContext({"],
+  [
+    "extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.ts",
+    "params.buildContext ?? buildChannelInboundEventContext",
+  ],
   ["extensions/zalo/src/monitor.ts", "core.channel.inbound.buildContext"],
   ["extensions/zalouser/src/monitor.ts", "core.channel.inbound.buildContext"],
   [

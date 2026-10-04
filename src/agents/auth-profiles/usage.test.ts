@@ -1,7 +1,8 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 /**
  * Usage mutation and quota recovery tests for auth profiles.
- * Covers WHAM probes and store persistence hooks without contacting real providers.
+ * Covers WHAM request planning and real reducer outcomes without contacting providers.
+ * Worker persistence and publication are covered at the embedded-runner boundary.
  */
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -20,6 +21,13 @@ import { createFailedOAuthRefreshFence, createOAuthRefreshFence } from "./oauth-
 import * as oauth from "./oauth.js";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
 import {
+  mockLockedUpdateForStore,
+  mockLockedUpdatesForStore,
+  resetAuthProfileUsageMocks,
+  storeMocks,
+  usageMocks,
+} from "./usage-fixture.test-support.js";
+import {
   clearExpiredCooldowns,
   isProfileInCooldown,
   markAuthProfileBlockedUntil,
@@ -30,14 +38,6 @@ import {
 } from "./usage.js";
 import { testing as authProfileUsageTesting } from "./usage.test-support.js";
 
-const storeMocks = vi.hoisted(() => ({
-  resolvePersistedAuthProfileOwnerAgentDir: vi.fn(
-    (params: { agentDir?: string }) => params.agentDir,
-  ),
-  saveAuthProfileStore: vi.fn(),
-  loadAuthProfileStoreWithoutExternalProfiles: vi.fn(),
-  updateAuthProfileStoreWithLock: vi.fn().mockResolvedValue(null),
-}));
 const fetchMock = vi.hoisted(() => vi.fn());
 const resolveApiKeyForProfileMock = vi.hoisted(() =>
   vi.fn<typeof import("./oauth.js").resolveApiKeyForProfile>(),
@@ -47,14 +47,23 @@ let resolveApiKeyForProfileSpy: MockInstance<typeof oauth.resolveApiKeyForProfil
 
 vi.mock("./store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./store.js")>()),
-  resolvePersistedAuthProfileOwnerAgentDir: storeMocks.resolvePersistedAuthProfileOwnerAgentDir,
+  resolvePersistedAuthProfileOwnerAgentDir: (await import("./usage-fixture.test-support.js"))
+    .storeMocks.resolvePersistedAuthProfileOwnerAgentDir,
 }));
-vi.mock("./store-runtime.js", () => ({
-  loadAuthProfileStoreWithoutExternalProfiles:
-    storeMocks.loadAuthProfileStoreWithoutExternalProfiles,
-  updateAuthProfileStoreWithLock: storeMocks.updateAuthProfileStoreWithLock,
-  saveAuthProfileStore: storeMocks.saveAuthProfileStore,
+// mock-isolation: Exercise quota planning and the real reducer without persistence workers.
+vi.mock("./usage-write.js", async () => ({
+  withAuthProfileUsage: (await import("./usage-fixture.test-support.js")).usageMocks
+    .withAuthProfileUsage,
 }));
+// mock-isolation: Keep native auth-store I/O outside the in-memory quota fixture.
+vi.mock("./store-runtime.js", async () => {
+  const { storeMocks: mocks } = await import("./usage-fixture.test-support.js");
+  return {
+    loadAuthProfileStoreWithoutExternalProfiles: mocks.loadAuthProfileStoreWithoutExternalProfiles,
+    updateAuthProfileStoreWithLock: mocks.updateAuthProfileStoreWithLock,
+    saveAuthProfileStore: mocks.saveAuthProfileStore,
+  };
+});
 
 beforeEach(() => {
   storeMocks.resolvePersistedAuthProfileOwnerAgentDir.mockReset();
@@ -64,6 +73,7 @@ beforeEach(() => {
   storeMocks.saveAuthProfileStore.mockReset();
   storeMocks.loadAuthProfileStoreWithoutExternalProfiles.mockReset();
   storeMocks.updateAuthProfileStoreWithLock.mockReset();
+  resetAuthProfileUsageMocks();
   fetchMock.mockReset();
   resolveApiKeyForProfileMock.mockReset();
   // Vitest can bypass manual factories during concurrent lazy imports. Keep both
@@ -73,41 +83,15 @@ beforeEach(() => {
     .mockImplementation(resolveApiKeyForProfileMock);
   vi.stubGlobal("fetch", fetchMock);
   storeMocks.updateAuthProfileStoreWithLock.mockResolvedValue({ version: 1, profiles: {} });
-  authProfileUsageTesting.setDepsForTest({
-    updateAuthProfileStoreWithLock: storeMocks.updateAuthProfileStoreWithLock,
-  });
 });
 
 afterEach(() => {
   resolveApiKeyForProfileSpy?.mockRestore();
   resolveApiKeyForProfileSpy = undefined;
-  authProfileUsageTesting.setDepsForTest(null);
   authProfileUsageTesting.resetWhamReprobeStateForTest();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
-
-function mockLockedUpdateForStore(store: AuthProfileStore): void {
-  storeMocks.loadAuthProfileStoreWithoutExternalProfiles.mockImplementation(() => store);
-  storeMocks.updateAuthProfileStoreWithLock.mockImplementationOnce(
-    async (lockParams: { updater: (store: AuthProfileStore) => boolean }) => {
-      const freshStore = structuredClone(store);
-      lockParams.updater(freshStore);
-      return freshStore;
-    },
-  );
-}
-
-function mockLockedUpdatesForStore(store: AuthProfileStore): void {
-  storeMocks.loadAuthProfileStoreWithoutExternalProfiles.mockImplementation(() => store);
-  storeMocks.updateAuthProfileStoreWithLock.mockImplementation(
-    async (lockParams: { updater: (store: AuthProfileStore) => boolean }) => {
-      const freshStore = structuredClone(store);
-      lockParams.updater(freshStore);
-      return freshStore;
-    },
-  );
-}
 
 describe("markAuthProfileFailure — active windows do not extend on retry", () => {
   // Regression for https://github.com/openclaw/openclaw/issues/23516
@@ -483,16 +467,16 @@ describe("markAuthProfileFailure — detail-less provider failures", () => {
 
     expect(store.usageStats).toBeUndefined();
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(storeMocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+    expect(usageMocks.withAuthProfileUsage).not.toHaveBeenCalled();
     expect(storeMocks.saveAuthProfileStore).not.toHaveBeenCalled();
   });
 });
 
-describe("markAuthProfileFailure — locked update failure", () => {
+describe("markAuthProfileFailure — worker update failure", () => {
   it("drops bookkeeping without an unlocked full-store save", async () => {
     const store = makeStore(undefined);
     const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    storeMocks.updateAuthProfileStoreWithLock.mockResolvedValueOnce(null);
+    usageMocks.record.mockResolvedValueOnce(null);
     setLoggerOverride({ level: "silent", consoleLevel: "warn" });
     try {
       await markAuthProfileFailure({
@@ -1121,14 +1105,9 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
         primary_window: { used_percent: 45, reset_after_seconds: 9_000 },
       },
     });
-    storeMocks.updateAuthProfileStoreWithLock.mockImplementationOnce(
-      async (lockParams: { updater: (store: AuthProfileStore) => boolean }) => {
-        const freshStore = structuredClone(store);
-        freshStore.profiles["openai:default"] = createApiKeyCredential("openai", "rotated-api-key");
-        lockParams.updater(freshStore);
-        return freshStore;
-      },
-    );
+    const freshStore = structuredClone(store);
+    freshStore.profiles["openai:default"] = createApiKeyCredential("openai", "rotated-api-key");
+    usageMocks.readFresh.mockReturnValueOnce(store).mockReturnValue(freshStore);
 
     await markCodexFailureAt({ store, now, reason: "no_error_details", mockLock: false });
 
@@ -1196,6 +1175,33 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
 
     expect(store.usageStats?.["openai:default"]?.cooldownClassification).toBeUndefined();
   });
+
+  it.each(["chatgpt-token-sharing", "chatgpt-identity"])(
+    "keeps %s credentials out of Codex quota probes",
+    async (authFlow) => {
+      const now = 1_700_000_000_000;
+      const store = makeStore({});
+      const profile = store.profiles["openai:default"];
+      if (profile?.type !== "oauth") {
+        throw new Error("expected OpenAI OAuth fixture");
+      }
+      profile.authFlow = authFlow;
+      mockWhamResponse(401);
+
+      await markCodexFailureAt({ store, now });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBe(now + 30_000);
+
+      const block = {
+        blockedUntil: now + 86_400_000,
+        blockedReason: "subscription_limit" as const,
+      };
+      store.usageStats = { "openai:default": { ...block } };
+      await maybeReprobeWhamBlockedProfiles({ store, profileIds: ["openai:default"], now });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(store.usageStats["openai:default"]).toEqual(block);
+    },
+  );
 
   it("skips WHAM probe for locally expired OAuth access tokens", async () => {
     const now = 1_700_000_000_000;

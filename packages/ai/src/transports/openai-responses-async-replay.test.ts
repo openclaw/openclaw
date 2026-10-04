@@ -42,10 +42,20 @@ it.each([
     const context: Context = {
       messages: [
         user("first"),
-        { ...user("first context"), runtimeContextCarrier: true },
+        {
+          role: "user",
+          content: "OpenClaw runtime context:\nfirst context",
+          timestamp: 0,
+          runtimeContext: {},
+        },
         answer("first answer"),
         user("second"),
-        { ...user("second context"), runtimeContextCarrier: true },
+        {
+          role: "user",
+          content: "OpenClaw runtime context:\nsecond context",
+          timestamp: 0,
+          runtimeContext: {},
+        },
         answer("second answer"),
       ],
     };
@@ -60,10 +70,10 @@ it.each([
     expect(withSteering).toMatchObject(
       [
         "first",
-        "first context",
+        "OpenClaw runtime context:\nfirst context",
         "first answer",
         "second",
-        "second context",
+        "OpenClaw runtime context:\nsecond context",
         "second answer",
         "steering",
       ].map((text) => ({ content: [{ text }] })),
@@ -71,6 +81,64 @@ it.each([
     expect(context).toEqual(original);
   },
 );
+
+it.each([
+  ["provider", convertProviderResponsesMessages],
+  ["transport", convertResponsesMessages],
+] as const)("%s anchors mixed-media shipped carriers before async replay", (_name, convert) => {
+  const imageModel: Model = { ...model, input: ["text", "image"] };
+  const prefix: AssistantMessage = {
+    ...createOpenAIResponsesAssistantOutput(imageModel),
+    responseId: "resp_async",
+    stopReason: "toolUse",
+    content: [
+      { type: "toolCall", id: "call_async|fc_async", name: "lookup", arguments: {}, async: true },
+    ],
+  };
+  const tail: AssistantMessage = {
+    ...createOpenAIResponsesAssistantOutput(imageModel),
+    responseId: "resp_async",
+    content: [{ type: "text", text: "answer", textSignature: encodeTextSignatureV1("msg_tail") }],
+  };
+  const carrier = {
+    role: "user" as const,
+    content: [
+      { type: "text" as const, text: "runtime facts" },
+      { type: "image" as const, mimeType: "image/png", data: "aW1n" },
+    ],
+    timestamp: 2,
+    runtimeContextCarrier: true as const,
+  };
+  const result = makeTextToolResult("call_async|fc_async", "lookup", "found", false, 3);
+  const context: Context = {
+    messages: [
+      { role: "user", content: "question", timestamp: 1 },
+      prefix,
+      result,
+      carrier,
+      tail,
+      { role: "user", content: "steering", timestamp: 4 },
+    ],
+  };
+
+  const replay = convert(imageModel, context, new Set(["openai"]));
+
+  expect(replay.map((item) => item.type)).toEqual([
+    "message",
+    "message",
+    "function_call",
+    "message",
+    "function_call_output",
+    "message",
+  ]);
+  expect(replay[1]).toMatchObject({
+    role: "user",
+    content: [
+      { type: "input_text", text: "runtime facts" },
+      { type: "input_image", image_url: "data:image/png;base64,aW1n" },
+    ],
+  });
+});
 
 it.each([
   ["provider early result", convertProviderResponsesMessages, true, false],

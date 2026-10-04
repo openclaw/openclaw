@@ -1,11 +1,12 @@
 import type { ConfigUiHint, ConfigUiHints } from "../shared/config-ui-hints-types.js";
+import { isPluginOwnedChannelConfigPath } from "./channel-config-keys.js";
 import { asSchemaObject, type ConfigJsonSchemaObject } from "./schema.shared.js";
 
 const ROOT_TIER_PATHS = `
 accessGroups acp agents approvals attachments auth bindings broadcast browser channels
 cloudWorkers commands cron desktop diagnostics discovery env gateway hooks logging mcp memory messages
-meta models nodeHost plugins proxy secrets security session skills surfaces talk telemetry tools transcripts
-tts ui update wizard worktreeAcceleration worktreeRoot
+meta models nodeHost plugins proxy secrets security session skills storage surfaces talk telemetry tools transcripts
+tts ui update wizard worktreeAcceleration worktreeMaxCount worktreeRoot
 `
   .trim()
   .split(/\s+/);
@@ -98,7 +99,7 @@ channels.irc.groups.*.enabled channels.irc.groups.*.requireMention channels.irc.
 channels.irc.nick channels.irc.nickserv.password channels.irc.password channels.irc.port
 channels.irc.tls channels.irc.accounts.*.nickserv.password channels.irc.accounts.*.port
 channels.msteams.appId channels.msteams.appPassword channels.msteams.requireMention
-channels.msteams.tenantId channels.msteams.webhook.port channels.qqbot.stt.apiKey
+channels.msteams.tenantId channels.msteams.legacyWebhook.port channels.qqbot.stt.apiKey
 channels.qqbot.stt.model channels.signal.account channels.signal.cliPath
 channels.signal.groups.*.requireMention channels.slack.appToken channels.slack.botToken
 channels.slack.channels.*.enabled channels.slack.channels.*.requireMention
@@ -119,7 +120,7 @@ channels.telegram.accounts.*.groups.*.topics.*.groupPolicy
 channels.telegram.direct.*.topics.*.groupPolicy
 channels.whatsapp.groups.*.requireMention channels.whatsapp.selfChatMode
 cron.enabled env.vars gateway.auth.mode gateway.auth.password gateway.auth.token
-gateway.cliAgents.enabled
+gateway.cliAgents.enabled gateway.uploads.enabled
 gateway.auth.trustedProxy.allowUsers gateway.auth.trustedProxy.userHeader gateway.bind
 gateway.controlUi.allowedOrigins gateway.http.endpoints.chatCompletions.images.urlAllowlist
 gateway.http.endpoints.responses.files.urlAllowlist
@@ -175,18 +176,9 @@ wizard.accessMode wizard.appRecommendations
 
 const ADVANCED_TUNING_PATHS = new Set([
   "agents.defaults.heartbeat.every",
+  "agents.entries.*.tools.github.allowInSandbox",
   "session.maintenance.preserveRecent",
 ]);
-const CHANNEL_KERNEL_TIER_PREFIXES = ["channels.defaults", "channels.modelByChannel"] as const;
-
-function isPluginOwnedChannelTierPath(path: string): boolean {
-  if (!path.startsWith("channels.") || path === "channels") {
-    return false;
-  }
-  return !CHANNEL_KERNEL_TIER_PREFIXES.some(
-    (prefix) => path === prefix || path.startsWith(`${prefix}.`),
-  );
-}
 
 function splitPath(path: string): string[] {
   return path
@@ -331,7 +323,7 @@ export function applyConfigTierHints(
     mergeTierHint(next, path, true);
   }
   for (const path of COMMON_TIER_PATHS) {
-    if (!options?.includePluginOwnedChannels && isPluginOwnedChannelTierPath(path)) {
+    if (!options?.includePluginOwnedChannels && isPluginOwnedChannelConfigPath(path)) {
       continue;
     }
     mergeTierHint(next, path, false);

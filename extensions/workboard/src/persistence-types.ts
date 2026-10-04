@@ -1,11 +1,17 @@
-// Workboard plugin module implements persistence types behavior.
 import type {
   WorkboardAttachment,
   WorkboardBoardMetadata,
   WorkboardCard,
   WorkboardNotificationSubscription,
+  WorkboardSessionPlacement,
+  WorkboardSessionsBoard,
+  WorkboardSessionsBoardSpec,
 } from "@openclaw/workboard-contract";
 
+/**
+ * Guard the first accepted write (including CAS retries), then allow its settlement.
+ * Independently authorized effects need separate scopes; settled scopes cannot be reused.
+ */
 export type WorkboardWriteAuthority = <T>(
   assertCurrent: () => void,
   run: () => Promise<T>,
@@ -37,6 +43,24 @@ export type WorkboardKeyedStore<T = PersistedWorkboardCard> = {
   lookup(key: string): Promise<T | undefined>;
   delete(key: string): Promise<boolean>;
   entries(): Promise<Array<{ key: string; value: T }>>;
+};
+
+export type WorkboardSessionPlacementWrite = WorkboardSessionPlacement & {
+  source: "operator";
+  /** Undefined requires an absent row; otherwise compare the last observed revision. */
+  expectedUpdatedAt?: number;
+};
+
+export type WorkboardSessionsBoardStore = {
+  get(boardId: string): Promise<WorkboardSessionsBoard>;
+  update(boardId: string, patch: unknown): Promise<WorkboardSessionsBoard>;
+  listPlacements(boardId: string): Promise<WorkboardSessionPlacement[]>;
+  repairPlacements(): Promise<{ placements: number; boards: number }>;
+  writePlacement(
+    boardId: string,
+    placement: WorkboardSessionPlacementWrite,
+    expectedSpec: WorkboardSessionsBoardSpec,
+  ): Promise<boolean>;
 };
 
 export type WorkboardSubscriptionStore = Omit<

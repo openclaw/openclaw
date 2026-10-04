@@ -42,6 +42,17 @@ function createPopup() {
   };
 }
 
+function createMirrorFixture() {
+  const fixture = createPopup();
+  const drawImage = vi.fn();
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+    drawImage,
+  } as unknown as CanvasRenderingContext2D);
+  const requestWindow = vi.fn(async () => fixture.popup);
+  vi.stubGlobal("documentPictureInPicture", { requestWindow });
+  return { ...fixture, drawImage, requestWindow };
+}
+
 async function setup(mode: "embedded" | "dock" | "document" = "embedded", connected = true) {
   const environment = { id: "gateway", type: "local", status: "available", desktop: true };
   const request = vi.fn(async (method: string) => {
@@ -103,16 +114,10 @@ describe("Desktop Picture-in-Picture ownership", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each(["dock", "embedded", "document"] as const)(
+  it.each(["dock", "document"] as const)(
     "mirrors %s without reconnecting or changing control; browser close preserves the viewer",
     async (mode) => {
-      const { popup, tick, frames } = createPopup();
-      const drawImage = vi.fn();
-      vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
-        drawImage,
-      } as unknown as CanvasRenderingContext2D);
-      const requestWindow = vi.fn(async () => popup);
-      vi.stubGlobal("documentPictureInPicture", { requestWindow });
+      const { popup, tick, frames, drawImage, requestWindow } = createMirrorFixture();
       const { panel, request, connect, disconnect } = await setup(mode);
       const source = panel.renderRoot.querySelector("canvas")!;
       button(panel).click();
@@ -137,6 +142,65 @@ describe("Desktop Picture-in-Picture ownership", () => {
       expect(disconnect).not.toHaveBeenCalled();
     },
   );
+
+  it("mirrors the published opener palette only while PiP is open", async () => {
+    const { popup } = createMirrorFixture();
+    const root = document.documentElement;
+    const previousStyle = root.getAttribute("style");
+    const previousTheme = root.getAttribute("data-theme");
+    const publish = (mode: "dark" | "light", bg: string, text: string) => {
+      root.dataset.theme = mode;
+      root.style.colorScheme = mode;
+      root.style.setProperty("--bg", bg);
+      root.style.setProperty("--text", text);
+    };
+    try {
+      publish("dark", "rgb(23 39 45)", "rgb(221 242 239)");
+      const { panel, connect } = await setup();
+      // The noVNC margin keeps a live same-document token, not a connect-time color.
+      expect(connect.mock.calls[0]?.[0].background).toBe("var(--bg)");
+      button(panel).click();
+      await waitForFast(() => expect(popup.document.querySelector("canvas")).not.toBeNull());
+      const pipRoot = popup.document.documentElement;
+      expect(pipRoot.style.getPropertyValue("--bg")).toBe("rgb(23 39 45)");
+      expect(pipRoot.style.getPropertyValue("--text")).toBe("rgb(221 242 239)");
+      expect(pipRoot.style.colorScheme).toBe("dark");
+      publish("light", "rgb(233 246 238)", "rgb(25 51 36)");
+      await Promise.resolve();
+      expect(pipRoot.style.getPropertyValue("--bg")).toBe("rgb(233 246 238)");
+      expect(pipRoot.style.getPropertyValue("--text")).toBe("rgb(25 51 36)");
+      expect(pipRoot.style.colorScheme).toBe("light");
+      // Replacing a custom palette can preserve both theme ID and mode.
+      publish("light", "rgb(234 216 240)", "rgb(55 22 66)");
+      await Promise.resolve();
+      expect(pipRoot.style.getPropertyValue("--bg")).toBe("rgb(234 216 240)");
+      popup.dispatchEvent(new Event("pagehide"));
+      publish("dark", "rgb(23 39 45)", "rgb(221 242 239)");
+      await Promise.resolve();
+      expect(pipRoot.style.getPropertyValue("--bg")).toBe("rgb(234 216 240)");
+      popup.closed = false;
+      await panel.updateComplete;
+      button(panel).click();
+      await waitForFast(() => expect(popup.document.querySelector("canvas")).not.toBeNull());
+      expect(pipRoot.style.getPropertyValue("--bg")).toBe("rgb(23 39 45)");
+      panel.remove();
+      publish("light", "rgb(233 246 238)", "rgb(25 51 36)");
+      await Promise.resolve();
+      expect(pipRoot.style.getPropertyValue("--bg")).toBe("rgb(23 39 45)");
+      expect(connect).toHaveBeenCalledOnce();
+    } finally {
+      if (previousStyle === null) {
+        root.removeAttribute("style");
+      } else {
+        root.setAttribute("style", previousStyle);
+      }
+      if (previousTheme === null) {
+        root.removeAttribute("data-theme");
+      } else {
+        root.setAttribute("data-theme", previousTheme);
+      }
+    }
+  });
 
   it.each(["unsupported", "insecure", "connecting"])(
     "does not open PiP while %s",
@@ -174,9 +238,6 @@ describe("Desktop Picture-in-Picture ownership", () => {
   it("does not mount a popup closed before requestWindow resolves", async () => {
     const pending = createDeferred<Window>();
     const { popup } = createPopup();
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
-      drawImage: vi.fn(),
-    } as unknown as CanvasRenderingContext2D);
     vi.stubGlobal("documentPictureInPicture", { requestWindow: () => pending.promise });
     const { panel, disconnect } = await setup();
     button(panel).click();
@@ -219,12 +280,7 @@ describe("Desktop Picture-in-Picture ownership", () => {
   );
 
   it("closes an active mirror on disconnect and stops failed frame copies instead of showing stale pixels", async () => {
-    const { popup, tick, frames } = createPopup();
-    const drawImage = vi.fn();
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
-      drawImage,
-    } as unknown as CanvasRenderingContext2D);
-    vi.stubGlobal("documentPictureInPicture", { requestWindow: async () => popup });
+    const { popup, tick, frames, drawImage } = createMirrorFixture();
     const { panel, callbacks, disconnect } = await setup();
     button(panel).click();
     await waitForFast(() => expect(popup.document.querySelector("canvas")).not.toBeNull());

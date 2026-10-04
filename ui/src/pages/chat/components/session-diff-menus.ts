@@ -16,11 +16,9 @@ export type SessionDiffScope =
 
 type MenuAnchor = { x: number; y: number };
 
-export type SessionDiffMenuData =
+export type SessionDiffMenuDraft =
   | {
       kind: "file";
-      anchor: MenuAnchor;
-      trigger: HTMLElement;
       path: string;
       absolutePath?: string;
       canOpenFile: boolean;
@@ -28,30 +26,26 @@ export type SessionDiffMenuData =
     }
   | {
       kind: "scope";
-      anchor: MenuAnchor;
-      trigger: HTMLElement;
       active: SessionDiffScope;
       result: SessionsDiffResult;
       placement?: "top-start" | "bottom-start";
     }
   | {
       kind: "sync";
-      anchor: MenuAnchor;
-      trigger: HTMLElement;
       command: string;
       root: string;
       branch: string;
     }
   | {
       kind: "view";
-      anchor: MenuAnchor;
-      trigger: HTMLElement;
       split: boolean;
       wrap: boolean;
     };
 
-type WithoutMenuAnchor<T> = T extends unknown ? Omit<T, "anchor" | "trigger"> : never;
-export type SessionDiffMenuDraft = WithoutMenuAnchor<SessionDiffMenuData>;
+export type SessionDiffMenuData = SessionDiffMenuDraft & {
+  anchor: MenuAnchor;
+  trigger: HTMLElement;
+};
 
 export type SessionDiffMenuAction =
   | { kind: "collapse-all" }
@@ -98,12 +92,8 @@ class SessionDiffMenu extends OpenClawLightDomElement {
       "scope:uncommitted": { kind: "scope", value: { scope: "uncommitted" } },
     };
     const fileMenu = this.menu?.kind === "file" ? this.menu : null;
-    if (fileMenu && value === "open-file") {
-      this.run({ kind: "open-file", path: fileMenu.path });
-      return;
-    }
-    if (fileMenu && value === "reveal-file") {
-      this.run({ kind: "reveal-file", path: fileMenu.path });
+    if (fileMenu && (value === "open-file" || value === "reveal-file")) {
+      this.run({ kind: value, path: fileMenu.path });
       return;
     }
     const action = simple[value];
@@ -173,28 +163,16 @@ class SessionDiffMenu extends OpenClawLightDomElement {
   }
 
   private renderViewMenu(menu: Extract<SessionDiffMenuData, { kind: "view" }>) {
+    const item = (value: string, label: Parameters<typeof t>[0]) =>
+      html`<wa-dropdown-item class="session-menu__item" value=${value}>
+        <span class="session-menu__text">${t(label)}</span>
+      </wa-dropdown-item>`;
     return html`
-      <wa-dropdown-item class="session-menu__item" value="collapse-all">
-        <span class="session-menu__text">${t("chat.sessionDiff.collapseAll")}</span>
-      </wa-dropdown-item>
-      <wa-dropdown-item class="session-menu__item" value="expand-all">
-        <span class="session-menu__text">${t("chat.sessionDiff.expandAll")}</span>
-      </wa-dropdown-item>
+      ${item("collapse-all", "chat.sessionDiff.collapseAll")}
+      ${item("expand-all", "chat.sessionDiff.expandAll")}
       <div class="session-menu__separator" role="separator"></div>
-      <wa-dropdown-item class="session-menu__item" value="toggle-wrap">
-        <span class="session-menu__text"
-          >${t(
-            menu.wrap ? "chat.sessionDiff.disableWrapping" : "chat.sessionDiff.enableWrapping",
-          )}</span
-        >
-      </wa-dropdown-item>
-      <wa-dropdown-item class="session-menu__item" value="toggle-split">
-        <span class="session-menu__text"
-          >${t(
-            menu.split ? "chat.sessionDiff.switchUnified" : "chat.sessionDiff.switchSplit",
-          )}</span
-        >
-      </wa-dropdown-item>
+      ${item("toggle-wrap", menu.wrap ? "chat.sessionDiff.disableWrapping" : "chat.sessionDiff.enableWrapping")}
+      ${item("toggle-split", menu.split ? "chat.sessionDiff.switchUnified" : "chat.sessionDiff.switchSplit")}
     `;
   }
 

@@ -34,6 +34,37 @@ describe("outbound message planning", () => {
       chunkMode: "newline",
       expected: ["first", "second"],
     },
+    ...[
+      { name: "U+2028", separator: "\u2028" },
+      { name: "U+2029", separator: "\u2029" },
+    ].flatMap(({ name, separator }) =>
+      [
+        {
+          name: "fenced JSON",
+          text: `\`\`\`json\n{"separator":"first${separator}second"}\n\`\`\``,
+        },
+        { name: "inline code", text: `Copy \`first${separator}second\` exactly.` },
+      ].flatMap(({ name: codeName, text }) =>
+        (["length", "newline"] as const).map((chunkMode) => ({
+          name: `${name} in ${codeName} in ${chunkMode} mode`,
+          text,
+          limit: 4000,
+          chunker: chunkMarkdownText,
+          chunkerMode: "markdown" as const,
+          chunkMode,
+          expected: [text],
+        })),
+      ),
+    ),
+    ...[0, -1].map((limit) => ({
+      name: `Markdown paragraphs with disabled limit ${limit}`,
+      text: "```txt\ncontent\n```\n\nafter",
+      limit,
+      chunker: chunkMarkdownText,
+      chunkerMode: "markdown" as const,
+      chunkMode: "newline" as const,
+      expected: ["```txt\ncontent\n```\n\nafter"],
+    })),
     {
       name: "fenced Markdown",
       text: "```txt\naa\nbb\ncc\n```",
@@ -42,6 +73,15 @@ describe("outbound message planning", () => {
       chunkerMode: "markdown",
       chunkMode: "length",
       expected: ["```txt\naa\nbb\n```", "```txt\ncc\n```"],
+    },
+    {
+      name: "long fenced paragraphs with a text-mode chunker",
+      text: "intro\n\n```txt\naa\nbb\ncc\n```",
+      limit: 16,
+      chunker: chunkMarkdownText,
+      chunkerMode: "text",
+      chunkMode: "newline",
+      expected: ["intro", "```txt\naa\nbb\n```", "```txt\ncc\n```"],
     },
   ] as const)("plans $name with one implicit reply", (testCase) => {
     const policy = createReplyToDeliveryPolicy({
@@ -78,7 +118,6 @@ describe("outbound message planning", () => {
 
   it.each([
     { label: "default", chunkMode: undefined },
-    { label: "length", chunkMode: "length" as const },
     { label: "newline", chunkMode: "newline" as const },
   ])("preserves nonempty text when a $label chunker returns nothing", ({ chunkMode }) => {
     const policy = createReplyToDeliveryPolicy({ replyToId: "reply-1", replyToMode: "first" });

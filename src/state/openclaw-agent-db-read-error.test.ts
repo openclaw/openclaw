@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import * as sqlite from "../infra/node-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withFreshOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-open.js";
 import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
@@ -32,28 +33,45 @@ it.each([false, true])("records missing required tables (fresh-only: %s)", async
     const options = { agentId: "main", env: state.env };
     const owner = openOpenClawAgentDatabase(options);
     owner.db.exec("DROP TABLE session_nodes;");
-    let readDb: DatabaseSync | undefined;
+    let readDb: DatabaseSync = owner.db;
+    const nativeOpen = sqlite.openNodeSqliteDatabase;
+    const open = vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+      const database = nativeOpen(...args);
+      if (args[0] === owner.path) {
+        readDb = database;
+      }
+      return database;
+    });
     const readOnly = freshOnly
       ? withFreshOpenClawAgentDatabaseReadOnly
       : withOpenClawAgentDatabaseReadOnly;
-    const read = () =>
-      readOnly(({ db }) => {
-        readDb = db;
-        return db.prepare("SELECT * FROM session_nodes").all();
-      }, options);
+    const operation = vi.fn(({ db }: { db: DatabaseSync }) =>
+      db.prepare("SELECT * FROM session_nodes").all(),
+    );
+    const read = () => readOnly(operation, options);
     const unavailable = expect.objectContaining({
       name: "SessionMetadataUnavailableError",
       reason: "table-missing",
       missingTables: ["session_nodes"],
-      cause: expect.objectContaining({ code: "ERR_SQLITE_ERROR" }),
+      cause: expect.objectContaining({
+        message: expect.stringMatching(
+          /canonical validation schema is missing or drifted.*openclaw doctor --fix/u,
+        ),
+      }),
     });
 
-    expect(read).toThrow(unavailable);
-    expect(readDb === owner.db).toBe(!freshOnly);
-    expect(readDb?.isOpen).toBe(!freshOnly);
-    expect(owner.db.isOpen).toBe(true);
-    expect(closeOpenClawAgentDatabaseByPath(owner.path)).toBe(true);
-    expect(read).toThrow(unavailable);
-    expect(readDb?.isOpen).toBe(false);
+    try {
+      expect(read).toThrow(unavailable);
+      expect(operation).not.toHaveBeenCalled();
+      expect(readDb === owner.db).toBe(!freshOnly);
+      expect(readDb.isOpen).toBe(!freshOnly);
+      expect(owner.db.isOpen).toBe(true);
+      expect(closeOpenClawAgentDatabaseByPath(owner.path)).toBe(true);
+      expect(read).toThrow(unavailable);
+      expect(operation).not.toHaveBeenCalled();
+      expect(readDb.isOpen).toBe(false);
+    } finally {
+      open.mockRestore();
+    }
   });
 });

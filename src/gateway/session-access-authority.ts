@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { isRuntimeToolAllowed, isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
 import {
   captureGatewayToolCallerAssertion,
@@ -14,7 +15,7 @@ import type { GatewayMethodSessionAccess } from "./methods/descriptor.js";
 import {
   onOperatorRolePolicyChanged,
   resolveGatewayOperatorRoleActor,
-  resolveOperatorRolePolicyForAssignment,
+  resolveOperatorRolePolicy,
 } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
@@ -72,7 +73,7 @@ class SessionAccessPreparationPendingError extends SessionMutationAuthorizationC
 }
 
 /** Prepare session/profile facts through resident owners; retain the original source authority. */
-export async function prepareGatewaySessionAccessAuthority(params: {
+export async function prepareGatewaySessionAccessAuthority(request: {
   policy: GatewayMethodSessionAccess;
   requestParams: unknown;
   client: GatewayClient | null;
@@ -80,9 +81,15 @@ export async function prepareGatewaySessionAccessAuthority(params: {
   ownSessionOnly: boolean;
   hasCurrentClientAuthority?: () => boolean;
   assertInvocationCurrent?: () => void;
-}): Promise<GatewaySessionAccessAuthority> {
+  assertPreparationCurrent?: () => void;
+}): Promise<{
+  authority: GatewaySessionAccessAuthority;
+  assertPreparationCurrent: () => void;
+}> {
+  const params = { ...request, policy: { ...request.policy } };
   const assertInvocationCurrent = params.assertInvocationCurrent;
-  assertInvocationCurrent?.();
+  const assertPreparationSourceCurrent = params.assertPreparationCurrent ?? assertInvocationCurrent;
+  assertPreparationSourceCurrent?.();
   const input = params.requestParams;
   const sessionKey =
     isRecord(input) && typeof input.sessionKey === "string" ? input.sessionKey : "";
@@ -171,29 +178,40 @@ export async function prepareGatewaySessionAccessAuthority(params: {
   if (!projection) {
     denied("Session access is unavailable during Gateway startup; retry when it is ready.");
   }
-  const profile = profileId ? await prepareUserProfileRoleAuthority(profileId) : undefined;
-  if (actor?.kind !== "system" && (!profile || profile.profileId !== profileId)) {
-    denied("This operation requires a current authenticated profile.");
-  }
-  const currentActor = resolveGatewayOperatorRoleActor(client);
-  if (
-    currentActor?.kind !== actor?.kind ||
-    (currentActor?.kind === "operator" && currentActor.profileId !== profileId) ||
-    JSON.stringify(client.connect.scopes ?? []) !== JSON.stringify(originalScopes) ||
-    client.internal?.operatorAccessAuthority !== originalGrant ||
-    client.internal?.operatorRunAuthority !== originalRun
-  ) {
-    denied();
-  }
-  const captured = captureGatewayOperatorRunAuthority({
+  const assertIngress = () => {
+    assertPreparationSourceCurrent?.();
+    assertRun();
+    originalGrant?.assertCurrent();
+    originalRun?.assertCurrent();
+    const currentActor = resolveGatewayOperatorRoleActor(client);
+    if (
+      params.hasCurrentClientAuthority?.() === false ||
+      currentActor?.kind !== actor?.kind ||
+      (currentActor?.kind === "operator" && currentActor.profileId !== profileId) ||
+      JSON.stringify(client.connect.scopes ?? []) !== JSON.stringify(originalScopes) ||
+      client.internal?.operatorAccessAuthority !== originalGrant ||
+      client.internal?.operatorRunAuthority !== originalRun
+    ) {
+      denied();
+    }
+  };
+  const captured = await captureGatewayOperatorRunAuthority({
     client,
     context: params.context,
-    preparedProfile: profile,
     hasCurrentClientAuthority: params.hasCurrentClientAuthority,
     sourceAuthority: originalGrant ?? null,
   });
   try {
+    assertIngress();
+    const profile = profileId ? await prepareUserProfileRoleAuthority(profileId) : undefined;
+    assertIngress();
+    captured?.authority.assertCurrent();
+    if (actor?.kind !== "system" && (!profile || profile.profileId !== profileId)) {
+      denied("This operation requires a current authenticated profile.");
+    }
     await projection.prepareMembership();
+    assertIngress();
+    captured?.authority.assertCurrent();
     const query = { agentId: parsed.agentId, key: sessionKey };
     const original = projection.sharingTarget(query);
     if (!original?.entry.sessionId || original.canonicalKey !== sessionKey) {
@@ -210,7 +228,11 @@ export async function prepareGatewaySessionAccessAuthority(params: {
     const policyClient: GatewayClient = {
       ...client,
       connect: { ...client.connect, scopes: originalScopes },
-      internal: { ...client.internal, operatorRoleActor: actor },
+      internal: {
+        ...client.internal,
+        operatorRoleActor: actor,
+        ...(captured ? { operatorRunAuthority: captured.authority } : {}),
+      },
     };
     const resolveToolPolicy = (current: typeof original) =>
       params.policy.requiredTool
@@ -224,13 +246,9 @@ export async function prepareGatewaySessionAccessAuthority(params: {
         : undefined;
     const toolPolicy = resolveToolPolicy(original);
     const currentRole = () =>
-      actor?.kind === "system"
+      actor?.kind === "system" || profileId === GATEWAY_OWNER_PROFILE_ID
         ? undefined
-        : resolveOperatorRolePolicyForAssignment(
-            profileId,
-            profile?.role ?? null,
-            params.context.getRuntimeConfig(),
-          );
+        : resolveOperatorRolePolicy(policyClient, params.context.getRuntimeConfig());
     const sandboxRequired =
       currentRole()?.sandbox === "required" || toolPolicy?.sandboxRequired === true;
     let sessionRetired = false;
@@ -313,14 +331,16 @@ export async function prepareGatewaySessionAccessAuthority(params: {
         throw error;
       }
     };
-    const assertCurrent = () => {
+    const assertAccessCurrent = (assertRequestCurrent: (() => void) | undefined) => {
       if (invocationClosed) {
         denied();
       }
-      assertInvocationCurrent?.();
+      assertRequestCurrent?.();
       assertRun();
       assertActor();
     };
+    const assertCurrent = () => assertAccessCurrent(assertInvocationCurrent);
+    const assertPreparationCurrent = () => assertAccessCurrent(assertPreparationSourceCurrent);
     const retain = (sessionOnly: boolean): RetainedGatewaySessionAccess => {
       assertCurrent();
       const assert = sessionOnly ? assertSession : assertActor;
@@ -407,16 +427,20 @@ export async function prepareGatewaySessionAccessAuthority(params: {
         release,
       };
     };
-    assertCurrent();
+    assertPreparationCurrent();
+    // Services receive invocation-bound authority; only the router retains the pure preflight.
     return {
-      target,
-      sandboxRequired,
-      assertCurrent,
-      retain: () => retain(false),
-      retainSession: () => retain(true),
-      release: () => {
-        invocationClosed = true;
-        captured?.release();
+      assertPreparationCurrent,
+      authority: {
+        target,
+        sandboxRequired,
+        assertCurrent,
+        retain: () => retain(false),
+        retainSession: () => retain(true),
+        release: () => {
+          invocationClosed = true;
+          captured?.release();
+        },
       },
     };
   } catch (error) {

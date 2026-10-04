@@ -38,8 +38,6 @@ import {
 import { shortenHomePath } from "../utils.js";
 import { analyzeLegacyHeartbeatTasks, type LegacyHeartbeatTask } from "./heartbeat-task-legacy.js";
 
-const HEARTBEAT_TASK_MIGRATION_CHECK_ID = "core/doctor/heartbeat-task-cron-migration";
-
 type HeartbeatTaskMigrationResult = { changes: string[]; warnings: string[] };
 
 function resolveHeartbeatTaskMigrationAgents(cfg: OpenClawConfig) {
@@ -78,29 +76,16 @@ function validateTasks(
   return validated;
 }
 
-function migrationFinding(params: {
-  storePath: string;
-  agentId: string;
-  message: string;
-  severity?: HealthFinding["severity"];
-  requirement: string;
-}): HealthFinding {
-  return {
-    checkId: HEARTBEAT_TASK_MIGRATION_CHECK_ID,
-    severity: params.severity ?? "warning",
-    message: params.message,
-    path: params.storePath,
-    target: params.agentId,
-    requirement: params.requirement,
-    fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to convert heartbeat tasks into automations.`,
-  };
-}
-
 /** Reports task blocks still owned by heartbeat scratch without changing them. */
 export async function collectHeartbeatTaskMigrationFindings(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<readonly HealthFinding[]> {
+  const MIGRATION_FINDING_DEFAULTS = {
+    checkId: "core/doctor/heartbeat-task-cron-migration",
+    severity: "warning",
+    fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to convert heartbeat tasks into automations.`,
+  } as const;
   const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
   const findings: HealthFinding[] = [];
   for (const agent of resolveHeartbeatTaskMigrationAgents(cfg)) {
@@ -108,15 +93,14 @@ export async function collectHeartbeatTaskMigrationFindings(
     try {
       monitor = readHeartbeatMonitorScratchReadOnly(storePath, agent.agentId, { env });
     } catch (error) {
-      findings.push(
-        migrationFinding({
-          storePath,
-          agentId: agent.agentId,
-          requirement: "heartbeat-task-migration-blocked",
-          severity: "error",
-          message: `Agent "${agent.agentId}" heartbeat scratch cannot be inspected: ${errorMessage(error)}`,
-        }),
-      );
+      findings.push({
+        ...MIGRATION_FINDING_DEFAULTS,
+        path: storePath,
+        target: agent.agentId,
+        requirement: "heartbeat-task-migration-blocked",
+        severity: "error",
+        message: `Agent "${agent.agentId}" heartbeat scratch cannot be inspected: ${errorMessage(error)}`,
+      });
       continue;
     }
     const content = monitor?.state.scratch?.content;
@@ -129,30 +113,28 @@ export async function collectHeartbeatTaskMigrationFindings(
     }
     try {
       validateTasks(document.tasks, document.taskEntryCount);
-      findings.push(
-        migrationFinding({
-          storePath,
-          agentId: agent.agentId,
-          requirement: "heartbeat-tasks-in-scratch",
-          message: `Agent "${agent.agentId}" has ${document.tasks.length} heartbeat task${document.tasks.length === 1 ? "" : "s"} that must become cron jobs.`,
-        }),
-      );
+      findings.push({
+        ...MIGRATION_FINDING_DEFAULTS,
+        path: storePath,
+        target: agent.agentId,
+        requirement: "heartbeat-tasks-in-scratch",
+        message: `Agent "${agent.agentId}" has ${document.tasks.length} heartbeat task${document.tasks.length === 1 ? "" : "s"} that must become cron jobs.`,
+      });
     } catch (error) {
-      findings.push(
-        migrationFinding({
-          storePath,
-          agentId: agent.agentId,
-          requirement: "heartbeat-task-migration-blocked",
-          severity: "error",
-          message: `Agent "${agent.agentId}" heartbeat tasks cannot be migrated: ${errorMessage(error)}`,
-        }),
-      );
+      findings.push({
+        ...MIGRATION_FINDING_DEFAULTS,
+        path: storePath,
+        target: agent.agentId,
+        requirement: "heartbeat-task-migration-blocked",
+        severity: "error",
+        message: `Agent "${agent.agentId}" heartbeat tasks cannot be migrated: ${errorMessage(error)}`,
+      });
     }
   }
   return findings;
 }
 
-function taskJobInput(params: {
+type TaskJobInput = {
   agentId: string;
   task: LegacyHeartbeatTask;
   occurrenceIndex: number;
@@ -160,7 +142,9 @@ function taskJobInput(params: {
   lastRunAtMs?: number;
   existing?: CronJob;
   nowMs: number;
-}) {
+};
+
+function taskJobInput(params: TaskJobInput) {
   const existingAnchor =
     params.existing?.schedule.kind === "every" &&
     params.existing.schedule.everyMs === params.intervalMs
@@ -230,15 +214,7 @@ function taskDeclarativeFields(job: CronJob) {
   };
 }
 
-function convergeTaskJob(params: {
-  agentId: string;
-  task: LegacyHeartbeatTask;
-  occurrenceIndex: number;
-  intervalMs: number;
-  lastRunAtMs?: number;
-  existing?: CronJob;
-  nowMs: number;
-}): CronJob {
+function convergeTaskJob(params: TaskJobInput): CronJob {
   const input = taskJobInput(params);
   if (!params.existing) {
     const { state, ...fields } = input;

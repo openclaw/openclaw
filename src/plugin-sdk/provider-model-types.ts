@@ -21,7 +21,6 @@ export type ProviderFastModePolicyContext = {
 };
 
 export type {
-  BedrockDiscoveryConfig,
   ModelApi,
   ModelCompatConfig,
   ModelDefinitionConfig,
@@ -35,6 +34,23 @@ export type ProviderModelRouteSource = {
 
 /** A concrete provider route. Order expresses provider default, never credential precedence. */
 export type ProviderModelRouteAuthRequirement = "api-key" | "subscription";
+/** Secret-free credential facts used by the provider to select and constrain its route. */
+export type ProviderModelAuthPolicyContext = {
+  provider: string;
+  mode?: string;
+  authFlow?: string;
+  /** Requested non-chat operation (for example, image-generation or embedding). */
+  capability?: string;
+  api?: string;
+  baseUrl?: string;
+};
+
+export type ProviderModelAuthPolicy = {
+  /** Null means this credential has no inference authorization. */
+  authRequirement: ProviderModelRouteAuthRequirement | null;
+  compatible: boolean;
+  incompatibilityReason?: string;
+};
 export type ProviderRouteOverridePresence = "none" | "present";
 export type ProviderModelRouteRuntimePolicy = {
   /** Agent runtime ids that can reproduce this route without losing transport behavior. */

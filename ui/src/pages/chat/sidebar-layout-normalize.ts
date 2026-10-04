@@ -1,12 +1,9 @@
 import { isRecord, normalizeOptionalString, readStringValue } from "@openclaw/normalization-core";
+import { clampHeight, clampWidth } from "./sidebar-layout-geometry.ts";
 import type { SidebarLayout, SidebarPanel, SidebarSlotId } from "./sidebar-layout-types.ts";
 
 const DEFAULT_WIDTH = 480;
 const DEFAULT_HEIGHT = 360;
-const MIN_WIDTH = 260;
-const MIN_HEIGHT = 220;
-const MAX_WIDTH = 1_200;
-const MAX_HEIGHT = 800;
 
 function isPluginSlotId(value: unknown): value is `plugin:${string}/${string}` {
   return (
@@ -30,20 +27,13 @@ function normalizeSlotId(value: unknown): SidebarSlotId | null {
     value === "detail" ||
     value === "discussion" ||
     value === "portal" ||
-    value === "tasks" ||
+    value === "processes" ||
+    value === "subagents" ||
     value === "terminal" ||
     value === "workspace" ||
     isPluginSlotId(value)
     ? value
     : null;
-}
-
-function clampWidth(width: number): number {
-  return Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, width));
-}
-
-function clampHeight(height: number): number {
-  return Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, height));
 }
 
 function uniqueId(base: string, used: Set<string>): string {
@@ -85,34 +75,16 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
       if (!isRecord(rawPanel)) {
         continue;
       }
-      const sourceSlot = normalizeSlotId(rawPanel.slot);
-      const taskId = normalizeOptionalString(rawPanel.taskId);
-      // Saved layouts from the previous task inspector retain the ID on Review.
-      // Normalize that persisted data once; runtime selection belongs only to Tasks.
-      const legacyTask = sourceSlot === "detail" && taskId !== undefined;
-      const slot = legacyTask ? "tasks" : sourceSlot;
-      if (!slot) {
+      const slot = normalizeSlotId(rawPanel.slot);
+      if (!slot || (slot === "detail" && normalizeOptionalString(rawPanel.taskId))) {
         continue;
       }
       if (usedSlots.has(slot)) {
-        const existing = panels.find((panel) => panel.slot === slot)!;
-        if (slot === "tasks") {
-          if (taskId && (!legacyTask || !existing.taskId)) {
-            existing.taskId = taskId;
-          }
-          const sourceId = normalizeOptionalString(rawPanel.id) ?? sourceSlot;
-          if (sourceId === requestedActiveId) {
-            columnActivePanelId = existing.id;
-          }
-          if (sourceId === requestedMainId) {
-            mainPanelId = existing.id;
-          }
-        }
         continue;
       }
       const rawPanelId = normalizeOptionalString(rawPanel.id) ?? "";
       const panelId = uniqueId(rawPanelId || slot, usedPanelIds);
-      const sourceId = rawPanelId || (rawPanel.slot === "chat" ? "chat" : sourceSlot);
+      const sourceId = rawPanelId || (rawPanel.slot === "chat" ? "chat" : slot);
       if (sourceId === requestedActiveId) {
         columnActivePanelId ??= panelId;
       }
@@ -120,18 +92,15 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
         mainPanelId ??= panelId;
       }
       usedSlots.add(slot);
+      const environmentId = normalizeOptionalString(rawPanel.environmentId);
+      const portalId = normalizeOptionalString(rawPanel.portalId);
       panels.push({
         id: panelId,
         slot,
-        ...(slot === "tasks" && taskId ? { taskId } : {}),
-        ...((slot === "desktop" ||
-          (slot === "portal" && !normalizeOptionalString(rawPanel.portalId))) &&
-        normalizeOptionalString(rawPanel.environmentId)
-          ? { environmentId: normalizeOptionalString(rawPanel.environmentId) }
+        ...((slot === "desktop" || (slot === "portal" && !portalId)) && environmentId
+          ? { environmentId }
           : {}),
-        ...(slot === "portal" && normalizeOptionalString(rawPanel.portalId)
-          ? { portalId: normalizeOptionalString(rawPanel.portalId) }
-          : {}),
+        ...(slot === "portal" && portalId ? { portalId } : {}),
       });
     }
     activePanelId = columnActivePanelId ?? activePanelId;
@@ -197,5 +166,6 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
     activeSidePanel
       ? { expandedSide: true }
       : {}),
+    ...(value.resourceAutoOpenDismissed === true ? { resourceAutoOpenDismissed: true } : {}),
   };
 }

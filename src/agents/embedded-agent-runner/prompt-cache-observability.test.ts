@@ -1,11 +1,19 @@
 // Coverage for prompt-cache diagnostic tracking across turns.
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
+import * as cryptoDigest from "@openclaw/normalization-core/node-crypto";
 import { Type } from "typebox";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
+import type { Message, TextContent } from "../../llm/types.js";
+import { withEnv } from "../../test-utils/env.js";
+import type { AgentMessage } from "../runtime/index.js";
+import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { log } from "./logger.js";
 import {
   beginPromptCacheObservation,
   collectPromptCacheTools,
   completePromptCacheObservation,
+  declarePromptHistoryRewrite,
   recordAggregateTruncation,
 } from "./prompt-cache-observability.js";
 import { createPromptCacheRequestObserver } from "./prompt-cache-request-observer.js";
@@ -17,7 +25,317 @@ function scopedKey(value: string): string {
   return `${value}:${currentTestScope}`;
 }
 
+type ObservationParams = Parameters<typeof beginPromptCacheObservation>[0];
+
+function beginOpenAIObservation(
+  params: Pick<ObservationParams, "sessionId"> & Partial<ObservationParams>,
+) {
+  return beginPromptCacheObservation({
+    messages: [],
+    provider: "openai",
+    modelId: "gpt-5.4",
+    modelApi: "openai-responses",
+    streamStrategy: "boundary-aware:openai-responses",
+    systemPrompt: "stable system",
+    tools: [{ name: "read" }],
+    ...params,
+  });
+}
+
 describe("prompt cache observability", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("keeps a two-turn tool loop append-only with bounded block hashing", () => {
+    withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
+      const sessionId = scopedKey("two-turn-loop");
+      const source: AgentMessage[] = [
+        { role: "user", content: [{ type: "text", text: "Read the fixture" }], timestamp: 1 },
+        {
+          role: "custom",
+          customType: "fixture-context",
+          content: [{ type: "text", text: "Fixture context" }],
+          display: false,
+          timestamp: 2,
+        },
+      ];
+      const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
+      const observed = vi.fn();
+      const observer = createPromptCacheRequestObserver(
+        { sessionId, streamStrategy: "test" },
+        observed,
+      );
+      const request = () => {
+        const messages = convertToLlm(source);
+        observer.onModelRequest(
+          { provider: "openai", id: "test-model", api: "openai-responses" },
+          { messages },
+        );
+        observer.onModelUsage({ cacheRead: 8_000 });
+        return messages;
+      };
+      const first = request();
+      source.push(
+        makeAgentAssistantMessage({
+          content: [{ type: "toolCall", id: "read-1", name: "read", arguments: {} }],
+          stopReason: "toolUse",
+          timestamp: 3,
+        }),
+        {
+          role: "toolResult",
+          toolCallId: "read-1",
+          toolName: "read",
+          content: [{ type: "text", text: "fixture result" }],
+          isError: false,
+          timestamp: 4,
+        },
+      );
+      const loop = request();
+      source.push(
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "Read complete" }],
+          timestamp: 5,
+        }),
+        { role: "user", content: "Summarize it", timestamp: 6 },
+      );
+      request();
+      expect(loop[0]).toBe(first[0]);
+      expect(loop[1]).not.toBe(first[1]);
+      expect(loop[1]?.content).toBe(first[1]?.content);
+      expect(
+        hashes.mock.calls.filter(
+          ([value]) => typeof value === "string" && value.includes('"role":'),
+        ),
+      ).toHaveLength(12);
+      expect(hashes).toHaveBeenCalledTimes(26);
+      expect(observed).toHaveBeenCalledTimes(3);
+      for (const [observation] of observed.mock.calls) {
+        expect(observation.changes).toBeNull();
+      }
+    });
+  });
+
+  it.each([
+    ["block", false],
+    ["block", true],
+    ["string", false],
+    ["string", true],
+  ] as const)("detects mutated %s text (rebuilt wrapper=%s)", (kind, rebuildWrapper) => {
+    const sessionId = scopedKey(`mutated-${kind}`);
+    const block: TextContent = { type: "text", text: "original" };
+    const first: Message = { role: "user", content: "question", timestamp: 1 };
+    const message: Message =
+      kind === "string"
+        ? { role: "user", content: "original", timestamp: 2 }
+        : makeAgentAssistantMessage({ content: [block], timestamp: 2 });
+    beginOpenAIObservation({ sessionId, messages: [first, message] });
+    completePromptCacheObservation({ sessionId, usage: { cacheRead: 8_000 } });
+    if (message.role === "user") {
+      message.content = "rewritten";
+    } else {
+      block.text = "rewritten";
+    }
+    const detail = `message 1 (${message.role}) differs from the previous request; history must be append-only`;
+    withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
+      expect(() =>
+        beginOpenAIObservation({
+          sessionId,
+          messages: [first, rebuildWrapper ? { ...message } : message],
+        }),
+      ).toThrow(detail);
+    });
+    expect(
+      completePromptCacheObservation({ sessionId, usage: { input: 8_000, cacheRead: 0 } })?.changes,
+    ).toEqual([{ code: "historyRewrite", detail }]);
+  });
+
+  it("detects nested tool arguments mutated in place", () => {
+    withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
+      const sessionId = scopedKey("mutated-arguments");
+      const args = { options: { path: "before" } };
+      const message = makeAgentAssistantMessage({
+        content: [{ type: "toolCall", id: "call-1", name: "read", arguments: args }],
+      });
+      beginOpenAIObservation({ sessionId, messages: [message] });
+      args.options.path = "after";
+      expect(() => beginOpenAIObservation({ sessionId, messages: [message] })).toThrow(
+        "message 0 (assistant)",
+      );
+    });
+  });
+
+  it("detects primitive property additions, changes, and removals", () => {
+    withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
+      const sessionId = scopedKey("mutated-properties");
+      const block: TextContent = { type: "text", text: "stable" };
+      const message = makeAgentAssistantMessage({ content: [block] });
+      beginOpenAIObservation({ sessionId, messages: [message] });
+      for (const mutate of [
+        () => {
+          block.textSignature = undefined;
+        },
+        () => {
+          block.textSignature = "signature";
+        },
+        () => {
+          delete block.textSignature;
+        },
+      ]) {
+        mutate();
+        expect(() => beginOpenAIObservation({ sessionId, messages: [message] })).toThrow(
+          "message 0 (assistant)",
+        );
+      }
+    });
+  });
+
+  it.each(["block", "string"] as const)(
+    "hashes unchanged large %s content once across three observations",
+    (kind) => {
+      const sessionId = scopedKey(`large-${kind}`);
+      const text = "large-content-fixture ".repeat(50_000);
+      const message: Message = {
+        role: "user",
+        content: kind === "string" ? text : [{ type: "text", text }],
+        timestamp: 1,
+      };
+      const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
+      for (let index = 0; index < 3; index++) {
+        expect(
+          beginOpenAIObservation({ sessionId, messages: [{ ...message }] }).changes,
+        ).toBeNull();
+      }
+      expect(
+        hashes.mock.calls.filter(
+          ([value]) => typeof value === "string" && value.includes("large-content-fixture"),
+        ),
+      ).toHaveLength(1);
+      expect(hashes).toHaveBeenCalledTimes(10);
+    },
+  );
+
+  it.each(["edit", "remove", "reorder"] as const)(
+    "reports the first history divergence after %s",
+    (kind) => {
+      const first: Message = { role: "user", content: "first", timestamp: 1 };
+      const second = makeAgentAssistantMessage({
+        content: [{ type: "text", text: "second" }],
+        timestamp: 2,
+      });
+      const messages = [first, second];
+      const changed =
+        kind === "edit"
+          ? [first, { ...second, content: [{ type: "text" as const, text: "rewritten" }] }]
+          : kind === "remove"
+            ? [first]
+            : [second, first];
+      const index = kind === "reorder" ? 0 : 1;
+      const detail = `message ${index} (assistant) differs from the previous request; history must be append-only`;
+      const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+      const sessionId = scopedKey(kind);
+      beginOpenAIObservation({ sessionId, messages });
+      completePromptCacheObservation({ sessionId, usage: { cacheRead: 8_000 } });
+      withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: undefined }, () => {
+        expect(beginOpenAIObservation({ sessionId, messages: changed }).changes).toEqual([
+          { code: "historyRewrite", detail },
+        ]);
+        expect(
+          completePromptCacheObservation({ sessionId, usage: { input: 8_000, cacheRead: 0 } })
+            ?.changes,
+        ).toEqual([{ code: "historyRewrite", detail }]);
+        beginOpenAIObservation({ sessionId, messages });
+        expect(warn).toHaveBeenCalledTimes(1);
+      });
+      withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
+        expect(() => beginOpenAIObservation({ sessionId, messages: changed })).toThrow(detail);
+      });
+    },
+  );
+
+  it.each(["compaction", "pruning", "runtimeContextCarrier", "imageCleanup"] as const)(
+    "consumes a declared %s rewrite for exactly one request",
+    (reason) => {
+      withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
+        const sessionId = scopedKey(reason);
+        const messages: Message[] = [{ role: "user", content: "before", timestamp: 1 }];
+        beginOpenAIObservation({ sessionId, messages });
+        declarePromptHistoryRewrite({ sessionId, reason });
+        const rewritten: Message[] = [{ role: "user", content: "after", timestamp: 1 }];
+        expect(beginOpenAIObservation({ sessionId, messages: rewritten }).changes).toEqual([
+          { code: reason, detail: `${reason} changed provider history` },
+        ]);
+        expect(beginOpenAIObservation({ sessionId, messages: rewritten }).changes).toBeNull();
+        expect(() => beginOpenAIObservation({ sessionId, messages })).toThrow("message 0 (user)");
+      });
+    },
+  );
+
+  it.each(["compaction", "pruning", "runtimeContextCarrier", "imageCleanup"] as const)(
+    "shares a %s declaration across cache affinities only within the same session key",
+    (reason) => {
+      withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
+        const identity = { sessionId: scopedKey("affinities"), sessionKey: scopedKey("primary") };
+        const before: Message[] = [{ role: "user", content: "before", timestamp: 1 }];
+        const after: Message[] = [{ role: "user", content: "after", timestamp: 1 }];
+        const keys = [scopedKey("affinity-a"), scopedKey("affinity-b")];
+        for (const promptCacheKey of keys) {
+          beginOpenAIObservation({ ...identity, promptCacheKey, messages: before });
+        }
+        const unrelated = {
+          ...identity,
+          sessionKey: scopedKey("other"),
+          promptCacheKey: scopedKey("unrelated-affinity"),
+        };
+        beginOpenAIObservation({ ...unrelated, messages: before });
+        declarePromptHistoryRewrite({ ...identity, promptCacheKey: keys[0], reason });
+        for (const promptCacheKey of keys) {
+          expect(
+            beginOpenAIObservation({ ...identity, promptCacheKey, messages: after }).changes,
+          ).toEqual([{ code: reason, detail: `${reason} changed provider history` }]);
+          expect(
+            beginOpenAIObservation({ ...identity, promptCacheKey, messages: after }).changes,
+          ).toBeNull();
+        }
+        expect(() => beginOpenAIObservation({ ...unrelated, messages: after })).toThrow(
+          "message 0 (user)",
+        );
+      });
+    },
+  );
+
+  it.each([
+    { modelId: "other" },
+    { transport: "websocket" },
+    { cacheRetention: "long" as const },
+    { sessionId: "new-session" },
+  ])("restarts the history series for %j", (change) => {
+    withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
+      const identity = { sessionId: scopedKey("series"), promptCacheKey: scopedKey("affinity") };
+      beginOpenAIObservation({
+        ...identity,
+        messages: [{ role: "user", content: "previous", timestamp: 1 }],
+      });
+      expect(() => beginOpenAIObservation({ ...identity, ...change, messages: [] })).not.toThrow();
+    });
+  });
+
+  it("does not reuse a content digest for a different tool-call identity", () => {
+    withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
+      const sessionId = scopedKey("shared-content");
+      const result: Message = {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "first",
+        content: [],
+        isError: false,
+        timestamp: 1,
+      };
+      beginOpenAIObservation({ sessionId, messages: [result] });
+      expect(() =>
+        beginOpenAIObservation({ sessionId, messages: [{ ...result, toolCallId: "second" }] }),
+      ).toThrow("message 0 (toolResult)");
+    });
+  });
+
   beforeEach(() => {
     currentTestScope = String(++testScope);
   });
@@ -51,6 +369,7 @@ describe("prompt cache observability", () => {
         observer.onModelRequest(
           { provider: "anthropic", id: "claude-sonnet-4-6", api: "anthropic-messages" },
           {
+            messages: [],
             systemPrompt: "stable prefix",
             tools: [{ name: "read", description: "Read text", parameters: Type.Object({}) }],
           },
@@ -68,6 +387,7 @@ describe("prompt cache observability", () => {
       const sessionId = scopedKey("small-cache-miss");
       const begin = (systemPrompt: string) =>
         beginPromptCacheObservation({
+          messages: [],
           sessionId,
           provider: "anthropic",
           modelId: "claude-sonnet-4-6",
@@ -171,80 +491,39 @@ describe("prompt cache observability", () => {
     expect(numberPrototype[0]?.schemaDigest).not.toBe(noPrototype[0]?.schemaDigest);
   });
 
-  it("bounds hostile, circular, and unreadable schema fingerprints", () => {
-    const circular: Record<string, unknown> = { type: "object" };
-    circular.self = circular;
+  it("memoizes cycle-safe schemas and skips unreadable tools", () => {
+    const parameters: Record<string, unknown> = { type: "object" };
+    parameters.self = parameters;
+    const digest = vi.spyOn(cryptoDigest, "sha256Hex");
     const unreadable = {
       name: "unreadable",
-      get parameters(): unknown {
-        throw new Error("schema getter exploded");
+      get parameters(): object {
+        throw new Error("unreadable schema");
       },
     };
-    const oversized = {
-      name: "oversized",
-      parameters: {
-        type: "object",
-        properties: Object.fromEntries(
-          Array.from({ length: 1_000 }, (_, index) => [
-            `property_${String(index).padStart(4, "0")}`,
-            { type: "string", description: "x".repeat(10_000) },
-          ]),
-        ),
-      },
-    };
-
-    expect(
-      collectPromptCacheTools([oversized, unreadable, { name: "circular", parameters: circular }]),
-    ).toEqual([
-      { name: "circular", schemaDigest: expect.stringMatching(/^[a-f0-9]{64}$/) },
-      { name: "oversized", schemaDigest: expect.stringMatching(/^[a-f0-9]{64}$/) },
-      { name: "unreadable", schemaDigest: expect.stringMatching(/^[a-f0-9]{64}$/) },
+    const first = collectPromptCacheTools([{ name: "read", parameters }, unreadable]);
+    expect(first).toEqual([
+      { name: "read", schemaDigest: expect.stringMatching(/^[a-f0-9]{64}$/) },
     ]);
+    expect(collectPromptCacheTools([{ name: "read", parameters }])).toEqual(first);
+    expect(digest).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects wide schemas before reading values and ignores their insertion order", () => {
-    let propertyReads = 0;
-    const createWideSchema = (reversed: boolean) => {
-      const properties: Record<string, unknown> = {};
-      const names = Array.from(
-        { length: 256 },
-        (_, index) => `property_${String(index).padStart(4, "0")}`,
-      );
-      for (const name of reversed ? names.toReversed() : names) {
-        Object.defineProperty(properties, name, {
-          enumerable: true,
-          get: () => {
-            propertyReads += 1;
-            return { type: "string" };
-          },
-        });
-      }
-      return { type: "object", properties };
-    };
-
-    const first = collectPromptCacheTools([{ name: "wide", parameters: createWideSchema(false) }]);
-    const reversed = collectPromptCacheTools([
-      { name: "wide", parameters: createWideSchema(true) },
-    ]);
-
-    expect(reversed).toEqual(first);
-    expect(first[0]?.schemaDigest).toMatch(/^[a-f0-9]{64}$/);
-    expect(propertyReads).toBe(0);
+  it("fingerprints complete schemas independently of property insertion order", () => {
+    const collect = (parameters: object) => collectPromptCacheTools([{ name: "read", parameters }]);
+    expect(collect({ type: "object", properties: { a: {}, b: {} } })).toEqual(
+      collect({ properties: { b: {}, a: {} }, type: "object" }),
+    );
   });
 
   it("tracks cache-relevant changes and reports a real cache-read drop", () => {
     // Observability only emits when a material cache-read drop follows a tracked
     // cache-affecting change.
-    const first = beginPromptCacheObservation({
+    const first = beginOpenAIObservation({
       sessionId: "session-1",
       sessionKey: scopedKey("agent:main"),
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
       cacheRetention: "long",
-      streamStrategy: "boundary-aware:openai-responses",
       transport: "sse",
-      systemPrompt: "stable system",
       tools: [{ name: "read" }, { name: "write" }],
     });
 
@@ -257,14 +536,10 @@ describe("prompt cache observability", () => {
       }),
     ).toBeNull();
 
-    const second = beginPromptCacheObservation({
+    const second = beginOpenAIObservation({
       sessionId: "session-1",
       sessionKey: scopedKey("agent:main"),
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
       cacheRetention: "short",
-      streamStrategy: "boundary-aware:openai-responses",
       transport: "websocket",
       systemPrompt: "stable system with hook change",
       tools: [{ name: "read" }, { name: "write" }],
@@ -295,6 +570,7 @@ describe("prompt cache observability", () => {
 
   it("suppresses cache-break events for small drops", () => {
     beginPromptCacheObservation({
+      messages: [],
       sessionId: scopedKey("session-1"),
       provider: "anthropic",
       modelId: "claude-sonnet-4-6",
@@ -309,6 +585,7 @@ describe("prompt cache observability", () => {
     });
 
     beginPromptCacheObservation({
+      messages: [],
       sessionId: scopedKey("session-1"),
       provider: "anthropic",
       modelId: "claude-sonnet-4-6",
@@ -329,13 +606,8 @@ describe("prompt cache observability", () => {
   it("treats reordered tool lists as the same diagnostics tool set", () => {
     // Tool list ordering is deterministic for payloads but should not create a
     // false cache-break diagnostic when the set is unchanged.
-    beginPromptCacheObservation({
+    beginOpenAIObservation({
       sessionId: scopedKey("session-1"),
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-      streamStrategy: "boundary-aware:openai-responses",
-      systemPrompt: "stable system",
       tools: [{ name: "read" }, { name: "write" }],
     });
     completePromptCacheObservation({
@@ -343,13 +615,8 @@ describe("prompt cache observability", () => {
       usage: { cacheRead: 8_000 },
     });
 
-    const second = beginPromptCacheObservation({
+    const second = beginOpenAIObservation({
       sessionId: scopedKey("session-1"),
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-      streamStrategy: "boundary-aware:openai-responses",
-      systemPrompt: "stable system",
       tools: [{ name: "write" }, { name: "read" }],
     });
 
@@ -360,6 +627,7 @@ describe("prompt cache observability", () => {
     const sessionId = scopedKey("dynamic-system-suffix");
     const stablePrefix = "stable instructions and tool capability directory";
     beginPromptCacheObservation({
+      messages: [],
       sessionId,
       provider: "anthropic",
       modelId: "claude-sonnet-4-6",
@@ -371,6 +639,7 @@ describe("prompt cache observability", () => {
     completePromptCacheObservation({ sessionId, usage: { cacheRead: 8_000 } });
 
     const next = beginPromptCacheObservation({
+      messages: [],
       sessionId,
       provider: "anthropic",
       modelId: "claude-sonnet-4-6",
@@ -403,24 +672,14 @@ describe("prompt cache observability", () => {
         parameters: { type: "object", properties: { path: { type: "string" } } },
       },
     ]);
-    beginPromptCacheObservation({
+    beginOpenAIObservation({
       sessionId,
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-      streamStrategy: "boundary-aware:openai-responses",
-      systemPrompt: "stable system",
       tools: initialTools,
     });
     completePromptCacheObservation({ sessionId, usage: { cacheRead: 8_000 } });
 
-    const next = beginPromptCacheObservation({
+    const next = beginOpenAIObservation({
       sessionId,
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-      streamStrategy: "boundary-aware:openai-responses",
-      systemPrompt: "stable system",
       tools: collectPromptCacheTools([
         {
           name: "read",
@@ -441,16 +700,10 @@ describe("prompt cache observability", () => {
   it("tracks recurring prompt-cache affinity across rotating session ids", () => {
     // Cron-style isolated runs use promptCacheKey to carry cache affinity across
     // new session ids.
-    beginPromptCacheObservation({
+    beginOpenAIObservation({
       sessionId: "isolated-run-1",
       promptCacheKey: scopedKey("openclaw-cron-stable-cache-key"),
       sessionKey: "agent:cron:run:isolated-run-1",
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-      streamStrategy: "boundary-aware:openai-responses",
-      systemPrompt: "stable system",
-      tools: [{ name: "read" }],
     });
     completePromptCacheObservation({
       sessionId: "isolated-run-1",
@@ -459,16 +712,10 @@ describe("prompt cache observability", () => {
       usage: { cacheRead: 8_000 },
     });
 
-    const nextRun = beginPromptCacheObservation({
+    const nextRun = beginOpenAIObservation({
       sessionId: "isolated-run-2",
       promptCacheKey: scopedKey("openclaw-cron-stable-cache-key"),
       sessionKey: "agent:cron:run:isolated-run-2",
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-      streamStrategy: "boundary-aware:openai-responses",
-      systemPrompt: "stable system",
-      tools: [{ name: "read" }],
     });
 
     expect(nextRun.previousCacheRead).toBe(8_000);
@@ -476,14 +723,8 @@ describe("prompt cache observability", () => {
   });
 
   it("evicts old tracker entries when the tracker map grows past the soft cap", () => {
-    beginPromptCacheObservation({
+    beginOpenAIObservation({
       sessionId: scopedKey("session-0"),
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-      streamStrategy: "boundary-aware:openai-responses",
-      systemPrompt: "stable system",
-      tools: [{ name: "read" }],
     });
     completePromptCacheObservation({
       sessionId: scopedKey("session-0"),
@@ -491,25 +732,14 @@ describe("prompt cache observability", () => {
     });
 
     for (let index = 1; index <= 513; index += 1) {
-      beginPromptCacheObservation({
+      beginOpenAIObservation({
         sessionId: scopedKey(`session-${index}`),
-        provider: "openai",
-        modelId: "gpt-5.4",
-        modelApi: "openai-responses",
-        streamStrategy: "boundary-aware:openai-responses",
         systemPrompt: `stable system ${index}`,
-        tools: [{ name: "read" }],
       });
     }
 
-    const restarted = beginPromptCacheObservation({
+    const restarted = beginOpenAIObservation({
       sessionId: scopedKey("session-0"),
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-      streamStrategy: "boundary-aware:openai-responses",
-      systemPrompt: "stable system",
-      tools: [{ name: "read" }],
     });
 
     expect(restarted.previousCacheRead).toBeNull();
@@ -517,17 +747,11 @@ describe("prompt cache observability", () => {
   });
 
   it("ignores missing usage and preserves the previous cache-read baseline", () => {
-    beginPromptCacheObservation({
+    beginOpenAIObservation({
       sessionId: scopedKey("session-1"),
       sessionKey: scopedKey("agent:main"),
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
       cacheRetention: "long",
-      streamStrategy: "boundary-aware:openai-responses",
       transport: "sse",
-      systemPrompt: "stable system",
-      tools: [{ name: "read" }],
     });
     completePromptCacheObservation({
       sessionId: scopedKey("session-1"),
@@ -535,17 +759,12 @@ describe("prompt cache observability", () => {
       usage: { cacheRead: 8_000 },
     });
 
-    beginPromptCacheObservation({
+    beginOpenAIObservation({
       sessionId: scopedKey("session-1"),
       sessionKey: scopedKey("agent:main"),
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
       cacheRetention: "short",
-      streamStrategy: "boundary-aware:openai-responses",
       transport: "websocket",
       systemPrompt: "stable system with hook change",
-      tools: [{ name: "read" }],
     });
 
     expect(
@@ -555,17 +774,12 @@ describe("prompt cache observability", () => {
       }),
     ).toBeNull();
 
-    const resumed = beginPromptCacheObservation({
+    const resumed = beginOpenAIObservation({
       sessionId: scopedKey("session-1"),
       sessionKey: scopedKey("agent:main"),
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
       cacheRetention: "short",
-      streamStrategy: "boundary-aware:openai-responses",
       transport: "websocket",
       systemPrompt: "stable system with hook change",
-      tools: [{ name: "read" }],
     });
 
     expect(resumed.previousCacheRead).toBe(8_000);

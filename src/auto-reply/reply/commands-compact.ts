@@ -1,4 +1,3 @@
-// Implements compaction commands for session context and model state.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -25,16 +24,9 @@ import { resolveSessionStorePathForScope } from "../../config/sessions/session-s
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
-
-const compactRuntimeLoader = createLazyImportLoader(() => import("./commands-compact.runtime.js"));
-
-function loadCompactRuntime(): Promise<typeof import("./commands-compact.runtime.js")> {
-  return compactRuntimeLoader.load();
-}
 
 function extractCompactInstructions(params: {
   rawBody?: string;
@@ -48,15 +40,10 @@ function extractCompactInstructions(params: {
     ? stripMentions(raw, params.ctx, params.cfg, params.agentId)
     : raw;
   const trimmed = stripped.trim();
-  if (!trimmed) {
+  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("/compact")) {
     return undefined;
   }
-  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
-  const prefix = lowered.startsWith("/compact") ? "/compact" : null;
-  if (!prefix) {
-    return undefined;
-  }
-  let rest = trimmed.slice(prefix.length).trimStart();
+  let rest = trimmed.slice("/compact".length).trimStart();
   if (rest.startsWith(":")) {
     rest = rest.slice(1).trimStart();
   }
@@ -99,18 +86,12 @@ function resolveManualCompactContextTokenBudget(params: {
   liveContextTokens?: number;
   persistedContextTokens?: number;
 }): number | undefined {
-  const inheritedContextTokens =
-    typeof params.liveContextTokens === "number" &&
-    Number.isFinite(params.liveContextTokens) &&
-    params.liveContextTokens > 0
-      ? Math.floor(params.liveContextTokens)
-      : undefined;
-  const liveContextTokens = inheritedContextTokens;
+  const liveContextTokens = normalizeContextTokenBudget(params.liveContextTokens);
 
   const model = normalizeOptionalString(params.model);
   const provider = normalizeOptionalString(params.provider);
   if (!model || !provider) {
-    return liveContextTokens ?? resolvePersistedContextTokens(params.persistedContextTokens);
+    return liveContextTokens ?? normalizeContextTokenBudget(params.persistedContextTokens);
   }
 
   const harnessPolicy = resolveAgentHarnessPolicy({
@@ -146,10 +127,10 @@ function resolveManualCompactContextTokenBudget(params: {
     return liveContextTokens;
   }
 
-  return resolvePersistedContextTokens(params.persistedContextTokens);
+  return normalizeContextTokenBudget(params.persistedContextTokens);
 }
 
-function resolvePersistedContextTokens(value: number | undefined): number | undefined {
+function normalizeContextTokenBudget(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : undefined;
@@ -200,6 +181,8 @@ export async function handleCompactCommand(
   if (unauthorized) {
     return unauthorized;
   }
+  const operatorAuthority = params.opts?.operatorAuthority;
+  operatorAuthority?.assertCurrent();
   const targetSessionEntry = params.commandInvocationSignal
     ? params.compactionSessionEntry
     : (params.sessionStore?.[params.sessionKey] ?? params.sessionEntry);
@@ -209,7 +192,7 @@ export async function handleCompactCommand(
       "⚙️ Compaction unavailable (missing session id).",
     );
   }
-  const runtime = await loadCompactRuntime();
+  const runtime = await import("./commands-compact.runtime.js");
   const sessionId = targetSessionEntry.sessionId;
   const sessionAgentId = params.sessionKey
     ? resolveSessionAgentId({
@@ -249,6 +232,7 @@ export async function handleCompactCommand(
   let expectedSession: InternalSessionEntry = targetSessionEntry;
   let compactionAccepted = false;
   const assertOwnerBeforeAcceptance = () => {
+    operatorAuthority?.assertCurrent();
     if (!compactionAccepted) {
       assertOwnerCurrent?.();
     }
@@ -317,6 +301,15 @@ export async function handleCompactCommand(
   });
   const replyOperation = params.opts?.replyOperation;
   replyOperation?.setPhase("preflight_compacting");
+  const assertActive = () => {
+    assertOwnerBeforeAcceptance();
+    params.opts?.abortSignal?.throwIfAborted();
+    params.commandInvocationSignal?.throwIfAborted();
+    const current = resolveCurrentEntry();
+    if (!current || current.activeWriterRunId !== expectedSession.activeWriterRunId) {
+      throw new Error("command session changed");
+    }
+  };
   const compaction = runtime.compactEmbeddedAgentSession(
     {
       abortSignal: params.opts?.abortSignal,
@@ -379,15 +372,8 @@ export async function handleCompactCommand(
       }),
     },
     {
-      assertActive: () => {
-        assertOwnerBeforeAcceptance();
-        params.opts?.abortSignal?.throwIfAborted();
-        params.commandInvocationSignal?.throwIfAborted();
-        const current = resolveCurrentEntry();
-        if (!current || current.activeWriterRunId !== expectedSession.activeWriterRunId) {
-          throw new Error("command session changed");
-        }
-      },
+      assertActive,
+      sourceAuthority: { assertActive, operatorAuthority },
       onCommitted: (accepted) => {
         compactionAccepted = true;
         // Update the expectation before identity observers run, not from public result metadata.

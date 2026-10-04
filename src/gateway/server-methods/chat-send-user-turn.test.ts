@@ -14,6 +14,7 @@ import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import { normalizeCommandBody } from "../../auto-reply/commands-registry.js";
 import { resolveReplyDirectiveRouting } from "../../auto-reply/reply/get-reply-directives-routing.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
+import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
 import { resolveSessionResetCommand } from "../../auto-reply/reply/session-reset-command.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { resolveStateDir } from "../../config/paths.js";
@@ -41,6 +42,14 @@ import {
   createAttachments,
 } from "./chat-send-user-turn.test-support.js";
 
+function requesterProfile(text: string) {
+  const json = text.match(/```json\n([\s\S]*?)\n```/u)?.[1];
+  return json
+    ? (JSON.parse(json) as { requester_profile?: { id: string; display_name: string } })
+        .requester_profile
+    : undefined;
+}
+
 describe("prepareChatSendUserTurn", () => {
   it.each([
     { profileId: "profile-ada", synthetic: false, verified: true, allowed: true },
@@ -48,10 +57,10 @@ describe("prepareChatSendUserTurn", () => {
     { profileId: "profile-ada", synthetic: true, verified: true, allowed: false },
     { profileId: "profile-ada", synthetic: false, verified: false, allowed: false },
   ])(
-    "checks command allowlists against the admitted profile: %j",
-    ({ profileId, synthetic, verified, allowed }) => {
+    "projects the verified requester without changing command allowlists: %j",
+    async ({ profileId, synthetic, verified, allowed }) => {
       const { controller } = createUserTurnInputController("/status");
-      const prepared = prepareChatSendUserTurn({
+      const prepared = await prepareChatSendUserTurn({
         request: {
           inboundMessage: "/status",
           clientInfo: createClientInfo({
@@ -95,6 +104,14 @@ describe("prepareChatSendUserTurn", () => {
           commandAuthorized: prepared.ctx.CommandAuthorized === true,
         }),
       ).toMatchObject({ senderIsOwner: allowed, isAuthorizedSender: allowed });
+      const ctx = finalizeInboundContext({ ...prepared.ctx });
+      const prompt = buildInboundUserContextPrefix(ctx);
+      if (verified && !synthetic) {
+        expect(requesterProfile(prompt)).toEqual({ id: profileId, display_name: "Ada" });
+      } else {
+        expect(prompt).not.toContain("requester_profile");
+      }
+      expect(prepared.ctx).not.toHaveProperty("SenderId");
     },
   );
 
@@ -110,7 +127,7 @@ describe("prepareChatSendUserTurn", () => {
             ? { id: GATEWAY_CLIENT_IDS.CONTROL_UI, mode: GATEWAY_CLIENT_MODES.WEBCHAT }
             : {},
         );
-        const prepared = prepareChatSendUserTurn({
+        const prepared = await prepareChatSendUserTurn({
           request: {
             inboundMessage: "hello",
             clientInfo,
@@ -235,7 +252,7 @@ describe("prepareChatSendUserTurn", () => {
           ? ensureGatewayOwnerProfile("Gateway Owner")
           : ensureProfileForEmail("chat-sandbox-creator@example.com");
         const { controller } = createUserTurnInputController();
-        const prepared = prepareChatSendUserTurn({
+        const prepared = await prepareChatSendUserTurn({
           request: {
             inboundMessage: "hello",
             clientInfo: createClientInfo(),
@@ -305,7 +322,7 @@ describe("prepareChatSendUserTurn", () => {
     async ({ inboundMessage, suppressed }) => {
       const { controller, readInput } = createUserTurnInputController(inboundMessage);
       const parsedMessage = `${inboundMessage}\n[media attached: media://inbound/voice.mp3]`;
-      const prepared = prepareChatSendUserTurn({
+      const prepared = await prepareChatSendUserTurn({
         request: {
           inboundMessage,
           clientInfo: createClientInfo({ displayName: "Gateway CLI" }),
@@ -330,9 +347,9 @@ describe("prepareChatSendUserTurn", () => {
         },
         attachments: createAttachments({
           parsedMessage,
-          mediaPathOffloadPaths: ["/workspace/voice.mp3"],
-          mediaPathOffloadTypes: ["audio/mpeg"],
-          mediaPathOffloadWorkspaceDir: "/workspace",
+          mediaPathOffloads: [
+            { path: "/workspace/voice.mp3", contentType: "audio/mpeg", workspaceDir: "/workspace" },
+          ],
         }),
         client: null,
         logGateway: { warn: vi.fn() } as never,
@@ -411,7 +428,7 @@ describe("prepareChatSendUserTurn", () => {
 
   it("carries pre-staged media and device ownership without UI sender decoration", async () => {
     const { controller, readInput } = createUserTurnInputController();
-    const prepared = prepareChatSendUserTurn({
+    const prepared = await prepareChatSendUserTurn({
       request: {
         inboundMessage: "hello",
         clientInfo: createClientInfo({
@@ -434,9 +451,13 @@ describe("prepareChatSendUserTurn", () => {
         },
       },
       attachments: createAttachments({
-        mediaPathOffloadPaths: ["uploads/report.pdf"],
-        mediaPathOffloadTypes: ["application/pdf"],
-        mediaPathOffloadWorkspaceDir: "/workspace",
+        mediaPathOffloads: [
+          {
+            path: "uploads/report.pdf",
+            contentType: "application/pdf",
+            workspaceDir: "/workspace",
+          },
+        ],
       }),
       client: {
         connId: "conn-1",
@@ -491,7 +512,7 @@ describe("prepareChatSendUserTurn", () => {
     const { controller, readInput } = createUserTurnInputController("inspect");
     const mediaRef = "media://inbound/image-1.png";
     const receipt = "[Source Receipt]\nbridge=fixture\n[/Source Receipt]";
-    const prepared = prepareChatSendUserTurn({
+    const prepared = await prepareChatSendUserTurn({
       request: {
         inboundMessage: "inspect",
         clientInfo: createClientInfo(),
@@ -554,7 +575,7 @@ describe("prepareChatSendUserTurn", () => {
 
   it("persists video then image as claim-only facts with the image at fact index one", async () => {
     const { controller, readInput } = createUserTurnInputController();
-    prepareChatSendUserTurn({
+    await prepareChatSendUserTurn({
       request: {
         inboundMessage: "hello",
         clientInfo: createClientInfo(),
@@ -626,7 +647,7 @@ describe("prepareChatSendUserTurn", () => {
       .mockResolvedValueOnce({ entries: [], omission: "inline-image-save-failed" });
     try {
       const { controller, readInput } = createUserTurnInputController();
-      const prepared = prepareChatSendUserTurn({
+      const prepared = await prepareChatSendUserTurn({
         request: {
           inboundMessage: "hello",
           clientInfo: createClientInfo(),
@@ -678,6 +699,7 @@ describe("prepareChatSendUserTurn", () => {
             fact: {
               url: "media://inbound/photo.png",
               contentType: "image/png",
+              fileName: "photo café 雪 🦞.png",
               kind: "image",
               sizeBytes: 10,
             },
@@ -687,7 +709,7 @@ describe("prepareChatSendUserTurn", () => {
       });
     try {
       const { controller } = createUserTurnInputController();
-      const prepared = prepareChatSendUserTurn({
+      const prepared = await prepareChatSendUserTurn({
         request: {
           inboundMessage: "inspect",
           clientInfo: createClientInfo({
@@ -722,6 +744,7 @@ describe("prepareChatSendUserTurn", () => {
         {
           path: persistedPath,
           contentType: "image/png",
+          fileName: "photo café 雪 🦞.png",
           hydrationSuppressed: true,
         },
       ]);
@@ -735,6 +758,7 @@ describe("prepareChatSendUserTurn", () => {
         {
           path: persistedPath,
           contentType: "image/png",
+          fileName: "photo café 雪 🦞.png",
           hydrationSuppressed: true,
         },
       ]);
@@ -749,7 +773,7 @@ describe("prepareChatSendUserTurn", () => {
   ])("persists structured inbound $kind history facts", async ({ kind, mimeType, fileName }) => {
     const { controller, readInput } = createUserTurnInputController();
     const mediaRef = `media://inbound/${fileName}`;
-    prepareChatSendUserTurn({
+    await prepareChatSendUserTurn({
       request: {
         inboundMessage: "play this",
         clientInfo: createClientInfo(),
@@ -806,7 +830,7 @@ describe("prepareChatSendUserTurn", () => {
   it("persists and prunes the managed PDF claim as structured ownership", async () => {
     const { controller, readInput } = createUserTurnInputController();
     const mediaRef = "media://inbound/report.pdf";
-    prepareChatSendUserTurn({
+    await prepareChatSendUserTurn({
       request: {
         inboundMessage: "read this",
         clientInfo: createClientInfo(),
@@ -888,7 +912,7 @@ describe("prepareChatSendUserTurn", () => {
 
     try {
       const { controller, readInput } = createUserTurnInputController();
-      prepareChatSendUserTurn({
+      await prepareChatSendUserTurn({
         request: {
           inboundMessage: "inspect",
           clientInfo: createClientInfo(),

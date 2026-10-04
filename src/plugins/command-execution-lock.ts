@@ -31,29 +31,6 @@ export function getPluginCommandExecutionCount(registryView: PluginRegistry): nu
   return executionStates.get(registry)?.count ?? 0;
 }
 
-function beginPluginCommandExecution(registry: PluginRegistry): boolean {
-  if (isPluginRegistryRetired(registry)) {
-    return false;
-  }
-  getExecutionState(registry).count += 1;
-  return true;
-}
-
-function endPluginCommandExecution(registry: PluginRegistry): void {
-  const state = getExecutionState(registry);
-  if (state.count <= 0) {
-    throw new Error("Plugin command execution lock is unbalanced.");
-  }
-  state.count -= 1;
-  if (state.count !== 0) {
-    return;
-  }
-  const waiters = state.waiters.splice(0);
-  for (const resolve of waiters) {
-    resolve();
-  }
-}
-
 export function isPluginCommandExecutionActiveHere(registryView: PluginRegistry): boolean {
   const registry = getPluginRegistryResourceOwner(registryView);
   return [...(executionContext.getStore() ?? [])].some(
@@ -66,9 +43,11 @@ export async function withPluginCommandExecution<T>(
   run: () => T | Promise<T>,
 ): Promise<{ admitted: true; value: T } | { admitted: false }> {
   const registry = getPluginRegistryResourceOwner(registryView);
-  if (!beginPluginCommandExecution(registry)) {
+  if (isPluginRegistryRetired(registry)) {
     return { admitted: false };
   }
+  const state = getExecutionState(registry);
+  state.count += 1;
   const token: PluginCommandExecutionToken = { registry, active: true };
   const active = new Set(
     [...(executionContext.getStore() ?? [])].filter((inherited) => inherited.registry !== registry),
@@ -78,7 +57,12 @@ export async function withPluginCommandExecution<T>(
     return { admitted: true, value: await executionContext.run(active, run) };
   } finally {
     token.active = false;
-    endPluginCommandExecution(registry);
+    state.count -= 1;
+    if (state.count === 0) {
+      for (const resolve of state.waiters.splice(0)) {
+        resolve();
+      }
+    }
   }
 }
 

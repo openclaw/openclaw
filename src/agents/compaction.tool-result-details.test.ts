@@ -1,7 +1,8 @@
 // Covers compaction sanitization for toolResult details and runtime context.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { AssistantMessage, ToolResultMessage } from "openclaw/plugin-sdk/llm";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { estimateMessagesTokens, summarizeInStages } from "./compaction.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 const agentSessionMocks = vi.hoisted(() => ({
@@ -15,9 +16,6 @@ vi.mock("./sessions/index.js", async () => {
     generateSummary: agentSessionMocks.generateSummary,
   };
 });
-
-let estimateMessagesTokens: typeof import("./compaction.js").estimateMessagesTokens;
-let summarizeInStages: typeof import("./compaction.js").summarizeInStages;
 
 function makeAssistantToolCall(timestamp: number): AssistantMessage {
   return makeAgentAssistantMessage({
@@ -43,17 +41,14 @@ function makeToolResultWithDetails(timestamp: number): ToolResultMessage<{ raw: 
 }
 
 describe("compaction toolResult details stripping", () => {
-  beforeAll(async () => {
-    ({ estimateMessagesTokens, summarizeInStages } = await import("./compaction.js"));
-  });
-
   beforeEach(() => {
     agentSessionMocks.generateSummary.mockReset();
     agentSessionMocks.generateSummary.mockResolvedValue("summary");
   });
 
   it("does not pass toolResult.details into generateSummary", async () => {
-    const messages: AgentMessage[] = [makeAssistantToolCall(1), makeToolResultWithDetails(2)];
+    const assistant = makeAssistantToolCall(1);
+    const messages: AgentMessage[] = [structuredClone(assistant), makeToolResultWithDetails(2)];
 
     const summary = await summarizeInStages({
       parts: 1,
@@ -76,31 +71,7 @@ describe("compaction toolResult details stripping", () => {
       agentSessionMocks.generateSummary.mock.calls as unknown as Array<[AgentMessage[]]>
     )[0]?.[0];
     expect(chunk).toStrictEqual([
-      {
-        role: "assistant",
-        content: [
-          { type: "toolCall", id: "call_1", name: "browser", arguments: { action: "tabs" } },
-        ],
-        api: "openai-responses",
-        model: "gpt-5.4",
-        provider: "openai",
-        stopReason: "toolUse",
-        timestamp: 1,
-        usage: {
-          cacheRead: 0,
-          cacheWrite: 0,
-          cost: {
-            cacheRead: 0,
-            cacheWrite: 0,
-            input: 0,
-            output: 0,
-            total: 0,
-          },
-          input: 0,
-          output: 0,
-          totalTokens: 0,
-        },
-      },
+      assistant,
       {
         role: "toolResult",
         toolCallId: "call_1",

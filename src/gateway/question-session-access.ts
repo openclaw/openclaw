@@ -4,10 +4,8 @@ import {
   errorShape,
   type QuestionRecord,
 } from "../../packages/gateway-protocol/src/index.js";
-import {
-  withSessionEntriesFromStoresInWorker,
-  type PreparedSessionEntryWorkerRead,
-} from "../config/sessions/session-entry-read-runtime.js";
+import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import type { PreparedSessionEntryWorkerRead } from "../config/sessions/session-entry-read-runtime.types.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { retainSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -39,6 +37,7 @@ import {
   sharingIdentity,
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
+import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
 import { canReceiveSessionEvent } from "./session-sharing-read.js";
 import { isGatewayAdmin, prepareSessionSharing } from "./session-sharing.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
@@ -341,8 +340,8 @@ export async function withQuestionSessionAccess<T>(
   operation: { assertCurrent: () => void; includeMembers?: boolean },
 ): Promise<T> {
   operation.assertCurrent();
-  const source = captureGatewayOperatorRunAuthority(options);
   const producer = resolveGatewayOperatorRoleActor(options.client);
+  const source = await captureGatewayOperatorRunAuthority(options);
   const profileId =
     usesOwnRunQuestionAccess(options.client) && options.client?.internal?.operatorRunAuthority
       ? source?.authority.profileId
@@ -561,6 +560,76 @@ export function prepareQuestionAuthorization(
       return access === "mutate" ? prepared.authorizeMutation(options.client) : null;
     },
   };
+}
+
+/** Retain the existing sharing facts owner through an asynchronous secret-answer commit. */
+export async function prepareQuestionCommitAuthority(
+  options: GatewayRequestHandlerOptions,
+  observation: QuestionObservation | null,
+  id: string,
+) {
+  const authorization = prepareQuestionAuthorization(options, observation, id, "mutate");
+  authorization.assertCurrent();
+  const cfg = options.context.getRuntimeConfig();
+  const target: QuestionTarget = authorization.target;
+  const resolved = target.sessionKey
+    ? resolveRequestedSessionAgentId(cfg, target.sessionKey, target.agentId)
+    : undefined;
+  if (resolved && !resolved.ok) {
+    throw new QuestionManagerError(
+      QuestionManagerErrorCodes.NOT_FOUND,
+      questionNotFound(id).message,
+    );
+  }
+  const facts =
+    target.sessionKey && resolved?.ok
+      ? await prepareSessionMutationFacts({
+          cfg,
+          sessionKey: target.sessionKey,
+          agentId: resolved.agentId,
+          allowMissing: true,
+        })
+      : undefined;
+  const assertCurrent = () => {
+    authorization.assertCurrent();
+    options.client?.internal?.operatorAccessAuthority?.assertCurrent();
+    options.client?.internal?.operatorRunAuthority?.assertCurrent();
+    const currentCfg = options.context.getRuntimeConfig();
+    const accessRevision = readGatewayAccessRevision();
+    let current = facts?.readCurrent(currentCfg);
+    const sharing = prepareQuestionSharing(
+      currentCfg,
+      options.client,
+      (_target, identityId) => current?.membership.has(identityId) ?? false,
+    );
+    // Policy callbacks can revoke the source; reread the owner-held facts afterward.
+    authorization.assertCurrent();
+    current = facts?.readCurrent(options.context.getRuntimeConfig());
+    if (
+      !observation?.isCurrent() ||
+      usesOwnRunQuestionAccess(options.client) ||
+      currentCfg !== options.context.getRuntimeConfig() ||
+      (!isGatewayAdmin(options.client) &&
+        hasOperatorBoundary(options.client, currentCfg) &&
+        observation.record.sessionKey &&
+        (!current?.target ||
+          sharing.entryFilter?.(current.target.storeKey, current.target.entry) === false ||
+          sharing.authorizeTarget(current.target))) ||
+      accessRevision !== readGatewayAccessRevision()
+    ) {
+      throw new QuestionManagerError(
+        QuestionManagerErrorCodes.NOT_FOUND,
+        questionNotFound(id).message,
+      );
+    }
+  };
+  try {
+    assertCurrent();
+    return { assertCurrent, release: () => facts?.release() };
+  } catch (error) {
+    facts?.release();
+    throw error;
+  }
 }
 
 export function questionBroadcastOptions(params: {

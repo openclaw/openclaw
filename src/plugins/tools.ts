@@ -38,7 +38,6 @@ import {
   type PluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
-import { findUndeclaredPluginToolNames } from "./tool-contracts.js";
 import {
   createPluginToolFactoryContext,
   type PluginToolOwnerContinuation,
@@ -458,10 +457,10 @@ function resolvePluginToolsFromRegistry(
   const pluginToolOwnersByName = new Map<string, string>();
   const denylist = normalizeDenylist(params.toolDenylist);
   const clientCaps = new Set(params.clientCaps ?? []);
+  const preparedRegistry =
+    context === params.preparedRuntime?.loadContext ? params.preparedRuntime.registry : undefined;
   const runtimeRegistry =
-    (context === params.preparedRuntime?.loadContext
-      ? params.preparedRuntime.registry
-      : params.runtimeRegistry) ??
+    (context === params.preparedRuntime?.loadContext ? preparedRegistry : params.runtimeRegistry) ??
     getLoadedRuntimePluginRegistry({ workspaceDir: context.workspaceDir });
   const inspection = runtimeRegistry && inspectionToolOwners.get(runtimeRegistry);
   inspection?.assertCurrent();
@@ -486,10 +485,27 @@ function resolvePluginToolsFromRegistry(
       toolOwners.set(pluginId, { registry: runtimeRegistry, tools: [] });
     }
   }
+  // A prepared generation already decided disabled and failed owners; reloading them would only
+  // repeat that outcome synchronously on the caller's thread.
+  const settledPreparedOutcomes = new Set(
+    preparedRegistry?.plugins
+      .filter((record) => {
+        const manifest = snapshot.byPluginId.get(record.id);
+        return (
+          (record.status === "disabled" || record.status === "error") &&
+          manifest !== undefined &&
+          record.origin === manifest.origin &&
+          record.rootDir === manifest.rootDir &&
+          record.source === manifest.source
+        );
+      })
+      .map((record) => record.id),
+  );
   // Failed registrations are settled facts of this inspection, not new cold-load requests.
   const missingPluginIds = onlyPluginIds.filter(
     (pluginId) =>
       !toolOwners.has(pluginId) &&
+      !settledPreparedOutcomes.has(pluginId) &&
       !samePluginToolSource(inspection?.manifests.get(pluginId), snapshot.byPluginId.get(pluginId)),
   );
   if (missingPluginIds.length > 0) {
@@ -521,6 +537,7 @@ function resolvePluginToolsFromRegistry(
     }
     toolOwners.delete(pluginId);
     const { registry, tools: registrations } = owner;
+    let trustedLocalMediaNames: Set<string> | undefined;
     const reportError = (entry: PluginToolRegistration, message: string) => {
       context.logger.error(message);
       recordToolDiagnostic(registry, {
@@ -563,7 +580,7 @@ function resolvePluginToolsFromRegistry(
       const manifestPlugin = snapshot.byPluginId.get(entry.pluginId);
       const declaredNames = entry.names ?? [];
       const availabilityNames =
-        declaredNames.length > 0 ? declaredNames : (entry.declaredNames ?? []);
+        declaredNames.length > 0 ? declaredNames : Array.from(entry.declaredNames ?? []);
       const allowlistNames = manifestPlugin
         ? filterManifestToolNamesForAvailability({
             plugin: manifestPlugin,
@@ -680,14 +697,8 @@ function resolvePluginToolsFromRegistry(
           continue;
         }
         const tool = inspected.tool;
-        const undeclared = entry.declaredNames
-          ? findUndeclaredPluginToolNames({
-              declaredNames: entry.declaredNames,
-              toolNames: [name],
-            })
-          : [];
-        if (undeclared.length > 0) {
-          const message = `plugin tool is undeclared (${entry.pluginId}): ${undeclared.join(", ")}`;
+        if (entry.declaredNames && !entry.declaredNames.has(toolName)) {
+          const message = `plugin tool is undeclared (${entry.pluginId}): ${toolName}`;
           reportError(entry, message);
           continue;
         }
@@ -710,7 +721,7 @@ function resolvePluginToolsFromRegistry(
           sideEffecting: metadata?.sideEffecting === true,
           trustedLocalMedia:
             manifestPlugin?.origin === "bundled" &&
-            manifestPlugin.contracts?.tools?.includes(name) === true,
+            (trustedLocalMediaNames ??= new Set(manifestPlugin.contracts?.tools)).has(name),
         });
         tools.push(tool);
       }

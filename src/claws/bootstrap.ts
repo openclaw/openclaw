@@ -1,10 +1,10 @@
-import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { DEFAULT_BOOTSTRAP_FILENAME, seedWorkspaceBootstrap } from "../agents/workspace.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { digestClawBytes } from "./digest.js";
 import { clawContainedRelativePath } from "./path-containment.js";
 import type { ClawAddPlan } from "./types.js";
 
@@ -16,10 +16,6 @@ export class ClawBootstrapWriteError extends Error {
     super(message);
     this.name = "ClawBootstrapWriteError";
   }
-}
-
-function contentDigest(content: Uint8Array): string {
-  return `sha256:${createHash("sha256").update(content).digest("hex")}`;
 }
 
 export async function seedClawPackageBootstrap(
@@ -39,13 +35,7 @@ export async function seedClawPackageBootstrap(
       "A Claw add plan may contain only one package bootstrap action.",
     );
   }
-  const action = actions[0];
-  if (!action) {
-    throw new ClawBootstrapWriteError(
-      "bootstrap_plan_invalid",
-      "The package bootstrap action is missing.",
-    );
-  }
+  const action = actions[0]!;
   if (!action.source || !action.digest) {
     throw new ClawBootstrapWriteError(
       "bootstrap_plan_invalid",
@@ -68,7 +58,7 @@ export async function seedClawPackageBootstrap(
     maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
     symlinks: "reject",
   });
-  if (resolve(read.realPath) !== sourcePath || contentDigest(read.buffer) !== action.digest) {
+  if (resolve(read.realPath) !== sourcePath || digestClawBytes(read.buffer) !== action.digest) {
     throw new ClawBootstrapWriteError(
       "bootstrap_source_changed",
       "BOOTSTRAP.md changed after consent; run add --dry-run again.",

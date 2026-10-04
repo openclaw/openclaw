@@ -16,9 +16,10 @@ import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
-import { hasReplyOperationExecutionStarted } from "./reply-run-registry.js";
+import { hasReplyOperationExecutionStarted, replyRunRegistry } from "./reply-run-registry.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
+import { resolveReplySourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";
 
 export type FollowupExecutionResult = {
@@ -67,15 +68,15 @@ function buildFollowupTemplateContext(turn: AdmittedFollowupTurn): TemplateConte
     InputProvenance: run.inputProvenance,
     InboundEventKind: queued.currentInboundEventKind,
     media: queued.media,
-  } as TemplateContext;
+  };
 }
 
 /** Adapts an admitted queued turn to the canonical agent execution owner. */
 export async function executeFollowupTurn(params: {
   turn: AdmittedFollowupTurn;
   defaults: FollowupRunnerParams;
-  onToolResult: (payload: ReplyPayload, execution: { runId: string }) => Promise<void>;
-  onCompactionNoticePayload: (payload: ReplyPayload, execution: { runId: string }) => Promise<void>;
+  onToolResult: (payload: ReplyPayload) => Promise<void>;
+  onCompactionNoticePayload: (payload: ReplyPayload) => Promise<void>;
 }): Promise<FollowupExecutionResult> {
   const { turn, defaults } = params;
   const sourceOpts = defaults.opts;
@@ -183,17 +184,17 @@ export async function executeFollowupTurn(params: {
             }
           })
       : undefined;
-  const wrapVisibility = <T>(
-    callback: ((value: T) => Promise<boolean | void> | boolean | void) | undefined,
+  const wrapVisibility = <Args extends unknown[]>(
+    callback: ((...args: Args) => Promise<boolean | void> | boolean | void) | undefined,
     allowed = progressAllowed,
   ) =>
     callback
-      ? (value: T) =>
+      ? (...args: Args) =>
           enqueueProgressResult(async () => {
             if (!allowed()) {
               return false;
             }
-            return (await settleProgressVisibilityCallbackResult(callback(value))).visible;
+            return (await settleProgressVisibilityCallbackResult(callback(...args))).visible;
           })
       : undefined;
   const baseTypingSignals = createTypingSignaler({
@@ -239,44 +240,19 @@ export async function executeFollowupTurn(params: {
             if (!draftOwnsPreamble && !shouldEmitStructuredProgress()) {
               return false;
             }
-            const visible = (
-              await settleProgressVisibilityCallbackResult(sourceOpts.onItemEvent!(item))
-            ).visible;
-            return visible;
+            return (await settleProgressVisibilityCallbackResult(sourceOpts.onItemEvent!(item)))
+              .visible;
           })
       : undefined,
     onNarrationUpdate: wrap(sourceOpts?.onNarrationUpdate),
     onPlanUpdate: wrapVisibility(sourceOpts?.onPlanUpdate),
     onApprovalEvent: wrapVisibility(sourceOpts?.onApprovalEvent, shouldEmitStructuredProgress),
     onPatchSummary: wrapVisibility(sourceOpts?.onPatchSummary, shouldEmitStructuredProgress),
-    onCompactionStart: sourceOpts?.onCompactionStart
-      ? () =>
-          enqueueProgressResult(async () =>
-            progressAllowed()
-              ? (await settleProgressVisibilityCallbackResult(sourceOpts.onCompactionStart!()))
-                  .visible
-              : false,
-          )
-      : undefined,
-    onCompactionEnd: sourceOpts?.onCompactionEnd
-      ? (payload) =>
-          enqueueProgressResult(async () =>
-            progressAllowed()
-              ? (await settleProgressVisibilityCallbackResult(sourceOpts.onCompactionEnd!(payload)))
-                  .visible
-              : false,
-          )
-      : undefined,
+    onCompactionStart: wrapVisibility(sourceOpts?.onCompactionStart),
+    onCompactionEnd: wrapVisibility(sourceOpts?.onCompactionEnd),
     onReasoningStream: wrapVisibility(sourceOpts?.onReasoningStream),
     onReasoningProgress: wrap(sourceOpts?.onReasoningProgress),
-    onReasoningEnd: sourceOpts?.onReasoningEnd
-      ? () =>
-          enqueueProgressResult(async () =>
-            progressAllowed()
-              ? (await settleProgressVisibilityCallbackResult(sourceOpts.onReasoningEnd!())).visible
-              : false,
-          )
-      : undefined,
+    onReasoningEnd: wrapVisibility(sourceOpts?.onReasoningEnd),
     onToolResult: async (payload) => {
       return await enqueueProgressResult(async () => {
         if (!progressAllowed()) {
@@ -305,14 +281,11 @@ export async function executeFollowupTurn(params: {
             if (visible) {
               return true;
             }
-            if (!forceToolResultProgress && !verboseToolResult) {
-              return false;
-            }
           }
           if (!forceToolResultProgress && !verboseToolResult) {
             return false;
           }
-          await params.onToolResult(payload, { runId: turn.runId });
+          await params.onToolResult(payload);
           return true;
         }
         const verboseToolResult = !requiresDurableToolResult && shouldEmitVerboseToolResult();
@@ -327,12 +300,10 @@ export async function executeFollowupTurn(params: {
         ) {
           return false;
         }
-        const visible =
-          transientToolResultProgress && !verboseToolResult
-            ? (await settleProgressVisibilityCallbackResult(transientToolResultProgress(payload)))
-                .visible
-            : await params.onToolResult(payload, { runId: turn.runId }).then(() => true);
-        return visible;
+        return transientToolResultProgress && !verboseToolResult
+          ? (await settleProgressVisibilityCallbackResult(transientToolResultProgress(payload)))
+              .visible
+          : await params.onToolResult(payload).then(() => true);
       });
     },
   };
@@ -414,14 +385,14 @@ export async function executeFollowupTurn(params: {
           getActiveSessionEntry: turn.session.current,
           activeSessionStore: turn.sessionStore,
           storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
-          resolvedVerboseLevel: currentVerboseLevel() ?? "off",
+          resolvedVerboseLevel: currentVerboseLevel(),
           toolProgressDetail: defaults.toolProgressDetail,
           onCompactionNoticePayload: async (payload) => {
             await enqueueProgressResult(async () => {
               if (!progressAllowed()) {
                 return false;
               }
-              await params.onCompactionNoticePayload(payload, { runId: turn.runId });
+              await params.onCompactionNoticePayload(payload);
               return true;
             });
           },
@@ -431,6 +402,16 @@ export async function executeFollowupTurn(params: {
       // custody after lazy collection binds it, so runtime appends consume all sources.
       await recorder?.resolveMessage();
       turn.operation.abortSignal.throwIfAborted();
+      const sourceTurnId = resolveReplySourceTurnId({
+        sourceTurnId: turn.queued.sourceTurnId,
+        admissionRunId: turn.queued.messageId,
+        ingressProvider: turn.queued.run.messageProvider,
+        entry: turn.session.current(),
+      });
+      if (sourceTurnId) {
+        replyRunRegistry.bindSourceTurnId(turn.operation, sourceTurnId);
+        setChannelSourceTurnId(sessionCtx, sourceTurnId);
+      }
       execution = await (recorder?.withPendingInput
         ? recorder.withPendingInput(execute)
         : execute());

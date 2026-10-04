@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { searchRemoteProjects } from "./project-github-search.js";
 
 function repository(fullName: string, updatedAt: string, description?: string) {
@@ -11,6 +16,7 @@ function repository(fullName: string, updatedAt: string, description?: string) {
     html_url: `https://github.com/${owner}/${name}`,
     clone_url: `https://github.com/${owner}/${name}.git`,
     description: description ?? null,
+    default_branch: "main",
     updated_at: updatedAt,
   };
 }
@@ -28,7 +34,128 @@ function json(value: unknown, status = 200): Response {
 
 describe("project GitHub search", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
+    clearRuntimeConfigSnapshot();
+  });
+
+  it.each([false, true])(
+    "retains quota cooldown across repeated and different queries (authenticated=%s)",
+    async (authenticated) => {
+      const token = authenticated ? "synthetic-search-quota-token" : undefined;
+      let now = 1_000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      const fetchImpl = vi
+        .fn<typeof fetch>()
+        .mockImplementation(
+          async () => new Response(null, { status: 429, headers: { "retry-after": "60" } }),
+        );
+      const options = { env: {}, fetchImpl, token };
+      const query = `quota-query-${token === undefined ? "anonymous" : "authenticated"}`;
+      await expect(searchRemoteProjects(query, options)).rejects.toMatchObject({
+        statusCode: 429,
+        retryAfterMs: 60_000,
+      });
+      const calls = fetchImpl.mock.calls.length;
+      now += 1_000;
+      await expect(searchRemoteProjects(query, options)).rejects.toMatchObject({
+        statusCode: 429,
+        retryAfterMs: 59_000,
+      });
+      await expect(searchRemoteProjects(`${query}-other`, options)).rejects.toMatchObject({
+        statusCode: 429,
+        retryAfterMs: 59_000,
+      });
+      expect(fetchImpl).toHaveBeenCalledTimes(calls);
+      now += 59_000;
+      fetchImpl.mockImplementation(async () => json({ items: [] }));
+      await expect(searchRemoteProjects(query, options)).resolves.toMatchObject({ projects: [] });
+      expect(fetchImpl.mock.calls.length).toBeGreaterThan(calls);
+    },
+  );
+
+  it.each([302, 401])("rechecks reader authority before retrying HTTP %s", async (status) => {
+    let current = true;
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      if (requestUrl(input).includes("/user/repos")) {
+        return json([]);
+      }
+      current = false;
+      return new Response(null, {
+        status,
+        headers: { location: "https://api.github.com/search/repositories?q=redirected" },
+      });
+    });
+    await expect(
+      searchRemoteProjects(`authority-retry-${status}`, {
+        token: "synthetic-retry-token",
+        fetchImpl,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("Search authority retired");
+          }
+        },
+      }),
+    ).rejects.toThrow("Search authority retired");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([true, false])(
+    "keeps coalesced search independent of a retired first reader (remaining=%s)",
+    async (remaining) => {
+      const gate = createDeferredCore<Response>();
+      const started = createDeferredCore();
+      const firstAbort = new AbortController();
+      const secondAbort = new AbortController();
+      const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
+        started.resolve();
+        return await new Promise<Response>((resolve, reject) => {
+          void gate.promise.then(resolve, reject);
+          const signal = init?.signal;
+          signal?.addEventListener(
+            "abort",
+            () => reject(new Error("Fixture request aborted", { cause: signal.reason })),
+            {
+              once: true,
+            },
+          );
+        });
+      });
+      const options = { env: {}, fetchImpl, now: 1000 };
+      const query = `coalesced-retirement-${remaining}`;
+      const first = searchRemoteProjects(query, { ...options, signal: firstAbort.signal });
+      const rejected = expect(first).rejects.toThrow("First reader retired");
+      await started.promise;
+      const second = searchRemoteProjects(query, { ...options, signal: secondAbort.signal });
+      const secondOutcome = remaining
+        ? expect(second).resolves.toMatchObject({ projects: [{ fullName: "acme/shared-result" }] })
+        : expect(second).rejects.toThrow("Second reader retired");
+      firstAbort.abort(new Error("First reader retired"));
+      if (!remaining) {
+        secondAbort.abort(new Error("Second reader retired"));
+      }
+      gate.resolve(json({ items: [repository("acme/shared-result", "2026-09-01")] }));
+      await Promise.all([rejected, secondOutcome]);
+      expect(fetchImpl).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("separates native search results when the selected Enterprise host changes", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => json({ items: [] }));
+    const config = (host: string) => ({
+      gateway: { github: { host, apiBaseUrl: `https://${host}/api/v3` } },
+    });
+    setRuntimeConfigSnapshot(config("a.ghe.example.test"));
+    await searchRemoteProjects("same-query", { token: "native-token", fetchImpl, now: 1_000 });
+    setRuntimeConfigSnapshot(config("b.ghe.example.test"));
+    await searchRemoteProjects("same-query", { token: "native-token", fetchImpl, now: 1_000 });
+
+    expect(fetchImpl.mock.calls.map(([url]) => requestUrl(url).split("/api/v3/")[0])).toEqual([
+      "https://a.ghe.example.test",
+      "https://a.ghe.example.test",
+      "https://b.ghe.example.test",
+      "https://b.ghe.example.test",
+    ]);
   });
 
   it("returns anonymous public results with a typed missing-credential state", async () => {
@@ -36,7 +163,12 @@ describe("project GitHub search", () => {
       json({
         total_count: 1,
         incomplete_results: false,
-        items: [repository("openclaw/openclaw", "2026-08-10T00:00:00Z")],
+        items: [
+          {
+            ...repository("openclaw/openclaw", "2026-08-10T00:00:00Z", "  public project  "),
+            html_url: "  https://github.com/openclaw/openclaw  ",
+          },
+        ],
       }),
     );
 
@@ -48,7 +180,13 @@ describe("project GitHub search", () => {
 
     expect(result).toMatchObject({
       credential: "missing",
-      projects: [{ fullName: "openclaw/openclaw" }],
+      projects: [
+        {
+          fullName: "openclaw/openclaw",
+          webUrl: "https://github.com/openclaw/openclaw",
+          description: "public project",
+        },
+      ],
     });
     expect(fetchImpl).toHaveBeenCalledOnce();
     expect(fetchImpl.mock.calls[0]?.[0]).toContain("/search/repositories?");
@@ -91,6 +229,36 @@ describe("project GitHub search", () => {
       "Authorization",
       "Bearer test-github-token",
     );
+  });
+
+  it("accepts an explicitly prepared native credential without ambient token state", async () => {
+    const selected = repository("acme/private-repo", "2026-09-23T00:00:00Z");
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const url = requestUrl(input);
+      if (url.includes("/repos/acme/private-repo")) {
+        return json(selected);
+      }
+      if (url.includes("/user/repos")) {
+        return json([selected]);
+      }
+      return json({ items: [selected] });
+    });
+
+    const result = await searchRemoteProjects("acme/private-repo", {
+      env: {},
+      fetchImpl,
+      now: 250,
+      token: "prepared-native-token",
+    });
+
+    expect(result).toMatchObject({
+      credential: "configured",
+      projects: [{ fullName: "acme/private-repo", defaultBranch: "main" }],
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    for (const [, init] of fetchImpl.mock.calls) {
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer prepared-native-token");
+    }
   });
 
   it("preserves GitHub best-match order for global results instead of re-sorting by recency", async () => {

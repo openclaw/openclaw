@@ -10,7 +10,6 @@ import { parseConcreteConfigPath, toDotPath } from "../shared/dot-path.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { applyUnsetPathsForWrite } from "./config-path-mutation.js";
 import type { ConfigWriteOptions } from "./io.types.js";
-import { inheritLegacyDefaultAgentId } from "./legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "./types.js";
 
 const snapshotMigrationFacts = new WeakMap<object, readonly DeferredPluginMigration[]>();
@@ -153,7 +152,7 @@ export function preserveDeferredPluginMigrationConfig(params: {
       }
     }
   }
-  return isRecord(next) ? inheritLegacyDefaultAgentId(params.nextConfig, next) : params.nextConfig;
+  return isRecord(next) ? next : params.nextConfig;
 }
 
 /** Retained plugin-owned legacy fields are inert until their migration owner becomes available. */
@@ -162,12 +161,9 @@ export function omitDeferredPluginMigrationConfig(
   pending: readonly DeferredPluginMigration[] | undefined,
 ): unknown {
   return isRecord(raw)
-    ? inheritLegacyDefaultAgentId(
+    ? applyUnsetPathsForWrite(
         raw,
-        applyUnsetPathsForWrite(
-          raw,
-          pending?.flatMap((entry) => entry.validationExcludedPaths ?? []),
-        ),
+        pending?.flatMap((entry) => entry.validationExcludedPaths ?? []),
       )
     : raw;
 }

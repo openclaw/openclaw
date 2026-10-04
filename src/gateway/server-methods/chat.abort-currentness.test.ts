@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { registerWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import { createWorkerInferenceCancellationService } from "../worker-environments/inference-control.test-helpers.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
+import * as abortRuntime from "./chat-abort-runtime.js";
 import * as persistence from "./chat-transcript-persistence.js";
 import {
   expectAbortPayload,
@@ -20,7 +23,149 @@ vi.mock("../session-utils.js", async () => {
   };
 });
 
+function createDeferredWorkerCancellation() {
+  const cancelled = createDeferred();
+  const workerPersistence = createDeferred<string[]>();
+  const service = {};
+  registerWorkerInferenceSessionControl(service, {
+    hasSession: () => true,
+    reserveSessionDrain: () => {
+      throw new Error("unexpected drain reservation");
+    },
+    resolveSessionTargetForRunId: () => undefined,
+    captureSessionCancellation: () => ({
+      runIds: ["worker-run"],
+      cancel: (control) => {
+        control?.assertCurrent?.();
+        control?.onCancelled?.("worker-run");
+        cancelled.resolve();
+        return workerPersistence.promise;
+      },
+    }),
+  });
+  return { cancelled, workerPersistence, service };
+}
+
+function setPendingRegistrations(
+  context: ReturnType<typeof createChatAbortContext>,
+  ts = 1,
+  attemptId?: string,
+) {
+  for (const prefix of ["agent", "pending-chat"]) {
+    context.dedupe.set(`${prefix}:pending`, {
+      ts,
+      ok: true,
+      payload: {
+        runId: "pending",
+        status: "accepted",
+        sessionKey: "main",
+        agentId: "main",
+        ...(attemptId ? { reservationId: attemptId, attemptId } : {}),
+      },
+    });
+  }
+}
+
 describe("chat.abort original authority and registration", () => {
+  it("preserves exact-run descendant and partial persistence failures after parent Stop", async () => {
+    const descendantFailure = new Error("descendant cancellation failed");
+    const partialFailure = new Error("partial persistence failed");
+    const context = createChatAbortContext();
+    const run = createActiveRun("main", { sessionId: "main-session", agentId: "main" });
+    context.chatAbortControllers.set("parent-run", run);
+    context.chatRunState.getOrCreate("parent-run").buffer = "captured parent output";
+    const descendants = vi
+      .spyOn(abortRuntime, "abortControlledSubagents")
+      .mockImplementationOnce(async (params) => {
+        await params.beforeKill?.();
+        throw descendantFailure;
+      });
+    const persist = vi
+      .spyOn(persistence, "persistAbortedPartials")
+      .mockRejectedValueOnce(partialFailure);
+    const respond = vi.fn();
+    try {
+      await expect(
+        invokeChatAbortHandler({
+          handler: handleChatAbortRequestWithLifecycle,
+          context,
+          request: { sessionKey: "main", runId: "parent-run" },
+          client: { connect: { scopes: ["operator.admin"] } },
+          respond,
+        }),
+      ).rejects.toMatchObject({ errors: [descendantFailure, partialFailure] });
+      expect(run.controller.signal.aborted).toBe(true);
+      expect(persist).toHaveBeenCalledOnce();
+      expect(respond).not.toHaveBeenCalled();
+    } finally {
+      descendants.mockRestore();
+      persist.mockRestore();
+    }
+  });
+
+  it.each([undefined, "worker-run"])(
+    "waits for worker cancellation persistence before responding to Stop with runId=%s",
+    async (runId) => {
+      const { cancelled, workerPersistence, service } = createDeferredWorkerCancellation();
+      const respond = vi.fn();
+      const stopping = invokeChatAbortHandler({
+        handler: handleChatAbortRequestWithLifecycle,
+        context: createChatAbortContext({ workerEnvironmentService: service }),
+        request: { sessionKey: "main", ...(runId ? { runId } : {}) },
+        client: { connect: { scopes: ["operator.admin"] } },
+        respond,
+      });
+      try {
+        await cancelled.promise;
+        expect(respond).not.toHaveBeenCalled();
+      } finally {
+        workerPersistence.resolve(["worker-run"]);
+        await stopping;
+      }
+      expectAbortPayload(requireLastRespondCall(respond)[1], {
+        aborted: true,
+        runIds: ["worker-run"],
+      });
+    },
+  );
+
+  it("preserves worker cancellation and partial persistence failures after synchronous Stop", async () => {
+    const { cancelled, workerPersistence, service } = createDeferredWorkerCancellation();
+    const workerFailure = new Error("worker cancellation write failed");
+    const partialFailure = new Error("partial output write failed");
+    const context = createChatAbortContext({ workerEnvironmentService: service });
+    const run = createActiveRun("main", { sessionId: "main-session", agentId: "main" });
+    context.chatAbortControllers.set("worker-run", run);
+    context.chatRunState.getOrCreate("worker-run").buffer = "captured output";
+    const persist = vi
+      .spyOn(persistence, "persistAbortedPartials")
+      .mockRejectedValue(partialFailure);
+    const respond = vi.fn();
+    const stopping = invokeChatAbortHandler({
+      handler: handleChatAbortRequestWithLifecycle,
+      context,
+      request: { sessionKey: "main" },
+      client: { connect: { scopes: ["operator.admin"] } },
+      respond,
+    });
+    const rejected = expect(stopping).rejects.toMatchObject({
+      errors: [workerFailure, partialFailure],
+    });
+    try {
+      await cancelled.promise;
+      expect(run.controller.signal.aborted).toBe(true);
+      expect(respond).not.toHaveBeenCalled();
+      workerPersistence.reject(workerFailure);
+      await rejected;
+      expect(persist).toHaveBeenCalledOnce();
+      expect(respond).not.toHaveBeenCalled();
+    } finally {
+      workerPersistence.resolve([]);
+      await stopping.catch(() => undefined);
+      persist.mockRestore();
+    }
+  });
+
   it.each(["queued", "active", "lifecycle"] as const)(
     "stops subsequent effects after a synchronous %s cancellation revokes authority",
     async (firstEffect) => {
@@ -59,18 +204,7 @@ describe("chat.abort original authority and registration", () => {
         }
         return true;
       });
-      for (const prefix of ["agent", "pending-chat"]) {
-        context.dedupe.set(`${prefix}:pending`, {
-          ts: 1,
-          ok: true,
-          payload: {
-            runId: "pending",
-            status: "accepted",
-            sessionKey: "main",
-            agentId: "main",
-          },
-        });
-      }
+      setPendingRegistrations(context);
       const pending = [...context.dedupe];
       const persist = vi.spyOn(persistence, "persistAbortedPartials").mockResolvedValue(undefined);
       try {
@@ -128,39 +262,13 @@ describe("chat.abort original authority and registration", () => {
     const replacement = createActiveRun("main", { sessionId: "main-session", agentId: "main" });
     context.chatAbortControllers.set("first", first);
     context.chatAbortControllers.set("reused", stale);
-    for (const prefix of ["agent", "pending-chat"]) {
-      context.dedupe.set(`${prefix}:pending`, {
-        ts: 1,
-        ok: true,
-        payload: {
-          runId: "pending",
-          status: "accepted",
-          sessionKey: "main",
-          agentId: "main",
-          reservationId: "old",
-          attemptId: "old",
-        },
-      });
-    }
+    setPendingRegistrations(context, 1, "old");
     let pending: Array<[string, unknown]> = [];
     first.controller.signal.addEventListener(
       "abort",
       () => {
         context.chatAbortControllers.set("reused", replacement);
-        for (const prefix of ["agent", "pending-chat"]) {
-          context.dedupe.set(`${prefix}:pending`, {
-            ts: 2,
-            ok: true,
-            payload: {
-              runId: "pending",
-              status: "accepted",
-              sessionKey: "main",
-              agentId: "main",
-              reservationId: "new",
-              attemptId: "new",
-            },
-          });
-        }
+        setPendingRegistrations(context, 2, "new");
         pending = [...context.dedupe];
       },
       { once: true },
@@ -238,11 +346,14 @@ describe("chat.abort original authority and registration", () => {
   );
 
   it("does not fall back to live worker queries without a registered capture owner", async () => {
-    const cancelInferenceForSession = vi.fn(() => ["worker-run"]);
+    const captureSessionCancellation = vi.fn(() => ({
+      runIds: ["worker-run"],
+      cancel: async () => ["worker-run"],
+    }));
     const context = createChatAbortContext({
       workerEnvironmentService: {
-        cancelInferenceForSession,
-        hasInferenceForSession: () => true,
+        captureSessionCancellation,
+        hasSession: () => true,
       },
     });
     for (const runId of [undefined, "worker-run"]) {
@@ -255,6 +366,6 @@ describe("chat.abort original authority and registration", () => {
       });
       expectAbortPayload(requireLastRespondCall(response)[1], { aborted: false, runIds: [] });
     }
-    expect(cancelInferenceForSession).not.toHaveBeenCalled();
+    expect(captureSessionCancellation).not.toHaveBeenCalled();
   });
 });

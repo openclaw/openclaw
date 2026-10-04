@@ -1,3 +1,4 @@
+import ConcurrencyExtras
 import Darwin
 import Foundation
 import Subprocess
@@ -38,23 +39,6 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
     struct Response: Sendable {
         let data: Data
         let sourceHomeId: String
-    }
-
-    private final class CancellationState: @unchecked Sendable {
-        private let lock = NSLock()
-        private var cancelled = false
-
-        func cancel() {
-            self.lock.lock()
-            self.cancelled = true
-            self.lock.unlock()
-        }
-
-        func isCancelled() -> Bool {
-            self.lock.lock()
-            defer { self.lock.unlock() }
-            return self.cancelled
-        }
     }
 
     private final class PendingRequest: @unchecked Sendable {
@@ -158,13 +142,13 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         maxLineBytes: Int) async throws -> Response
     {
         try Task.checkCancellation()
-        let requestParamsData = try Self.jsonData(requestParams)
+        let requestParamsData = try JSONSerialization.data(withJSONObject: requestParams)
         let token = UUID()
-        let cancellationState = CancellationState()
+        let cancellationState = LockIsolated(false)
         let result: Response = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 self.queue.async {
-                    guard !cancellationState.isCancelled() else {
+                    guard !cancellationState.value else {
                         continuation.resume(throwing: CancellationError())
                         return
                     }
@@ -194,9 +178,9 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
                 }
             }
         } onCancel: {
-            cancellationState.cancel()
+            cancellationState.setValue(true)
             self.queue.async {
-                self.cancel(token: token)
+                self.failRequest(token: token, error: CancellationError())
             }
         }
         try Task.checkCancellation()
@@ -232,7 +216,7 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         let timer = DispatchSource.makeTimerSource(queue: self.queue)
         timer.schedule(deadline: .now() + max(0.01, timeoutSeconds))
         timer.setEventHandler { [weak self] in
-            self?.timeout(token: token)
+            self?.failRequest(token: token, error: MacNodeCodexThreadCatalog.CatalogError.timedOut)
         }
         timer.resume()
         return timer
@@ -325,7 +309,7 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
               connection.cleanupTask == nil
         else { return }
         guard started, let process = connection.process else {
-            self.discardUnstartedConnection(connection)
+            self.retireConnection(connection)
             self.finishActive(
                 .failure(MacNodeCodexThreadCatalog.CatalogError.appServerUnavailable),
                 restartConnection: false)
@@ -363,7 +347,7 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
                 let requestParams = try JSONSerialization.jsonObject(
                     with: active.requestParamsData)
                 active.requestID = requestID
-                active.requestData = try Self.jsonData([
+                active.requestData = try JSONSerialization.data(withJSONObject: [
                     "id": requestID,
                     "method": active.method,
                     "params": requestParams,
@@ -490,7 +474,7 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
             }
             connection.sourceHomeId = sourceHomeId
             do {
-                try self.write(Self.initializedNotificationData(), over: connection)
+                try self.write(JSONSerialization.data(withJSONObject: ["method": "initialized"]), over: connection)
                 self.sendActiveRequest(over: connection)
             } catch {
                 self.finishActive(
@@ -504,7 +488,7 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         guard message["error"] == nil,
               let result = message["result"] as? [String: Any],
               let sourceHomeId = connection.sourceHomeId,
-              let resultData = try? Self.jsonData(result)
+              let resultData = try? JSONSerialization.data(withJSONObject: result)
         else {
             self.finishActive(
                 .failure(MacNodeCodexThreadCatalog.CatalogError.appServerUnavailable),
@@ -551,34 +535,17 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         }
     }
 
-    private func timeout(token: UUID) {
+    private func failRequest(token: UUID, error: Error) {
         if let index = self.pending.firstIndex(where: { $0.token == token }) {
             let request = self.pending.remove(at: index)
-            self.complete(
-                request,
-                with: .failure(MacNodeCodexThreadCatalog.CatalogError.timedOut))
+            self.complete(request, with: .failure(error))
             if self.active == nil {
                 self.stopConnection(abortive: true)
             }
             return
         }
         guard self.active?.token == token else { return }
-        self.finishActive(
-            .failure(MacNodeCodexThreadCatalog.CatalogError.timedOut),
-            restartConnection: true)
-    }
-
-    private func cancel(token: UUID) {
-        if let index = self.pending.firstIndex(where: { $0.token == token }) {
-            let request = self.pending.remove(at: index)
-            self.complete(request, with: .failure(CancellationError()))
-            if self.active == nil {
-                self.stopConnection(abortive: true)
-            }
-            return
-        }
-        guard self.active?.token == token else { return }
-        self.finishActive(.failure(CancellationError()), restartConnection: true)
+        self.finishActive(.failure(error), restartConnection: true)
     }
 
     private func finishActive(
@@ -660,19 +627,9 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         return cleanupTask
     }
 
-    private func discardUnstartedConnection(_ connection: Connection) {
-        guard self.connection?.generation == connection.generation else { return }
-        self.connection = nil
-        self.closeLocalPipeHandles(connection)
-    }
-
     private func retireConnection(_ connection: Connection) {
         guard self.connection?.generation == connection.generation else { return }
         self.connection = nil
-        self.closeLocalPipeHandles(connection)
-    }
-
-    private func closeLocalPipeHandles(_ connection: Connection) {
         connection.stdoutPipe.fileHandleForReading.readabilityHandler = nil
         connection.stderrPipe.fileHandleForReading.readabilityHandler = nil
         try? connection.stdinPipe.fileHandleForWriting.close()
@@ -687,7 +644,7 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
     }
 
     private static func initializeRequestData(id: Int) throws -> Data {
-        try self.jsonData([
+        try JSONSerialization.data(withJSONObject: [
             "id": id,
             "method": "initialize",
             "params": [
@@ -699,14 +656,6 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
                 "capabilities": ["experimentalApi": true],
             ],
         ])
-    }
-
-    private static func initializedNotificationData() throws -> Data {
-        try self.jsonData(["method": "initialized"])
-    }
-
-    private static func jsonData(_ object: Any) throws -> Data {
-        try JSONSerialization.data(withJSONObject: object)
     }
 
     private static func drainAvailable(from handle: FileHandle) -> Bool {

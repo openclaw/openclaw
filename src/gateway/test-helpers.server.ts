@@ -52,10 +52,6 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import {
-  resetTaskFlowRegistryForTests,
-  resetTaskRegistryForTests,
-} from "../tasks/task-runtime.test-helpers.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { TestPortClaim } from "../test-utils/port-claims.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
@@ -267,7 +263,6 @@ export async function writeSessionStore(params: {
     }
     upsertsByAgentId.set(agentId, upserts);
   }
-  clearSessionStoreCacheForTest();
   await persistTestSessionConfig();
   await fs.mkdir(path.dirname(storePath), { recursive: true });
   if (upsertsByAgentId.size === 0) {
@@ -305,7 +300,6 @@ export async function writeSessionStore(params: {
       events,
     );
   }
-  clearSessionStoreCacheForTest();
 }
 
 async function setupGatewayTestHome() {
@@ -396,15 +390,13 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   gatewayFixtureLifetime.assertReleased();
   // Some tests intentionally use fake timers; ensure they don't leak into gateway suites.
   vi.useRealTimers();
-  await resetGatewayLifecycleTestState({ preserveRuntimeBindings: false });
+  await resetGatewayLifecycleTestState("prepare");
   setLoggerOverride({ level: "silent", consoleLevel: "silent" });
   if (!tempHome) {
     throw new Error("resetGatewayTestState called before temp home was initialized");
   }
   applyGatewaySkipEnv();
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
-  resetTaskRegistryForTests({ persist: false });
-  resetTaskFlowRegistryForTests({ persist: false });
   const stateDir = process.env.OPENCLAW_STATE_DIR;
   if (stateDir) {
     await fs.rm(stateDir, {
@@ -464,14 +456,13 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
 async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
   gatewayFixtureLifetime.assertReleased();
   vi.useRealTimers();
-  // Direct handler projections outlive replies and must release reads before registry closure.
+  // Direct handler projections outlive replies and must release reads before database closure.
   await disposeSessionReadContexts();
-  await resetGatewayLifecycleTestState({ preserveRuntimeBindings: false });
+  await resetGatewayLifecycleTestState("cleanup");
   resetLogger();
-  resetTaskRegistryForTests({ persist: false });
-  resetTaskFlowRegistryForTests({ persist: false });
   if (tempHome) {
-    await closeGatewayTestHomeDatabases(tempHome, options);
+    // Join native borrowers before closing the fixture databases.
+    await closeGatewayTestHomeDatabases(tempHome);
   }
   if (options.restoreEnv) {
     gatewayEnvSnapshot?.restore();
@@ -496,7 +487,7 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
 async function resetGatewayTestRuntimeOnly() {
   gatewayFixtureLifetime.assertAdmission();
   vi.useRealTimers();
-  await resetGatewayLifecycleTestState({ preserveRuntimeBindings: true });
+  await resetGatewayLifecycleTestState("runtime");
   setLoggerOverride({ level: "silent", consoleLevel: "silent" });
   applyGatewaySkipEnv();
   delete process.env.OPENCLAW_GATEWAY_TOKEN;

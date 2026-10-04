@@ -34,11 +34,20 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   // Keep rejection ownership in the snapshot so a handler attached after wait
   // can clear it; an unawaited failure must not become a successful cell.
   const unhandledRejections = new Set();
+  // Maps each host-rejected bridge error to its terminal failure code. Guest
+  // writes to error.code never reach the cell result; only this record does.
+  const bridgeErrors = new WeakMap();
+  // Guest prototype changes must not replace the operations that own error provenance.
+  const rememberBridgeError = bridgeErrors.set.bind(bridgeErrors);
+  const bridgeFailureCode = bridgeErrors.get.bind(bridgeErrors);
   let nextTimerId = 0;
   const GuestPromise = Promise;
   const GuestError = Error;
   const GuestTypeError = TypeError;
+  const GuestRangeError = RangeError;
   const stringifyJson = JSON.stringify;
+  // Bridge payloads carry trusted failure codes; guest JSON replacements must not rewrite them.
+  const parseJson = JSON.parse;
   function emitOutput(entry) {
     const count = output.push(entry);
     if (hostOutput) hostOutput(encodeFinalValue(entry));
@@ -197,11 +206,14 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     const entry = pending.get(String(id));
     if (!entry) return false;
     pending.delete(String(id));
+    // Workers pass host-encoded strings; avoid guest-mutable String coercion.
     let parsed = null;
-    try {
-      parsed = JSON.parse(String(payload));
-    } catch {
-      parsed = String(payload);
+    if (typeof payload === "string") {
+      try {
+        parsed = parseJson(payload);
+      } catch {
+        parsed = payload;
+      }
     }
     if (ok) {
       entry.resolve(parsed);
@@ -209,13 +221,26 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
       const error = new GuestError(typeof parsed === "string" ? parsed : parsed?.message ?? "nested tool failed");
       if (entry.stack) Object.defineProperty(error, "stack", { value: entry.stack, writable: true, configurable: true });
       if (entry.location) error.location = entry.location;
+      const code = parsed && typeof parsed === "object" ? parsed.code : undefined;
       if (parsed && typeof parsed === "object") {
-        error.code = parsed.code;
+        error.code = code;
         error.effectStatus = "unknown";
       }
+      rememberBridgeError(
+        error,
+        code === "invalid_input" || code === "input_contract" ? "invalid_input" : "internal_error",
+      );
       entry.reject(error);
     }
     return true;
+  }
+
+  function settleBatch(json) {
+    const replies = parseJson(json);
+    for (let index = 0; index < replies.length; index++) {
+      const reply = replies[index];
+      settle(reply.id, reply.ok, reply.json);
+    }
   }
 
   function nodeHandle(descriptor) {
@@ -243,7 +268,8 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   });
 
   const skills = Object.freeze({
-    list: () => request("skillsList", []),
+    list: (offset = 0) => request("skillsList", [offset]),
+    search: (query, limit) => request("skillsSearch", limit === undefined ? [query] : [query, limit]),
     read: (name) => request("skillsRead", [name]),
   });
 
@@ -252,6 +278,27 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     load: (id) => request("resultLoad", [id]),
     delete: (id) => request("resultDelete", [id]),
   });
+
+  // Session operations use the existing result bridge; buffers stay with the host cell.
+  async function sessionResult(method, key, value) {
+    if (typeof key !== "string") throw new GuestTypeError("Code Mode store key must be a string.");
+    try {
+      const result = await request(method, method === "resultSave"
+        ? [value, "session", key]
+        : [key, "session"]);
+      return method === "resultLoad" ? result.value : undefined;
+    } catch (error) {
+      if (!(error instanceof GuestError)) throw error;
+      const Constructor = error.code === "store_range" ? GuestRangeError
+        : error.code === "store_type" ? GuestTypeError : undefined;
+      if (!Constructor) throw error;
+      const typed = new Constructor(error.message);
+      typed.stack = error.stack;
+      const bridgeCode = bridgeFailureCode(error);
+      if (bridgeCode) rememberBridgeError(typed, bridgeCode);
+      throw typed;
+    }
+  }
 
   if (globalThis.__openclawSwarmEnabled === true) {
     Object.defineProperties(globalThis, {
@@ -472,6 +519,8 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     namespaces: { value: Object.freeze(namespaceGlobals), enumerable: true },
     skills: { value: skills, enumerable: true },
     results: { value: results, enumerable: true },
+    store: { value: (key, value) => sessionResult(value === undefined ? "resultDelete" : "resultSave", key, value), enumerable: true },
+    load: { value: (key) => sessionResult("resultLoad", key), enumerable: true },
     setTimeout: { value: (callback, delay, ...args) => scheduleTimer(callback, delay, args), enumerable: true },
     clearTimeout: { value: cancelTimer, enumerable: true },
     console: { value: guestConsole, enumerable: true },
@@ -479,6 +528,8 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     json: { value: (value) => emitOutput({ type: "json", value: safe(value, true) }), enumerable: true },
     yield_control: { value: (reason) => request("yield", [reason]), enumerable: true },
     __openclawSettleBridge: { value: settle },
+    __openclawSettleBridgeBatch: { value: settleBatch },
+    __openclawBridgeFailureCode: { value: bridgeFailureCode },
     __openclawDrainQueuedRequests: { value: drainQueuedRequests },
     __openclawAdmissionError: { value: () => admissionError },
     // Final getters must run before the worker drains output and settles host work.

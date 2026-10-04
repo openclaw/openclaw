@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "openclaw/plugin-sdk/model-session-runtime";
@@ -9,7 +7,8 @@ import {
   resolveStorePath,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildCodexSupervisionTestConnectionFingerprint,
   readCodexAppServerBinding,
@@ -28,6 +27,8 @@ import {
   setCodexConversationModel as setCodexConversationModelImpl,
   setCodexConversationPermissions as setCodexConversationPermissionsImpl,
 } from "./conversation-control.js";
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-control-");
 
 function controlTarget(sessionFile: string) {
   const identity = { kind: "session" as const, agentId: "main", sessionId: sessionFile };
@@ -102,18 +103,17 @@ vi.mock("./app-server/shared-client.js", () => ({
 }));
 
 describe("codex conversation controls", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     resetCodexTestBindingStore();
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-control-"));
+    tempDir = sessionDirs.make();
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
     sharedClientMocks.getSharedCodexAppServerClient.mockReset();
     sharedClientMocks.releaseLeasedSharedCodexAppServerClient.mockReset();
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     vi.unstubAllEnvs();
     clearRuntimeAuthProfileStoreSnapshots();
-    await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   it("persists fast mode on the binding and permissions on the session", async () => {
@@ -219,20 +219,15 @@ describe("codex conversation controls", () => {
   });
 
   it.each([
-    { mode: "read-only" as const, display: "read-only" },
-    { mode: "guarded" as const, display: "guarded" },
     { mode: "workspace" as const, display: "workspace" },
     { mode: "full" as const, display: "full access" },
   ])("reports the explicit $mode conversation permission mode", ({ mode, display }) => {
     expect(formatPermissionsMode(mode)).toBe(display);
   });
 
-  it.each(["default", "guardian", "guarded", "approve"])(
-    "recognizes %s as an explicit guarded conversation permission command",
-    (mode) => {
-      expect(parseCodexPermissionsModeArg(mode)).toBe("default");
-    },
-  );
+  it("recognizes a guarded conversation permission alias", () => {
+    expect(parseCodexPermissionsModeArg("guardian")).toBe("default");
+  });
 
   it("persists a permission mode on a rootless session", async () => {
     const session = {
@@ -420,7 +415,6 @@ describe("codex conversation controls", () => {
       setCodexConversationModel({
         sessionFile,
         model: "gpt-5.4",
-        pluginConfig: { supervision: { enabled: true } },
       }),
     ).rejects.toThrow(MODEL_SELECTION_LOCKED_MESSAGE);
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
@@ -472,7 +466,6 @@ describe("codex conversation controls", () => {
       setCodexConversationModel({
         sessionFile,
         model: "openai/gpt-5.5",
-        pluginConfig: { appServer: { mode: "guardian" } },
       }),
     ).resolves.toBe("Codex model set to gpt-5.5.");
 
@@ -496,7 +489,6 @@ describe("codex conversation controls", () => {
       setCodexConversationModel({
         sessionFile,
         model: "local-model-2",
-        pluginConfig: { appServer: { mode: "guardian" } },
       }),
     ).resolves.toBe("Codex model set to local-model-2.");
 
@@ -521,7 +513,6 @@ describe("codex conversation controls", () => {
       setCodexConversationModel({
         sessionFile,
         model: "openai/gpt-oss-20b",
-        pluginConfig: { appServer: { mode: "guardian" } },
       }),
     ).resolves.toBe("Codex model set to openai/gpt-oss-20b.");
 

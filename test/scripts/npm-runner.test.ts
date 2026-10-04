@@ -21,6 +21,7 @@ describe("resolveNpmRunner", () => {
     expect(runner).toEqual({
       command: execPath,
       args: [expectedNpmCliPath],
+      packageJsonPath: path.posix.resolve(expectedNpmCliPath, "../../package.json"),
       shell: false,
     });
   });
@@ -43,6 +44,7 @@ describe("resolveNpmRunner", () => {
     expect(runner).toEqual({
       command: execPath,
       args: [expectedNpmCliPath, "pack", "openclaw@beta"],
+      packageJsonPath: path.posix.resolve(expectedNpmCliPath, "../../package.json"),
       shell: false,
     });
   });
@@ -64,6 +66,7 @@ describe("resolveNpmRunner", () => {
     expect(runner).toEqual({
       command: execPath,
       args: [expectedNpmCliPath],
+      packageJsonPath: path.win32.resolve(expectedNpmCliPath, "../../package.json"),
       shell: false,
     });
   });
@@ -87,8 +90,13 @@ describe("resolveNpmRunner", () => {
     });
   });
 
-  it("wraps an adjacent npm.cmd via cmd.exe without enabling shell mode", () => {
-    const execPath = "C:\\nodejs\\node.exe";
+  it.each([
+    ["C:\\nodejs\\node.exe", "C:\\nodejs\\npm.cmd install --omit=dev"],
+    [
+      "C:\\Program Files\\nodejs\\node.exe",
+      '""C:\\Program Files\\nodejs\\npm.cmd" install --omit=dev"',
+    ],
+  ])("wraps the adjacent npm.cmd without shell mode for %s", (execPath, commandLine) => {
     const npmCmdPath = path.win32.resolve(path.win32.dirname(execPath), "npm.cmd");
 
     const runner = resolveNpmRunner({
@@ -102,7 +110,7 @@ describe("resolveNpmRunner", () => {
 
     expect(runner).toEqual({
       command: "C:\\Windows\\System32\\cmd.exe",
-      args: ["/d", "/s", "/c", `${npmCmdPath} install --omit=dev`],
+      args: ["/d", "/s", "/c", commandLine],
       shell: false,
       windowsVerbatimArguments: true,
     });

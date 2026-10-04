@@ -11,10 +11,10 @@
   },
   "dependencies": {
     "@openclaw/normalization-core": "workspace:*",
-    "dompurify": "3.4.15",
+    "dompurify": "3.4.16",
     "mermaid": "12.0.0"
   },
   "devDependencies": {
-    "vite": "8.3.0"
+    "vite": "8.3.1"
   }
 }

@@ -9,12 +9,9 @@ import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
-const hasAudioMedia = (urls?: string[]): boolean =>
-  Boolean(urls?.some((url) => isAudioFileName(url)));
-
 /** Returns true when a payload carries audio media. */
 export const isAudioPayload = (payload: ReplyPayload): boolean =>
-  hasAudioMedia(resolveSendableOutboundReplyParts(payload).mediaUrls);
+  resolveSendableOutboundReplyParts(payload).mediaUrls.some(isAudioFileName);
 
 type VerboseGateParams = {
   sessionKey?: string;
@@ -44,35 +41,28 @@ function readCurrentVerboseLevel(params: VerboseGateParams): VerboseLevel | unde
   }
 }
 
-function createCurrentVerboseLevelResolver(
-  params: VerboseGateParams,
-): () => VerboseLevel | undefined {
-  let cachedLevel: VerboseLevel | undefined;
-  let cachedAtMs = Number.NEGATIVE_INFINITY;
-  return () => {
-    if (!params.sessionKey || !params.storePath) {
-      return undefined;
-    }
-    const now = Date.now();
-    if (now - cachedAtMs < VERBOSE_GATE_SESSION_REFRESH_MS) {
-      return cachedLevel;
-    }
-    cachedLevel = readCurrentVerboseLevel(params);
-    cachedAtMs = now;
-    return cachedLevel;
-  };
-}
-
 function createVerboseGate(
   params: VerboseGateParams,
   shouldEmit: (level: VerboseLevel) => boolean,
 ): () => boolean {
-  const resolveCurrentVerboseLevel = createCurrentVerboseLevelResolver(params);
-  // Explicit turn hints stay fixed; only inherited settings follow live session changes.
-  return () =>
-    shouldEmit(
-      params.verboseLevelOverride ?? resolveCurrentVerboseLevel() ?? params.resolvedVerboseLevel,
-    );
+  let cachedLevel: VerboseLevel | undefined;
+  let cachedAtMs = Number.NEGATIVE_INFINITY;
+  return () => {
+    // Explicit turn hints stay fixed; only inherited settings follow live session changes.
+    if (params.verboseLevelOverride != null) {
+      return shouldEmit(params.verboseLevelOverride);
+    }
+    if (!params.sessionKey || !params.storePath) {
+      return shouldEmit(params.resolvedVerboseLevel);
+    }
+    const now = Date.now();
+    if (now - cachedAtMs < VERBOSE_GATE_SESSION_REFRESH_MS) {
+      return shouldEmit(cachedLevel ?? params.resolvedVerboseLevel);
+    }
+    cachedLevel = readCurrentVerboseLevel(params);
+    cachedAtMs = now;
+    return shouldEmit(cachedLevel ?? params.resolvedVerboseLevel);
+  };
 }
 
 /** Creates the visibility gate for tool result summaries. */

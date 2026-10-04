@@ -1,6 +1,8 @@
 // OpenClaw-authored rich block subset plus size accounting and the plain-text
 // projection shared by the emitter, splitter, and fallback paths.
-export type TelegramRichBlocksDegradationReason = "list-limit" | "table-ascii";
+import type { User } from "grammy/types";
+
+export type TelegramRichBlocksDegradationReason = "list-limit" | "table-ascii" | "nesting-limit";
 
 export type RichText =
   | string
@@ -22,6 +24,11 @@ export type RichText =
       type: "url";
       text: RichText;
       url: string;
+    }
+  | {
+      type: "text_mention";
+      text: RichText;
+      user: User;
     }
   | {
       type: "anchor_link";
@@ -124,14 +131,29 @@ export type InputRichBlock =
       caption?: RichBlockCaption;
     };
 
-export function normalizeRichText(value: RichText): RichText {
+const TELEGRAM_USER_MENTION_HREF_RE = /^tg:\/\/user\?id=(\d+)$/i;
+
+// Telegram HTML turns tg://user?id= links into mentions server-side; rich
+// blocks are already structured, so the mention has to be explicit here.
+// Only the ID comes from the link; is_bot and first_name fill the wire type.
+export function richTextLink(text: RichText, url: string): RichText {
+  const id = Number(TELEGRAM_USER_MENTION_HREF_RE.exec(url)?.[1]);
+  return Number.isSafeInteger(id)
+    ? { type: "text_mention", text, user: { id, is_bot: false, first_name: "" } }
+    : { type: "url", text, url };
+}
+
+export function normalizeRichText(value: RichText, depth = 0): RichText {
+  if (depth >= MAX_RICH_BLOCK_NESTING) {
+    return richTextToPlainString(value);
+  }
   if (typeof value === "string") {
     return value;
   }
   if (Array.isArray(value)) {
     const flattened: RichText[] = [];
     for (const item of value) {
-      const normalized = normalizeRichText(item);
+      const normalized = normalizeRichText(item, depth + 1);
       if (normalized === "") {
         continue;
       }
@@ -152,43 +174,38 @@ export function normalizeRichText(value: RichText): RichText {
   if (value.type === "mathematical_expression" || value.type === "custom_emoji") {
     return value;
   }
-  return { ...value, text: normalizeRichText(value.text) };
+  return { ...value, text: normalizeRichText(value.text, depth + 1) };
 }
 
 export function countRichTextChars(text: RichText): number {
-  if (typeof text === "string") {
-    return text.length;
-  }
-  if (Array.isArray(text)) {
-    return text.reduce((total, part) => total + countRichTextChars(part), 0);
-  }
-  if (text.type === "mathematical_expression") {
-    return text.expression.length;
-  }
-  if (text.type === "custom_emoji") {
-    return text.alternative_text.length;
-  }
-  return countRichTextChars(text.text);
+  const size = { chars: 0, blocks: 0, media: 0, nesting: 0 };
+  measureRichBlockText(text, size, 0);
+  return size.chars;
 }
 
 type RichBlockMeasurement = { chars: number; blocks: number; media: number; nesting: number };
+// Telegram accepts 15 nested containers plus the leaf, but rejects 16 containers.
+export const MAX_RICH_BLOCK_NESTING = 15;
 
 function measureRichBlockText(text: RichText, size: RichBlockMeasurement, depth: number): void {
-  if (typeof text === "string") {
-    size.chars += text.length;
-  } else if (Array.isArray(text)) {
-    for (const part of text) {
-      measureRichBlockText(part, size, depth);
+  const pending = [{ text, depth }];
+  while (pending.length > 0) {
+    const frame = pending.pop()!;
+    const value = frame.text;
+    if (typeof value === "string") {
+      size.chars += value.length;
+    } else if (Array.isArray(value)) {
+      for (const part of value) {
+        pending.push({ text: part, depth: frame.depth });
+      }
+    } else if (value.type === "mathematical_expression") {
+      size.chars += value.expression.length;
+    } else if (value.type === "custom_emoji") {
+      size.chars += value.alternative_text.length;
+    } else {
+      size.nesting = Math.max(size.nesting, frame.depth + 1);
+      pending.push({ text: value.text, depth: frame.depth + 1 });
     }
-  } else if (text.type === "mathematical_expression") {
-    size.chars += text.expression.length;
-  } else if (text.type === "custom_emoji") {
-    size.chars += text.alternative_text.length;
-  } else {
-    if (depth >= size.nesting) {
-      size.nesting = depth + 1;
-    }
-    measureRichBlockText(text.text, size, depth + 1);
   }
 }
 
@@ -212,6 +229,7 @@ function measureRichBlockChildren(
   children: readonly InputRichBlock[],
   size: RichBlockMeasurement,
   depth: number,
+  pending: Array<{ children: readonly InputRichBlock[]; depth: number }>,
 ): void {
   // Empty containers still contribute their nesting edge; plain text leaves do not add one.
   if (depth > size.nesting) {
@@ -238,18 +256,18 @@ function measureRichBlockChildren(
         }
         break;
       case "blockquote":
-        measureRichBlockChildren(block.blocks, size, depth + 1);
+        pending.push({ children: block.blocks, depth: depth + 1 });
         if (block.credit) {
           measureRichBlockText(block.credit, size, depth + 1);
         }
         break;
       case "details":
-        measureRichBlockChildren(block.blocks, size, depth + 1);
+        pending.push({ children: block.blocks, depth: depth + 1 });
         measureRichBlockText(block.summary, size, depth + 1);
         break;
       case "collage":
       case "slideshow":
-        measureRichBlockChildren(block.blocks, size, depth + 1);
+        pending.push({ children: block.blocks, depth: depth + 1 });
         measureRichBlockCaption(block.caption, size, depth + 1);
         break;
       case "list":
@@ -258,7 +276,7 @@ function measureRichBlockChildren(
           size.nesting = depth + 1;
         }
         for (const item of block.items) {
-          measureRichBlockChildren(item.blocks, size, depth + 1);
+          pending.push({ children: item.blocks, depth: depth + 1 });
         }
         break;
       case "table":
@@ -300,24 +318,34 @@ function measureRichBlockChildren(
 /** Bot API budgets: UTF-16 text, nested blocks/items/rows, media, and formatting edges. */
 export function measureInputRichBlocks(blocks: readonly InputRichBlock[]) {
   const size = { chars: 0, blocks: 0, media: 0, nesting: 0 };
-  measureRichBlockChildren(blocks, size, 0);
+  const pending = [{ children: blocks, depth: 0 }];
+  while (pending.length > 0) {
+    const frame = pending.pop()!;
+    measureRichBlockChildren(frame.children, size, frame.depth, pending);
+  }
   return size;
 }
 
 export function richTextToPlainString(text: RichText): string {
-  if (typeof text === "string") {
-    return text;
+  const parts: string[] = [];
+  const pending = [text];
+  while (pending.length > 0) {
+    const node = pending.pop()!;
+    if (typeof node === "string") {
+      parts.push(node);
+    } else if (Array.isArray(node)) {
+      for (let index = node.length - 1; index >= 0; index -= 1) {
+        pending.push(node[index]!);
+      }
+    } else if (node.type === "mathematical_expression") {
+      parts.push(node.expression);
+    } else if (node.type === "custom_emoji") {
+      parts.push(node.alternative_text);
+    } else {
+      pending.push(node.text);
+    }
   }
-  if (Array.isArray(text)) {
-    return text.map(richTextToPlainString).join("");
-  }
-  if (text.type === "mathematical_expression") {
-    return text.expression;
-  }
-  if (text.type === "custom_emoji") {
-    return text.alternative_text;
-  }
-  return richTextToPlainString(text.text);
+  return parts.join("");
 }
 
 function captionToPlainText(caption: RichBlockCaption | undefined): string {
@@ -328,17 +356,40 @@ function captionToPlainText(caption: RichBlockCaption | undefined): string {
   return `${richTextToPlainString(caption.text)}${credit}`.trim();
 }
 
-function inputRichBlocksToPlainTextAtDepth(
-  blocks: readonly InputRichBlock[],
-  listDepth: number,
-): string {
-  const parts: string[] = [];
-  const push = (value: string) => {
-    if (value) {
-      parts.push(value);
-    }
+export function inputRichBlocksToPlainText(blocks: readonly InputRichBlock[]): string {
+  type Frame = {
+    blocks: readonly InputRichBlock[];
+    index: number;
+    listDepth: number;
+    parts: string[];
+    finish: (text: string) => void;
   };
-  for (const block of blocks) {
+  let result = "";
+  const pending: Frame[] = [];
+  const visit = (
+    children: readonly InputRichBlock[],
+    listDepth: number,
+    finish: Frame["finish"],
+  ) => {
+    pending.push({ blocks: children, index: 0, listDepth, parts: [], finish });
+  };
+  visit(blocks, 0, (text) => {
+    result = text;
+  });
+  while (pending.length > 0) {
+    const frame = pending[pending.length - 1]!;
+    if (frame.index === frame.blocks.length) {
+      pending.pop();
+      frame.finish(frame.parts.join("\n"));
+      continue;
+    }
+    const { listDepth } = frame;
+    const push = (value: string) => {
+      if (value) {
+        frame.parts.push(value);
+      }
+    };
+    const block = frame.blocks[frame.index++]!;
     switch (block.type) {
       case "paragraph":
       case "heading":
@@ -359,22 +410,27 @@ function inputRichBlocksToPlainTextAtDepth(
         );
         break;
       case "blockquote":
-        push(inputRichBlocksToPlainTextAtDepth(block.blocks, listDepth));
-        if (block.credit) {
-          push(`— ${richTextToPlainString(block.credit)}`);
-        }
+        visit(block.blocks, listDepth, (text) => {
+          push(text);
+          if (block.credit) {
+            push(`— ${richTextToPlainString(block.credit)}`);
+          }
+        });
         break;
       case "collage":
       case "slideshow":
-        push(inputRichBlocksToPlainTextAtDepth(block.blocks, listDepth));
-        push(captionToPlainText(block.caption));
+        visit(block.blocks, listDepth, (text) => {
+          push(text);
+          push(captionToPlainText(block.caption));
+        });
         break;
       case "details":
         push(richTextToPlainString(block.summary));
-        push(inputRichBlocksToPlainTextAtDepth(block.blocks, listDepth));
+        visit(block.blocks, listDepth, push);
         break;
       case "list":
-        for (const item of block.items) {
+        for (let index = block.items.length - 1; index >= 0; index -= 1) {
+          const item = block.items[index]!;
           const markerText = item.has_checkbox
             ? item.is_checked
               ? "[x] "
@@ -383,7 +439,7 @@ function inputRichBlocksToPlainTextAtDepth(
               ? `${item.value}. `
               : "• ";
           const marker = `${"  ".repeat(listDepth)}${markerText}`;
-          push(`${marker}${inputRichBlocksToPlainTextAtDepth(item.blocks, listDepth + 1)}`);
+          visit(item.blocks, listDepth + 1, (text) => push(`${marker}${text}`));
         }
         break;
       case "table":
@@ -421,21 +477,93 @@ function inputRichBlocksToPlainTextAtDepth(
         break;
     }
   }
-  return parts.join("\n");
+  return result;
 }
 
-export function inputRichBlocksToPlainText(blocks: readonly InputRichBlock[]): string {
-  return inputRichBlocksToPlainTextAtDepth(blocks, 0);
-}
-
-export function boldRichText(text: string): RichText {
-  return { type: "bold", text };
-}
-
-export function italicRichText(text: string): RichText {
-  return { type: "italic", text };
-}
-
-export function paragraphBlock(text: RichText): InputRichBlockParagraph {
-  return { type: "paragraph", text };
+/** Bound caller-supplied blocks before recursive splitting or wire serialization. */
+export function normalizeInputRichBlocks(
+  blocks: readonly InputRichBlock[],
+  depth = 0,
+): InputRichBlock[] {
+  if (depth >= MAX_RICH_BLOCK_NESTING) {
+    return [{ type: "paragraph", text: inputRichBlocksToPlainText(blocks) }];
+  }
+  return blocks.map((block): InputRichBlock => {
+    const textDepth = depth + 1;
+    switch (block.type) {
+      case "paragraph":
+      case "heading":
+      case "footer":
+        return { ...block, text: normalizeRichText(block.text, textDepth) };
+      case "pullquote":
+        return {
+          ...block,
+          text: normalizeRichText(block.text, textDepth),
+          ...(block.credit === undefined
+            ? {}
+            : { credit: normalizeRichText(block.credit, textDepth) }),
+        };
+      case "blockquote":
+        return {
+          ...block,
+          blocks: normalizeInputRichBlocks(block.blocks, depth + 1),
+          ...(block.credit === undefined
+            ? {}
+            : { credit: normalizeRichText(block.credit, textDepth) }),
+        };
+      case "details":
+        return {
+          ...block,
+          summary: normalizeRichText(block.summary, textDepth),
+          blocks: normalizeInputRichBlocks(block.blocks, depth + 1),
+        };
+      case "list":
+        return {
+          ...block,
+          items: block.items.map((item) => ({
+            ...item,
+            blocks: normalizeInputRichBlocks(item.blocks, depth + 1),
+          })),
+        };
+      case "table":
+        return {
+          ...block,
+          ...(block.caption === undefined
+            ? {}
+            : { caption: normalizeRichText(block.caption, textDepth) }),
+          cells: block.cells.map((row) =>
+            row.map((cell) => ({
+              ...cell,
+              ...(cell.text === undefined ? {} : { text: normalizeRichText(cell.text, textDepth) }),
+            })),
+          ),
+        };
+      case "collage":
+      case "slideshow":
+      case "photo":
+      case "video":
+      case "audio":
+      case "animation":
+      case "voice_note":
+      case "map":
+        return {
+          ...block,
+          ...("blocks" in block
+            ? { blocks: normalizeInputRichBlocks(block.blocks, depth + 1) }
+            : {}),
+          ...(block.caption === undefined
+            ? {}
+            : {
+                caption: {
+                  text: normalizeRichText(block.caption.text, textDepth),
+                  ...(block.caption.credit === undefined
+                    ? {}
+                    : { credit: normalizeRichText(block.caption.credit, textDepth) }),
+                },
+              }),
+        };
+      default:
+        return block;
+    }
+  });
 }

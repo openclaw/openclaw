@@ -8,7 +8,8 @@ import {
   type PanelHostedTab,
   type PanelHostedTabsElement,
 } from "../../../components/panel-hosted-tabs.ts";
-import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
+import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
+import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import { activatePanel, openSlot, type SidebarSlotId } from "../sidebar-layout.ts";
 import "./chat-sidebar-region.runtime.ts";
 
@@ -49,7 +50,11 @@ async function mount(
     openSlot(openSlot(openSlot({ columns: [] }, "detail"), slot), "workspace"),
     slot,
   );
-  region.panelTemplates = { [slot]: html`${panel}` };
+  region.panelDefinitions = sidebarPanelDefinitions().map((definition) =>
+    Object.assign(definition, {
+      content: definition.slot === slot ? html`${panel}` : null,
+    }),
+  );
   region.fetchFavicon = options.fetchFavicon;
   region.callbacks = {
     activatePanel: vi.fn(),
@@ -96,7 +101,11 @@ describe("chat sidebar hosted tabs", () => {
     const postMessage = vi.fn();
     vi.stubGlobal("webkit", { messageHandlers: { openclawWindowDrag: { postMessage } } });
     const { panel, region, shell, changed } = await mount();
-    region.availableSlots = ["browser", "terminal"];
+    region.panelDefinitions = region.panelDefinitions.map((definition) =>
+      Object.assign(definition, {
+        available: definition.slot === "browser" || definition.slot === "terminal",
+      }),
+    );
     const press = (target: Element) => {
       postMessage.mockClear();
       const event = new MouseEvent("mousedown", {
@@ -209,7 +218,10 @@ describe("chat sidebar hosted tabs", () => {
   it("falls back to Browser for an empty or not-yet-mounted owner", async () => {
     const { region, shell } = await mount({ tabs: [] });
     expect(labels(shell)).toEqual(["Review", "Browser", "Files"]);
-    region.panelTemplates = {};
+    region.panelDefinitions = region.panelDefinitions.map((definition) => ({
+      ...definition,
+      content: null,
+    }));
     await region.updateComplete;
     region.requestUpdate();
     await region.updateComplete;
@@ -258,10 +270,15 @@ describe("chat sidebar hosted tabs", () => {
       slot: "terminal",
       hostedActions: html`<button type="button">New session</button>`,
     });
-    region.panelActions = {
-      terminal: html`<button type="button">Terminal action</button>`,
-      workspace: html`<button type="button">Files action</button>`,
-    };
+    region.panelDefinitions = region.panelDefinitions.map((definition) => ({
+      ...definition,
+      headerAction:
+        definition.slot === "terminal"
+          ? html`<button type="button">Terminal action</button>`
+          : definition.slot === "workspace"
+            ? html`<button type="button">Files action</button>`
+            : undefined,
+    }));
     await region.updateComplete;
     const actionLabels = () =>
       [...shell.querySelectorAll(".side-panel__action-group--content button")].map(

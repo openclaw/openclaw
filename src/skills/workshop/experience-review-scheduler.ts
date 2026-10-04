@@ -1,11 +1,11 @@
 import type { EmbeddedForegroundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
-import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import { getCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { runOutsidePluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import type { RunSkillUsage } from "../runtime/run-usage.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import {
@@ -124,35 +124,32 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         return;
       }
       pending.timer = undefined;
-      void Promise.resolve(deps.isSystemActive())
-        .then(async (active) => {
-          if (pendingBySession.get(key) !== pending || pending.generation !== generation) {
-            return;
-          }
-          if (active || reviewInFlight) {
-            arm(key, pending, EXPERIENCE_REVIEW_RETRY_IDLE_MS);
-            return;
-          }
-          reviewInFlight = true;
-          try {
-            pendingBySession.delete(key);
-            await deps.runReview(pending.candidate);
-          } finally {
-            reviewInFlight = false;
-          }
-        })
-        .catch((error: unknown) => {
-          log.warn(`skill experience review failed: ${String(error)}`);
-          if (pendingBySession.get(key) === pending && pending.generation === generation) {
-            pendingBySession.delete(key);
-          }
-        });
+      void (async () => {
+        const active = await deps.isSystemActive();
+        if (pendingBySession.get(key) !== pending || pending.generation !== generation) {
+          return;
+        }
+        if (active || reviewInFlight) {
+          arm(key, pending, EXPERIENCE_REVIEW_RETRY_IDLE_MS);
+          return;
+        }
+        reviewInFlight = true;
+        try {
+          pendingBySession.delete(key);
+          await deps.runReview(pending.candidate);
+        } finally {
+          reviewInFlight = false;
+        }
+      })().catch((error: unknown) => {
+        log.warn(`skill experience review failed: ${formatErrorMessage(error)}`);
+        if (pendingBySession.get(key) === pending && pending.generation === generation) {
+          pendingBySession.delete(key);
+        }
+      });
     };
     // This timer outlives the foreground turn that armed it. Create its async
     // resource outside the parent scope so review work admits on the current generation.
-    const timer = runOutsidePreparedModelRuntimePluginGenerationScope(() =>
-      runOutsidePluginRuntimeGenerationScope(() => setTimer(timerCallback, delayMs)),
-    );
+    const timer = runInDetachedAsyncContext(() => setTimer(timerCallback, delayMs));
     pending.timer = timer;
     timer.unref?.();
   };

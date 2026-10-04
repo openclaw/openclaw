@@ -2,27 +2,31 @@ import {
   compactChannelProgressDraftLine,
   formatChannelProgressDraftDiffStat,
   isChannelProgressAttentionLine,
+  resolveChannelProgressDraftMaxLineChars,
+  resolveChannelProgressDraftMaxLines,
+  resolveChannelStreamingPreviewToolProgress,
   selectPlanChecklistSteps,
   type ChannelProgressDraftCompositorLine,
   type ChannelProgressDraftCompositorSnapshot,
 } from "openclaw/plugin-sdk/channel-outbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveTelegramAccount } from "./accounts.js";
 import type { TelegramDraftPreview } from "./draft-stream-message.js";
 import { escapeTelegramHtml, renderTelegramHtmlText } from "./format.js";
-import {
-  boldRichText,
-  italicRichText,
-  paragraphBlock,
-  type InputRichBlock,
-  type RichText,
-} from "./rich-block-model.js";
+import { resolveTelegramPreviewStreamMode } from "./preview-streaming.js";
+import type { InputRichBlock, RichText } from "./rich-block-model.js";
 import { markdownToTelegramRichBlocks } from "./rich-blocks.js";
 import { buildTelegramRichBlocksPlan } from "./rich-message.js";
+import { resolveTelegramRichMessages } from "./rich-messages-config.js";
 
 function isTelegramProgressPriorityLine(line: ChannelProgressDraftCompositorLine): boolean {
   if (typeof line === "string") {
     return false;
   }
   const status = line.status?.toLowerCase();
+  if (line.kind === "item" && line.toolName?.trim() && status === "failed") {
+    return false;
+  }
   return (
     line.kind === "approval" || status === "failed" || status === "error" || status === "blocked"
   );
@@ -33,15 +37,12 @@ type ProgressText = { html: string; rich: RichText };
 
 function literalProgressText(text: string, style?: "bold" | "italic" | "code"): ProgressText {
   const escaped = escapeTelegramHtml(text);
-  if (style === "code") {
-    // Telegram also detects bare URLs in HTML text; code entities keep prepared notes inert.
-    return { html: `<code>${escaped}</code>`, rich: { type: "code", text } };
+  if (!style) {
+    return { html: escaped, rich: text };
   }
-  return style === "bold"
-    ? { html: `<b>${escaped}</b>`, rich: boldRichText(text) }
-    : style === "italic"
-      ? { html: `<i>${escaped}</i>`, rich: italicRichText(text) }
-      : { html: escaped, rich: text };
+  // Code entities keep prepared notes inert, including bare URLs.
+  const tag = { bold: "b", italic: "i", code: "code" }[style];
+  return { html: `<${tag}>${escaped}</${tag}>`, rich: { type: style, text } };
 }
 
 function joinProgressText(parts: ProgressText[], separator: string): ProgressText {
@@ -99,7 +100,8 @@ export function renderTelegramProgressDraftPreview(
     : isChannelProgressAttentionLine;
   const attention = activity.filter(isPriorityLine);
   const checklist = selectPlanChecklistSteps(snapshot.plan ?? [], {
-    maxLines: maxLines - attention.length,
+    maxLines:
+      maxLines - Math.max(attention.length, options.toolProgress && activity.length ? 1 : 0),
   });
   const checklistLines = checklist.steps.length + (checklist.summary ? 1 : 0);
   const lineBudget = Math.max(0, maxLines - checklistLines);
@@ -116,7 +118,7 @@ export function renderTelegramProgressDraftPreview(
   const blocks: InputRichBlock[] = [];
   const html: string[] = [];
   const addParagraph = (text: ProgressText) => {
-    blocks.push(paragraphBlock(text.rich));
+    blocks.push({ type: "paragraph", text: text.rich });
     html.push(text.html);
   };
   if (label) {
@@ -163,7 +165,7 @@ export function renderTelegramProgressDraftPreview(
         const completed = step.status === "completed";
         html.push(`${completed ? "[x]" : "[ ]"} ${text.html}`);
         return {
-          blocks: [paragraphBlock(text.rich)],
+          blocks: [{ type: "paragraph", text: text.rich }],
           has_checkbox: true as const,
           is_checked: completed || undefined,
         };
@@ -175,6 +177,28 @@ export function renderTelegramProgressDraftPreview(
   }
   const plan = buildTelegramRichBlocksPlan(blocks, { skipEntityDetection: true });
   return options.richMessages
-    ? { text: plan.plainText, richMessage: plan.richMessage, complete: true }
-    : { text: html.join("<br>"), parseMode: "HTML", complete: true };
+    ? { text: plan.plainText, richMessage: plan.richMessage, complete: true, linkPreview: false }
+    : { text: html.join("<br>"), parseMode: "HTML", complete: true, linkPreview: false };
+}
+
+/** Renders a progress snapshot with one account's progress-draft settings. */
+export function renderTelegramAccountProgressDraftPreview(
+  snapshot: ChannelProgressDraftCompositorSnapshot,
+  params: { cfg: OpenClawConfig; accountId?: string | null },
+): TelegramDraftPreview {
+  const accountConfig = resolveTelegramAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  }).config;
+  const streamMode = resolveTelegramPreviewStreamMode(accountConfig);
+  return renderTelegramProgressDraftPreview(snapshot, {
+    richMessages: resolveTelegramRichMessages({ ...params, accountConfig }),
+    toolProgress: resolveChannelStreamingPreviewToolProgress(
+      accountConfig,
+      streamMode !== "progress",
+      streamMode,
+    ),
+    maxLines: resolveChannelProgressDraftMaxLines(accountConfig),
+    maxLineChars: resolveChannelProgressDraftMaxLineChars(accountConfig),
+  });
 }

@@ -10,7 +10,12 @@ import { requireNodeSqlite } from "./node-sqlite.js";
 import { encodeRun } from "./update-run-codec.js";
 import { readUpdateRunRecord } from "./update-run-read.kernel.js";
 import { toPublicUpdateRun, type UpdateRunRecord } from "./update-run-record.js";
-import { mutateRunInTransaction, persistRun, updateRunLedgerSchema } from "./update-run-write.js";
+import {
+  mutateRunInTransaction,
+  persistRun,
+  updateRunLedgerSchema,
+  upsertStep,
+} from "./update-run-write.js";
 
 let root: string;
 let database: DatabaseSync | undefined;
@@ -109,79 +114,51 @@ beforeEach(async () => {
 });
 
 describe("durable update capture receipts", () => {
-  it("keeps ordinary runs writable without a capture receipt", () => {
-    const input = { ...record(), reason: "ordinary progress" };
-    persistRun(ownedDatabase(), input, { env });
-    const recovered = readUpdateRunRecord(ownedDatabase(), input.runId);
-    expect(recovered?.reason).toBe("ordinary progress");
-    expect(recovered?.origin.driver).toEqual(input.origin.driver);
-    expect(recovered?.origin.updateRecoveryCapture).toBeUndefined();
-    expect(toPublicUpdateRun(recovered!)).toEqual(recovered);
-    expect(recovered?.updatedAtMs).toBeGreaterThan(2);
-  });
-
-  it("preserves exact receipt paths, hashes and warnings through the real ledger writer and reader", () => {
-    const capture = receipt();
-    const input = {
-      ...record(),
-      reason: `Failure at ${root}`,
-      origin: { ...record().origin, updateRecoveryCapture: capture },
-    };
-    persistRun(ownedDatabase(), input, { env });
-    ownedDatabase().close();
-    database = undefined;
-    database = new (requireNodeSqlite().DatabaseSync)(path.join(root, "state", "receipts.sqlite"));
-    const recovered = readUpdateRunRecord(ownedDatabase(), input.runId);
-    expect(recovered?.origin.updateRecoveryCapture).toEqual(capture);
-    expect(recovered?.origin.driver).toEqual(record().origin.driver);
-    expect(recovered?.reason).not.toContain(root);
-    expect(recovered?.reason).toContain("~");
-    expect(recovered?.status).toBe("failed");
-  });
-
-  it("exports a valid public run without private recovery receipts or changing durable evidence", () => {
-    const capture = receipt();
-    persistRun(
-      ownedDatabase(),
-      { ...record(), origin: { ...record().origin, updateRecoveryCapture: capture } },
-      { env },
-    );
-    const retained = readUpdateRunRecord(ownedDatabase(), record().runId)!;
-    // Directly returning the internal row breaks the closed wire contract and reveals private paths.
-    expect(Value.Check(WireRunSchema, retained)).toBe(false);
-    const output = toPublicUpdateRun(retained);
-    expect(Value.Check(WireRunSchema, output)).toBe(true);
-    expect(output.origin).toEqual(record().origin);
-    expect(JSON.stringify(output)).not.toContain(root);
-    expect(retained.origin.updateRecoveryCapture).toEqual(capture);
-    expect(
-      readUpdateRunRecord(ownedDatabase(), record().runId)?.origin.updateRecoveryCapture,
-    ).toEqual(capture);
-  });
-
-  it("keeps an existing capture when a main consumer updates unrelated run progress", () => {
-    const capture = receipt();
-    // A stored receipt from the capture producer must survive later ledger mutations.
-    ownedDatabase()
-      .prepare("UPDATE update_runs SET origin_json=? WHERE run_id=?")
-      .run(JSON.stringify({ ...record().origin, updateRecoveryCapture: capture }), record().runId);
-    const updated = mutateRunInTransaction(
+  it("keeps database recovery locations when later diagnostics exhaust the history budget", () => {
+    const summaries = [
+      {
+        step: "diagnostic:database snapshot",
+        status: "completed" as const,
+        detail: "Databases snapshotted at /backup.databases",
+      },
+      {
+        step: "diagnostic:database migration writes",
+        status: "completed" as const,
+        detail: `Post-migration write inventory: 100 databases; SHA-256 ${"e".repeat(64)}. Snapshots: /backup.databases.`,
+      },
+      {
+        step: "diagnostic:database rollback",
+        status: "completed" as const,
+        detail: "Restored databases; migrated originals retained beside their paths",
+      },
+    ];
+    mutateRunInTransaction(
       ownedDatabase(),
       record().runId,
       (run) => {
-        run.reason = "retained recovery still pending";
+        for (const summary of summaries) {
+          upsertStep(run, summary);
+        }
+        for (let index = 0; index < 150; index++) {
+          upsertStep(run, {
+            step: `diagnostic:${index}`,
+            status: "completed",
+            detail: "validation detail ".repeat(50),
+          });
+        }
       },
       { env },
     );
-    expect(updated.reason).toBe("retained recovery still pending");
-    expect(updated.origin.updateRecoveryCapture).toEqual(capture);
-    expect(
-      readUpdateRunRecord(ownedDatabase(), record().runId)?.origin.updateRecoveryCapture,
-    ).toEqual(capture);
+    ownedDatabase().close();
+    database = new (requireNodeSqlite().DatabaseSync)(path.join(root, "state", "receipts.sqlite"));
+    const recovered = readUpdateRunRecord(ownedDatabase(), record().runId)!;
+    expect(recovered.steps).toEqual(expect.arrayContaining(summaries));
+    expect(recovered.steps.length).toBeLessThanOrEqual(128);
+    expect(Buffer.byteLength(JSON.stringify(recovered.steps))).toBeLessThanOrEqual(16 * 1024);
   });
 
-  it.each(["retirement", "forward"] as const)(
-    "retains %s resolution without changing the failed-run outcome",
+  it.each(["ordinary", "capture", "retirement", "forward"] as const)(
+    "preserves %s evidence through persistence, public export and progress updates",
     (mode) => {
       const capture = receipt();
       const resolution =
@@ -204,48 +181,87 @@ describe("durable update capture receipts", () => {
                 ],
               },
             }
-          : {
-              forwardResolution: {
-                kind: "forward-resolved" as const,
-                binding: {
-                  runId: record().runId,
-                  failedAtMs: 2,
-                  manifestSha256: capture.manifestSha256,
-                  candidateSha256: "d".repeat(64),
-                  preparedSha256: null,
-                  installRoot: root,
-                  stateDir: env.OPENCLAW_STATE_DIR!,
-                  configPath: env.OPENCLAW_CONFIG_PATH!,
-                  incompleteGenerations: { candidate: "e".repeat(64) },
-                },
-                repair: {
-                  root,
-                  packageSha256: "f".repeat(64),
-                  node: path.join(root, "node"),
-                  nodeVersion: "24.20.0",
-                  build: "fixture",
-                  artifact: {
-                    rootIdentity: "fixture-root",
-                    module: path.join(root, "module.mjs"),
-                    entry: path.join(root, "entry.mjs"),
-                    inventorySha256: "1".repeat(64),
-                    executableIdentity: "fixture-executable",
-                    executableSha256: "2".repeat(64),
+          : mode === "forward"
+            ? {
+                forwardResolution: {
+                  kind: "forward-resolved" as const,
+                  binding: {
+                    runId: record().runId,
+                    failedAtMs: 2,
+                    manifestSha256: capture.manifestSha256,
+                    candidateSha256: "d".repeat(64),
+                    preparedSha256: null,
+                    installRoot: root,
+                    stateDir: env.OPENCLAW_STATE_DIR!,
+                    configPath: env.OPENCLAW_CONFIG_PATH!,
+                    incompleteGenerations: { candidate: "e".repeat(64) },
                   },
+                  repair: {
+                    root,
+                    packageSha256: "f".repeat(64),
+                    node: path.join(root, "node"),
+                    nodeVersion: "24.20.0",
+                    build: "fixture",
+                    artifact: {
+                      rootIdentity: "fixture-root",
+                      module: path.join(root, "module.mjs"),
+                      entry: path.join(root, "entry.mjs"),
+                      inventorySha256: "1".repeat(64),
+                      executableIdentity: "fixture-executable",
+                      executableSha256: "2".repeat(64),
+                    },
+                  },
+                  completedAtMs: 3,
                 },
-                completedAtMs: 3,
-              },
-            };
-      const retained = { ...capture, ...resolution };
-      persistRun(
+              }
+            : {};
+      const retained = mode === "ordinary" ? undefined : { ...capture, ...resolution };
+      const input = {
+        ...record(),
+        reason: mode === "ordinary" ? "ordinary progress" : `Failure at ${root}`,
+        origin: { ...record().origin, updateRecoveryCapture: retained },
+      };
+      persistRun(ownedDatabase(), input, { env });
+      ownedDatabase().close();
+      database = undefined;
+      database = new (requireNodeSqlite().DatabaseSync)(
+        path.join(root, "state", "receipts.sqlite"),
+      );
+      const recovered = readUpdateRunRecord(ownedDatabase(), record().runId)!;
+      expect(recovered.origin.updateRecoveryCapture).toEqual(retained);
+      expect(recovered.origin.driver).toEqual(record().origin.driver);
+      expect(recovered.status).toBe("failed");
+      expect(recovered.finishedAtMs).toBe(2);
+      expect(recovered.updatedAtMs).toBeGreaterThan(2);
+      if (retained) {
+        expect(recovered.reason).not.toContain(root);
+        expect(recovered.reason).toContain("~");
+      } else {
+        expect(recovered.reason).toBe("ordinary progress");
+        expect(toPublicUpdateRun(recovered)).toEqual(recovered);
+      }
+      expect(Value.Check(WireRunSchema, recovered)).toBe(!retained);
+      const output = toPublicUpdateRun(recovered);
+      expect(Value.Check(WireRunSchema, output)).toBe(true);
+      expect(output.origin).toEqual(record().origin);
+      expect(JSON.stringify(output)).not.toContain(root);
+      expect(recovered.origin.updateRecoveryCapture).toEqual(retained);
+      expect(
+        readUpdateRunRecord(ownedDatabase(), record().runId)?.origin.updateRecoveryCapture,
+      ).toEqual(retained);
+      const updated = mutateRunInTransaction(
         ownedDatabase(),
-        { ...record(), origin: { updateRecoveryCapture: retained } },
+        record().runId,
+        (run) => {
+          run.reason = "retained recovery still pending";
+        },
         { env },
       );
-      const recovered = readUpdateRunRecord(ownedDatabase(), record().runId);
-      expect(recovered?.origin.updateRecoveryCapture).toEqual(retained);
-      expect(recovered?.status).toBe("failed");
-      expect(recovered?.finishedAtMs).toBe(2);
+      expect(updated.reason).toBe("retained recovery still pending");
+      expect(updated.origin.updateRecoveryCapture).toEqual(retained);
+      expect(
+        readUpdateRunRecord(ownedDatabase(), record().runId)?.origin.updateRecoveryCapture,
+      ).toEqual(retained);
     },
   );
 
@@ -276,49 +292,37 @@ describe("durable update capture receipts", () => {
     );
   });
 
-  it.each([0, 1])("preserves receipts with only %i bytes left for diagnostics", (remaining) => {
+  it("preserves full-capacity receipts while evicting diagnostics", () => {
     const capture = receipt();
     const driver = record().origin.driver;
     const size = Buffer.byteLength(JSON.stringify({ driver, updateRecoveryCapture: capture }));
-    capture.warnings[0]!.message += "w".repeat(16 * 1024 - remaining - size);
+    capture.warnings[0]!.message += "w".repeat(16 * 1024 - size);
     persistRun(
       ownedDatabase(),
       { ...record(), origin: { driver, updateRecoveryCapture: capture, nextAction: "diagnostic" } },
       { env },
     );
     const row = storedRow();
-    expect(Buffer.byteLength(String(row?.origin_json))).toBe(16 * 1024 - remaining);
+    expect(Buffer.byteLength(String(row?.origin_json))).toBe(16 * 1024);
     const recovered = readUpdateRunRecord(ownedDatabase(), record().runId);
     expect(recovered?.origin.updateRecoveryCapture).toEqual(capture);
     expect(recovered?.origin.driver).toEqual(driver);
     expect(recovered?.origin.nextAction).toBeUndefined();
   });
 
-  it("refuses an oversized receipt without replacing the persisted row", () => {
-    const capture = receipt();
-    capture.configWrites = Array.from({ length: 40 }, (_, index) => ({
-      ...capture.configWrites[0]!,
-      path: path.join(root, "state", `${index}-${"x".repeat(600)}.json`),
-    }));
-    const before = storedRow();
-    expect(() =>
-      persistRun(
-        ownedDatabase(),
-        { ...record(), origin: { updateRecoveryCapture: capture } },
-        { env },
-      ),
-    ).toThrow(/recovery receipts exceed the origin byte limit/);
-    expect(storedRow()).toEqual(before);
-  });
-
-  it.each(["hash", "path"] as const)(
+  it.each(["hash", "path", "oversized"] as const)(
     "rejects a malformed receipt %s without changing the stored row",
     (field) => {
       const capture = receipt();
       if (field === "hash") {
         capture.manifestSha256 = "not-a-hash";
-      } else {
+      } else if (field === "path") {
         capture.configWrites[0]!.path = "../unowned.json";
+      } else {
+        capture.configWrites = Array.from({ length: 40 }, (_, index) => ({
+          ...capture.configWrites[0]!,
+          path: path.join(root, "state", `${index}-${"x".repeat(600)}.json`),
+        }));
       }
       const before = storedRow();
       expect(() =>
@@ -327,7 +331,9 @@ describe("durable update capture receipts", () => {
           { ...record(), origin: { updateRecoveryCapture: capture } },
           { env },
         ),
-      ).toThrow();
+      ).toThrow(
+        field === "oversized" ? /recovery receipts exceed the origin byte limit/ : undefined,
+      );
       expect(storedRow()).toEqual(before);
     },
   );

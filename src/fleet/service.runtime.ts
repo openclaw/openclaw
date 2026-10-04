@@ -44,6 +44,7 @@ import {
   cleanupFailedCreateContainer,
   cleanupFailedCreateNetwork,
   detectHostSelinux,
+  inspectionHasFleetOwner,
   inspectionState,
   prepareCellConfig,
   prepareCellDirectories,
@@ -58,15 +59,13 @@ import {
   restorePreviousCell,
   withFleetCellOperation,
   verifyReplacementHealthy,
+  type FleetHealthResult,
 } from "./service-support.runtime.js";
+
+export type { FleetHealthResult } from "./service-support.runtime.js";
 
 const OFFICIAL_IMAGE_UID = 1_000;
 const OFFICIAL_IMAGE_GID = 1_000;
-// Mirrors the compose healthcheck contract: an upgrade commits only after /healthz
-// answers. The deadline bounds how long a broken image can hold the cell before
-// restore without rolling back slow-booting cells prematurely.
-const CELL_VERIFY_TIMEOUT_MS = 60_000;
-const CELL_VERIFY_POLL_MS = 1_000;
 
 export type FleetCreateOptions = {
   tenant: string;
@@ -103,11 +102,6 @@ type FleetListEntry = {
   image: string;
   created: string;
 };
-
-export type FleetHealthResult =
-  | { status: "ok"; url: string; httpStatus: number }
-  | { status: "failed"; url: string; error: string; httpStatus?: number }
-  | { status: "skipped"; url: string; reason: string };
 
 type FleetStatusResult = {
   tenant: string;
@@ -389,8 +383,6 @@ export function createFleetService(options: FleetServiceOptions = {}) {
                 now,
                 sleep,
                 checkpoint,
-                timeoutMs: CELL_VERIFY_TIMEOUT_MS,
-                pollMs: CELL_VERIFY_POLL_MS,
                 context: "create",
               });
             } catch (error) {
@@ -410,8 +402,9 @@ export function createFleetService(options: FleetServiceOptions = {}) {
     async list(): Promise<FleetListEntry[]> {
       const records = await listFleetCells(env);
       const localityChecks = new Map<FleetContainerRuntimeName, Promise<void>>();
-      const inspections = await Promise.all(
+      const entries = await Promise.all(
         records.map(async (record) => {
+          let state = "unknown";
           try {
             let locality = localityChecks.get(record.runtime);
             if (!locality) {
@@ -419,26 +412,19 @@ export function createFleetService(options: FleetServiceOptions = {}) {
               localityChecks.set(record.runtime, locality);
             }
             await locality;
-            return await containers.inspect(record.runtime, record.containerName);
-          } catch (error) {
-            return {
-              kind: "unavailable" as const,
-              state: "unknown" as const,
-              error: error instanceof Error ? error.message : String(error),
-            };
+            state = inspectionState(
+              record,
+              await containers.inspect(record.runtime, record.containerName),
+            );
+          } catch {
+            // Listing retains cells whose container runtime is unavailable.
           }
+          return { record, state };
         }),
       );
-      return records.map((record, index) => ({
+      return entries.map(({ record, state }) => ({
         tenant: record.tenantId,
-        state: inspectionState(
-          record,
-          inspections[index] ?? {
-            kind: "unavailable",
-            state: "unknown",
-            error: "inspect result missing",
-          },
-        ),
+        state,
         port: record.hostPort,
         image: record.image,
         created: new Date(record.createdAtMs).toISOString(),
@@ -462,9 +448,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
       let container: FleetStatusResult["container"];
       let health: FleetHealthResult;
       if (inspection.kind === "ok") {
-        const managed =
-          inspection.labels[FLEET_TENANT_LABEL] === record.tenantId &&
-          inspection.labels[FLEET_OWNER_LABEL] === cellOwnerId(record.dataDir);
+        const managed = inspectionHasFleetOwner(record, inspection);
         container = {
           state: managed ? inspection.state : "unknown",
           running: inspection.running,
@@ -617,8 +601,6 @@ export function createFleetService(options: FleetServiceOptions = {}) {
               now,
               sleep,
               checkpoint,
-              timeoutMs: CELL_VERIFY_TIMEOUT_MS,
-              pollMs: CELL_VERIFY_POLL_MS,
               context: "upgrade",
             });
             await checkpoint();
@@ -701,7 +683,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
     },
 
     async doctor(tenant?: string) {
-      return await runFleetDoctor({ env, containers, fetchImpl, tenant, getuid, getgid });
+      return await runFleetDoctor({ env, containers, fetchImpl, tenant });
     },
 
     async remove(params: {

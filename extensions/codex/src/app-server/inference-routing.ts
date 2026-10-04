@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { defineCodexBuildState } from "../build-state.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
@@ -5,20 +6,30 @@ import {
   CODEX_SESSION_OVERRIDABLE_LAYER_TYPES,
   readCodexEffectiveConfig,
 } from "./config-layer-policy.js";
+import { supportsInferenceEnvironment } from "./inference-environment.js";
+import {
+  configuredProviders,
+  hasProviderAws,
+  projectProviderRoutes,
+  providerKind,
+  readProviderBaseUrl,
+  readProviderField,
+  withProviderBaseUrl,
+  type ProviderKind,
+} from "./inference-provider-config.js";
 import type { CodexInferenceProxy } from "./inference-proxy.js";
 import type { CodexInferenceThreadQualification } from "./inference-qualification.js";
 import { isJsonObject, type CodexConfigReadResponse, type JsonObject } from "./protocol.js";
-import type { CodexAppServerThreadBinding } from "./session-binding.js";
+import { CODEX_RESPONSES_OAUTH_PROVIDER, type CodexResponsesOAuth } from "./responses-oauth.js";
+import type { CodexBindingAuthority, CodexAppServerThreadBinding } from "./session-binding.js";
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
 export type CodexInferenceProviderRoutes = ReadonlyMap<string, CodexInferenceProxy>;
-export type { CodexInferenceThreadQualification } from "./inference-qualification.js";
 type ThreadRoutes = {
   route: CodexInferenceProxy;
   providers: CodexInferenceProviderRoutes;
   qualification?: CodexInferenceThreadQualification;
 };
-type ProviderKind = "openai" | "azure" | "other";
 
 type Owner = {
   closed: boolean;
@@ -30,6 +41,7 @@ type Owner = {
     { provider: string; kind: ProviderKind; modelPolicyEnforced: boolean }
   >;
   authRoute?: "apiKey" | "chatgpt";
+  oauth?: CodexResponsesOAuth;
 };
 // Shared clients survive duplicate module loads; their inference ownership must too.
 const owners = defineCodexBuildState(
@@ -43,6 +55,7 @@ const MAX_THREADS = 256;
 export function ownCodexInferenceClient(
   client: CodexAppServerClient,
   startOptions: Pick<CodexAppServerStartOptions, "env" | "clearEnv"> = {},
+  oauth?: CodexResponsesOAuth,
 ): void {
   if (owners.has(client)) {
     return;
@@ -50,6 +63,11 @@ export function ownCodexInferenceClient(
   // The native transport owns custom trust roots and per-process proxy choices.
   // Leave those profiles native until the relay can preserve the same transport.
   if (!supportsInferenceEnvironment(resolveCodexAppServerSpawnEnv(startOptions))) {
+    if (oauth) {
+      throw new Error(
+        "ChatGPT subscription sharing requires the managed public Responses inference route with a compatible proxy and trust configuration.",
+      );
+    }
     return;
   }
   const owner: Owner = {
@@ -58,6 +76,7 @@ export function ownCodexInferenceClient(
     routes: new Map(),
     threads: new Map(),
     handles: new Map(),
+    oauth,
   };
   owners.set(client, owner);
   const close = () => {
@@ -98,61 +117,6 @@ export function ownCodexInferenceClient(
   });
 }
 
-function supportsInferenceEnvironment(native: NodeJS.ProcessEnv): boolean {
-  if (native.CODEX_CA_CERTIFICATE?.trim() || native.SSL_CERT_FILE?.trim()) {
-    return false;
-  }
-  const names = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"];
-  for (const upper of names) {
-    const lower = upper.toLowerCase();
-    if (
-      native[upper] !== process.env[upper] ||
-      native[lower] !== process.env[lower] ||
-      (native[upper] !== undefined &&
-        native[lower] !== undefined &&
-        native[upper] !== native[lower])
-    ) {
-      return false;
-    }
-  }
-  const value = (name: string) => (native[name] ?? native[name.toLowerCase()])?.trim() || undefined;
-  const http = value("HTTP_PROXY");
-  const https = value("HTTPS_PROXY");
-  const all = value("ALL_PROXY");
-  if (!http && !https && !all) {
-    return true;
-  }
-  const noProxy = native.NO_PROXY ?? native.no_proxy ?? "";
-  if (noProxy === "*") {
-    return true;
-  }
-  if (
-    native.REQUEST_METHOD !== undefined ||
-    names.slice(0, 3).some((name) => {
-      const raw = native[name] ?? native[name.toLowerCase()];
-      return raw !== undefined && raw !== raw.trim();
-    })
-  ) {
-    return false;
-  }
-  // Reqwest prefers uppercase and has no HTTP_PROXY fallback for HTTPS. Only
-  // equivalent proxy selection and literal loopback bypasses are qualified here.
-  if ((https ?? all) !== (https ?? http ?? all)) {
-    return false;
-  }
-  const bypasses = noProxy
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-  if (bypasses.some((entry) => !["127.0.0.1", "localhost", "::1", "[::1]"].includes(entry))) {
-    return false;
-  }
-  if ((http || all) && !bypasses.includes("127.0.0.1")) {
-    return false;
-  }
-  return /^https?:\/\//.test(https ?? all ?? "");
-}
-
 async function prepareCodexInferenceRoute(params: {
   client: CodexAppServerClient;
   cwd: string;
@@ -163,6 +127,7 @@ async function prepareCodexInferenceRoute(params: {
   optionalProjection?: true;
   signal?: AbortSignal;
   assertCurrent: () => void;
+  authority?: CodexBindingAuthority;
 }): Promise<CodexInferenceProxy | undefined> {
   const client = params.client;
   const owner = owners.get(client);
@@ -182,21 +147,45 @@ async function prepareCodexInferenceRoute(params: {
   assertCurrent();
   const snapshot =
     params.effectiveConfig ??
-    (await readCodexEffectiveConfig(params.client, params.cwd, { signal: params.signal }));
+    (await readCodexEffectiveConfig(params.client, params.cwd, {
+      signal: params.signal,
+      assertCurrent: params.assertCurrent,
+      ...(params.authority ? { withCurrent: params.authority.withCurrent } : {}),
+    }));
   assertCurrent();
-  const provider =
+  const unsupported = () => {
+    if (owner.oauth) {
+      throw new Error(
+        "ChatGPT subscription sharing requires the managed public Responses inference route.",
+      );
+    }
+    return undefined;
+  };
+  const selectedProvider =
     params.modelProvider ??
     params.config?.model_provider ??
     snapshot.config.model_provider ??
     "openai";
-  if (typeof provider !== "string" || !provider.trim()) {
-    return undefined;
+  if (
+    owner.oauth &&
+    ((snapshot.config.model_provider != null && snapshot.config.model_provider !== "openai") ||
+      (selectedProvider !== "openai" && selectedProvider !== CODEX_RESPONSES_OAUTH_PROVIDER))
+  ) {
+    return unsupported();
   }
-  const customProvider = provider !== "openai";
+  const provider = owner.oauth ? CODEX_RESPONSES_OAUTH_PROVIDER : selectedProvider;
+  if (typeof provider !== "string" || !provider.trim()) {
+    return unsupported();
+  }
+  const customProvider = !owner.oauth && provider !== "openai";
   const providerField = (field: string) =>
     readProviderField(params.config, provider, field) ??
     readProviderField(snapshot.config, provider, field);
-  const nativeProviderName = customProvider ? providerField("name") : "OpenAI";
+  const nativeProviderName = owner.oauth
+    ? "OpenClaw subscription sharing"
+    : customProvider
+      ? providerField("name")
+      : "OpenAI";
   const kind = providerKind(nativeProviderName);
   const wireApi = customProvider ? providerField("wire_api") : "responses";
   if (
@@ -208,7 +197,7 @@ async function prepareCodexInferenceRoute(params: {
         (wireApi != null && wireApi !== "responses")))
   ) {
     // Native built-ins ignore ordinary provider overrides; SigV4 also signs the URL/body.
-    return undefined;
+    return unsupported();
   }
   // Native system-proxy routing owns its transport, including loopback bypass.
   // Leave that profile intact instead of proxying its private inference IPC.
@@ -221,7 +210,7 @@ async function prepareCodexInferenceRoute(params: {
       ? snapshot.config.features.respect_system_proxy
       : undefined);
   if (systemProxy === true) {
-    return undefined;
+    return unsupported();
   }
   // Pinned native merges built-ins first: model_providers.openai never replaces OpenAI.
   const configured = customProvider
@@ -234,7 +223,7 @@ async function prepareCodexInferenceRoute(params: {
     typeof configured === "string" &&
     (!configured.trim() || configured.includes("?") || configured.includes("#"))
   ) {
-    return undefined;
+    return unsupported();
   }
   // The relay preserves the selected Responses provider, including its auth and query fields.
   if (configured) {
@@ -242,20 +231,21 @@ async function prepareCodexInferenceRoute(params: {
     try {
       target = new URL(configured);
     } catch {
-      return undefined;
+      return unsupported();
     }
     if (
       target.protocol !== "https:" ||
       target.username ||
       target.password ||
       target.hash ||
-      target.search
+      target.search ||
+      (owner.oauth && target.href.replace(/\/$/, "") !== "https://api.openai.com/v1")
     ) {
-      return undefined;
+      return unsupported();
     }
   }
   if (customProvider && !configured) {
-    return undefined;
+    return unsupported();
   }
   const configKey = customProvider ? `model_providers.${provider}.base_url` : "openai_base_url";
   const origins = Object.entries(snapshot.origins ?? {}).filter(([key]) =>
@@ -268,7 +258,7 @@ async function prepareCodexInferenceRoute(params: {
       ([, origin]) => !origin || !CODEX_SESSION_OVERRIDABLE_LAYER_TYPES.has(origin.name.type),
     )
   ) {
-    return undefined;
+    return unsupported();
   }
   const account = customProvider
     ? undefined
@@ -278,18 +268,16 @@ async function prepareCodexInferenceRoute(params: {
         {
           signal: params.signal,
           assertCurrent,
+          withCurrent: params.authority?.withCurrent,
         },
       );
   assertCurrent();
   const type = account?.account?.type;
+  if (owner.oauth && type !== "apiKey") {
+    return unsupported();
+  }
   if (!customProvider && type !== "apiKey" && type !== "chatgpt") {
-    return undefined;
-  }
-  if (!customProvider && owner.authRoute && owner.authRoute !== type) {
-    throw new Error("Codex native account route changed; reconnect before retrying");
-  }
-  if (type === "apiKey" || type === "chatgpt") {
-    owner.authRoute = type;
+    return unsupported();
   }
   // Pinned native ModelProviderInfo::to_api_provider uses these defaults only without an override.
   // chatgpt_base_url owns other native services; it is not the model-provider base URL.
@@ -300,7 +288,7 @@ async function prepareCodexInferenceRoute(params: {
   const { isBlockedHostnameOrIp } = await import("openclaw/plugin-sdk/ssrf-runtime");
   assertCurrent();
   if (isBlockedHostnameOrIp(target.hostname)) {
-    return undefined;
+    return unsupported();
   }
   // Native 0.154 also recognizes Azure by URL substrings; loopback must preserve that fact.
   const nativeBaseUrl = typeof configured === "string" ? configured.toLowerCase() : target.href;
@@ -321,9 +309,6 @@ async function prepareCodexInferenceRoute(params: {
     params.config?.["features.memories"] ??
     (isJsonObject(params.config?.features) ? params.config.features.memories : undefined) ??
     (isJsonObject(snapshot.config.features) ? snapshot.config.features.memories : undefined);
-  // A configured native startup service may outlive the foreground that created its thread.
-  // generate_memories controls new thread recording, not processing of eligible prior history.
-  owner.memoryConfigured ||= memoryFeature === true;
   const modelPolicyEnforced = params.modelPolicyEnforced !== false;
   const key = JSON.stringify([
     provider,
@@ -333,47 +318,73 @@ async function prepareCodexInferenceRoute(params: {
     preserveCodexBackendRoutes,
     modelPolicyEnforced,
   ]);
-  let pending = owner.routes.get(key);
-  if (!pending) {
-    if (owner.routes.size >= MAX_ROUTES) {
-      if (params.optionalProjection) {
-        return undefined;
-      }
-      throw new Error(
-        "Codex inference route limit reached; start a fresh managed native connection before retrying.",
-      );
+  const prepareRoute = () => {
+    assertCurrent();
+    if (!customProvider && owner.authRoute && owner.authRoute !== type) {
+      throw new Error("Codex native account route changed; reconnect before retrying");
     }
-    pending = Promise.all([
-      import("./inference-proxy.js"),
-      import("./native-subagent-monitor.js"),
-      import("./inference-dispatch.js"),
-    ]).then(([{ createCodexInferenceProxy }, native, { createCodexInferenceModelBinding }]) => {
-      assertClient();
-      return createCodexInferenceProxy({
-        upstream: target,
-        assertCurrent: assertClient,
-        preserveAzureUrlFeatures,
-        preserveCodexBackendRoutes,
-        bindModelExecution: createCodexInferenceModelBinding({
-          client,
-          provider,
-          modelPolicyEnforced,
+    if (type === "apiKey" || type === "chatgpt") {
+      owner.authRoute = type;
+    }
+    // A configured native startup service may outlive the foreground that created its thread.
+    // generate_memories controls new thread recording, not processing of eligible prior history.
+    owner.memoryConfigured ||= memoryFeature === true;
+    let pending = owner.routes.get(key);
+    if (!pending) {
+      if (owner.routes.size >= MAX_ROUTES) {
+        if (params.optionalProjection) {
+          return unsupported();
+        }
+        throw new Error(
+          "Codex inference route limit reached; start a fresh managed native connection before retrying.",
+        );
+      }
+      pending = Promise.all([
+        import("./inference-proxy.js"),
+        import("./native-subagent-monitor.js"),
+        import("./inference-dispatch.js"),
+      ]).then(([{ createCodexInferenceProxy }, native, { createCodexInferenceModelBinding }]) => {
+        assertClient();
+        return createCodexInferenceProxy({
+          upstream: target,
           assertCurrent: assertClient,
-          memoryConfigured: () => owner.memoryConfigured,
-          captureModelSource: native.codexNativeSubagentMonitorRuntime.captureModelSource,
-          resolveModelThreadId: native.codexNativeSubagentMonitorRuntime.resolveModelThreadId,
-        }),
+          oauth: owner.oauth,
+          preserveAzureUrlFeatures,
+          preserveCodexBackendRoutes,
+          bindModelExecution: createCodexInferenceModelBinding({
+            client,
+            provider,
+            modelPolicyEnforced,
+            assertCurrent: assertClient,
+            memoryConfigured: () => owner.memoryConfigured,
+            captureModelSource: native.codexNativeSubagentMonitorRuntime.captureModelSource,
+            resolveModelThreadId: native.codexNativeSubagentMonitorRuntime.resolveModelThreadId,
+          }),
+        });
       });
-    });
-    // Keep a failed route failed for this physical client; never fall back to unmodified inference.
-    owner.routes.set(key, pending);
+      // Keep a failed route failed for this physical client; never fall back to unmodified inference.
+      owner.routes.set(key, pending);
+    }
+    // The admission publishes only the pending route, never awaits its startup.
+    return { pending };
+  };
+  const prepared = params.authority
+    ? await params.authority.withCurrent(prepareRoute)
+    : prepareRoute();
+  if (!prepared) {
+    return undefined;
   }
-  const route = await pending;
-  assertCurrent();
-  route.assertCurrent();
-  params.client.protectPrivateTransportSecret(new URL(route.baseUrl).pathname.split("/")[1] ?? "");
-  owner.handles.set(route, { provider, kind, modelPolicyEnforced });
-  return route;
+  const route = await prepared.pending;
+  const publish = () => {
+    assertCurrent();
+    route.assertCurrent();
+    params.client.protectPrivateTransportSecret(
+      new URL(route.baseUrl).pathname.split("/")[1] ?? "",
+    );
+    owner.handles.set(route, { provider, kind, modelPolicyEnforced });
+    return route;
+  };
+  return params.authority ? await params.authority.withCurrent(publish) : publish();
 }
 
 /** Prepare a managed thread without changing an attached or unsupported native profile. */
@@ -391,6 +402,7 @@ export async function prepareCodexInferenceThreadConfig(params: {
   modelPolicyEnforced?: boolean;
   signal?: AbortSignal;
   assertCurrent: () => void;
+  authority?: CodexBindingAuthority;
 }): Promise<
   | { route: CodexInferenceProxy; config: JsonObject; providers?: CodexInferenceProviderRoutes }
   | undefined
@@ -410,6 +422,9 @@ export async function prepareCodexInferenceThreadConfig(params: {
       ? owner.threads.get(binding.threadId)
       : undefined;
   if (preserved) {
+    if (owner.oauth) {
+      throw new Error("ChatGPT subscription sharing cannot attach to a native Codex thread.");
+    }
     // An attachment cannot confer ownership; an already-owned route can remain in use.
     if (!retained) {
       return undefined;
@@ -432,7 +447,11 @@ export async function prepareCodexInferenceThreadConfig(params: {
   params.assertCurrent();
   const effectiveConfig =
     params.effectiveConfig ??
-    (await readCodexEffectiveConfig(params.client, params.cwd, { signal: params.signal }));
+    (await readCodexEffectiveConfig(params.client, params.cwd, {
+      signal: params.signal,
+      assertCurrent: params.assertCurrent,
+      ...(params.authority ? { withCurrent: params.authority.withCurrent } : {}),
+    }));
   params.signal?.throwIfAborted();
   params.assertCurrent();
   const route =
@@ -447,8 +466,13 @@ export async function prepareCodexInferenceThreadConfig(params: {
     const { thread } = await params.client.request(
       "thread/read",
       { threadId: binding.threadId, includeTurns: false },
-      { signal: params.signal, assertCurrent: params.assertCurrent },
+      {
+        signal: params.signal,
+        assertCurrent: params.assertCurrent,
+        withCurrent: params.authority?.withCurrent,
+      },
     );
+    params.signal?.throwIfAborted();
     params.assertCurrent();
     if (thread.id !== binding.threadId || thread.status?.type !== "notLoaded") {
       throw new Error(
@@ -459,6 +483,16 @@ export async function prepareCodexInferenceThreadConfig(params: {
   const provider = owner.handles.get(route)?.provider;
   if (!provider) {
     throw new Error("Codex inference provider ownership changed");
+  }
+  if (owner.oauth) {
+    return {
+      route,
+      config: {
+        ...params.config,
+        model_provider: CODEX_RESPONSES_OAUTH_PROVIDER,
+        model_providers: { [CODEX_RESPONSES_OAUTH_PROVIDER]: responsesOAuthProvider(route) },
+      },
+    };
   }
   if (!params.operatorBacked) {
     return { route, config: withProviderBaseUrl(params.config, provider, route.baseUrl) };
@@ -481,6 +515,16 @@ export async function prepareCodexInferenceThreadConfig(params: {
     }
   }
   return { route, config: projectProviderRoutes(params.config, providers), providers };
+}
+
+function responsesOAuthProvider(route: CodexInferenceProxy): JsonObject {
+  return {
+    name: "OpenClaw subscription sharing",
+    base_url: route.baseUrl,
+    wire_api: "responses",
+    requires_openai_auth: true,
+    supports_websockets: false,
+  };
 }
 
 /** Validate the exact private handle and unchanged upstream, not a localhost string exception. */
@@ -511,6 +555,20 @@ export function assertCodexInferenceRouteConfig(
   ) {
     throw new Error("Codex parent-local inference route was overridden; no turn was sent");
   }
+  if (
+    owner.oauth &&
+    (config?.model_provider !== CODEX_RESPONSES_OAUTH_PROVIDER ||
+      !isJsonObject(config?.model_providers) ||
+      !isDeepStrictEqual(
+        config.model_providers[CODEX_RESPONSES_OAUTH_PROVIDER],
+        responsesOAuthProvider(route),
+      ) ||
+      Object.keys(config).some((key) =>
+        key.startsWith(`model_providers.${CODEX_RESPONSES_OAUTH_PROVIDER}`),
+      ))
+  ) {
+    throw new Error("Codex parent-local inference route was overridden; no turn was sent");
+  }
   route.assertCurrent();
   for (const [candidate, sibling] of providers ?? [[provider, route] as const]) {
     const siblingDefinition = owner.handles.get(sibling);
@@ -528,100 +586,6 @@ export function assertCodexInferenceRouteConfig(
     }
     sibling.assertCurrent();
   }
-}
-
-function providerKind(name: unknown): ProviderKind | undefined {
-  if (name === "Amazon Bedrock" || name === "Amazon Bedrock Runtime") {
-    return undefined;
-  }
-  return name === "OpenAI"
-    ? "openai"
-    : typeof name === "string" && name.toLowerCase() === "azure"
-      ? "azure"
-      : "other";
-}
-
-function hasProviderAws(config: JsonObject | undefined, provider: string): boolean {
-  return (
-    readProviderField(config, provider, "aws") != null ||
-    Object.keys(config ?? {}).some((key) => key.startsWith(`model_providers.${provider}.aws.`))
-  );
-}
-
-function configuredProviders(...configs: (JsonObject | undefined)[]): Set<string> {
-  const providers = new Set(["openai"]);
-  for (const config of configs) {
-    for (const provider of Object.keys(
-      isJsonObject(config?.model_providers) ? config.model_providers : {},
-    )) {
-      providers.add(provider);
-    }
-    for (const key of Object.keys(config ?? {})) {
-      const provider = /^model_providers\.([^.]+)(?:\.|$)/.exec(key)?.[1];
-      if (provider) {
-        providers.add(provider);
-      }
-    }
-  }
-  return providers;
-}
-
-function projectProviderRoutes(
-  config: JsonObject | undefined,
-  providers: CodexInferenceProviderRoutes,
-): JsonObject {
-  let projected = config ?? {};
-  for (const [provider, route] of providers) {
-    projected = withProviderBaseUrl(projected, provider, route.baseUrl);
-  }
-  return projected;
-}
-
-function readProviderBaseUrl(config: JsonObject | undefined, provider: string): unknown {
-  if (provider === "openai") {
-    return config?.openai_base_url;
-  }
-  return readProviderField(config, provider, "base_url");
-}
-
-function readProviderField(
-  config: JsonObject | undefined,
-  provider: string,
-  field: string,
-): unknown {
-  const providers = isJsonObject(config?.model_providers) ? config.model_providers : undefined;
-  const selected = providers?.[provider];
-  const flat = config?.[`model_providers.${provider}`];
-  return (
-    config?.[`model_providers.${provider}.${field}`] ??
-    (isJsonObject(flat) ? flat[field] : undefined) ??
-    (isJsonObject(selected) ? selected[field] : undefined)
-  );
-}
-
-function withProviderBaseUrl(
-  config: JsonObject | undefined,
-  provider: string,
-  baseUrl: string,
-): JsonObject {
-  if (provider === "openai") {
-    return { ...config, openai_base_url: baseUrl };
-  }
-  const providers = isJsonObject(config?.model_providers) ? config.model_providers : {};
-  const selected = providers[provider];
-  const providerKey = `model_providers.${provider}`;
-  const baseUrlKey = `${providerKey}.base_url`;
-  const flat = config?.[providerKey];
-  // A sparse native table overlay changes only this URL; native still owns auth and headers.
-  return {
-    ...config,
-    model_providers: {
-      ...providers,
-      [provider]: { ...(isJsonObject(selected) ? selected : {}), base_url: baseUrl },
-    },
-    ...(isJsonObject(flat) ? { [providerKey]: { ...flat, base_url: baseUrl } } : {}),
-    ...(config?.[baseUrlKey] !== undefined ? { [baseUrlKey]: baseUrl } : {}),
-  };
 }
 
 export function bindCodexInferenceThread(

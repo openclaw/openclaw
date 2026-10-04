@@ -6,7 +6,19 @@ import { createThinkingTagStreamState } from "./embedded-agent-utils.js";
 import { collectAgentInternalEventMedia } from "./internal-events.js";
 
 export function createEmbeddedAgentSubscribeState(
-  params: SubscribeEmbeddedAgentSessionParams,
+  params: Pick<
+    SubscribeEmbeddedAgentSessionParams,
+    | "reasoningMode"
+    | "thinkingLevel"
+    | "internalEvents"
+    | "blockReplyBreak"
+    | "onBlockReply"
+    | "streamReasoningInNonStreamModes"
+    | "onReasoningStream"
+    | "onBeforeTerminalDelivery"
+    | "deferTerminalDelivery"
+    | "initialReplayState"
+  >,
 ): EmbeddedAgentSubscribeState {
   const reasoningMode = params.reasoningMode ?? "off";
   const canShowReasoning = params.thinkingLevel !== "off";
@@ -47,7 +59,9 @@ export function createEmbeddedAgentSubscribeState(
     lastStreamedReasoning: undefined,
     lastBlockReplyText: undefined,
     lastDeliveredBlockReplyText: undefined,
-    deferBlockReplyDelivery: typeof params.onBeforeTerminalDelivery === "function",
+    deferBlockReplyDelivery:
+      typeof params.onBeforeTerminalDelivery === "function" &&
+      params.deferTerminalDelivery !== false,
     deferredBlockReplies: [],
     toolExecutionSinceLastBlockReply: false,
     reasoningStreamOpen: false,
@@ -66,9 +80,6 @@ export function createEmbeddedAgentSubscribeState(
     compactionInFlight: false,
     lastCompactionTokensAfter: undefined,
     pendingCompactionRetry: 0,
-    compactionRetryResolve: undefined,
-    compactionRetryReject: undefined,
-    compactionRetryPromise: null,
     unsubscribed: false,
     replayState: createEmbeddedRunReplayState(params.initialReplayState),
     livenessState: "working",

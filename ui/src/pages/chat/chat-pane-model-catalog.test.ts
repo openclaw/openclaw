@@ -4,6 +4,7 @@ import { render } from "lit";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, ModelCatalogResult } from "../../api/types.ts";
+import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import {
   beginChatMetadataPublication,
   subscribeChatMetadata,
@@ -11,6 +12,7 @@ import {
 import {
   beginModelCatalogRead,
   invalidateModelCatalogCache,
+  modelCatalogEventInvalidation,
   publishModelCatalogResult,
 } from "../../lib/model-catalog-cache.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
@@ -27,13 +29,23 @@ import {
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
 
+function composerControls(state: ChatPageHost) {
+  return renderChatPaneComposerControls({
+    state,
+    selectedSession: undefined,
+    agentDefaultModel: undefined,
+    modelAccess: { allowed: true, requiredScope: "operator.write" },
+    effortAccess: { allowed: true, requiredScope: "operator.write" },
+    contextWindowAccess: { allowed: true, requiredScope: "operator.admin" },
+    permissionAccess: { allowed: true, requiredScope: "operator.write" },
+    canSelectFull: true,
+    onModelSetup: vi.fn(),
+  }).composerControls;
+}
+
 describe("chat pane composer controls", () => {
   const cachedModels = [{ id: "cached-model", name: "Cached Model", provider: "openai" }];
   it.each<{ label: string; cachedCatalog?: ModelCatalogResult }>([
-    {
-      label: "warm",
-      cachedCatalog: { models: cachedModels },
-    },
     {
       label: "warm restricted",
       cachedCatalog: {
@@ -86,18 +98,7 @@ describe("chat pane composer controls", () => {
         await initialized;
         invalidateModelCatalogCache(client, scope);
       }
-      const controlParams = {
-        state,
-        selectedSession: undefined,
-        agentDefaultModel: undefined,
-        modelAccess: { allowed: true, requiredScope: "operator.write" } as const,
-        effortAccess: { allowed: true, requiredScope: "operator.write" } as const,
-        contextWindowAccess: { allowed: true, requiredScope: "operator.admin" } as const,
-        permissionAccess: { allowed: true, requiredScope: "operator.write" } as const,
-        canSelectFull: true,
-        onModelSetup: vi.fn(),
-      };
-      render(renderChatPaneComposerControls(controlParams).composerControls, container);
+      render(composerControls(state), container);
 
       const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
       picker!.open = true;
@@ -111,7 +112,7 @@ describe("chat pane composer controls", () => {
         sessionKey: "main",
       });
       expect(state.chatModelsLoading).toBe(!cachedCatalog);
-      render(renderChatPaneComposerControls(controlParams).composerControls, container);
+      render(composerControls(state), container);
       if (cachedCatalog) {
         expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
         expect(
@@ -138,7 +139,7 @@ describe("chat pane composer controls", () => {
     },
   );
 
-  it("keeps current models interactive while the direct catalog revalidates", async () => {
+  it("keeps current models interactive after sign-in while the replacement catalog is held", async () => {
     const startup = createDeferred<unknown>();
     const catalog = createDeferred<unknown>();
     const client = createTestGatewayClient(
@@ -168,7 +169,12 @@ describe("chat pane composer controls", () => {
       }),
     ).toBe(true);
     await refreshChatModelCatalogOnDemand(host);
-    invalidateModelCatalogCache(client, scope);
+    invalidateChatMetadataStore(
+      client,
+      undefined,
+      undefined,
+      modelCatalogEventInvalidation({ event: "config.changed" }),
+    );
     const refresh = refreshPageChat(host, {
       awaitHistory: true,
       deferBranches: true,
@@ -179,18 +185,7 @@ describe("chat pane composer controls", () => {
     expect(host.chatModelCatalog).toEqual([cachedModel]);
     expect(host.chatModelsLoading).toBe(false);
     const container = document.createElement("div");
-    const controls = renderChatPaneComposerControls({
-      state: host,
-      selectedSession: undefined,
-      agentDefaultModel: undefined,
-      modelAccess: { allowed: true, requiredScope: "operator.write" },
-      effortAccess: { allowed: true, requiredScope: "operator.write" },
-      contextWindowAccess: { allowed: true, requiredScope: "operator.admin" },
-      permissionAccess: { allowed: true, requiredScope: "operator.write" },
-      canSelectFull: true,
-      onModelSetup: vi.fn(),
-    });
-    render(controls.composerControls, container);
+    render(composerControls(host), container);
     expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
     expect(container.textContent).toContain("Cached Model");
     expect(container.textContent).not.toContain("Loading models…");

@@ -4,12 +4,13 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
+import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
+import { migrateOpenClawAgentDatabaseForMaintenance } from "../state/openclaw-agent-db-maintenance.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../state/openclaw-agent-db-registry-listing.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   listOpenClawRegisteredAgentDatabases,
-  migrateOpenClawAgentDatabaseForMaintenance,
-  withAgentDatabaseMaintenanceLease,
 } from "../state/openclaw-agent-db.js";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import { shortenHomePath } from "../utils.js";
@@ -85,13 +86,17 @@ function inspectAgentMemoryRecallMetadataMigration(
 
 function needsAgentMemorySchemaMaintenance(env: NodeJS.ProcessEnv): boolean {
   try {
+    const isHeld = createRetainedAgentDatabaseMatcher(env, () => []);
     // Doctor discovery must observe registrations committed by another process.
     invalidateRegisteredAgentDatabasesMemo({ env });
     return listOpenClawRegisteredAgentDatabases({
       env,
       includeIncompatibleSchemaVersions: true,
     }).some((entry) => {
-      if (readAgentDatabaseAdmissionRefusal(entry.agentId, { env })) {
+      if (
+        isHeld(entry.path, entry.agentId) ||
+        readAgentDatabaseAdmissionRefusal(entry.agentId, { env })
+      ) {
         return false;
       }
       const state = inspectAgentMemoryRecallMetadataMigration(entry.path);
@@ -114,6 +119,7 @@ async function repairDoctorAgentMemorySchemas(
   invalidateRegisteredAgentDatabasesMemo({ env });
   const repaired: DoctorAgentMemorySchemaRepair[] = [];
   const warnings: string[] = [];
+  const isHeld = createRetainedAgentDatabaseMatcher(env, () => []);
   let registered: ReturnType<typeof listOpenClawRegisteredAgentDatabases>;
   try {
     registered = listOpenClawRegisteredAgentDatabases({
@@ -128,7 +134,10 @@ async function repairDoctorAgentMemorySchemas(
   }
 
   for (const entry of registered) {
-    if (readAgentDatabaseAdmissionRefusal(entry.agentId, { env })) {
+    if (
+      isHeld(entry.path, entry.agentId) ||
+      readAgentDatabaseAdmissionRefusal(entry.agentId, { env })
+    ) {
       continue;
     }
     // A lost lease must stop the pass before a later target can close a new owner's handle.

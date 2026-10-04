@@ -70,6 +70,55 @@ describe("setupCommand", () => {
         }),
       );
       expect(effects.resolveSessionTranscriptsDir).toHaveBeenCalledWith("main");
+      expect((await fs.stat(path.join(workspace, "AGENTS.md"))).isFile()).toBe(true);
+    });
+  });
+
+  it.each([false, true])("persists skipped bootstrap files (existing: %s)", async (existing) => {
+    await withSetupHome(async (home) => {
+      const runtime = createTestRuntime();
+      const configDir = path.join(home, ".openclaw");
+      const configPath = path.join(configDir, "openclaw.json");
+      const workspace = path.join(home, "workspace");
+      const userContent = "User-maintained instructions.\n";
+      await fs.mkdir(configDir, { recursive: true });
+      if (existing) {
+        await fs.writeFile(
+          configPath,
+          JSON.stringify({
+            agents: { defaults: { workspace, skipBootstrap: false } },
+            gateway: { mode: "local" },
+          }),
+        );
+        await fs.mkdir(workspace, { recursive: true });
+        await fs.writeFile(path.join(workspace, "USER.md"), userContent);
+      }
+
+      await setupCommand({ workspace, skipBootstrap: true }, runtime);
+
+      const raw = await fs.readFile(configPath, "utf8");
+      const config = JSON.parse(raw);
+      expect(config.agents?.defaults?.skipBootstrap).toBe(true);
+      expect(config).toMatchObject({
+        agents: { defaults: { workspace, skipBootstrap: true }, entries: { main: {} } },
+      });
+      const expectedFiles = existing ? ["USER.md"] : [];
+      expect((await fs.readdir(workspace)).filter((name) => name.endsWith(".md"))).toEqual(
+        expectedFiles,
+      );
+      expect(
+        (await fs.stat(path.join(configDir, "agents", "main", "sessions"))).isDirectory(),
+      ).toBe(true);
+
+      await setupCommand(undefined, runtime);
+
+      expect(await fs.readFile(configPath, "utf8")).toBe(raw);
+      expect((await fs.readdir(workspace)).filter((name) => name.endsWith(".md"))).toEqual(
+        expectedFiles,
+      );
+      if (existing) {
+        expect(await fs.readFile(path.join(workspace, "USER.md"), "utf8")).toBe(userContent);
+      }
     });
   });
 
@@ -88,6 +137,39 @@ describe("setupCommand", () => {
       ]);
     });
   });
+
+  it.each([false, true])(
+    "preserves an included skip-bootstrap leaf (value: %s)",
+    async (skipBootstrap) => {
+      await withSetupHome(async (home) => {
+        const configDir = path.join(home, ".openclaw");
+        const configPath = path.join(configDir, "openclaw.json");
+        const includePath = path.join(configDir, "skip-bootstrap.json");
+        const workspace = path.join(home, "workspace");
+        const rootRaw = JSON.stringify({
+          agents: {
+            defaults: { workspace, skipBootstrap: { $include: "./skip-bootstrap.json" } },
+            entries: { ops: {} },
+          },
+          gateway: { mode: "local" },
+        });
+        await fs.mkdir(configDir, { recursive: true });
+        await fs.writeFile(configPath, rootRaw);
+        await fs.writeFile(includePath, JSON.stringify(skipBootstrap));
+
+        const setup = setupCommand({ skipBootstrap: true }, createTestRuntime());
+        if (skipBootstrap) {
+          await setup;
+          expect(await fs.readdir(workspace)).toEqual([]);
+        } else {
+          await expect(setup).rejects.toThrow("Edit the included file directly");
+          await expect(fs.stat(workspace)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        expect(await fs.readFile(configPath, "utf8")).toBe(rootRaw);
+        expect(await fs.readFile(includePath, "utf8")).toBe(JSON.stringify(skipBootstrap));
+      });
+    },
+  );
 
   it("emits one structured result for baseline JSON output", async () => {
     await withSetupHome(async (home) => {
@@ -125,14 +207,14 @@ describe("setupCommand", () => {
     });
   });
 
-  it("keeps the default entry workspace on bare setup", async () => {
+  it("keeps the sole entry workspace on bare setup", async () => {
     await withSetupHome(async (home) => {
       const runtime = createTestRuntime();
       const configDir = path.join(home, ".openclaw");
       const configPath = path.join(configDir, "openclaw.json");
       const workspace = path.join(home, "ops-workspace");
       const raw = JSON.stringify({
-        agents: { entries: { ops: { default: true, workspace } } },
+        agents: { entries: { ops: { workspace } } },
         gateway: { mode: "local" },
       });
       await fs.mkdir(configDir, { recursive: true });
@@ -166,7 +248,7 @@ describe("setupCommand", () => {
       await fs.writeFile(
         configPath,
         JSON.stringify({
-          agents: { entries: { ops: { default: true, workspace } } },
+          agents: { entries: { ops: { workspace } } },
         }),
       );
 
@@ -227,7 +309,7 @@ describe("setupCommand", () => {
         JSON.stringify({
           agents: {
             defaults: { workspace },
-            entries: { ops: { default: true } },
+            entries: { ops: {} },
           },
           gateway: { mode: "local" },
         }),
@@ -252,7 +334,7 @@ describe("setupCommand", () => {
       const included = {
         agents: {
           defaults: { workspace: oldWorkspace },
-          entries: { ops: { default: true, workspace: "   " } },
+          entries: { ops: { workspace: "   " } },
         },
         gateway: { mode: "local" },
       };
@@ -272,6 +354,161 @@ describe("setupCommand", () => {
     });
   });
 
+  it.each([
+    { scope: "root", skip: undefined, changeWorkspace: false, missingGateway: false },
+    { scope: "root", skip: false, changeWorkspace: true, missingGateway: false },
+    { scope: "root", skip: false, changeWorkspace: false, missingGateway: true },
+    { scope: "agents", skip: undefined, changeWorkspace: false, missingGateway: false },
+    { scope: "agents", skip: false, changeWorkspace: true, missingGateway: false },
+    { scope: "defaults", skip: false, changeWorkspace: false, missingGateway: false },
+    { scope: "defaults", skip: false, changeWorkspace: true, missingGateway: false },
+    { scope: "authored", skip: false, changeWorkspace: false, missingGateway: false },
+    { scope: "authored", skip: false, changeWorkspace: true, missingGateway: false },
+  ])(
+    "keeps $scope includes while skipping bootstrap (workspace: $changeWorkspace, gateway missing: $missingGateway)",
+    async ({ scope, skip, changeWorkspace, missingGateway }) => {
+      await withSetupHome(async (home) => {
+        const runtime = createTestRuntime();
+        const configDir = path.join(home, ".openclaw");
+        const configPath = path.join(configDir, "openclaw.json");
+        const includePath = path.join(configDir, "agents.json");
+        const oldWorkspace = path.join(home, "old-workspace");
+        const nextWorkspace = path.join(home, "next-workspace");
+        const defaults = {
+          workspace: oldWorkspace,
+          skipBootstrap: skip,
+          heartbeat: { every: "30m" },
+        };
+        const agents = { defaults, entries: { ops: {} } };
+        const gateway = missingGateway ? {} : { mode: "local" };
+        const include = { $include: "./agents.json" };
+        const included =
+          scope === "root" ? { agents, gateway } : scope === "defaults" ? defaults : agents;
+        const authored =
+          scope === "root"
+            ? include
+            : {
+                agents:
+                  scope === "defaults"
+                    ? { defaults: include, entries: agents.entries }
+                    : {
+                        ...include,
+                        ...(scope === "authored"
+                          ? {
+                              defaults: {
+                                skipBootstrap: false,
+                                ...(changeWorkspace ? { workspace: oldWorkspace } : {}),
+                              },
+                            }
+                          : {}),
+                      },
+                gateway,
+              };
+        const includedRaw = JSON.stringify(included);
+        await fs.mkdir(configDir, { recursive: true });
+        await fs.writeFile(configPath, JSON.stringify(authored));
+        await fs.writeFile(includePath, includedRaw);
+
+        const options = {
+          skipBootstrap: true,
+          ...(changeWorkspace ? { workspace: nextWorkspace } : {}),
+        };
+        await setupCommand(options, runtime);
+
+        const raw = await fs.readFile(configPath, "utf8");
+        const root = JSON.parse(raw);
+        const directive =
+          scope === "root" ? root : scope === "defaults" ? root.agents.defaults : root.agents;
+        expect(directive.$include).toBe("./agents.json");
+        expect(root.agents?.defaults?.skipBootstrap).toBe(true);
+        expect(root.agents.defaults.workspace).toBe(changeWorkspace ? nextWorkspace : undefined);
+        expect(root.agents.entries).toEqual(scope === "defaults" ? agents.entries : undefined);
+        expect(root.agents.defaults.heartbeat).toBeUndefined();
+        expect(root.gateway?.mode).toBe(
+          missingGateway ? "local" : scope === "root" ? undefined : "local",
+        );
+        expect(await fs.readFile(includePath, "utf8")).toBe(includedRaw);
+        const workspace = changeWorkspace ? nextWorkspace : oldWorkspace;
+        expect((await fs.readdir(workspace)).filter((name) => name.endsWith(".md"))).toEqual([]);
+
+        await setupCommand(undefined, runtime);
+
+        expect(await fs.readFile(configPath, "utf8")).toBe(raw);
+        expect(await fs.readFile(includePath, "utf8")).toBe(includedRaw);
+        expect((await fs.readdir(workspace)).filter((name) => name.endsWith(".md"))).toEqual([]);
+      });
+    },
+  );
+
+  it.each(["defaults", "entry", "legacy-entry", "local-entry"])(
+    "handles combined workspace and bootstrap ownership (%s)",
+    async (scope) => {
+      await withSetupHome(async (home) => {
+        const configDir = path.join(home, ".openclaw");
+        const configPath = path.join(configDir, "openclaw.json");
+        const includePath = path.join(configDir, "workspace.json");
+        const oldWorkspace = path.join(home, "old-workspace");
+        const workspace = path.join(home, "new-workspace");
+        const include = { $include: "./workspace.json" };
+        const defaults = {
+          skipBootstrap: false,
+          ...(scope === "local-entry" ? { systemAgent: { agentId: "ops" } } : {}),
+        };
+        const selected = { workspace: oldWorkspace };
+        const included =
+          scope === "defaults"
+            ? oldWorkspace
+            : scope === "local-entry"
+              ? { workspace: oldWorkspace }
+              : {
+                  defaults,
+                  ...(scope === "legacy-entry"
+                    ? { list: [{ id: "ops", default: true, ...selected }] }
+                    : { entries: { ops: selected } }),
+                };
+        const rootRaw = JSON.stringify({
+          agents:
+            scope === "defaults"
+              ? {
+                  defaults: { ...defaults, workspace: include },
+                  entries: { ops: {} },
+                }
+              : scope === "local-entry"
+                ? { ownership: "explicit", defaults, entries: { ops: selected, worker: include } }
+                : include,
+          gateway: { mode: "local" },
+        });
+        const includeRaw = JSON.stringify(included);
+        await fs.mkdir(configDir, { recursive: true });
+        await fs.writeFile(configPath, rootRaw);
+        await fs.writeFile(includePath, includeRaw);
+
+        const runtime = createTestRuntime();
+        const setup = setupCommand({ workspace, skipBootstrap: true }, runtime);
+        if (scope === "local-entry") {
+          await setup;
+          const config = JSON.parse(await fs.readFile(configPath, "utf8"));
+          expect(config.agents.entries.ops.workspace).toBe(workspace);
+          expect(config.agents.defaults.skipBootstrap).toBe(true);
+          expect((await fs.readdir(workspace)).filter((name) => name.endsWith(".md"))).toEqual([]);
+        } else {
+          if (scope === "legacy-entry") {
+            await setup;
+            expect(runtime.exit).toHaveBeenCalledWith(1);
+            expect(runtime.error).toHaveBeenCalledWith(
+              expect.stringContaining("openclaw doctor --fix"),
+            );
+          } else {
+            await expect(setup).rejects.toMatchObject({ code: "CONFIG_INCLUDE_OWNERSHIP" });
+          }
+          expect(await fs.readFile(configPath, "utf8")).toBe(rootRaw);
+          await expect(fs.stat(workspace)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        expect(await fs.readFile(includePath, "utf8")).toBe(includeRaw);
+      });
+    },
+  );
+
   it("updates inherited workspace defaults below a nested roster include", async () => {
     await withSetupHome(async (home) => {
       const runtime = createTestRuntime();
@@ -282,7 +519,7 @@ describe("setupCommand", () => {
       const nextWorkspace = path.join(home, "next-workspace");
       const includedAgents = {
         defaults: { workspace: oldWorkspace },
-        entries: { ops: { default: true } },
+        entries: { ops: {} },
       };
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(

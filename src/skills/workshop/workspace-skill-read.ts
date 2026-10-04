@@ -7,21 +7,8 @@ import {
   readWorkspaceSkillFile,
 } from "../lifecycle/workspace-skill-write.js";
 import { resolveSkillManifestMetadata } from "../loading/frontmatter.js";
-import type { Skill } from "../loading/skill-contract.js";
 import { loadSkillRootRecords, warnInvalidSkill } from "../loading/skill-root-loader.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
-
-function assertWritableSkillTarget(
-  skill: Pick<Skill, "baseDir" | "filePath" | "name">,
-  options: WorkshopSkillReadOptions,
-): void {
-  const skillsRoot = workshopSkillsDir(options);
-  assertInsideSkillsRoot(skillsRoot, skill.filePath, "skill file");
-  assertInsideSkillsRoot(skillsRoot, skill.baseDir, "skill directory");
-  if (path.basename(skill.filePath) !== "SKILL.md") {
-    throw new Error("Skill Workshop can only update SKILL.md targets.");
-  }
-}
 
 export type WritableWorkshopSkillSummary = {
   name: string;
@@ -75,15 +62,6 @@ export function listWritableWorkshopSkillSummaries(
     .toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
-function resolveWritableWorkshopSkillSummary(
-  skillName: string,
-  options: WorkshopSkillReadOptions,
-): WritableWorkshopSkillSummary | undefined {
-  return (
-    resolveSkillStatusEntry(listWritableWorkshopSkillSummaries(options), skillName) ?? undefined
-  );
-}
-
 export async function readWritableWorkshopSkill(
   skillName: string,
   options: WorkshopSkillReadOptions,
@@ -99,13 +77,18 @@ export async function readWritableWorkshopSkill(
   if (!name) {
     throw new Error("Skill name is required.");
   }
-  const targetSkill = resolveWritableWorkshopSkillSummary(name, options);
+  const targetSkill = resolveSkillStatusEntry(listWritableWorkshopSkillSummaries(options), name);
   if (!targetSkill) {
     throw new Error(
       `Skill Workshop can only update skills it generated. No Workshop-generated skill matched: ${name}. Create it as a new skill, or edit the file directly.`,
     );
   }
-  assertWritableSkillTarget(targetSkill, options);
+  const skillsRoot = workshopSkillsDir(options);
+  assertInsideSkillsRoot(skillsRoot, targetSkill.filePath, "skill file");
+  assertInsideSkillsRoot(skillsRoot, targetSkill.baseDir, "skill directory");
+  if (path.basename(targetSkill.filePath) !== "SKILL.md") {
+    throw new Error("Skill Workshop can only update SKILL.md targets.");
+  }
   const content = await readWorkspaceSkillFile(targetSkill.filePath);
   if (content === null) {
     throw new Error(`Skill file is missing: ${targetSkill.filePath}`);

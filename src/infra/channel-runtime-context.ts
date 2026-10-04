@@ -1,4 +1,3 @@
-// Registers and watches plugin channel runtime context values.
 import type {
   ChannelRuntimeContextKey,
   ChannelRuntimeSurface,
@@ -9,7 +8,7 @@ const NOOP_DISPOSE = () => {};
 function resolveScopedRuntimeContextRegistry(params: {
   channelRuntime: ChannelRuntimeSurface;
 }): ChannelRuntimeSurface["runtimeContexts"] {
-  const runtimeContexts = resolveRuntimeContextRegistry(params);
+  const runtimeContexts = params.channelRuntime?.runtimeContexts;
   if (
     runtimeContexts &&
     typeof runtimeContexts.register === "function" &&
@@ -23,12 +22,6 @@ function resolveScopedRuntimeContextRegistry(params: {
   );
 }
 
-function resolveRuntimeContextRegistry(params: {
-  channelRuntime?: ChannelRuntimeSurface;
-}): ChannelRuntimeSurface["runtimeContexts"] | null {
-  return params.channelRuntime?.runtimeContexts ?? null;
-}
-
 /** Registers a channel-scoped runtime context, returning null when no runtime registry exists. */
 export function registerChannelRuntimeContext(
   params: ChannelRuntimeContextKey & {
@@ -37,17 +30,15 @@ export function registerChannelRuntimeContext(
     abortSignal?: AbortSignal;
   },
 ): { dispose: () => void } | null {
-  const runtimeContexts = resolveRuntimeContextRegistry(params);
-  if (!runtimeContexts) {
-    return null;
-  }
-  return runtimeContexts.register({
-    channelId: params.channelId,
-    accountId: params.accountId,
-    capability: params.capability,
-    context: params.context,
-    abortSignal: params.abortSignal,
-  });
+  return (
+    params.channelRuntime?.runtimeContexts?.register({
+      channelId: params.channelId,
+      accountId: params.accountId,
+      capability: params.capability,
+      context: params.context,
+      abortSignal: params.abortSignal,
+    }) ?? null
+  );
 }
 
 /** Reads a channel-scoped runtime context from the current runtime registry. */
@@ -56,11 +47,7 @@ export function getChannelRuntimeContext(
     channelRuntime?: ChannelRuntimeSurface;
   },
 ): unknown {
-  const runtimeContexts = resolveRuntimeContextRegistry(params);
-  if (!runtimeContexts) {
-    return undefined;
-  }
-  return runtimeContexts.get({
+  return params.channelRuntime?.runtimeContexts?.get({
     channelId: params.channelId,
     accountId: params.accountId,
     capability: params.capability,
@@ -74,16 +61,14 @@ export function watchChannelRuntimeContexts(
     onEvent: Parameters<ChannelRuntimeSurface["runtimeContexts"]["watch"]>[0]["onEvent"];
   },
 ): (() => void) | null {
-  const runtimeContexts = resolveRuntimeContextRegistry(params);
-  if (!runtimeContexts) {
-    return null;
-  }
-  return runtimeContexts.watch({
-    channelId: params.channelId,
-    accountId: params.accountId,
-    capability: params.capability,
-    onEvent: params.onEvent,
-  });
+  return (
+    params.channelRuntime?.runtimeContexts?.watch({
+      channelId: params.channelId,
+      accountId: params.accountId,
+      capability: params.capability,
+      onEvent: params.onEvent,
+    }) ?? null
+  );
 }
 
 /** Wraps a channel runtime so contexts registered during a task are disposed together. */

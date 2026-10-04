@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { hasErrnoCode } from "../../infra/errno.js";
-import { isMissingPathError } from "../../infra/errors.js";
 import { root as fsRoot } from "../../infra/fs-safe.js";
+import { rawPathStat } from "./git-path-inventory.js";
 import { commandError, listGitWorktrees, requireGit, requireGitBuffer, runGit } from "./git.js";
 import { restoreProvisionedFiles } from "./provisioned-files.js";
 import {
@@ -100,6 +100,7 @@ async function createReceipt(
   record: ManagedWorktreeRecord,
   snapshot: string,
   options: GitOptions,
+  admitCapacity: (requiredPaths: readonly string[]) => Promise<void>,
 ): Promise<Receipt> {
   options?.beforeRun?.();
   await fs.mkdir(path.dirname(record.path), { recursive: true });
@@ -120,6 +121,8 @@ async function createReceipt(
   if (!stat.isDirectory()) {
     throw new Error("Exact restore destination is not a directory");
   }
+  await admitCapacity([record.repoRoot, record.path]);
+  options?.beforeRun?.();
   const receipt = {
     version: 1 as const,
     binding: binding(record),
@@ -179,12 +182,7 @@ async function restoreProvisionedAtomically(params: {
     if (!entry) {
       throw new Error("Exact restore lacks provisioned metadata");
     }
-    const existing = await fs.lstat(target).catch((error: unknown) => {
-      if (isMissingPathError(error)) {
-        return undefined;
-      }
-      throw error;
-    });
+    const existing = await rawPathStat(target);
     if (existing) {
       if (!existing.isFile() || state.mode === null) {
         throw new Error("Exact restore provisioned path changed; source preserved");
@@ -236,13 +234,14 @@ export async function restoreExactSnapshotFallback<T>(params: {
   states: readonly ProvisionedFileState[];
   options: GitOptions;
   assertCurrent: () => void;
+  admitCapacity: (requiredPaths: readonly string[]) => Promise<void>;
   add: (assertCurrent: () => void) => Promise<void>;
   finalize: (identity: ExactStateSnapshot) => Promise<T>;
 }) {
   const { record, snapshot, metadata } = params;
   const receipt =
     (await readExactRestoreReceipt(record, params.options)) ??
-    (await createReceipt(record, snapshot, params.options));
+    (await createReceipt(record, snapshot, params.options, params.admitCapacity));
   if (receipt.snapshot !== snapshot) {
     throw new Error("Exact restore snapshot changed; receipt and source preserved");
   }
@@ -257,6 +256,7 @@ export async function restoreExactSnapshotFallback<T>(params: {
     if ((await fs.readdir(record.path)).length) {
       throw new Error("Incomplete exact restore registration; source and receipt preserved");
     }
+    await params.admitCapacity([record.repoRoot, record.path]);
     assertCurrent();
     await params.add(assertCurrent);
   }
@@ -285,6 +285,7 @@ export async function restoreExactSnapshotFallback<T>(params: {
     ) {
       throw new Error("Exact restore temporary namespace conflicts with captured data");
     }
+    await params.admitCapacity([record.repoRoot, record.path]);
     if (!(await hasExactWorktreeIndex(record.path, metadata, options))) {
       assertCurrent();
       await fs.rm(temporaryRoot, { recursive: true, force: true });
@@ -298,7 +299,6 @@ export async function restoreExactSnapshotFallback<T>(params: {
       });
       await restoreExactStateMetadata({
         checkoutPath: record.path,
-        snapshot,
         metadata,
         options,
         assertCurrent,

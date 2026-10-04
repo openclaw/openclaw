@@ -1,5 +1,8 @@
+import type { CDPSession } from "@vitest/browser-playwright";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { cdp } from "vitest/browser";
 import { CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS } from "../../../../src/gateway/control-ui-plugin-frame-contract.js";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../../api/gateway.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -17,16 +20,20 @@ class SessionNavigationPluginPage extends PluginPage {
 
 const tag = "openclaw-plugin-session-navigation-test";
 customElements.define(tag, SessionNavigationPluginPage);
+const pluginPath = "/plugins/example/panel";
 const sessionKey = "agent:writer:subagent:11111111-2222-4333-8444-555555555555";
 const message: ControlUiPluginSessionOpenMessage = {
   type: "openclaw-plugin-session-open",
   sessionKey,
 };
-const dispose: Array<() => void> = [];
+const dispose: Array<() => void | Promise<void>> = [];
 
-afterEach(() => {
-  dispose.splice(0).forEach((cleanup) => cleanup());
-  vi.restoreAllMocks();
+afterEach(async () => {
+  try {
+    await Promise.all(dispose.splice(0).map(async (cleanup) => cleanup()));
+  } finally {
+    vi.restoreAllMocks();
+  }
 });
 
 async function mount(
@@ -34,13 +41,14 @@ async function mount(
     requiresGatewayAuth?: boolean;
     path?: string;
     boardFace?: "dashboard";
+    view?: SessionNavigationPluginPage;
   } = {},
 ) {
   const descriptor: GatewayControlUiPluginTab = {
     pluginId: "example-plugin",
     id: "panel",
     label: "Example panel",
-    path: options.path ?? "/plugins/example/panel",
+    path: options.path ?? pluginPath,
     requiresGatewayAuth: options.requiresGatewayAuth ?? true,
   };
   const config = {
@@ -60,6 +68,7 @@ async function mount(
     automaticallyFetchFavicons: false,
     communityInvite: false,
     terminalEnabled: false,
+    uploadsEnabled: true,
     pluginAssetsRequireAuth: true,
     pluginFrameGrants: [
       { pluginId: descriptor.pluginId, path: "/plugins/example", match: "prefix" },
@@ -111,7 +120,7 @@ async function mount(
     navigate,
   } as unknown as ApplicationContext;
   const provider = createApplicationContextProvider(context);
-  const view = document.createElement(tag) as SessionNavigationPluginPage;
+  const view = options.view ?? (document.createElement(tag) as SessionNavigationPluginPage);
   view.pluginId = descriptor.pluginId;
   view.tabId = descriptor.id;
   provider.append(view);
@@ -141,34 +150,79 @@ function dispatch(
   window.dispatchEvent(new MessageEvent("message", { source, data, origin, ports }));
 }
 
-async function installClickDocument(frame: HTMLIFrameElement) {
-  let ready = false;
+async function prepareClickDocument(view: SessionNavigationPluginPage, signal: AbortSignal) {
+  signal.throwIfAborted();
+  const session: CDPSession = cdp();
+  // Vitest initializes its CDP handler lazily; finish that before listener and command RPCs race.
+  await session.send("Page.enable");
+  const ready = createDeferred();
+  let cleanupPromise: Promise<void> | undefined;
+  const cleanup = () =>
+    (cleanupPromise ??= (async () => {
+      window.removeEventListener("message", onReady);
+      signal.removeEventListener("abort", onAbort);
+      session.off("Fetch.requestPaused", onRequest);
+      await session.send("Fetch.disable");
+    })());
+  const fail = (error: unknown) => {
+    void cleanup().then(
+      () => ready.reject(new Error("Plugin click document failed", { cause: error })),
+      (cleanupError: unknown) =>
+        ready.reject(new Error("Plugin click document cleanup failed", { cause: cleanupError })),
+    );
+  };
   const onReady = (event: MessageEvent<unknown>) => {
-    if (event.source === frame.contentWindow && event.data === "test-click-ready") {
-      ready = true;
+    const frame = view.querySelector("iframe");
+    if (frame && event.source === frame.contentWindow && event.data === "test-click-ready") {
+      void cleanup().then(() => ready.resolve(), fail);
     }
   };
-  window.addEventListener("message", onReady);
-  frame.srcdoc = `<button id="open">Open work session</button><script>
+  const onAbort = () => fail(new Error("Iframe readiness aborted", { cause: signal.reason }));
+  const clickHtml = `<button id="open">Open work session</button><script>
     document.getElementById("open").onclick = () => parent.postMessage(${JSON.stringify(message)}, ${JSON.stringify(window.location.origin)});
     addEventListener("message", event => {
       if (event.source === parent && event.data === "test-click") document.getElementById("open").click();
     });
     parent.postMessage("test-click-ready", ${JSON.stringify(window.location.origin)});
   </script>`;
+  const onRequest = ({ requestId }: { requestId: string }) => {
+    void session
+      .send("Fetch.fulfillRequest", {
+        requestId,
+        responseCode: 200,
+        responseHeaders: [{ name: "Content-Type", value: "text/html; charset=utf-8" }],
+        body: btoa(clickHtml),
+      })
+      .catch(fail);
+  };
+  dispose.push(cleanup);
+  window.addEventListener("message", onReady);
+  session.on("Fetch.requestPaused", onRequest);
   try {
-    await expect.poll(() => ready).toBe(true);
-  } finally {
-    window.removeEventListener("message", onReady);
+    // Own the initial document; replacing srcdoc after mount races Vite's SPA fallback navigation.
+    await session.send("Fetch.enable", {
+      patterns: [
+        { urlPattern: new URL(pluginPath, window.location.href).href, resourceType: "Document" },
+      ],
+    });
+    signal.throwIfAborted();
+  } catch (error) {
+    await cleanup();
+    throw new Error("Could not prepare plugin click document", { cause: error });
   }
-  frame.contentWindow!.postMessage("test-click", "*");
+  signal.addEventListener("abort", onAbort, { once: true });
+  return { ready: ready.promise };
 }
 
 describe("authenticated plugin-frame session navigation", () => {
-  it("routes a real sandbox-frame click with the canonical base path and ordered selection", async () => {
-    const fixture = await mount();
+  it("routes a real sandbox-frame click with the canonical base path and ordered selection", async ({
+    signal,
+  }) => {
+    const view = document.createElement(tag) as SessionNavigationPluginPage;
+    const clickDocument = await prepareClickDocument(view, signal);
+    const [fixture] = await Promise.all([mount({ view }), clickDocument.ready]);
     expect(fixture.frame.getAttribute("sandbox")).toBe("allow-scripts");
-    await installClickDocument(fixture.frame);
+    fixture.frame.contentWindow!.postMessage("test-click", "*");
     await expect.poll(() => fixture.navigate.mock.calls.length).toBe(1);
     expect(fixture.selectAgent).toHaveBeenCalledExactlyOnceWith("writer");
     expect(fixture.setSessionKey).toHaveBeenCalledExactlyOnceWith(sessionKey);
@@ -285,52 +339,46 @@ describe("authenticated plugin-frame session navigation", () => {
     expect(fixture.setSessionKey).not.toHaveBeenCalled();
   });
 
-  it("retires the old window across a coalesced reconnect and after unmount", async () => {
-    const fixture = await mount();
-    const staleWindow = fixture.frame.contentWindow;
-    fixture.snapshot.phase = "reconnecting";
-    fixture.notify();
-    fixture.snapshot.phase = "connected";
-    fixture.notify();
-    dispatch(staleWindow);
-    expect(fixture.navigate).not.toHaveBeenCalled();
-    await expect
-      .poll(() => {
-        const frame = fixture.view.querySelector("iframe");
-        return frame !== null && frame !== fixture.frame;
-      })
-      .toBe(true);
-    await fixture.view.updateComplete;
-    const currentFrame = fixture.view.querySelector("iframe")!;
-    expect(currentFrame).not.toBe(fixture.frame);
-    dispatch(staleWindow);
-    expect(fixture.navigate).not.toHaveBeenCalled();
-    dispatch(currentFrame.contentWindow);
-    expect(fixture.navigate).toHaveBeenCalledOnce();
-    const currentWindow = currentFrame.contentWindow;
-    fixture.view.remove();
-    dispatch(currentWindow);
-    expect(fixture.navigate).toHaveBeenCalledOnce();
-  });
-
-  it("retires a frame when its descriptor changes and cannot revive it by switching back", async () => {
-    const fixture = await mount();
-    const staleWindow = fixture.frame.contentWindow;
-    fixture.descriptor.path = "/plugins/example/other";
-    fixture.view.requestUpdate();
-    await expect
-      .poll(() => fixture.view.querySelector("iframe")?.getAttribute("src"))
-      .toBe("/plugins/example/other");
-    fixture.descriptor.path = "/plugins/example/panel";
-    fixture.view.requestUpdate();
-    await expect
-      .poll(() => fixture.view.querySelector("iframe")?.getAttribute("src"))
-      .toBe("/plugins/example/panel");
-    dispatch(staleWindow);
-    expect(fixture.navigate).not.toHaveBeenCalled();
-    dispatch(fixture.view.querySelector("iframe")!.contentWindow);
-    expect(fixture.navigate).toHaveBeenCalledOnce();
-  });
+  it.each(["reconnect", "descriptor"] as const)(
+    "retires a frame across %s replacement and unmount",
+    async (change) => {
+      const fixture = await mount();
+      const staleWindow = fixture.frame.contentWindow;
+      if (change === "reconnect") {
+        fixture.snapshot.phase = "reconnecting";
+        fixture.notify();
+        fixture.snapshot.phase = "connected";
+        fixture.notify();
+        dispatch(staleWindow);
+        expect(fixture.navigate).not.toHaveBeenCalled();
+        await expect
+          .poll(() => {
+            const frame = fixture.view.querySelector("iframe");
+            return frame !== null && frame !== fixture.frame;
+          })
+          .toBe(true);
+      } else {
+        for (const path of ["/plugins/example/other", pluginPath]) {
+          fixture.descriptor.path = path;
+          fixture.view.requestUpdate();
+          await expect
+            .poll(() => fixture.view.querySelector("iframe")?.getAttribute("src"))
+            .toBe(path);
+        }
+      }
+      await fixture.view.updateComplete;
+      const currentFrame = fixture.view.querySelector("iframe")!;
+      expect(currentFrame).not.toBe(fixture.frame);
+      dispatch(staleWindow);
+      expect(fixture.navigate).not.toHaveBeenCalled();
+      dispatch(currentFrame.contentWindow);
+      expect(fixture.navigate).toHaveBeenCalledOnce();
+      const currentWindow = currentFrame.contentWindow;
+      fixture.view.remove();
+      dispatch(currentWindow);
+      expect(fixture.navigate).toHaveBeenCalledOnce();
+    },
+  );
 
   it("never lends navigation to an unauthenticated or external descriptor", async () => {
     const local = await mount({ requiresGatewayAuth: false });

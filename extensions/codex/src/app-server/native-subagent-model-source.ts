@@ -219,6 +219,23 @@ export function releaseNativeDirectChild(child: ChildState): void {
   release?.();
 }
 
+export function admitNativeChildModelExecution(
+  child: ChildState,
+  owner: ParentOwner,
+  known: KnownChild | undefined,
+): void {
+  if (known) {
+    known.configurationQualification = owner.configurationQualification;
+  }
+  child.modelExecution ??= retainNativeModelExecution(
+    owner,
+    child.nativeTurnId,
+    child.childThreadId,
+    child.completionCustody,
+  );
+  owner.onDirectChildAccepted?.();
+}
+
 export function consumeNativeChildModelAdmission(
   evidence: Extract<NativeChildAdmissionEvidence, { kind: "interaction" }>,
 ): void {
@@ -386,6 +403,13 @@ function captureExecutionOwner(
   }
   let released = false;
   const reviewRequirement = (owner.nativeReviewRequirement ??= { required: false });
+  const assertCurrent = () => {
+    capture.assertCurrent();
+    if (owner.modelExecutionCancelled) {
+      throw new Error("Codex native model execution was cancelled");
+    }
+    assertInputCurrent();
+  };
   return {
     ...capture,
     modelMapping: owner.modelMapping,
@@ -393,22 +417,12 @@ function captureExecutionOwner(
       return reviewRequirement.required;
     },
     recordNativeReviewRequirement: (required) => {
-      capture.assertCurrent();
-      if (owner.modelExecutionCancelled) {
-        throw new Error("Codex native model execution was cancelled");
-      }
-      assertInputCurrent();
+      assertCurrent();
       if (required) {
         reviewRequirement.required = true;
       }
     },
-    assertCurrent: () => {
-      capture.assertCurrent();
-      if (owner.modelExecutionCancelled) {
-        throw new Error("Codex native model execution was cancelled");
-      }
-      assertInputCurrent();
-    },
+    assertCurrent,
     cancel: () => {
       if (!released) {
         owner.modelExecutionCancelled = true;
@@ -475,6 +489,12 @@ function executionOwner(
       execution.bindTurn(request.turnId);
     }
     if (execution.executionOwner.turnId === request.turnId) {
+      if (!child.nativeTurnId && !known.assignment.unanchored) {
+        // Direct spawn already retained this execution before turn/started.
+        // Pin the admitted inference locator on that same initial assignment.
+        child.nativeTurnId = request.turnId;
+        known.assignment.nativeTurnId = request.turnId;
+      }
       return execution.executionOwner;
     }
   }
@@ -509,10 +529,16 @@ function executionOwner(
     return undefined;
   }
   if (
-    child?.nativeTurnId === request.turnId &&
+    child &&
+    (!child.nativeTurnId || child.nativeTurnId === request.turnId) &&
     !child.terminal &&
-    !child.settledWithoutCompletion
+    !child.settledWithoutCompletion &&
+    !known.assignment.unanchored
   ) {
+    // An admitted inference carries the exact initial child turn even when its
+    // turn/started notification was lost. Never recover this locator by history subtraction.
+    child.nativeTurnId = request.turnId;
+    known.assignment.nativeTurnId = request.turnId;
     child.modelExecution = modelSource;
     child.completionCustody ??= completionCustody?.retain();
   } else if (pending) {

@@ -25,6 +25,7 @@ import {
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
 import { renderChat } from "./chat-view.ts";
+import { questionPanelIn } from "./components/chat-question-card.test-support.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -286,7 +287,7 @@ describe("chat pane approval requester identity", () => {
     };
     const state = pane.initialize(context);
     state.sessionKey = host.key;
-    pane.paneTitle = "Unrelated pane title";
+    pane.presentationTitle = "Unrelated pane title";
     const now = Date.now();
     state.chatSessionApprovalQueue = projectSessionApprovalReplay(
       {
@@ -380,8 +381,7 @@ function createGlobalFeaturePane(
   methods: string[],
 ) {
   const client = createGatewayBrowserClientFixture({
-    request: (method, params) =>
-      method === "tasks.list" ? Promise.resolve({ tasks: [] }) : request(method, params),
+    request: (method, params) => request(method, params),
   });
   const sessions = createSessionCapabilityFixture({
     state: { modelOverrides: {}, result: null, loading: false, error: null },
@@ -524,13 +524,9 @@ describe("global chat pane feature ownership", () => {
       const draw = async () => {
         await pane.updateComplete;
         render(renderChat(pane.chatProps!), container);
-        await (
-          container.querySelector("openclaw-chat-question-panel") as
-            | (HTMLElement & {
-                updateComplete?: Promise<unknown>;
-              })
-            | null
-        )?.updateComplete;
+        if (container.querySelector("openclaw-chat-question-card")) {
+          await questionPanelIn(container);
+        }
       };
       const expectStableQuestions = async () => {
         const previous = pane.chatProps?.gatewayQuestionPrompts;
@@ -629,18 +625,32 @@ describe("global chat pane feature ownership", () => {
     expect(request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
   });
 
-  it("loads, refreshes and dismisses the selected agent's global progress card", async () => {
+  it("keeps revision-checked shared clearing behind a separate writer action", async () => {
+    const card = globalProgressCard("research");
+    const request = vi.fn(async (method: string) =>
+      method === "progressCard.put" ? { card: null } : { card },
+    );
+    const { pane } = createGlobalFeaturePane(request, ["progressCard.get", "progressCard.put"]);
+    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(card));
+    expect(pane.chatProps?.onClearSavedProgressCard).toBeDefined();
+    pane.chatProps!.onClearSavedProgressCard!(pane.chatProps!.progressCard!);
+    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toBeNull());
+    expect(request).toHaveBeenCalledWith("progressCard.put", {
+      sessionKey: "global",
+      agentId: "research",
+      expectedRevision: card.revision,
+    });
+  });
+
+  it("hides only this pane's selected agent progress without clearing its card", async () => {
     let card: ProgressCard | null = globalProgressCard("research");
     const request = vi.fn(async (method: string) => {
-      if (method === "progressCard.put") {
-        card = null;
+      if (method !== "progressCard.get") {
+        throw new Error(`Unexpected progress-card write: ${method}`);
       }
       return { card };
     });
-    const { pane, emit } = createGlobalFeaturePane(request, [
-      "progressCard.get",
-      "progressCard.put",
-    ]);
+    const { pane, emit } = createGlobalFeaturePane(request, ["progressCard.get"]);
     await pane.updateComplete;
     expect(request).toHaveBeenCalledWith("progressCard.get", {
       sessionKey: "global",
@@ -659,11 +669,57 @@ describe("global chat pane feature ownership", () => {
     }
     pane.chatProps!.onDismissProgressCard!(displayedCard);
     await vi.waitFor(() => expect(pane.chatProps?.progressCard).toBeNull());
-    expect(request).toHaveBeenLastCalledWith("progressCard.put", {
-      sessionKey: "global",
-      agentId: "research",
-      expectedRevision: 2,
+    expect(request.mock.calls.every(([method]) => method === "progressCard.get")).toBe(true);
+
+    card = globalProgressCard("research", 3);
+    emit({ sessionKey: card.sessionKey, revision: card.revision });
+    await vi.waitFor(() =>
+      expect(request.mock.calls.filter(([method]) => method === "progressCard.get")).toHaveLength(
+        3,
+      ),
+    );
+    expect(pane.chatProps?.progressCard).toBeNull();
+
+    card = null;
+    emit({ sessionKey: "agent:research:global", revision: null });
+    await vi.waitFor(() =>
+      expect(request.mock.calls.filter(([method]) => method === "progressCard.get")).toHaveLength(
+        4,
+      ),
+    );
+    card = globalProgressCard("research", 5);
+    emit({ sessionKey: card.sessionKey, revision: card.revision });
+    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(card));
+  });
+
+  it("keeps each hidden card hidden when the same pane switches agents", async () => {
+    const research = globalProgressCard("research");
+    const main = globalProgressCard("main");
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method !== "progressCard.get") {
+        throw new Error(`Unexpected progress-card write: ${method}`);
+      }
+      const agentId = (params as { agentId?: string } | undefined)?.agentId;
+      return { card: agentId === "main" ? main : research };
     });
+    const { pane, select } = createGlobalFeaturePane(request, ["progressCard.get"]);
+    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(research));
+    pane.chatProps!.onDismissProgressCard!(pane.chatProps!.progressCard!);
+    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toBeNull());
+
+    select("main");
+    await pane.updateComplete;
+    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(main));
+    pane.chatProps!.onDismissProgressCard!(pane.chatProps!.progressCard!);
+    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toBeNull());
+
+    select("research");
+    await pane.updateComplete;
+    expect(pane.chatProps?.progressCard).toBeNull();
+    select("main");
+    await pane.updateComplete;
+    expect(pane.chatProps?.progressCard).toBeNull();
+    expect(request.mock.calls.every(([method]) => method === "progressCard.get")).toBe(true);
   });
 
   it("keeps Main progress when an old Research response arrives for the same raw global key", async () => {

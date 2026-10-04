@@ -235,9 +235,8 @@ export async function dispatchInboundDirectDmWithRuntime(
     MessageSidFull: params.messageId,
     Timestamp: params.timestamp,
     CommandAuthorized: params.commandAuthorized,
-    ...(params.inboundAccessAuthorized === true ? { InboundAccessAuthorized: true } : {}),
     ...(params.inboundAccessAuthorized === true
-      ? { ConversationRouteContextObserved: true as const }
+      ? { InboundAccessAuthorized: true, ConversationRouteContextObserved: true as const }
       : {}),
     ConversationRoutePeerId: params.peer.id,
     OriginatingChannel: params.originatingChannel ?? params.channel,

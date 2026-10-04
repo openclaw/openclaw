@@ -1,6 +1,8 @@
 package ai.openclaw.app.gateway
 
+import ai.openclaw.app.asJsonStringOrNull
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.Call
@@ -32,16 +34,16 @@ internal fun resolveGatewaySourcePreviewConfig(
   val gateway = config["gateway"] as? JsonObject
   val controlUi = gateway?.get("controlUi") as? JsonObject
   val basePath =
-    (controlUi?.get("basePath") as? JsonPrimitive)
-      ?.takeIf { it.isString }
-      ?.content
+    controlUi
+      ?.get("basePath")
+      .asJsonStringOrNull()
       .orEmpty()
       .trim()
       .trim('/')
   // The native Control UI URL owns the mount; explicit prefixes share its encoded representation.
   val location = controlUiUrl.toHttpUrlOrNull()?.newBuilder() ?: return null
   if (basePath.isNotEmpty()) location.encodedPath("/$basePath")
-  val publicOrigin = (gateway?.get("publicOrigin") as? JsonPrimitive)?.takeIf { it.isString }?.content
+  val publicOrigin = gateway?.get("publicOrigin").asJsonStringOrNull()
   return GatewaySourcePreviewConfig(
     gatewayUrl = controlUiUrl,
     basePath = location.build().encodedPath.trimEnd('/'),
@@ -101,8 +103,7 @@ internal class GatewaySourceFaviconLoader(
         credentials.forEach { add("Bearer $it") }
         if (isEmpty()) add(null)
       }.distinct()
-    mutex.lock()
-    try {
+    mutex.withLock {
       if (cache.containsKey(key)) return cache[key]
       for (authorization in authorizations) {
         val request = baseRequest.newBuilder()
@@ -114,8 +115,6 @@ internal class GatewaySourceFaviconLoader(
       }
       cache[key] = null
       return null
-    } finally {
-      mutex.unlock()
     }
   }
 

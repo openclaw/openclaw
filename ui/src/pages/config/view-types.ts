@@ -13,7 +13,6 @@ import type {
 import type { ServerUiPrefProvenance } from "../../app/server-prefs.ts";
 import type { ChatFollowUpMode, ChatSendShortcut, CatalogOpenTarget } from "../../app/settings.ts";
 import type { ThemeCatalogSnapshot } from "../../app/theme-catalog.ts";
-import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import type { TypefaceId } from "../../app/typography.ts";
 import type { WebPushSnapshot } from "../../app/web-push.ts";
@@ -91,7 +90,6 @@ export type ConfigProps = {
   /** Curated content inside the active section; receives the canonical schema editor. */
   renderSection?: (editor: TemplateResult | typeof nothing) => TemplateResult;
   formValue: Record<string, unknown> | null;
-  originalValue: Record<string, unknown> | null;
   activeSection: string | null;
   activeSubsection: string | null;
   onRawChange: (next: string) => void;
@@ -129,8 +127,8 @@ export type ConfigProps = {
   onLocaleChange: (locale: Locale | undefined) => void;
   themeCatalog?: ThemeCatalogSnapshot;
   onRetryThemeCatalog?: () => void;
-  setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
-  setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
+  setTheme: (theme: ThemeName) => void;
+  setThemeMode: (mode: ThemeMode) => void;
   setAccent: (accent: string | undefined) => void;
   hasCustomTheme: boolean;
   customThemeLabel: string | null;
@@ -152,6 +150,8 @@ export type ConfigProps = {
   hiddenSessionCatalogIds: ReadonlySet<string>;
   hiddenSessionCatalogLabels: ReadonlyMap<string, string>;
   setSessionCatalogHidden: (catalogId: string, hidden: boolean) => void;
+  openLinksExternally: boolean;
+  setOpenLinksExternally: (enabled: boolean) => void;
   chatMessageMaxWidth?: string;
   setChatMessageMaxWidth: (value: string | undefined) => void;
   chatShowTaskProgress: boolean;
@@ -170,12 +170,12 @@ export type ConfigProps = {
   sessionObserverDisabled?: boolean;
   setSessionObserverEnabled?: (enabled: boolean) => void;
   setSessionObserverUtilityModel?: (selection: SessionObserverModelSelection) => void;
-  lobsterPetVisits?: boolean;
-  setLobsterPetVisits?: (enabled: boolean) => void;
-  sessionDeleteConfirm?: boolean;
-  setSessionDeleteConfirm?: (enabled: boolean) => void;
-  lobsterPetSounds?: boolean;
-  setLobsterPetSounds?: (enabled: boolean) => void;
+  lobsterPetVisits: boolean;
+  setLobsterPetVisits: (enabled: boolean) => void;
+  sessionDeleteConfirm: boolean;
+  setSessionDeleteConfirm: (enabled: boolean) => void;
+  lobsterPetSounds: boolean;
+  setLobsterPetSounds: (enabled: boolean) => void;
   lobsterdexHref?: string;
   onOpenLobsterdex?: () => void;
   chatSendShortcut: ChatSendShortcut;
@@ -197,8 +197,8 @@ export type ConfigProps = {
   camera?: SettingsMediaDeviceState;
   onCameraRefresh?: () => void;
   onCameraSelect?: (deviceId: string) => void;
-  composerHoldToRecord?: boolean;
-  setComposerHoldToRecord?: (enabled: boolean) => void;
+  composerHoldToRecord: boolean;
+  setComposerHoldToRecord: (enabled: boolean) => void;
   gatewayUrl: string;
   pluginsHref?: string;
   installedSessionSourcePluginIds?: ReadonlySet<string> | null;

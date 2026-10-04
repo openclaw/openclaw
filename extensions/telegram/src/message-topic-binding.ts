@@ -1,5 +1,5 @@
 // Telegram provider-owned authorization for message mutations in forum topics.
-import { normalizeAccountId, normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-core";
+import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-core";
 import type {
   ChannelMessageActionContext,
   ChannelThreadingToolContext,
@@ -75,11 +75,7 @@ function resolveMatchingTelegramRequesterAccount(params: {
     params.accountId ?? resolveDefaultTelegramAccountId(params.cfg),
   );
   const requesterAccountId = normalizeOptionalAccountId(params.context?.requesterAccountId);
-  return accountId &&
-    requesterAccountId &&
-    normalizeAccountId(accountId) === normalizeAccountId(requesterAccountId)
-    ? accountId
-    : undefined;
+  return accountId && accountId === requesterAccountId ? accountId : undefined;
 }
 
 export function resolveTelegramConversationReadChatId(params: {

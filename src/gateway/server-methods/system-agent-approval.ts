@@ -16,6 +16,7 @@ import {
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { describeSystemAgentPersistentOperation } from "../../system-agent/operations.js";
+import { appendTranscriptTurnAsync } from "../../system-agent/transcript-store.js";
 import type { AgentRuntimeDelegatedAuthority } from "../agent-runtime-identity-token.js";
 import { ApprovalObserverClosedError } from "../exec-approval-lifecycle.js";
 import { sameWorkerSessionTurnClaim } from "../worker-environments/placement-record.js";
@@ -25,7 +26,6 @@ import {
   handlePendingApprovalRequest,
 } from "./approval-shared.js";
 import type { GatewaySystemAgentSession } from "./shared-types.js";
-import { persistSystemAgentEngineHistory } from "./system-agent-chat-turn.js";
 import { runSystemAgentGatewayTask } from "./system-agent-execution.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -213,6 +213,7 @@ export async function prepareDelegatedSystemAgentApproval(params: {
       ): Promise<Awaited<ReturnType<DelegatedProposalResolver>> | undefined> => {
         if (
           proposal.operation.kind !== "config-set" &&
+          proposal.operation.kind !== "config-unset" &&
           proposal.operation.kind !== "config-set-ref"
         ) {
           return undefined;
@@ -321,6 +322,13 @@ export async function prepareDelegatedSystemAgentApproval(params: {
           event: resolvedEvent,
         });
         params.context.approvalEvents?.publishResolved("system-agent", resolvedEvent);
+        void params.context
+          .forwardSystemAgentApprovalResolved?.(resolvedEvent)
+          .catch((error: unknown) => {
+            params.context.logGateway?.error?.(
+              `OpenClaw approval chat resolution failed: ${String(error)}`,
+            );
+          });
       };
       void handlePendingApprovalRequest({
         manager,
@@ -331,7 +339,20 @@ export async function prepareDelegatedSystemAgentApproval(params: {
         requestEvent,
         twoPhase: true,
         approvalKind: "system-agent",
-        deliverRequest: () => false,
+        // Native cards own their channels; the forwarder answers every other
+        // requesting chat with a `/approve` fallback, so the user can decide in chat.
+        deliverRequest: async () => {
+          try {
+            return (
+              (await params.context.forwardSystemAgentApprovalRequest?.(requestEvent)) ?? false
+            );
+          } catch (error) {
+            params.context.logGateway?.error?.(
+              `OpenClaw approval chat delivery failed: ${String(error)}`,
+            );
+            return false;
+          }
+        },
         keepPendingWithoutRoute: true,
         requireDeliveryRoute: false,
         afterDecision: async (decision) => {
@@ -369,7 +390,10 @@ export async function prepareDelegatedSystemAgentApproval(params: {
                     params.session.engine.noteAssistantMessage(failedReply.text);
                     return { reply: failedReply, correction: undefined };
                   } finally {
-                    persistSystemAgentEngineHistory(params.session.engine, historyStart);
+                    const at = Date.now();
+                    for (const turn of params.session.engine.historySince(historyStart)) {
+                      await appendTranscriptTurnAsync({ ...turn, at });
+                    }
                   }
                 }),
               "system-agent:task",

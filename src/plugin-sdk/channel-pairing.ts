@@ -1,4 +1,3 @@
-// Channel pairing contracts describe account/device pairing state shared by channel plugins.
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { issuePairingChallenge } from "../pairing/pairing-challenge.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";

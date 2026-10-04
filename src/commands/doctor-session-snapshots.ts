@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { decodeXml } from "../shared/xml.js";
 import { resolveBundledSkillsDir } from "../skills/loading/bundled-dir.js";
 import { resolveConfigDir, shortenHomePath } from "../utils.js";
 
@@ -37,56 +38,30 @@ type SessionSnapshotHealthIssue = StaleSessionSnapshotPathFinding & {
   storePath: string;
 };
 
-function resolveSessionSnapshotBundledSkillsDir(params?: {
-  bundledSkillsDir?: string;
-  argv1?: string;
-  moduleUrl?: string;
-  cwd?: string;
-  execPath?: string;
-}): string | undefined {
-  const explicit = params?.bundledSkillsDir?.trim();
+function resolveSessionSnapshotBundledSkillsDir(bundledSkillsDir?: string): string | undefined {
+  const explicit = bundledSkillsDir?.trim();
   if (explicit) {
     return explicit;
   }
-  const resolved = resolveBundledSkillsDir({
-    argv1: params?.argv1,
-    moduleUrl: params?.moduleUrl,
-    cwd: params?.cwd,
-    execPath: params?.execPath,
-  });
+  const resolved = resolveBundledSkillsDir();
   if (resolved) {
     return resolved;
   }
   const packageRoot = resolveOpenClawPackageRootSync({
-    argv1: params?.argv1 ?? process.argv[1],
-    moduleUrl: params?.moduleUrl ?? import.meta.url,
-    cwd: params?.cwd ?? process.cwd(),
+    argv1: process.argv[1],
+    moduleUrl: import.meta.url,
+    cwd: process.cwd(),
   });
   return packageRoot ? path.join(packageRoot, "skills") : undefined;
 }
 
-function decodeXmlText(value: string): string {
-  return value
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&");
-}
-
 function extractSkillLocations(prompt: unknown): string[] {
-  if (typeof prompt !== "string" || !prompt.trim()) {
-    return [];
-  }
-  const locations: string[] = [];
-  const locationPattern = /<location>([\s\S]*?)<\/location>/g;
-  for (const match of prompt.matchAll(locationPattern)) {
-    const raw = match[1]?.trim();
-    if (raw) {
-      locations.push(decodeXmlText(raw));
-    }
-  }
-  return locations;
+  return typeof prompt === "string"
+    ? [...prompt.matchAll(/<location>([\s\S]*?)<\/location>/g)].flatMap((match) => {
+        const raw = match[1]?.trim();
+        return raw ? [decodeXml(raw)] : [];
+      })
+    : [];
 }
 
 function collectResolvedSkillPaths(value: unknown): string[] {
@@ -98,18 +73,16 @@ function collectResolvedSkillPaths(value: unknown): string[] {
     if (!isRecord(skill)) {
       continue;
     }
-    if (typeof skill.filePath === "string" && skill.filePath.trim()) {
-      paths.push(skill.filePath.trim());
-    }
-    if (typeof skill.baseDir === "string" && skill.baseDir.trim()) {
-      paths.push(path.join(skill.baseDir.trim(), "SKILL.md"));
-    }
-    if (isRecord(skill.sourceInfo)) {
-      if (typeof skill.sourceInfo.path === "string" && skill.sourceInfo.path.trim()) {
-        paths.push(skill.sourceInfo.path.trim());
+    const sourceInfo = isRecord(skill.sourceInfo) ? skill.sourceInfo : undefined;
+    for (const [filePath, baseDir] of [
+      [skill.filePath, skill.baseDir],
+      [sourceInfo?.path, sourceInfo?.baseDir],
+    ]) {
+      if (typeof filePath === "string" && filePath.trim()) {
+        paths.push(filePath.trim());
       }
-      if (typeof skill.sourceInfo.baseDir === "string" && skill.sourceInfo.baseDir.trim()) {
-        paths.push(path.join(skill.sourceInfo.baseDir.trim(), "SKILL.md"));
+      if (typeof baseDir === "string" && baseDir.trim()) {
+        paths.push(path.join(baseDir.trim(), "SKILL.md"));
       }
     }
   }
@@ -159,29 +132,21 @@ function isWindowsAbsolutePath(value: string): boolean {
     (/^[a-z]:/i.test(value) && ["/", "\\"].includes(value.slice(2, 3))) || value.startsWith("\\\\")
   );
 }
-function isTempBackedOpenClawRoot(segments: readonly string[]): boolean {
-  const lower = segments.map((segment) => segment.toLowerCase());
-  const openclawIndex = lower.lastIndexOf("openclaw");
-  if (openclawIndex < 1) {
-    return false;
-  }
-  return lower[openclawIndex - 1] === "tmp" || lower[openclawIndex - 1] === "temp";
-}
-
-function isBundledRuntimeSkillsPath(cachedPath: string, skillRootIndex: number): boolean {
-  const beforeSkillRoot = splitPathSegments(cachedPath).slice(0, skillRootIndex);
+function isBundledRuntimeSkillsPath(beforeSkillRoot: readonly string[]): boolean {
   const lower = beforeSkillRoot.map((segment) => segment.toLowerCase());
+  const openclawIndex = lower.lastIndexOf("openclaw");
   return (
     lower.some(
       (segment) =>
         segment === "dist-runtime" || segment === "node_modules" || segment.startsWith("openclaw@"),
-    ) || isTempBackedOpenClawRoot(beforeSkillRoot)
+    ) ||
+    (openclawIndex > 0 && ["tmp", "temp"].includes(lower[openclawIndex - 1]!))
   );
 }
 function extractBundledSkillRelativeSegments(cachedPath: string): string[] | undefined {
   const segments = splitPathSegments(cachedPath);
   const skillRootIndex = segments.lastIndexOf("skills");
-  if (skillRootIndex < 0 || !isBundledRuntimeSkillsPath(cachedPath, skillRootIndex)) {
+  if (skillRootIndex < 0 || !isBundledRuntimeSkillsPath(segments.slice(0, skillRootIndex))) {
     return undefined;
   }
   const relativeSegments = segments.slice(skillRootIndex + 1);
@@ -198,10 +163,7 @@ function isInsidePath(baseDir: string, candidatePath: string): boolean {
   }
   const pathApi = baseIsWindows ? path.win32 : path;
   const relative = pathApi.relative(pathApi.resolve(baseDir), pathApi.resolve(candidatePath));
-  return (
-    relative === "" ||
-    (relative !== "" && !relative.startsWith("..") && !pathApi.isAbsolute(relative))
-  );
+  return relative === "" || (!relative.startsWith("..") && !pathApi.isAbsolute(relative));
 }
 function joinPathForRoot(root: string, ...segments: string[]): string {
   return isWindowsAbsolutePath(root)
@@ -211,7 +173,6 @@ function joinPathForRoot(root: string, ...segments: string[]): string {
 function resolveExpectedBundledSkillPath(params: {
   cachedPath: string;
   bundledSkillsDir: string;
-  pathExists: (filePath: string) => boolean;
   env?: NodeJS.ProcessEnv;
 }): string | undefined {
   // Snapshot paths use shell `~` semantics. OPENCLAW_HOME may point at an isolated
@@ -227,48 +188,29 @@ function resolveExpectedBundledSkillPath(params: {
   if (!relativeSegments) {
     return undefined;
   }
-  const movedPath = resolveMovedBundledSkillPath({
-    relativeSegments,
-    pathExists: params.pathExists,
-    env: params.env,
-  });
-  if (movedPath) {
-    return movedPath;
+  if (relativeSegments.join("/") === "imsg/SKILL.md") {
+    const movedPath = path.join(resolveConfigDir(params.env), "plugin-skills", "imsg", "SKILL.md");
+    if (fs.existsSync(movedPath)) {
+      return movedPath;
+    }
   }
   if (isInsidePath(params.bundledSkillsDir, expandedCachedPath)) {
     return undefined;
   }
   const expectedPath = joinPathForRoot(params.bundledSkillsDir, ...relativeSegments);
-  if (params.pathExists(expectedPath)) {
-    return expectedPath;
-  }
-  return undefined;
-}
-
-function resolveMovedBundledSkillPath(params: {
-  relativeSegments: readonly string[];
-  pathExists: (filePath: string) => boolean;
-  env?: NodeJS.ProcessEnv;
-}): string | undefined {
-  if (params.relativeSegments.join("/") !== "imsg/SKILL.md") {
-    return undefined;
-  }
-  const expectedPath = path.join(resolveConfigDir(params.env), "plugin-skills", "imsg", "SKILL.md");
-  return params.pathExists(expectedPath) ? expectedPath : undefined;
+  return fs.existsSync(expectedPath) ? expectedPath : undefined;
 }
 
 /** Finds cached bundled-skill paths that point at old runtime/temp package roots. */
 function scanSessionStoreForStaleRuntimeSnapshotPaths(params: {
   store: Record<string, SessionEntry>;
   bundledSkillsDir: string | undefined;
-  pathExists?: (filePath: string) => boolean;
   env?: NodeJS.ProcessEnv;
 }): StaleSessionSnapshotPathFinding[] {
   const bundledSkillsDir = params.bundledSkillsDir?.trim();
   if (!bundledSkillsDir) {
     return [];
   }
-  const pathExists = params.pathExists ?? fs.existsSync;
   const findings: StaleSessionSnapshotPathFinding[] = [];
   const seen = new Set<string>();
   for (const [sessionKey, entry] of Object.entries(params.store)) {
@@ -279,7 +221,6 @@ function scanSessionStoreForStaleRuntimeSnapshotPaths(params: {
       const expectedPath = resolveExpectedBundledSkillPath({
         cachedPath: cached.path,
         bundledSkillsDir,
-        pathExists,
         env: params.env,
       });
       if (!expectedPath) {
@@ -316,19 +257,6 @@ async function listSessionStorePaths(stateDir: string): Promise<string[]> {
     .toSorted((a, b) => a.localeCompare(b));
 }
 
-function resolveSessionStorePaths(params: {
-  cfg?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): string[] | undefined {
-  if (!params.cfg) {
-    return undefined;
-  }
-  return resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env })
-    .map((target) => target.storePath)
-    .filter((storePath) => fs.existsSync(storePath))
-    .toSorted((a, b) => a.localeCompare(b));
-}
-
 function loadSessionStoreForSnapshotScan(storePath: string): Record<string, SessionEntry> {
   const parsed = JSON.parse(fs.readFileSync(storePath, "utf-8")) as unknown;
   if (!isRecord(parsed)) {
@@ -339,46 +267,56 @@ function loadSessionStoreForSnapshotScan(storePath: string): Record<string, Sess
   return store;
 }
 
-export async function detectSessionSnapshotHealthIssues(params?: {
+type SessionSnapshotScanOptions = {
   storePaths?: string[];
   bundledSkillsDir?: string;
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-}): Promise<SessionSnapshotHealthIssue[]> {
-  const bundledSkillsDir = resolveSessionSnapshotBundledSkillsDir({
-    bundledSkillsDir: params?.bundledSkillsDir,
-  });
-  if (!bundledSkillsDir) {
-    return [];
-  }
-  const storePaths =
-    params?.storePaths ??
-    resolveSessionStorePaths({ cfg: params?.cfg, env: params?.env }) ??
-    (await listSessionStorePaths(resolveStateDir(params?.env)));
-  const issues: SessionSnapshotHealthIssue[] = [];
-  for (const storePath of storePaths) {
-    let store: Record<string, SessionEntry>;
-    try {
-      store = loadSessionStoreForSnapshotScan(storePath);
-    } catch {
-      continue;
-    }
-    const findings = scanSessionStoreForStaleRuntimeSnapshotPaths({
-      store,
-      bundledSkillsDir,
-      env: params?.env,
-    });
-    for (const finding of findings) {
-      issues.push({
-        sessionKey: finding.sessionKey,
-        field: finding.field,
-        cachedPath: finding.cachedPath,
-        expectedPath: finding.expectedPath,
-        storePath,
+};
+
+async function scanSessionSnapshotHealth(
+  params: SessionSnapshotScanOptions = {},
+  onError?: (storePath: string, error: unknown) => void,
+) {
+  const bundledSkillsDir = resolveSessionSnapshotBundledSkillsDir(params.bundledSkillsDir);
+  const stores: Array<{ storePath: string; findings: StaleSessionSnapshotPathFinding[] }> = [];
+  if (bundledSkillsDir) {
+    const storePaths =
+      params.storePaths ??
+      (params.cfg
+        ? resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env })
+            .map((target) => target.storePath)
+            .filter((storePath) => fs.existsSync(storePath))
+            .toSorted((a, b) => a.localeCompare(b))
+        : await listSessionStorePaths(resolveStateDir(params.env)));
+    for (const storePath of storePaths) {
+      let store: Record<string, SessionEntry>;
+      try {
+        store = loadSessionStoreForSnapshotScan(storePath);
+      } catch (error) {
+        onError?.(storePath, error);
+        continue;
+      }
+      const findings = scanSessionStoreForStaleRuntimeSnapshotPaths({
+        store,
+        bundledSkillsDir,
+        env: params.env,
       });
+      if (findings.length > 0) {
+        stores.push({ storePath, findings });
+      }
     }
   }
-  return issues;
+  return { bundledSkillsDir, stores };
+}
+
+export async function detectSessionSnapshotHealthIssues(
+  params?: SessionSnapshotScanOptions,
+): Promise<SessionSnapshotHealthIssue[]> {
+  const { stores } = await scanSessionSnapshotHealth(params);
+  return stores.flatMap(({ storePath, findings }) =>
+    findings.map((finding) => ({ ...finding, storePath })),
+  );
 }
 
 export function sessionSnapshotIssueToHealthFinding(
@@ -397,43 +335,20 @@ export function sessionSnapshotIssueToHealthFinding(
 }
 
 /** Reports historical snapshot paths without rewriting migration source bytes. */
-export async function noteSessionSnapshotHealth(params?: {
-  storePaths?: string[];
-  bundledSkillsDir?: string;
-  cfg?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}) {
-  const bundledSkillsDir = resolveSessionSnapshotBundledSkillsDir({
-    bundledSkillsDir: params?.bundledSkillsDir,
-  });
+export async function noteSessionSnapshotHealth(params?: SessionSnapshotScanOptions) {
+  const { bundledSkillsDir, stores } = await scanSessionSnapshotHealth(
+    params,
+    (storePath, error) => {
+      note(
+        `- Failed to inspect session snapshot metadata in ${shortenHomePath(storePath)}: ${String(error)}`,
+        "Session snapshots",
+      );
+    },
+  );
   if (!bundledSkillsDir) {
     return;
   }
-  const storePaths =
-    params?.storePaths ??
-    resolveSessionStorePaths({ cfg: params?.cfg, env: params?.env }) ??
-    (await listSessionStorePaths(resolveStateDir(params?.env)));
-  const findingsByStore = new Map<string, StaleSessionSnapshotPathFinding[]>();
-  for (const storePath of storePaths) {
-    let store: Record<string, SessionEntry>;
-    try {
-      store = loadSessionStoreForSnapshotScan(storePath);
-    } catch (err) {
-      note(
-        `- Failed to inspect session snapshot metadata in ${shortenHomePath(storePath)}: ${String(err)}`,
-        "Session snapshots",
-      );
-      continue;
-    }
-    const findings = scanSessionStoreForStaleRuntimeSnapshotPaths({
-      store,
-      bundledSkillsDir,
-      env: params?.env,
-    });
-    if (findings.length > 0) {
-      findingsByStore.set(storePath, findings);
-    }
-  }
+  const findingsByStore = new Map(stores.map(({ storePath, findings }) => [storePath, findings]));
   const totalFindings = [...findingsByStore.values()].reduce(
     (total, findings) => total + findings.length,
     0,
@@ -476,13 +391,4 @@ export async function noteSessionSnapshotHealth(params?: {
     );
   }
   note(lines.join("\n"), "Session snapshots");
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.doctorSessionSnapshotsTestApi")
-  ] = {
-    resolveSessionSnapshotBundledSkillsDir,
-    scanSessionStoreForStaleRuntimeSnapshotPaths,
-  };
 }

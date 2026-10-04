@@ -1,23 +1,9 @@
-// Msteams helper module supports conversation store helpers behavior.
 import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   MSTeamsConversationStoreEntry,
   StoredConversationReference,
 } from "./conversation-store.js";
-
-export function normalizeStoredConversationId(raw: string): string {
-  return raw.split(";")[0] ?? raw;
-}
-
-export function toConversationStoreEntries(
-  entries: Iterable<[string, StoredConversationReference]>,
-): MSTeamsConversationStoreEntry[] {
-  return Array.from(entries, ([conversationId, reference]) => ({
-    conversationId,
-    reference,
-  }));
-}
 
 export function mergeStoredConversationReference(
   existing: StoredConversationReference | undefined,
@@ -48,12 +34,11 @@ export function findPreferredDmConversationByUserId(
     return null;
   }
 
-  // Partition user matches into DM-safe and non-DM buckets.
-  // Channel and group conversations also carry the sender's aadObjectId, but
-  // returning one of those when the caller asked for a user-targeted DM would
-  // leak the reply into a shared channel -- the root cause of #54520.
-  const personalMatches: MSTeamsConversationStoreEntry[] = [];
-  const unknownTypeMatches: MSTeamsConversationStoreEntry[] = [];
+  // Shared conversations carry the sender's aadObjectId too; never return one
+  // for a user-targeted DM. Confirmed personal DMs outrank legacy unknown types.
+  let preferred: MSTeamsConversationStoreEntry | null = null;
+  let preferredIsPersonal = false;
+  let preferredTimestamp = 0;
   for (const entry of entries) {
     if (entry.reference.user?.aadObjectId !== target && entry.reference.user?.id !== target) {
       continue;
@@ -61,32 +46,21 @@ export function findPreferredDmConversationByUserId(
     const convType = normalizeLowercaseStringOrEmpty(
       entry.reference.conversation?.conversationType ?? "",
     );
-    if (convType === "personal") {
-      personalMatches.push(entry);
-    } else if (convType === "channel" || convType === "groupchat") {
-      // Explicitly skip channel/group conversations -- these must never be
-      // returned for a user-targeted DM lookup.
-    } else {
-      // Legacy entries without conversationType are ambiguous. Include them
-      // as a fallback but rank below confirmed personal conversations.
-      unknownTypeMatches.push(entry);
+    if (convType === "channel" || convType === "groupchat") {
+      continue;
+    }
+    const isPersonal = convType === "personal";
+    const timestamp = parseDateStringTimestampMs(entry.reference.lastSeenAt) ?? 0;
+    if (
+      !preferred ||
+      (isPersonal && !preferredIsPersonal) ||
+      (isPersonal === preferredIsPersonal && timestamp > preferredTimestamp)
+    ) {
+      preferred = entry;
+      preferredIsPersonal = isPersonal;
+      preferredTimestamp = timestamp;
     }
   }
 
-  // Prefer confirmed personal DMs, fall back to unknown-type entries.
-  const candidates = personalMatches.length > 0 ? personalMatches : unknownTypeMatches;
-  if (candidates.length === 0) {
-    return null;
-  }
-
-  // When multiple candidates exist, prefer the most recently seen one.
-  if (candidates.length > 1) {
-    candidates.sort(
-      (a, b) =>
-        (parseDateStringTimestampMs(b.reference.lastSeenAt) ?? 0) -
-        (parseDateStringTimestampMs(a.reference.lastSeenAt) ?? 0),
-    );
-  }
-
-  return candidates[0] ?? null;
+  return preferred;
 }

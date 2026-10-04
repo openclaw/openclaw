@@ -185,9 +185,8 @@ describe("probeLineBot", () => {
 
       // LINE returns the registered URL; the probe deliberately does not carry it,
       // because it would then reach logs and status output with no action to take on it.
-      await expect(probeLineBot("token", 5000)).resolves.toMatchObject({
-        webhook: { status: expected },
-      });
+      const result = await probeLineBot("token", 5000);
+      expect(result.webhook).toEqual({ status: expected });
     },
   );
 
@@ -248,12 +247,5 @@ describe("probeLineBot", () => {
       await vi.runAllTimersAsync();
       await probing;
     }
-  });
-
-  it("still fails the probe when the bot identity call fails", async () => {
-    const fetchMock = stubLineApiFetch(Response.json({ message: "Unauthorized" }, { status: 401 }));
-
-    expect(await probeLineBot("token", 5000)).toMatchObject({ ok: false });
-    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });

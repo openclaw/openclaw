@@ -8,7 +8,7 @@ import {
 } from "./app-server/session-binding.js";
 import { assertCodexArchiveDescendantsUnowned } from "./app-server/thread-archive-guard.js";
 import { isAdoptionSessionKeyForThread, requireIdleThread } from "./session-catalog-adoption.js";
-import { runSessionActionExclusive } from "./session-catalog-node-adoption.js";
+import { catalogSessionActions } from "./session-catalog-node-adoption.js";
 import { CatalogParamsError, CODEX_LOCAL_SESSION_HOST_ID } from "./session-catalog-parsing.js";
 import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
 
@@ -76,11 +76,11 @@ export async function archiveLocalCodexSession(params: {
   sourceHomeId?: string;
   allowLegacy?: boolean;
 }): Promise<{ archived: true }> {
-  return await runSessionActionExclusive(
+  return await catalogSessionActions.enqueue(
     sessionCatalogAdoptedSourceKey(params.hostId ?? CODEX_LOCAL_SESSION_HOST_ID, params.threadId),
-    async () => {
-      return await params.bindingStore.withThreadArchiveFence(async () => {
-        const run = async (control: CodexSessionCatalogControl) => {
+    () =>
+      params.bindingStore.withThreadArchiveFence(() =>
+        params.control.withPinnedConnection(async (control) => {
           assertNoPendingSupervisionBranch(params);
           await control.requireEligibleThread(params.threadId);
           // Eligibility reads metadata before checking membership; activity can change meanwhile.
@@ -108,9 +108,7 @@ export async function archiveLocalCodexSession(params: {
           });
           await control.archiveThread(params.threadId);
           return { archived: true as const };
-        };
-        return await params.control.withPinnedConnection(run);
-      });
-    },
+        }),
+      ),
   );
 }

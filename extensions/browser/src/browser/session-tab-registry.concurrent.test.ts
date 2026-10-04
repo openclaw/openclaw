@@ -8,6 +8,7 @@ const processStateSymbols = [
   "openclaw.browser.session-tabs.volatile-cleanup",
   "openclaw.browser.session-tabs.volatile-aliases",
   "openclaw.browser.session-tabs.exact-volatile-aliases",
+  "openclaw.browser.session-tabs.deferred-diagnostics",
 ];
 
 function clearProcessLocalTabState(): void {
@@ -31,6 +32,44 @@ describe("volatile session tab cleanup across Browser plugin bundles", () => {
   beforeEach(clearProcessLocalTabState);
   afterEach(clearProcessLocalTabState);
 
+  it("preserves volatile tabs when an untyped caller omits native-check preparation", async () => {
+    const registry = await freshRegistry("unpaired-current");
+    const sessionKey = "agent:main:main";
+    await registry.trackSessionBrowserTab({
+      sessionKey,
+      targetId: "unpaired-tab",
+      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" },
+    });
+    const closeTab = vi.fn<CloseTab>(async () => {});
+    const onWarn = vi.fn();
+    await expect(
+      Reflect.apply(registry.closeTrackedBrowserTabsForSessions.bind(registry), undefined, [
+        {
+          sessionKeys: [sessionKey],
+          sessionEntryCurrent: {
+            source: {
+              agentId: "main",
+              path: "/synthetic/agent.sqlite",
+              sessionKey,
+              databaseIdentity: "synthetic-source",
+            },
+            assertCurrent: vi.fn(),
+          },
+          closeTab,
+          onWarn,
+        },
+      ]),
+    ).resolves.toBe(0);
+    expect(closeTab).not.toHaveBeenCalled();
+    expect(onWarn).toHaveBeenCalledExactlyOnceWith(
+      "browser cleanup unavailable: sessionEntryCurrent requires prepareCurrent",
+    );
+    await expect(
+      registry.closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey], closeTab }),
+    ).resolves.toBe(1);
+    expect(closeTab).toHaveBeenCalledOnce();
+  });
+
   it("keeps a replacement registration when a waiting cleanup caller becomes stale", async () => {
     const first = await freshRegistry("first-owner");
     const follower = await freshRegistry("waiting-owner");
@@ -40,7 +79,7 @@ describe("volatile session tab cleanup across Browser plugin bundles", () => {
       route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" } as const,
       profile: "remote",
     };
-    first.trackSessionBrowserTab(tab);
+    await first.trackSessionBrowserTab(tab);
     const started = createDeferred<void>();
     const finish = createDeferred<void>();
     const closeTab = vi.fn<CloseTab>(async () => {
@@ -51,7 +90,7 @@ describe("volatile session tab cleanup across Browser plugin bundles", () => {
     const params = { sessionKeys: [tab.sessionKey], closeTab, isCurrent: () => current };
     const closing = first.closeTrackedBrowserTabsForSessions(params);
     await started.promise;
-    follower.trackSessionBrowserTab(tab);
+    await follower.trackSessionBrowserTab(tab);
     const waiting = follower.closeTrackedBrowserTabsForSessions(params);
     try {
       current = false;
@@ -71,7 +110,7 @@ describe("volatile session tab cleanup across Browser plugin bundles", () => {
   it("shares one close attempt and releases a failed reservation for retry", async () => {
     const first = await freshRegistry("first");
     const duplicate = await freshRegistry("duplicate");
-    first.trackSessionBrowserTab({
+    await first.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "bridge-tab",
       route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" },

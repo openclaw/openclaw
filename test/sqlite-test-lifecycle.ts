@@ -6,7 +6,6 @@ const source = (name: string) => normalizeModuleId(path.resolve(import.meta.dirn
 const agentSource = source("src/state/openclaw-agent-db-lifecycle.ts");
 const agentKey = Symbol.for("openclaw.agentDatabaseLifecycle");
 const brokerKey = Symbol.for("openclaw.sqliteWorkerBroker");
-const coordinatorPoolKey = Symbol.for("openclaw.sqliteCoordinatorPool");
 const resetKey = Symbol.for("openclaw.globalSingletonLifecycleResets");
 const retainedCustodyKey = Symbol.for("openclaw.sqliteTestRetainedCustody");
 
@@ -14,12 +13,19 @@ const retainedCustodyKey = Symbol.for("openclaw.sqliteTestRetainedCustody");
 // Keep their native custody intact through drainage, then retire the whole generation.
 export const sqliteTestSingletonPublications: ReadonlyMap<string, symbol> = new Map([
   [
-    source("src/state/openclaw-state-worker-store.ts"),
+    source("src/cron/store/receipt-authority-owner.ts"),
+    Symbol.for("openclaw.cron.receiptAuthority"),
+  ],
+  [
+    source("src/state/openclaw-state-worker-owner.ts"),
     Symbol.for("openclaw.sharedStateWorkerOwner"),
   ],
   [source("src/infra/sqlite-worker-store.ts"), brokerKey],
-  [source("src/infra/sqlite-coordinator.ts"), coordinatorPoolKey],
   [source("src/state/openclaw-state-db-cache.ts"), Symbol.for("openclaw.stateDatabaseLifecycle")],
+  [
+    source("src/state/openclaw-state-db-snapshot-owner.ts"),
+    Symbol.for("openclaw.stateSnapshotOwners"),
+  ],
   [source("src/state/openclaw-state-read-worker.ts"), Symbol.for("openclaw.stateReadWorkers")],
   [source("src/gateway/session-group-catalog.ts"), Symbol.for("openclaw.sessionGroupCatalog")],
   [agentSource, agentKey],
@@ -78,8 +84,8 @@ export async function drainSqliteTestSingletons(
         }
       }),
   );
-  // Native and broker retirement can return a coordinator to the idle pool.
-  const closeOrder = (key: symbol) => (key === coordinatorPoolKey ? 2 : Number(key === brokerKey));
+  // Native resources finish their accepted work before the shared broker closes.
+  const closeOrder = (key: symbol) => Number(key === brokerKey);
   const sqlite = entries
     .filter(([key]) => sqliteKeys.has(key))
     .toSorted(([left], [right]) => closeOrder(left) - closeOrder(right));
@@ -164,6 +170,40 @@ export async function drainSqliteTestAgentOwner(
     throw new Error(
       `SQLite test teardown cannot retire agent owners with unsettled database custody from ${testFiles}: ${JSON.stringify(custody())}`,
     );
+  }
+}
+
+/**
+ * Wait for agent database closes a finished test scheduled without awaiting. The
+ * synchronous test closer only schedules Worker retirement; left running, a lease release
+ * overlaps the next test, and a Vitest thread cannot retire an escaped lease afterwards.
+ * A failed close stays in its owner's custody (logged, retried by the file drain).
+ */
+export async function settleSqliteTestAgentCloses(): Promise<void> {
+  const resources = (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.agentDatabaseAsyncResources")
+  ] as
+    | {
+        closing: Map<unknown, Promise<void> | undefined>;
+        selections: Map<unknown, Promise<void>>;
+      }
+    | undefined;
+  if (!resources) {
+    return;
+  }
+  const joined = new Set<Promise<void>>();
+  // A settled close can start dependent retirement; wait until nothing new is pending.
+  while (true) {
+    const pending = [...resources.closing.values(), ...resources.selections.values()].filter(
+      (operation): operation is Promise<void> => operation !== undefined && !joined.has(operation),
+    );
+    if (pending.length === 0) {
+      return;
+    }
+    for (const operation of pending) {
+      joined.add(operation);
+    }
+    await Promise.allSettled(pending);
   }
 }
 

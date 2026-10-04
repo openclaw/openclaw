@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "How OpenClaw records schema versions, when a bump is required, and how updaters cross one"
 read_when:
   - "Deciding whether a storage change needs a schema-version bump"
@@ -15,11 +16,44 @@ Each database records its published schema in two places:
 
 OpenClaw applies forward-only migrations when it opens an older supported database. It refuses a database whose `user_version` is newer than the running build and reports a `newer schema version` error. The Gateway checks all registered databases before startup. [`openclaw update`](/cli/update) also refuses a package or source target whose declared schema support is older than an on-disk database. Known stable releases published before schema metadata was added are checked against their shipped schema-1 contract. Updates driven by the 2026.9.2 release line can temporarily defer publication of a shared-state schema version while the old updater finishes; see [Schema bumps and older updaters](#schema-bumps-and-older-updaters).
 
-When Gateway startup encounters a newer database schema, it exits with status 78 so the generated systemd service does not restart it repeatedly. On macOS, it also parks its managed LaunchAgent to stop `KeepAlive` retries. This applies to failures during CLI bootstrap as well as server startup and does not depend on the database-backed crash counter. Start the Gateway with a build that supports the existing schemas. The older install cannot repair them with `doctor --fix`; run Doctor from the compatible install if further migration is required, then restart through the service or deployment owner.
+When Gateway startup encounters a newer database schema, it exits with status 78 so the generated systemd service does not restart it repeatedly. On macOS, it also parks its managed LaunchAgent to stop `KeepAlive` retries. This applies to failures during CLI bootstrap as well as server startup and does not depend on the database-backed crash counter. Start the Gateway with a build that supports the existing schemas. The older install cannot repair them with `openclaw doctor --fix`; run `openclaw doctor --fix` from the compatible install if further migration is required, then restart through the service or deployment owner.
 
 Changes may stay at the same schema version only when downgraded readers remain safe. New tables qualify because older builds ignore them. An explicitly compatible column on an existing table qualifies only when its declaration is exactly one bare nullable SQLite `STRICT` datatype: `ANY`, `BLOB`, `INT`, `INTEGER`, `REAL`, or `TEXT`. The declaration cannot have a default, `NOT NULL`, a primary or unique key, a check, a reference, a collation, a generated expression, or another suffix. Constrained existing-table additions require a schema-version bump or a companion table instead.
 
+Linux Node worker cleanup uses the additive `node_worker_launch_process_scopes`
+companion table. Its launch-bound `linux-subreaper` certificate records kernel
+descendant extinction independently of `node_worker_launch_cleanup.lineage_settled`.
+The existing cleanup row retains `owned-anchor` with no synthetic lineage
+completion, so older readers retain uncertain custody rather than treating the new
+certificate as an older proof. Existing rows are not backfilled or reinterpreted.
+The companion row is pruned with its launch under the same retention policy; the
+schema version is unchanged.
+
 Matching numeric versions are necessary but not sufficient. A release can add a lazy or startup-repairable table, column, index, or trigger without advancing `user_version`, so two databases at the same version can still have different shapes. OpenClaw validates the canonical table definitions, constraints, indexes, triggers, virtual tables, and table options owned by the running release.
+
+The per-agent companion table `session_reactions` stores message reaction rows
+at the same schema version. The canonical database-open additive schema installs it on
+existing databases without changing `user_version`; older readers ignore the
+table. Rows bind the session key, transcript session ID, persisted message event
+ID, emoji, and reacting identity without changing transcript bytes. Deleting the
+session node cascades to its reactions. Transcript replacement and suffix removal
+delete reactions for removed message identities in the same transaction, while
+a reset makes old-instance rows inert. Downgrade leaves the table intact and disables Control UI reactions until
+a supporting build returns. No transcript backfill or rewrite is required.
+
+Admitted agent and cached shared-state handles retain their schema version and
+table facts. The handle owner revokes these facts after local DDL or transaction
+rollback. A fresh `PRAGMA data_version` probe observes foreign commits on the next
+unpinned read, even within the same event-loop turn. On a foreign commit, the owner
+compares `schema_version` and `user_version` in one pinned snapshot and retains
+facts and their revision when both are unchanged. Data-only commits therefore
+avoid table and column scans while version-only changes still trigger refusal
+when the stored version is newer than the running build. Actual
+SQLite read snapshots retain their view until they end; the next read then observes
+committed changes. Canonical session validation uses the same schema revision.
+Unchanged versions reuse parsed schema facts and prepared statements without
+repeating schema scans. Migration and snapshot consistency checks remain fresh reads.
+This changes no stored schema, migration, durability, or update behavior.
 
 The nullable requester-authority columns on GitHub publication lifecycle and
 repository receipts require [state schema 18](/reference/database-schemas/state-schema-history#state-schema-18).
@@ -41,27 +75,67 @@ same-version readers can ignore the extra index, so binary rollback leaves it
 intact. The accepted design is recorded in the
 [session label index decision](https://github.com/openclaw/openclaw/pull/147837#issuecomment-5658783288).
 
-Task and maintenance lookups add nonunique indexes without changing state schema
-17 or agent schema 21: task requester sessions, worker placements by environment,
-and session entries whose
-validity is not yet confirmed. Existing task matching, stored rows, retention,
-and ownership checks are unchanged. Read-only admission accepts missing indexes;
-the canonical writable schema owner installs or repairs them. Initial construction
+Task and maintenance lookups added nonunique indexes without changing state
+schema 17 or agent schema 21: task requester sessions, worker placements by
+environment, and session entries whose validity is not yet confirmed. The task
+requester index remains in the physical schema after the Tasks runtime removal.
+Stored rows, retention, and ownership checks are unchanged. Read-only admission
+accepts missing indexes; the canonical writable schema owner installs or repairs them. Initial construction
 uses time and temporary disk proportional to the affected tables, and subsequent
 writes maintain the added indexes. Older same-version readers can ignore them,
 so binary rollback preserves both rows and indexes. See the
 [accepted index design](https://github.com/openclaw/openclaw/issues/153533).
 
-Task execution ownership uses three bare nullable columns on `task_runs`:
-`execution_owner_host TEXT`, `execution_owner_pid INTEGER`, and
-`execution_owner_start_identity INTEGER`. The first task write ensures them
-idempotently; read-only inspection does not add them. They are declared in the
-canonical schema and included in the existing additive migration path, without
-changing the schema version. Older readers ignore these columns. Legacy rows
-remain unknown until an execution owner explicitly records its identity; restore
-never guesses their owner. Confirmed process-exit settlement uses existing task
-terminal fields and retention rules. Downgrading code does not undo a terminal
-outcome already recorded by restore.
+Failed-delivery health counts use the shared-state delivery queue's existing
+`idx_delivery_queue_failed` index with columns `(status, queue_name, failed_at, id)`.
+This replaces the queue-first definition at the same schema version. Queue rows
+remain canonical; the nonunique index is derived. The canonical writable schema
+owner atomically rebuilds a mismatched definition during admission, including its
+integrity checks. No per-request repair or extra index is added. The rebuild uses
+startup I/O and temporary disk proportional to retained queue history, including
+a probe index and its replacement. Subsequent writes maintain the same index count.
+Older same-version writable owners can rebuild their queue-first definition on
+downgrade or binary rollback without changing rows; strict read-only validation
+may reject the changed index until that writable owner repairs it. Counts, null
+failure timestamps, ordering, retention, permissions, and durability are unchanged;
+no schema-version bump is required.
+
+Meeting caption retry lookups use a nonunique partial index on
+`meeting_transcript_utterances(session_id, session_started_at, utterance_id)`
+where `utterance_id IS NOT NULL`, without a schema-version bump. The transcript
+store owns the canonical caption rows; the index is derived and preserves
+same-ID revisions, exact-content retry matching, and append order. Read-only
+admission accepts a missing index; the shared-state canonical-index owner
+installs or repairs it on writable open, and the feature's first-use schema
+includes it. The schema fast path detects missing or drifted indexes before
+admitting the handle. Construction on existing databases scans the table and
+uses temporary disk for the repair owner's probe and final index. Subsequent
+writes maintain index entries only for non-null IDs. Stored content, retention,
+permissions, and transaction ownership are unchanged. Older same-version
+readers ignore the additional nonunique index, so binary rollback leaves both
+caption rows and the index intact.
+
+Logbook's plugin-local database keeps schema version 1 while replacing the unused
+batch-day index with a nonunique partial index on `batches(start_ms, id)` where
+`status = 'pending'`. The existing worker-owned schema open installs the index on
+populated databases before dropping the retired index. Batch rows remain canonical;
+the index is derived, and retention and recovery are unchanged. Initial construction
+scans batch history once and stores only pending entries. Older same-version builds
+can read and write the database safely, leaving the new index intact and recreating
+their day index; reopening with the current build retires it again. Binary rollback
+requires no row conversion or schema-version change.
+
+Removing the Tasks and TaskFlow runtime does not change the shared-state or agent
+schema. The existing tables, indexes, and optional execution-owner columns
+remain part of the released storage contract. Cron reads and writes its existing
+`runtime = 'cron'` history rows in `task_runs` through its own store. Non-Cron
+Task and TaskFlow rows remain untouched and unused by the runtime; they are not
+converted into a replacement ledger. The Codex plugin's
+[Doctor migration](/gateway/doctor/config-migrations#native-codex-recovery-after-tasks-removal)
+preserves eligible native child recovery facts from owner-stamped legacy rows
+in existing parent binding metadata, with an atomic import marker preventing
+replay. Source rows stay byte-identical. No table drop, SQL schema change, or
+schema-version bump accompanies this removal.
 
 Node worker recovery uses the private `node_worker_launch_cleanup` companion
 table in the existing launch journal. The launch owner adds it on first use and
@@ -91,6 +165,18 @@ version: `session_watch_cursors.watcher_store_path`,
 Their writers ensure them idempotently on first use; reads do not install them.
 Older readers ignore the columns. NULL remains unknown, so Gateway notification
 delivery does not assign historical records to a current parent by key alone.
+
+Subagent runs record the known owning agent for raw child keys such as `global`
+in the optional `childAgentId` field inside `subagent_runs.payload_json`.
+Agent-qualified child keys do not record this field. This is a payload-only
+addition: no DDL, new column, or schema-version bump is required. The session
+store is derived from the agent and current configuration, just as it is for
+agent-qualified keys. Legacy rows without that binding continue to resolve their
+agent through the current configuration, without migration or backfill.
+Cancellation clears queues only for the resolved agent. Downgraded writers retain
+the field in `payload_json` because
+`normalizeSubagentRunState` mutates the parsed record in place rather than
+rebuilding it from known fields.
 
 Cron standing-grant definition generations use three bare nullable projections on
 `cron_jobs`: `grant_definition_revision`, `grant_definition_generation`, and
@@ -195,7 +281,7 @@ A missing table or row means no recorded retirement; earlier edits cannot be
 reconstructed from the final job definition. Older compatible readers ignore the
 companion but do not enforce this protection. To preserve edited watcher state,
 complete active runs and pending scheduler reconciliation on the current build
-before downgrading. A terminal task or receipt can still leave job state
+before downgrading. A terminal history result or receipt can still leave job state
 unreconciled.
 
 Scheduling edits made while a run awaits reconciliation record a private
@@ -237,25 +323,22 @@ for updated binaries. Older readers ignore it and can reopen and update the
 same database safely; their association update invalidates context captured by
 a newer writer so it cannot be replayed after re-upgrade.
 
-Conversation progress continuations reuse the agent database's `cache_entries`
+Retained conversation progress snapshots use the agent database's `cache_entries`
 table with scope `conversation-progress` and the delivery operation ID as the key.
-No table, column, schema-version change, or migration is required. A missing cache
-entry means no retained presentation; older receipts are not backfilled.
+The Tasks-backed detached presenter is removed, but its stored snapshots and
+receipt cleanup contract are unchanged. No table, column, schema-version change,
+or migration accompanies this removal. Older receipts are not backfilled.
 
 The receipt owns the known platform message identity and delivery status.
-Adoption records that evidence and its bounded, data-only prepared snapshot in
-one guarded transaction. Later updates write only the snapshot cache, leaving
-the receipt unchanged: desired presentation is not proof that a platform edit
-was delivered or that work completed. Snapshots are limited to 64 KiB of JSON,
-4,096 characters per string, 128 rolling lines, and 64 checklist steps or prepared
-blocks. Invalid optional snapshots are ignored without hiding delivery evidence.
+The removed presenter no longer writes or reads progress snapshots. Existing
+snapshot bytes remain opaque retained data; desired presentation is not proof
+that a platform edit was delivered or that work completed.
 
-Reopening restores cached presentation only under the existing task and
-requester checks; the snapshot never grants authority. Older builds ignore the
-cache scope and cannot resume the newer presentation flow. Canonical session
-repair carries snapshots with their receipt identities. The existing session
-delivery cleanup removes matching snapshot keys with their receipts, with no new
-expiry policy, cleanup loop, or completion owner.
+Reopening does not restore the removed Tasks presenter from cached snapshots;
+a snapshot never grants execution or delivery authority. Canonical session repair
+carries snapshots with their receipt identities. The existing session delivery
+cleanup removes matching snapshot keys with their receipts, with no new expiry
+policy, cleanup loop, or completion owner.
 
 Transcript context eligibility uses a bare nullable
 `session_transcript_active_events.context_eligible INTEGER` column without

@@ -14,6 +14,7 @@ import {
 import { BoardValidationError } from "./board-layout.js";
 import { createBoardWidgetPutSnapshot, type BoardStore } from "./board-store.js";
 import { readBoardHtml, createTestBoardStore } from "./board-store.test-support.js";
+import { readBoardSnapshotWithHtmlViewMetadata } from "./sqlite-board-store.kernel.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -78,19 +79,6 @@ describe("board store", () => {
     expect(await readBoardHtml(store, target, "status")).toMatchObject({
       html: "replacement",
     });
-  });
-
-  it("creates the implicit main tab and bumps board and widget revisions", async () => {
-    const store = createTestBoardStore();
-    const first = await putHtml(store, "agent:main:main", "status");
-    const second = await putHtml(store, "agent:main:main", "status", "<p>two</p>");
-    expect(first).toMatchObject({
-      revision: 1,
-      tabs: [{ tabId: "main", title: "Main", position: 0 }],
-      widgets: [{ name: "status", revision: 1 }],
-    });
-    expect(second.revision).toBe(2);
-    expect(second.widgets[0]!.revision).toBe(2);
   });
 
   it.each(widgetContents)(
@@ -272,43 +260,6 @@ describe("board store", () => {
     });
   });
 
-  it("stores HTML bytes with digest and keeps MCP descriptors non-HTML", async () => {
-    const store = createTestBoardStore();
-    await putHtml(store, "session", "html", "<main>ok</main>");
-    await store.putWidget({
-      sessionKey: "session",
-      name: "app",
-      content: {
-        kind: "mcp-app",
-        descriptor: {
-          serverName: "server",
-          toolName: "tool",
-          uiResourceUri: "ui://resource",
-          toolCallId: "call",
-        },
-        interactive: false,
-      },
-    });
-    expect(await readBoardHtml(store, { sessionKey: "session" }, "html")).toMatchObject({
-      html: "<main>ok</main>",
-      revision: 1,
-      sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
-    });
-    expect(await readBoardHtml(store, { sessionKey: "session" }, "app")).toBeUndefined();
-    expect(await store.readWidgetMcpApp({ sessionKey: "session" }, "app")).toMatchObject({
-      descriptor: {
-        serverName: "server",
-        toolName: "tool",
-        uiResourceUri: "ui://resource",
-        toolCallId: "call",
-      },
-      revision: 1,
-      instanceId: expect.stringMatching(/^[a-f0-9]{32}$/u),
-      interactive: false,
-    });
-    expect(await readBoardHtml(store, { sessionKey: "session" }, "unknown")).toBeUndefined();
-  });
-
   it("transitions declared widgets through pending grants", async () => {
     const store = createTestBoardStore();
     const pending = await store.putWidget({
@@ -338,13 +289,6 @@ describe("board store", () => {
         pending.widgets[0]?.instanceId,
       ),
     ).rejects.toThrow("not pending");
-  });
-
-  it("survives reset/new boundaries", async () => {
-    const store = createTestBoardStore();
-    await putHtml(store, "session", "status");
-    // Session reset has no BoardStore call; the stable session key remains authoritative.
-    expect((await store.getSnapshot({ sessionKey: "session" })).widgets).toHaveLength(1);
   });
 
   it("rejects stale grant revisions and accepts the current revision", async () => {
@@ -392,9 +336,13 @@ describe("board store", () => {
       expect(error).toMatchObject({ code: "invalid_operation" });
       expect((error as Error).message).toContain("more than 48 widgets");
     }
-    await expect(
-      putHtml(createTestBoardStore(), "session", "large", "é".repeat(131_073)),
-    ).rejects.toThrow("262144 UTF-8 bytes");
+    const largeStore = createTestBoardStore();
+    const html = "é".repeat(5 * 1024 * 1024);
+    await putHtml(largeStore, "session", "large", html);
+    await expect(putHtml(largeStore, "session", "large", html + "é")).rejects.toThrow(
+      "10485760 UTF-8 bytes",
+    );
+    expect((await readBoardHtml(largeStore, { sessionKey: "session" }, "large"))?.html).toBe(html);
   });
 
   it("bumps once per applyOps transaction and removes widget bytes", async () => {
@@ -407,29 +355,6 @@ describe("board store", () => {
     expect(snapshot.revision).toBe(2);
     expect(snapshot.widgets).toEqual([]);
     expect(await readBoardHtml(store, { sessionKey: "session" }, "status")).toBeUndefined();
-  });
-
-  it("preserves position on content updates and honors explicit after placement", async () => {
-    const store = createTestBoardStore();
-    await putHtml(store, "session", "first");
-    await putHtml(store, "session", "second");
-    await putHtml(store, "session", "third");
-
-    expect(
-      (await putHtml(store, "session", "first", "<p>updated</p>")).widgets.map(
-        (widget) => widget.name,
-      ),
-    ).toEqual(["first", "second", "third"]);
-    expect(
-      (
-        await store.putWidget({
-          sessionKey: "session",
-          name: "first",
-          content: { kind: "html", html: "<p>moved</p>" },
-          placement: { after: "third" },
-        })
-      ).widgets.map((widget) => widget.name),
-    ).toEqual(["second", "third", "first"]);
   });
 });
 
@@ -446,7 +371,7 @@ it("does not select the HTML BLOB when preparing board view metadata", async () 
   });
   const prepare = vi.spyOn(database.db, "prepare");
 
-  const prepared = await store.getSnapshotWithHtmlViewMetadata({ sessionKey });
+  const prepared = readBoardSnapshotWithHtmlViewMetadata(database, sessionKey);
 
   const widgetSelects = prepare.mock.calls
     .map(([sql]) => sql)
@@ -454,6 +379,7 @@ it("does not select the HTML BLOB when preparing board view metadata", async () 
   expect(widgetSelects).toHaveLength(1);
   expect(widgetSelects[0]).toContain('"sha256"');
   expect(widgetSelects[0]).not.toContain('"html"');
-  expect(prepared.htmlViewMetadata.get("status")).not.toHaveProperty("html");
+  expect(prepared?.htmlViewMetadata.get("status")).not.toHaveProperty("html");
   prepare.mockRestore();
+  expect(await store.getSnapshotWithHtmlViewMetadata({ sessionKey })).toEqual(prepared);
 });

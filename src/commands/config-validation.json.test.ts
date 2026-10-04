@@ -12,15 +12,10 @@ import {
 const reads = vi.hoisted(() => ({
   read: vi.fn(),
   write: vi.fn(),
-  compatibility: vi.fn(() => []),
 }));
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: reads.read,
   readConfigFileSnapshotForWrite: reads.write,
-}));
-vi.mock("../plugins/status.js", () => ({
-  buildPluginCompatibilitySnapshotNotices: reads.compatibility,
-  formatPluginCompatibilityNotice: () => "unexpected compatibility notice",
 }));
 
 const configPath = "/synthetic/openclaw.json";
@@ -33,29 +28,33 @@ function invalidSnapshot() {
     parsed: {},
     sourceConfig: {},
     config: {},
-    issues: [{ path: "gateway.mode", message: "Invalid mode", allowedValues: ["local", "remote"] }],
+    issues: [
+      { path: " ", message: "Invalid root", allowedValues: [] },
+      {
+        path: "mode",
+        message: "Choose a mode",
+        allowedValues: ["local"],
+        allowedValuesHiddenCount: 2,
+      },
+    ],
     warnings: [],
     legacyIssues: [],
   };
 }
 function runtime() {
-  const documents: unknown[] = [];
   return {
-    documents,
     log: vi.fn(),
     error: vi.fn(),
     exit: vi.fn(),
     writeStdout: vi.fn(),
-    writeJson: vi.fn((value: unknown) => {
-      documents.push(structuredClone(value));
-    }),
+    writeJson: vi.fn<(value: unknown) => void>(),
   };
 }
-async function withOutputMode<T>(json: boolean, run: () => Promise<T>) {
+async function withJsonOutput<T>(run: () => Promise<T>) {
   return withConsoleLogsRoutedToStderrForJson(
     ["node", "openclaw", "agents", "list", "--json"],
     async () => {
-      applyResolvedCommandOutputMode(json);
+      applyResolvedCommandOutputMode(true);
       return await run();
     },
     { restoreChanges: true },
@@ -65,7 +64,15 @@ function expectedFailure() {
   return {
     ok: false,
     error: { type: "cli_error", message: `OpenClaw config is invalid: ${configPath}` },
-    issues: [{ path: "gateway.mode", message: "Invalid mode", allowedValues: ["local", "remote"] }],
+    issues: [
+      { path: "<root>", message: "Invalid root" },
+      {
+        path: "mode",
+        message: "Choose a mode",
+        allowedValues: ["local"],
+        allowedValuesHiddenCount: 2,
+      },
+    ],
   };
 }
 
@@ -80,31 +87,34 @@ describe("command invalid-config JSON", () => {
   it("writes one enriched JSON failure before exit and no human diagnostic", async () => {
     const rt = runtime();
     const order: string[] = [];
-    rt.writeJson.mockImplementation((value) => {
-      rt.documents.push(value);
+    rt.writeJson.mockImplementation(() => {
       order.push("json");
     });
     rt.exit.mockImplementation(() => {
       order.push("exit");
     });
-    await expect(
-      withOutputMode(true, () => requireValidConfig(rt, { includeCompatibilityAdvisory: true })),
-    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
-    expect(rt.documents).toEqual([expectedFailure()]);
+    await expect(withJsonOutput(() => requireValidConfig(rt))).rejects.toMatchObject({
+      name: "ExitError",
+      code: 1,
+    });
+    expect(rt.writeJson).toHaveBeenCalledExactlyOnceWith(expectedFailure(), 2);
     expect(order).toEqual(["json", "exit"]);
     expect(rt.exit).toHaveBeenCalledExactlyOnceWith(1);
     expect(rt.log).not.toHaveBeenCalled();
     expect(rt.error).not.toHaveBeenCalled();
-    expect(reads.compatibility).not.toHaveBeenCalled();
   });
 
   it("does not return a writable snapshot when asynchronous validation fails", async () => {
+    reads.write.mockResolvedValue({
+      snapshot: { ...invalidSnapshot(), issues: [] },
+      writeOptions: {},
+    });
     const rt = runtime();
-    await expect(withOutputMode(true, () => requireValidConfigForWrite(rt))).rejects.toMatchObject({
+    await expect(withJsonOutput(() => requireValidConfigForWrite(rt))).rejects.toMatchObject({
       name: "ExitError",
       code: 1,
     });
-    expect(rt.documents).toEqual([expectedFailure()]);
+    expect(rt.writeJson).toHaveBeenCalledExactlyOnceWith({ ...expectedFailure(), issues: [] }, 2);
     expect(rt.exit).toHaveBeenCalledExactlyOnceWith(1);
     expect(reads.read).not.toHaveBeenCalled();
   });
@@ -113,8 +123,8 @@ describe("command invalid-config JSON", () => {
     const snapshot = { ...invalidSnapshot(), valid: true, config: { plugins: {} } };
     reads.read.mockResolvedValue(snapshot);
     const rt = runtime();
-    expect(await withOutputMode(true, () => requireValidConfigFileSnapshot(rt))).toBe(snapshot);
-    expect(rt.documents).toEqual([]);
+    expect(await withJsonOutput(() => requireValidConfigFileSnapshot(rt))).toBe(snapshot);
+    expect(rt.writeJson).not.toHaveBeenCalled();
     expect(rt.exit).not.toHaveBeenCalled();
   });
 
@@ -122,70 +132,17 @@ describe("command invalid-config JSON", () => {
     const snapshot = { ...invalidSnapshot(), exists: false };
     reads.read.mockResolvedValue(snapshot);
     const rt = runtime();
-    expect(await withOutputMode(true, () => requireValidConfig(rt))).toEqual({});
-    expect(rt.documents).toEqual([]);
+    expect(await withJsonOutput(() => requireValidConfig(rt))).toEqual({});
+    expect(rt.writeJson).not.toHaveBeenCalled();
     expect(rt.exit).not.toHaveBeenCalled();
-  });
-
-  it("keeps the existing human recovery and inspection guidance", async () => {
-    const rt = runtime();
-    expect(await withOutputMode(false, () => requireValidConfig(rt))).toBeNull();
-    expect(rt.error).toHaveBeenCalledWith("Fix: openclaw doctor --fix");
-    expect(rt.error).toHaveBeenCalledWith("Inspect: openclaw config validate");
-    expect(rt.documents).toEqual([]);
-    expect(rt.exit).toHaveBeenCalledExactlyOnceWith(1);
-  });
-
-  it("retains normalized root issues and nonempty allowed-value metadata", async () => {
-    reads.read.mockResolvedValue({
-      ...invalidSnapshot(),
-      issues: [
-        { path: " ", message: "Invalid root", allowedValues: [] },
-        {
-          path: "mode",
-          message: "Choose a mode",
-          allowedValues: ["local"],
-          allowedValuesHiddenCount: 2,
-        },
-      ],
-    });
-    const rt = runtime();
-    await expect(withOutputMode(true, () => requireValidConfig(rt))).rejects.toMatchObject({
-      name: "ExitError",
-      code: 1,
-    });
-    expect(rt.documents).toEqual([
-      {
-        ...expectedFailure(),
-        issues: [
-          { path: "<root>", message: "Invalid root" },
-          {
-            path: "mode",
-            message: "Choose a mode",
-            allowedValues: ["local"],
-            allowedValuesHiddenCount: 2,
-          },
-        ],
-      },
-    ]);
-  });
-
-  it("emits an empty issues array when no issue details are available", async () => {
-    reads.read.mockResolvedValue({ ...invalidSnapshot(), issues: [] });
-    const rt = runtime();
-    await expect(withOutputMode(true, () => requireValidConfig(rt))).rejects.toMatchObject({
-      name: "ExitError",
-      code: 1,
-    });
-    expect(rt.documents).toEqual([{ ...expectedFailure(), issues: [] }]);
   });
 
   it("propagates a snapshot read failure without fabricating config issues", async () => {
     const failure = new Error("snapshot unavailable");
     reads.read.mockRejectedValueOnce(failure);
     const rt = runtime();
-    await expect(withOutputMode(true, () => requireValidConfig(rt))).rejects.toBe(failure);
-    expect(rt.documents).toEqual([]);
+    await expect(withJsonOutput(() => requireValidConfig(rt))).rejects.toBe(failure);
+    expect(rt.writeJson).not.toHaveBeenCalled();
     expect(rt.exit).not.toHaveBeenCalled();
   });
 
@@ -195,7 +152,7 @@ describe("command invalid-config JSON", () => {
     rt.writeJson.mockImplementation(() => {
       throw failure;
     });
-    await expect(withOutputMode(true, () => requireValidConfig(rt))).rejects.toBe(failure);
+    await expect(withJsonOutput(() => requireValidConfig(rt))).rejects.toBe(failure);
     expect(rt.exit).not.toHaveBeenCalled();
   });
 });

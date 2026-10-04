@@ -45,6 +45,7 @@ const mocks = vi.hoisted(() => ({
   loadSession: vi.fn(),
   getConfigSnapshot: vi.fn(),
   attribution: vi.fn(),
+  prepareAttribution: vi.fn(),
   updateIndex: vi.fn(),
   refreshIdentity: vi.fn(),
 }));
@@ -75,6 +76,7 @@ vi.mock("../agents/worktrees/git-lock.js", async (importOriginal) => ({
 
 vi.mock("../agents/git-coauthor-attribution.js", () => ({
   resolveGitCoauthorAttribution: mocks.attribution,
+  prepareGitCoauthorAttribution: mocks.prepareAttribution,
 }));
 
 vi.mock("../agents/worktrees/service.js", () => ({
@@ -85,9 +87,25 @@ vi.mock("../agents/worktrees/service.js", () => ({
   },
 }));
 
+vi.mock("../agents/worktrees/registry-read.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/worktrees/registry-read.js")>()),
+  readLiveRegistryWorktreeByOwner: async (_context: unknown, kind: string, id: string) =>
+    mocks.findWorktree(kind, id),
+}));
+
 vi.mock("./session-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-utils.js")>()),
   loadGatewaySessionEntryReadOnly: mocks.loadSession,
+}));
+
+// Preparation and live authority checks use the same fixture session state.
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (
+    params: Parameters<
+      typeof import("./session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
+    >[0],
+  ) => mocks.loadSession(params.key, { agentId: params.agentId }),
 }));
 
 vi.mock("../process/exec.js", async (importOriginal) => ({
@@ -311,7 +329,7 @@ let realWorktree = false;
 /** Publish and reset the same real SQLite owner while transport faults stay synthetic. */
 export async function persistPublicationTestSession(sessionKey = SESSION_KEY) {
   setRuntimeConfigSnapshot({
-    agents: { list: [{ id: "main", default: true, workspace: path.join(root, "workspace") }] },
+    agents: { entries: { main: { workspace: path.join(root, "workspace") } } },
     // Publication fixtures exercise lifecycle writes without unrelated maintenance workers.
     session: { maintenance: { mode: "warn" } },
   });
@@ -443,6 +461,10 @@ export function installGitHubPublicationTestHarness(
       logins: ["alice"],
       prompt: "",
     });
+    mocks.prepareAttribution.mockReset().mockImplementation(async (...args) => ({
+      attribution: await mocks.attribution(...args),
+      isCurrent: () => true,
+    }));
     mocks.getConfigSnapshot.mockReset().mockReturnValue(null);
     mocks.refreshIdentity.mockReset().mockResolvedValue(undefined);
     mocks.matchesIdentity.mockReset().mockReturnValue(true);
@@ -586,7 +608,7 @@ export function installGitHubPublicationTestHarness(
     // Source-policy selection reads canonical session custody, including the
     // creation-time sandbox required by authenticated requester fixtures.
     setRuntimeConfigSnapshot({
-      agents: { list: [{ id: "main", default: true, workspace: "/repo/worktree" }] },
+      agents: { entries: { main: { workspace: "/repo/worktree" } } },
     });
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: SESSION_KEY },

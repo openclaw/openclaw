@@ -1,13 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import type { CronJob } from "../cron/types.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import * as matcher from "./cron-stream-matcher.js";
 import {
   createCronStreamMatchingJob,
   createCronStreamWatcherFixture,
-  createWatchers,
   exitResult,
-  fakeSupervisor,
   job,
   settle,
 } from "./cron-stream-watchers.test-helpers.js";
@@ -19,6 +25,106 @@ describe("cron stream output", () => {
   });
 
   describe("serialized output interleavings", () => {
+    it("coalesces late quiet and busy-retry wakes and resumes after an owner stop", async () => {
+      const clock = createGatewaySchedulerClock(1_000);
+      const scheduler = createTestGatewayScheduler(clock.clock);
+      const fireBatch = vi.fn().mockResolvedValueOnce("busy").mockResolvedValue("fired");
+      const { fake, watchers } = createCronStreamWatcherFixture({
+        scheduler,
+        minIntervalMs: 100,
+        fireBatch,
+      });
+      try {
+        await watchers.start(job());
+        fake.inputs[0]?.onStdout?.("first\n");
+        await settle();
+        clock.setTime(5_000);
+        await clock.wake();
+        await settle();
+        expect(fireBatch).toHaveBeenCalledExactlyOnceWith(
+          expect.any(Object),
+          "first",
+          expect.any(String),
+          expect.any(String),
+        );
+
+        clock.setTime(10_000);
+        await clock.wake();
+        await settle();
+        expect(fireBatch).toHaveBeenCalledTimes(2);
+        expect(fireBatch).toHaveBeenLastCalledWith(
+          expect.any(Object),
+          "first",
+          expect.any(String),
+          expect.any(String),
+        );
+        await watchers.stop("stream-job", "disabled");
+        expect(scheduler.nextWakeAtMs).toBeNull();
+
+        await watchers.start(job());
+        fake.inputs[1]?.onStdout?.("resumed\n");
+        await settle();
+        await clock.advanceBy(100);
+        expect(fireBatch).toHaveBeenCalledTimes(3);
+        expect(fireBatch).toHaveBeenLastCalledWith(
+          expect.any(Object),
+          "resumed",
+          expect.any(String),
+          expect.any(String),
+        );
+      } finally {
+        await watchers.stopAll("shutdown");
+        await scheduler.stop();
+      }
+    });
+
+    it("settles a scheduled callback's internal teardown while public stop joins its scope", async ({
+      signal,
+    }) => {
+      const clock = createGatewaySchedulerClock();
+      const scheduler = createTestGatewayScheduler(clock.clock);
+      const writing = createDeferred();
+      const releaseWrite = createDeferred<boolean>();
+      const { fake, watchers } = createCronStreamWatcherFixture({
+        scheduler,
+        updateState: vi.fn(async (_id: string, patch: Partial<CronJob["state"]>) => {
+          if (patch.streamStatus === "running" && patch.streamConsecutiveFailures === 0) {
+            writing.resolve();
+            return await releaseWrite.promise;
+          }
+          return undefined;
+        }),
+      });
+      let waking: ReturnType<typeof clock.advanceBy> = undefined;
+      let stopping: Promise<void> | undefined;
+      try {
+        await watchers.start(job({ state: { streamConsecutiveFailures: 4 } }));
+        waking = clock.advanceBy(60_000);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            writing.promise,
+            Promise.resolve(waking),
+            "The scheduled callback completed before its state write",
+          ),
+          signal,
+        );
+        let stopped = false;
+        stopping = watchers.stop("stream-job", "disabled").then(() => {
+          stopped = true;
+        });
+        await settle();
+        expect(stopped).toBe(false);
+      } finally {
+        releaseWrite.resolve(false);
+        const closing = stopping ?? watchers.stop("stream-job", "disabled");
+        scheduler.beginClose();
+        await withinTest(Promise.all([waking, closing, scheduler.stop()]), signal);
+      }
+      expect(watchers.inspect("stream-job")?.state).toBe("stopped");
+      expect(fake.runs[0]?.cancel).toHaveBeenCalledOnce();
+      expect(scheduler.nextWakeAtMs).toBeNull();
+    });
+
     it("restarts the quiet window when a match overtakes a queued close", async () => {
       vi.useFakeTimers();
       const entered = createDeferred();
@@ -228,17 +334,8 @@ describe("cron stream output", () => {
     it("counts a pending batch before terminal restart exhaustion", async () => {
       vi.useFakeTimers();
       vi.setSystemTime(1_000);
-      const fake = fakeSupervisor();
-      const updateState = vi.fn(async () => {});
-      const recordFailure = vi.fn(async () => {});
-      const fireBatch = vi.fn(async () => "fired" as const);
-      const watchers = createWatchers({
-        getProcessSupervisor: () => fake.supervisor,
+      const { fake, recordFailure, fireBatch, watchers } = createCronStreamWatcherFixture({
         minIntervalMs: 100,
-        updateState,
-        recordFailure,
-        fireBatch,
-        logger: { info: vi.fn(), warn: vi.fn() },
       });
       await watchers.start(job({ state: { lastRunAtMs: 1_000, streamConsecutiveFailures: 4 } }));
       fake.inputs[0]?.onStdout?.("pending\n");
@@ -258,15 +355,8 @@ describe("cron stream output", () => {
     it("honors a synchronous stop fence in a pending-fire operation already queued first", async () => {
       vi.useFakeTimers();
       vi.setSystemTime(1_000);
-      const fake = fakeSupervisor();
-      const fireBatch = vi.fn(async () => "fired" as const);
-      const watchers = createWatchers({
-        getProcessSupervisor: () => fake.supervisor,
+      const { fake, fireBatch, watchers } = createCronStreamWatcherFixture({
         minIntervalMs: 100,
-        updateState: vi.fn(async () => {}),
-        recordFailure: vi.fn(async () => {}),
-        fireBatch,
-        logger: { info: vi.fn(), warn: vi.fn() },
       });
       await watchers.start(job());
       fake.inputs[0]?.onStdout?.("first\n");
@@ -288,7 +378,6 @@ describe("cron stream output", () => {
 
     it("drains output accepted behind a slow owner write before entering backoff", async () => {
       vi.useFakeTimers();
-      const fake = fakeSupervisor();
       const { promise: payload, resolve: releasePayload } = createDeferred();
       const { promise: counter, resolve: releaseCounter } = createDeferred();
       const updateState = vi.fn(async (_jobId: string, patch: Partial<CronJob["state"]>) => {
@@ -303,14 +392,11 @@ describe("cron stream output", () => {
           return "fired" as const;
         })
         .mockResolvedValue("fired" as const);
-      const watchers = createWatchers({
-        getProcessSupervisor: () => fake.supervisor,
+      const { fake, watchers } = createCronStreamWatcherFixture({
         minIntervalMs: 1,
         retryBackoffMs: [1],
         updateState,
-        recordFailure: vi.fn(async () => {}),
         fireBatch,
-        logger: { info: vi.fn(), warn: vi.fn() },
       });
       await watchers.start(job());
       fake.inputs[0]?.onStdout?.("first\n");
@@ -345,7 +431,6 @@ describe("cron stream output", () => {
 
     it("lets a stop requested during exit draining own teardown without counting failure", async () => {
       vi.useFakeTimers();
-      const fake = fakeSupervisor();
       const { promise: payload, resolve: releasePayload } = createDeferred();
       const { promise: drainEntered, resolve: markDrainEntered } = createDeferred();
       const { promise: drain, resolve: releaseDrain } = createDeferred();
@@ -355,17 +440,13 @@ describe("cron stream output", () => {
           await drain;
         }
       });
-      const recordFailure = vi.fn(async () => {});
-      const watchers = createWatchers({
-        getProcessSupervisor: () => fake.supervisor,
+      const { fake, recordFailure, watchers } = createCronStreamWatcherFixture({
         minIntervalMs: 1,
         updateState,
-        recordFailure,
         fireBatch: vi.fn(async () => {
           await payload;
           return "fired" as const;
         }),
-        logger: { info: vi.fn(), warn: vi.fn() },
       });
       await watchers.start(job({ state: { streamConsecutiveFailures: 4 } }));
       fake.inputs[0]?.onStdout?.("first\n");
@@ -392,16 +473,8 @@ describe("cron stream output", () => {
 
     it("ignores a late batch after removal without moving counters", async () => {
       vi.useFakeTimers();
-      const fake = fakeSupervisor();
-      const updateState = vi.fn(async (_jobId: string, _patch: Partial<CronJob["state"]>) => {});
-      const fireBatch = vi.fn(async () => "fired" as const);
-      const watchers = createWatchers({
-        getProcessSupervisor: () => fake.supervisor,
+      const { fake, updateState, fireBatch, watchers } = createCronStreamWatcherFixture({
         minIntervalMs: 1,
-        updateState,
-        recordFailure: vi.fn(async () => {}),
-        fireBatch,
-        logger: { info: vi.fn(), warn: vi.fn() },
       });
       await watchers.start(job());
       const lateOutput = fake.inputs[0]?.onStdout;
@@ -423,7 +496,6 @@ describe("cron stream output", () => {
 
     it("bounds raw output while a serialized counter write is slow", async () => {
       vi.useFakeTimers();
-      const fake = fakeSupervisor();
       const { promise: payload, resolve: releasePayload } = createDeferred();
       const { promise: counter, resolve: releaseCounter } = createDeferred();
       const updateState = vi.fn(async (_jobId: string, patch: Partial<CronJob["state"]>) => {
@@ -431,16 +503,13 @@ describe("cron stream output", () => {
           await counter;
         }
       });
-      const watchers = createWatchers({
-        getProcessSupervisor: () => fake.supervisor,
+      const { fake, watchers } = createCronStreamWatcherFixture({
         minIntervalMs: 1,
         updateState,
-        recordFailure: vi.fn(async () => {}),
         fireBatch: vi.fn(async () => {
           await payload;
           return "fired" as const;
         }),
-        logger: { info: vi.fn(), warn: vi.fn() },
       });
       await watchers.start(
         job({
@@ -484,19 +553,13 @@ describe("cron stream output", () => {
 
     it("bounds stop while a payload remains in flight and freezes its counter", async () => {
       vi.useFakeTimers();
-      const fake = fakeSupervisor();
       const { promise: payload, resolve: releasePayload } = createDeferred();
-      const updateState = vi.fn(async (_jobId: string, _patch: Partial<CronJob["state"]>) => {});
-      const watchers = createWatchers({
-        getProcessSupervisor: () => fake.supervisor,
+      const { fake, updateState, watchers } = createCronStreamWatcherFixture({
         minIntervalMs: 1,
-        updateState,
-        recordFailure: vi.fn(async () => {}),
         fireBatch: vi.fn(async () => {
           await payload;
           return "fired" as const;
         }),
-        logger: { info: vi.fn(), warn: vi.fn() },
       });
       await watchers.start(job());
       fake.inputs[0]?.onStdout?.("in flight\n");

@@ -1,12 +1,11 @@
-// Formats provider authentication choices exposed by plugin setup flows.
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   resolveDefaultAgentId,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
 import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
-import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -21,15 +20,13 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import { enablePluginWithCapabilityConsent } from "./enable.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
-import { applyProviderAuthConfigPatch, applyDefaultModel } from "./provider-auth-choice-helpers.js";
-import {
-  resolveManifestProviderAuthChoice,
-  type ProviderAuthChoiceMetadata,
-} from "./provider-auth-choices.js";
+import { applyProviderAuthConfigPatch } from "./provider-auth-choice-helpers.js";
+import { resolveManifestProviderAuthChoice } from "./provider-auth-choices.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
 import { runProviderPluginAuthMethodUnpersisted } from "./provider-auth-method.js";
 import { persistProviderAuthProfileBatch } from "./provider-auth-persistence.js";
 import { resolveProviderInstallCatalogEntry } from "./provider-install-catalog.js";
+import { applyPrimaryModel } from "./provider-model-primary.js";
 import { buildProviderPluginMethodChoice } from "./provider-plugin-choice.js";
 import type {
   ProviderAuthMethod,
@@ -83,13 +80,6 @@ function preparedWithoutAuthProfiles(
   };
 }
 
-function formatModelRefForDisplay(modelRef: string, provider: ProviderPlugin): string {
-  if (!provider.preserveLiteralProviderPrefix) {
-    return modelRef;
-  }
-  return formatLiteralProviderPrefixedModelRef(provider.id, modelRef);
-}
-
 function restoreConfiguredPrimaryModel(
   nextConfig: OpenClawConfig,
   originalConfig: OpenClawConfig,
@@ -100,24 +90,17 @@ function restoreConfiguredPrimaryModel(
   if (!nextDefaults) {
     return nextConfig;
   }
-  if (originalModel !== undefined) {
-    return {
-      ...nextConfig,
-      agents: {
-        ...nextAgents,
-        defaults: {
-          ...nextDefaults,
-          model: originalModel,
-        },
-      },
-    };
+  const defaults = { ...nextDefaults };
+  if (originalModel === undefined) {
+    delete defaults.model;
+  } else {
+    defaults.model = originalModel;
   }
-  const { model: _model, ...restDefaults } = nextDefaults;
   return {
     ...nextConfig,
     agents: {
       ...nextAgents,
-      defaults: restDefaults,
+      defaults,
     },
   };
 }
@@ -131,35 +114,6 @@ function resolveConfiguredDefaultModelPrimary(cfg: OpenClawConfig): string | und
     return model.primary;
   }
   return undefined;
-}
-
-async function noteDefaultModelResult(params: {
-  previousPrimary: string | undefined;
-  selectedModel: string;
-  selectedModelDisplay?: string;
-  preserveExistingDefaultModel: boolean | undefined;
-  prompter: WizardPrompter;
-}): Promise<void> {
-  const selectedModelDisplay = params.selectedModelDisplay ?? params.selectedModel;
-  if (
-    params.preserveExistingDefaultModel === true &&
-    params.previousPrimary &&
-    params.previousPrimary !== params.selectedModel
-  ) {
-    await params.prompter.note(
-      t("wizard.model.keptExistingDefault", {
-        current: params.previousPrimary,
-        selected: selectedModelDisplay,
-      }),
-      t("wizard.model.configuredTitle"),
-    );
-    return;
-  }
-
-  await params.prompter.note(
-    t("wizard.model.defaultSet", { model: selectedModelDisplay }),
-    t("wizard.model.configuredTitle"),
-  );
 }
 
 async function applyDefaultModelFromAuthChoice(params: {
@@ -179,12 +133,11 @@ async function applyDefaultModelFromAuthChoice(params: {
     params.preserveExistingDefaultModel === true &&
     previousPrimary !== undefined &&
     previousPrimary !== params.selectedModel;
-  const defaultModelBaseConfig = params.entryConfig;
   const defaultModelConfig =
     params.preserveExistingDefaultModel === true
-      ? restoreConfiguredPrimaryModel(params.config, defaultModelBaseConfig)
+      ? restoreConfiguredPrimaryModel(params.config, params.entryConfig)
       : params.config;
-  let nextConfig = applyDefaultModel(defaultModelConfig, params.selectedModel, {
+  let nextConfig = applyPrimaryModel(defaultModelConfig, params.selectedModel, {
     preserveExistingPrimary: params.preserveExistingDefaultModel === true,
   });
   if (!preservesDifferentPrimary) {
@@ -220,34 +173,17 @@ async function applyDefaultModelFromAuthChoice(params: {
       nextConfig = migrationResult.config;
     }
   }
-  await noteDefaultModelResult({
-    previousPrimary,
-    selectedModel: params.selectedModel,
-    selectedModelDisplay: params.selectedModelDisplay,
-    preserveExistingDefaultModel: params.preserveExistingDefaultModel,
-    prompter: params.prompter,
-  });
+  const selectedModelDisplay = params.selectedModelDisplay ?? params.selectedModel;
+  await params.prompter.note(
+    preservesDifferentPrimary && previousPrimary
+      ? t("wizard.model.keptExistingDefault", {
+          current: previousPrimary,
+          selected: selectedModelDisplay,
+        })
+      : t("wizard.model.defaultSet", { model: selectedModelDisplay }),
+    t("wizard.model.configuredTitle"),
+  );
   return nextConfig;
-}
-
-type ProviderAuthChoiceRuntime = typeof import("./provider-auth-choice.runtime.js");
-
-async function loadPluginProviderRuntime(): Promise<ProviderAuthChoiceRuntime> {
-  return await import("./provider-auth-choice.runtime.js");
-}
-
-function resolveManifestAuthChoiceScope(params: {
-  authChoice: string;
-  config: OpenClawConfig;
-  workspaceDir: string;
-  env?: NodeJS.ProcessEnv;
-}): ProviderAuthChoiceMetadata | undefined {
-  return resolveManifestProviderAuthChoice(params.authChoice, {
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    includeUntrustedWorkspacePlugins: false,
-  });
 }
 
 function withProviderPluginId(provider: ProviderPlugin, pluginId: string): ProviderPlugin {
@@ -270,7 +206,7 @@ export function applyProviderPluginAuthMethodResultConfig(params: {
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: profile.profileId,
       provider: profile.credential.provider,
-      mode: profile.credential.type === "token" ? "token" : profile.credential.type,
+      mode: profile.credential.type,
       ...("email" in profile.credential && profile.credential.email
         ? { email: profile.credential.email }
         : {}),
@@ -284,6 +220,7 @@ export function applyProviderPluginAuthMethodResultConfig(params: {
 
 export async function runProviderPluginAuthMethod(params: {
   config: OpenClawConfig;
+  providerId: string;
   env?: NodeJS.ProcessEnv;
   runtime: RuntimeEnv;
   prompter: WizardPrompter;
@@ -318,12 +255,14 @@ async function prepareProviderPluginAuthMethod(
 }> {
   const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
   const agentDir = params.agentDir ?? resolveAgentDir(params.config, agentId);
-  const workspaceDir =
-    params.workspaceDir ??
-    resolveAgentWorkspaceDir(params.config, agentId) ??
-    resolveDefaultAgentWorkspaceDir();
+  const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.config, agentId);
+  const store = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+  const existingProfiles = Object.entries(store.profiles)
+    .filter(([, credential]) => credential.provider === params.providerId)
+    .map(([profileId, credential]) => ({ profileId, credential }));
   const result = await runProviderPluginAuthMethodUnpersisted({
     config: params.config,
+    existingProfiles,
     env: params.env,
     runtime: params.runtime,
     prompter: params.prompter,
@@ -386,27 +325,24 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
   let cache = initialCache;
   const entryConfig = params.config;
   const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
-  const workspaceDir =
-    params.workspaceDir ??
-    resolveAgentWorkspaceDir(params.config, agentId) ??
-    resolveDefaultAgentWorkspaceDir();
+  const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.config, agentId);
   const {
     resolvePluginProviders,
     resolvePluginSetupProvider,
     resolveProviderPluginChoice,
     runProviderModelSelectedHook,
-  } = await loadPluginProviderRuntime();
+  } = await import("./provider-auth-choice.runtime.js");
   // Import the reviewed generation while locked; authentication may outlive the lease.
   const prepared = await withPluginLifecycleLease({ env: params.env }, async () =>
     withPluginCache(initialCache, async () => {
       let nextConfig = params.config;
       let pendingPluginInstalls: Record<string, PluginInstallRecord> | undefined;
       let enabledConfig = params.config;
-      const manifestAuthChoice = resolveManifestAuthChoiceScope({
-        authChoice: params.authChoice,
+      const manifestAuthChoice = resolveManifestProviderAuthChoice(params.authChoice, {
         config: nextConfig,
         workspaceDir,
         env: params.env,
+        includeUntrustedWorkspacePlugins: false,
       });
       const installCatalogEntry = resolveProviderInstallCatalogEntry(params.authChoice, {
         config: nextConfig,
@@ -566,6 +502,7 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
 
     const applied = await prepareProviderPluginAuthMethod({
       config: nextConfig,
+      providerId: resolved.provider.id,
       env: params.env,
       runtime: params.runtime,
       prompter: params.prompter,
@@ -589,29 +526,35 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
       opts: params.opts,
     });
 
+    const consumeAuthenticated = (result: ApplyProviderAuthChoiceResult) =>
+      consume(
+        {
+          ...result,
+          ...(prepared.pendingPluginInstalls
+            ? { pendingPluginInstalls: prepared.pendingPluginInstalls }
+            : {}),
+          authProfiles: applied.authProfiles,
+          persistAuthProfiles: applied.persistAuthProfiles,
+        },
+        resolved.provider,
+      );
     nextConfig = applied.config;
     let agentModelOverride: string | undefined;
     if (applied.defaultModel) {
       const selectedModel = applied.defaultModel;
       if (resolved.wizard?.modelTarget === "utility") {
-        return await consume(
-          {
-            config: materializeUtilityModelSeparation(
-              restoreConfiguredPrimaryModel(nextConfig, params.config),
-              params.config,
-            ).config,
-            modelTarget: "utility",
-            utilityModelOverride: selectedModel,
-            ...(prepared.pendingPluginInstalls
-              ? { pendingPluginInstalls: prepared.pendingPluginInstalls }
-              : {}),
-            authProfiles: applied.authProfiles,
-            persistAuthProfiles: applied.persistAuthProfiles,
-          },
-          resolved.provider,
-        );
+        return await consumeAuthenticated({
+          config: materializeUtilityModelSeparation(
+            restoreConfiguredPrimaryModel(nextConfig, params.config),
+            params.config,
+          ).config,
+          modelTarget: "utility",
+          utilityModelOverride: selectedModel,
+        });
       }
-      const selectedModelDisplay = formatModelRefForDisplay(selectedModel, resolved.provider);
+      const selectedModelDisplay = resolved.provider.preserveLiteralProviderPrefix
+        ? formatLiteralProviderPrefixedModelRef(resolved.provider.id, selectedModel)
+        : selectedModel;
       if (params.setDefaultModel) {
         const defaultModelConfig = await applyDefaultModelFromAuthChoice({
           config: nextConfig,
@@ -644,34 +587,16 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
           );
         }
         nextConfig = defaultModelConfig;
-        return await consume(
-          {
-            config: nextConfig,
-            ...(prepared.pendingPluginInstalls
-              ? { pendingPluginInstalls: prepared.pendingPluginInstalls }
-              : {}),
-            authProfiles: applied.authProfiles,
-            persistAuthProfiles: applied.persistAuthProfiles,
-          },
-          resolved.provider,
-        );
+        return await consumeAuthenticated({ config: nextConfig });
       }
       nextConfig = restoreConfiguredPrimaryModel(nextConfig, params.config);
       agentModelOverride = selectedModel;
     }
 
-    return await consume(
-      {
-        config: nextConfig,
-        agentModelOverride,
-        ...(prepared.pendingPluginInstalls
-          ? { pendingPluginInstalls: prepared.pendingPluginInstalls }
-          : {}),
-        authProfiles: applied.authProfiles,
-        persistAuthProfiles: applied.persistAuthProfiles,
-      },
-      resolved.provider,
-    );
+    return await consumeAuthenticated({
+      config: nextConfig,
+      agentModelOverride,
+    });
   });
 }
 

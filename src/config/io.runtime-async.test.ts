@@ -8,10 +8,10 @@ import { clearBundledDiscoveryModeMemo } from "../plugins/bundled-discovery-stat
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { prepareConfigRuntimeEnv } from "./config-env-vars.js";
 import { readConfigHealthStateFromStore } from "./io.health-state.js";
-import { createManagedRuntimeEnvBase } from "./io.read-helpers.js";
+import { createManagedRuntimeEnvBase } from "./io.runtime-env.js";
 import {
   captureRuntimeConfigAsyncReader,
   registerConfigWriteListener,
@@ -119,67 +119,81 @@ it("preserves SDK config writes and load authority inside a native worker", asyn
   }
 });
 
-it("loads and pins default config with real staged dotenv and health without main SQL", async () => {
-  const { home, state, configPath } = fixture({
-    gateway: { mode: "local", auth: { mode: "token", token: "${CONFIG_ASYNC_GLOBAL}" } },
-    env: { vars: { CONFIG_ASYNC_CONFIG: "config" } },
-  });
-  await withPluginCache(createPluginCache(), async () => {
+it.each(["config environment", "dotenv selector"] as const)(
+  "pins the selected config while publishing staged %s without main SQL",
+  async (mode) => {
+    const { home, state, configPath } = fixture(
+      mode === "config environment"
+        ? {
+            gateway: { mode: "local", auth: { mode: "token", token: "${CONFIG_ASYNC_GLOBAL}" } },
+            env: { vars: { CONFIG_ASYNC_CONFIG: "config" } },
+          }
+        : undefined,
+    );
+    const other = path.join(state, "other.json");
+    if (mode === "dotenv selector") {
+      fs.writeFileSync(other, JSON.stringify({ gateway: { mode: "local", port: 19001 } }));
+      fs.writeFileSync(path.join(state, ".env"), `OPENCLAW_CONFIG_PATH=${other}\n`);
+    }
+    await withPluginCache(createPluginCache(), async () => {
+      const read = captureRuntimeConfigAsyncReader();
+      expect(process.env.CONFIG_ASYNC_WORKSPACE).toBeUndefined();
+      expect(getRuntimeConfigSnapshot()).toBeNull();
+      const config = await withoutMainSql(read);
+      expect(getRuntimeConfigSnapshot()).toBe(config);
+      expect(await read()).toBe(config);
+      if (mode === "dotenv selector") {
+        expect(config.gateway?.port).toBe(18789);
+        expect(process.env.OPENCLAW_CONFIG_PATH).toBe(other);
+      } else {
+        expect(config.gateway?.auth?.token).toBe("global");
+        expect(config.agents?.defaults?.compaction?.mode).toBe("safeguard");
+        expect(process.env.CONFIG_ASYNC_WORKSPACE).toBe("workspace");
+        expect(process.env.CONFIG_ASYNC_GLOBAL).toBe("global");
+        expect(process.env.CONFIG_ASYNC_CONFIG).toBe("config");
+      }
+    });
+    if (mode === "config environment") {
+      expect(
+        readConfigHealthStateFromStore({
+          env: { HOME: home, OPENCLAW_STATE_DIR: state },
+          homedir: () => home,
+          logger: console,
+        }).entries?.[configPath]?.lastKnownGood,
+      ).toBeDefined();
+    }
+  },
+);
+
+it.each(["validation", "namespace"] as const)(
+  "rejects a cold load after %s failure without publishing config environment",
+  async (failure) => {
+    fixture(
+      failure === "validation"
+        ? {
+            gateway: { port: "invalid" },
+            env: { vars: { CONFIG_ASYNC_CONFIG: "rejected" } },
+          }
+        : undefined,
+    );
     const read = captureRuntimeConfigAsyncReader();
-    expect(process.env.CONFIG_ASYNC_WORKSPACE).toBeUndefined();
+    if (failure === "namespace") {
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", "/fixture/another-config.json");
+    }
+    const pending = withoutMainSql(() => withPluginCache(createPluginCache(), read));
+    if (failure === "validation") {
+      await expect(pending).rejects.toMatchObject({ code: "INVALID_CONFIG" });
+      expect(process.env.CONFIG_ASYNC_GLOBAL).toBe("global");
+    } else {
+      await expect(pending).rejects.toThrow("Runtime config source changed");
+    }
+    expect(process.env.CONFIG_ASYNC_WORKSPACE).toBe(
+      failure === "validation" ? "workspace" : undefined,
+    );
+    expect(process.env.CONFIG_ASYNC_CONFIG).toBeUndefined();
     expect(getRuntimeConfigSnapshot()).toBeNull();
-    const config = await withoutMainSql(read);
-    expect(config.gateway?.auth?.token).toBe("global");
-    expect(config.agents?.defaults?.compaction?.mode).toBe("safeguard");
-    expect(getRuntimeConfigSnapshot()).toBe(config);
-    expect(await read()).toBe(config);
-    expect(process.env.CONFIG_ASYNC_WORKSPACE).toBe("workspace");
-    expect(process.env.CONFIG_ASYNC_GLOBAL).toBe("global");
-    expect(process.env.CONFIG_ASYNC_CONFIG).toBe("config");
-  });
-  expect(
-    readConfigHealthStateFromStore({
-      env: { HOME: home, OPENCLAW_STATE_DIR: state },
-      homedir: () => home,
-      logger: console,
-    }).entries?.[configPath]?.lastKnownGood,
-  ).toBeDefined();
-});
-
-it("keeps the root path selected before trusted dotenv publishes a config selector", async () => {
-  const { state } = fixture();
-  const other = path.join(state, "other.json");
-  fs.writeFileSync(other, JSON.stringify({ gateway: { mode: "local", port: 19001 } }));
-  fs.writeFileSync(path.join(state, ".env"), `OPENCLAW_CONFIG_PATH=${other}\n`);
-  const config = await withoutMainSql(() =>
-    withPluginCache(createPluginCache(), captureRuntimeConfigAsyncReader()),
-  );
-  expect(config.gateway?.port).toBe(18789);
-  expect(process.env.OPENCLAW_CONFIG_PATH).toBe(other);
-  expect(getRuntimeConfigSnapshot()).toBe(config);
-});
-
-it("retains dotenv but rejects config-owned environment when strict validation fails", async () => {
-  fixture({ gateway: { port: "invalid" }, env: { vars: { CONFIG_ASYNC_CONFIG: "rejected" } } });
-  await expect(
-    withoutMainSql(() => withPluginCache(createPluginCache(), captureRuntimeConfigAsyncReader())),
-  ).rejects.toMatchObject({ code: "INVALID_CONFIG" });
-  expect(process.env.CONFIG_ASYNC_WORKSPACE).toBe("workspace");
-  expect(process.env.CONFIG_ASYNC_GLOBAL).toBe("global");
-  expect(process.env.CONFIG_ASYNC_CONFIG).toBeUndefined();
-  expect(getRuntimeConfigSnapshot()).toBeNull();
-});
-
-it("does not load a different ambient namespace after the reader was captured", async () => {
-  fixture();
-  const read = captureRuntimeConfigAsyncReader();
-  vi.stubEnv("OPENCLAW_CONFIG_PATH", "/fixture/another-config.json");
-  await expect(withoutMainSql(() => Promise.resolve().then(read))).rejects.toThrow(
-    "Runtime config source changed",
-  );
-  expect(process.env.CONFIG_ASYNC_WORKSPACE).toBeUndefined();
-  expect(getRuntimeConfigSnapshot()).toBeNull();
-});
+  },
+);
 
 it("keeps a pinned runtime readable when the captured launch directory is unavailable", async () => {
   fixture();

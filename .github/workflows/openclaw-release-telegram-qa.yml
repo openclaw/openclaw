@@ -56,7 +56,7 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN: "HTTP 5[0-9][0-9]|Server Error|invalid character .* looking for beginning of value|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i/o timeout|network is unreachable|ETIMEDOUT|ECONNRESET|EAI_AGAIN"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
   OPENCLAW_BUILD_PRIVATE_QA: "1"
   OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
 
@@ -1095,13 +1095,13 @@ jobs:
             OPENCLAW_CONFIG_PATH
             OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS
             OPENCLAW_ENABLE_PRIVATE_QA_CLI
+            OPENCLAW_GATEWAY_HOST_LIFELINE
             OPENCLAW_GATEWAY_TOKEN
             OPENCLAW_HOME
             OPENCLAW_LOG_LEVEL
             OPENCLAW_NO_RESPAWN
             OPENCLAW_OAUTH_DIR
             OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER
-            OPENCLAW_QA_PARENT_PID
             OPENCLAW_QA_STAGED_RUNTIME_ROOT
             OPENCLAW_QA_TEMP_ROOT
             OPENCLAW_SKIP_BROWSER_CONTROL_SERVER
@@ -1659,7 +1659,7 @@ jobs:
               # Only the unprivileged SUT writes below its private state root.
               /usr/bin/setpriv --reuid="$SUT_UID" --regid="$SUT_GID" \
                 --clear-groups --no-new-privs --inh-caps=-all --ambient-caps=-all --bounding-set=-all \
-                /usr/bin/env -i PATH=/usr/bin:/bin /bin/bash -ceu '
+                /usr/bin/env -i PATH=/usr/bin:/bin /bin/bash --noprofile --norc -ceu '
                   umask 077
                   source_config="$1"
                   projection_dir="$2"
@@ -1745,6 +1745,9 @@ jobs:
           export CANONICAL_CONFIG_PATH="$config_path"
           export boundary_mode generation command_file identity_file sandbox_file
           export command_sha256 expected_env_keys_b64 sandbox_payload_b64
+          # This privileged launcher stays alive until the isolated child exits.
+          # Its process identity is private to the isolation check, not Gateway lifetime.
+          export launcher_pid="$BASHPID"
 
           launcher_stage=enter-mount-namespace
           launcher_stage_file="${RUNTIME_ROOT}/launcher-stage-${BASHPID}"
@@ -1756,7 +1759,7 @@ jobs:
             --mount \
             --fork \
             --propagation private \
-            /bin/bash -ceu '
+            /bin/bash --noprofile --norc -ceu '
               set_launcher_stage() {
                 launcher_stage="$1"
                 printf "%s\n" "$launcher_stage" >"$launcher_stage_file"
@@ -1830,7 +1833,7 @@ jobs:
                   --ambient-caps=-all \
                   --bounding-set=-all \
                   --pdeathsig=KILL \
-                  /bin/bash -ceu '\''
+                  /bin/bash --noprofile --norc -ceu '\''
                     runtime_stage=verify-runtime-identity
                     fail_runtime_stage() {
                       exit_status="$1"
@@ -1867,7 +1870,7 @@ jobs:
                     ! /usr/bin/sudo -n true >/dev/null 2>&1
                     runtime_stage=verify-parent-proc-hidden
                     for proc_path in environ mem fd cmdline; do
-                      [[ ! -e "/proc/${OPENCLAW_QA_PARENT_PID:?}/${proc_path}" ]]
+                      [[ ! -e "/proc/${launcher_pid:?}/${proc_path}" ]]
                     done
                     runtime_stage=verify-proc-visibility
                     OPENCLAW_QA_PROC_CONTROL=visible sleep 30 &
@@ -1971,6 +1974,7 @@ jobs:
                       expected_env_keys_b64 \
                       generation \
                       identity_file \
+                      launcher_pid \
                       sandbox_file \
                       sandbox_payload_b64
 
@@ -2165,16 +2169,11 @@ jobs:
             exit 1
           fi
 
-          for attempt in 1 2; do
-            if run_qa_attempt "attempt-${attempt}" "${remaining_scenarios[@]}"; then
-              exit 0
-            fi
-            terminate_sut_uid
-            if [[ "$attempt" == "2" ]]; then
-              exit 1
-            fi
-            echo "Telegram live lane failed on attempt ${attempt}; retrying once..." >&2
-          done
+          if run_qa_attempt "attempt-1" "${remaining_scenarios[@]}"; then
+            exit 0
+          fi
+          terminate_sut_uid
+          exit 1
 
       - name: Terminate isolated Telegram SUT
         id: terminate_sut

@@ -10,8 +10,8 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
-import { subscribeChatOutboxProjection } from "./chat-queue.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import {
@@ -97,8 +97,8 @@ it("publishes a real recovery-owner change to subscribed panes during a foreign 
   const peerPaint = vi.fn();
   host.requestUpdate = paint;
   peer.requestUpdate = peerPaint;
-  const stopHost = subscribeChatOutboxProjection(host);
-  const stopPeer = subscribeChatOutboxProjection(peer);
+  const stopHost = chatOutboxOwner(host).subscribe(host);
+  const stopPeer = chatOutboxOwner(peer).subscribe(peer);
   onTestFinished(() => {
     stopPeer();
     stopHost();
@@ -181,13 +181,11 @@ it.each(
 
 it.each(
   [false, true].flatMap((changed) =>
-    [0, 7].flatMap((peerEpoch) =>
-      [selected, queued].map((peerSession) => ({ changed, peerEpoch, peerSession })),
-    ),
+    [selected, queued].map((peerSession) => ({ changed, peerSession })),
   ),
 )(
-  "joins a passive reader for $peerSession at epoch $peerEpoch and preserves events (changed: $changed)",
-  async ({ changed, peerEpoch, peerSession }) => {
+  "joins a passive reader for $peerSession across pane epochs and preserves events (changed: $changed)",
+  async ({ changed, peerSession }) => {
     const first = createDeferred<ChatHistoryResult>();
     const firstReadStarted = createDeferred();
     let reads = 0;
@@ -202,7 +200,7 @@ it.each(
       client: host.client,
       sessions: host.sessions,
       sessionKey: peerSession,
-      connectionEpoch: peerEpoch,
+      connectionEpoch: 7,
     });
     const event = sessionEvent(queued);
     const a = resumeStoredChatOutboxes(host, event);
@@ -272,6 +270,7 @@ it("keeps global outbox event recovery bound to the event's agent", async () => 
     [
       "chat.history",
       { sessionKey: "global", agentId: "work", inputRunIds: ["work-run"], limit: 1000 },
+      { timeoutMs: 30_000 },
     ],
   ]);
   expect(listStoredChatOutboxes(host)).toHaveLength(2);

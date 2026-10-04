@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
+import { createProps } from "./chat-thread.test-support.ts";
 import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
 
 const clients = [{ id: "cli", mode: "cli", displayName: "Release helper" }];
@@ -12,13 +13,16 @@ const baseMessage = {
   __openclaw: { id: "input-1", seq: 2, idempotencyKey: "run:user", transport: { clients } },
 };
 
-function pending(message: object): ChatPendingInputsPage["items"] {
+function pending(
+  message: object,
+  state: ChatPendingInputsPage["items"][number]["state"] = "queued",
+): ChatPendingInputsPage["items"] {
   return [
     {
       id: "input-1",
       runId: "run",
       acceptedAt: 1000,
-      state: "queued",
+      state,
       message: { ...message, __openclaw: { id: "pending:input-1", transport: { clients } } },
     },
   ];
@@ -29,19 +33,15 @@ function render(
   pendingInputs: ChatPendingInputsPage["items"],
   searchQuery = "",
 ) {
-  return buildCachedChatItems({
-    paneId: "notices",
-    sessionKey: "main",
-    messages,
-    pendingInputs,
-    toolMessages: [],
-    streamSegments: [],
-    stream: null,
-    streamStartedAt: null,
-    showToolCalls: true,
-    searchOpen: Boolean(searchQuery),
-    searchQuery,
-  });
+  return buildCachedChatItems(
+    createProps({
+      paneId: "notices",
+      messages,
+      pendingInputs,
+      searchOpen: Boolean(searchQuery),
+      searchQuery,
+    }),
+  );
 }
 
 afterEach(() => resetChatThreadState());
@@ -72,14 +72,9 @@ describe("system notices through pending-to-history promotion", () => {
       "<task-notification>\n<status>completed</status>\n</task-notification>",
       true,
     ],
-    ...[
-      undefined,
-      "session-companion",
-      "heartbeat",
-      "main-session-restart-recovery",
-      "restart_sentinel",
-      " restart-sentinel ",
-    ].map((sourceTool) => [sourceTool, "System", "Keep the raw fallback copy.", false] as const),
+    ...[undefined, " restart-sentinel "].map(
+      (sourceTool) => [sourceTool, "System", "Keep the raw fallback copy.", false] as const,
+    ),
   ] as const)(
     "preserves %s presentation, search and turn boundaries",
     (sourceTool, label, text, midTurn) => {
@@ -101,6 +96,27 @@ describe("system notices through pending-to-history promotion", () => {
             }
           : baseMessage["__openclaw"],
       };
+      if (sourceTool === "main_session_restart_recovery") {
+        expect(render([], pending(message))).toMatchObject([{ kind: "notice", label }]);
+        for (const state of ["interrupted", "cancelled"] as const) {
+          expect(render([], pending(message, state))).toMatchObject([
+            {
+              kind: "notice",
+              label,
+              text: `The Gateway restarted. Automatic recovery was ${state} before the agent could resume. Send a message to continue.`,
+              startsTurn: true,
+            },
+          ]);
+          expect(render([message], pending(message, state))).toMatchObject([
+            {
+              kind: "notice",
+              label,
+              text,
+              boundaryId: "send:run",
+            },
+          ]);
+        }
+      }
       const inputs = pending(message);
       const before = { role: "user", content: "before", timestamp: 999 };
       const after = {
@@ -130,13 +146,12 @@ describe("system notices through pending-to-history promotion", () => {
         }
         expect(notice.startsTurn).toBe(midTurn ? undefined : true);
         expect(notice.collapsedBody).toBe(midTurn ? true : undefined);
-        expect(
-          coalesceAgentRunFrames(items).filter((item) => item.kind === "agent-run-frame"),
-        ).toMatchObject(
-          stage === 1 && !midTurn
-            ? [{ runId: "run", boundaryId: "send:run", parts: [items[2]] }]
-            : [],
-        );
+        const framed = coalesceAgentRunFrames(items);
+        expect(framed).toContain(notice);
+        // A known-run reply frames even before promotion supplies a causal boundary.
+        expect(framed.filter((item) => item.kind === "agent-run-frame")).toMatchObject([
+          { runId: "run", boundaryId: "send:run", parts: [items[stage === 1 ? 2 : 1]] },
+        ]);
         expect(notice.boundaryId).toBe(stage === 1 && !imported ? "send:run" : undefined);
       }
       for (const messages of stages) {

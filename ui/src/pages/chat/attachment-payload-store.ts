@@ -1,4 +1,5 @@
 import { estimateBase64DecodedBytes, isValidBase64 } from "@openclaw/media-core/base64";
+import { base64ToBytes } from "../../lib/bytes-base64.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import {
   payloads,
@@ -91,8 +92,7 @@ function blobFromDataUrl(dataUrl: string): Blob | null {
   const payload = match[2] ?? "";
   try {
     if (metadata.toLowerCase().includes(";base64")) {
-      const binary = atob(payload.replace(/\s+/gu, ""));
-      const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+      const bytes = base64ToBytes(payload.replace(/\s+/gu, ""));
       return new Blob([bytes], { type: metadata.split(";", 1)[0] });
     }
     return new Blob([decodeURIComponent(payload.replace(/\+/gu, "%20"))], {
@@ -191,21 +191,17 @@ export function replaceChatAttachmentsFromEditor(
   );
 }
 
-function discardChatAttachmentDataUrl(id: string): void {
-  const payload = payloads.get(id);
-  if (!payload) {
-    return;
-  }
-  releaseVideoPoster(payload);
-  if (payload.previewUrl) {
-    payloads.set(id, { previewUrl: payload.previewUrl });
-    return;
-  }
-  payloads.delete(id);
-}
-
 export function discardChatAttachmentDataUrls(attachments: readonly ChatAttachment[] = []): void {
-  for (const attachment of attachments) {
-    discardChatAttachmentDataUrl(attachment.id);
+  for (const { id } of attachments) {
+    const payload = payloads.get(id);
+    if (!payload) {
+      continue;
+    }
+    releaseVideoPoster(payload);
+    if (payload.previewUrl) {
+      payloads.set(id, { previewUrl: payload.previewUrl });
+    } else {
+      payloads.delete(id);
+    }
   }
 }

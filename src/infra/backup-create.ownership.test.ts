@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
 import { buildBackupArchivePath } from "../commands/backup-shared.js";
@@ -16,25 +17,49 @@ import {
 } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { resolveQuarantineStorePath } from "../state/openclaw-quarantine-store.js";
-import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  closeOpenClawStateDatabase,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import {
+  resolveOpenClawStateSqlitePath,
+  resolveQuarantineStorePath,
+} from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
 
+function inspectDatabase(databasePath: string, inspect: (database: DatabaseSync) => void) {
+  const database = new (requireNodeSqlite().DatabaseSync)(databasePath, { readOnly: true });
+  try {
+    inspect(database);
+  } finally {
+    database.close();
+  }
+}
+
+type RegisteredAlias = "dot" | "symlink" | "namespace";
+const registeredAliases: { includeWorkspace: boolean; alias: RegisteredAlias }[] = [
+  { includeWorkspace: false, alias: "dot" },
+  { includeWorkspace: true, alias: "symlink" },
+];
+if (process.platform === "win32") {
+  registeredAliases.push({ includeWorkspace: true, alias: "namespace" });
+}
+
 describe("backup SQLite ownership", () => {
-  it.each([
-    { includeWorkspace: true, alias: "dot" },
-    { includeWorkspace: false, alias: "dot" },
-    { includeWorkspace: true, alias: "symlink" },
-  ])(
+  it.each(registeredAliases)(
     "backs up registered state inside its workspace ($alias, includeWorkspace=$includeWorkspace)",
     async ({ includeWorkspace, alias }) => {
       await withOpenClawTestState(
-        { layout: "home", prefix: "backup-enclosing-workspace-", scenario: "minimal" },
+        {
+          layout: "home",
+          prefix: alias === "namespace" ? "backup-namespace-alias-" : "backup-enclosing-workspace-",
+          scenario: "minimal",
+        },
         async (state) => {
           await state.writeConfig({ agents: { defaults: { workspace: state.home } } });
           const agentPath = path.join(state.agentDir(), "openclaw-agent.sqlite");
@@ -43,51 +68,79 @@ describe("backup SQLite ownership", () => {
           const aliasPath =
             alias === "dot"
               ? `${state.agentDir()}${path.sep}.${path.sep}openclaw-agent.sqlite`
-              : path.join(state.agentDir(), "z-alias.sqlite");
+              : alias === "namespace"
+                ? path.toNamespacedPath(agentPath)
+                : path.join(state.agentDir(), "z-alias.sqlite");
           if (alias === "symlink") {
             await fs.symlink(agentPath, aliasPath);
           }
-          registerOpenClawAgentDatabase({
-            agentId: "main",
-            path: aliasPath,
-            env: state.env,
-          });
+          if (alias === "namespace") {
+            const stateDb = openOpenClawStateDatabase({ env: state.env });
+            stateDb.db
+              .prepare("INSERT INTO agent_databases VALUES ('main', ?, ?, ?, ?)")
+              .run(aliasPath, OPENCLAW_AGENT_SCHEMA_VERSION, Date.now(), 1);
+          } else {
+            registerOpenClawAgentDatabase({ agentId: "main", path: aliasPath, env: state.env });
+          }
           closeOpenClawStateDatabase();
           const onSqliteSnapshots = vi.fn();
           const runtime = createTestRuntime();
           const archive = await backupCreateCommand(runtime, {
             output: state.path("backup.tar.gz"),
-            includeWorkspace,
             verify: true,
-            onSqliteSnapshots,
+            ...(alias === "namespace" ? {} : { includeWorkspace, onSqliteSnapshots }),
           });
           expect(archive.verified).toBe(true);
-          expect(onSqliteSnapshots).toHaveBeenCalledExactlyOnceWith([
-            expect.objectContaining({
-              role: "global",
-              sourcePath: resolveOpenClawStateSqlitePath(state.env),
-            }),
-            expect.objectContaining({ role: "agent", agentId: "main", sourcePath: agentPath }),
-          ]);
+          if (alias !== "namespace") {
+            expect(onSqliteSnapshots).toHaveBeenCalledExactlyOnceWith([
+              expect.objectContaining({
+                role: "global",
+                sourcePath: resolveOpenClawStateSqlitePath(state.env),
+              }),
+              expect.objectContaining({ role: "agent", agentId: "main", sourcePath: agentPath }),
+            ]);
+          }
+          const restoredRoot = state.path("restored");
           await expect(
             backupRestoreCommand(runtime, {
               archive: archive.archivePath,
-              target: state.path("restored"),
+              target: restoredRoot,
             }),
           ).resolves.toMatchObject({ ok: true });
-          const restoredAgent = path.join(
-            state.path("restored"),
-            buildBackupArchivePath(archive.archiveRoot, aliasPath),
-          );
-          const database = new (requireNodeSqlite().DatabaseSync)(restoredAgent, {
-            readOnly: true,
-          });
-          try {
+          if (alias === "namespace") {
+            const restoredAgents: string[] = [];
+            const visit = async (directory: string) => {
+              for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+                const child = path.join(directory, entry.name);
+                if (entry.isDirectory()) {
+                  await visit(child);
+                } else if (entry.name === "openclaw-agent.sqlite") {
+                  restoredAgents.push(child);
+                }
+              }
+            };
+            await visit(restoredRoot);
             expect(
-              database.prepare("SELECT agent_id FROM schema_meta WHERE meta_key = 'primary'").get(),
-            ).toEqual({ agent_id: "main" });
-          } finally {
-            database.close();
+              restoredAgents.map((restoredAgent) => restoredAgent.replaceAll("\\", "/")),
+            ).toEqual([
+              expect.stringContaining(
+                `/${buildBackupArchivePath(archive.archiveRoot, agentPath).replaceAll("\\", "/")}`,
+              ),
+            ]);
+            const header = await fs.readFile(restoredAgents[0] ?? "");
+            expect(header.subarray(0, 16).toString("utf8")).toBe("SQLite format 3\0");
+          } else {
+            const restoredAgent = path.join(
+              restoredRoot,
+              buildBackupArchivePath(archive.archiveRoot, aliasPath),
+            );
+            inspectDatabase(restoredAgent, (database) => {
+              expect(
+                database
+                  .prepare("SELECT agent_id FROM schema_meta WHERE meta_key = 'primary'")
+                  .get(),
+              ).toEqual({ agent_id: "main" });
+            });
           }
         },
       );
@@ -236,48 +289,39 @@ describe("backup SQLite ownership", () => {
             archive: archive.archivePath,
             target: state.path("restored"),
           });
-          const sqlite = requireNodeSqlite();
-          const restoredGlobal = new sqlite.DatabaseSync(
+          inspectDatabase(
             path.join(restored.targetPath, buildBackupArchivePath(archive.archiveRoot, globalPath)),
-            { readOnly: true },
+            (database) => {
+              expect(database.prepare("SELECT agent_id, path FROM agent_databases").all()).toEqual([
+                { agent_id: "main", path: agentPath },
+              ]);
+            },
           );
-          try {
-            expect(
-              restoredGlobal.prepare("SELECT agent_id, path FROM agent_databases").all(),
-            ).toEqual([{ agent_id: "main", path: agentPath }]);
-          } finally {
-            restoredGlobal.close();
-          }
-          const restoredAgent = new sqlite.DatabaseSync(
+          inspectDatabase(
             path.join(restored.targetPath, buildBackupArchivePath(archive.archiveRoot, agentPath)),
-            { readOnly: true },
+            (database) => {
+              expect(
+                database
+                  .prepare("SELECT role, agent_id FROM schema_meta WHERE meta_key = 'primary'")
+                  .get(),
+              ).toEqual({ role: "agent", agent_id: "main" });
+              expect(database.prepare("SELECT value FROM durable_records").all()).toEqual([
+                { value: "registered-before-root-capture" },
+              ]);
+            },
           );
-          try {
-            expect(
-              restoredAgent
-                .prepare("SELECT role, agent_id FROM schema_meta WHERE meta_key = 'primary'")
-                .get(),
-            ).toEqual({ role: "agent", agent_id: "main" });
-            expect(restoredAgent.prepare("SELECT value FROM durable_records").all()).toEqual([
-              { value: "registered-before-root-capture" },
-            ]);
-          } finally {
-            restoredAgent.close();
-          }
-          const restoredQuarantine = new sqlite.DatabaseSync(
+          const canonicalAgentPath = await fs.realpath(agentPath);
+          inspectDatabase(
             path.join(
               restored.targetPath,
               buildBackupArchivePath(archive.archiveRoot, resolveQuarantineStorePath(state.env)),
             ),
-            { readOnly: true },
+            (database) => {
+              expect(
+                database.prepare("SELECT path FROM agent_integrity_verifications").all(),
+              ).toEqual([{ path: canonicalAgentPath }]);
+            },
           );
-          try {
-            expect(
-              restoredQuarantine.prepare("SELECT path FROM agent_integrity_verifications").all(),
-            ).toEqual([{ path: await fs.realpath(agentPath) }]);
-          } finally {
-            restoredQuarantine.close();
-          }
         } finally {
           snapshot.mockRestore();
         }

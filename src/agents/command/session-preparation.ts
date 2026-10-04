@@ -5,6 +5,7 @@ import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/t
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import { buildDeliveryFormatPrompt } from "../../infra/outbound/delivery-format-prompt.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { isSubagentCoordinationInputProvenance } from "../../sessions/input-provenance.js";
@@ -12,11 +13,13 @@ import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import { recordSessionHumanDirectMessage } from "../../sessions/session-state-events.js";
 import { resolveEffectiveAgentSkillFilter } from "../../skills/discovery/agent-filter.js";
+import { resolveSessionSkillExecutionWorkspace } from "../../skills/loading/workspace-skill-roots.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import {
   buildCurrentRunRestartRecoveryClaim,
   prepareCommandHarnessCompletionRecovery,
 } from "../agent-command-restart-recovery.js";
+import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import { loadExecDefaultsRuntime, loadSkillsRuntime } from "./runtime-loaders.js";
@@ -97,7 +100,6 @@ export async function prepareEmbeddedSessionState(params: {
   sessionAgentId: string;
   lifecycleGeneration: string;
   runId: string;
-  workspaceDir: string;
   executionWorkspaceDir: string;
   watchSkills: boolean;
   isNewSession: boolean;
@@ -145,8 +147,11 @@ export async function prepareEmbeddedSessionState(params: {
     agentId: params.sessionAgentId,
   });
   const skillSnapshotState = await resolveReusableWorkspaceSkillSnapshot({
-    workspaceDir: params.workspaceDir,
-    executionWorkspaceDir: params.executionWorkspaceDir,
+    workspaceDir: resolveAgentWorkspaceDir(params.cfg, params.sessionAgentId),
+    ...resolveSessionSkillExecutionWorkspace(
+      sessionEntry?.worktree?.canonicalWorkspaceDir,
+      params.executionWorkspaceDir,
+    ),
     config: params.cfg,
     agentId: params.sessionAgentId,
     existingSnapshot: params.isNewSession ? undefined : currentSkillsSnapshot,
@@ -254,13 +259,32 @@ export async function prepareEmbeddedSessionState(params: {
     assertSignalCurrent();
   }
 
+  const runContext = resolveAgentRunContext(params.opts);
+  // Announce and inter-session turns get the delivering channel's contract, like replies.
+  const deliveryFormat =
+    (params.opts.deliver === true || params.opts.sourceReplyDeliveryMode === "message_tool_only") &&
+    buildDeliveryFormatPrompt({
+      cfg: params.cfg,
+      // Delivery preflight records the actual outbound target as reply* options.
+      channel: params.opts.replyChannel ?? runContext.messageChannel,
+      accountId: params.opts.replyAccountId ?? runContext.accountId,
+      agentId: params.sessionAgentId,
+      allowBootstrap: true,
+    });
+  const extraSystemPrompt = [params.opts.extraSystemPrompt, deliveryFormat].filter(Boolean);
   return {
     sessionEntry,
     requestedThinkLevel,
     resolvedVerboseLevel,
     skillsSnapshot,
-    runContext: resolveAgentRunContext(params.opts),
+    runContext,
+    opts: deliveryFormat
+      ? { ...params.opts, extraSystemPrompt: extraSystemPrompt.join("\n\n") }
+      : params.opts,
   };
 }
 
-export type EmbeddedSessionState = Awaited<ReturnType<typeof prepareEmbeddedSessionState>>;
+export type EmbeddedSessionState = Omit<
+  Awaited<ReturnType<typeof prepareEmbeddedSessionState>>,
+  "opts"
+>;

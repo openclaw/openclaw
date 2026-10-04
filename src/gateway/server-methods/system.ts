@@ -4,7 +4,6 @@ import os from "node:os";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-  readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -12,11 +11,13 @@ import {
   type SystemInfoResult,
   validateSystemInfoParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { validatePresenceActivityParams } from "../../../packages/gateway-protocol/src/schema/presence.js";
 import {
   SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG,
   validateSystemEventParams,
 } from "../../../packages/gateway-protocol/src/schema/system-event.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
+import { preparedModelRuntimeConfigsMatch } from "../../agents/prepared-model-runtime.js";
 import { readUtilityModelSetting } from "../../agents/utility-model-setting.js";
 import { resolveUtilityModelRefForAgent } from "../../agents/utility-model.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
@@ -40,12 +41,14 @@ import { listSystemPresence, updateSystemPresence } from "../../infra/system-pre
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { createPresenceRecipientProjection } from "../presence-projection.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
-import { broadcastPresenceSnapshot } from "../server/presence-events.js";
+import { readPreparedCatalog } from "../server-model-catalog-auth.js";
 import { readGatewayProcessVitals } from "../server/process-vitals.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { assertValidParams, defineValidatedGatewayMethod } from "./validation.js";
 
 let advertisedLanHostPromise: Promise<string | null> | null = null;
 let stateDiskSnapshot:
@@ -89,19 +92,57 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
     readSystemDisks(),
   ]);
   const soleAgentId = tryResolveLegacyCompatibilityAgentId(config);
-  const defaultAgentUtilityModel = soleAgentId
-    ? (() => {
-        const utilitySetting = readUtilityModelSetting(config, soleAgentId);
-        const utilityModel = resolveUtilityModelRefForAgent({ cfg: config, agentId: soleAgentId });
-        return utilitySetting.kind === "disabled"
-          ? ({ status: "disabled" } as const)
-          : utilitySetting.kind === "explicit"
-            ? ({ status: "configured", model: utilitySetting.modelRef } as const)
-            : utilityModel
-              ? ({ status: "auto", model: utilityModel } as const)
-              : ({ status: "unavailable" } as const);
-      })()
-    : ({ status: "unavailable" } as const);
+  const defaultAgentUtilityModel: SystemInfoResult["defaultAgentUtilityModel"] =
+    await (async () => {
+      if (!soleAgentId) {
+        return { status: "unavailable" } as const;
+      }
+      const utilitySetting = readUtilityModelSetting(config, soleAgentId);
+      if (utilitySetting.kind === "disabled") {
+        return { status: "disabled" } as const;
+      }
+      const prepared = await readPreparedCatalog(context, soleAgentId);
+      const current =
+        prepared &&
+        prepared.agentId === soleAgentId &&
+        preparedModelRuntimeConfigsMatch(prepared.config, config) &&
+        prepared.isCurrent();
+      const model =
+        utilitySetting.kind === "explicit"
+          ? utilitySetting.modelRef
+          : current
+            ? resolveUtilityModelRefForAgent({
+                cfg: prepared.config,
+                agentId: soleAgentId,
+                metadataSnapshot: prepared.metadataSnapshot,
+              })
+            : undefined;
+      if (!model) {
+        return { status: "unavailable" } as const;
+      }
+      const { resolveUtilityCompletionRuntimeForAgent } =
+        await import("../../agents/utility-completion.js");
+      const runtime = current
+        ? await resolveUtilityCompletionRuntimeForAgent({
+            cfg: prepared.config,
+            agentId: soleAgentId,
+            agentDir: prepared.agentDir,
+            workspaceDir: prepared.workspaceDir,
+            metadataSnapshot: prepared.metadataSnapshot,
+            preparedAuthStore: prepared.authStore,
+            preparedRuntimeAuthModes: prepared.authModes,
+            preparedRuntimeAuthMaterializations: prepared.authMaterializations,
+            pluginRegistry: prepared.pluginRegistry,
+            snapshot: prepared,
+            isCurrent: prepared.isCurrent,
+          })
+        : undefined;
+      return {
+        status: utilitySetting.kind === "explicit" ? "configured" : "auto",
+        model,
+        ...(runtime ? { runtime } : {}),
+      } as const;
+    })();
 
   return {
     machineName: await getMachineDisplayName(),
@@ -172,10 +213,25 @@ export const systemHandlers: GatewayRequestHandlers = {
     setHeartbeatsEnabled(enabled);
     respond(true, { ok: true, enabled }, undefined);
   },
-  "system-presence": ({ respond, client, context }) => {
+  "presence.activity": defineValidatedGatewayMethod(
+    "presence.activity",
+    validatePresenceActivityParams,
+    ({ client, context, respond }) => {
+      context.recordClientActivity?.(client);
+      respond(true, { ok: true }, undefined);
+    },
+  ),
+  "system-presence": async (options) => {
+    const { respond, client, context } = options;
+    const projection = getSessionRowProjection(context);
+    while (projection?.needsMembershipPreparation()) {
+      await projection.prepareMembership();
+      readGatewayRequestMutationAuthority(options).assertCurrent();
+    }
     const presence = createPresenceRecipientProjection({
       cfg: context.getRuntimeConfig(),
       presence: listSystemPresence(),
+      projection,
     })(client);
     respond(true, presence, undefined);
   },
@@ -249,49 +305,26 @@ export const systemHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    const deviceId = readStringValue(params.deviceId);
-    const instanceId = readStringValue(params.instanceId);
-    const host = readStringValue(params.host);
-    const ip = readStringValue(params.ip);
-    const mode = readStringValue(params.mode);
-    const version = readStringValue(params.version);
-    const platform = readStringValue(params.platform);
-    const deviceFamily = readStringValue(params.deviceFamily);
-    const modelIdentifier = readStringValue(params.modelIdentifier);
-    const reason = readStringValue(params.reason);
-    const roles =
-      Array.isArray(params.roles) && params.roles.every((t) => typeof t === "string")
-        ? params.roles
-        : undefined;
-    const scopes =
-      Array.isArray(params.scopes) && params.scopes.every((t) => typeof t === "string")
-        ? params.scopes
-        : undefined;
-    const tags =
-      Array.isArray(params.tags) && params.tags.every((t) => typeof t === "string")
-        ? params.tags
-        : undefined;
-    const lastInputSeconds = tags?.includes(SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG)
+    const reason = params.reason;
+    const lastInputSeconds = params.tags?.includes(SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG)
       ? null
-      : typeof params.lastInputSeconds === "number" && Number.isFinite(params.lastInputSeconds)
-        ? params.lastInputSeconds
-        : undefined;
+      : params.lastInputSeconds;
     const presenceUpdate = updateSystemPresence({
       text,
-      deviceId,
-      instanceId,
-      host,
-      ip,
-      mode,
-      version,
-      platform,
-      deviceFamily,
-      modelIdentifier,
+      deviceId: params.deviceId,
+      instanceId: params.instanceId,
+      host: params.host,
+      ip: params.ip,
+      mode: params.mode,
+      version: params.version,
+      platform: params.platform,
+      deviceFamily: params.deviceFamily,
+      modelIdentifier: params.modelIdentifier,
       lastInputSeconds,
       reason,
-      roles,
-      scopes,
-      tags,
+      roles: params.roles,
+      scopes: params.scopes,
+      tags: params.tags,
     });
     if (isNodePresenceLine) {
       // Node presence heartbeats are noisy; only enqueue user-visible system
@@ -371,11 +404,7 @@ export const systemHandlers: GatewayRequestHandlers = {
     }
     // Presence changes are observable even when noisy node heartbeat text is
     // suppressed from the transcript-style system event queue.
-    broadcastPresenceSnapshot({
-      broadcast: context.broadcast,
-      incrementPresenceVersion: context.incrementPresenceVersion,
-      getHealthVersion: context.getHealthVersion,
-    });
+    context.publishPresence();
     respond(true, { ok: true }, undefined);
   },
 };

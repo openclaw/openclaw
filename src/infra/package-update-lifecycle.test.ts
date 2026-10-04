@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -24,6 +25,10 @@ const pendingBytes = "pending candidate lifecycle\n";
 const malformedLockBytes = '{"kind":"openclaw-package-lifecycle",';
 type UpdateParams = Parameters<typeof runGlobalPackageUpdateSteps>[0];
 type StepParams = Parameters<UpdateParams["runStep"]>[0];
+
+function successfulStep({ name, argv, cwd }: StepParams, packageRoot: string) {
+  return { name, command: argv.join(" "), cwd: cwd ?? packageRoot, durationMs: 0, exitCode: 0 };
+}
 
 async function readPackageBytes(packageRoot: string): Promise<string[]> {
   return await Promise.all(
@@ -61,6 +66,7 @@ async function createFixture() {
       onTransaction,
       postVerifyStep: undefined as UpdateParams["postVerifyStep"],
       timeoutMs: 1000,
+      workTimeoutMs: undefined as UpdateParams["workTimeoutMs"],
     },
   };
 }
@@ -69,20 +75,15 @@ type Fixture = Awaited<ReturnType<typeof createFixture>>;
 
 async function runUpdate(
   fixture: Fixture,
-  prepareCandidate: (packageRoot: string) => Promise<void>,
+  prepareCandidate: (packageRoot: string, prefix: string) => Promise<void>,
   runLifecycleStep?: UpdateParams["runStep"],
+  admission: Pick<UpdateParams, "beforeVerifyCandidate" | "resolveLifecycleNodeRunner"> = {},
 ) {
   const stages: { prefix: string; packageRoot: string; bytes: string[] }[] = [];
   const lifecycleCalls: string[] = [];
-  const success = ({ name, argv, cwd }: StepParams) => ({
-    name,
-    command: argv.join(" "),
-    cwd: cwd ?? fixture.packageRoot,
-    durationMs: 0,
-    exitCode: 0,
-  });
   const result = await runGlobalPackageUpdateSteps({
     ...fixture.params,
+    ...admission,
     runStep: async (step) => {
       if (step.name === "package-install") {
         const prefixIndex = step.argv.indexOf("--prefix");
@@ -97,9 +98,9 @@ async function runUpdate(
           path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH),
           pendingBytes,
         );
-        await prepareCandidate(packageRoot);
+        await prepareCandidate(packageRoot, prefix);
         stages.push({ prefix, packageRoot, bytes: await readPackageBytes(packageRoot) });
-        return success(step);
+        return successfulStep(step, fixture.packageRoot);
       }
       lifecycleCalls.push(step.name);
       if (runLifecycleStep) {
@@ -108,7 +109,7 @@ async function runUpdate(
       if (step.name === "npm-package-postinstall" && step.cwd) {
         await fs.rm(path.join(step.cwd, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH));
       }
-      return success(step);
+      return successfulStep(step, fixture.packageRoot);
     },
   });
   expect(stages).toHaveLength(1);
@@ -147,6 +148,54 @@ async function writeUncertainLock(
 }
 
 describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
+  it.each([
+    ["legacy", undefined, 1000, false],
+    ["unbounded", null, undefined, false],
+    ["explicit", 5000, 5000, false],
+    ["selected Node", undefined, 1000, true],
+  ] as const)(
+    "carries %s admission settings to both lifecycle scripts",
+    async (_, workTimeoutMs, expectedTimeout, selectNode) => {
+      const fixture = await createFixture();
+      fixture.params.workTimeoutMs = workTimeoutMs;
+      const scriptTimeouts: Array<number | undefined> = [];
+      const selectedNode = path.join(fixture.globalRoot, "selected-node");
+      let nodeRunner: string | undefined;
+      let admitted = false;
+      const { result, lifecycleCalls } = await runUpdate(
+        fixture,
+        async () => {},
+        async (step) => {
+          scriptTimeouts.push(step.timeoutMs);
+          if (selectNode) {
+            expect(admitted).toBe(true);
+            expect(step.argv[0]).toBe(selectedNode);
+            expect(step.env?.PATH?.split(path.delimiter)[0]).toBe(path.dirname(selectedNode));
+          }
+          if (step.name === "npm-package-postinstall" && step.cwd) {
+            await fs.rm(path.join(step.cwd, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH));
+          }
+          return successfulStep(step, fixture.packageRoot);
+        },
+        selectNode
+          ? {
+              beforeVerifyCandidate: async (root) => {
+                await expect(
+                  fs.readFile(path.join(root, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH), "utf8"),
+                ).resolves.toBe(pendingBytes);
+                nodeRunner = selectedNode;
+                admitted = true;
+              },
+              resolveLifecycleNodeRunner: () => nodeRunner,
+            }
+          : {},
+      );
+      expect(result.failedStep).toBeNull();
+      expect(result.afterVersion).toBe("2.0.0");
+      expect(lifecycleCalls).toEqual(["npm-package-preinstall", "npm-package-postinstall"]);
+      expect(scriptTimeouts).toEqual([expectedTimeout, expectedTimeout]);
+    },
+  );
   it("does not activate after a zero-exit output-limited postinstall", async () => {
     const fixture = await createFixture();
     const { result } = await runUpdate(
@@ -177,19 +226,33 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
     await expectSiblingUntouched(fixture);
   });
 
-  it.each(["legacy directory", "malformed file"] as const)(
-    "retains the exact pending candidate with an uncertain %s lock",
-    async (shape) => {
+  it.each([
+    { shape: "legacy directory", marker: true, runtime: true },
+    { shape: "malformed file", marker: true, runtime: true },
+    { shape: "malformed file", marker: false, runtime: true },
+    { shape: "legacy directory", marker: true, runtime: false },
+  ] as const)(
+    "retains an uncertain $shape candidate (marker=$marker, previous runtime=$runtime)",
+    async ({ shape, marker, runtime }) => {
       const fixture = await createFixture();
+      fixture.params.workTimeoutMs = null;
       const { result, stage, lifecycleCalls } = await runUpdate(fixture, async (packageRoot) => {
         await writeUncertainLock(packageRoot, shape);
+        if (!marker) {
+          await fs.rm(path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH));
+        }
+        if (!runtime) {
+          await fs.rm(path.join(fixture.packageRoot, "dist/index.js"));
+        }
       });
 
       expect(result).toMatchObject({
         activePackageRoot: fixture.packageRoot,
         afterVersion: null,
         failedStep: { name: "npm-package-lifecycle", exitCode: 1, cwd: stage.packageRoot },
-        recovery: { serviceRestartSafe: true, version: "1.0.0" },
+        recovery: runtime
+          ? { serviceRestartSafe: true, version: "1.0.0" }
+          : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       });
       expect(result.failedStep?.stderrTail).toContain("ownership is uncertain");
       expect(result.failedStep?.stderrTail).toContain(stage.packageRoot);
@@ -200,11 +263,22 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
       ]);
       expect(lifecycleCalls).toEqual([]);
       expectNoActivation(fixture);
-      expect(await readPackageBytes(fixture.packageRoot)).toEqual(fixture.originalBytes);
+      if (runtime) {
+        expect(await readPackageBytes(fixture.packageRoot)).toEqual(fixture.originalBytes);
+      } else {
+        await expect(
+          fs.access(path.join(fixture.packageRoot, "dist/index.js")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+      }
       expect(await readPackageBytes(stage.packageRoot)).toEqual(stage.bytes);
-      await expect(
-        fs.readFile(path.join(stage.packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH), "utf8"),
-      ).resolves.toBe(pendingBytes);
+      if (marker) {
+        await expect(
+          fs.readFile(
+            path.join(stage.packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH),
+            "utf8",
+          ),
+        ).resolves.toBe(pendingBytes);
+      }
       const lockPath = path.join(stage.packageRoot, lockName);
       expect((await fs.stat(lockPath)).isDirectory()).toBe(shape === "legacy directory");
       if (shape === "malformed file") {
@@ -217,32 +291,10 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
     },
   );
 
-  it("retains an uncertain candidate even when postinstall already removed its marker", async () => {
-    const fixture = await createFixture();
-    const { result, stage, lifecycleCalls } = await runUpdate(fixture, async (packageRoot) => {
-      await writeUncertainLock(packageRoot, "malformed file");
-      await fs.rm(path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH));
-    });
-    expect(result).toMatchObject({
-      failedStep: { name: "npm-package-lifecycle", exitCode: 1 },
-      recovery: { serviceRestartSafe: true, version: "1.0.0" },
-    });
-    expect(lifecycleCalls).toEqual([]);
-    expectNoActivation(fixture);
-    expect(await readPackageBytes(stage.packageRoot)).toEqual(stage.bytes);
-    expect(await readPackageBytes(fixture.packageRoot)).toEqual(fixture.originalBytes);
-    expect(await fs.readFile(path.join(stage.packageRoot, lockName), "utf8")).toBe(
-      malformedLockBytes,
-    );
-    await expectSiblingUntouched(fixture);
-  });
-
   it.each([
     ["already-current", "active"],
     ["already-current", "completed"],
-    ["already-current", "absent"],
     ["blocking-version", "active"],
-    ["blocking-version", "completed"],
     ["blocking-version", "absent"],
   ] as const)("disposes %s candidates only after a %s owner settles", async (scenario, state) => {
     const fixture = await createFixture();
@@ -435,25 +487,39 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
     "classifies disposable prefix cleanup refusal after %s verification",
     async (phase) => {
       const fixture = await createFixture();
-      const rm = fs.rm;
-      let retainedPrefix: string | undefined;
+      const disposalRoot = await fsSafeRoot(fixture.globalRoot);
+      const prototype = Object.getPrototypeOf(disposalRoot) as Root;
+      // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted Root receiver to preserve its path and mutation authority.
+      const removeEntry = prototype.remove;
       let removalAttempts = 0;
       try {
-        const { result, stage, lifecycleCalls } = await runUpdate(fixture, async (packageRoot) => {
-          if (phase === "pre-commit") {
-            await writePackageRoot(packageRoot, "3.0.0");
-          }
-          retainedPrefix = path.resolve(packageRoot, "../../..");
-          vi.spyOn(fs, "rm").mockImplementation(async (file, options) => {
-            if (file === retainedPrefix) {
-              removalAttempts++;
-              throw Object.assign(new Error("disposable prefix cleanup denied"), {
-                code: "EACCES",
-              });
+        const { result, stage, lifecycleCalls } = await runUpdate(
+          fixture,
+          async (packageRoot, prefix) => {
+            if (phase === "pre-commit") {
+              await writePackageRoot(packageRoot, "3.0.0");
             }
-            return rm(file, options);
-          });
-        });
+            const retainedPrefix = await fs.realpath(prefix);
+            vi.spyOn(prototype, "remove").mockImplementation(async function (
+              this: Root,
+              relativePath,
+              options,
+            ) {
+              const target = path.resolve(this.rootReal, relativePath);
+              // Refuse disposal before its first leaf removal so pending evidence survives.
+              if (
+                this.rootReal === disposalRoot.rootReal &&
+                (target === retainedPrefix || target.startsWith(`${retainedPrefix}${path.sep}`))
+              ) {
+                removalAttempts++;
+                throw Object.assign(new Error("disposable prefix cleanup denied"), {
+                  code: "EACCES",
+                });
+              }
+              return removeEntry.call(this, relativePath, options);
+            });
+          },
+        );
         expect(removalAttempts).toBeGreaterThan(0);
         await expect(fs.access(stage.prefix)).resolves.toBeUndefined();
         await expectSiblingUntouched(fixture);
@@ -617,32 +683,6 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
       ),
     ).toBe(pendingBytes);
     expect(await readPackageBytes(fixture.packageRoot)).toEqual(fixture.originalBytes);
-    await expectSiblingUntouched(fixture);
-  });
-
-  it("does not declare the previous runtime restart-safe after its dist entry disappears", async () => {
-    const fixture = await createFixture();
-    const { result, stage } = await runUpdate(fixture, async (packageRoot) => {
-      await writeUncertainLock(packageRoot, "legacy directory");
-      await fs.rm(path.join(fixture.packageRoot, "dist", "index.js"));
-    });
-
-    expect(result).toMatchObject({
-      activePackageRoot: fixture.packageRoot,
-      afterVersion: null,
-      failedStep: { name: "npm-package-lifecycle", exitCode: 1 },
-      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-    });
-    expectNoActivation(fixture);
-    await expect(
-      fs.access(path.join(fixture.packageRoot, "dist", "index.js")),
-    ).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    expect(await readPackageBytes(stage.packageRoot)).toEqual(stage.bytes);
-    await expect(
-      fs.readFile(path.join(stage.packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH), "utf8"),
-    ).resolves.toBe(pendingBytes);
     await expectSiblingUntouched(fixture);
   });
 

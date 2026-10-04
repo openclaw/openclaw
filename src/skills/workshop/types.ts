@@ -2,10 +2,10 @@ import type {
   SkillProposalEvaluation as ProtocolSkillProposalEvaluation,
   SkillProposalLifecycleEvent,
   SkillsProposalCreateParams,
+  SkillsProposalEventsListResult,
   SkillsProposalRecordResult,
   SkillsProposalsListResult,
 } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-// Workshop types define generated skill draft, policy, and config contracts.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 /** Schema id for persisted skill workshop proposal records. */
@@ -72,19 +72,14 @@ export type PreparedSkillProposalSupportFile = SkillProposalSupportFile & { cont
 
 export type SkillProposalDraftFile = "PROPOSAL.md" | `generations/${string}/PROPOSAL.md`;
 
-export type SkillProposalRecord = Omit<
-  ProtocolSkillProposalRecord,
-  "draftFile" | "evaluation" | "origin"
-> & {
+export type SkillProposalRecord = Omit<ProtocolSkillProposalRecord, "draftFile"> & {
   /** True only for proposals created by autonomous correction or experience capture. */
   autonomousCapture?: true;
-  origin?: SkillProposalOrigin;
   /** Immutable run attribution used to recover interrupted proposal-only reviews. */
   originRunIds?: string[];
   /** Durable mutation counts keyed by run id for bounded interrupted-run recovery. */
   originRunMutationCounts?: Record<string, number>;
   draftFile: SkillProposalDraftFile;
-  evaluation?: SkillProposalEvaluation;
 };
 
 export type SkillProposalManifestEntry = Omit<
@@ -120,12 +115,17 @@ export type SkillProposalSupportFileInput = NonNullable<
   SkillsProposalCreateParams["supportFiles"]
 >[number];
 
-export type SkillProposalCreateInput = {
+type SkillProposalContext = {
   workspaceDir: string;
   agentId?: string;
   eventActor?: SkillProposalEventActor;
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+};
+
+export type SkillProposalCreateInput = SkillProposalContext & {
+  /** Caller-owned synchronous authority for draft bytes and metadata publication. */
+  assertCommitAllowed?: () => void;
   name: string;
   description: string;
   content: string;
@@ -137,12 +137,10 @@ export type SkillProposalCreateInput = {
   evidence?: string;
 };
 
-export type SkillProposalUpdateInput = {
-  workspaceDir: string;
-  agentId?: string;
-  eventActor?: SkillProposalEventActor;
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
+export type SkillProposalUpdateInput = Omit<
+  SkillProposalCreateInput,
+  "name" | "description" | "content"
+> & {
   skillName: string;
   description?: string;
   /** Complete replacement body. Exactly one of content or composePatch is required. */
@@ -154,23 +152,11 @@ export type SkillProposalUpdateInput = {
   composePatch?: { oldString: string; newString: string };
   /** Refuse composition when the service's own read hashes differently (reviewer receipt). */
   expectedCurrentContentHash?: string;
-  supportFiles?: SkillProposalSupportFileInput[];
-  createdBy?: SkillProposalSource;
-  autonomousCapture?: boolean;
-  origin?: SkillProposalOrigin;
-  goal?: string;
-  evidence?: string;
 };
 
-export type SkillProposalReviseInput = {
-  workspaceDir: string;
-  agentId?: string;
-  eventActor?: SkillProposalEventActor;
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  proposalId: string;
-  expectedRevisionHash?: string;
-  correlationId?: string;
+export type SkillProposalReviseInput = SkillProposalRevisionInput & {
+  /** Caller-owned synchronous authority for draft bytes and metadata publication. */
+  assertCommitAllowed?: () => void;
   content?: string;
   supportFiles?: SkillProposalSupportFileInput[];
   description?: string;
@@ -179,27 +165,15 @@ export type SkillProposalReviseInput = {
   evidence?: string;
 };
 
-export type SkillProposalActionInput = {
-  workspaceDir: string;
-  agentId?: string;
-  eventActor?: SkillProposalEventActor;
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
+type SkillProposalRevisionInput = SkillProposalContext & {
   proposalId: string;
   expectedRevisionHash?: string;
   correlationId?: string;
-  reason?: string;
 };
 
-export type SkillProposalEvaluateInput = {
-  workspaceDir: string;
-  agentId?: string;
-  eventActor?: SkillProposalEventActor;
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  proposalId: string;
-  expectedRevisionHash?: string;
-  correlationId?: string;
+export type SkillProposalActionInput = SkillProposalRevisionInput & { reason?: string };
+
+export type SkillProposalEvaluateInput = SkillProposalRevisionInput & {
   trigger?: SkillProposalEvaluationTrigger;
 };
 
@@ -212,10 +186,7 @@ export type SkillProposalEventsListInput = {
   limit?: number;
 };
 
-export type SkillProposalEventsListResult = {
-  events: SkillProposalEvent[];
-  nextSequence?: number;
-};
+export type SkillProposalEventsListResult = SkillsProposalEventsListResult;
 
 export type SkillProposalReadResult = {
   record: SkillProposalRecord;

@@ -1,13 +1,11 @@
-// Pure grouping helpers for the sessions table "Group by" modes.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { moveArrayEntry } from "../array-order.ts";
+import { pathDisplayName } from "../path-display.ts";
 import { resolveSessionDisplayKind } from "../session-display.ts";
-import {
-  checkoutDisplayName,
-  foldWorktreeCheckoutPath,
-  sessionActorGroupId,
-} from "./catalog-project-grouping.ts";
-import { moveSessionOrderEntry, normalizeSessionSectionOrderTokens } from "./custom-groups.ts";
+import { foldWorktreeCheckoutPath, sessionActorGroupId } from "./catalog-project-grouping.ts";
+import { normalizeSessionSectionOrderTokens } from "./custom-groups.ts";
 import { parseAgentSessionKey, parseSessionKeyParts } from "./session-key.ts";
 
 export const SESSION_GROUP_MODES = [
@@ -73,11 +71,9 @@ export function normalizeSessionSectionOrder(
   knownGroups: readonly string[],
   knownCatalogIds: readonly string[] = [],
 ): string[] {
-  const groups = [...new Set(knownGroups.map((name) => name.trim()).filter(Boolean))];
+  const groups = normalizeUniqueTrimmedStringList(knownGroups);
   const knownGroupSet = new Set(groups);
-  const catalogIds = [
-    ...new Set(knownCatalogIds.map((catalogId) => catalogId.trim()).filter(Boolean)),
-  ];
+  const catalogIds = normalizeUniqueTrimmedStringList(knownCatalogIds);
   const knownCatalogIdSet = new Set(catalogIds);
   const order = (normalizeSessionSectionOrderTokens(stored) ?? []).filter((token) => {
     if (token.startsWith("category:")) {
@@ -120,14 +116,7 @@ export function normalizeSessionSectionOrder(
   return order;
 }
 
-export function moveSessionSection(
-  order: readonly string[],
-  source: string,
-  target: string,
-  position: "before" | "after",
-): string[] {
-  return moveSessionOrderEntry(order, source, target, position);
-}
+export const moveSessionSection = moveArrayEntry<string>;
 
 export function normalizeSessionsGroupBy(raw: unknown): SessionsGroupBy {
   return SESSION_GROUP_MODES.includes(raw as SessionsGroupBy) ? (raw as SessionsGroupBy) : "none";
@@ -155,10 +144,6 @@ function createDateGroupResolver(now: number): (row: GatewaySessionRow) => strin
   };
 }
 
-function sessionRowChannel(row: GatewaySessionRow): string {
-  return row.channel ?? parseSessionKeyParts(row.key)?.channel ?? UNGROUPED_ID;
-}
-
 function resolveSessionGroupId(row: GatewaySessionRow, mode: SessionsGroupBy): string {
   switch (mode) {
     case "category":
@@ -166,7 +151,7 @@ function resolveSessionGroupId(row: GatewaySessionRow, mode: SessionsGroupBy): s
     case "person":
       return sessionActorGroupId(row.owner?.actor);
     case "channel":
-      return sessionRowChannel(row);
+      return row.channel ?? parseSessionKeyParts(row.key)?.channel ?? UNGROUPED_ID;
     case "kind":
       return resolveSessionDisplayKind(row);
     case "agent":
@@ -306,7 +291,7 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
       } else {
         projects.set(projectPath, {
           id: `project:${projectPath}`,
-          project: { name: checkoutDisplayName(projectPath), path: projectPath },
+          project: { name: pathDisplayName(projectPath), path: projectPath },
           rows: [row],
         });
       }
@@ -403,9 +388,7 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
     orderedSections.push({ id: "groups", groups: true, rows: groups });
   }
   orderedSections.push({ id: "work", work: true, rows: coding });
-  const catalogIds = [
-    ...new Set((options.catalogIds ?? []).map((catalogId) => catalogId.trim()).filter(Boolean)),
-  ];
+  const catalogIds = normalizeUniqueTrimmedStringList(options.catalogIds);
   orderedSections.push(
     ...catalogIds.map((catalogId): SidebarSessionSection<Row> => ({
       id: `catalog:${catalogId}`,
@@ -441,7 +424,7 @@ function orderedGroupIds(
     return DATE_BUCKET_ORDER.filter((id) => byId.has(id));
   }
   if (mode === "category") {
-    const known = [...new Set(knownCategories.map((name) => name.trim()).filter(Boolean))];
+    const known = normalizeUniqueTrimmedStringList(knownCategories);
     const extras = [...byId.keys()]
       .filter((id) => id !== UNGROUPED_ID && !known.includes(id))
       .toSorted((a, b) => a.localeCompare(b));

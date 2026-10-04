@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { activateSessionMenuValue } from "../app-sidebar-menu.ts";
 import {
   createGateway,
   createSessions,
   createSessionsHarness,
   mountSidebar,
+  TWO_AGENTS,
 } from "../app-sidebar.ts";
-import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar session section visibility", () => {
@@ -115,15 +116,7 @@ describe("AppSidebar session section visibility", () => {
     expect(filter?.getAttribute("aria-label")).toBe("Filter & sort");
     expect(filter?.classList.contains("sidebar-session-sort--filtered")).toBe(false);
 
-    filter?.click();
-    await sidebar.updateComplete;
-    sidebar.querySelector(".sidebar-session-sort-menu")?.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        detail: { item: { value: "status:all" } },
-      }),
-    );
-    await sidebar.updateComplete;
+    await activateSessionMenuValue(sidebar, "status:all");
 
     expect(filter?.classList.contains("sidebar-session-sort--filtered")).toBe(true);
   });
@@ -182,19 +175,7 @@ describe("AppSidebar session section visibility", () => {
         group.getAttribute("data-session-section"),
       );
     const chooseEmptyGroups = async (mode: "filtering" | "always" | "never") => {
-      sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")!.click();
-      await sidebar.updateComplete;
-      const menu = sidebar.querySelector(".sidebar-session-sort-menu")!;
-      const choice = menu.querySelector(`[value="empty-groups:${mode}"]`);
-      expect(choice).not.toBeNull();
-      await waitForFast(() => expect(choice?.getAttribute("role")).toBe("menuitemradio"));
-      menu.dispatchEvent(
-        new CustomEvent("wa-select", {
-          bubbles: true,
-          detail: { item: { value: `empty-groups:${mode}` } },
-        }),
-      );
-      await sidebar.updateComplete;
+      await activateSessionMenuValue(sidebar, `empty-groups:${mode}`);
     };
 
     expect(groupNames()).toEqual(["category:Empty", "category:Alpha"]);
@@ -217,7 +198,12 @@ describe("AppSidebar session section visibility", () => {
 
   it("renders no chat rows when only the main session exists", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main"]),
+      "panel",
+      TWO_AGENTS,
+    );
     (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
     await sidebar.updateComplete;
 

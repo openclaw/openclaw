@@ -1,6 +1,7 @@
 // Raster image adapter tests cover image operation integration with RasterMill.
 import type { ImageProbe } from "rastermill";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { createTinyJpegBuffer } from "../../test/helpers/image-fixtures.js";
 
 function jpegWithDimensions(width: number, height: number): Buffer {

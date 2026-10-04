@@ -1,6 +1,7 @@
 // Pane-local search, context menus, selection actions, and presentation resets.
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
+import type { MessageReactionSummary } from "../../../../../packages/gateway-protocol/src/index.js";
 import type { ChatPendingInputsPage } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
@@ -14,50 +15,51 @@ import type { BrowserTabSelection } from "../../../components/browser/browser-ta
 import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
+import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
 import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
 import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
-import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
+import "../../../components/tooltip.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import type {
+  ChatAttachment,
   ChatGuardianNotice,
   ChatQueueItem,
   ChatSelectionSource,
   ChatStreamSegment,
 } from "../../../lib/chat/chat-types.ts";
-import { buildCompanionQuestionPrefill } from "../../../lib/chat/companion-question.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
+import type { PresentationValue } from "../../../lit/presentation-binding.ts";
 import type { TurnRecapWatch } from "../chat-progress.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
-import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
+import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-presence.ts";
+import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
 import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
 import type { AsyncQuestionDraft, AsyncQuestionPresentation } from "./chat-async-question.types.ts";
-import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
-import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import { resolveChatContextCopy, usesNativeContextMenu } from "./chat-context-copy.ts";
 import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.ts";
-import { isConfirmedActionPopoverFocused } from "./chat-message-confirmation.ts";
-import type { MessageActionDetails } from "./chat-message-markdown.ts";
-import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
-import type { ChatSendStatusActions } from "./chat-message-send-status.ts";
 import {
   dismissConfirmedActionPopovers,
+  isConfirmedActionPopoverFocused,
   openChatRewindConfirmation,
-  type MessageReplyTarget,
-} from "./chat-message.ts";
+} from "./chat-message-confirmation.ts";
+import type { MessageActionDetails, MessageReplyTarget } from "./chat-message-markdown.ts";
+import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
+import type { ChatSendStatusActions } from "./chat-message-send-status.ts";
+import type { ReplyMessageStatus } from "./chat-reply-preview.ts";
 import {
   handleChatSelectionPointerUp,
   isChatSelectionPopupFocused,
   removeChatSelectionPopup,
 } from "./chat-selection-popup.ts";
-import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
+import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
 
 registerChatMessageMetadataEnglish();
 
@@ -79,6 +81,11 @@ export type ChatThreadState = {
   searchReturnFocusOwner: HTMLElement | null;
   transcriptRenderDependencies: readonly unknown[];
   transcriptRenderContext: {
+    onRequestUpdate?: () => void;
+    turnVideoMessages?: ReadonlyMap<
+      string,
+      readonly import("./chat-turn-video-gallery.ts").TurnVideoMessage[]
+    >;
     onSetReply?: (target: MessageReplyTarget) => void;
     onOpenReply?: (replyToId: string) => void;
     onAsyncQuestionDiscard?: (item: ChatQueueItem) => void;
@@ -94,20 +101,23 @@ type ReplyMessageAccess = {
   revision: number;
   navigationId: string | null;
   read: (messageId: string) => unknown;
-  request: (messageId: string) => void;
+  /** How the Gateway answered a lookup without a message. */
+  status?: (messageId: string) => ReplyMessageStatus | undefined;
   open: (messageId: string) => void;
 };
 
 export type ChatThreadProps = ChatSendStatusActions & {
+  messageReactions?: ReadonlyMap<string, MessageReactionSummary[]>;
+  onReact?: (messageId: string, emoji: string, remove: boolean) => void;
   branding?: ThemeBranding;
   compactionStatus?: CompactionStatus | null;
   paneId: string;
   /** Routing for peer sender names in a shared session. */
   personActivity?: PersonActivityRouting;
   sessionKey: string;
-  presented?: boolean;
+  presented?: PresentationValue;
   /** Mounted transcript visibility, independent of which split pane owns input. */
-  transcriptVisible?: boolean;
+  transcriptVisible?: PresentationValue;
   gatewayClient?: GatewayBrowserClient | null;
   selectedSession: GatewaySessionRow | undefined;
   boardProvider?: BoardProvider;
@@ -137,6 +147,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   runWorking?: boolean;
   startupLabel?: string;
   waitingApproval?: boolean;
+  subagentSessions?: readonly GatewaySessionRow[];
   questionPrompts?: readonly QuestionPrompt[];
   asyncQuestions?: AsyncQuestionPresentation;
   sessions: SessionsListResult | null;
@@ -171,10 +182,12 @@ export type ChatThreadProps = ChatSendStatusActions & {
   githubRepositories?: MarkdownRenderOptions["githubRepositories"];
   autoExpandToolCalls?: boolean;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
-  typingActors?: readonly { id: string; label: string; preview?: string }[];
+  typingActors?: readonly ChatTypingActorView[];
+  typingOverflow?: ChatTypingOverflow;
   onOpenSidebar?: (content: SidebarContent) => void;
-  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+  onOpenWorkspaceFile?: (target: MarkdownFileLinkTarget) => void;
   onOpenSessionLink?: (target: SessionLinkTarget) => void;
+  onNavigate?: (routeId: "cron", options: { search: string }) => void;
   onRequestOpenImage?: () => number;
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
   onAssistantAttachmentLoaded?: () => void;
@@ -188,13 +201,13 @@ export type ChatThreadProps = ChatSendStatusActions & {
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
   onForkMessage?: (entryId: string) => Promise<void> | void;
   onFocusComposer?: () => void;
-  commentAttachments?: ChatAttachmentControlsProps;
+  commentAttachments?: readonly ChatAttachment[];
+  commentsDisabled?: boolean;
   onAddToChat?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
-  onCompanionPrefill?: (question: string) => void;
+  onCompanionSelection?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
   onOpenSession?: (sessionKey: string) => void;
   modelSetupRequired?: boolean;
   onModelSetup?: () => void;
-  backgroundTasks?: BackgroundTasksProps;
 };
 
 type TranscriptInteractionProps = Pick<
@@ -207,7 +220,7 @@ type TranscriptInteractionProps = Pick<
   | "onForkMessage"
   | "onFocusComposer"
   | "onAddToChat"
-  | "onCompanionPrefill"
+  | "onCompanionSelection"
 >;
 
 function createTranscriptState(): ChatThreadState {
@@ -266,8 +279,9 @@ export function resetTranscriptSession(paneId: string, owner?: ParentNode): void
   const state = transcriptStates.get(paneId);
   if (state) {
     state.asyncQuestionDrafts = new Map();
-    // Search input belongs to the outgoing transcript. Other fields are pane
-    // preferences or dependency memos and invalidate themselves on new props.
+    // Parked rows must commit fresh bindings on return even when visible props match.
+    state.transcriptRenderDependencies = [];
+    // Search input belongs to the outgoing transcript; pane preferences survive.
     state.searchOpen = false;
     state.searchQuery = "";
     state.searchFocusPending = false;
@@ -429,37 +443,6 @@ function removeReplyContextMenu(paneId?: string) {
   owner?.listeners.abort();
 }
 
-function createReplyContextMenuButton(onClick: () => void): HTMLButtonElement {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.setAttribute("role", "menuitem");
-  button.setAttribute("aria-label", t("chat.messages.replyToMessage"));
-  button.textContent = t("chat.messages.reply");
-  button.addEventListener("click", onClick);
-  return button;
-}
-
-function createMessageActionContextButton(params: {
-  label: string;
-  disabled: boolean;
-  tooltip: string;
-  onClick: (event: Event) => void;
-}): { element: HTMLElement; button: HTMLButtonElement } {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.disabled = params.disabled;
-  button.setAttribute("role", "menuitem");
-  const label = document.createElement("span");
-  label.dataset.copyLabel = "";
-  label.textContent = params.label;
-  button.append(label);
-  button.addEventListener("click", params.onClick);
-  const tooltip = document.createElement("openclaw-tooltip");
-  tooltip.content = params.tooltip;
-  tooltip.append(button);
-  return { element: tooltip, button };
-}
-
 function toggleTouchMessageMeta(event: PointerEvent): void {
   const transcript = event.currentTarget;
   const target = event.target;
@@ -482,27 +465,40 @@ function toggleTouchMessageMeta(event: PointerEvent): void {
   if (selection && !selection.isCollapsed) {
     return;
   }
-  const reveal = !group.classList.contains("chat-group--meta-revealed");
+  // Resolve the message before clearing disclosure so a tap on a sibling moves
+  // the actions, while tapping the same message still toggles them off.
+  const bubble = group.classList.contains("chat-group--peer")
+    ? (target.closest(".chat-bubble") ??
+      // Tapping beside an image must reveal its actions without opening the image.
+      [...group.querySelectorAll(".chat-bubble")].find((candidate) => {
+        const bounds = candidate.getBoundingClientRect();
+        return event.clientY >= bounds.top && event.clientY <= bounds.bottom;
+      }))
+    : null;
+  const reveal = bubble
+    ? !bubble.classList.contains("chat-bubble--actions-revealed")
+    : !group.classList.contains("chat-group--meta-revealed");
   for (const revealed of transcript.querySelectorAll(".chat-group--meta-revealed")) {
     revealed.classList.remove("chat-group--meta-revealed");
   }
   group.classList.toggle("chat-group--meta-revealed", reveal);
+  for (const revealed of transcript.querySelectorAll(".chat-bubble--actions-revealed")) {
+    revealed.classList.remove("chat-bubble--actions-revealed");
+  }
+  if (reveal) {
+    bubble?.classList.add("chat-bubble--actions-revealed");
+  }
 }
 
 export function handleTranscriptPointerUp(event: PointerEvent, props: TranscriptInteractionProps) {
   toggleTouchMessageMeta(event);
-  if (event.button !== 0 || event.ctrlKey || typeof props.onCompanionPrefill !== "function") {
+  if (event.button !== 0 || event.ctrlKey || typeof props.onCompanionSelection !== "function") {
     return;
   }
   handleChatSelectionPointerUp(event, {
     paneId: props.paneId,
     onAddToChat: props.onAddToChat,
-    onAskSideChat: (selection) => {
-      const question = buildCompanionQuestionPrefill(selection);
-      if (question) {
-        props.onCompanionPrefill?.(question);
-      }
-    },
+    onAskSideChat: (selection, anchorRect) => props.onCompanionSelection?.(selection, anchorRect),
   });
 }
 
@@ -569,13 +565,38 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
   const focusCandidates: HTMLButtonElement[] = [];
+  const appendAction = (params: {
+    label: string;
+    disabled?: boolean;
+    tooltip: string;
+    className?: string;
+    onClick: (event: Event) => void;
+  }) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.disabled = params.disabled ?? false;
+    button.setAttribute("role", "menuitem");
+    button.addEventListener("click", params.onClick);
+    const label = document.createElement("span");
+    label.dataset.copyLabel = "";
+    label.textContent = params.label;
+    button.append(label);
+    const tooltip = document.createElement("openclaw-tooltip");
+    tooltip.content = params.tooltip;
+    tooltip.append(button);
+    if (params.className) {
+      tooltip.className = params.className;
+    }
+    menu.append(tooltip);
+    focusCandidates.push(button);
+    return button;
+  };
   const appendCopyAction = (label: string, text: string) => {
     if (!text) {
       return;
     }
-    const action = createMessageActionContextButton({
+    appendAction({
       label,
-      disabled: false,
       tooltip: label,
       onClick: (copyEvent) => {
         void handleCopyButton(copyEvent, text, label).then((copied) => {
@@ -585,8 +606,6 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
         });
       },
     });
-    menu.append(action.element);
-    focusCandidates.push(action.button);
   };
   if (selectedText) {
     appendCopyAction(t("chat.messages.copySelection"), selectedText);
@@ -595,22 +614,28 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
     appendCopyAction(contentCopy.label, contentCopy.text);
   }
   if (canReply && replyTarget) {
-    const replyButton = createReplyContextMenuButton(() => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("role", "menuitem");
+    button.setAttribute("aria-label", t("chat.messages.replyToMessage"));
+    button.textContent = t("chat.messages.reply");
+    button.addEventListener("click", () => {
       props.onSetReply?.(replyTarget);
       removeReplyContextMenu();
       props.onFocusComposer?.();
     });
-    menu.append(replyButton);
-    focusCandidates.push(replyButton);
+    menu.append(button);
+    focusCandidates.push(button);
   }
   const working = Boolean(props.runActive || props.runWorking);
   if (canRewind) {
-    const action = createMessageActionContextButton({
+    const button = appendAction({
       label: t("chat.messages.rewindToHere"),
       disabled: working,
       tooltip: working ? t("chat.messages.rewindUnavailable") : t("chat.messages.rewindToHere"),
+      className: "chat-confirm-wrap chat-rewind-wrap",
       onClick: () => {
-        openChatRewindConfirmation(action.button, () => {
+        openChatRewindConfirmation(button, () => {
           removeReplyContextMenu();
           void Promise.resolve(props.onRewindMessage?.(entryId)).then((rewound) => {
             if (rewound) {
@@ -620,27 +645,21 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
         });
       },
     });
-    action.element.classList.add("chat-confirm-wrap", "chat-rewind-wrap");
-    menu.append(action.element);
-    focusCandidates.push(action.button);
   }
   if (copyMarkdown && !copyButton) {
     appendCopyAction(copyMarkdownLabel(), copyMarkdown);
   } else if (copyButton) {
-    const action = createMessageActionContextButton({
+    appendAction({
       label: copyMarkdownLabel(),
-      disabled: false,
       tooltip: copyMarkdownLabel(),
       onClick: () => {
         removeReplyContextMenu();
         copyButton?.click();
       },
     });
-    menu.append(action.element);
-    focusCandidates.push(action.button);
   }
   if (canFork) {
-    const action = createMessageActionContextButton({
+    appendAction({
       label: t("chat.messages.forkFromHere"),
       disabled: working,
       tooltip: working ? t("chat.messages.forkUnavailable") : t("chat.messages.forkFromHere"),
@@ -649,8 +668,6 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
         void props.onForkMessage?.(entryId);
       },
     });
-    menu.append(action.element);
-    focusCandidates.push(action.button);
   }
   // Expanded tables live in a native modal. Its context menu must stay inside
   // that top layer, otherwise the browser makes the body portal inert.

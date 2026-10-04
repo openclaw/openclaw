@@ -1,14 +1,9 @@
 import "../../styles/chat/startup-layout.css";
-import {
-  normalizeStringEntries,
-  uniqueStrings,
-} from "@openclaw/normalization-core/string-normalization";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-// Control UI view renders the Automations (cron) screen: a full-width list (stats, task table,
-// starter ideas) and a full-page detail view for creating or editing a single automation.
 import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
 import type { CronJob, CronJobsEnabledFilter } from "../../api/types.ts";
 import "../../styles/chat/text.css";
@@ -16,6 +11,7 @@ import "../../styles/cron.css";
 import { renderAgentRowChip } from "../../components/agent-row-chip.ts";
 import { renderChannelPicker, type ChannelPickerOption } from "../../components/channel-picker.ts";
 import { renderCronJobsPagination } from "../../components/cron-jobs-pagination.ts";
+import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icon, icons } from "../../components/icons.ts";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
 import { renderModelPicker } from "../../components/model-picker.ts";
@@ -27,26 +23,28 @@ import {
   renderSettingsPage,
   renderSettingsRow,
   renderSettingsSection,
+  renderSettingsSegmented,
   renderSettingsToggle,
   renderSettingsToggleRow,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
-import {
-  isCronJobActiveFailure,
-  isCronJobRunning,
-  resolveCronJobLastRunStatus,
-} from "../../lib/cron-status.ts";
+import { isCronJobActiveFailure, isCronJobRunning } from "../../lib/cron-status.ts";
 import { parseCronDurationMs } from "../../lib/cron/decimal.ts";
 import type { CronFieldErrors, CronFieldKey, CronFormState } from "../../lib/cron/types.ts";
-import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
-import { renderSegmented } from "./segmented-control.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
+import {
+  renderDisabledNote,
+  renderJobStateIndicator,
+  renderLastRunCell,
+  renderTriggerIndicator,
+} from "./view-job-status.ts";
 import { renderJobsFilterPopover } from "./view-jobs-filter.ts";
-import { renderRunsSection, runStatusLabel } from "./view-runs.ts";
+import { renderRunsSection } from "./view-runs.ts";
+import { renderCronSuggestionLists } from "./view-suggestions.ts";
 import type { CronDetailTab, CronProps } from "./view-types.ts";
 
 registerCronEnglish();
@@ -54,8 +52,6 @@ registerCronEnglish();
 type CronPanelMode = "overview" | "create" | "job";
 
 type CronOverviewTab = CronJobsEnabledFilter | "activity";
-
-// ── Shared option helpers ──
 
 function buildChannelOptions(props: CronProps): ChannelPickerOption[] {
   return [
@@ -70,19 +66,7 @@ function buildChannelOptions(props: CronProps): ChannelPickerOption[] {
   ];
 }
 
-function renderSuggestionList(id: string, options: string[]) {
-  const clean = uniqueStrings(normalizeStringEntries(options));
-  return clean.length === 0
-    ? nothing
-    : html`<datalist id=${id}>
-        ${clean.map((value) => html`<option value=${value}></option> `)}
-      </datalist>`;
-}
-
-// ── Validation summary helpers ──
-
 type BlockingField = {
-  key: CronFieldKey;
   label: string;
   message: string;
   inputId: string;
@@ -99,6 +83,7 @@ const CRON_FIELD_LABEL_KEYS: Record<CronFieldKey, string> = {
   payloadModel: "cron.form.model",
   payloadThinking: "cron.form.thinking",
   timeoutSeconds: "cron.form.timeoutSeconds",
+  deliveryMode: "cron.form.deliveryModeLabel",
   deliveryTo: "cron.form.to",
   failureAlertAfter: "cron.form.failureAlertAfter",
   failureAlertCooldownSeconds: "cron.form.failureAlertCooldown",
@@ -136,7 +121,6 @@ function collectBlockingFields(
     return message
       ? [
           {
-            key,
             label: fieldLabelForKey(key, form, deliveryMode),
             message,
             inputId: inputIdForField(key),
@@ -163,8 +147,6 @@ function renderFieldError(message?: string, id?: string) {
   }
   return html`<div id=${ifDefined(id)} class="cron-help cron-error">${t(message)}</div>`;
 }
-
-// ── Row primitives (settings design language) ──
 
 function renderRequiredTitle(label: string) {
   return html`
@@ -269,16 +251,15 @@ function renderCronInputField(
   });
 }
 
-type CronSelectOption = PickerOption;
-
 type CronSelectOptions = {
   label: string;
-  options: readonly CronSelectOption[];
+  options: readonly PickerOption[];
   help?: string;
   value?: string;
   disabled?: boolean;
   standalone?: boolean;
   channel?: boolean;
+  errorKey?: CronFieldKey;
 };
 
 function renderCronSelect(
@@ -287,6 +268,7 @@ function renderCronSelect(
   options: CronSelectOptions,
 ) {
   const selected = options.value ?? props.form[field];
+  const error = options.errorKey ? props.fieldErrors[options.errorKey] : undefined;
   const picker = options.channel ? renderChannelPicker : renderPicker;
   return picker({
     id: options.standalone ? undefined : inputIdForField(field),
@@ -294,6 +276,8 @@ function renderCronSelect(
     value: options.channel ? selected || "last" : selected,
     options: options.options,
     disabled: options.disabled,
+    invalid: options.errorKey ? Boolean(error) : undefined,
+    describedBy: error && options.errorKey ? errorIdForField(options.errorKey) : undefined,
     onChange: (value) => props.onFormChange({ [field]: value }),
   });
 }
@@ -307,6 +291,8 @@ function renderCronSelectField(
     label: options.label,
     controlId: inputIdForField(field),
     help: options.help,
+    error: options.errorKey ? props.fieldErrors[options.errorKey] : undefined,
+    errorId: options.errorKey ? errorIdForField(options.errorKey) : undefined,
     control: renderCronSelect(props, field, options),
   });
 }
@@ -324,17 +310,11 @@ function renderToggleRow(
   });
 }
 
-// ── Main render ──
-
 export function renderCron(props: CronProps) {
   const mode: CronPanelMode = props.editingJob ? "job" : props.createOpen ? "create" : "overview";
   return html`
     ${mode === "overview" ? renderListView(props) : renderDetailView(props, mode)}
-    ${renderSuggestionList("cron-agent-suggestions", props.agentSuggestions)}
-    ${renderSuggestionList("cron-thinking-suggestions", props.thinkingSuggestions)}
-    ${renderSuggestionList("cron-tz-suggestions", props.timezoneSuggestions)}
-    ${renderSuggestionList("cron-delivery-to-suggestions", props.deliveryToSuggestions)}
-    ${renderSuggestionList("cron-delivery-account-suggestions", props.accountSuggestions)}
+    ${renderCronSuggestionLists(props)}
   `;
 }
 
@@ -346,8 +326,6 @@ function renderAdminRequired(props: CronProps) {
         <span>${t("cron.adminRequired")}</span>
       </div>`;
 }
-
-// ── List view ──
 
 const ENABLED_TABS: Array<{ value: CronJobsEnabledFilter; labelKey: string }> = [
   { value: "all", labelKey: "cron.tabs.all" },
@@ -430,9 +408,12 @@ function renderListView(props: CronProps) {
 }
 
 function renderListTabs(props: CronProps) {
-  return renderSegmented<CronOverviewTab>({
-    value: props.listTab === "activity" ? "activity" : props.jobsEnabledFilter,
-    options: [
+  return renderHubTabs<CronOverviewTab>({
+    id: "cron-list",
+    panelId: "cron-list-panel",
+    className: "cron-tabs",
+    active: props.listTab === "activity" ? "activity" : props.jobsEnabledFilter,
+    tabs: [
       ...ENABLED_TABS.map((tab) => ({
         value: tab.value,
         label: t(tab.labelKey),
@@ -441,8 +422,7 @@ function renderListTabs(props: CronProps) {
       { value: "activity", label: t("cron.list.activityTab"), testId: "cron-list-tab-activity" },
     ],
     ariaLabel: t("cron.list.viewLabel"),
-    tabs: { id: "cron-list", panelId: "cron-list-panel" },
-    onChange: (value) => {
+    onSelect: (value) => {
       if (value === "activity") {
         props.onListTabChange("activity");
         return;
@@ -585,14 +565,10 @@ function renderJobsTable(props: CronProps, hasAnyJobsFilters: boolean) {
   `;
 }
 
-function isSystemOwnedCronJob(job: CronJob | null | undefined): boolean {
-  return isSystemMonitorDeclaration(job?.declarationKey);
-}
-
 function renderJobRow(job: CronJob, props: CronProps) {
   const displayName = job.displayName ?? job.name;
   const description = job.description?.trim();
-  const systemOwned = isSystemOwnedCronJob(job);
+  const systemOwned = isSystemMonitorDeclaration(job.declarationKey);
   const nextRunAtMs = job.state?.nextRunAtMs;
   const hasNextRun = typeof nextRunAtMs === "number" && Number.isFinite(nextRunAtMs);
   const nextRun = isCronJobRunning(job)
@@ -684,120 +660,13 @@ function renderJobCell(className: string, label: string, value: unknown) {
   </span>`;
 }
 
-function renderJobStateIndicator(job: CronJob) {
-  const autoDisabled = job.state?.autoDisabled;
-  const state = isCronJobRunning(job)
-    ? {
-        className: "cron-table__state--running",
-        iconName: "loader" as const,
-        label: t("cron.runs.runStatusRunning"),
-      }
-    : autoDisabled
-      ? {
-          className: "cron-table__state--error",
-          iconName: "lock" as const,
-          label: disabledNoteLabel(job),
-        }
-      : isCronJobActiveFailure(job)
-        ? {
-            className: "cron-table__state--error",
-            iconName: "alertTriangle" as const,
-            label: t("cron.runs.runStatusError"),
-          }
-        : !job.enabled
-          ? {
-              className: "cron-table__state--paused",
-              iconName: "pause" as const,
-              label: t("cron.list.paused"),
-            }
-          : {
-              className: "cron-table__state--active",
-              iconName: null,
-              label: t("cron.detail.active"),
-            };
-  return html`<span
-    class="cron-table__state ${state.className}"
-    role="img"
-    aria-label=${state.label}
-    title=${state.label}
-    >${
-      state.iconName ? icon(state.iconName) : html`<span class="cron-table__state-dot"></span>`
-    }</span
-  >`;
-}
-
-function renderTriggerIndicator() {
-  const label = t("cron.form.triggerConfigured");
-  return html`<span class="cron-trigger-icon" role="img" aria-label=${label} title=${label}
-    >${icon("gitBranch")}</span
-  >`;
-}
-
-/** Auto-disabled is the escalated failure state, not an operator pause: the
- * recorded fact (state.autoDisabled) must stay visible or the job silently
- * drops out of every failure surface the moment the problem became permanent. */
-function renderDisabledNote(job: CronJob) {
-  const autoDisabled = job.state?.autoDisabled;
-  if (!autoDisabled) {
-    return html`<span class="muted cron-table__paused-note">${t("cron.list.paused")}</span>`;
-  }
-  const label = disabledNoteLabel(job);
-  const lastError = job.state?.lastError?.trim();
-  return html`<span
-    class="cron-table__paused-note cron-table__auto-disabled"
-    data-test-id=${`cron-row-auto-disabled-${job.id}`}
-    title=${lastError ? formatUiExternalText(lastError) : label}
-    >${label}</span
-  >`;
-}
-
-function disabledNoteLabel(job: CronJob) {
-  const autoDisabled = job.state?.autoDisabled;
-  if (!autoDisabled) {
-    return t("cron.list.paused");
-  }
-  return t(
-    autoDisabled.reason === "schedule-errors"
-      ? "cron.list.autoDisabledScheduleErrors"
-      : "cron.list.autoDisabledRunFailures",
-    { count: String(autoDisabled.consecutiveErrors) },
-  );
-}
-
-function renderLastRunCell(job: CronJob) {
-  const status = resolveCronJobLastRunStatus(job);
-  const lastRunAtMs = job.state?.lastRunAtMs;
-  const rel =
-    typeof lastRunAtMs === "number" && Number.isFinite(lastRunAtMs)
-      ? formatRelativeTimestamp(lastRunAtMs)
-      : null;
-  if (status === "unknown" || !rel) {
-    return html`<span class="muted">${t("common.na")}</span>`;
-  }
-  // Bare glyph + time reads calmer than a chip per row; the status word stays
-  // available to hover and assistive tech via the label.
-  const glyph =
-    status === "ok"
-      ? html`<span class="cron-last-glyph cron-last-glyph--ok">${icon("check")}</span>`
-      : status === "error"
-        ? html`<span class="cron-last-glyph cron-last-glyph--error">${icon("x")}</span>`
-        : html`<span class="cron-last-glyph">${icon("cornerDownRight")}</span>`;
-  const label = runStatusLabel(status);
-  return html`
-    <span class="cron-table__last-run" role="img" aria-label=${label} title=${label}>
-      ${glyph}
-      <span class="cron-table__last-time">${rel}</span>
-    </span>
-  `;
-}
-
 // Run now and pause/resume are visible controls (rows and detail header);
 // the menu only carries the low-traffic actions.
 function renderJobMenu(props: CronProps, job: CronJob) {
   if (!props.canManage) {
     return nothing;
   }
-  const systemOwned = isSystemOwnedCronJob(job);
+  const systemOwned = isSystemMonitorDeclaration(job.declarationKey);
   const displayName = job.displayName ?? job.name;
   return html`
     <wa-dropdown
@@ -847,7 +716,6 @@ function renderJobMenu(props: CronProps, job: CronJob) {
 }
 
 function renderSuggestions(props: CronProps) {
-  // Starter ideas are drill-in rows: activating one prefills the create form.
   return renderSettingsSection(
     { title: t("cron.suggestions.title") },
     CRON_SUGGESTIONS.map(
@@ -873,8 +741,6 @@ function renderSuggestions(props: CronProps) {
     ),
   );
 }
-
-// ── Detail view ──
 
 function renderDetailView(props: CronProps, mode: CronPanelMode) {
   const selectedJob = mode === "job" ? (props.editingJob ?? undefined) : undefined;
@@ -938,7 +804,7 @@ function renderDetailHeader(props: CronProps, mode: CronPanelMode, selectedJob?:
       ? (selectedJob?.displayName ?? selectedJob?.name ?? props.form.name)
       : t("cron.detail.newTitle");
   const description = mode === "job" ? selectedJob?.description?.trim() : undefined;
-  const systemOwned = isSystemOwnedCronJob(selectedJob);
+  const systemOwned = isSystemMonitorDeclaration(selectedJob?.declarationKey);
   // Header describes the SAVED job (schedule + next run); the form's live
   // summary describes unsaved edits, so the two never contradict each other.
   const nextRunAtMs = selectedJob?.state?.nextRunAtMs;
@@ -1025,9 +891,13 @@ function renderEnabledSwitch(
 }
 
 function renderDetailTabs(props: CronProps) {
-  return renderSegmented<CronDetailTab>({
-    value: props.detailTab,
-    options: [
+  return renderHubTabs<CronDetailTab>({
+    id: "cron-detail",
+    panelId: "cron-detail-panel",
+    className: "cron-tabs",
+    variant: "sub",
+    active: props.detailTab,
+    tabs: [
       {
         value: "settings",
         label: t("cron.detail.settingsTab"),
@@ -1036,14 +906,14 @@ function renderDetailTabs(props: CronProps) {
       { value: "history", label: t("cron.detail.historyTitle"), testId: "cron-detail-tab-history" },
     ],
     ariaLabel: t("cron.detail.tabsLabel"),
-    tabs: { id: "cron-detail", panelId: "cron-detail-panel", variant: "sub" },
-    onChange: props.onDetailTabChange,
+    onSelect: props.onDetailTabChange,
   });
 }
 
 function renderEditor(props: CronProps, mode: CronPanelMode) {
   const payloadLocked = props.form.payloadLocked;
-  const systemOwned = mode === "job" && isSystemOwnedCronJob(props.editingJob);
+  const systemOwned =
+    mode === "job" && isSystemMonitorDeclaration(props.editingJob?.declarationKey);
   const isAgentTurn = !payloadLocked && props.form.payloadKind === "agentTurn";
   const supportsAnnounce =
     props.form.sessionTarget !== "main" &&
@@ -1164,8 +1034,6 @@ function renderMenuItem(
     </wa-dropdown-item>
   `;
 }
-
-// ── Editor sections ──
 
 // Only the read-only payload kinds carry source text; the rest are prose prompts,
 // so an empty language keeps them on the plain editable textarea.
@@ -1341,6 +1209,13 @@ function renderGeneralSection(props: CronProps) {
   );
 }
 
+const EVERY_SUMMARY_KEYS = {
+  seconds: ["cron.form.summaryEverySecondOne", "cron.form.summaryEverySeconds"],
+  minutes: ["cron.form.summaryEveryMinuteOne", "cron.form.summaryEveryMinutes"],
+  hours: ["cron.form.summaryEveryHourOne", "cron.form.summaryEveryHours"],
+  days: ["cron.form.summaryEveryDayOne", "cron.form.summaryEveryDays"],
+} as const;
+
 // Human-readable schedule summary; null while invalid so it never disagrees with the saved value.
 function describeFormSchedule(form: CronFormState): string | null {
   if (form.scheduleKind === "every") {
@@ -1348,26 +1223,8 @@ function describeFormSchedule(form: CronFormState): string | null {
     if (parseCronDurationMs(amount, form.everyUnit) === undefined) {
       return null;
     }
-    if (Number(amount) === 1) {
-      const singularKey =
-        form.everyUnit === "seconds"
-          ? "cron.form.summaryEverySecondOne"
-          : form.everyUnit === "minutes"
-            ? "cron.form.summaryEveryMinuteOne"
-            : form.everyUnit === "hours"
-              ? "cron.form.summaryEveryHourOne"
-              : "cron.form.summaryEveryDayOne";
-      return t(singularKey);
-    }
-    const key =
-      form.everyUnit === "seconds"
-        ? "cron.form.summaryEverySeconds"
-        : form.everyUnit === "minutes"
-          ? "cron.form.summaryEveryMinutes"
-          : form.everyUnit === "hours"
-            ? "cron.form.summaryEveryHours"
-            : "cron.form.summaryEveryDays";
-    return t(key, { amount });
+    const [singular, plural] = EVERY_SUMMARY_KEYS[form.everyUnit];
+    return Number(amount) === 1 ? t(singular) : t(plural, { amount });
   }
   if (form.scheduleKind === "at") {
     const ms = Date.parse(form.scheduleAt);
@@ -1414,7 +1271,7 @@ function renderScheduleSection(props: CronProps) {
         title: t("cron.form.repeat"),
         description: isOnExit ? t("cron.form.onExitHelp") : undefined,
         stacked: true,
-        control: renderSegmented<CronFormState["scheduleKind"]>({
+        control: renderSettingsSegmented<CronFormState["scheduleKind"]>({
           value: form.scheduleKind,
           options: kinds,
           ariaLabel: t("cron.form.repeat"),
@@ -1513,7 +1370,11 @@ function renderDeliverySection(
         label: t("cron.form.deliveryModeLabel"),
         help: t("cron.form.deliveryHelp"),
         value: ctx.selectedDeliveryMode,
+        errorKey: "deliveryMode",
         options: [
+          ...(ctx.selectedDeliveryMode === ""
+            ? [{ value: "", label: t("cron.form.selectDeliveryMode"), disabled: true }]
+            : []),
           ...(ctx.supportsAnnounce
             ? [{ value: "announce", label: t("cron.form.announceDefault") }]
             : []),
@@ -1625,20 +1486,10 @@ function renderAdvanced(
             label: t("cron.form.clearAgentOverride"),
             help: t("cron.form.clearAgentHelp"),
           })}
-          ${renderFieldRow({
+          ${renderCronInputField(props, "sessionKey", {
             label: t("cron.form.sessionKey"),
-            controlId: "cron-session-key",
             help: t("cron.form.sessionKeyHelp"),
-            control: html`
-              <input
-                id="cron-session-key"
-                class="settings-input"
-                .value=${props.form.sessionKey}
-                placeholder="agent:main:main"
-                @input=${(e: Event) =>
-                  props.onFormChange({ sessionKey: (e.target as HTMLInputElement).value })}
-              />
-            `,
+            placeholder: "agent:main:main",
           })}
           ${
             isCronSchedule
@@ -1678,24 +1529,12 @@ function renderAdvanced(
           ${
             ctx.isAgentTurn
               ? html`
-                  ${renderFieldRow({
+                  ${renderCronInputField(props, "deliveryAccountId", {
                     label: t("cron.form.accountId"),
-                    controlId: "cron-delivery-account-id",
                     help: t("cron.form.accountIdHelp"),
-                    control: html`
-                      <input
-                        id="cron-delivery-account-id"
-                        class="settings-input"
-                        .value=${props.form.deliveryAccountId}
-                        list="cron-delivery-account-suggestions"
-                        ?disabled=${ctx.selectedDeliveryMode !== "announce"}
-                        placeholder="default"
-                        @input=${(e: Event) =>
-                          props.onFormChange({
-                            deliveryAccountId: (e.target as HTMLInputElement).value,
-                          })}
-                      />
-                    `,
+                    list: "cron-delivery-account-suggestions",
+                    disabled: ctx.selectedDeliveryMode !== "announce",
+                    placeholder: "default",
                   })}
                   ${renderToggleRow(props, "payloadLightContext", {
                     label: t("cron.form.lightContext"),
@@ -1823,7 +1662,7 @@ function renderFailureAlertRows(props: CronProps, channelOptions: readonly Chann
             ${renderCronInputField(props, "failureAlertTo", {
               label: t("cron.form.failureAlertTo"),
               help: t("cron.form.failureAlertToHelp"),
-              list: "cron-delivery-to-suggestions",
+              list: "cron-failure-alert-to-suggestions",
               placeholder: t("cron.form.failureAlertToPlaceholder"),
             })}
             ${renderCronSelectField(props, "failureAlertDeliveryMode", {

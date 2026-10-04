@@ -48,7 +48,7 @@ export class DiscordAudioWorker {
   private stopped = false;
   private readonly stopAbort = new AbortController();
   private readonly tasks = new Set<Promise<unknown>>();
-  private readonly onPlayerError = (error: Error) =>
+  private readonly onError = (error: unknown) =>
     this.post({ type: "error", error: serializeDiscordAudioError(error) });
   private readonly onDisconnected = () => {
     if (!this.stopped && this.connection) {
@@ -72,11 +72,12 @@ export class DiscordAudioWorker {
     this.player.on("stateChange", (_old, state) =>
       this.post({ type: "player", status: state.status }),
     );
-    this.player.on("error", this.onPlayerError);
+    this.player.on("error", this.onError);
   }
 
   async connect(): Promise<void> {
-    const deadline = Date.now() + this.options.connectTimeoutMs;
+    // Readiness and retries share an elapsed budget; native timeout delays require whole milliseconds.
+    const deadline = performance.now() + this.options.connectTimeoutMs;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       if (this.stopped) {
         return;
@@ -103,16 +104,14 @@ export class DiscordAudioWorker {
         },
       });
       this.connection = connection;
-      connection.on("error", (error) =>
-        this.post({ type: "error", error: serializeDiscordAudioError(error) }),
-      );
+      connection.on("error", this.onError);
       try {
         await this.sdk.entersState(
           connection,
           this.sdk.VoiceConnectionStatus.Ready,
           AbortSignal.any([
             this.stopAbort.signal,
-            AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+            AbortSignal.timeout(Math.max(1, Math.floor(deadline - performance.now()))),
           ]),
         );
         if (this.stopped) {
@@ -142,7 +141,7 @@ export class DiscordAudioWorker {
         if (
           attempt === 0 &&
           !this.stopped &&
-          Date.now() < deadline &&
+          performance.now() < deadline &&
           error instanceof Error &&
           error.message.toLowerCase().includes("operation was aborted")
         ) {
@@ -584,11 +583,7 @@ export class DiscordAudioWorker {
 
   private track(task: Promise<unknown>): void {
     this.tasks.add(task);
-    void task
-      .catch((error: unknown) =>
-        this.post({ type: "error", error: serializeDiscordAudioError(error) }),
-      )
-      .finally(() => this.tasks.delete(task));
+    void task.catch(this.onError).finally(() => this.tasks.delete(task));
   }
 
   async stop(): Promise<void> {
@@ -611,7 +606,7 @@ export class DiscordAudioWorker {
     // Retire recovery callbacks before destroy emits terminal connection events.
     connection?.off(this.sdk.VoiceConnectionStatus.Disconnected, this.onDisconnected);
     connection?.off(this.sdk.VoiceConnectionStatus.Destroyed, this.onDestroyed);
-    this.player.off("error", this.onPlayerError);
+    this.player.off("error", this.onError);
     if (connection && connection.state.status !== this.sdk.VoiceConnectionStatus.Destroyed) {
       connection.destroy();
     }

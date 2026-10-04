@@ -1,4 +1,3 @@
-// Normalizes raw agent output into sendable reply text and metadata.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
@@ -167,7 +166,6 @@ export function normalizeReplyPayloadOutcome(
     text = enrichedPayload.text;
   }
 
-  // Resolve template variables in responsePrefix if context is provided
   const effectivePrefix = opts.responsePrefixContext
     ? resolveResponsePrefixTemplate(opts.responsePrefix, opts.responsePrefixContext)
     : opts.responsePrefix;

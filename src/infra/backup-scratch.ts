@@ -2,10 +2,10 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { getChildLogger } from "../logging/logger.js";
 import { isMissingPathError } from "./errno.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { FsSafeError, root as createRoot, type Root } from "./fs-safe.js";
 import { isSqliteLockError, isSqliteNativeOpenFailure } from "./sqlite-error-diagnostics.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
@@ -125,7 +125,8 @@ async function inspectScratchPayload(
       item.isFile() &&
       ((layout === "root" &&
         (SQLITE_STAGING_TOKEN_FILES.some((control) => control === name) ||
-          /^config-\d+$/u.test(name))) ||
+          /^config-\d+$/u.test(name) ||
+          name === "archive.tar.gz")) ||
         (layout === "sqlite"
           ? /^database\.sqlite(?:-wal|-shm|-journal)?$/u.test(name)
           : /^(?:openclaw-state-db-\d+\.sqlite(?:-wal|-shm|-journal)?|legacy-audit-raw-\d+\.jsonl)$/u.test(

@@ -5,6 +5,7 @@ import type {
 } from "../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { canChannelEnforcePluginReviewerPolicy } from "./approval-channel-policy-support.js";
 import {
   CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
   createLazyChannelApprovalNativeRuntimeAdapter,
@@ -186,7 +187,13 @@ export function createChannelApprovalNativeRuntimeAdapter<
   TBinding,
   TFinalPayload
 > {
-  return {
+  const adapter: ChannelApprovalNativeRuntimeAdapter<
+    TPendingPayload,
+    TPreparedTarget,
+    TPendingEntry,
+    TBinding,
+    TFinalPayload
+  > = {
     ...(spec.eventKinds ? { eventKinds: spec.eventKinds } : {}),
     ...(spec.resolveApprovalKind ? { resolveApprovalKind: spec.resolveApprovalKind } : {}),
     availability: {
@@ -204,91 +211,51 @@ export function createChannelApprovalNativeRuntimeAdapter<
     transport: {
       prepareTarget: async (params) => await spec.transport.prepareTarget(params as never),
       deliverPending: async (params) => await spec.transport.deliverPending(params as never),
-      ...(spec.transport.updateEntry
-        ? {
-            updateEntry: async (
-              params: {
-                entry: unknown;
-                request: ApprovalRequest;
-                approvalKind: ChannelApprovalKind;
-                payload: unknown;
-                phase: "resolved" | "expired";
-              } & ChannelApprovalCapabilityHandlerContext,
-            ) => await spec.transport.updateEntry?.(params as never),
-          }
-        : {}),
-      ...(spec.transport.deleteEntry
-        ? {
-            deleteEntry: async (
-              params: {
-                entry: unknown;
-                phase: "resolved" | "expired";
-              } & ChannelApprovalCapabilityHandlerContext,
-            ) => await spec.transport.deleteEntry?.(params as never),
-          }
-        : {}),
     },
-    ...(spec.interactions
-      ? {
-          interactions: {
-            ...(spec.interactions.bindPending
-              ? {
-                  bindPending: async (params) =>
-                    (await spec.interactions!.bindPending!(params as never)) ?? null,
-                }
-              : {}),
-            ...(spec.interactions.unbindPending
-              ? {
-                  unbindPending: async (params) =>
-                    await spec.interactions?.unbindPending?.(params as never),
-                }
-              : {}),
-            ...(spec.interactions.clearPendingActions
-              ? {
-                  clearPendingActions: async (params) =>
-                    await spec.interactions?.clearPendingActions?.(params as never),
-                }
-              : {}),
-            ...(spec.interactions.cancelDelivered
-              ? {
-                  cancelDelivered: async (params) =>
-                    await spec.interactions?.cancelDelivered?.(params as never),
-                }
-              : {}),
-          },
-        }
-      : {}),
-    ...(spec.observe
-      ? {
-          observe: {
-            ...(spec.observe.onDeliveryError
-              ? {
-                  onDeliveryError: (params) => spec.observe?.onDeliveryError?.(params as never),
-                }
-              : {}),
-            ...(spec.observe.onDuplicateSkipped
-              ? {
-                  onDuplicateSkipped: (params) =>
-                    spec.observe?.onDuplicateSkipped?.(params as never),
-                }
-              : {}),
-            ...(spec.observe.onDelivered
-              ? {
-                  onDelivered: (params) => spec.observe?.onDelivered?.(params as never),
-                }
-              : {}),
-            ...(spec.observe.onFinalized
-              ? {
-                  onFinalized: (params) => {
-                    // SAFETY: The factory preserves the request and lifecycle types for this adapter.
-                    return spec.observe?.onFinalized?.(params as never);
-                  },
-                }
-              : {}),
-          },
-        }
-      : {}),
   };
+  if (spec.transport.updateEntry) {
+    adapter.transport.updateEntry = async (params) => await spec.transport.updateEntry?.(params);
+  }
+  if (spec.transport.deleteEntry) {
+    adapter.transport.deleteEntry = async (params) => await spec.transport.deleteEntry?.(params);
+  }
+  if (spec.interactions) {
+    const interactions: NonNullable<typeof adapter.interactions> = {};
+    if (spec.interactions.bindPending) {
+      interactions.bindPending = async (params) =>
+        (await spec.interactions!.bindPending!(params as never)) ?? null;
+    }
+    if (spec.interactions.unbindPending) {
+      interactions.unbindPending = async (params) =>
+        await spec.interactions?.unbindPending?.(params);
+    }
+    if (spec.interactions.clearPendingActions) {
+      interactions.clearPendingActions = async (params) =>
+        await spec.interactions?.clearPendingActions?.(params);
+    }
+    if (spec.interactions.cancelDelivered) {
+      interactions.cancelDelivered = async (params) =>
+        await spec.interactions?.cancelDelivered?.(params);
+    }
+    adapter.interactions = interactions;
+  }
+  if (spec.observe) {
+    const observe: NonNullable<typeof adapter.observe> = {};
+    if (spec.observe.onDeliveryError) {
+      observe.onDeliveryError = (params) => spec.observe?.onDeliveryError?.(params as never);
+    }
+    if (spec.observe.onDuplicateSkipped) {
+      observe.onDuplicateSkipped = (params) => spec.observe?.onDuplicateSkipped?.(params as never);
+    }
+    if (spec.observe.onDelivered) {
+      observe.onDelivered = (params) => spec.observe?.onDelivered?.(params as never);
+    }
+    if (spec.observe.onFinalized) {
+      observe.onFinalized = (params) => spec.observe?.onFinalized?.(params);
+    }
+    adapter.observe = observe;
+  }
+  return adapter;
 }
 
 type ChannelApprovalHandlerRuntimeSpec<TRequest extends ApprovalRequest> = {
@@ -417,7 +384,10 @@ export function createChannelApprovalHandler<
 
 /** Builds a shared approval handler from a plugin approval capability, or null when unsupported. */
 export async function createChannelApprovalHandlerFromCapability(params: {
-  capability?: Pick<ChannelApprovalCapability, "native" | "nativeRuntime"> | null;
+  capability?: Pick<
+    ChannelApprovalCapability,
+    "native" | "nativeRuntime" | "supportsScopedPluginApprovalApprovers"
+  > | null;
   label: string;
   clientDisplayName: string;
   channel: string;
@@ -527,6 +497,12 @@ export async function createChannelApprovalHandlerFromCapability(params: {
       isConfigured: () => nativeRuntime.availability.isConfigured(baseContext),
       shouldHandle: (request) => {
         const approvalKind = resolveApprovalKind(request);
+        if (
+          approvalKind === "plugin" &&
+          !canChannelEnforcePluginReviewerPolicy(params.cfg, params.channel, params.capability)
+        ) {
+          return false;
+        }
         return nativeRuntime.availability.shouldHandle({
           ...baseContext,
           request,

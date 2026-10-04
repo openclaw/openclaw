@@ -26,7 +26,7 @@ describe("resolveCronAgentConfig memory search preservation", () => {
       plugins: { enabled: false },
       agents: {
         defaults: agentDefaults,
-        list: [{ id: "main", default: true, memory: { search: agentMemorySearch } }],
+        entries: { main: { memory: { search: agentMemorySearch } } },
       },
       memory: { search: defaultMemorySearch },
     };

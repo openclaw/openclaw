@@ -112,7 +112,7 @@ actor MacNodeRuntime {
     private static let maxGatewayPayloadBytes = 25 * 1024 * 1024
     private static let maxScreenSnapshotRawBytesBeforeBase64 = (maxGatewayPayloadBytes / 4) * 3
     private static let cuaOwnedCommands = Set([
-        MacNodeScreenCommand.snapshot.rawValue,
+        OpenClawScreenCommand.snapshot.rawValue,
         OpenClawComputerCommand.act.rawValue,
     ])
     private let cameraCapture = CameraCaptureService()
@@ -149,7 +149,7 @@ actor MacNodeRuntime {
             await MainActor.run { LiveMacNodeRuntimeMainActorServices() }
         },
         computerControlEnabled: @escaping @Sendable () -> Bool = {
-            MacNodeRuntime.computerControlEnabledDefault()
+            isComputerControlEnabled()
         },
         computerControlProvider: @escaping @Sendable () -> ComputerControlProvider = {
             ComputerControlProvider.current()
@@ -221,7 +221,7 @@ actor MacNodeRuntime {
                 return try await handleCameraInvoke(req)
             case OpenClawLocationCommand.get.rawValue:
                 return try await handleLocationInvoke(req)
-            case MacNodeScreenCommand.record.rawValue:
+            case OpenClawScreenCommand.record.rawValue:
                 return try await handleScreenRecordInvoke(req)
             case OpenClawSystemCommand.notify.rawValue:
                 return try await handleSystemNotify(req)
@@ -356,7 +356,7 @@ actor MacNodeRuntime {
                         throw MacDesktopAvailabilityCoordinator.AvailabilityError.executionClosed
                     }
                     try Task.checkCancellation()
-                    response = req.command == MacNodeScreenCommand.snapshot.rawValue
+                    response = req.command == OpenClawScreenCommand.snapshot.rawValue
                         ? try await self.handleScreenSnapshotInvoke(req, desktopPermit: permit)
                         : try await self.handleComputerActInvoke(req, desktopPermit: permit)
                 }
@@ -425,12 +425,10 @@ actor MacNodeRuntime {
                 message: "INVALID_REQUEST: unknown command")
         }
         guard self.canvasEnabled() else {
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(
-                    code: .unavailable,
-                    message: "CANVAS_DISABLED: enable Canvas in Settings"))
+            return errorResponse(
+                req,
+                code: .unavailable,
+                message: "CANVAS_DISABLED: enable Canvas in Settings")
         }
         return nil
     }
@@ -486,15 +484,21 @@ actor MacNodeRuntime {
 extension MacNodeRuntime {
     private func handleCanvasInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         switch req.command {
-        case OpenClawCanvasCommand.present.rawValue:
-            let params = (try? Self.decodeParams(OpenClawCanvasPresentParams.self, from: req.paramsJSON)) ??
-                OpenClawCanvasPresentParams()
-            let urlTrimmed = params.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let url = urlTrimmed.isEmpty ? nil : urlTrimmed
-            let effectiveURL = try await resolveCanvasTarget(url)
-            let placement = params.placement.map {
-                CanvasPlacement(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
+        case OpenClawCanvasCommand.present.rawValue, OpenClawCanvasCommand.navigate.rawValue:
+            let target: String?
+            let placement: CanvasPlacement?
+            if req.command == OpenClawCanvasCommand.present.rawValue {
+                let params = (try? Self.decodeParams(OpenClawCanvasPresentParams.self, from: req.paramsJSON)) ??
+                    OpenClawCanvasPresentParams()
+                target = params.url
+                placement = params.placement.map {
+                    CanvasPlacement(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
+                }
+            } else {
+                target = try Self.decodeParams(OpenClawCanvasNavigateParams.self, from: req.paramsJSON).url
+                placement = nil
             }
+            let effectiveURL = try await resolveCanvasTarget(target)
             let sessionKey = self.mainSessionKey
             try await MainActor.run {
                 _ = try CanvasManager.shared.show(
@@ -507,16 +511,6 @@ extension MacNodeRuntime {
             let sessionKey = self.mainSessionKey
             await MainActor.run {
                 CanvasManager.shared.hide(sessionKey: sessionKey)
-            }
-            return BridgeInvokeResponse(id: req.id, ok: true)
-        case OpenClawCanvasCommand.navigate.rawValue:
-            let params = try Self.decodeParams(OpenClawCanvasNavigateParams.self, from: req.paramsJSON)
-            let effectiveURL = try await resolveCanvasTarget(params.url)
-            let sessionKey = self.mainSessionKey
-            try await MainActor.run {
-                _ = try CanvasManager.shared.show(
-                    sessionKey: sessionKey,
-                    path: effectiveURL)
             }
             return BridgeInvokeResponse(id: req.id, ok: true)
         default:
@@ -551,12 +545,10 @@ private enum MacNodeCanvasTargetError: LocalizedError {
 extension MacNodeRuntime {
     private func handleCameraInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         guard Self.cameraEnabled() else {
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(
-                    code: .unavailable,
-                    message: "CAMERA_DISABLED: enable Camera in Settings"))
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "CAMERA_DISABLED: enable Camera in Settings")
         }
         switch req.command {
         case OpenClawCameraCommand.snap.rawValue:
@@ -634,12 +626,10 @@ extension MacNodeRuntime {
     private func handleLocationInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         let mode = Self.locationMode()
         guard mode != .off else {
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(
-                    code: .unavailable,
-                    message: "LOCATION_DISABLED: enable Location in Settings"))
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "LOCATION_DISABLED: enable Location in Settings")
         }
         let params = (try? Self.decodeParams(OpenClawLocationGetParams.self, from: req.paramsJSON)) ??
             OpenClawLocationGetParams()
@@ -651,12 +641,10 @@ extension MacNodeRuntime {
             status: status,
             requireAlways: mode == .always)
         if !hasPermission {
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(
-                    code: .unavailable,
-                    message: "LOCATION_PERMISSION_REQUIRED: grant Location permission"))
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "LOCATION_PERMISSION_REQUIRED: grant Location permission")
         }
         do {
             let location = try await services.currentLocation(
@@ -677,19 +665,15 @@ extension MacNodeRuntime {
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         } catch MacNodeLocationService.Error.timeout {
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(
-                    code: .unavailable,
-                    message: "LOCATION_TIMEOUT: no fix in time"))
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "LOCATION_TIMEOUT: no fix in time")
         } catch {
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(
-                    code: .unavailable,
-                    message: "LOCATION_UNAVAILABLE: \(error.localizedDescription)"))
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "LOCATION_UNAVAILABLE: \(error.localizedDescription)")
         }
     }
 
@@ -698,12 +682,10 @@ extension MacNodeRuntime {
         desktopPermit: MacDesktopAvailabilityCoordinator.Permit) async throws -> BridgeInvokeResponse
     {
         guard self.computerControlEnabled() else {
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(
-                    code: .unavailable,
-                    message: "COMPUTER_DISABLED: enable Computer Control in Settings"))
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "COMPUTER_DISABLED: enable Computer Control in Settings")
         }
         let params: OpenClawComputerActParams
         do {
@@ -768,8 +750,8 @@ extension MacNodeRuntime {
     }
 
     private func handleScreenRecordInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        let params = (try? Self.decodeParams(MacNodeScreenRecordParams.self, from: req.paramsJSON)) ??
-            MacNodeScreenRecordParams()
+        let params = (try? Self.decodeParams(OpenClawScreenRecordParams.self, from: req.paramsJSON)) ??
+            OpenClawScreenRecordParams()
         if let format = params.format?.lowercased(), !format.isEmpty, format != "mp4" {
             return Self.errorResponse(
                 req,
@@ -961,7 +943,7 @@ extension MacNodeRuntime {
 
 extension MacNodeRuntime {
     private static func invalidDesktopParamsResponse(_ req: BridgeInvokeRequest) -> BridgeInvokeResponse {
-        if req.command == MacNodeScreenCommand.snapshot.rawValue {
+        if req.command == OpenClawScreenCommand.snapshot.rawValue {
             return self.errorResponse(
                 req, code: .invalidRequest, message: "INVALID_REQUEST: invalid screen snapshot params")
         }
@@ -978,13 +960,7 @@ extension MacNodeRuntime {
     }
 
     private static func encodePayload(_ obj: some Encodable) throws -> String {
-        let data = try JSONEncoder().encode(obj)
-        guard let json = String(bytes: data, encoding: .utf8) else {
-            throw NSError(domain: "Node", code: 21, userInfo: [
-                NSLocalizedDescriptionKey: "Failed to encode payload as UTF-8",
-            ])
-        }
-        return json
+        try String(bytes: JSONEncoder().encode(obj), encoding: .utf8)!
     }
 
     static func projectedOuterFrameBytes(
@@ -1027,10 +1003,6 @@ extension MacNodeRuntime {
 
     private nonisolated static func cameraEnabled() -> Bool {
         AppDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? false
-    }
-
-    nonisolated static func computerControlEnabledDefault() -> Bool {
-        isComputerControlEnabled()
     }
 
     private nonisolated static func locationMode() -> OpenClawLocationMode {

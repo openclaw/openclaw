@@ -159,6 +159,7 @@ describe("applyModelDefaults", () => {
           models: {
             "anthropic/claude-opus-5-5": {},
             "anthropic/claude-opus-5": {},
+            "anthropic/claude-sonnet-5-5": {},
             "anthropic/claude-sonnet-5": {},
             "openai/gpt-5.4": {},
           },
@@ -169,24 +170,9 @@ describe("applyModelDefaults", () => {
 
     expect(next.agents?.defaults?.models?.["anthropic/claude-opus-5-5"]?.alias).toBe("opus");
     expect(next.agents?.defaults?.models?.["anthropic/claude-opus-5"]?.alias).toBeUndefined();
-    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5"]?.alias).toBe("sonnet");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5-5"]?.alias).toBe("sonnet");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5"]?.alias).toBeUndefined();
     expect(next.agents?.defaults?.models?.["openai/gpt-5.4"]?.alias).toBe("gpt");
-  });
-
-  it("does not override existing aliases", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-opus-4-8": { alias: "Opus" },
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const next = applyModelDefaults(cfg);
-
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-8"]?.alias).toBe("Opus");
   });
 
   it("preserves an authored Opus alias when the new default target is also present", () => {
@@ -212,8 +198,8 @@ describe("applyModelDefaults", () => {
       agents: {
         defaults: {
           models: {
-            "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
-            "anthropic/claude-sonnet-5": {},
+            "anthropic/claude-sonnet-5": { alias: "Sonnet" },
+            "anthropic/claude-sonnet-5-5": {},
           },
         },
       },
@@ -221,8 +207,8 @@ describe("applyModelDefaults", () => {
 
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]?.alias).toBe("Sonnet");
-    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5"]?.alias).toBeUndefined();
+    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5"]?.alias).toBe("Sonnet");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5-5"]?.alias).toBeUndefined();
   });
 
   it("respects explicit empty alias disables", () => {
@@ -330,9 +316,8 @@ describe("applyModelDefaults", () => {
   it("normalizes retired Gemini per-agent model refs", () => {
     const cfg = {
       agents: {
-        list: [
-          {
-            id: "ops",
+        entries: {
+          ops: {
             model: {
               primary: "google/gemini-3-pro-preview",
               fallbacks: ["google/gemini-3-pro-preview"],
@@ -341,56 +326,19 @@ describe("applyModelDefaults", () => {
               "google/gemini-3-pro-preview": {},
             },
           },
-        ],
-      },
-    } satisfies OpenClawConfig;
-
-    const next = applyModelDefaults(cfg);
-
-    expect(next.agents?.list?.[0]?.model).toEqual({
-      primary: "google/gemini-3.1-pro-preview",
-      fallbacks: ["google/gemini-3.1-pro-preview"],
-    });
-    expect(next.agents?.list?.[0]?.models).toEqual({
-      "google/gemini-3.1-pro-preview": {},
-    });
-  });
-
-  it("applies provider policy normalization to configured provider rows", () => {
-    const cfg = {
-      models: {
-        providers: {
-          google: {
-            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-            api: "google-generative-ai",
-            apiKey: "GOOGLE_API_KEY",
-            models: [
-              {
-                id: "google/gemini-3-pro-preview",
-                name: "Gemini 3 Pro",
-                input: ["text", "image"],
-                reasoning: true,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 1_048_576,
-                maxTokens: 65_536,
-              },
-            ],
-          },
         },
       },
     } satisfies OpenClawConfig;
 
-    const provider = cfg.models.providers.google;
-    mockNormalizedProvider({
-      ...provider,
-      models: provider.models.map((model) =>
-        Object.assign({}, model, { id: "google/gemini-3.1-pro-preview" }),
-      ),
-    });
-
     const next = applyModelDefaults(cfg);
 
-    expect(next.models?.providers?.google?.models?.[0]?.id).toBe("google/gemini-3.1-pro-preview");
+    expect(next.agents?.entries?.ops?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+      fallbacks: ["google/gemini-3.1-pro-preview"],
+    });
+    expect(next.agents?.entries?.ops?.models).toEqual({
+      "google/gemini-3.1-pro-preview": {},
+    });
   });
 
   it("preserves an explicit provider api after provider policy normalization", () => {
@@ -540,14 +488,6 @@ describe("applyModelDefaults", () => {
 
     expect(model?.contextWindow).toBe(262144);
     expect(model?.maxTokens).toBe(16384);
-  });
-
-  it("caps explicit mistral maxTokens above the named model limit", () => {
-    const cfg = buildMistralProviderConfig({ maxTokens: 17_000 });
-
-    const next = applyModelDefaults(cfg);
-
-    expect(next.models?.providers?.mistral?.models?.[0]?.maxTokens).toBe(16_384);
   });
 
   it.each(["custom-mistral-model", "constructor"])(

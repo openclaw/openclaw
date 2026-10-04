@@ -1,6 +1,8 @@
 import path from "node:path";
-import { expect, it } from "vitest";
-import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { expect, it, vi } from "vitest";
+import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import * as workerAdmission from "../../../infra/sqlite-worker-operation-admission.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
@@ -22,6 +24,25 @@ const MID_TURN_PRECHECK_ERROR_MESSAGE = new MidTurnPrecheckSignal({
   effectiveReserveTokens: 100,
 }).message;
 
+function interceptTranscriptCommit(databasePath: string, onCommit: () => void) {
+  const original = workerAdmission.createSqliteWorkerOperationAdmission;
+  return vi
+    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+    .mockImplementation((admit, attachment) =>
+      original((request, grant) => {
+        if (
+          request.stage === "commit" &&
+          isRecord(request.facts) &&
+          isRecord(request.facts.identity) &&
+          request.facts.identity.nativeLocation === databasePath
+        ) {
+          onCommit();
+        }
+        admit(request, grant);
+      }, attachment),
+    );
+}
+
 it.each(["yield", "precheck", "compaction"])(
   "publishes %s recovery only after the transcript rewrite commits",
   async (recovery) => {
@@ -32,7 +53,8 @@ it.each(["yield", "precheck", "compaction"])(
         sessionKey: "agent:main:recovery",
         storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
       };
-      const sessionManager = SessionManager.open(target, state.workspaceDir);
+      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const sessionManager = await SessionManager.openAsync(target, state.workspaceDir);
       const user: AgentMessage = { role: "user", content: "continue", timestamp: 1 };
       const error: AgentMessage = {
         role: "assistant",
@@ -45,32 +67,37 @@ it.each(["yield", "precheck", "compaction"])(
         timestamp: 2,
         usage: createZeroUsageFixture(),
       };
-      sessionManager.appendMessage(user);
-      sessionManager.appendMessage(error);
-      sessionManager.appendCustomEntry("preserved-state", { retained: true });
+      await sessionManager.appendMessageAsync(user);
+      await sessionManager.appendMessageAsync(error);
+      await sessionManager.appendCustomEntryAsync("preserved-state", { retained: true });
       const messages = [user, error];
       const activeSession = { messages, agent: { state: { messages } }, sessionManager };
-      const cleanup = () => {
+      const cleanup = async () => {
         if (recovery === "yield") {
-          stripSessionsYieldArtifacts(activeSession);
+          await stripSessionsYieldArtifacts(activeSession);
         } else if (recovery === "precheck") {
-          removeTrailingMidTurnPrecheckAssistantError({ activeSession, sessionManager });
+          await removeTrailingMidTurnPrecheckAssistantError({ activeSession, sessionManager });
         } else {
-          normalizeCompactionRecoveryTranscriptTail({ activeSession, sessionManager });
+          await normalizeCompactionRecoveryTranscriptTail({ activeSession, sessionManager });
         }
       };
-      const database = openOpenClawAgentDatabase({ agentId: "main", path: target.storePath });
-      database.db.exec(`CREATE TRIGGER reject_recovery BEFORE INSERT ON transcript_events
-        BEGIN SELECT RAISE(ABORT, 'recovery write failed'); END;`);
-
-      expect(cleanup).toThrow("recovery write failed");
+      const refuseCommit = vi.fn(() => {
+        throw new Error("recovery write failed");
+      });
+      const admission = interceptTranscriptCommit(target.storePath, refuseCommit);
+      try {
+        await expect(cleanup()).rejects.toThrow("recovery write failed");
+      } finally {
+        admission.mockRestore();
+      }
+      expect(refuseCommit).toHaveBeenCalled();
       expect(activeSession.agent.state.messages).toEqual(messages);
       expect(sessionManager.buildSessionContext().messages).toEqual(messages);
-
-      database.db.exec("DROP TRIGGER reject_recovery");
-      cleanup();
+      await cleanup();
       expect(activeSession.agent.state.messages).toEqual([user]);
-      expect(SessionManager.open(target).buildSessionContext().messages).toEqual([user]);
+      expect((await SessionManager.openAsync(target)).buildSessionContext().messages).toEqual([
+        user,
+      ]);
       expect(sessionManager.getEntries()).toEqual(
         expect.arrayContaining([expect.objectContaining({ customType: "preserved-state" })]),
       );
@@ -86,10 +113,13 @@ it("keeps a mid-turn routing error out of durable history and resumes without a 
       sessionKey: "agent:main:precheck-no-rewrite",
       storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
     };
-    const sessionManager = guardSessionManager(SessionManager.open(target, state.workspaceDir));
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const sessionManager = guardSessionManager(
+      await SessionManager.openAsync(target, state.workspaceDir),
+    );
     const user: AgentMessage = { role: "user", content: "continue", timestamp: 1 };
-    sessionManager.appendMessage(user);
-    const before = SessionManager.open(target).getEntries();
+    await sessionManager.appendMessageAsync(user);
+    const before = (await SessionManager.openAsync(target)).getEntries();
     const error: AgentMessage = {
       role: "assistant",
       content: [{ type: "text", text: "" }],
@@ -101,18 +131,25 @@ it("keeps a mid-turn routing error out of durable history and resumes without a 
       timestamp: 2,
       usage: createZeroUsageFixture(),
     };
-    sessionManager.appendMessage(error);
-    expect(SessionManager.open(target).getEntries()).toEqual(before);
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: target.storePath });
-    database.db.exec(`CREATE TRIGGER reject_recovery BEFORE INSERT ON transcript_events
-      BEGIN SELECT RAISE(ABORT, 'unexpected recovery write'); END;`);
+    await sessionManager.appendMessageAsync(error);
+    expect((await SessionManager.openAsync(target)).getEntries()).toEqual(before);
     const activeSession = { agent: { state: { messages: [user, error] } } };
-    removeTrailingMidTurnPrecheckAssistantError({ activeSession, sessionManager });
+    const refuseCommit = vi.fn(() => {
+      throw new Error("unexpected recovery write");
+    });
+    const admission = interceptTranscriptCommit(target.storePath, refuseCommit);
+    try {
+      await removeTrailingMidTurnPrecheckAssistantError({ activeSession, sessionManager });
+    } finally {
+      admission.mockRestore();
+    }
+    expect(refuseCommit).not.toHaveBeenCalled();
     expect(activeSession.agent.state.messages).toEqual([user]);
-    expect(SessionManager.open(target).getEntries()).toEqual(before);
-    database.db.exec("DROP TRIGGER reject_recovery");
-    sessionManager.appendMessage({ ...error, errorMessage: "provider unavailable" });
-    expect(SessionManager.open(target).buildSessionContext().messages.at(-1)).toMatchObject({
+    expect((await SessionManager.openAsync(target)).getEntries()).toEqual(before);
+    await sessionManager.appendMessageAsync({ ...error, errorMessage: "provider unavailable" });
+    expect(
+      (await SessionManager.openAsync(target)).buildSessionContext().messages.at(-1),
+    ).toMatchObject({
       role: "assistant",
       errorMessage: "provider unavailable",
     });

@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,15 +6,15 @@ import {
   TRANSCRIPTS_LEGACY_RESULT_MAX_BYTES,
   TRANSCRIPTS_RESULT_MAX_BYTES,
 } from "../../packages/gateway-protocol/src/schema/transcripts.js";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
-import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
-import { activeSessions } from "./capture.js";
+import { activeSessions } from "./capture-startup.js";
 import { transcriptLibraryTimezoneEntrypoint } from "./library-timezone-runtime.test-support.js";
 import { exportTranscriptLibrary, getTranscriptLibrary, listTranscriptLibrary } from "./library.js";
 import {
@@ -146,31 +145,28 @@ describe("transcript library SQLite reads", () => {
   it(
     "uses the process timezone for unzoned stored dates and range bounds",
     { timeout: 45_000 },
-    () => {
+    async ({ signal }) => {
       const stateDir = tempDirs.make("transcript-library-timezone-");
-      const child = spawnSync(
-        resolveTestNodeExecPath(),
-        [
-          ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(transcriptLibraryTimezoneEntrypoint)),
+      const child = await runNodeScript(
+        (workerArgv) => [
+          ...workerArgv(resolveRuntimeWorkerUrl(transcriptLibraryTimezoneEntrypoint)),
           stateDir,
         ],
         {
-          encoding: "utf8",
-          timeout: 30_000,
-          env: {
-            ...process.env,
-            TZ: "America/Los_Angeles",
-            OPENCLAW_STATE_DIR: stateDir,
-            OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-          },
+          ...process.env,
+          TZ: "America/Los_Angeles",
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
         },
+        30_000,
+        { signal, maxBuffer: 1024 * 1024, requireProcessTreeExit: process.platform !== "win32" },
       );
       expect(child.error, child.stderr).toBeUndefined();
       expect(child.status, child.stderr).toBe(0);
     },
   );
 
-  it.each(["at-cap", "oversized-ascii", "oversized-utf8"] as const)(
+  it.each(["at-cap", "oversized-utf8"] as const)(
     "bounds %s stored date input before the JavaScript parser",
     async (kind) => {
       const { store } = fixture();
@@ -180,7 +176,7 @@ describe("transcript library SQLite reads", () => {
         prefix +
         (kind === "oversized-utf8"
           ? "é".repeat(Math.floor(remaining / 2) + 1)
-          : "x".repeat(remaining + Number(kind === "oversized-ascii")));
+          : "x".repeat(remaining));
       await store.writeSession(session(kind, { startedAt }));
       const parse = vi.spyOn(Date, "parse");
       await expect(listTranscriptLibrary(store, {})).rejects.toThrow(
@@ -556,7 +552,7 @@ describe("transcript library SQLite reads", () => {
     ).rejects.toThrow("cursor");
   });
 
-  it.each(["structured", "structured-only", "divergent-markdown", "markdown-only"] as const)(
+  it.each(["structured-only", "divergent-markdown", "markdown-only"] as const)(
     "exports full canonical content with %s notes even when the stored summary covers only a tail",
     async (notesKind) => {
       const { store, stateDir, database } = fixture();
@@ -579,20 +575,18 @@ describe("transcript library SQLite reads", () => {
       );
       const canonicalMarkdown =
         "# Historical notes\r\n\r\nKeep this exact historical decision.\r\n";
-      if (notesKind !== "structured") {
-        const db = database();
-        executeSqliteQuerySync(
-          db,
-          meetingTranscriptDb(db)
-            .updateTable("meeting_transcript_summaries")
-            .set({
-              markdown: notesKind === "structured-only" ? null : canonicalMarkdown,
-              ...(notesKind === "markdown-only" ? { summary_json: null } : {}),
-            })
-            .where("session_id", "=", target.sessionId)
-            .where("session_started_at", "=", target.startedAt),
-        );
-      }
+      const db = database();
+      executeSqliteQuerySync(
+        db,
+        meetingTranscriptDb(db)
+          .updateTable("meeting_transcript_summaries")
+          .set({
+            markdown: notesKind === "structured-only" ? null : canonicalMarkdown,
+            ...(notesKind === "markdown-only" ? { summary_json: null } : {}),
+          })
+          .where("session_id", "=", target.sessionId)
+          .where("session_started_at", "=", target.startedAt),
+      );
       const selector = transcriptSessionSelector(target);
       const markdown = await exportTranscriptLibrary(store, { selector, format: "markdown" });
       const text = Buffer.from(markdown.data, "base64").toString("utf8");

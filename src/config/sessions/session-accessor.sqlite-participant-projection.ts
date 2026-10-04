@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import {
+  createSqliteQueryCache,
   getNodeSqliteKysely,
   executeSqliteQuerySync,
   prepareSqliteQuerySync,
@@ -9,6 +10,7 @@ import {
 import { SESSION_PARTICIPANTS_TABLE } from "../../state/openclaw-agent-db-contract.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
+import { readCurrentSessionEntryCacheParticipants } from "./session-accessor.sqlite-entry-cache-state.js";
 import {
   readParticipantIdentity,
   type SessionParticipantIdentity,
@@ -46,20 +48,12 @@ function prepareSingleSessionParticipantQuery(database: DatabaseSync) {
 }
 
 // Compiled SQL follows the connection; native statement invalidation remains executor-owned.
-const singleSessionParticipantQueries = new WeakMap<
-  DatabaseSync,
-  ReturnType<typeof prepareSingleSessionParticipantQuery>
->();
+const singleSessionParticipantQuery = createSqliteQueryCache(prepareSingleSessionParticipantQuery);
 
 function readParticipantRows(database: DatabaseSync, sessionKeys?: readonly string[]) {
   const sessionKey = sessionKeys?.length === 1 ? sessionKeys[0] : undefined;
   if (sessionKey !== undefined) {
-    let query = singleSessionParticipantQueries.get(database);
-    if (!query) {
-      query = prepareSingleSessionParticipantQuery(database);
-      singleSessionParticipantQueries.set(database, query);
-    }
-    return query(sessionKey).rows;
+    return singleSessionParticipantQuery(database)(sessionKey).rows;
   }
   let query = selectParticipantRows(database);
   if (sessionKeys) {
@@ -115,6 +109,7 @@ function withProjectedParticipants(
 export function readSqliteSessionParticipantProjection(database: DatabaseSync, sessionKey: string) {
   return (
     readPreparedSessionParticipants(database, sessionKey) ??
+    readCurrentSessionEntryCacheParticipants(database, sessionKey) ??
     participantProjection(
       participantRecordsBySessionKey(database, [sessionKey]).get(sessionKey) ?? [],
     )
@@ -126,7 +121,9 @@ export function projectSqliteSessionParticipants(
   sessionKey: string,
   entry: SessionEntry,
 ): SessionEntry {
-  const prepared = readPreparedSessionParticipants(database, sessionKey);
+  const prepared =
+    readPreparedSessionParticipants(database, sessionKey) ??
+    readCurrentSessionEntryCacheParticipants(database, sessionKey);
   if (prepared) {
     return prepared.participants ? { ...entry, ...prepared } : entry;
   }

@@ -9,17 +9,17 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import type { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
 import { CallManager } from "./manager.js";
 import { createTestStorePath, FakeProvider, makePersistedCall } from "./manager.test-harness.js";
-import { CALL_RECORD_EVENTS_NAMESPACE, findCallInStore } from "./manager/store.js";
+import { findCallInStore } from "./manager/store.js";
 import * as callStore from "./manager/store.js";
 import { setVoiceCallStateRuntime } from "./runtime-state.js";
 import { CallRecordSchema, type InitiateCallInput } from "./types.js";
 import { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "./websocket-test-support.js";
-import type { WebSocket } from "./websocket.js";
 
 async function withDelayedStore(
   run: (fixture: {
@@ -53,7 +53,7 @@ async function withDelayedStore(
         return {
           ...store,
           async register(...args: Parameters<typeof store.register>) {
-            if (options.namespace === CALL_RECORD_EVENTS_NAMESPACE && nextWrite) {
+            if (options.namespace === "call-record-events" && nextWrite) {
               const hold = nextWrite;
               nextWrite = undefined;
               await hold();

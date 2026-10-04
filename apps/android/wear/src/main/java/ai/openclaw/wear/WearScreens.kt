@@ -4,7 +4,6 @@ import ai.openclaw.wear.shared.WearRealtimeTalkEntry
 import ai.openclaw.wear.shared.WearRealtimeTalkRole
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
 import ai.openclaw.wear.shared.WearRealtimeTalkStatus
-import ai.openclaw.wear.shared.WearReplyText
 import ai.openclaw.wear.shared.WearReplyTextPage
 import ai.openclaw.wear.shared.WearReplyTextStatus
 import android.os.SystemClock
@@ -16,15 +15,11 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -33,7 +28,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -62,9 +56,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.layout
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -74,7 +65,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -94,7 +84,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import androidx.compose.ui.semantics.onClick as semanticsOnClick
 
 internal enum class WearHomePage {
   Chat,
@@ -113,36 +102,6 @@ internal fun wearHomePages(agentPulseSupported: Boolean): List<WearHomePage> =
 private const val VOICE_MODE_COUNT = 2
 private const val VOICE_HOME_MODE = 0
 private const val VOICE_THREAD_MODE = 1
-
-internal data class WearVoiceLayout(
-  val horizontalPadding: Dp,
-  val orbSize: Dp,
-  val contentHeight: Dp,
-)
-
-internal fun wearVoiceLayout(
-  maxWidth: Dp,
-  fontScale: Float,
-): WearVoiceLayout {
-  val compact = maxWidth <= 192.dp
-  val compactLargeText = compact && fontScale > 1.1f
-  return WearVoiceLayout(
-    horizontalPadding = if (fontScale > 1.1f) 4.dp else 6.dp,
-    orbSize =
-      when {
-        compactLargeText -> 48.dp
-        compact -> 80.dp
-        fontScale > 1.1f -> 80.dp
-        else -> 92.dp
-      },
-    contentHeight =
-      when {
-        compactLargeText -> 132.dp
-        compact -> 144.dp
-        else -> 156.dp
-      },
-  )
-}
 
 @Composable
 internal fun OpenClawWearScreens(
@@ -324,10 +283,6 @@ internal fun OpenClawWearScreens(
         state = pagerState,
         modifier = Modifier.fillMaxSize(),
         rotaryScrollableBehavior = null,
-        userScrollEnabled =
-          homePages.getOrNull(pagerState.currentPage) != WearHomePage.Voice ||
-            voicePagerState.currentPage == VOICE_HOME_MODE ||
-            voicePagerState.currentPage == VOICE_THREAD_MODE,
       ) { page ->
         when (homePages.getOrNull(page)) {
           WearHomePage.Chat -> {
@@ -402,13 +357,7 @@ internal fun OpenClawWearScreens(
           WearHomePage.Pulse -> {
             AgentPulsePage(
               snapshot = snapshot,
-              onRefresh = {
-                if (snapshot.agentPulseSupported) {
-                  onAgentPulseRefresh()
-                } else {
-                  onRefresh()
-                }
-              },
+              onRefresh = onAgentPulseRefresh,
             )
           }
 
@@ -548,7 +497,12 @@ private fun ChatPage(
       } else {
         visibleMessages.forEach { message ->
           item(key = message.id ?: "${message.role}:${message.timestamp}:${message.text.hashCode()}") {
-            MessageBubble(message = message, onOpenReply = { onOpenReply(message) })
+            MessageBubble(
+              role = message.chatRole,
+              text = message.text,
+              truncated = message.textTruncated == true,
+              onOpenReply = { onOpenReply(message) },
+            )
           }
         }
         streamingText?.let { streaming ->
@@ -678,7 +632,7 @@ private fun VoicePage(
   onRealtimeTalk: () -> Unit,
   onStopSpeaking: () -> Unit,
 ) {
-  val colors = OpenClawWearTheme.colors
+  val colors = OpenClawWearTheme.canvasColors
   val voicePagerScope = rememberCoroutineScope()
   val view = LocalView.current
   var previousMode by remember { mutableIntStateOf(voicePagerState.currentPage) }
@@ -731,6 +685,7 @@ private fun VoicePage(
         when (mode) {
           VOICE_HOME_MODE -> {
             VoiceHomeMode(
+              colors = colors,
               microphonePermissionRequired = microphonePermissionRequired,
               microphoneSettingsRequired = microphoneSettingsRequired,
               onMicrophoneRecovery = onMicrophoneRecovery,
@@ -787,304 +742,6 @@ private fun VoicePage(
             .padding(bottom = 9.dp),
       )
     }
-  }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun VoiceHomeMode(
-  microphonePermissionRequired: Boolean,
-  microphoneSettingsRequired: Boolean,
-  onMicrophoneRecovery: () -> Unit,
-  realtimeTalk: WearRealtimeTalkSnapshot,
-  realtimeStopping: Boolean,
-  speaking: Boolean,
-  realtimeCapturing: Boolean,
-  realtimePlaying: Boolean,
-  realtimeMouthLevel: Float,
-  realtimePlaybackFailed: Boolean,
-  realtimeThinkingOverride: Boolean,
-  realtimeElapsedSeconds: Long,
-  actionBusy: Boolean,
-  inputEnabled: Boolean,
-  onTalk: () -> Unit,
-  onRealtimeTalk: () -> Unit,
-  onStopSpeaking: () -> Unit,
-  onOpenThread: () -> Unit,
-) {
-  val colors = OpenClawWearTheme.colors
-  val realtimeActive = realtimeTalk.active || realtimeCapturing
-  val ttsOnly = speaking && !realtimeActive
-  val recoverMicrophone = microphonePermissionRequired && !realtimeActive && !ttsOnly
-  val state =
-    realtimeVoiceButtonState(
-      realtimeTalk = realtimeTalk,
-      ttsOnly = ttsOnly,
-      realtimeCapturing = realtimeCapturing,
-      realtimePlaying = realtimePlaying,
-      realtimePlaybackFailed = realtimePlaybackFailed,
-      realtimeThinkingOverride = realtimeThinkingOverride && !realtimeStopping,
-    )
-  var dictatePreview by remember { mutableStateOf(false) }
-  val coroutineScope = rememberCoroutineScope()
-  val dictateActionEnabled = inputEnabled && !actionBusy && !speaking && !realtimeActive && !dictatePreview
-  val liveActionEnabled =
-    (realtimeActive || ttsOnly || (inputEnabled && !actionBusy)) && !dictatePreview
-  val startDictate: () -> Unit = {
-    if (dictateActionEnabled) {
-      coroutineScope.launch {
-        dictatePreview = true
-        delay(300L)
-        dictatePreview = false
-        onTalk()
-      }
-    }
-  }
-  val toggleLive: () -> Unit = {
-    if (liveActionEnabled) {
-      if (ttsOnly) {
-        onStopSpeaking()
-      } else if (recoverMicrophone) {
-        onMicrophoneRecovery()
-      } else {
-        onRealtimeTalk()
-      }
-    }
-  }
-  val label =
-    when (state) {
-      RealtimeVoiceButtonState.IDLE -> null
-      RealtimeVoiceButtonState.CONNECTING -> stringResource(R.string.connecting)
-      RealtimeVoiceButtonState.LISTENING -> stringResource(R.string.listening)
-      RealtimeVoiceButtonState.THINKING -> stringResource(R.string.thinking)
-      RealtimeVoiceButtonState.SPEAKING -> stringResource(R.string.speaking)
-      RealtimeVoiceButtonState.ERROR -> stringResource(R.string.real_time_audio_failed)
-    }
-  val statusText =
-    when {
-      realtimeStopping -> stringResource(R.string.stopping)
-      dictatePreview -> stringResource(R.string.listening)
-      recoverMicrophone -> stringResource(R.string.microphone_permission_required)
-      label == null -> null
-      realtimeActive -> "$label · ${formatVoiceElapsedTime(realtimeElapsedSeconds)}"
-      else -> label
-    }
-  val accent =
-    when {
-      dictatePreview || state == RealtimeVoiceButtonState.IDLE -> colors.voiceAccent
-      state == RealtimeVoiceButtonState.ERROR -> colors.danger
-      else -> colors.voiceAccent
-    }
-  val avatarState = if (dictatePreview) RealtimeVoiceButtonState.LISTENING else state
-  val liveVoiceDescription = stringResource(R.string.talk)
-  val liveClickLabel =
-    when {
-      ttsOnly -> stringResource(R.string.stop_speaking)
-      recoverMicrophone -> stringResource(if (microphoneSettingsRequired) R.string.open_settings else R.string.retry)
-      realtimeActive -> stringResource(R.string.stop_speaking)
-      else -> stringResource(R.string.speak_to_agent)
-    }
-  val dictateClickLabel = stringResource(R.string.dictate)
-  val orbClick = if (liveActionEnabled) toggleLive else startDictate
-  val orbClickLabel = if (liveActionEnabled) liveClickLabel else dictateClickLabel
-  val fontScale = LocalDensity.current.fontScale
-  BoxWithConstraints(
-    modifier = Modifier.fillMaxSize(),
-  ) {
-    val layout = wearVoiceLayout(maxWidth = maxWidth, fontScale = fontScale)
-    // Keep the localized action readable; its explanation uses the wider status area below.
-    val liveControlWidth = if (recoverMicrophone) layout.orbSize.coerceAtLeast(80.dp) else layout.orbSize
-    val liveControlHeight = if (recoverMicrophone) 60.dp else layout.orbSize
-    // Reserve up to three status lines without moving them into the lower round edge.
-    val voiceControlOffset = if (fontScale > 1.1f) (-8).dp else (-4).dp
-    Row(
-      modifier =
-        Modifier
-          .align(Alignment.Center)
-          .fillMaxWidth()
-          .padding(horizontal = layout.horizontalPadding),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.Center,
-    ) {
-      VoiceGestureLabel(
-        title = stringResource(R.string.hold),
-        detail = stringResource(R.string.dictate),
-        accent = colors.voiceAccent,
-        onClick = if (dictateActionEnabled) startDictate else null,
-        onClickLabel = dictateClickLabel,
-        modifier =
-          Modifier
-            .offset(y = voiceControlOffset)
-            .weight(1f),
-      )
-      Box(
-        modifier =
-          Modifier
-            .width(liveControlWidth)
-            .height(layout.contentHeight),
-      ) {
-        Box(
-          modifier =
-            Modifier
-              .align(Alignment.Center)
-              .width(liveControlWidth)
-              .height(liveControlHeight)
-              .offset(y = voiceControlOffset)
-              .combinedClickable(
-                // combinedClickable gates every gesture together; keep preview exclusive and fall back to Dictate.
-                enabled = !dictatePreview && (liveActionEnabled || dictateActionEnabled),
-                onClickLabel = orbClickLabel,
-                role = Role.Button,
-                onClick = orbClick,
-                onDoubleClick = onOpenThread,
-                onLongClickLabel = dictateClickLabel.takeIf { dictateActionEnabled },
-                onLongClick = startDictate.takeIf { dictateActionEnabled },
-              ).semantics {
-                contentDescription = liveVoiceDescription
-              },
-          contentAlignment = Alignment.Center,
-        ) {
-          if (recoverMicrophone) {
-            Text(
-              text = stringResource(if (microphoneSettingsRequired) R.string.open_settings else R.string.retry),
-              color = colors.voiceAccent,
-              textAlign = TextAlign.Center,
-              fontSize = 12.sp,
-              lineHeight = 14.sp,
-              fontWeight = FontWeight.SemiBold,
-            )
-          } else {
-            WearTalkAvatar(
-              state = avatarState,
-              mouthLevel = if (realtimePlaying) realtimeMouthLevel else 0f,
-              syntheticSpeech = ttsOnly,
-              accent = accent,
-              danger = colors.danger,
-              modifier = Modifier.fillMaxSize(),
-            )
-          }
-        }
-      }
-      VoiceGestureLabel(
-        title = stringResource(R.string.tap),
-        detail = stringResource(R.string.live),
-        accent = colors.voiceAccent,
-        onClick = if (liveActionEnabled) toggleLive else null,
-        onClickLabel = liveClickLabel,
-        modifier =
-          Modifier
-            .offset(y = voiceControlOffset)
-            .weight(1f),
-      )
-    }
-    val threadTop = if (fontScale > 1.1f) (-8).dp else (-16).dp
-    val orbTop = (maxHeight - liveControlHeight) / 2 + voiceControlOffset
-    val threadOverlap = (threadTop + 48.dp - orbTop).coerceAtLeast(0.dp)
-    VoiceGestureLabel(
-      title = stringResource(R.string.double_tap),
-      detail = stringResource(R.string.thread),
-      accent = colors.voiceAccent,
-      onDoubleClick = onOpenThread,
-      onClickLabel = stringResource(R.string.open_thread),
-      // Move the entire target above Talk while keeping the readable glyphs in place.
-      contentPadding = PaddingValues(top = threadOverlap * 2),
-      modifier =
-        Modifier
-          .align(Alignment.TopCenter)
-          .layout { measurable, constraints ->
-            val target = measurable.measure(constraints)
-            val top = minOf(threadTop.roundToPx(), orbTop.roundToPx() - target.height)
-            this.layout(target.width, target.height) { target.placeRelative(0, top) }
-          }.padding(horizontal = 28.dp)
-          .fillMaxWidth()
-          .minimumInteractiveComponentSize(),
-    )
-    statusText?.let { status ->
-      Text(
-        text = status,
-        color = if (recoverMicrophone) colors.danger else colors.textMuted,
-        fontSize = 12.sp,
-        lineHeight = 12.sp,
-        textAlign = TextAlign.Center,
-        modifier =
-          Modifier
-            .align(Alignment.BottomCenter)
-            .width((maxWidth - 56.dp).coerceAtMost(136.dp))
-            .padding(bottom = 1.dp),
-      )
-    }
-  }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun VoiceGestureLabel(
-  title: String,
-  detail: String,
-  accent: Color,
-  modifier: Modifier = Modifier,
-  onClick: (() -> Unit)? = null,
-  onDoubleClick: (() -> Unit)? = null,
-  onClickLabel: String? = null,
-  contentPadding: PaddingValues = PaddingValues(vertical = 10.dp),
-) {
-  val interactionModifier =
-    when {
-      onDoubleClick != null -> {
-        Modifier
-          .pointerInput(onDoubleClick) {
-            detectTapGestures(onDoubleTap = { onDoubleClick() })
-          }.semantics(mergeDescendants = true) {
-            role = Role.Button
-            semanticsOnClick(label = onClickLabel) {
-              onDoubleClick()
-              true
-            }
-          }
-      }
-
-      onClick != null -> {
-        Modifier.clickable(
-          role = Role.Button,
-          onClickLabel = onClickLabel,
-          onClick = onClick,
-        )
-      }
-
-      else -> {
-        Modifier
-      }
-    }
-  Column(
-    modifier =
-      modifier
-        .then(interactionModifier)
-        .then(
-          if (onClick != null || onDoubleClick != null) {
-            Modifier.minimumInteractiveComponentSize()
-          } else {
-            Modifier
-          },
-        ).padding(contentPadding),
-    horizontalAlignment = Alignment.CenterHorizontally,
-    verticalArrangement = Arrangement.Center,
-  ) {
-    Text(
-      text = title,
-      color = accent,
-      fontSize = 12.sp,
-      lineHeight = 14.sp,
-      fontWeight = FontWeight.SemiBold,
-      textAlign = TextAlign.Center,
-    )
-    Text(
-      text = detail,
-      color = OpenClawWearTheme.colors.textMuted,
-      fontSize = 12.sp,
-      lineHeight = 14.sp,
-      textAlign = TextAlign.Center,
-      maxLines = 1,
-    )
   }
 }
 
@@ -1157,7 +814,7 @@ private fun ThreadVoiceMode(
         item {
           Text(
             text = stringResource(R.string.no_live_conversation),
-            color = colors.textMuted,
+            color = OpenClawWearTheme.canvasColors.textMuted,
             fontSize = 12.sp,
             lineHeight = 16.sp,
             textAlign = TextAlign.Center,
@@ -1167,7 +824,13 @@ private fun ThreadVoiceMode(
       } else {
         visibleConversation.forEach { entry ->
           item(key = entry.id) {
-            RealtimeTalkBubble(entry, onOpenReply = { onOpenReply(entry) })
+            MessageBubble(
+              role = if (entry.role == WearRealtimeTalkRole.USER) WearChatRole.USER else WearChatRole.ASSISTANT,
+              text = entry.text,
+              truncated = entry.textTruncated,
+              streaming = entry.streaming,
+              onOpenReply = { onOpenReply(entry) },
+            )
           }
         }
         if (thinking) {
@@ -1475,112 +1138,6 @@ private fun MicrophoneGlyph(
   }
 }
 
-private fun realtimeVoiceButtonState(
-  realtimeTalk: WearRealtimeTalkSnapshot,
-  ttsOnly: Boolean,
-  realtimeCapturing: Boolean,
-  realtimePlaying: Boolean,
-  realtimePlaybackFailed: Boolean,
-  realtimeThinkingOverride: Boolean,
-): RealtimeVoiceButtonState =
-  when {
-    realtimePlaybackFailed || realtimeTalk.status == WearRealtimeTalkStatus.ERROR -> {
-      RealtimeVoiceButtonState.ERROR
-    }
-
-    realtimeThinkingOverride -> {
-      RealtimeVoiceButtonState.THINKING
-    }
-
-    realtimePlaying || realtimeTalk.speaking || ttsOnly -> {
-      RealtimeVoiceButtonState.SPEAKING
-    }
-
-    realtimeTalk.status == WearRealtimeTalkStatus.THINKING -> {
-      RealtimeVoiceButtonState.THINKING
-    }
-
-    realtimeCapturing ||
-      realtimeTalk.listening ||
-      realtimeTalk.status == WearRealtimeTalkStatus.LISTENING -> {
-      RealtimeVoiceButtonState.LISTENING
-    }
-
-    realtimeTalk.status == WearRealtimeTalkStatus.CONNECTING -> {
-      RealtimeVoiceButtonState.CONNECTING
-    }
-
-    else -> {
-      RealtimeVoiceButtonState.IDLE
-    }
-  }
-
-private fun formatVoiceElapsedTime(totalSeconds: Long): String {
-  val minutes = totalSeconds / 60L
-  val seconds = totalSeconds % 60L
-  return "$minutes:${seconds.toString().padStart(2, '0')}"
-}
-
-internal enum class RealtimeVoiceButtonState {
-  IDLE,
-  CONNECTING,
-  LISTENING,
-  THINKING,
-  SPEAKING,
-  ERROR,
-}
-
-@Composable
-private fun RealtimeTalkBubble(
-  entry: WearRealtimeTalkEntry,
-  onOpenReply: () -> Unit,
-) {
-  val colors = OpenClawWearTheme.colors
-  val isUser = entry.role == WearRealtimeTalkRole.USER
-  val background = if (isUser) colors.surfacePressed else colors.surfaceRaised
-  val foreground = colors.text
-  Column(
-    modifier =
-      Modifier
-        .fillMaxWidth()
-        .padding(
-          start = if (isUser) 28.dp else 12.dp,
-          end = if (isUser) 12.dp else 28.dp,
-        ).background(background, RoundedCornerShape(14.dp))
-        .then(
-          Modifier.border(
-            width = 1.dp,
-            color = colors.borderStrong,
-            shape = RoundedCornerShape(14.dp),
-          ),
-        ).padding(horizontal = 12.dp, vertical = 9.dp),
-  ) {
-    Text(
-      text =
-        localizedWearUppercase(
-          if (isUser) {
-            stringResource(R.string.you)
-          } else {
-            stringResource(R.string.agent)
-          },
-        ),
-      color = if (isUser) foreground.copy(alpha = 0.72f) else colors.textMuted,
-      fontSize = 10.sp,
-      fontWeight = FontWeight.Bold,
-      letterSpacing = 0.8.sp,
-    )
-    ReplyPreview(text = entry.text, truncated = entry.textTruncated, onOpen = onOpenReply.takeIf { !isUser })
-    if (entry.streaming) {
-      Text(
-        text = localizedWearUppercase(stringResource(R.string.live)),
-        color = colors.warning,
-        fontSize = 10.sp,
-        fontWeight = FontWeight.Bold,
-      )
-    }
-  }
-}
-
 @Composable
 private fun ControlsPage(
   snapshot: WearConversationSnapshot,
@@ -1694,15 +1251,6 @@ private fun AgentPulsePage(
         }
       }
 
-      !snapshot.agentPulseSupported -> {
-        item {
-          EmptyPanel(
-            title = stringResource(R.string.pulse_unavailable),
-            detail = stringResource(R.string.update_required_detail),
-          )
-        }
-      }
-
       pulse == null -> {
         item {
           EmptyPanel(
@@ -1723,7 +1271,6 @@ private fun AgentPulsePage(
       }
 
       else -> {
-        item { AgentPulseTasksPanel(pulse.tasks) }
         item { AgentPulseSwarmPanel(pulse.swarm) }
         item { AgentPulseApprovalsPanel(pulse.approvals) }
         snapshot.agentPulseFailure?.let { pulseFailure ->
@@ -1737,47 +1284,6 @@ private fun AgentPulsePage(
         enabled = !snapshot.agentPulseLoading,
         onClick = onRefresh,
       )
-    }
-  }
-}
-
-@Composable
-private fun AgentPulseTasksPanel(tasks: WearAgentPulseTasks) {
-  val ready = tasks.state == WearAgentPulseTaskState.Ready
-  Panel {
-    AgentPulsePanelHeader(
-      title = stringResource(R.string.pulse_tasks),
-      status =
-        if (ready) {
-          stringResource(R.string.pulse_ready)
-        } else {
-          stringResource(R.string.pulse_unavailable)
-        },
-      statusColor =
-        if (ready) {
-          OpenClawWearTheme.colors.success
-        } else {
-          OpenClawWearTheme.colors.danger
-        },
-    )
-    if (ready) {
-      AgentPulseMetricRow(stringResource(R.string.pulse_queued), tasks.queued)
-      AgentPulseMetricRow(stringResource(R.string.pulse_running), tasks.running)
-      AgentPulseMetricRow(stringResource(R.string.pulse_completed), tasks.completed)
-      AgentPulseMetricRow(stringResource(R.string.pulse_failed), tasks.failed)
-      AgentPulseDetail(text = stringResource(R.string.pulse_task_snapshot_bounded))
-      if (tasks.activeAtLimit == true) {
-        AgentPulseDetail(
-          text = stringResource(R.string.pulse_active_at_limit),
-          color = OpenClawWearTheme.colors.warning,
-        )
-      }
-      if (tasks.recentAtLimit == true) {
-        AgentPulseDetail(
-          text = stringResource(R.string.pulse_recent_at_limit),
-          color = OpenClawWearTheme.colors.warning,
-        )
-      }
     }
   }
 }
@@ -1937,45 +1443,29 @@ private fun ConnectionStateScreen(
   failure: WearConversationFailure?,
   onRefresh: () -> Unit,
 ) {
-  val colors = OpenClawWearTheme.colors
-  val listState = rememberTransformingLazyColumnState()
-  ScreenScaffold(scrollState = listState) { contentPadding ->
-    TransformingLazyColumn(
-      modifier =
-        Modifier
-          .fillMaxSize()
-          .background(colors.canvas),
-      state = listState,
-      contentPadding = contentPadding,
-      horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      item {
-        OpenClawHeader(pageLabel = stringResource(R.string.chat))
-      }
-      item {
-        EmptyPanel(
-          title =
-            if (loading) {
-              stringResource(R.string.checking_phone)
-            } else {
-              failureTitle(failure)
-            },
-          detail =
-            if (loading) {
-              stringResource(R.string.reading_conversation)
-            } else {
-              failureDetail(failure)
-            },
-        )
-      }
-      item {
-        SecondaryButton(
-          label = stringResource(R.string.retry),
-          enabled = !loading,
-          onClick = onRefresh,
-        )
-      }
+  WearPage(pageLabel = stringResource(R.string.chat)) {
+    item {
+      EmptyPanel(
+        title =
+          if (loading) {
+            stringResource(R.string.checking_phone)
+          } else {
+            failureTitle(failure)
+          },
+        detail =
+          if (loading) {
+            stringResource(R.string.reading_conversation)
+          } else {
+            failureDetail(failure)
+          },
+      )
+    }
+    item {
+      SecondaryButton(
+        label = stringResource(R.string.retry),
+        enabled = !loading,
+        onClick = onRefresh,
+      )
     }
   }
 }
@@ -2010,7 +1500,7 @@ internal fun WearPage(
 
 @Composable
 private fun OpenClawHeader(pageLabel: String) {
-  val colors = OpenClawWearTheme.colors
+  val colors = OpenClawWearTheme.canvasColors
   Column(
     modifier =
       Modifier
@@ -2044,7 +1534,7 @@ private fun ConversationContextPicker(
   actionBusy: Boolean,
   onOpenContextPicker: () -> Unit,
 ) {
-  val agent = snapshot.agents.firstOrNull(WearAgentSummary::selected) ?: snapshot.agents.firstOrNull()
+  val agent = snapshot.agents.firstOrNull(WearAgent::selected) ?: snapshot.agents.firstOrNull()
   val model = snapshot.models.firstOrNull(WearModelSummary::selected)
   val agentName =
     listOfNotNull(
@@ -2121,7 +1611,7 @@ private fun ContextPickerOverlay(
     }
     if (picker == WearContextPicker.Session) {
       item {
-        val agent = snapshot.agents.firstOrNull(WearAgentSummary::selected) ?: snapshot.agents.firstOrNull()
+        val agent = snapshot.agents.firstOrNull(WearAgent::selected) ?: snapshot.agents.firstOrNull()
         val model = snapshot.models.firstOrNull(WearModelSummary::selected)
         Panel {
           ContextPickerRow(
@@ -2252,7 +1742,7 @@ private fun ContextPickerOverlay(
 private fun PickerQueryLabel(query: String) {
   Text(
     text = query,
-    color = OpenClawWearTheme.colors.textMuted,
+    color = OpenClawWearTheme.canvasColors.textMuted,
     fontSize = 11.sp,
     maxLines = 1,
     overflow = TextOverflow.Ellipsis,
@@ -2263,7 +1753,7 @@ private fun PickerQueryLabel(query: String) {
 private fun PickerEmptyResult() {
   Text(
     text = stringResource(R.string.no_matches),
-    color = OpenClawWearTheme.colors.textMuted,
+    color = OpenClawWearTheme.canvasColors.textMuted,
     fontSize = 12.sp,
     textAlign = TextAlign.Center,
   )
@@ -2278,7 +1768,7 @@ private fun ContextPickerOption(
   enabled: Boolean,
   onClick: () -> Unit,
 ) {
-  val colors = OpenClawWearTheme.colors
+  val colors = OpenClawWearTheme.canvasColors
   Column(
     modifier =
       Modifier
@@ -2447,13 +1937,16 @@ private fun ConversationStatus(
 
 @Composable
 private fun MessageBubble(
-  message: WearChatMessage,
+  role: WearChatRole,
+  text: String,
+  truncated: Boolean,
+  streaming: Boolean = false,
   onOpenReply: () -> Unit,
 ) {
   val colors = OpenClawWearTheme.colors
-  val isUser = message.chatRole == WearChatRole.USER
+  val isUser = role == WearChatRole.USER
   val background =
-    when (message.chatRole) {
+    when (role) {
       WearChatRole.USER -> colors.surfacePressed
       WearChatRole.ASSISTANT -> colors.surfaceRaised
       WearChatRole.SYSTEM -> colors.surface
@@ -2467,18 +1960,16 @@ private fun MessageBubble(
           start = if (isUser) 28.dp else 12.dp,
           end = if (isUser) 12.dp else 28.dp,
         ).background(background, RoundedCornerShape(14.dp))
-        .then(
-          Modifier.border(
-            width = 1.dp,
-            color = colors.borderStrong,
-            shape = RoundedCornerShape(14.dp),
-          ),
+        .border(
+          width = 1.dp,
+          color = colors.borderStrong,
+          shape = RoundedCornerShape(14.dp),
         ).padding(horizontal = 12.dp, vertical = 9.dp),
   ) {
     Text(
       text =
         localizedWearUppercase(
-          when (message.chatRole) {
+          when (role) {
             WearChatRole.USER -> stringResource(R.string.you)
             WearChatRole.ASSISTANT -> stringResource(R.string.agent)
             WearChatRole.SYSTEM -> stringResource(R.string.system)
@@ -2489,7 +1980,15 @@ private fun MessageBubble(
       fontWeight = FontWeight.Bold,
       letterSpacing = 0.8.sp,
     )
-    ReplyPreview(text = message.text, truncated = message.textTruncated == true, onOpen = onOpenReply.takeIf { message.chatRole == WearChatRole.ASSISTANT })
+    ReplyPreview(text = text, truncated = truncated, onOpen = onOpenReply.takeIf { role == WearChatRole.ASSISTANT })
+    if (streaming) {
+      Text(
+        text = localizedWearUppercase(stringResource(R.string.live)),
+        color = colors.warning,
+        fontSize = 10.sp,
+        fontWeight = FontWeight.Bold,
+      )
+    }
   }
 }
 
@@ -2617,7 +2116,7 @@ private fun ThemeModeSelector(
   ) {
     Text(
       text = localizedWearUppercase(stringResource(R.string.appearance)),
-      color = colors.textMuted,
+      color = OpenClawWearTheme.canvasColors.textMuted,
       fontSize = 10.sp,
       fontWeight = FontWeight.SemiBold,
       letterSpacing = 1.sp,
@@ -2831,7 +2330,7 @@ private fun EmptyPanel(
 
 @Composable
 private fun InlineError(text: String) {
-  val colors = OpenClawWearTheme.colors
+  val colors = OpenClawWearTheme.canvasColors
   Text(
     text = text,
     color = colors.danger,
@@ -2866,72 +2365,10 @@ private fun Panel(content: @Composable ColumnScope.() -> Unit) {
 }
 
 @Composable
-private fun failureTitle(failure: WearConversationFailure?): String =
-  when (failure) {
-    WearConversationFailure.PHONE_UNAVAILABLE -> {
-      stringResource(R.string.phone_unavailable)
-    }
-
-    WearConversationFailure.PHONE_NOT_READY -> {
-      stringResource(R.string.open_phone_app)
-    }
-
-    WearConversationFailure.GATEWAY_OFFLINE -> {
-      stringResource(R.string.gateway_offline)
-    }
-
-    WearConversationFailure.NOT_FOUND -> {
-      stringResource(R.string.selection_not_found)
-    }
-
-    WearConversationFailure.ACTION_REJECTED -> {
-      stringResource(R.string.message_not_sent)
-    }
-
-    WearConversationFailure.INCOMPATIBLE -> {
-      stringResource(R.string.update_required)
-    }
-
-    WearConversationFailure.INTERNAL_ERROR,
-    null,
-    -> {
-      stringResource(R.string.something_went_wrong)
-    }
-  }
+private fun failureTitle(failure: WearConversationFailure?): String = stringResource((failure ?: WearConversationFailure.INTERNAL_ERROR).title)
 
 @Composable
-private fun failureDetail(failure: WearConversationFailure?): String =
-  when (failure) {
-    WearConversationFailure.PHONE_UNAVAILABLE -> {
-      stringResource(R.string.phone_unavailable_detail)
-    }
-
-    WearConversationFailure.PHONE_NOT_READY -> {
-      stringResource(R.string.phone_not_ready_detail)
-    }
-
-    WearConversationFailure.GATEWAY_OFFLINE -> {
-      stringResource(R.string.gateway_offline_detail)
-    }
-
-    WearConversationFailure.NOT_FOUND -> {
-      stringResource(R.string.refresh_and_try_again)
-    }
-
-    WearConversationFailure.ACTION_REJECTED -> {
-      stringResource(R.string.try_again)
-    }
-
-    WearConversationFailure.INCOMPATIBLE -> {
-      stringResource(R.string.update_required_detail)
-    }
-
-    WearConversationFailure.INTERNAL_ERROR,
-    null,
-    -> {
-      stringResource(R.string.try_again)
-    }
-  }
+private fun failureDetail(failure: WearConversationFailure?): String = stringResource((failure ?: WearConversationFailure.INTERNAL_ERROR).detail)
 
 private const val CHAT_FIXED_ITEM_COUNT = 2
 private const val VISIBLE_MESSAGE_COUNT = 8

@@ -7,7 +7,9 @@ import {
   isPathInside,
 } from "openclaw/plugin-sdk/file-access-runtime";
 import { extractErrorCode } from "openclaw/plugin-sdk/security-runtime";
+import { toRepoPath } from "./cli-paths.js";
 import {
+  collectQaEvidenceArtifacts,
   mergeQaEvidenceSummaries,
   validateQaEvidenceSummaryJson,
   type QaEvidenceSummaryJson,
@@ -119,15 +121,14 @@ function selectQaProfileScenarioCategory(
   return categoryIds[0] ?? `uncategorized.${scenario.execution.kind}`;
 }
 
-function listQaProfileScenarioLiveChannels(scenario: QaSeedScenarioWithSource) {
-  return (scenario.execution.channels ?? []).filter((candidate) => candidate !== "qa-channel");
-}
-
 function listExclusiveQaProfileChannels(
   scenario: QaSeedScenarioWithSource,
   factories: readonly QaTransportAdapterFactory[] | undefined,
 ) {
-  return listQaProfileScenarioLiveChannels(scenario).filter((channelId) => {
+  return (scenario.execution.channels ?? []).filter((channelId) => {
+    if (channelId === "qa-channel") {
+      return false;
+    }
     const factory = factories?.find((candidate) =>
       candidate.matches({ channelId, driver: "live" }),
     );
@@ -226,13 +227,11 @@ function buildQaProfileEvidenceShardPlan(
       categoryIdsByScenarioRef.set(scenarioRef, categoryIds);
     }
   }
+  for (const categoryIds of categoryIdsByScenarioRef.values()) {
+    categoryIds.sort();
+  }
   const scenarioGroups = buildQaProfileScenarioGroups({
-    categoriesByScenarioRef: new Map(
-      [...categoryIdsByScenarioRef].map(([scenarioRef, categoryIds]) => [
-        scenarioRef,
-        categoryIds.toSorted(),
-      ]),
-    ),
+    categoriesByScenarioRef: categoryIdsByScenarioRef,
     factories: liveAdapterFactories,
     scenarios: executionSelection.selectedScenarios,
   });
@@ -283,10 +282,6 @@ function shardSignature(scenarioIds: readonly string[]) {
   return scenarioIds.toSorted().join("\u0000");
 }
 
-function toPublishedPath(filePath: string) {
-  return filePath.split(path.sep).join("/");
-}
-
 async function resolveChildArtifactPath(params: {
   artifactPath: string;
   evidencePath: string;
@@ -328,7 +323,7 @@ async function resolveChildArtifactPath(params: {
       );
     }
     if ((await fs.stat(realCandidate)).isFile()) {
-      return toPublishedPath(path.relative(params.payloadRoot, candidate));
+      return toRepoPath(path.relative(params.payloadRoot, candidate));
     }
     return undefined;
   };
@@ -441,15 +436,7 @@ export async function aggregateQaProfileEvidenceShards(params: {
 
     const rebasedSummary = structuredClone(summary);
     const resolvedArtifacts = new Map<string, string>();
-    const artifacts = [
-      ...rebasedSummary.entries.flatMap((entry) => entry.execution?.artifacts ?? []),
-      ...(rebasedSummary.schemaVersion === 3
-        ? rebasedSummary.occurrences.flatMap((occurrence) =>
-            occurrence.receipts.map((receipt) => receipt.artifact),
-          )
-        : []),
-    ];
-    for (const artifact of artifacts) {
+    for (const artifact of collectQaEvidenceArtifacts(rebasedSummary)) {
       let relativePath = resolvedArtifacts.get(artifact.path);
       if (!relativePath) {
         relativePath = await resolveChildArtifactPath({

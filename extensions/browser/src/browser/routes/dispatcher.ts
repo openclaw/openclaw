@@ -4,7 +4,7 @@
  * Provides an in-process request/response adapter so Gateway nodes can invoke
  * the same route handlers without opening an HTTP socket.
  */
-import { escapeRegExp } from "../../utils.js";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeBrowserRequestPath } from "../request-policy.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { registerBrowserRoutes } from "./index.js";
@@ -15,11 +15,7 @@ type BrowserDispatchRequest = {
   path: string;
   query?: Record<string, unknown>;
   body?: unknown;
-  signal?: AbortSignal;
-  requester?: BrowserRequest["requester"];
-  assertCurrent?: BrowserRequest["assertCurrent"];
-  screencastAuthority?: BrowserRequest["screencastAuthority"];
-};
+} & Pick<BrowserRequest, "signal" | "requester" | "assertCurrent" | "screencastAuthority">;
 
 type BrowserDispatchResponse = {
   status: number;
@@ -28,10 +24,9 @@ type BrowserDispatchResponse = {
 
 type RouteEntry = {
   method: BrowserDispatchRequest["method"];
-  path: string;
   regex: RegExp;
   paramNames: string[];
-  handler: (req: BrowserRequest, res: BrowserResponse) => void | Promise<void>;
+  handler: Parameters<BrowserRouteRegistrar["get"]>[1];
 };
 
 function compileRoute(path: string): { regex: RegExp; paramNames: string[] } {
@@ -52,7 +47,7 @@ function createRegistry() {
   const register =
     (method: RouteEntry["method"]) => (path: string, handler: RouteEntry["handler"]) => {
       const { regex, paramNames } = compileRoute(path);
-      routes.push({ method, path, regex, paramNames, handler });
+      routes.push({ method, regex, paramNames, handler });
     };
   const router: BrowserRouteRegistrar = {
     get: register("GET"),
@@ -69,18 +64,10 @@ export function createBrowserRouteDispatcher(ctx: BrowserRouteContext) {
 
   return {
     dispatch: async (req: BrowserDispatchRequest): Promise<BrowserDispatchResponse> => {
-      const method = req.method;
       const path = normalizeBrowserRequestPath(req.path) || "/";
-      const query = req.query ?? {};
-      const body = req.body;
-      const signal = req.signal;
-
-      const match = registry.routes.find((route) => {
-        if (route.method !== method) {
-          return false;
-        }
-        return route.regex.test(path);
-      });
+      const match = registry.routes.find(
+        (route) => route.method === req.method && route.regex.test(path),
+      );
       if (!match) {
         return { status: 404, body: { error: "Not Found" } };
       }
@@ -119,9 +106,9 @@ export function createBrowserRouteDispatcher(ctx: BrowserRouteContext) {
         await match.handler(
           {
             params,
-            query,
-            body,
-            signal,
+            query: req.query ?? {},
+            body: req.body,
+            signal: req.signal,
             requester: req.requester,
             assertCurrent: req.assertCurrent,
             screencastAuthority: req.screencastAuthority,

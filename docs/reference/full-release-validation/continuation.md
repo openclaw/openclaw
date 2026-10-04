@@ -26,10 +26,17 @@ Inspect or continue an existing parent:
 
 ```bash
 pnpm frv status --run <parent-run-id> --json
+pnpm frv watch --run <parent-run-id> [--once] [--json]
 pnpm frv rerun --run <parent-run-id> --job "normalCi:checks-node-agentic-control-plane-agent-chat"
+pnpm frv rerun --run <parent-run-id> --child <child-key|run-id> [--max-attempts 2]
 pnpm frv continue --failed --run <parent-run-id>
 pnpm frv verify --run <successful-parent-run-id>
+pnpm frv prioritize --restore <record> [--dry-run]
 ```
+
+`prioritize --restore` recovers runs deferred by the former release-priority gate
+(see [Release priority](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery)). Active validation
+no longer pauses CI or supporting workflows.
 
 `rerun --job` selects an exact executed, terminal job name inside a child key shown by
 `status --json` (for example, `normalCi`, `pluginPrerelease`, or
@@ -37,6 +44,19 @@ pnpm frv verify --run <successful-parent-run-id>
 then uses GitHub's job-rerun API on the job's accepted attempt. GitHub also
 reruns dependent jobs. Other failures stay visible and require their own retry;
 a targeted retry never declares the parent recovered while blockers remain.
+
+`watch` resolves child runs from the parent's `Dispatched <workflow>: <url>
+(attempt N)` dispatch-job log lines and reports each attempt transition and
+failed job once, with runner labels. Transient GitHub failures retry on the next
+poll. A local state file under `$TMPDIR/openclaw-frv/` lets a restarted watch
+resume without repeating events.
+
+`rerun --child` waits for one failed child, sends exactly one
+rerun-failed-jobs request, confirms the new attempt has no duplicate jobs, and
+records an audit line. It refuses children past `--max-attempts` (default 2,
+which allows one rerun). When a failed consumer is bound to a green producer's
+run attempt, it reruns that producer and its dependents instead. It returns
+after the new attempt starts; `continue --failed` still owns the final reseal.
 
 `continue --failed` reruns each failed child's jobs as soon as that child is
 terminal, while sibling children and the original parent may still run. It
@@ -91,8 +111,10 @@ Parents whose immutable plan predates attempt-aware evidence cannot be
 continued. Start a fresh all-group Full Release Validation instead; the
 controller never reconstructs old state or dispatches a replacement parent.
 
-The helper creates a temporary `release-ci/*` ref pinned to the Tooling SHA,
-passes the Validation SHA as both the candidate ref and `expected_sha`, and
+For new dispatches, including dry runs, the helper first proves GitHub serves the
+exact Validation SHA by bare-SHA fetch in a fresh temporary repository. It pushes
+one immutable `release-ci/*` workflow ref pinned to the Tooling SHA,
+passes the exact Validation SHA as both `ref` and `expected_sha`, and
 deletes the temporary ref after successful validation and strict evidence
 verification. The helper reads Release Decision artifacts while the parent is
 active so blockers can surface while Diagnostic Drain collects failures. It
@@ -107,7 +129,8 @@ check and at most three retries, waiting 30, 60, then 120 seconds between checks
 All reads use the normal cache-aware GitHub route; cache and request latency can
 add to these intervals. The helper retains its 12-hour wait deadline. Successful
 temporary-ref cleanup still requires parent completion and strict evidence
-verification. Failed validations retain both refs for reruns and diagnosis. The
+verification. Failed validations retain the workflow ref for reruns and diagnosis;
+`--keep-branch` also retains it after success. The
 Validation SHA is the exact commit being qualified: the Code SHA, which can
 also be the Release SHA, or a later changelog-only Release SHA. It is not a
 third release identity. The workflow
@@ -122,81 +145,22 @@ creates or updates repository refs itself.
 
 ### Automatic retries for declared flakes
 
-`known_flaky_jobs_json` accepts exact `child:job name` selectors, such as
-`normalCi:checks-node-agentic-control-plane-agent-chat`. An empty array disables
-automatic retries. Declare only diagnosed intermittent failures before dispatch;
-the immutable execution plan binds the allowance to the selected child and its
-original attempt.
+Automatic test retries are disabled. Failed or timed out jobs remain blockers;
+`known_flaky_jobs_json` is rejected
+on new dispatches. Inspect the original failure before requesting another execution. The
+explicit `frv rerun` and `frv continue --failed` commands remain operator recovery
+operations and never run as an automatic response to a test outcome.
 
-One retry owner per declared child waits for that child to finish. Exactly one
-declared failed or timed out job uses GitHub's targeted job-rerun API; other
-undeclared blockers remain. With multiple declared failures, the owner
-uses the failed-jobs API only when every failed job is declared. A mixture of
-multiple declared failures and undeclared failures records no automatic attempt
-for that child; required failures remain blockers.
-
-Automatic recovery permits at most one wave from child attempt 1 to attempt 2.
-Any earlier child rerun consumes that budget, including a manual or dependent
-rerun that did not execute the listed job. GitHub reruns dependent jobs and has
-no atomic operation for an arbitrary subset of failed jobs, so the controller
-never starts a third execution under this allowance. Release Decision and
-Diagnostic Drain wait for the retry owners to collect stable terminal
-replacement attempts and bind their records into the final validation evidence.
-Explicit operator retries remain separate and can run further attempts; they
-never replenish the automatic allowance.
-
-Manual retries wait for active automatic owners. If the child remains on
-attempt one after its owner finishes, the controller requires verified
-`not-attempted` evidence or an authenticated original rejection witness before another
-POST. A terminal owner alone does not prove rejection. Missing or unknown
-outcomes remain read-only until the original witness or a newer child attempt
-resolves them; explicit retries after an observed second attempt remain
-available.
-
-After claiming the intent, a failed final pre-dispatch read or authority check
-records a confirmed rejection because no POST was sent. An ambiguous POST
-response keeps an unknown outcome and permits only reconciliation.
-
-A dedicated step on parent attempt one records the rejected intent's digest.
-Manual admission, later-parent recovery, and final verification authenticate
-that original step and its log interval. This proof survives loss of the
-original outcome artifact. A recovered rejection stays `rejected`; an operator
-may repair separate jobs in attempts two and three, and normal composite child
-evidence must still prove the final result.
-
-The hosted retry owner shares one 5.5-hour deadline across the original attempt
-and its retry, leaving 30 minutes for setup and artifact cleanup within the
-hosted six-hour job limit. An unusually long child can exhaust this automatic
-budget; retain any claim and use explicit continuation. A later parent attempt
-gets a fresh bounded read-only reconciliation window, never renewed mutation
-authority. Manual `frv` operations retain their existing 12-hour budget.
-
-Before sending a retry request, the owner uploads an immutable intent, records
-its digest after the successful upload, and saves the same bytes under an exact
-parent-run-and-child cache key. Each mutation is sent once. An uncertain API
-response triggers bounded read-only reconciliation, never another POST. The
-retry record reports the exact source jobs, requested operation, and observed
-replacement attempt in the manifest. A null `not-attempted` record means the
-original guarded mutation steps were explicitly skipped. Recovery revalidates
-selectors against the exact child attempt history before accepting that record;
-a failed preparation never renews mutation authority.
-
-`observed` means an authenticated replacement matches the original frozen
-intent. A later explicit operator retry may have produced it; this outcome does
-not assert that the automatic POST caused it. Child attempt provenance records
-the actor authority. Original attempt-one receipts retain their historical
-disposition while available.
-
-A parent rerun restores the intent from its cache or surviving artifact and
-authenticates it against the original upload witness. Recovery only reconciles
-the recorded operation; it cannot renew an allowance or replay a request. Missing
-or contradictory intent, changed child identity, and unobserved outcomes remain
-explicit recovery failures. Retain the original job logs and intent cache until
-validation is verified. Use explicit operator recovery for an exhausted or
-uncertain allowance. Retry-owner errors remain visible immediately in Release
-Decision while Diagnostic Drain keeps collecting independent children to
-terminal; existing API, provenance, and cancellation failures retain their
-original stopping rules.
+Published artifacts may contain empty `knownFlakyJobs` and `automaticRetries`
+fields. Readers retain their original plan digest and reject nonempty allowances
+or retry records. Current qualification requires successful selected results. A
+campaign already dispatched with an
+older pinned Tooling SHA remains owned by that immutable tooling and must not be
+retargeted mid-run. Current strict tooling rejects retained `windows-node-ci`
+advisory evidence; start a fresh campaign on current tooling to qualify under the
+restored blocking gate. Retired waivers and pre-declared advisory failure
+allowances remain rejected and must be replaced with a fresh qualifying run; they
+cannot authorize publication.
 
 ### Read publication observations
 
@@ -217,8 +181,7 @@ FRV and publication workflow identities independently, then joins supported
 manifest recorded by that publisher. An original plan from attempt 1 can bind a
 final validation manifest from attempt 2. The two attempts are reported
 separately; neither is silently replaced with the latest attempt.
-Linked children retain their own observed tooling SHA/ref. The recorded normal
-ClawHub ref can differ from an alpha publisher's ref.
+Linked children retain their own observed tooling SHA/ref.
 
 This view reports observations, **not release authorization or current registry
 visibility**. Writer selection, verification selection, job conclusions,

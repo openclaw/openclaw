@@ -152,17 +152,13 @@ wa-dropdown-item.session-menu__item[data-new-tab-action]:not([disabled], [aria-d
   }
 }
 
-/* Search and page controls stay usable without mounting an entire directory. */
-.people-menu__search,
-.people-menu__pagination {
+/* Keep search available while scrolling the complete directory. */
+.people-menu__search {
   position: sticky;
+  top: 0;
   z-index: 1;
   padding: 6px 8px;
   background: var(--bg-elevated);
-}
-
-.people-menu__search {
-  top: 0;
 }
 
 .people-menu__search input {
@@ -177,20 +173,14 @@ wa-dropdown-item.session-menu__item[data-new-tab-action]:not([disabled], [aria-d
   font: inherit;
 }
 
-.people-menu__pagination {
-  bottom: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
+.people-menu__status {
+  padding: 6px 8px;
   color: var(--muted);
   font-size: 11px;
 }
 
-.people-menu__pagination span {
-  flex: 1;
-}
-
-wa-dropdown-item:has(> .people-menu__search)::part(submenu) {
+/* A :has() subject here invalidates unrelated shadow parts on transcript mutations. */
+wa-dropdown-item.people-menu__submenu::part(submenu) {
   width: min(320px, calc(100vw - 24px));
   max-height: min(420px, 60vh);
   overflow-y: auto;

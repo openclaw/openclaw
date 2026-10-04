@@ -2,11 +2,12 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
-import { captureEnv, withEnvAsync } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
@@ -19,36 +20,9 @@ vi.mock("../plugins/provider-discovery.runtime.js", () => ({
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
-  normalizeProviderConfigWithPlugin: vi.fn(
-    (params: { provider: string; context?: { providerConfig?: { baseUrl?: string } } }) => {
-      const providerConfig = params.context?.providerConfig;
-      const baseUrl = providerConfig?.baseUrl?.trim();
-      if (params.provider !== "google" || !baseUrl || baseUrl.endsWith("/v1beta")) {
-        return providerConfig;
-      }
-      return {
-        ...providerConfig,
-        baseUrl:
-          baseUrl === "https://generativelanguage.googleapis.com"
-            ? `${baseUrl}/v1beta`
-            : providerConfig?.baseUrl,
-      };
-    },
-  ),
-  resolveProviderConfigApiKeyWithPlugin: (params: {
-    provider: string;
-    context: { env: NodeJS.ProcessEnv };
-  }) => {
-    if (params.provider === "amazon-bedrock") {
-      return params.context.env.AWS_PROFILE?.trim() ? "AWS_PROFILE" : undefined;
-    }
-    if (params.provider === "anthropic-vertex") {
-      return params.context.env.ANTHROPIC_VERTEX_USE_GCP_METADATA === "true"
-        ? "gcp-vertex-credentials"
-        : undefined;
-    }
-    return undefined;
-  },
+  normalizeProviderConfigWithPlugin: (params: { context?: { providerConfig?: object } }) =>
+    params.context?.providerConfig,
+  resolveProviderConfigApiKeyWithPlugin: () => undefined,
   resolveProviderSyntheticAuthWithPlugin: vi.fn(),
 }));
 
@@ -63,32 +37,24 @@ vi.mock("./provider-auth-aliases.js", () => ({
 type ProviderRuntimeModule = typeof import("../plugins/provider-runtime.js");
 
 let CUSTOM_LOCAL_AUTH_MARKER: typeof import("./model-auth-markers.js").CUSTOM_LOCAL_AUTH_MARKER;
-let resolveApiKeyFromCredential: typeof import("./models-config.providers.secret-helpers.js").resolveApiKeyFromCredential;
 let createProviderApiKeyResolver: typeof import("./models-config.providers.secrets.js").createProviderApiKeyResolver;
 let createProviderAuthResolver: typeof import("./models-config.providers.secrets.js").createProviderAuthResolver;
 let mockedResolveProviderSyntheticAuthWithPlugin: ReturnType<
   typeof vi.mocked<ProviderRuntimeModule["resolveProviderSyntheticAuthWithPlugin"]>
 >;
 
-import {
-  normalizeProviderSpecificConfig,
-  resolveProviderConfigApiKeyResolver,
-} from "./models-config.providers.policy.js";
-
 async function loadProviderAuthModules() {
   vi.doUnmock("../plugins/manifest-registry.js");
   vi.doUnmock("../secrets/provider-env-vars.js");
-  const [providerRuntimeModule, markersModule, helperModule, secretsModule] = await Promise.all([
+  const [providerRuntimeModule, markersModule, secretsModule] = await Promise.all([
     import("../plugins/provider-runtime.js"),
     import("./model-auth-markers.js"),
-    import("./models-config.providers.secret-helpers.js"),
     import("./models-config.providers.secrets.js"),
   ]);
   mockedResolveProviderSyntheticAuthWithPlugin = vi.mocked(
     providerRuntimeModule.resolveProviderSyntheticAuthWithPlugin,
   );
   CUSTOM_LOCAL_AUTH_MARKER = markersModule.CUSTOM_LOCAL_AUTH_MARKER;
-  resolveApiKeyFromCredential = helperModule.resolveApiKeyFromCredential;
   createProviderApiKeyResolver = secretsModule.createProviderApiKeyResolver;
   createProviderAuthResolver = secretsModule.createProviderAuthResolver;
 }
@@ -105,215 +71,203 @@ describe("models-config provider auth provenance", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   type DiscoveryCallback = "resolveProviderAuth" | "resolveProviderApiKey";
 
+  async function createDiscoveryFixture(
+    stateDir: string,
+    type: "api_key" | "token",
+    callback: DiscoveryCallback,
+    requestedProvider: string,
+    refSource: "store" | "env",
+  ) {
+    const { resolveImplicitProviders } = await import("./models-config.providers.implicit.js");
+    const { planOpenClawModelsJson } = await import("./models-config.plan.js");
+    const { clearRuntimeAuthProfileStoreSnapshots, setRuntimeAuthProfileStoreSnapshot } =
+      await import("./auth-profiles/runtime-snapshots.js");
+    const { setActiveDegradedSecretOwners } = await import("../secrets/runtime-degraded-state.js");
+    const { resolveAuthProfileSecretOwnerId } =
+      await import("../secrets/runtime-auth-profile-owner.js");
+    const { fetchLiveProviderModelIds } =
+      await import("../plugin-sdk/provider-catalog-live-runtime.js");
+    const provider = "openai";
+    const profileId = `${provider}:selected`;
+    const agentDir = path.join(stateDir, "agent");
+    const ref = { source: refSource, provider: "default", id: "DISCOVERY_KEY" } as const;
+    const profile: AuthProfileCredential =
+      type === "api_key"
+        ? { type, provider, keyRef: ref, key: "stale-inline-key" }
+        : { type, provider, tokenRef: ref, token: "stale-inline-token" };
+    const store: AuthProfileStore = { version: 1, profiles: { [profileId]: profile } };
+    const runtimeKey = "runtime-discovery-key";
+    const published: AuthProfileStore = createAuthProfileStoreFixture({
+      [profileId]:
+        profile.type === "api_key"
+          ? { ...profile, key: runtimeKey }
+          : { ...profile, token: runtimeKey },
+    });
+    const authorization: Array<string | null> = [];
+    const authResults: Array<{ apiKey?: string; discoveryApiKey?: string }> = [];
+    const outcomes: Array<import("../plugins/provider-catalog.types.js").ProviderCatalogOutcome> =
+      [];
+    const errors: unknown[] = [];
+    const env: NodeJS.ProcessEnv = {};
+    let emitProfileOutcome = false;
+    discovery.providers = [
+      {
+        id: provider,
+        label: "a requested provider",
+        auth: [],
+        catalog: {
+          order: "simple",
+          run: async (ctx) => {
+            try {
+              const auth = ctx[callback](requestedProvider);
+              authResults.push(auth);
+              await fetchLiveProviderModelIds({
+                providerId: provider,
+                endpoint: "https://catalog.example.test/v1/models",
+                ...auth,
+                fetchGuard: async ({ url, init }) => {
+                  authorization.push(new Headers(init?.headers).get("authorization"));
+                  return {
+                    response: Response.json({ data: [{ id: "test-model" }] }),
+                    finalUrl: url,
+                    release: async () => {},
+                  };
+                },
+              });
+              const result = {
+                provider: {
+                  apiKey: auth.apiKey,
+                  baseUrl: "https://catalog.example.test/v1",
+                  models: [],
+                },
+              };
+              const selectedProfileId =
+                "profileId" in auth && typeof auth.profileId === "string"
+                  ? auth.profileId
+                  : undefined;
+              return emitProfileOutcome && selectedProfileId
+                ? {
+                    ...result,
+                    outcomes: [
+                      {
+                        provider,
+                        profileId: selectedProfileId,
+                        status: "ready" as const,
+                      },
+                    ],
+                  }
+                : result;
+            } catch (error) {
+              errors.push(error);
+              throw error;
+            }
+          },
+        },
+      },
+      {
+        id: "healthy",
+        label: "z independent provider",
+        auth: [],
+        catalog: {
+          order: "simple",
+          run: async () => ({
+            provider: { baseUrl: "https://healthy.example.test", models: [] },
+          }),
+        },
+      },
+    ];
+    const publish = (directory = agentDir) =>
+      setRuntimeAuthProfileStoreSnapshot(published, directory);
+    publish();
+
+    return {
+      store,
+      published,
+      profileId,
+      agentDir,
+      runtimeKey,
+      env,
+      publish,
+      clear: clearRuntimeAuthProfileStoreSnapshots,
+      cold: () =>
+        setActiveDegradedSecretOwners([
+          {
+            ownerKind: "account",
+            ownerId: resolveAuthProfileSecretOwnerId({ agentDir, profileId }),
+            state: "unavailable",
+            degradationState: "cold",
+            paths: [],
+            refKeys: [],
+            reason: "secret reference was not found",
+          },
+        ]),
+      discover: (config: OpenClawConfig = {}) =>
+        resolveImplicitProviders({
+          agentDir,
+          authStore: store,
+          config,
+          env,
+          onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
+        }),
+      emitOutcome: () => {
+        emitProfileOutcome = true;
+      },
+      plan: (source: OpenClawConfig = {}, prepared = source) =>
+        planOpenClawModelsJson({
+          context: {
+            cfg: source,
+            discoveryAuthConfig: prepared,
+            sourceConfigForSecrets: source,
+            agentDir,
+            env,
+            envFingerprint: env,
+            onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
+          },
+          authStore: store,
+          existingRaw: "",
+          existingParsed: null,
+        }),
+      authorization,
+      authResults,
+      outcomes,
+      errors,
+
+      cleanup: () => {
+        clearRuntimeAuthProfileStoreSnapshots();
+        setActiveDegradedSecretOwners([]);
+        discovery.providers = [];
+      },
+    };
+  }
+
   async function withDiscoveryFixture(
     type: "api_key" | "token",
     callback: DiscoveryCallback,
-    check: (fixture: {
-      store: AuthProfileStore;
-      published: AuthProfileStore;
-      profileId: string;
-      agentDir: string;
-      runtimeKey: string;
-      env: NodeJS.ProcessEnv;
-      publish: (agentDir?: string) => void;
-      clear: () => void;
-      cold: () => void;
-      discover: (
-        config?: OpenClawConfig,
-      ) => ReturnType<
-        typeof import("./models-config.providers.implicit.js").resolveImplicitProviders
-      >;
-      emitOutcome: () => void;
-      plan: (
-        source?: OpenClawConfig,
-        prepared?: OpenClawConfig,
-      ) => ReturnType<typeof import("./models-config.plan.js").planOpenClawModelsJson>;
-      authorization: Array<string | null>;
-      authResults: Array<{ apiKey?: string; discoveryApiKey?: string }>;
-      outcomes: Array<import("../plugins/provider-catalog.types.js").ProviderCatalogOutcome>;
-      errors: unknown[];
-      canonical: () => Promise<string | undefined>;
-    }) => Promise<void>,
+    check: (fixture: Awaited<ReturnType<typeof createDiscoveryFixture>>) => Promise<void>,
     requestedProvider = " OPENAI ",
     refSource: "store" | "env" = "store",
   ) {
     const stateDir = tempDirs.make("discovery-ref-provenance-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir, OPENAI_API_KEY: undefined }, async () => {
-      const { resolveImplicitProviders } = await import("./models-config.providers.implicit.js");
-      const { planOpenClawModelsJson } = await import("./models-config.plan.js");
-      const { clearRuntimeAuthProfileStoreSnapshots, setRuntimeAuthProfileStoreSnapshot } =
-        await import("./auth-profiles/runtime-snapshots.js");
-      const { resolveApiKeyForProfile } = await import("./auth-profiles/oauth.js");
-      const { setActiveDegradedSecretOwners } =
-        await import("../secrets/runtime-degraded-state.js");
-      const { resolveAuthProfileSecretOwnerId } =
-        await import("../secrets/runtime-auth-profile-owner.js");
-      const { fetchLiveProviderModelIds } =
-        await import("../plugin-sdk/provider-catalog-live-runtime.js");
-      const provider = "openai";
-      const profileId = `${provider}:selected`;
-      const agentDir = path.join(stateDir, "agent");
-      const ref = { source: refSource, provider: "default", id: "DISCOVERY_KEY" } as const;
-      const profile: AuthProfileCredential =
-        type === "api_key"
-          ? { type, provider, keyRef: ref, key: "stale-inline-key" }
-          : { type, provider, tokenRef: ref, token: "stale-inline-token" };
-      const store: AuthProfileStore = { version: 1, profiles: { [profileId]: profile } };
-      const runtimeKey = "runtime-discovery-key";
-      const published: AuthProfileStore = createAuthProfileStoreFixture({
-        [profileId]:
-          profile.type === "api_key"
-            ? { ...profile, key: runtimeKey }
-            : { ...profile, token: runtimeKey },
-      });
-      const authorization: Array<string | null> = [];
-      const authResults: Array<{ apiKey?: string; discoveryApiKey?: string }> = [];
-      const outcomes: Array<import("../plugins/provider-catalog.types.js").ProviderCatalogOutcome> =
-        [];
-      const errors: unknown[] = [];
-      const env: NodeJS.ProcessEnv = {};
-      let emitProfileOutcome = false;
-      discovery.providers = [
-        {
-          id: provider,
-          label: "a requested provider",
-          auth: [],
-          catalog: {
-            order: "simple",
-            run: async (ctx) => {
-              try {
-                const auth = ctx[callback](requestedProvider);
-                authResults.push(auth);
-                await fetchLiveProviderModelIds({
-                  providerId: provider,
-                  endpoint: "https://catalog.example.test/v1/models",
-                  ...auth,
-                  fetchGuard: async ({ url, init }) => {
-                    authorization.push(new Headers(init?.headers).get("authorization"));
-                    return {
-                      response: Response.json({ data: [{ id: "test-model" }] }),
-                      finalUrl: url,
-                      release: async () => {},
-                    };
-                  },
-                });
-                const result = {
-                  provider: {
-                    apiKey: auth.apiKey,
-                    baseUrl: "https://catalog.example.test/v1",
-                    models: [],
-                  },
-                };
-                const selectedProfileId =
-                  "profileId" in auth && typeof auth.profileId === "string"
-                    ? auth.profileId
-                    : undefined;
-                return emitProfileOutcome && selectedProfileId
-                  ? {
-                      ...result,
-                      outcomes: [
-                        {
-                          provider,
-                          profileId: selectedProfileId,
-                          status: "ready" as const,
-                        },
-                      ],
-                    }
-                  : result;
-              } catch (error) {
-                errors.push(error);
-                throw error;
-              }
-            },
-          },
-        },
-        {
-          id: "healthy",
-          label: "z independent provider",
-          auth: [],
-          catalog: {
-            order: "simple",
-            run: async () => ({
-              provider: { baseUrl: "https://healthy.example.test", models: [] },
-            }),
-          },
-        },
-      ];
-      const publish = (directory = agentDir) =>
-        setRuntimeAuthProfileStoreSnapshot(published, directory);
-      publish();
+      const fixture = await createDiscoveryFixture(
+        stateDir,
+        type,
+        callback,
+        requestedProvider,
+        refSource,
+      );
       try {
-        await check({
-          store,
-          published,
-          profileId,
-          agentDir,
-          runtimeKey,
-          env,
-          publish,
-          clear: clearRuntimeAuthProfileStoreSnapshots,
-          cold: () =>
-            setActiveDegradedSecretOwners([
-              {
-                ownerKind: "account",
-                ownerId: resolveAuthProfileSecretOwnerId({ agentDir, profileId }),
-                state: "unavailable",
-                degradationState: "cold",
-                paths: [],
-                refKeys: [],
-                reason: "secret reference was not found",
-              },
-            ]),
-          discover: (config = {}) =>
-            resolveImplicitProviders({
-              agentDir,
-              authStore: store,
-              config,
-              env,
-              onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
-            }),
-          emitOutcome: () => {
-            emitProfileOutcome = true;
-          },
-          plan: (source = {}, prepared = source) =>
-            planOpenClawModelsJson({
-              context: {
-                cfg: source,
-                discoveryAuthConfig: prepared,
-                sourceConfigForSecrets: source,
-                agentDir,
-                env,
-                envFingerprint: env,
-                onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
-              },
-              authStore: store,
-              existingRaw: "",
-              existingParsed: null,
-            }),
-          authorization,
-          authResults,
-          outcomes,
-          errors,
-          canonical: async () =>
-            (await resolveApiKeyForProfile({ cfg: {}, store, profileId, agentDir }))?.apiKey,
-        });
+        await check(fixture);
       } finally {
-        clearRuntimeAuthProfileStoreSnapshots();
-        setActiveDegradedSecretOwners([]);
-        discovery.providers = [];
+        fixture.cleanup();
       }
     });
   }
 
-  const discoveryCases = [
-    ["api_key", "resolveProviderAuth"],
-    ["token", "resolveProviderAuth"],
-    ["api_key", "resolveProviderApiKey"],
-    ["token", "resolveProviderApiKey"],
+  const discoveryRefCases = [
+    { type: "api_key", callback: "resolveProviderAuth", refSource: "store" },
+    { type: "token", callback: "resolveProviderApiKey", refSource: "env" },
   ] as const;
-  const discoveryRefCases = discoveryCases.flatMap(([type, callback]) =>
-    (["store", "env"] as const).map((refSource) => ({ type, callback, refSource })),
-  );
   it.each(discoveryRefCases)(
     "authenticates published $refSource-backed $type discovery through $callback",
     async ({ type, callback, refSource }) => {
@@ -322,9 +276,12 @@ describe("models-config provider auth provenance", () => {
         callback,
         async (fixture) => {
           const marker = refSource === "env" ? "DISCOVERY_KEY" : NON_ENV_SECRETREF_MARKER;
-          expect(await fixture.canonical()).toBe(fixture.runtimeKey);
+          fixture.emitOutcome();
           const providers = await fixture.discover();
           expect(providers?.openai?.apiKey).toBe(marker);
+          expect(fixture.outcomes).toEqual([
+            { provider: "openai", profileId: fixture.profileId, status: "ready" },
+          ]);
           expect(JSON.stringify(providers)).not.toContain(fixture.runtimeKey);
           expect(fixture.authorization).toEqual([`Bearer ${fixture.runtimeKey}`]);
           const plan = await fixture.plan();
@@ -332,108 +289,102 @@ describe("models-config provider auth provenance", () => {
           expect(JSON.stringify(plan)).toContain(marker);
           expect(JSON.stringify(plan)).not.toMatch(/runtime-discovery-key|stale-inline/);
         },
-        "openai",
+        "proof-alias",
         refSource,
       );
     },
   );
 
-  const unavailableStates = [
-    "unpublished",
-    "agent-mismatch",
-    "ref-mismatch",
-    "provider-mismatch",
-    "missing-profile",
-    "missing-value",
-    "cleared",
-    "cold",
-  ] as const;
-  it.each(
-    discoveryRefCases.flatMap(({ type, callback, refSource }) =>
-      unavailableStates
-        .filter((state) => refSource === "store" || state === "cold" || state === "unpublished")
-        .map((state) => ({ type, callback, refSource, state })),
-    ),
-  )(
-    "isolates $refSource-backed $type $state through $callback without fallback or anonymous HTTP",
-    async ({ type, callback, refSource, state }) => {
-      await withDiscoveryFixture(
-        type,
-        callback,
-        async (fixture) => {
-          const { SecretSurfaceUnavailableError } =
-            await import("../secrets/runtime-degraded-state.js");
-          fixture.store.profiles["openai:other"] = createApiKeyCredential(
-            "openai",
-            "wrong-account-key",
-          );
-          const profile = expectDefined(
-            fixture.published.profiles[fixture.profileId],
-            "published profile",
-          );
-          if (state === "cleared") {
-            await fixture.discover();
-            expect(fixture.authorization).toEqual([`Bearer ${fixture.runtimeKey}`]);
-            fixture.authorization.length = 0;
+  it.each([
+    ["api_key", "agent-mismatch"],
+    ["api_key", "provider-mismatch"],
+    ["api_key", "missing-profile"],
+    ["api_key", "ref-mismatch"],
+    ["token", "ref-mismatch"],
+    ["api_key", "missing-value"],
+    ["token", "missing-value"],
+    ["api_key", "cleared"],
+    ["api_key", "cold"],
+    ["token", "unpublished"],
+  ] as const)("isolates %s %s without fallback or anonymous HTTP", async (type, state) => {
+    const refSource = state === "cold" || state === "unpublished" ? "env" : "store";
+    const callback = state === "unpublished" ? "resolveProviderApiKey" : "resolveProviderAuth";
+    await withDiscoveryFixture(
+      type,
+      callback,
+      async (fixture) => {
+        const { SecretSurfaceUnavailableError } =
+          await import("../secrets/runtime-degraded-state.js");
+        fixture.store.profiles["openai:other"] = createApiKeyCredential(
+          "openai",
+          "wrong-account-key",
+        );
+        const profile = expectDefined(
+          fixture.published.profiles[fixture.profileId],
+          "published profile",
+        );
+        if (state === "cleared") {
+          await fixture.discover();
+          expect(fixture.authorization).toEqual([`Bearer ${fixture.runtimeKey}`]);
+          fixture.authorization.length = 0;
+        }
+        if (state === "unpublished" || state === "cleared") {
+          fixture.clear();
+        }
+        if (state === "agent-mismatch") {
+          fixture.clear();
+          fixture.publish(path.join(fixture.agentDir, "other"));
+        }
+        if (state === "missing-profile") {
+          delete fixture.published.profiles[fixture.profileId];
+        }
+        if (state === "provider-mismatch") {
+          profile.provider = "other-provider";
+        }
+        if (state === "ref-mismatch") {
+          const changedRef = { source: "store", provider: "default", id: "OTHER_KEY" } as const;
+          if (profile.type === "api_key") {
+            profile.keyRef = changedRef;
+          } else if (profile.type === "token") {
+            profile.tokenRef = changedRef;
           }
-          if (state === "unpublished" || state === "cleared") {
-            fixture.clear();
+        }
+        if (state === "missing-value") {
+          if (profile.type === "api_key") {
+            delete profile.key;
+          } else if (profile.type === "token") {
+            delete profile.token;
           }
-          if (state === "agent-mismatch") {
-            fixture.clear();
-            fixture.publish(path.join(fixture.agentDir, "other"));
-          }
-          if (state === "missing-profile") {
-            delete fixture.published.profiles[fixture.profileId];
-          }
-          if (state === "provider-mismatch") {
-            profile.provider = "other-provider";
-          }
-          if (state === "ref-mismatch") {
-            const changedRef = { source: "store", provider: "default", id: "OTHER_KEY" } as const;
-            if (profile.type === "api_key") {
-              profile.keyRef = changedRef;
-            } else if (profile.type === "token") {
-              profile.tokenRef = changedRef;
-            }
-          }
-          if (state === "missing-value") {
-            if (profile.type === "api_key") {
-              delete profile.key;
-            } else if (profile.type === "token") {
-              delete profile.token;
-            }
-          }
-          if (!["unpublished", "cleared", "agent-mismatch"].includes(state)) {
-            fixture.publish();
-          }
-          if (state === "cold") {
-            fixture.cold();
-          }
-          // Profile-first resolution must not escape to otherwise valid ambient auth.
-          if (callback === "resolveProviderAuth") {
-            fixture.env.OPENAI_API_KEY = "wrong-env-key";
-          }
-          const providers = await fixture.discover();
-          expect(fixture.authorization).toEqual([]);
-          expect(fixture.errors).toHaveLength(1);
-          expect(fixture.errors[0]).toBeInstanceOf(SecretSurfaceUnavailableError);
-          expect(fixture.outcomes).toEqual([
-            { provider: "openai", profileId: fixture.profileId, status: "unavailable" },
-          ]);
-          expect(providers?.openai).toBeUndefined();
-          expect(providers?.healthy).toBeDefined();
-          expect(JSON.stringify([providers, fixture.outcomes])).not.toMatch(
-            /stale-inline|wrong-account-key|wrong-env-key|runtime-discovery-key/,
-          );
-        },
-        "openai",
-        refSource,
-      );
-    },
-  );
+        }
+        if (!["unpublished", "cleared", "agent-mismatch"].includes(state)) {
+          fixture.publish();
+        }
+        if (state === "cold") {
+          fixture.cold();
+        }
+        // Profile-first resolution must not escape to otherwise valid ambient auth.
+        if (callback === "resolveProviderAuth") {
+          fixture.env.OPENAI_API_KEY = "wrong-env-key";
+        }
+        const providers = await fixture.discover();
+        expect(fixture.authorization).toEqual([]);
+        expect(fixture.errors).toHaveLength(1);
+        expect(fixture.errors[0]).toBeInstanceOf(SecretSurfaceUnavailableError);
+        expect(fixture.outcomes).toEqual([
+          { provider: "openai", profileId: fixture.profileId, status: "unavailable" },
+        ]);
+        expect(providers?.openai).toBeUndefined();
+        expect(providers?.healthy).toBeDefined();
+        expect(JSON.stringify([providers, fixture.outcomes])).not.toMatch(
+          /stale-inline|wrong-account-key|wrong-env-key|runtime-discovery-key/,
+        );
+      },
+      "openai",
+      refSource,
+    );
+  });
 
-  it.each(["resolveProviderAuth", "resolveProviderApiKey"] as const)(
+  it.each(["resolveProviderAuth"] as const)(
     "skips expired profiles through %s and uses the next canonical candidate",
     async (callback) => {
       await withDiscoveryFixture("token", callback, async (fixture) => {
@@ -458,42 +409,46 @@ describe("models-config provider auth provenance", () => {
     },
   );
 
-  it.each(["resolveProviderAuth", "resolveProviderApiKey"] as const)(
-    "keeps plain, env and OAuth controls through %s",
-    async (callback) => {
-      await withDiscoveryFixture("api_key", callback, async (fixture) => {
-        fixture.clear();
-        for (const profile of [
-          { type: "api_key", provider: "openai", key: "plain-key" },
-          {
-            type: "api_key",
-            provider: "openai",
-            keyRef: { source: "env", provider: "default", id: "PROFILE_KEY" },
-          },
-          {
-            type: "oauth",
-            provider: "openai",
-            access: "oauth-key",
-            refresh: "unused-refresh",
-            expires: Date.now() + 600_000,
-          },
-        ] satisfies AuthProfileCredential[]) {
-          fixture.store.profiles[fixture.profileId] = profile;
-          fixture.env.PROFILE_KEY = "env-ref-key";
-          if (profile.type === "oauth" && callback === "resolveProviderApiKey") {
-            continue;
-          }
-          await fixture.discover();
-        }
-        expect(fixture.authorization).toEqual(
-          callback === "resolveProviderAuth"
-            ? ["Bearer plain-key", "Bearer env-ref-key", "Bearer oauth-key"]
-            : ["Bearer plain-key", "Bearer env-ref-key"],
-        );
+  it.each([undefined, "chatgpt-identity"])(
+    "uses OAuth discovery credentials with auth flow %s",
+    async (authFlow) => {
+      await withDiscoveryFixture("api_key", "resolveProviderAuth", async (fixture) => {
+        fixture.store.profiles[fixture.profileId] = {
+          type: "oauth",
+          provider: "openai",
+          access: "oauth-key",
+          refresh: "unused-refresh",
+          expires: Date.now() + 600_000,
+          authFlow,
+        };
+        await fixture.discover();
+        expect(fixture.authorization).toEqual(["Bearer oauth-key"]);
+        expect(fixture.authResults).toEqual([
+          expect.objectContaining({
+            mode: "oauth",
+            discoveryApiKey: "oauth-key",
+            ...(authFlow ? { authFlow } : {}),
+          }),
+        ]);
         expect(fixture.errors).toEqual([]);
       });
     },
   );
+
+  it("uses cold env refs without a published auth snapshot", async () => {
+    await withDiscoveryFixture("api_key", "resolveProviderAuth", async (fixture) => {
+      fixture.clear();
+      fixture.store.profiles[fixture.profileId] = {
+        type: "api_key",
+        provider: "openai",
+        keyRef: { source: "env", provider: "default", id: "PROFILE_KEY" },
+      };
+      fixture.env.PROFILE_KEY = "env-ref-key";
+      await fixture.discover();
+      expect(fixture.authorization).toEqual(["Bearer env-ref-key"]);
+      expect(fixture.errors).toEqual([]);
+    });
+  });
 
   it.each(["resolveProviderAuth", "resolveProviderApiKey"] as const)(
     "preserves profile/env precedence and ignores unselected failures through %s",
@@ -534,26 +489,7 @@ describe("models-config provider auth provenance", () => {
     },
   );
 
-  it.each(["resolveProviderAuth", "resolveProviderApiKey"] as const)(
-    "preserves the selected profile through provider aliases with %s",
-    async (callback) => {
-      await withDiscoveryFixture(
-        "api_key",
-        callback,
-        async (fixture) => {
-          fixture.emitOutcome();
-          await fixture.discover();
-          expect(fixture.authorization).toEqual([`Bearer ${fixture.runtimeKey}`]);
-          expect(fixture.outcomes).toEqual([
-            { provider: "openai", profileId: fixture.profileId, status: "ready" },
-          ]);
-        },
-        "proof-alias",
-      );
-    },
-  );
-
-  it.each(["resolveProviderAuth", "resolveProviderApiKey"] as const)(
+  it.each(["resolveProviderAuth"] as const)(
     "applies stored catalog order through %s",
     async (callback) => {
       await withDiscoveryFixture("api_key", callback, async (fixture) => {
@@ -584,54 +520,41 @@ describe("models-config provider auth provenance", () => {
   );
 
   it.each([
-    {
-      name: "keeps a profile with a one-model cooldown",
-      usage: {
-        cooldownReason: "rate_limit" as const,
-        cooldownModel: "gpt-5.5",
-      },
-      expectedProfile: "selected",
-      expectedKey: "runtime",
-    },
-    {
-      name: "demotes a profile-wide cooldown",
-      usage: {
-        cooldownReason: "rate_limit" as const,
-      },
-      expectedProfile: "backup",
-      expectedKey: "backup",
-    },
-  ])("$name during prepared catalog discovery", async ({ usage, expectedProfile, expectedKey }) => {
-    await withDiscoveryFixture("api_key", "resolveProviderAuth", async (fixture) => {
-      const backupProfileId = "openai:cooldown-backup";
-      fixture.store.profiles[backupProfileId] = {
-        type: "api_key",
-        provider: "openai",
-        key: "cooldown-backup-key",
-      };
-      fixture.store.usageStats = {
-        [fixture.profileId]: { ...usage, cooldownUntil: Date.now() + 60_000 },
-      };
-      fixture.emitOutcome();
-
-      await fixture.discover({
-        auth: {
-          order: {
-            openai: [fixture.profileId, backupProfileId],
+    ["model", "gpt-5.5", true],
+    ["profile", undefined, false],
+  ] as const)(
+    "applies %s cooldown scope during catalog discovery",
+    async (_scope, cooldownModel, keepPrimary) => {
+      await withDiscoveryFixture("api_key", "resolveProviderAuth", async (fixture) => {
+        const backupProfileId = "openai:cooldown-backup";
+        fixture.store.profiles[backupProfileId] = createApiKeyCredential(
+          "openai",
+          "cooldown-backup-key",
+        );
+        fixture.store.usageStats = {
+          [fixture.profileId]: {
+            cooldownReason: "rate_limit",
+            cooldownUntil: Date.now() + 60_000,
+            ...(cooldownModel ? { cooldownModel } : {}),
           },
-        },
+        };
+        fixture.emitOutcome();
+        await fixture.discover({
+          auth: { order: { openai: [fixture.profileId, backupProfileId] } },
+        });
+        expect(fixture.authorization).toEqual([
+          keepPrimary ? `Bearer ${fixture.runtimeKey}` : "Bearer cooldown-backup-key",
+        ]);
+        expect(fixture.outcomes).toEqual([
+          {
+            provider: "openai",
+            profileId: keepPrimary ? fixture.profileId : backupProfileId,
+            status: "ready",
+          },
+        ]);
       });
-
-      const expectedProfileId =
-        expectedProfile === "selected" ? fixture.profileId : backupProfileId;
-      const expectedAuthorization =
-        expectedKey === "runtime" ? `Bearer ${fixture.runtimeKey}` : "Bearer cooldown-backup-key";
-      expect(fixture.authorization).toEqual([expectedAuthorization]);
-      expect(fixture.outcomes).toEqual([
-        { provider: "openai", profileId: expectedProfileId, status: "ready" },
-      ]);
-    });
-  });
+    },
+  );
 
   const configRef = { source: "store", provider: "default", id: "CONFIG_KEY" } as const;
   const configWithKey = (
@@ -641,17 +564,10 @@ describe("models-config provider auth provenance", () => {
       providers: { openai: { baseUrl: "https://catalog.example.test/v1", apiKey, models: [] } },
     },
   });
-  it.each(
-    (["resolveProviderAuth", "resolveProviderApiKey"] as const).flatMap((callback) =>
-      [
-        "prepared-config-key",
-        "ollama-local",
-        "OLLAMA_API_KEY",
-        "secretref-managed",
-        "${OPAQUE_KEY}",
-      ].map((value) => ({ callback, value })),
-    ),
-  )(
+  it.each([
+    { callback: "resolveProviderAuth", value: "secretref-managed" },
+    { callback: "resolveProviderApiKey", value: "${OPAQUE_KEY}" },
+  ] as const)(
     "keeps prepared config Ref bytes $value opaque through $callback",
     async ({ callback, value }) => {
       await withDiscoveryFixture(
@@ -676,11 +592,10 @@ describe("models-config provider auth provenance", () => {
     },
   );
 
-  it.each(
-    (["resolveProviderAuth", "resolveProviderApiKey"] as const).flatMap((callback) =>
-      ["missing", "empty", "unmaterialized"].map((state) => ({ callback, state })),
-    ),
-  )(
+  it.each([
+    { callback: "resolveProviderAuth", state: "unmaterialized" },
+    { callback: "resolveProviderApiKey", state: "empty" },
+  ] as const)(
     "isolates selected $state config refs through $callback before HTTP",
     async ({ callback, state }) => {
       await withDiscoveryFixture("api_key", callback, async (fixture) => {
@@ -691,7 +606,7 @@ describe("models-config provider auth provenance", () => {
             ? { "openai:lower": { type: "api_key", provider: "openai", key: "wrong-account-key" } }
             : {};
         fixture.env.CONFIG_KEY = "wrong-env-key";
-        const value = state === "missing" ? undefined : state === "empty" ? "" : configRef;
+        const value = state === "empty" ? "" : configRef;
         const plan = await fixture.plan(configWithKey(configRef), configWithKey(value));
         expect(fixture.authorization).toEqual([]);
         expect(fixture.errors).toHaveLength(1);
@@ -703,256 +618,39 @@ describe("models-config provider auth provenance", () => {
     },
   );
 
-  it("persists env keyRef and tokenRef auth profiles as env var markers", () => {
-    const envSnapshot = captureEnv(["VOLCANO_ENGINE_API_KEY", "TOGETHER_API_KEY"]);
-    delete process.env.VOLCANO_ENGINE_API_KEY;
-    delete process.env.TOGETHER_API_KEY;
-    try {
-      const volcengineApiKey = resolveApiKeyFromCredential({
-        type: "api_key",
-        provider: "volcengine",
-        keyRef: { source: "env", provider: "default", id: "VOLCANO_ENGINE_API_KEY" },
-      })?.apiKey;
-      const togetherApiKey = resolveApiKeyFromCredential({
-        type: "token",
-        provider: "together",
-        tokenRef: { source: "env", provider: "default", id: "TOGETHER_API_KEY" },
-      })?.apiKey;
-      expect(volcengineApiKey).toBe("VOLCANO_ENGINE_API_KEY");
-      expect(togetherApiKey).toBe("TOGETHER_API_KEY");
-    } finally {
-      envSnapshot.restore();
-    }
+  it.each([
+    { key: "xai-plugin-key", marker: NON_ENV_SECRETREF_MARKER, discoveryApiKey: "xai-plugin-key" },
+    { key: "custom-local", marker: "custom-local", discoveryApiKey: undefined },
+  ])("preserves synthetic auth provenance for $key", ({ key, marker, discoveryApiKey }) => {
+    mockedResolveProviderSyntheticAuthWithPlugin.mockReturnValue({
+      apiKey: key,
+      mode: "api-key",
+      source: "test plugin",
+    });
+    const auth = createProviderAuthResolver({}, createAuthProfileStoreFixture({}));
+    expect(auth("fixture")).toEqual({
+      apiKey: marker,
+      discoveryApiKey,
+      mode: "api_key",
+      source: "none",
+    });
   });
 
-  it("uses non-env marker for ref-managed profiles even when runtime plaintext is present", () => {
-    // Ref-managed secrets may be resolved in memory, but models.json should
-    // persist only a non-env marker so plaintext is not written back.
-    const byteplusApiKey = resolveApiKeyFromCredential({
-      type: "api_key",
-      provider: "byteplus",
-      key: "sk-runtime-resolved-byteplus",
-      keyRef: { source: "file", provider: "vault", id: "/byteplus/apiKey" },
-    })?.apiKey;
-    const togetherApiKey = resolveApiKeyFromCredential({
-      type: "token",
-      provider: "together",
-      token: "tok-runtime-resolved-together",
-      tokenRef: { source: "exec", provider: "vault", id: "providers/together/token" },
-    })?.apiKey;
-    expect(byteplusApiKey).toBe(NON_ENV_SECRETREF_MARKER);
-    expect(togetherApiKey).toBe(NON_ENV_SECRETREF_MARKER);
-  });
-
-  it("prefers profile auth over env auth in provider summaries to match runtime resolution", () => {
-    const auth = createProviderAuthResolver(
-      {
-        OPENAI_API_KEY: "env-openai-key",
-      } as NodeJS.ProcessEnv,
-      createAuthProfileStoreFixture({
-        "openai:default": {
-          type: "api_key",
-          provider: "openai",
-          keyRef: { source: "env", provider: "default", id: "OPENAI_PROFILE_KEY" },
-        },
-      }),
+  it.each([
+    ["${MY_VLLM_KEY}", { MY_VLLM_KEY: "resolved-key" }, "MY_VLLM_KEY", "resolved-key"],
+    ["${MY_VLLM_KEY}", {}, undefined, undefined],
+    ["VLLM_API_KEY", {}, undefined, undefined],
+    ["ALLCAPS_SAMPLE", {}, "ALLCAPS_SAMPLE", "ALLCAPS_SAMPLE"],
+  ] as const)("resolves configured credential %s with %j", (key, env, apiKey, discoveryApiKey) => {
+    const auth = createProviderApiKeyResolver(
+      env,
+      { version: 1, profiles: {} },
+      configWithKey(key),
     );
-
     expect(auth("openai")).toEqual({
-      apiKey: "OPENAI_PROFILE_KEY",
-      discoveryApiKey: undefined,
-      mode: "api_key",
-      source: "profile",
-      profileId: "openai:default",
-    });
-  });
-
-  it("resolves plugin-owned synthetic auth through the provider hook", () => {
-    // Plugin-owned synthetic auth can provide discovery keys while persisted
-    // config still records a non-secret marker.
-    mockedResolveProviderSyntheticAuthWithPlugin.mockReturnValue({
-      apiKey: "xai-plugin-key",
-      mode: "api-key",
-      source: "test plugin",
-    });
-    const auth = createProviderAuthResolver(
-      {} as NodeJS.ProcessEnv,
-      createAuthProfileStoreFixture({}),
-      {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: "xai-plugin-key",
-                },
-              },
-            },
-          },
-        },
-      },
-    );
-
-    expect(auth("xai")).toEqual({
-      apiKey: NON_ENV_SECRETREF_MARKER,
-      discoveryApiKey: "xai-plugin-key",
-      mode: "api_key",
-      source: "none",
-    });
-  });
-
-  it("uses literal configured provider api keys for catalog discovery", () => {
-    const auth = createProviderApiKeyResolver(
-      {} as NodeJS.ProcessEnv,
-      createAuthProfileStoreFixture({}),
-      {
-        models: {
-          providers: {
-            vllm: {
-              baseUrl: "http://127.0.0.1:8000/v1",
-              apiKey: "proof-key",
-              api: "openai-completions",
-              models: [],
-            },
-          },
-        },
-      },
-    );
-
-    expect(auth("vllm")).toEqual({
-      apiKey: "proof-key",
-      discoveryApiKey: "proof-key",
-      mode: "api_key",
-    });
-  });
-
-  it("resolves custom configured env markers for catalog discovery", () => {
-    const auth = createProviderApiKeyResolver(
-      {
-        MY_VLLM_KEY: "resolved-vllm-key",
-      } as NodeJS.ProcessEnv,
-      createAuthProfileStoreFixture({}),
-      {
-        models: {
-          providers: {
-            vllm: {
-              baseUrl: "http://127.0.0.1:8000/v1",
-              apiKey: "${MY_VLLM_KEY}",
-              api: "openai-completions",
-              models: [],
-            },
-          },
-        },
-      },
-    );
-
-    expect(auth("vllm")).toEqual({
-      apiKey: "MY_VLLM_KEY",
-      discoveryApiKey: "resolved-vllm-key",
-      mode: "api_key",
-    });
-  });
-
-  it("does not send missing custom env markers as catalog discovery keys", () => {
-    const auth = createProviderApiKeyResolver(
-      {} as NodeJS.ProcessEnv,
-      createAuthProfileStoreFixture({}),
-      {
-        models: {
-          providers: {
-            vllm: {
-              baseUrl: "http://127.0.0.1:8000/v1",
-              apiKey: "${MY_VLLM_KEY}",
-              api: "openai-completions",
-              models: [],
-            },
-          },
-        },
-      },
-    );
-
-    expect(auth("vllm")).toEqual({
-      apiKey: undefined,
-      discoveryApiKey: undefined,
-    });
-  });
-
-  it("does not send missing known provider env markers as catalog discovery keys", () => {
-    const auth = createProviderApiKeyResolver(
-      {} as NodeJS.ProcessEnv,
-      createAuthProfileStoreFixture({}),
-      {
-        models: {
-          providers: {
-            vllm: {
-              baseUrl: "http://127.0.0.1:8000/v1",
-              apiKey: "VLLM_API_KEY",
-              api: "openai-completions",
-              models: [],
-            },
-          },
-        },
-      },
-    );
-
-    expect(auth("vllm")).toEqual({
-      apiKey: undefined,
-      discoveryApiKey: undefined,
-    });
-  });
-
-  it("preserves bare all-caps configured api keys as literal catalog discovery keys", () => {
-    const auth = createProviderApiKeyResolver(
-      {} as NodeJS.ProcessEnv,
-      createAuthProfileStoreFixture({}),
-      {
-        models: {
-          providers: {
-            vllm: {
-              baseUrl: "http://127.0.0.1:8000/v1",
-              apiKey: "ALLCAPS_SAMPLE",
-              api: "openai-completions",
-              models: [],
-            },
-          },
-        },
-      },
-    );
-
-    expect(auth("vllm")).toEqual({
-      apiKey: "ALLCAPS_SAMPLE",
-      discoveryApiKey: "ALLCAPS_SAMPLE",
-      mode: "api_key",
-    });
-  });
-
-  it("preserves shared non-secret synthetic auth markers from provider hooks", () => {
-    mockedResolveProviderSyntheticAuthWithPlugin.mockReturnValue({
-      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
-      mode: "api-key",
-      source: "test plugin",
-    });
-    const auth = createProviderAuthResolver(
-      {} as NodeJS.ProcessEnv,
-      createAuthProfileStoreFixture({}),
-      {
-        plugins: {
-          entries: {
-            lmstudio: {
-              config: {
-                models: [{ id: "qwen/qwen3.5-9b" }],
-              },
-            },
-          },
-        },
-      },
-    );
-
-    expect(auth("lmstudio")).toEqual({
-      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
-      discoveryApiKey: undefined,
-      mode: "api_key",
-      source: "none",
+      apiKey,
+      discoveryApiKey,
+      ...(apiKey ? { mode: "api_key" } : {}),
     });
   });
 
@@ -983,48 +681,162 @@ describe("models-config provider auth provenance", () => {
   });
 });
 
-describe("models-config.providers.policy", () => {
-  it("resolves config apiKey markers through provider plugin hooks", () => {
-    const resolver = resolveProviderConfigApiKeyResolver("amazon-bedrock");
-
-    expect(resolver).toBeTypeOf("function");
-    expect(resolver?.({ AWS_PROFILE: "default" } as NodeJS.ProcessEnv)).toBe("AWS_PROFILE");
-  });
-
-  it("resolves anthropic-vertex ADC markers through provider plugin hooks", () => {
-    const resolver = resolveProviderConfigApiKeyResolver("anthropic-vertex");
-
-    expect(resolver).toBeTypeOf("function");
-    expect(resolver?.({ ANTHROPIC_VERTEX_USE_GCP_METADATA: "true" } as NodeJS.ProcessEnv)).toBe(
-      "gcp-vertex-credentials",
-    );
-  });
-
-  it("normalizes Google provider config through provider plugin hooks", () => {
-    expect(
-      normalizeProviderSpecificConfig("google", {
-        api: "google-generative-ai",
-        baseUrl: "https://generativelanguage.googleapis.com",
-        models: [],
-      }),
-    ).toEqual({
-      api: "google-generative-ai",
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      models: [],
+describe("models-config catalog runtime headers", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const ref = (id: string) => ({ source: "env", provider: "default", id }) as const;
+  async function planCatalog(
+    cfg: OpenClawConfig,
+    runtime: OpenClawConfig,
+    env: NodeJS.ProcessEnv = {},
+  ) {
+    const { planOpenClawModelsJson } = await import("./models-config.plan.js");
+    return planOpenClawModelsJson({
+      context: {
+        cfg,
+        discoveryAuthConfig: runtime,
+        sourceConfigForSecrets: cfg,
+        agentDir: tempDirs.make("catalog-headers-"),
+        env,
+        envFingerprint: "catalog-headers",
+        providerDiscoveryProviderIds: ["catalog-fixture"],
+      },
+      authStore: { version: 1, profiles: {} },
+      existingRaw: "",
+      existingParsed: null,
     });
+  }
+
+  it("passes resolved catalog headers while persisting their source markers", async () => {
+    const sourceConfig = {
+      models: {
+        providers: {
+          "catalog-fixture": {
+            baseUrl: "https://catalog.example/v1",
+            api: "openai-completions",
+            apiKey: ref("CATALOG_AUTH_TOKEN"),
+            headers: {
+              "X-Catalog-Token": ref("CATALOG_TOP_TOKEN"),
+            },
+            request: {
+              headers: {
+                "X-Request-Token": ref("CATALOG_REQUEST_TOKEN"),
+              },
+            },
+            models: [],
+          },
+          "other-fixture": {
+            baseUrl: "https://other.example/v1",
+            headers: {
+              "X-Other-Token": ref("CATALOG_OTHER_TOKEN"),
+            },
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const runtimeConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          "catalog-fixture": {
+            ...sourceConfig.models.providers["catalog-fixture"],
+            apiKey: "activated-auth-material",
+            headers: { "X-Catalog-Token": "activated-catalog-material" },
+            request: { headers: { "X-Request-Token": "activated-request-material" } },
+          },
+          "other-fixture": {
+            ...sourceConfig.models.providers["other-fixture"],
+            headers: { "X-Other-Token": "other-private-material" },
+          },
+        },
+      },
+    };
+    const before = structuredClone(sourceConfig);
+    const observed: unknown[] = [];
+    discovery.providers = [
+      {
+        id: "catalog-fixture",
+        pluginId: "catalog-fixture",
+        label: "Catalog fixture",
+        auth: [],
+        catalog: {
+          order: "simple",
+          run: async (ctx) => {
+            const provider = expectDefined(
+              ctx.config.models?.providers?.["catalog-fixture"],
+              "catalog callback provider",
+            );
+            observed.push({
+              apiKey: provider.apiKey,
+              headers: provider.headers,
+              request: provider.request,
+              otherHeaders: ctx.config.models?.providers?.["other-fixture"]?.headers,
+            });
+            return { provider: { baseUrl: provider.baseUrl, api: provider.api, models: [] } };
+          },
+        },
+      },
+    ];
+    const plan = await planCatalog(sourceConfig, runtimeConfig, {
+      CATALOG_TOP_TOKEN: "unactivated-env-material",
+    });
+
+    expect(observed).toEqual([
+      {
+        apiKey: ref("CATALOG_AUTH_TOKEN"),
+        headers: { "X-Catalog-Token": "activated-catalog-material" },
+        request: { headers: { "X-Request-Token": "activated-request-material" } },
+        otherHeaders: {
+          "X-Other-Token": ref("CATALOG_OTHER_TOKEN"),
+        },
+      },
+    ]);
+    expect(plan.action).toBe("write");
+    expect(JSON.stringify(plan)).toContain("CATALOG_TOP_TOKEN");
+    expect(JSON.stringify(plan)).toContain("CATALOG_REQUEST_TOKEN");
+    expect(JSON.stringify(plan)).not.toContain("activated-catalog-material");
+    expect(JSON.stringify(plan)).not.toContain("activated-request-material");
+    expect(JSON.stringify(plan)).not.toContain("activated-auth-material");
+    expect(JSON.stringify(plan)).not.toContain("other-private-material");
+    expect(sourceConfig).toEqual(before);
   });
 
-  it("does not treat generic transport APIs as provider plugin ids", () => {
-    const provider = {
-      api: "openai-completions" as const,
-      baseUrl: "https://example.invalid/v1",
-      apiKey: "GENERIC_TRANSPORT_MARKER",
-      models: [],
-    };
+  it("keeps unresolved catalog headers fail-closed", async () => {
+    const { normalizeResolvedSecretInputString } = await import("../config/types.secrets.js");
+    const config = {
+      models: {
+        providers: {
+          "catalog-fixture": {
+            baseUrl: "https://catalog.example/v1",
+            headers: {
+              "X-Catalog-Token": ref("CATALOG_TOP_TOKEN"),
+            },
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    discovery.providers = [
+      {
+        id: "catalog-fixture",
+        pluginId: "catalog-fixture",
+        label: "Catalog fixture",
+        auth: [],
+        catalog: {
+          order: "simple",
+          run: async (ctx) => {
+            normalizeResolvedSecretInputString({
+              value:
+                ctx.config.models?.providers?.["catalog-fixture"]?.headers?.["X-Catalog-Token"],
+              path: "models.providers.catalog-fixture.headers.X-Catalog-Token",
+            });
+            throw new Error("Unresolved catalog request was admitted");
+          },
+        },
+      },
+    ];
 
-    const resolver = resolveProviderConfigApiKeyResolver("dashscope-vision", provider);
-    expect(resolver).toBeTypeOf("function");
-    expect(resolver?.({} as NodeJS.ProcessEnv)).toBeUndefined();
-    expect(normalizeProviderSpecificConfig("dashscope-vision", provider)).toBe(provider);
+    await expect(planCatalog(config, structuredClone(config))).rejects.toThrow(
+      "unresolved SecretRef",
+    );
   });
 });

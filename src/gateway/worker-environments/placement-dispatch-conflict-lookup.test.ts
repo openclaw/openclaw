@@ -1,11 +1,10 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { MANIFEST_REF, type PlacementStore, REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness as createPlacementHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
@@ -26,7 +25,7 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useStateDatabaseTempDirs();
 
 describe("worker placement dispatch conflict lookup", () => {
   let root: string;
@@ -48,10 +47,6 @@ describe("worker placement dispatch conflict lookup", () => {
     placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
   });
 
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
-  });
-
   it("reclaims an unchanged worker with unknown conflict state without silently clearing its report", async () => {
     const harness = createTestHarness({
       priorWorkspaceResultConflictLookup: { kind: "unknown", reason: "malformed-report" },
@@ -67,7 +62,7 @@ describe("worker placement dispatch conflict lookup", () => {
     });
 
     expect(harness.reportWorkspaceResultConflict).not.toHaveBeenCalled();
-    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
     expect(workerPlacementWarn).toHaveBeenCalledExactlyOnceWith(
       `Cloud workspace conflict state unknown sessionId=${REQUEST.sessionId} reason=malformed-report; preserving prior conflict state`,
@@ -81,11 +76,11 @@ describe("worker placement dispatch conflict lookup", () => {
     "reclaims a previous-instance pending result with $kind conflict state without clearing unseen reports",
     async (lookup) => {
       const originalHarness = createTestHarness();
-      const active = originalHarness.placements.seedActive(2);
+      const active = await originalHarness.placements.seedActive(2);
       if (active.state !== "active") {
         throw new Error("active placement fixture was not active");
       }
-      const claim = placementStore.claimTurn({
+      const claim = await placementStore.claimTurn({
         ...REQUEST,
         claimId: "restarted-turn-claim",
         runId: "restarted-turn-run",
@@ -95,7 +90,7 @@ describe("worker placement dispatch conflict lookup", () => {
           ownerEpoch: active.activeOwnerEpoch,
         },
       });
-      placementStore.markWorkspaceResultPending(claim);
+      await placementStore.markWorkspaceResultPending(claim);
 
       const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
       const restartedHarness = createTestHarness(
@@ -110,7 +105,7 @@ describe("worker placement dispatch conflict lookup", () => {
         turnClaim: null,
         workspaceBaseManifestRef: restartedHarness.reconciledManifestRef,
       });
-      expect(restartedStore.listPendingWorkspaceResults()).toEqual([]);
+      expect(await restartedStore.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(restartedHarness.environments.destroy).toHaveBeenCalledOnce();
       expect(restartedHarness.log).not.toContain("workspace:resume");
       expect(restartedHarness.reportWorkspaceResultConflict).not.toHaveBeenCalled();

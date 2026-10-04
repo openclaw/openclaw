@@ -1,6 +1,6 @@
 // Commander registration for device pairing and auth-token commands.
 import { Option, type Command } from "commander";
-import { createLazyRuntimeMethodBinder, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { createLazyRuntimeMethodBinder } from "../shared/lazy-runtime.js";
 import { isDevicesMachineOutput } from "./devices-output-mode.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
@@ -8,19 +8,14 @@ import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 const DEFAULT_DEVICES_TIMEOUT_MS = 10_000;
 
 // Keep device-pairing crypto/table dependencies out of root help startup.
-const loadDevicesRuntime = createLazyRuntimeModule(() => import("./devices-cli.runtime.js"));
-const deviceAction = createLazyRuntimeMethodBinder(loadDevicesRuntime);
+const deviceAction = createLazyRuntimeMethodBinder(() => import("./devices-cli.runtime.js"));
 
-const devicesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
+const devicesCallOpts = (cmd: Command) =>
   cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (password auth)")
-    .option(
-      "--timeout <ms>",
-      "Timeout in ms",
-      String(defaults?.timeoutMs ?? DEFAULT_DEVICES_TIMEOUT_MS),
-    )
+    .option("--timeout <ms>", "Timeout in ms", String(DEFAULT_DEVICES_TIMEOUT_MS))
     .option("--json", "Output JSON", false);
 
 export function registerDevicesCli(program: Command) {

@@ -15,10 +15,10 @@ afterEach(() => roots.splice(0).forEach((root) => root.remove()));
 
 it.each(
   (["assignment", "compact assignment", "members"] as const).flatMap((surface) =>
-    [21, 1000].map((count) => ({ surface, count })),
+    [60, 101].map((count) => ({ surface, count })),
   ),
 )(
-  "keeps $surface search editable, pages bounded, and keyboard selection intact ($count entries)",
+  "shows every $surface entry with editable search and keyboard selection ($count entries)",
   async ({ surface, count }) => {
     await page.viewport(surface === "compact assignment" ? 414 : 1280, 900);
     const shown = new Promise<void>((resolve) => {
@@ -44,6 +44,8 @@ it.each(
       );
       expect(assignment).toBeGreaterThanOrEqual(0);
       await expect.element(page.getByText("Assign to…", { exact: true })).toBeVisible();
+      // A resting pointer opens the submenu first; Enter on its owner must not select a row.
+      await userEvent.hover(groups[assignment]!);
       groups[assignment]!.focus();
       await userEvent.keyboard("{Enter}");
     } else {
@@ -81,8 +83,26 @@ it.each(
     }
     const input = page.getByRole("searchbox", { name: "Search people and agents…" });
     await expect.element(input).toBeVisible();
+    if (surface === "assignment") {
+      const submenu = input
+        .element()
+        .closest("wa-dropdown-item")
+        ?.shadowRoot?.querySelector('[part="submenu"]');
+      const style = submenu ? getComputedStyle(submenu) : null;
+      expect(style?.width).toBe("320px");
+      expect(style?.maxHeight).toBe("420px");
+      expect(style?.overflowY).toBe("auto");
+    }
     const selector = surface !== "members" ? '[value^="assign-owner:"]' : '[value^="member:"]';
-    await expect.poll(() => root.querySelectorAll(selector).length).toBe(20);
+    await expect
+      .poll(() => root.querySelectorAll(selector).length)
+      .toBe(count + (surface === "members" ? 0 : 2));
+    await expect
+      .element(page.getByRole("button", { name: "Next", exact: true }))
+      .not.toBeInTheDocument();
+    await expect
+      .element(page.getByRole("button", { name: "Previous", exact: true }))
+      .not.toBeInTheDocument();
     if (surface === "compact assignment") {
       await expect.poll(() => document.activeElement?.getAttribute("value")).toBe("compact:back");
     }
@@ -93,26 +113,8 @@ it.each(
     await userEvent.keyboard("{Tab}");
     expect(document.activeElement).toBe(input.element());
     await userEvent.keyboard("{Tab}");
-    expect(document.activeElement).toBe(
-      page.getByRole("button", { name: "Next", exact: true }).element(),
-    );
-    await userEvent.keyboard("{Enter}");
-    await expect
-      .poll(() => root.querySelectorAll(selector).length)
-      .toBe(Math.min(20, count + (surface === "members" ? 0 : 2) - 20));
-    expect(root.querySelector(selector)?.textContent).toContain(
-      surface !== "members" ? "Person 0018" : "Person 0020",
-    );
-    const next = page.getByRole("button", { name: "Next", exact: true }).element();
-    if (!next.hasAttribute("disabled")) {
-      await userEvent.keyboard("{Tab}{Tab}");
-    }
-    expect(document.activeElement).toBe(input.element());
-    await userEvent.keyboard("{Tab}");
-    expect(document.activeElement).toBe(
-      page.getByRole("button", { name: "Previous", exact: true }).element(),
-    );
-    await userEvent.keyboard("{Enter}");
+    expect(document.activeElement).toBe(root.querySelector(selector));
+    await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
     expect(document.activeElement).toBe(input.element());
     await userEvent.keyboard("pc");
     expect(onAction).not.toHaveBeenCalled();

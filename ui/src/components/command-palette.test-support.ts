@@ -62,6 +62,7 @@ export function createGateway(
     connectionRevision: 0,
     eventLog: [],
     eventLogRevision: 0,
+    loadSelfProfile: async () => null,
     connect: () => undefined,
     setSessionKey: () => undefined,
     start: () => undefined,
@@ -84,7 +85,7 @@ export function createGateway(
       }
       const invalidation = modelCatalogEventInvalidation({ event, payload });
       if (invalidation) {
-        invalidateChatMetadataStore(client, undefined, undefined, invalidation === "clear");
+        invalidateChatMetadataStore(client, undefined, undefined, invalidation);
       }
       for (const listener of events) {
         listener({ type: "event", event, payload });

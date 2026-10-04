@@ -13,6 +13,7 @@ import { sessionCreatorProfileId } from "../../config/sessions/session-entry-pro
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadSessionLogs, loadSessionUsageTimeSeries } from "../../infra/session-cost-usage.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import {
   createUsageAggregateAccumulator,
   UNKNOWN_USAGE_CREATOR_KEY,
@@ -54,7 +55,7 @@ import {
 } from "./usage-session-selection.js";
 import { assertValidParams } from "./validation.js";
 
-function resolveSessionUsageFileOrRespond(
+async function resolveSessionUsageFileOrRespond(
   params: { key?: unknown; agentId?: unknown } | undefined,
   detail: "timeseries" | "logs",
   respond: RespondFn,
@@ -78,10 +79,11 @@ function resolveSessionUsageFileOrRespond(
     respond(false, undefined, sessionOwner.error);
     return null;
   }
-  let resolved: NonNullable<ReturnType<typeof resolveSessionUsageTarget>> | undefined;
+  let resolved: Awaited<ReturnType<typeof resolveSessionUsageTarget>>;
   try {
-    resolved = resolveSessionUsageTarget(key, config, sessionOwner.agentId);
+    resolved = await resolveSessionUsageTarget(key, config, sessionOwner.agentId);
   } catch {
+    getAsyncWorkSignal()?.throwIfAborted();
     resolved = undefined;
   }
   if (!resolved) {
@@ -371,6 +373,7 @@ export const usageHandlers: GatewayRequestHandlers = {
                 modelProvider: merged.storeEntry?.modelProvider,
                 model: merged.storeEntry?.model,
                 usage,
+                ...(!usage ? { computing: true } : {}),
                 hasContextWeight: Boolean(merged.contextWeight),
                 contextWeight: includeContextWeight ? (merged.contextWeight ?? null) : undefined,
               });
@@ -399,7 +402,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     respond(true, result, undefined);
   },
   "sessions.usage.timeseries": async ({ respond, params, context }) => {
-    const resolved = resolveSessionUsageFileOrRespond(
+    const resolved = await resolveSessionUsageFileOrRespond(
       params,
       "timeseries",
       respond,
@@ -408,11 +411,10 @@ export const usageHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
-    const { config, key, entry, agentId, sessionId, sessionFile } = resolved;
+    const { config, key, agentId, sessionId, sessionFile } = resolved;
 
     const timeseries = await loadSessionUsageTimeSeries({
       sessionId,
-      sessionEntry: entry,
       sessionFile,
       config,
       agentId,
@@ -436,7 +438,7 @@ export const usageHandlers: GatewayRequestHandlers = {
         ? Math.min(params.limit, 1000)
         : 200;
 
-    const resolved = resolveSessionUsageFileOrRespond(
+    const resolved = await resolveSessionUsageFileOrRespond(
       params,
       "logs",
       respond,
@@ -445,11 +447,10 @@ export const usageHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
-    const { config, entry, agentId, sessionId, sessionFile } = resolved;
+    const { config, agentId, sessionId, sessionFile } = resolved;
 
     const logs = await loadSessionLogs({
       sessionId,
-      sessionEntry: entry,
       sessionFile,
       config,
       agentId,

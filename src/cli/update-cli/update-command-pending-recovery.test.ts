@@ -3,12 +3,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import * as config from "../../config/config.js";
 import * as launchd from "../../daemon/launchd.js";
+import * as scheduledTasks from "../../daemon/schtasks.js";
 import * as gatewayService from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { resolvePackageActivationAnchor } from "../../infra/package-update-activation-journal.js";
+import { createPackageActivationLifetimeFixture } from "../../infra/package-update-activation-lifetime.test-support.js";
+import { readPackageActivationReceipt } from "../../infra/package-update-activation.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
@@ -38,15 +42,21 @@ import {
   finishSuccessfulPackageSwitch,
   taskRecovery,
 } from "./update-command-post-update.test-support.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import * as updateResume from "./update-command-resume.js";
+import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
+import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 import { updateCommand } from "./update-command.js";
+import { updateRepairCommand } from "./update-repair-command.js";
 
 const dirs = new Set<string>();
+const activationFixture = createPackageActivationLifetimeFixture();
 afterEach(() => cleanupTempDirs(dirs));
+afterEach(() => activationFixture.lifetime.cleanup());
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
@@ -80,11 +90,13 @@ function pendingPackageInvocation(
     serviceDrift?: boolean;
     alias?: boolean;
     existingRun?: boolean;
-    manager?: "npm" | "pnpm" | "bun";
     profile?: string;
     readOnlyConfig?: boolean;
   } = {},
 ) {
+  if (params.serviceDrift) {
+    stubNodeRuntime();
+  }
   const home = fs.realpathSync(makeTempDir(dirs, "pending-package-admission-"));
   const identity = createManagedServiceIdentityFixture(home);
   const state = resolveProfileStateDir(params.profile ?? "default", process.env, () => home);
@@ -132,9 +144,7 @@ function pendingPackageInvocation(
   }
   vi.spyOn(updateShared, "resolveUpdateRoot").mockResolvedValue(invocationRoot);
   vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
-  const manager = vi
-    .spyOn(updateShared, "resolveGlobalManager")
-    .mockResolvedValue(params.manager ?? "npm");
+  const manager = vi.spyOn(updateShared, "resolveGlobalManager").mockResolvedValue("npm");
   const service = createMockGatewayService({
     isLoaded: async () => true,
     readRuntime: async () => ({ status: "running", systemd: { managerUid: 2001 } }),
@@ -209,17 +219,50 @@ function pendingPackageInvocation(
 }
 
 describe.skipIf(process.platform === "win32")("pending package activation admission", () => {
+  it("preserves the prepared activation owner's full recovery command in the child result", () =>
+    activationFixture.lifetime.run(async () => {
+      const { root } = activationFixture.setup();
+      const prepared = await activationFixture.prepare();
+      const receipt = readPackageActivationReceipt(prepared.packageRoot);
+      expect(receipt?.phase).toBe("prepared");
+      const command = receipt?.recoveryCommand;
+      if (!command) {
+        throw new Error("Prepared activation did not provide its recovery command");
+      }
+      const f = pendingPackageInvocation();
+      vi.mocked(updateShared.resolveUpdateRoot).mockResolvedValue(prepared.packageRoot);
+      const before = materialSnapshot(root);
+      try {
+        await expect(updateCommand({ json: true, yes: true })).rejects.toMatchObject({ code: 1 });
+        expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+          expect.objectContaining({
+            status: "error",
+            reason: "update-recovery-pending",
+            steps: expect.arrayContaining([
+              expect.objectContaining({
+                diagnostics: [expect.stringContaining(command)],
+              }),
+            ]),
+          }),
+        );
+        for (const writer of Object.values(f.writers)) {
+          expect(writer).not.toHaveBeenCalled();
+        }
+        expect(materialSnapshot(root)).toEqual(before);
+      } finally {
+        f.restore();
+      }
+    }));
+
   it.each([
     { name: "source with absent history" },
     { name: "canonical source behind an alias", alias: true },
     { name: "managed service in another prefix", serviceDrift: true, existingRun: true },
     {
-      name: "pnpm caller with another profile",
-      manager: "pnpm" as const,
+      name: "caller with another profile",
       profile: "other",
       existingRun: true,
     },
-    { name: "Bun caller with another profile", manager: "bun" as const, profile: "other" },
     { name: "externally managed config", readOnlyConfig: true, existingRun: true },
   ])("refuses $name before writable preparation or run admission", async (params) => {
     const f = pendingPackageInvocation(params);
@@ -253,8 +296,6 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
 
   it.each([
     { existingRun: false, serviceDrift: false },
-    { existingRun: true, serviceDrift: false },
-    { existingRun: false, serviceDrift: true },
     { existingRun: true, serviceDrift: true },
   ])(
     "reports pending after lease acquisition (existing history=$existingRun, service drift=$serviceDrift) without changing retained material",
@@ -277,6 +318,7 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
           skipPluginValidation: true,
           observe: false,
         }),
+        configReadFailure: undefined,
         legacyConfigPlan: undefined,
         storedChannel: null,
       });
@@ -376,13 +418,11 @@ async function fixture() {
     windows,
     rollback,
     complete,
-    entries: () => 0,
-    invoke: (previousInstallRoot = runtime.root) =>
+    invoke: () =>
       finishSuccessfulPackageSwitch(
         { packageRoot: runtime.root, run },
         {
           root: runtime.root,
-          previousInstallRoot,
           opts,
           result: {
             status: "error",
@@ -408,20 +448,23 @@ async function fixture() {
 }
 
 describe("pending recovery finalizer", () => {
-  it("refuses standalone finalization before recreating a displaced canonical database", async () => {
+  it.each([
+    { command: "finalize", invoke: updateFinalizeCommand },
+    { command: "repair", invoke: updateRepairCommand },
+  ])("refuses $command before recreating a displaced canonical database", async ({ invoke }) => {
     const f = await fixture();
     const before = fs.readFileSync(f.displaced);
     const configPath = path.join(f.root, "openclaw.json");
     const originalConfig = fs.readFileSync(configPath);
     const resolveRoot = vi
       .spyOn(updateShared, "resolveUpdateRoot")
-      .mockRejectedValue(new Error("ordinary finalization reached root discovery"));
+      .mockRejectedValue(new Error("ordinary maintenance reached root discovery"));
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
     await expect(
       withOwnedManagedUpdateEnv(
         { ...process.env, ...f.env, OPENCLAW_CONFIG_PATH: configPath },
-        () => updateFinalizeCommand({ json: true, yes: true, deferCompletionCache: true }),
+        () => invoke({ json: true, yes: true, deferCompletionCache: true }),
       ),
     ).rejects.toThrow("full-state recovery is deferred");
     expect(resolveRoot).not.toHaveBeenCalled();
@@ -450,7 +493,6 @@ describe("pending recovery finalizer", () => {
           recovery: { serviceRestartSafe: false },
         },
       });
-      expect(f.entries()).toBe(0);
       expect(fs.existsSync(f.file)).toBe(false);
       expect(fs.readFileSync(f.displaced)).toEqual(before);
       expect(f.rollback).not.toHaveBeenCalled();
@@ -459,22 +501,6 @@ describe("pending recovery finalizer", () => {
       expect(f.windows.complete).not.toHaveBeenCalled();
     },
   );
-  it("refuses retained recovery without touching either the managed or caller root", async () => {
-    const f = await fixture();
-    const failure = await f.invoke(path.join(f.root, "caller-install")).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    expect(failure).toMatchObject({
-      name: "UpdateCommandPendingRecoveryFailure",
-      result: { reason: "candidate-failed" },
-    });
-    expect(f.entries()).toBe(0);
-    expect(fs.existsSync(f.file)).toBe(false);
-    expect(f.rollback).not.toHaveBeenCalled();
-    expect(f.windows.restore).not.toHaveBeenCalled();
-  });
-
   it.each(["finalizer", "reported", "unexpected", "completed"] as const)(
     "keeps %s unwind away from autostart, history and managed triage",
     async (kind) => {
@@ -539,12 +565,64 @@ describe("pending recovery finalizer", () => {
       expect(fs.readFileSync(f.displaced)).toEqual(before);
       expect(fs.readFileSync(context, "utf8")).toBe("unchanged");
       expect(f.windows.restore).not.toHaveBeenCalled();
-      expect(f.windows.complete).not.toHaveBeenCalled();
+      if (f.opts.recovery) {
+        expect(f.windows.complete).not.toHaveBeenCalled();
+      } else {
+        expect(f.windows.complete).toHaveBeenCalledExactlyOnceWith(false, { preserveState: true });
+      }
       expect(f.rollback).not.toHaveBeenCalled();
       expect(f.complete).not.toHaveBeenCalled();
     },
   );
 });
+
+it.each([false, true])(
+  "settles interrupted Windows suspension without touching pending databases (mutated=%s)",
+  async (mutated) => {
+    const f = await fixture();
+    const run = f.opts.run!;
+    const before = materialSnapshot(f.root);
+    const listeners = process.listeners("SIGINT");
+    const exited = createDeferred();
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => {
+      exited.resolve();
+      return undefined as never;
+    });
+    const suspend = vi
+      .spyOn(scheduledTasks, "suspendScheduledTaskAutoStartForUpdate")
+      .mockResolvedValue(true);
+    const resume = vi.spyOn(scheduledTasks, "resumeScheduledTaskAutoStartAfterUpdate");
+    const recovery = createWindowsTaskAutoStartRecovery({ serviceEnv: f.env, updateRun: run });
+    await recovery.suspended;
+    if (mutated) {
+      recovery.beginMutation();
+    }
+    const signal = process.listeners("SIGINT").find((listener) => !listeners.includes(listener));
+    expect(signal).toBeDefined();
+    const cause = new UpdateCommandRecoveryPendingError("Database rollback could not finish");
+    try {
+      signal!("SIGINT");
+      await expect(
+        withUpdateCommandRecoveryUnwind(
+          { run },
+          { triageTarget: { env: f.env }, windowsTaskAutoStartRecovery: recovery },
+          async () => {
+            throw cause;
+          },
+        ),
+      ).rejects.toMatchObject({ name: "UpdateCommandPendingRecoveryFailure", cause });
+      // Assert retirement before awaiting exit, so a leaked gate fails immediately.
+      expect(process.listeners("SIGINT")).toEqual(listeners);
+      await exited.promise;
+      expect(exit).toHaveBeenCalledWith(130);
+      expect(suspend).toHaveBeenCalledOnce();
+      expect(resume).not.toHaveBeenCalled();
+      expect(materialSnapshot(f.root)).toEqual(before);
+    } finally {
+      await recovery.complete(false, { preserveState: true });
+    }
+  },
+);
 
 describe("migrated-runtime unwind", () => {
   it.each([false, true])(

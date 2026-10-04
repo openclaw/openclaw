@@ -1,4 +1,3 @@
-/** Builds ACP session presentation, metadata, usage, and config-option snapshots. */
 import type { SessionConfigOption, SessionModeState } from "@agentclientprotocol/sdk";
 import {
   toAcpSessionLineageMeta,
@@ -12,7 +11,6 @@ import {
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import type { GatewaySessionRow } from "../gateway/session-utils.js";
 
-/** ACP config option ids exposed to compatible ACP clients. */
 export const ACP_THOUGHT_LEVEL_CONFIG_ID = "thought_level";
 export const ACP_FAST_MODE_CONFIG_ID = "fast_mode";
 export const ACP_VERBOSE_LEVEL_CONFIG_ID = "verbose_level";
@@ -23,7 +21,6 @@ export const ACP_ELEVATED_LEVEL_CONFIG_ID = "elevated_level";
 export const ACP_TIMEOUT_CONFIG_ID = "timeout";
 export const ACP_TIMEOUT_SECONDS_CONFIG_ID = "timeout_seconds";
 
-/** Gateway session fields needed to build ACP session presentation state. */
 export type GatewaySessionPresentationRow = Pick<
   GatewaySessionRow,
   | "key"
@@ -56,56 +53,33 @@ export type GatewaySessionPresentationRow = Pick<
   | "contextTokens"
 >;
 
-/** ACP session controls and modes shown to the client. */
 type SessionPresentation = {
   configOptions: SessionConfigOption[];
   modes: SessionModeState;
 };
 
-/** ACP session metadata plus lineage information. */
 type SessionMetadata = {
   title?: string | null;
   updatedAt?: string | null;
   _meta?: AcpSessionLineageMeta;
 };
 
-/** Context/token usage snapshot for ACP clients that expose progress meters. */
 type SessionUsageSnapshot = {
   size: number;
   used: number;
 };
 
-/** Full session snapshot sent after load/list/prompt completion. */
 export type SessionSnapshot = SessionPresentation & {
   metadata?: SessionMetadata;
   usage?: SessionUsageSnapshot;
 };
 
-function formatThinkingLevelName(level: string): string {
-  switch (level) {
-    case "xhigh":
-      return "Extra High";
-    case "adaptive":
-      return "Adaptive";
-    default:
-      return level.length > 0 ? `${level.charAt(0).toUpperCase()}${level.slice(1)}` : "Unknown";
-  }
-}
-
-function buildThinkingModeDescription(level: string): string | undefined {
-  if (level === "adaptive") {
-    return "Use the Gateway session default thought level.";
-  }
-  return undefined;
-}
-
 function formatConfigValueName(value: string): string {
-  switch (value) {
-    case "xhigh":
-      return "Extra High";
-    default:
-      return value.length > 0 ? `${value.charAt(0).toUpperCase()}${value.slice(1)}` : "Unknown";
-  }
+  return value === "xhigh"
+    ? "Extra High"
+    : value.length > 0
+      ? `${value.charAt(0).toUpperCase()}${value.slice(1)}`
+      : "Unknown";
 }
 
 function buildSelectConfigOption(params: {
@@ -151,8 +125,9 @@ export function buildSessionPresentation(params: {
     currentModeId,
     availableModes: availableLevelIds.map((level) => ({
       id: level,
-      name: formatThinkingLevelName(level),
-      description: buildThinkingModeDescription(level),
+      name: formatConfigValueName(level),
+      description:
+        level === "adaptive" ? "Use the Gateway session default thought level." : undefined,
     })),
   };
 

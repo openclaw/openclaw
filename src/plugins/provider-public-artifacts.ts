@@ -37,26 +37,6 @@ type ProviderPolicyMetadata = {
   directSurface?: BundledProviderPolicySurface | null;
 };
 
-function resolveBundledProviderPolicyPlugin(
-  providerId: string,
-  options: ProviderPolicyMetadata = {},
-): PluginManifestRecord | null {
-  const normalizedProviderId = normalizeProviderId(providerId);
-  if (!normalizedProviderId) {
-    return null;
-  }
-  const bundledPluginsDir = resolveBundledPluginsDir();
-  if (!bundledPluginsDir) {
-    return null;
-  }
-
-  const registry =
-    options.manifestRegistry ??
-    options.loadManifestRegistry?.() ??
-    loadPluginManifestRegistryCore();
-  return resolveBundledProviderPolicyOwner(normalizedProviderId, registry);
-}
-
 /** Resolves provider policy hooks for a bundled provider or its owning plugin. */
 export function resolveBundledProviderPolicySurface(
   providerId: string,
@@ -73,19 +53,23 @@ export function resolveBundledProviderPolicySurface(
   if (directSurface) {
     return directSurface;
   }
-  const ownerPlugin = resolveBundledProviderPolicyPlugin(normalizedProviderId, options);
-  if (ownerPlugin) {
-    const ownerSurface = resolveDirectBundledProviderPolicySurface(ownerPlugin.id);
-    if (ownerSurface) {
-      return ownerSurface;
-    }
+  if (!resolveBundledPluginsDir()) {
+    return null;
   }
+  const registry =
+    options.manifestRegistry ??
+    options.loadManifestRegistry?.() ??
+    loadPluginManifestRegistryCore();
+  const ownerPlugin = resolveBundledProviderPolicyOwner(normalizedProviderId, registry);
   if (!ownerPlugin) {
     return null;
   }
   // A stable plugin id can differ from its stock directory name. Use the
   // registry-owned root basename so its pre-runtime policy stays discoverable.
-  return resolveDirectBundledProviderPolicySurface(path.basename(ownerPlugin.rootDir));
+  return (
+    resolveDirectBundledProviderPolicySurface(ownerPlugin.id) ??
+    resolveDirectBundledProviderPolicySurface(path.basename(ownerPlugin.rootDir))
+  );
 }
 
 /** Resolves provider policy hooks from bundled or trusted official plugin artifacts. */

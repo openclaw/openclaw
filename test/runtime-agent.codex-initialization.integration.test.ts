@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexSessionInitializationFixtureForTest } from "../extensions/codex/test-api.js";
@@ -10,8 +11,11 @@ import {
 import { writeSessionEntry } from "../src/config/sessions/session-accessor.sqlite-entry-store.js";
 import { sessionRewindHandlers } from "../src/gateway/server-methods/sessions-rewind.js";
 import type { GatewayRequestContext } from "../src/gateway/server-methods/types.js";
+import * as sqliteAdmission from "../src/infra/sqlite-worker-operation-admission.js";
 import {
+  createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
+  type OpenAsyncKeyedStoreOptions,
   type OpenKeyedStoreOptions,
 } from "../src/plugin-state/plugin-state-store.js";
 import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
@@ -67,8 +71,10 @@ describe("Codex initialization through the registered session deletion owner", (
         const runtime = createPluginRuntimeMock({
           agent,
           state: {
+            openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) =>
+              createPluginStateKeyedStore<T>("codex", { ...options, env: state.env }),
             openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
-              createPluginStateSyncKeyedStore<T>("codex", options),
+              createPluginStateSyncKeyedStore<T>("codex", { ...options, env: state.env }),
           },
         });
         const fixture = await createCodexSessionInitializationFixtureForTest({
@@ -76,7 +82,7 @@ describe("Codex initialization through the registered session deletion owner", (
           workspaceDir: state.workspaceDir,
         });
         const { params, sourceThread, forkedThread, native, bindingStore, harness } = fixture;
-        const sourceBinding = await bindingStore.read(fixture.sourceIdentity);
+        const sourceBinding = bindingStore.read(fixture.sourceIdentity);
         const sourceEntry = loadSessionEntry(params.source);
         let expectedSourceEntry = sourceEntry;
         const replaceSource = () => {
@@ -204,6 +210,7 @@ describe("Codex initialization through the registered session deletion owner", (
         });
         let successorBinding: Awaited<ReturnType<typeof bindingStore.read>>;
         let successorLink: ReturnType<typeof readSessionUpstreamLink>;
+        let rollbackCommitRefused = false;
         if (failure === "native cleanup") {
           native.archiveThread.mockRejectedValue(new Error("injected archive failure"));
           native.control.retireConnection = vi.fn();
@@ -233,7 +240,7 @@ describe("Codex initialization through the registered session deletion owner", (
               threadId: forkedThread.id,
               patch: { model: "successor-model" },
             });
-            successorBinding = await bindingStore.read(identity);
+            successorBinding = bindingStore.read(identity);
           }
           if (failure === "successor link") {
             expect(
@@ -246,8 +253,24 @@ describe("Codex initialization through the registered session deletion owner", (
             successorLink = readSessionUpstreamLink(params.targetKey, "main");
           }
           if (failure === "rollback commit") {
-            openOpenClawAgentDatabase({ agentId: "main" }).db.exec(
-              "CREATE TEMP TRIGGER reject_rollback BEFORE DELETE ON session_nodes BEGIN SELECT RAISE(ABORT, 'injected rollback failure'); END",
+            // A host TEMP trigger cannot reach the deletion worker's connection.
+            const createAdmission = sqliteAdmission.createSqliteWorkerOperationAdmission;
+            vi.spyOn(sqliteAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+              (admit, attachment) =>
+                createAdmission((request, grant) => {
+                  const publication = isRecord(request.facts)
+                    ? request.facts.publication
+                    : undefined;
+                  if (
+                    request.stage === "commit" &&
+                    isRecord(publication) &&
+                    publication.kind === "session-native-binding"
+                  ) {
+                    rollbackCommitRefused = true;
+                    throw new Error("injected rollback failure");
+                  }
+                  admit(request, grant);
+                }, attachment),
             );
           }
           if (
@@ -287,6 +310,9 @@ describe("Codex initialization through the registered session deletion owner", (
           flow === "fork" ? invokeFork : fixture.adopt,
         );
 
+        if (failure === "rollback commit") {
+          expect(rollbackCommitRefused).toBe(true);
+        }
         expect(result).toMatchObject({ status: "failed" });
         const identity = {
           kind: "session" as const,
@@ -295,7 +321,7 @@ describe("Codex initialization through the registered session deletion owner", (
           sessionId: expectDefined(childSessionId, "created child identity"),
         };
         const child = loadSessionEntry(identity);
-        const binding = await bindingStore.read(identity);
+        const binding = bindingStore.read(identity);
         const link = readSessionUpstreamLink(params.targetKey, "main");
         if (failure === "lost response" || failure === "readiness publication") {
           expect(child?.initializationPending).toBeUndefined();
@@ -363,9 +389,9 @@ describe("Codex initialization through the registered session deletion owner", (
             ),
           ).rejects.toThrow("owned by supervision");
           expect(loadSessionEntry(identity)).toEqual(child);
-          expect(await bindingStore.read(identity)).toEqual(binding);
+          expect(bindingStore.read(identity)).toEqual(binding);
         }
-        expect(await bindingStore.read(fixture.sourceIdentity)).toEqual(sourceBinding);
+        expect(bindingStore.read(fixture.sourceIdentity)).toEqual(sourceBinding);
         expect(loadSessionEntry(params.source)).toEqual(expectedSourceEntry);
         expect(await loadTranscriptEvents(params.source)).toEqual(sourceHistory);
         expect(native.archiveThread.mock.calls).not.toEqual(

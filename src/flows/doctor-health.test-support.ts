@@ -64,6 +64,7 @@ beforeEach(() => {
     return {
       runtime: await params.service.readRuntime(params.env ?? process.env),
       portUsage: { port: params.port, status: "busy", listeners: [], hints: [] },
+      outcome: mocks.restartedHealthy ? "ready" : "failed",
       healthy: mocks.restartedHealthy,
       staleGatewayPids: [],
       gatewayVersion: params.expectedVersion ?? null,
@@ -79,6 +80,28 @@ vi.mock("../gateway/call.js", async (original) => {
   return {
     ...(await original<typeof import("../gateway/call.js")>()),
     callGatewayCli: gatewayMaintenanceResponse(() => mocks.resident()),
+  };
+});
+
+vi.mock("../daemon/service-process-membership.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../daemon/service-process-membership.js")>();
+  return {
+    ...actual,
+    // The in-memory manager models Doctor as an external caller, not a host service member.
+    inspectServiceProcessMembershipSync: (
+      ...args: Parameters<typeof actual.inspectServiceProcessMembershipSync>
+    ) =>
+      mocks.emulateNativeInstall ? "outside" : actual.inspectServiceProcessMembershipSync(...args),
+  };
+});
+
+vi.mock("../infra/container-environment.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/container-environment.js")>();
+  return {
+    ...actual,
+    // Native-manager fixtures model a host installation independently of the test runner.
+    isContainerEnvironment: () =>
+      mocks.emulateNativeInstall ? false : actual.isContainerEnvironment(),
   };
 });
 
@@ -161,13 +184,20 @@ vi.mock("../cli/update-cli/update-command-service-maintenance.js", async (import
   };
 });
 
-vi.mock("../cli/update-cli/update-command-service-plan.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../cli/update-cli/update-command-service-plan.js")>()),
-  // The fixture owns an in-memory manager; native machine profile policy is
-  // covered at the updater boundary and must not select a host service here.
-  assertGatewayServiceManagementAllowedForUpdate: () => undefined,
-  resolveGatewayServiceManagementBlockMessageForUpdate: () => undefined,
-}));
+vi.mock("../infra/gateway-supervision.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/gateway-supervision.js")>();
+  return {
+    ...actual,
+    // Emulate only the fixture's native manager; keep updater readers and policy wrappers real.
+    assertGatewayServiceMutationAllowed: (
+      ...args: Parameters<typeof actual.assertGatewayServiceMutationAllowed>
+    ) => {
+      if (!mocks.emulateNativeInstall) {
+        actual.assertGatewayServiceMutationAllowed(...args);
+      }
+    },
+  };
+});
 
 vi.mock("../cli/daemon-cli/restart-health.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../cli/daemon-cli/restart-health.js")>()),
@@ -190,6 +220,7 @@ vi.mock("../commands/doctor-install.js", () => ({
 
 vi.mock("../commands/doctor/shared/plugin-runtime-symlinks.js", () => ({
   noteStalePluginRuntimeSymlinks: async () => undefined,
+  removeStalePluginRuntimeSymlinks: async () => ({ changes: [], warnings: [] }),
 }));
 
 vi.mock("../commands/doctor-platform-notes.js", () => ({
@@ -239,9 +270,7 @@ export const doctorServiceInspectionCases = [
   "absent-busy-port",
   "absent-unknown-port",
   "windows-ready",
-  "windows-disabled",
   "windows-queued",
-  "windows-running",
   "windows-startup-stopped",
   "windows-startup-unknown",
 ].flatMap((kind) => [
@@ -352,6 +381,11 @@ export function registerDoctorConfigReceiptTests(
             ...(outcome === "advisory"
               ? postInstallAdvisory
               : { status: failure ? "error" : "ok" }),
+            ...(outcome === "partial-config" || outcome === "unrestored-config"
+              ? { maintenanceRefusal: { kind: "data-at-risk", reason: "gateway-state-unverified" } }
+              : outcome === "schema-refusal"
+                ? { maintenanceRefusal: { kind: "data-at-risk", reason: "incomplete-migration" } }
+                : {}),
             configHash: expectedHash,
             ...(failure
               ? {

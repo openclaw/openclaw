@@ -1,5 +1,5 @@
-// Input-mode parsing helpers for `openclaw config set` values, refs, providers, and batches.
 import fs from "node:fs";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
   readNonBlankString,
@@ -57,9 +57,12 @@ export function readConfigMutationFileSync(
 ): string {
   // These explicit CLI file flags have historically followed user-provided
   // symlinks. Pin the opened descriptor, then bound the read without changing that contract.
+  // Nonblocking open lets the descriptor check reject FIFOs without waiting for a writer.
+  const openFlags =
+    process.platform === "win32" ? "r" : fs.constants.O_RDONLY | fs.constants.O_NONBLOCK;
   let fd: number;
   try {
-    fd = fs.openSync(filePath, "r");
+    fd = fs.openSync(filePath, openFlags);
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT")) {
       throw new Error(`${sourceLabel} not found: ${filePath}. Check the path and try again.`, {
@@ -90,16 +93,11 @@ export function readConfigMutationFileSync(
   }
 }
 
-export function hasBatchMode(opts: ConfigSetOptions): boolean {
-  return opts.batchJson !== undefined || opts.batchFile !== undefined;
-}
-
-export function hasRefBuilderOptions(opts: ConfigSetOptions): boolean {
-  return Boolean(opts.refProvider || opts.refSource || opts.refId);
-}
-
-export function hasProviderBuilderOptions(opts: ConfigSetOptions): boolean {
-  return Boolean(
+export function resolveConfigSetMode(
+  opts: ConfigSetOptions,
+): "value" | "json" | "ref_builder" | "provider_builder" | "batch" {
+  const hasRef = Boolean(opts.refProvider || opts.refSource || opts.refId);
+  const hasProvider = Boolean(
     opts.providerSource ||
     opts.providerAllowlist?.length ||
     opts.providerPath ||
@@ -115,9 +113,29 @@ export function hasProviderBuilderOptions(opts: ConfigSetOptions): boolean {
     opts.providerPassEnv?.length ||
     opts.providerTrustedDir?.length,
   );
+  if (opts.batchJson !== undefined || opts.batchFile !== undefined) {
+    if (hasRef || hasProvider) {
+      throw new Error(
+        "config set mode error: batch mode (--batch-json/--batch-file) cannot be combined with ref builder (--ref-*) or provider builder (--provider-*) flags.",
+      );
+    }
+    return "batch";
+  }
+  if (hasRef && hasProvider) {
+    throw new Error(
+      "config set mode error: choose exactly one mode: ref builder (--ref-provider/--ref-source/--ref-id) or provider builder (--provider-*), not both.",
+    );
+  }
+  return hasRef
+    ? "ref_builder"
+    : hasProvider
+      ? "provider_builder"
+      : opts.strictJson || opts.json
+        ? "json"
+        : "value";
 }
 
-function parseJson5Raw(raw: string, label: string): unknown {
+export function parseConfigMutationJson5(raw: string, label: string): unknown {
   let parsed: unknown;
   try {
     parsed = JSON5.parse(raw);
@@ -129,40 +147,39 @@ function parseJson5Raw(raw: string, label: string): unknown {
 }
 
 function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntry[] {
-  const parsed = parseJson5Raw(raw, sourceLabel);
+  const parsed = parseConfigMutationJson5(raw, sourceLabel);
   if (!Array.isArray(parsed)) {
     throw new Error(`${sourceLabel} must be a JSON array.`);
   }
   if (parsed.length === 0) {
     throw new Error(`${sourceLabel} must contain at least one config update.`);
   }
-  const out: ConfigSetBatchEntry[] = [];
+  const entries: ConfigSetBatchEntry[] = [];
   for (const [index, entry] of parsed.entries()) {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    if (!isRecord(entry)) {
       throw new Error(`${sourceLabel}[${index}] must be an object.`);
     }
-    const typed = entry as Record<string, unknown>;
-    const path = normalizeOptionalString(typed.path) ?? "";
+    const path = normalizeOptionalString(entry.path);
     if (!path) {
       throw new Error(`${sourceLabel}[${index}].path is required.`);
     }
-    const hasValue = Object.hasOwn(typed, "value");
-    const hasRef = Object.hasOwn(typed, "ref");
-    const hasProvider = Object.hasOwn(typed, "provider");
+    const hasValue = Object.hasOwn(entry, "value");
+    const hasRef = Object.hasOwn(entry, "ref");
+    const hasProvider = Object.hasOwn(entry, "provider");
     const modeCount = Number(hasValue) + Number(hasRef) + Number(hasProvider);
     if (modeCount !== 1) {
       throw new Error(
         `${sourceLabel}[${index}] must include exactly one of: value, ref, provider.`,
       );
     }
-    out.push({
+    entries.push({
       path,
-      ...(hasValue ? { value: typed.value } : {}),
-      ...(hasRef ? { ref: typed.ref } : {}),
-      ...(hasProvider ? { provider: typed.provider } : {}),
+      ...(hasValue ? { value: entry.value } : {}),
+      ...(hasRef ? { ref: entry.ref } : {}),
+      ...(hasProvider ? { provider: entry.provider } : {}),
     });
   }
-  return out;
+  return entries;
 }
 
 export function parseConfigSetCurrentExpectation(

@@ -1,10 +1,10 @@
-import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
+import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../../state/openclaw-agent-db-registry-listing.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
-import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import type {
@@ -12,6 +12,11 @@ import type {
   SessionProviderReviewComparison,
 } from "./provider-review.types.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
+import {
+  retainSessionEntryWorkerPublication,
+  type SessionEntryReplacementPublication,
+} from "./session-accessor.sqlite-entry-cache-publication.js";
+import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
@@ -125,45 +130,78 @@ export async function compareSessionProviderReview(
     params.assertCurrent,
     async (options, sessionKey, assertHeld) => {
       input.sessionKey = sessionKey;
-      const execution = captureOpenClawAgentDatabaseExecution(options);
-      const assertCurrent = () => {
-        execution.assertCurrent();
-        assertHeld();
-      };
-      try {
-        const entry = await runOpenClawAgentWorkerWrite(options, () =>
-          execution.runExisting(
-            {
-              assertCurrent,
-              createAdmission(binding) {
-                return () => ({
-                  nativeLocations: binding.nativeLocations,
-                  admission: createSqliteWorkerOperationAdmission((request, grant) => {
-                    binding.authorize(request);
-                    assertCurrent();
-                    if (!grant()) {
-                      throw new Error("Provider review authority expired");
-                    }
-                  }),
-                });
-              },
-            },
-            (worker) => worker.execute({ type: "session.providerReview.compare", input }),
-          ),
-        );
-        if (!entry) {
-          throw new Error("Session disappeared before provider review update");
-        }
-        // The worker owns the commit; the host publishes only its acknowledged result.
-        sessionChanges.emit({
-          agentId: capturedTarget.agentId,
-          storePath: execution.path,
-          sessionKey,
-        });
-        return entry;
-      } finally {
-        await execution.release();
-      }
+      let publication: ReturnType<typeof retainSessionEntryWorkerPublication> | undefined;
+      let admitted:
+        | {
+            admission: SqliteWorkerOperationAdmission;
+            retained: RetainedWorkerTransactionAdmission;
+          }
+        | undefined;
+      return withSessionEntryWorker(
+        { ...options, path: resolveOpenClawAgentSqlitePath(options) },
+        undefined,
+        assertHeld,
+        async (execution, source) => {
+          const result = await execution.runExisting(source, async (worker) => {
+            const databaseIdentity = execution.fileIdentity?.physicalIdentity;
+            if (!databaseIdentity) {
+              throw new Error("Provider review has no prepared native database identity");
+            }
+            publication = retainSessionEntryWorkerPublication({
+              agentId: execution.agentId,
+              storePath: execution.path,
+              databaseIdentity,
+            });
+            const outcome = await worker
+              .execute({ type: "session.providerReview.compare", input })
+              .then(
+                (value) => ({ ok: true as const, value }),
+                (error: unknown) => ({ ok: false as const, error }),
+              );
+            let unknown = outcome.ok;
+            if (admitted) {
+              // Retain the writer until the native commit receipt and host publication settle.
+              await admitted.retained.settled;
+              const facts = admitted.admission.committed?.facts;
+              let receipt = outcome.ok ? outcome.value.publication : undefined;
+              if (isRecord(facts) && facts.kind === "session-entry-replacements") {
+                // SAFETY: The paired review kernel owns this retained command's receipt.
+                receipt = facts as SessionEntryReplacementPublication;
+              }
+              unknown = admitted.admission.settlement?.kind !== "completed" || !receipt;
+              publication.settle(receipt, unknown);
+            }
+            if (unknown) {
+              const error = new SqliteWorkerError(
+                "Provider review has no confirmed native completion and commit receipt",
+                "outcome-unknown",
+              );
+              error.cause = outcome.ok ? undefined : outcome.error;
+              throw error;
+            }
+            if (!outcome.ok) {
+              throw outcome.error;
+            }
+            return outcome.value.entry;
+          });
+          if (!result) {
+            throw new Error("Session disappeared before provider review update");
+          }
+          return result;
+        },
+        (admission, retained, facts) => {
+          if (
+            !isRecord(facts) ||
+            !isRecord(facts.publication) ||
+            facts.publication.kind !== "session-entry-replacements" ||
+            !publication
+          ) {
+            throw new Error("Provider review commit omitted its publication receipt");
+          }
+          admitted = { admission, retained };
+          publication.begin([sessionKey], []);
+        },
+      );
     },
   );
 }

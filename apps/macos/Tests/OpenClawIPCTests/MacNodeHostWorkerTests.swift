@@ -6,8 +6,6 @@ import os
 import Testing
 @testable import OpenClaw
 
-private struct WorkerBackpressureTimeout: Error {}
-
 private actor StubMacNodeHostWorker: MacNodeHostWorking {
     let manifest: MacNodeHostManifest
     private var requests: [BridgeInvokeRequest] = []
@@ -47,13 +45,12 @@ private actor StubMacNodeHostWorker: MacNodeHostWorking {
     }
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 struct MacNodeHostWorkerTests {
     @Test func `worker crash retry budget is bounded and exponentially delayed`() throws {
-        let input = MacNodeHostWorkerRetryPolicy.Input(
-            launch: MacNodeHostWorkerLaunch(
-                command: ["/usr/local/bin/openclaw", "node", "worker"],
-                configurationGeneration: 4))
+        let input = MacNodeHostWorkerLaunch(
+            command: ["/usr/local/bin/openclaw", "node", "worker"],
+            configurationGeneration: 4)
         var policy = MacNodeHostWorkerRetryPolicy(maximumRetryCount: 5)
 
         try policy.prepareForStart(input)
@@ -75,14 +72,12 @@ struct MacNodeHostWorkerTests {
     }
 
     @Test func `new worker input resets an exhausted crash retry budget`() throws {
-        let original = MacNodeHostWorkerRetryPolicy.Input(
-            launch: MacNodeHostWorkerLaunch(
-                command: ["/usr/local/bin/openclaw", "node", "worker"],
-                configurationGeneration: 4))
-        let updated = MacNodeHostWorkerRetryPolicy.Input(
-            launch: MacNodeHostWorkerLaunch(
-                command: original.launch.command,
-                configurationGeneration: 5))
+        let original = MacNodeHostWorkerLaunch(
+            command: ["/usr/local/bin/openclaw", "node", "worker"],
+            configurationGeneration: 4)
+        let updated = MacNodeHostWorkerLaunch(
+            command: original.command,
+            configurationGeneration: 5)
         var policy = MacNodeHostWorkerRetryPolicy(maximumRetryCount: 1)
 
         try policy.prepareForStart(original)
@@ -233,11 +228,8 @@ struct MacNodeHostWorkerTests {
                 #expect(await worker.setRoute(nil, authorityGeneration: 2))
                 let receives = socket.snapshotCallbackReceiveCount()
                 socket.emitReceiveSuccess(approval)
-                try await AsyncTimeout.withTimeout(seconds: 5, onTimeout: { WorkerBackpressureTimeout() }) {
-                    while socket.snapshotCallbackReceiveCount() <= receives {
-                        try Task.checkCancellation()
-                        await Task.yield()
-                    }
+                try await TestWait.state("approval receive callback") {
+                    socket.snapshotCallbackReceiveCount() > receives
                 }
                 #expect(await worker.setRoute(route, authorityGeneration: 3))
                 await worker.gatewayConnected(ifCurrentRoute: route)
@@ -248,10 +240,7 @@ struct MacNodeHostWorkerTests {
             invoking = activeInvoke
             let workerPID = try await TestProcessSupport.waitForPID(in: invokeReceived)
             socket.emitReceiveSuccess(approval)
-            let response = try await AsyncTimeout.withTimeout(
-                seconds: 5,
-                onTimeout: { WorkerBackpressureTimeout() },
-                operation: { await activeInvoke.value })
+            let response = try await TestWait.value(of: activeInvoke, "inventory refresh response")
             #expect(response.ok)
             #expect(response.payload?.dictionaryValue?["refreshes"]?.intValue == 1)
             #expect(await worker.isWorkerHostingEnabled())
@@ -300,7 +289,7 @@ struct MacNodeHostWorkerTests {
         #expect(await worker.invokedCommands() == [command])
     }
 
-    @Test(arguments: [MacNodeScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue])
+    @Test(arguments: [OpenClawScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue])
     func `selected CUA provider gives the command pair exclusively to the worker`(command: String) async {
         let worker = StubMacNodeHostWorker(commands: [command])
         let services = await MainActor.run { MacNodeRuntimeTests.MainActorServicesProbe() }
@@ -333,7 +322,7 @@ struct MacNodeHostWorkerTests {
 
         let response = await runtime.handleInvoke(BridgeInvokeRequest(
             id: "cua-unavailable",
-            command: MacNodeScreenCommand.snapshot.rawValue))
+            command: OpenClawScreenCommand.snapshot.rawValue))
 
         #expect(!response.ok)
         #expect(response.error?.message == "UNAVAILABLE: selected CUA provider is not ready")
@@ -475,17 +464,17 @@ struct MacNodeHostWorkerTests {
         let manifest = MacNodeHostManifest(
             version: "test",
             caps: ["screen", "computer"],
-            commands: [MacNodeScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue],
+            commands: [OpenClawScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue],
             computerUse: descriptor,
             pathEnv: "/usr/bin:/bin")
 
         let peekaboo = try #require(MacNodeModeCoordinator.workerManifest(manifest, for: .peekaboo))
-        #expect(!peekaboo.commands.contains(MacNodeScreenCommand.snapshot.rawValue))
+        #expect(!peekaboo.commands.contains(OpenClawScreenCommand.snapshot.rawValue))
         #expect(!peekaboo.commands.contains(OpenClawComputerCommand.act.rawValue))
         #expect(peekaboo.computerUse == nil)
         let peekabooDescriptor = try #require(MacNodeModeCoordinator.computerUseDescriptor(
             provider: .peekaboo,
-            commands: [MacNodeScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue],
+            commands: [OpenClawScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue],
             workerManifest: peekaboo))
         let peekabooJSON = try JSONEncoder().encode(peekabooDescriptor)
         let peekabooObject = try #require(
@@ -527,7 +516,7 @@ struct MacNodeHostWorkerTests {
         let manifest = MacNodeHostManifest(
             version: "test",
             caps: ["screen", "computer"],
-            commands: [MacNodeScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue],
+            commands: [OpenClawScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue],
             computerUse: cuaDescriptor,
             pathEnv: "/usr/bin:/bin")
         let workerManifest = try #require(MacNodeModeCoordinator.workerManifest(manifest, for: provider))
@@ -677,14 +666,13 @@ struct MacNodeHostWorkerTests {
         await worker.cancel(invokeId: "terminal-1")
         var invoking: Task<BridgeInvokeResponse, Never>?
         do {
-            let buffered = try await AsyncTimeout.withTimeout(
-                seconds: 1,
-                onTimeout: { WorkerBackpressureTimeout() },
-                operation: {
-                    await worker.invoke(BridgeInvokeRequest(
-                        id: "terminal-1",
-                        command: "codex.terminal.resume.v1"))
-                })
+            let buffered = await worker.invoke(BridgeInvokeRequest(
+                id: "terminal-1",
+                command: "codex.terminal.resume.v1"))
+            guard !Task.isCancelled else {
+                Issue.record("Still waiting for buffered invocation cancellation")
+                throw CancellationError()
+            }
             #expect(!buffered.ok)
             #expect(buffered.error?.message == "UNAVAILABLE: node-host worker invocation cancelled")
 
@@ -700,10 +688,7 @@ struct MacNodeHostWorkerTests {
             } else {
                 await worker.cancel(invokeId: "terminal-2")
             }
-            let active = try await AsyncTimeout.withTimeout(
-                seconds: 1,
-                onTimeout: { WorkerBackpressureTimeout() },
-                operation: { await activeInvoke.value })
+            let active = try await TestWait.value(of: activeInvoke, "active invocation cancellation")
             await worker.stop()
             #expect(!active.ok)
             #expect(active.error?.message == "UNAVAILABLE: node-host worker invocation cancelled")
@@ -743,10 +728,7 @@ struct MacNodeHostWorkerTests {
         }
         cancelled.cancel()
         do {
-            let response = try await AsyncTimeout.withTimeout(
-                seconds: 1,
-                onTimeout: { WorkerBackpressureTimeout() },
-                operation: { await cancelled.value })
+            let response = try await TestWait.value(of: cancelled, "pre-cancelled invocation")
             #expect(!response.ok)
             #expect(response.error?.message == "UNAVAILABLE: node-host worker invocation cancelled")
             let reused = await worker.invoke(BridgeInvokeRequest(id: "shared", command: "system.run"))
@@ -754,12 +736,11 @@ struct MacNodeHostWorkerTests {
             let barrier = await worker.invoke(BridgeInvokeRequest(id: "barrier", command: "system.run"))
             #expect(barrier.ok)
             if bufferedControls {
-                let other = try await AsyncTimeout.withTimeout(
-                    seconds: 1,
-                    onTimeout: { WorkerBackpressureTimeout() },
-                    operation: {
-                        await worker.invoke(BridgeInvokeRequest(id: "other", command: "system.run"))
-                    })
+                let other = await worker.invoke(BridgeInvokeRequest(id: "other", command: "system.run"))
+                guard !Task.isCancelled else {
+                    Issue.record("Still waiting for other buffered invocation cancellation")
+                    throw CancellationError()
+                }
                 #expect(other.error?.message == "UNAVAILABLE: node-host worker invocation cancelled")
             }
             await worker.stop()
@@ -822,7 +803,7 @@ struct MacNodeHostWorkerTests {
 
         worker = nil
 
-        #expect(await TestProcessSupport.waitUntilGone(pid))
+        #expect(try await TestProcessSupport.waitUntilGone(pid))
     }
 
     @Test func `changed worker command replaces the running process`() async throws {
@@ -982,10 +963,10 @@ struct MacNodeHostWorkerTests {
                     command: "system.run",
                     paramsJSON: largeParams))
             }
-            let responses = try await AsyncTimeout.withTimeout(
-                seconds: 5,
-                onTimeout: { WorkerBackpressureTimeout() },
-                operation: { [first, second] in await [first.value, second.value] })
+            let responses = try await [
+                TestWait.value(of: first, "first backpressured response"),
+                TestWait.value(of: second, "second backpressured response"),
+            ]
             await worker.stop()
             let allResponsesSucceeded = responses.allSatisfy(\.ok)
             #expect(allResponsesSucceeded)

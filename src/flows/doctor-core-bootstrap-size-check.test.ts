@@ -124,7 +124,7 @@ describe("core/doctor/bootstrap-size", () => {
       cfg: {
         agents: {
           defaults: { workspace: tmp, bootstrapMaxChars: 20_000 },
-          list: [{ id: "custom-agent", default: true, bootstrapMaxChars: 10_000 }],
+          entries: { "custom-agent": { bootstrapMaxChars: 10_000 } },
         },
       },
       cwd: tmp,
@@ -145,10 +145,10 @@ describe("core/doctor/bootstrap-size", () => {
         cfg: {
           agents: {
             defaults: { bootstrapMaxChars: 20_000 },
-            list: [
-              { id: "alpha", default: true, workspace: tmp, bootstrapMaxChars: 10_000 },
-              { id: "beta" },
-            ],
+            entries: {
+              alpha: { workspace: tmp, bootstrapMaxChars: 10_000 },
+              beta: {},
+            },
           },
         },
       }),

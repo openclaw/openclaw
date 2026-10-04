@@ -4,17 +4,18 @@
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { format } from "node:util";
+import { disableExitUnsafeCompilers } from "./bootstrap/node-exit-safe-compilers.js";
+import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
 import { isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
-import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from "./cli/one-shot-exit.js";
-import {
-  tryOutputPrecomputedCommandHelp,
-  type PrecomputedCommandHelpDeps,
-} from "./cli/precomputed-help.js";
+import { tryOutputPrecomputedCommandHelp } from "./cli/precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import type { RootHelpRenderOptions } from "./cli/program/root-help.js";
 import { isNativeHookRelayArgv } from "./cli/respawn-policy.js";
-import { withCliProcessScope } from "./cli/runtime-cleanup-scope.js";
+import {
+  isUpdateAdmissionInvocation,
+  tryRunUpdateAdmissionBeforeStartup,
+} from "./cli/run-main-update-admission.js";
 import {
   configureGatewayStartupTraceConsoleFormatting,
   createGatewayDispatchStartupTrace,
@@ -30,6 +31,7 @@ import { installDistEsmResolveFastPath } from "./entry.esm-resolve-fast-path.js"
 import { buildCliRespawnPlan, runCliRespawnPlan } from "./entry.respawn.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { normalizeEnv } from "./infra/env.js";
+import { fsSafeEnvInput } from "./infra/fs-safe-env.js";
 import { isMainModule } from "./infra/is-main.js";
 import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js";
 import { installProcessWarningFilter } from "./infra/warning-filter.js";
@@ -118,13 +120,17 @@ const gatewayEntryStartupTrace = createGatewayDispatchStartupTrace(process.argv,
 // is the actual entry point; without this guard the top-level code below
 // would call runCli a second time, starting a duplicate gateway that fails
 // on the lock / port and crashes the process.
-if (
-  !isMainModule({
-    currentFile: fileURLToPath(import.meta.url),
-    wrapperEntryPairs: [...ENTRY_WRAPPER_PAIRS],
-  })
-) {
+const isEntryMain = isMainModule({
+  currentFile: fileURLToPath(import.meta.url),
+  wrapperEntryPairs: [...ENTRY_WRAPPER_PAIRS],
+});
+if (isEntryMain) {
+  disableExitUnsafeCompilers();
+}
+if (!isEntryMain) {
   // Imported as a dependency — skip all entry-point side effects.
+} else if (isUpdateAdmissionInvocation(resolveCliArgvInvocation(process.argv))) {
+  await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(process.argv));
 } else {
   const entryFile = fileURLToPath(import.meta.url);
   const installRoot = resolveEntryInstallRoot(entryFile);
@@ -137,7 +143,7 @@ if (
   if (earlyProfile.ok && earlyProfile.profile) {
     applyCliProfileEnv({ profile: earlyProfile.profile });
   }
-  const startupEnv = { ...process.env };
+  const startupEnv = { ...fsSafeEnvInput(process.env) };
   const { assertSupportedRuntime, isCurrentRuntimeSupported } =
     await import("./infra/runtime-guard.js");
   if (!(await isCurrentRuntimeSupported())) {
@@ -233,8 +239,10 @@ if (
       gatewayEntryStartupTrace.mark("argv");
 
       if (!tryHandleRootVersionFastPath(process.argv)) {
-        const run = (finalize?: () => Promise<void>) =>
-          withCliProcessScope(() => runMainOrRootHelp(process.argv, { finalize }));
+        const run = async (finalize?: () => Promise<void>) => {
+          const { withCliProcessScope } = await import("./cli/runtime-cleanup-scope.js");
+          return withCliProcessScope(() => runMainOrRootHelp(process.argv, { finalize }));
+        };
         const managedNodeStatePath = getManagedNodeHostStatePath();
         if (managedNodeStatePath) {
           const { withExistingOpenClawStateSchema } =
@@ -308,17 +316,13 @@ export async function tryHandleRootHelpFastPath(
   }
 }
 
-export async function tryHandlePrecomputedCommandHelpFastPath(
-  argv: string[],
-  deps: PrecomputedCommandHelpDeps = {},
-): Promise<boolean> {
-  const env = deps.env ?? process.env;
-  if (resolveCliContainerTarget(argv, env)) {
+export async function tryHandlePrecomputedCommandHelpFastPath(argv: string[]): Promise<boolean> {
+  if (resolveCliContainerTarget(argv)) {
     return false;
   }
 
   try {
-    return await tryOutputPrecomputedCommandHelp(argv, { ...deps, env });
+    return await tryOutputPrecomputedCommandHelp(argv);
   } catch {
     return false;
   }
@@ -364,6 +368,8 @@ export async function runMainOrRootHelp(
   // mode so the envelope is written here. Only failures before runCli are startup failures.
   let commandStarted = false;
   let failureHandler: Awaited<ReturnType<typeof prepareCliFailureHandler>> | undefined;
+  const { runCliWithExitFinalization, requestExitAfterOneShotOutput } =
+    await import("./cli/one-shot-exit.js");
   await runCliWithExitFinalization({
     finalize: deps.finalize,
     run: async () => {
@@ -376,10 +382,12 @@ export async function runMainOrRootHelp(
       }
       if (await tryHandleRootHelpFastPath(argv)) {
         await flushEntryStartupTraceForEarlyReturn(argv);
+        requestExitAfterOneShotOutput(defaultRuntime);
         return;
       }
       if (await tryHandlePrecomputedCommandHelpFastPath(argv)) {
         await flushEntryStartupTraceForEarlyReturn(argv);
+        requestExitAfterOneShotOutput(defaultRuntime);
         return;
       }
       const { runCli } = await gatewayEntryStartupTrace.measure(

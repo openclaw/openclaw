@@ -3,7 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import {
   loadSessionEntryReadOnly,
@@ -11,11 +11,13 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   createPluginSessionStateDoctorScanner,
   runPluginSessionStateDoctorRepairs,
 } from "./doctor-session-state-providers.js";
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-route-sqlite-");
 
 const codexOwner = {
   id: "codex",
@@ -325,34 +327,32 @@ describe("doctor session state provider routes", () => {
     }
   });
 
-  it.each(["claude-cli/team/model", "anthropic/team/model"])(
-    "preserves an explicit provider's cached local model %s",
-    async (model) => {
-      ownerState.owners = [anthropicOwner];
-      const store = {
-        "agent:main:canonical-provider": entry({
-          providerOverride: "google",
-          modelOverride: model,
-          modelOverrideSource: "user",
-          modelProvider: "google",
-          model,
-          contextTokens: 128_000,
-          authProfileOverride: "google:chosen",
-          authProfileOverrideSource: "user",
-        }),
-      };
+  it("preserves an explicit provider's cached local model", async () => {
+    const model = "claude-cli/team/model";
+    ownerState.owners = [anthropicOwner];
+    const store = {
+      "agent:main:canonical-provider": entry({
+        providerOverride: "google",
+        modelOverride: model,
+        modelOverrideSource: "user",
+        modelProvider: "google",
+        model,
+        contextTokens: 128_000,
+        authProfileOverride: "google:chosen",
+        authProfileOverrideSource: "user",
+      }),
+    };
 
-      const result = await runDoctor({
-        cfg: { agents: { defaults: { model: "google/claude-cli/team/model" } } },
-        store,
-      });
+    const result = await runDoctor({
+      cfg: { agents: { defaults: { model: "google/claude-cli/team/model" } } },
+      store,
+    });
 
-      expect(result.store).toEqual(store);
-      expect(result.warnings).toEqual([]);
-      expect(result.changes).toEqual([]);
-      expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();
-    },
-  );
+    expect(result.store).toEqual(store);
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([]);
+    expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();
+  });
 
   it.each([
     { model: "claude-cli/team/model" },
@@ -385,7 +385,7 @@ describe("doctor session state provider routes", () => {
   });
 
   it("repairs a non-default SQLite row without creating a legacy store", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-route-sqlite-"));
+    const root = sessionDirs.make();
     const legacyStorePath = path.join(root, "sessions.json");
     const sqliteStorePath = resolveSqliteTargetFromSessionStorePath(legacyStorePath, {
       agentId: "ops",
@@ -405,40 +405,35 @@ describe("doctor session state provider routes", () => {
         entries: { main: {}, ops: {} },
       },
     } satisfies OpenClawConfig;
-    try {
-      await upsertSessionEntryCore(
-        {
-          agentId: "ops",
-          defaultAgentId: "ops",
-          sessionKey,
-          storePath: legacyStorePath,
-        },
-        staleEntry,
-      );
-      const scanner = createPluginSessionStateDoctorScanner({ cfg, env: {} });
-      scanner.scanEntry(sessionKey, staleEntry);
-
-      await runPluginSessionStateDoctorRepairs({
-        scan: scanner.result(),
-        store: { kind: "sqlite", agentId: "ops", path: sqliteStorePath },
-        prompter: { confirmRuntimeRepair: vi.fn(async () => true), note: vi.fn() },
-        warnings: [],
-        changes: [],
-      });
-
-      const repaired = loadSessionEntryReadOnly({
+    await upsertSessionEntryCore(
+      {
         agentId: "ops",
+        defaultAgentId: "ops",
         sessionKey,
-        storePath: sqliteStorePath,
-      });
-      expect(repaired?.providerOverride).toBeUndefined();
-      expect(repaired?.modelOverride).toBeUndefined();
-      expect(repaired?.modelProvider).toBeUndefined();
-      expect(fsSync.existsSync(legacyStorePath)).toBe(false);
-    } finally {
-      closeOpenClawAgentDatabasesForTest();
-      await fs.rm(root, { recursive: true, force: true });
-    }
+        storePath: legacyStorePath,
+      },
+      staleEntry,
+    );
+    const scanner = createPluginSessionStateDoctorScanner({ cfg, env: {} });
+    scanner.scanEntry(sessionKey, staleEntry);
+
+    await runPluginSessionStateDoctorRepairs({
+      scan: scanner.result(),
+      store: { kind: "sqlite", agentId: "ops", path: sqliteStorePath },
+      prompter: { confirmRuntimeRepair: vi.fn(async () => true), note: vi.fn() },
+      warnings: [],
+      changes: [],
+    });
+
+    const repaired = loadSessionEntryReadOnly({
+      agentId: "ops",
+      sessionKey,
+      storePath: sqliteStorePath,
+    });
+    expect(repaired?.providerOverride).toBeUndefined();
+    expect(repaired?.modelOverride).toBeUndefined();
+    expect(repaired?.modelProvider).toBeUndefined();
+    expect(fsSync.existsSync(legacyStorePath)).toBe(false);
   });
 
   it("leaves explicit user owner choices for manual review", async () => {

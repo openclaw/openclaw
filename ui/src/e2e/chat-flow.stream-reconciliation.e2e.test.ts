@@ -182,6 +182,12 @@ suite.define(() => {
               messageSeq: 2,
               message,
             });
+          const snapshot = {
+            messages: historyMessages,
+            inFlightRun,
+            sessionInfo,
+            thinkingLevel: null,
+          };
           const startupCount = (await gateway.getRequests("chat.startup")).length;
           await gateway.deferNext("chat.startup");
           await gateway.setOnline(false);
@@ -189,13 +195,14 @@ suite.define(() => {
           await gateway.waitForRequest("chat.startup", { after: startupCount });
           if (order !== "after hydration") {
             await persist();
+            // A commit during the in-flight read retires it; the Gateway answers one fresh read.
+            await gateway.deferNext("chat.startup");
           }
-          await gateway.resolveDeferred("chat.startup", {
-            messages: historyMessages,
-            inFlightRun,
-            sessionInfo,
-            thinkingLevel: null,
-          });
+          await gateway.resolveDeferred("chat.startup", snapshot);
+          if (order !== "after hydration") {
+            await gateway.waitForRequest("chat.startup", { after: startupCount + 1 });
+            await gateway.resolveDeferred("chat.startup", snapshot);
+          }
           await page.waitForFunction(() => {
             const pane = document.querySelector<HTMLElement & { state?: { chatLoading: boolean } }>(
               "openclaw-chat-pane",
@@ -252,6 +259,7 @@ suite.define(() => {
   it("reconciles distinct commentary items once across reconnect", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const runId = "commentary-reconciliation-run";
+      const startedAt = Date.now() - 30_000;
       const items = [
         { itemId: "commentary-item-one", text: "Inspecting the workspace." },
         { itemId: "commentary-item-two", text: "Checking the result." },
@@ -262,12 +270,12 @@ suite.define(() => {
         seq: index + 1,
         sessionKey: "agent:main:main",
         stream: "item",
-        ts: 2_000 + index,
+        ts: startedAt + 2_000 + index,
       }));
       const historyMessages = items.map(({ itemId, text }, index) => ({
         role: "assistant",
         content: [{ type: "text", text }],
-        timestamp: 1_000 + index,
+        timestamp: startedAt + 1_000 + index,
         __openclaw: { id: `commentary-message-${index}`, runId, seq: index + 1 },
         openclawStreamFallback: { itemId, replacementText: text, source: "segment" },
       }));
@@ -278,14 +286,12 @@ suite.define(() => {
       };
       const gateway = await installMockGateway(page, {
         historyMessages: [],
-        inFlightRun: { runId, startedAt: 1_000, text: "" },
+        inFlightRun: { runId, startedAt, text: "" },
         sessionInfo,
       });
       const transcript = page.locator(".chat-thread-inner");
       const itemOccurrences = async () => {
-        const bubbles = await transcript
-          .locator(".chat-bubble, .chat-working-indicator__preamble")
-          .allTextContents();
+        const bubbles = await transcript.locator(".chat-bubble").allTextContents();
         return items.map(({ text }) => bubbles.filter((bubble) => bubble.trim() === text).length);
       };
 
@@ -296,13 +302,17 @@ suite.define(() => {
       }
       await expect.poll(itemOccurrences).toEqual([1, 1]);
       await expect
-        .poll(() => transcript.locator(".chat-working-indicator__preamble").textContent())
+        .poll(async () =>
+          (
+            await transcript.locator(".chat-text").filter({ hasText: items[1].text }).textContent()
+          )?.trim(),
+        )
         .toBe(items[1].text);
 
       const startupCount = (await gateway.getRequests("chat.startup")).length;
       await gateway.setMethodResponse("chat.startup", {
         messages: historyMessages,
-        inFlightRun: { runId, startedAt: 1_000, text: "", events },
+        inFlightRun: { runId, startedAt, text: "", events },
         sessionInfo,
         thinkingLevel: null,
       });
@@ -377,10 +387,7 @@ suite.define(() => {
         (await page.locator(".chat-group.assistant .chat-text").allTextContents()).map((value) =>
           value.trim(),
         );
-      await expect.poll(assistantTexts).toEqual([commentary[0], "Still working."]);
-      await expect
-        .poll(() => page.locator(".chat-working-indicator__preamble").textContent())
-        .toBe(commentary[1]);
+      await expect.poll(assistantTexts).toEqual([...commentary, "Still working."]);
       expect(await page.locator(".chat-tool-msg-summary").count()).toBe(1);
 
       if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
@@ -491,7 +498,16 @@ suite.define(() => {
         await page.getByRole("button", { name: "Stop generating" }).waitFor({ state: "hidden" });
         await page.locator(".chat-working-indicator").waitFor({ state: "hidden" });
         if (terminal === "error") {
-          await page.locator(".chat-error strong", { hasText: errorMessage }).waitFor();
+          const failure = page.locator(".chat-error").filter({ hasText: errorMessage });
+          await failure
+            .locator("summary strong")
+            .getByText("Couldn't finish this reply. Check the conversation before trying again.")
+            .waitFor();
+          await failure.locator("summary").click();
+          await failure.getByLabel("Error details", { exact: true }).waitFor();
+          expect(
+            await failure.getByLabel("Error details", { exact: true }).textContent(),
+          ).toContain(errorMessage);
         }
         await emitDelta(text, text.slice(partial.length));
         await expect.poll(() => page.locator(".chat-bubble.streaming").count()).toBe(0);

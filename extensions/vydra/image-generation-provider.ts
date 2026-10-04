@@ -1,7 +1,7 @@
-// Vydra provider module implements model/runtime integration.
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import { DEFAULT_VYDRA_IMAGE_MODEL, runVydraGeneration } from "./shared.js";
+import { DEFAULT_VYDRA_IMAGE_MODEL } from "./defaults.js";
+import { runVydraGeneration } from "./shared.js";
 
 export function buildVydraImageGenerationProvider(): ImageGenerationProvider {
   return {

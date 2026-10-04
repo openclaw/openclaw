@@ -1,10 +1,15 @@
 // Telegram tests cover bot message plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
-import type { TelegramMessageProcessorTurnContext } from "./bot-handlers.types.js";
-import type { TelegramMessageProcessingResult } from "./bot-processing-outcome.js";
+import { createTelegramMessageProcessor } from "./bot-message.js";
+import {
+  createTelegramSpooledReplayDeferredParticipant,
+  runWithTelegramUpdateProcessingFrame,
+  runWithTelegramSpooledReplayUpdate,
+  type TelegramMessageProcessingResult,
+} from "./bot-processing-outcome.js";
 
 const buildTelegramMessageContext = vi.hoisted(() => vi.fn());
 const dispatchTelegramMessage = vi.hoisted(() => vi.fn());
@@ -41,21 +46,11 @@ vi.mock("./bot-message-dispatch.js", () => ({
   dispatchTelegramMessage,
 }));
 
-let createTelegramMessageProcessor: typeof import("./bot-message.js").createTelegramMessageProcessor;
-let createTelegramSpooledReplayDeferredParticipant: typeof import("./bot-processing-outcome.js").createTelegramSpooledReplayDeferredParticipant;
-let runWithTelegramUpdateProcessingFrame: typeof import("./bot-processing-outcome.js").runWithTelegramUpdateProcessingFrame;
-let runWithTelegramSpooledReplayUpdate: typeof import("./bot-processing-outcome.js").runWithTelegramSpooledReplayUpdate;
+type TelegramMessageProcessorTurnContext = Parameters<
+  ReturnType<typeof createTelegramMessageProcessor>
+>[0]["turnContext"];
 
 describe("telegram bot message processor", () => {
-  beforeAll(async () => {
-    ({ createTelegramMessageProcessor } = await import("./bot-message.js"));
-    ({
-      createTelegramSpooledReplayDeferredParticipant,
-      runWithTelegramUpdateProcessingFrame,
-      runWithTelegramSpooledReplayUpdate,
-    } = await import("./bot-processing-outcome.js"));
-  });
-
   beforeEach(() => {
     buildTelegramMessageContext.mockClear();
     dispatchTelegramMessage.mockClear();
@@ -97,29 +92,26 @@ describe("telegram bot message processor", () => {
     processMessage: ReturnType<typeof createTelegramMessageProcessor>,
     turnContext?: Partial<TelegramMessageProcessorTurnContext>,
     primaryCtxOverrides: Record<string, unknown> = {},
-    options: Parameters<typeof processMessage>[4] = {},
-    allMedia: Parameters<typeof processMessage>[1] = [],
+    options: Parameters<typeof processMessage>[0]["options"] = {},
+    allMedia: Parameters<typeof processMessage>[0]["allMedia"] = [],
   ) {
-    return await processMessage(
-      {
+    return await processMessage({
+      ctx: {
         message: {
           chat: { id: 123, type: "private", title: "chat" },
           message_id: 456,
         },
         ...primaryCtxOverrides,
-      } as unknown as Parameters<typeof processMessage>[0],
+      } as unknown as Parameters<typeof processMessage>[0]["ctx"],
       allMedia,
-      [],
-      {
+      storeAllowFrom: [],
+      turnContext: {
         ...turnContext,
         cfg: turnContext?.cfg ?? baseTurnContext.cfg,
         telegramCfg: turnContext?.telegramCfg ?? baseTurnContext.telegramCfg,
       },
       options,
-      undefined,
-      undefined,
-      undefined,
-    );
+    });
   }
 
   function createDispatchFailureHarness(
