@@ -476,7 +476,7 @@ export function forwardSecretEgressRequest(
       release();
     }
   });
-  if (!releaseBudget) {
+  if (!releaseBudget || length > MAX_BUFFERED_REQUEST_BODY_BYTES) {
     refuse(
       "upload-capacity",
       503,
@@ -487,7 +487,7 @@ export function forwardSecretEgressRequest(
   try {
     // One exact backing store: chunk count, BufferList nodes and shared slabs
     // cannot amplify retained memory. Every byte is initialized before scanning.
-    body = Buffer.allocUnsafeSlow(Math.min(length, MAX_BUFFERED_REQUEST_BODY_BYTES));
+    body = Buffer.allocUnsafeSlow(length);
     let received = 0;
     collector = forward.ownResource(
       new Writable({
