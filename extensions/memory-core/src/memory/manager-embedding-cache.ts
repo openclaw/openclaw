@@ -25,7 +25,11 @@ type MemoryEmbeddingCacheRow = {
 
 type EmbeddingCacheDatabase = {
   memory_embedding_cache: MemoryEmbeddingCacheRow & { rowid: Generated<number> };
+  memory_index_chunks: { hash: string };
 };
+
+/** Bounds each orphan-collection transaction, like the row-cap prune batches. */
+const MEMORY_EMBEDDING_CACHE_ORPHAN_BATCH = 256;
 
 /** Require a finite, nonempty vector compatible with the active embedding dimensions. */
 export function isValidMemoryEmbedding(embedding: number[], dimensions?: number): boolean {
@@ -127,6 +131,51 @@ function deleteOldestMemoryEmbeddingCacheRows(database: DatabaseSync, limit: num
           .limit(limit),
       ),
   );
+}
+
+/**
+ * Delete cache rows of the given identities whose hash no indexed chunk carries
+ * and that were last written before `before`. Rows of other identities are never
+ * touched. `before` is the instant the publishing rebuild started: a vector
+ * written since then may belong to a sync that has not published yet, so it
+ * waits for a later rebuild. The caller holds the write transaction and repeats
+ * while this returns true (a full batch was removed). Each batch scans the chunk
+ * hash column once, which is unindexed.
+ */
+export function deleteOrphanedMemoryEmbeddingCacheRows(
+  database: DatabaseSync,
+  identities: MemoryIndexProviderIdentity[],
+  before: number,
+  limit = MEMORY_EMBEDDING_CACHE_ORPHAN_BATCH,
+): boolean {
+  const db = getNodeSqliteKysely<EmbeddingCacheDatabase>(database);
+  let deleted = 0;
+  for (const identity of identities) {
+    if (deleted >= limit) {
+      break;
+    }
+    // The uncorrelated subquery is materialized once per statement, so the
+    // unindexed chunk hash column is scanned once rather than once per cache row.
+    const result = executeSqliteQuerySync(
+      database,
+      db.deleteFrom("memory_embedding_cache").where(
+        "rowid",
+        "in",
+        db
+          .selectFrom("memory_embedding_cache")
+          .select("rowid")
+          .where("provider", "=", identity.provider)
+          .where("model", "=", identity.model)
+          .where("provider_key", "=", identity.providerKey)
+          .where("updated_at", "<", before)
+          .where("hash", "not in", db.selectFrom("memory_index_chunks").select("hash"))
+          .orderBy("rowid", "asc")
+          .limit(limit - deleted),
+      ),
+    );
+    deleted += Number(result.numAffectedRows ?? 0);
+  }
+  return deleted >= limit;
 }
 
 /** Discard ambiguous vector spaces without removing unrelated provider caches or index rows. */

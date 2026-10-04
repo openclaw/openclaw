@@ -6,6 +6,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import {
   collectMemoryCachedEmbeddings,
+  deleteOrphanedMemoryEmbeddingCacheRows,
   loadMemoryEmbeddingCache,
   pruneMemoryEmbeddingCache,
   upsertMemoryEmbeddingCache,
@@ -426,6 +427,52 @@ describe("memory embedding cache", () => {
     } finally {
       db.close();
     }
+  });
+
+  it("deletes only unreferenced rows of the requested identities written before the fence, within the batch limit", () => {
+    const db = createDb();
+    const identity = { provider: "openai", model: "m", providerKey: "k" };
+    const insert = db.prepare(
+      "INSERT INTO memory_embedding_cache (provider, model, provider_key, hash, embedding, dims, updated_at) VALUES (?, ?, ?, ?, ?, 2, 1)",
+    );
+    const vector = encodeMemoryEmbedding([0.1, 0.2]);
+    for (const hash of ["live", "orphan-1", "orphan-2", "orphan-3"]) {
+      insert.run("openai", "m", "k", hash, vector);
+    }
+    insert.run("openai", "m", "other-key", "orphan-1", vector);
+    insert.run("local", "m", "k", "orphan-1", vector);
+    insert.run("openai", "m", "k", "live-session", vector);
+    // Written at or after the fence: another sync's unpublished work, kept.
+    const insertAt = db.prepare(
+      "INSERT INTO memory_embedding_cache (provider, model, provider_key, hash, embedding, dims, updated_at) VALUES ('openai', 'm', 'k', ?, ?, 2, ?)",
+    );
+    insertAt.run("pending-at-fence", vector, 100);
+    insertAt.run("pending-after-fence", vector, 101);
+    insertAt.run("orphan-just-before", vector, 99);
+    const chunk = db.prepare(
+      "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, 1, 1, ?, 'm', 't', ?, 1)",
+    );
+    chunk.run("c", "a.md", "memory", "live", vector);
+    chunk.run("s", "session.jsonl", "sessions", "live-session", vector);
+
+    expect(deleteOrphanedMemoryEmbeddingCacheRows(db, [identity], 100, 2)).toBe(true);
+    expect(deleteOrphanedMemoryEmbeddingCacheRows(db, [identity], 100, 2)).toBe(true);
+    expect(deleteOrphanedMemoryEmbeddingCacheRows(db, [identity], 100, 2)).toBe(false);
+    expect(deleteOrphanedMemoryEmbeddingCacheRows(db, [identity], 100, 2)).toBe(false);
+    expect(
+      db
+        .prepare(
+          "SELECT provider, provider_key, hash FROM memory_embedding_cache ORDER BY provider, provider_key, hash",
+        )
+        .all(),
+    ).toEqual([
+      { provider: "local", provider_key: "k", hash: "orphan-1" },
+      { provider: "openai", provider_key: "k", hash: "live" },
+      { provider: "openai", provider_key: "k", hash: "live-session" },
+      { provider: "openai", provider_key: "k", hash: "pending-after-fence" },
+      { provider: "openai", provider_key: "k", hash: "pending-at-fence" },
+      { provider: "openai", provider_key: "other-key", hash: "orphan-1" },
+    ]);
   });
 
   it("prunes at most 100 oldest rows per transaction", () => {

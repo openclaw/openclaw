@@ -196,7 +196,12 @@ Full reindexes build a replacement in a temporary database and publish the
 memory tables atomically. Concurrent searches and status reads keep using the
 published index; a failed rebuild leaves that index intact. The embedding cache
 is bounded before publication, not after copying excess entries into the
-shared database.
+shared database. After a successful full reindex, cache entries for the active
+embedding provider that no published chunk references are removed in bounded
+batches, unless they were written after that reindex started: another sync may
+not have published them yet, so a later reindex decides. A failed rebuild keeps
+them so a retry can reuse the vectors, and entries for other providers or models
+are left to the cache cap.
 
 Other agent state, including sessions and transcripts in the same database,
 is retained. Use the [memory index command](/cli/memory#memory-index) for

@@ -40,6 +40,10 @@ export type MemoryPublicationOperations = {
     input: { maxEntries: number };
     output: MemoryPublicationResult<boolean>;
   };
+  "cache.collect-orphans": {
+    input: { identities: MemoryIndexProviderIdentity[]; before: number };
+    output: MemoryPublicationResult<boolean>;
+  };
   "cache.stage.start": {
     input: { operation: string; header: MemoryEmbeddingCacheHeader; rows: number };
     output: void;

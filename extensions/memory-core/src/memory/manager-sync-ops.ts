@@ -491,6 +491,8 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     const dbPath = resolveUserPath(this.settings.store.databasePath);
     const tempDbPath = `${dbPath}.memory-reindex-${randomUUID()}`;
     const originalDb = this.db;
+    // Cache rows written after this instant may be another sync's unpublished work.
+    const reindexStartedAt = Date.now();
     const originalRetryState = this.snapshotReindexRetryState();
     const shouldRetryMemoryOnFailure = this.sources.has("memory");
     const shouldRetrySessionsOnFailure = this.shouldSyncSessions(undefined, true);
@@ -594,6 +596,16 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       this.vector.dims = rebuilt.nextMeta.vectorDims;
       // Cache-only rebuilds bypass insertion-time eviction; prune the canonical
       // cache only after successful publication so failed rebuilds retain their work.
+      // Rows no published chunk references, and that predate this rebuild, are
+      // collected at the same point. The index is already published, so a
+      // collection failure is logged, not retried.
+      try {
+        await this.collectOrphanedEmbeddingCache(reindexStartedAt);
+      } catch (err) {
+        log.warn(
+          `failed to collect orphaned memory embedding cache rows: ${formatErrorMessage(err)}`,
+        );
+      }
       await this.pruneEmbeddingCacheIfNeeded();
     } catch (err) {
       this.adoptReindexRetryState(originalRetryState);

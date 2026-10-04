@@ -360,6 +360,8 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
     this.embeddingCachePrunes += 1;
   }
 
+  protected async collectOrphanedEmbeddingCache(): Promise<void> {}
+
   protected resetProviderInitializationForRetry(): void {}
 
   protected assertRequiredProviderAvailable(): void {}
