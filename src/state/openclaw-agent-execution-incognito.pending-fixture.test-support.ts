@@ -11,7 +11,7 @@ import type { AgentDatabaseIncognitoOpen } from "./openclaw-agent-execution-cont
 import { createIncognitoAgentDatabaseBackend } from "./openclaw-agent-execution-incognito.worker.js";
 
 /** Only boot fixtures differ; every command uses the real actor backend and admission. */
-export function createSqliteWorkerBackend(
+export async function createSqliteWorkerBackend(
   input: AgentDatabaseIncognitoOpen,
   opening: { databasePath: string; target?: SqliteWorkerEphemeralTarget },
 ) {
@@ -68,7 +68,7 @@ export function createSqliteWorkerBackend(
     );
     return backend;
   } catch (error) {
-    backend.close();
+    await backend.close();
     throw error;
   }
 }

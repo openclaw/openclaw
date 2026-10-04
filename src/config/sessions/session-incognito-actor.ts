@@ -507,11 +507,11 @@ export function createIncognitoSessionFacts(
           input: IncognitoPendingInputOperations["session.pendingInputs.interruptHistory"]["input"],
           admitCustody: (stage: "transaction" | "commit", facts: PendingInputHistoryGrant) => void,
         ) {
-          input = structuredClone(input);
-          const ids = new Set(input.ids);
+          const captured = structuredClone(input);
+          const ids = new Set(captured.ids);
           return perform(
             authority,
-            { type: "session.pendingInputs.interruptHistory", input },
+            { type: "session.pendingInputs.interruptHistory", input: captured },
             true,
             (result) => result.value,
             undefined,
@@ -528,8 +528,8 @@ export function createIncognitoSessionFacts(
                       !isRecord(row) ||
                       typeof row.input_id !== "string" ||
                       !ids.has(row.input_id) ||
-                      row.session_key !== input.sessionKey ||
-                      row.session_id !== input.sessionId,
+                      row.session_key !== captured.sessionKey ||
+                      row.session_id !== captured.sessionId,
                   )
                 ) {
                   throw new Error("Incognito pending input history omitted its custody facts");
