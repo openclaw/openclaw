@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -1076,6 +1077,35 @@ describe("createCopilotToolBridge tool conversion", () => {
       await Promise.allSettled([first, queued]);
       firstBridge.cleanup?.();
       otherBridge.cleanup?.();
+    }
+  });
+
+  it("runs the handler inside the async context captured when the bridge was built, not the caller's ambient context", async () => {
+    // Regression test for the Copilot pooled-client bug: the SDK client is
+    // pooled across turns, so a handler can be invoked while a *different*
+    // turn's async context is ambient. The bridge must anchor execution to
+    // the context that was active when it was constructed (turn N), not
+    // whatever context happens to be live when the SDK calls the handler.
+    const probe = new AsyncLocalStorage<string>();
+    let observedDuringExecute: string | undefined;
+    const tool = makeTool({
+      name: "exclusive",
+      execute: vi.fn(async () => {
+        observedDuringExecute = probe.getStore();
+        return { content: [{ text: "done", type: "text" }], details: null };
+      }),
+    });
+    const bridge = await probe.run("turn-1-context", () =>
+      createCopilotToolBridge({ createOpenClawCodingTools: () => [tool] }),
+    );
+    try {
+      const sdkTool = sdkToolNamed(bridge, "exclusive");
+      // Simulate the SDK's pooled client invoking the handler under a
+      // completely different (e.g. already-closed) turn's context.
+      await probe.run("turn-2-context", () => runSdkTool(sdkTool, {}));
+      expect(observedDuringExecute).toBe("turn-1-context");
+    } finally {
+      bridge.cleanup?.();
     }
   });
 });

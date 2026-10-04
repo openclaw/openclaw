@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   convertMcpCallToolResult,
   type Tool as SdkTool,
@@ -214,11 +215,19 @@ export async function createCopilotToolBridge(
 
   let sequentialBarrier = Promise.resolve();
   const pendingCalls = new Set<Promise<void>>();
+  // The Copilot SDK client is pooled across turns, so a handler invoked on
+  // turn N+1 can run inside the ambient async context left over from
+  // whenever the pooled client last resumed — not necessarily this attempt's
+  // own (still-open) async work scope. Snapshotting here, while this
+  // attempt's scope is active, and replaying it around `execute` keeps every
+  // scheduled call anchored to the scope it was built under, regardless of
+  // which context the SDK happens to invoke the handler from.
+  const attemptContext = AsyncLocalStorage.snapshot();
   const scheduleToolExecution: ScheduleToolExecution = (executionMode, execute) => {
     // SDK handlers arrive independently. An exclusive call waits for earlier
     // work across the attempt and blocks later calls, regardless of tool name.
     const ready = executionMode === "sequential" ? Promise.all(pendingCalls) : sequentialBarrier;
-    const run = ready.then(execute);
+    const run = ready.then(() => attemptContext(execute));
     const settled = run.then(
       () => undefined,
       () => undefined,
