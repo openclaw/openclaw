@@ -146,6 +146,69 @@ describe("GPT-Live gateway relay bridge", () => {
     }
   });
 
+  it("sends the greeting context before releasing caller audio to the model", async () => {
+    let socket: FakeSocket | undefined;
+    const events: string[] = [];
+    const peer = {
+      createOffer: vi.fn(async () => "v=offer\r\n"),
+      applyAnswer: vi.fn(async () => undefined),
+      adoptPendingAudio: vi.fn((pending: OpenAIQuicksilverPendingAudio) => {
+        events.push(`audio:${readPendingAudio(pending).toString("hex")}`);
+      }),
+      sendAudio: vi.fn((audio: Buffer) => events.push(`audio:${audio.toString("hex")}`)),
+      close: vi.fn(),
+    } satisfies OpenAIQuicksilverAudioPeerContract;
+    const bridgeRef: { current?: OpenAIQuicksilverGatewayBridge } = {};
+    const bridge = new OpenAIQuicksilverGatewayBridge(
+      {
+        providerConfig: {},
+        model: "gpt-live-1-codex",
+        voice: "cove",
+        audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+        onReady: () => bridgeRef.current?.triggerGreeting("Say the opening line."),
+        runAgentConsult: vi.fn(async () => ({ text: "done" })),
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        resolveAuth: vi.fn(async () => ({
+          type: "oauth" as const,
+          token: "oauth-token",
+          accountId: "account-1",
+        })),
+        createPeer: vi.fn(async () => peer),
+        fetchImpl: vi.fn(async () => createCallResponse("v=answer\r\n", "rtc_opening")),
+        webSocketFactory: () => {
+          const created = new FakeSocket();
+          created.send = (payload: string) => {
+            created.sent.push(payload);
+            events.push(`sideband:${(JSON.parse(payload) as { type: string }).type}`);
+          };
+          socket = created;
+          return created;
+        },
+      },
+      openAIRealtimeHost,
+    );
+    bridgeRef.current = bridge;
+    try {
+      const connection = bridge.connect();
+      bridge.sendAudio(Buffer.from([0x01, 0x02]));
+      await connection;
+      bridge.sendAudio(Buffer.from([0x03, 0x04]));
+      if (!socket) {
+        throw new Error("expected sideband socket");
+      }
+
+      expect(events).toEqual([]);
+      emitSideband(socket, { type: "session.started", session: { id: "rtc_opening" } });
+      bridge.sendAudio(Buffer.from([0x05, 0x06]));
+
+      expect(events).toEqual(["sideband:session.context.append", "audio:01020304", "audio:0506"]);
+    } finally {
+      await bridge.close();
+    }
+  });
+
   it("discards queued microphone audio when media peer creation fails", async () => {
     const { bridge, connection, peer, rejectPeer, waitForPeerStart } = createPendingPeerBridge();
     const pendingAudioState = bridge as unknown as {
