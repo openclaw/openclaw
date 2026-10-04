@@ -2754,9 +2754,8 @@ warn_shell_path_missing_dir() {
         return 0
     fi
 
-    # persist_shell_path_prepend may already have written the export line; in
-    # that case new shells are fine and the user only needs to reload this one.
-    # RC lines may spell the home dir as $HOME instead of the expanded path.
+    # A profile reference cannot prove what PATH a new shell will end up with.
+    # Always offer a current-shell remedy before any conditional profile hint.
     local dir_home_form="\$HOME${dir#"$HOME"}"
     local managed_node_bin="$HOME/.openclaw/tools/node/bin"
     local managed_node_home_form="\$HOME/.openclaw/tools/node/bin"
@@ -2765,33 +2764,46 @@ warn_shell_path_missing_dir() {
         managed_node_bin=""
         managed_node_home_form=""
     fi
+    local shell_name="${SHELL:-}" quoted_dir fish_dir
+    shell_name="${shell_name##*/}"
+    # Keep path bytes literal, including history expansion in interactive Bash.
+    quoted_dir="${managed_node_bin:-$dir}"
+    fish_dir="$quoted_dir"
+    quoted_dir="${quoted_dir//\'/\'\\\'\'}"
+    quoted_dir="'$quoted_dir'"
+    fish_dir="${fish_dir//\\/\\\\}"
+    fish_dir="${fish_dir//\"/\\\"}"
+    fish_dir="${fish_dir//\$/\\\$}"
+    echo ""
+    ui_warn "PATH missing ${label}: ${dir}"
+    echo "  This directory was not on PATH when the installer started."
+    case "$shell_name" in
+        bash|zsh)
+            echo "  For this shell, run:"
+            printf "    export PATH=%s:\"\$PATH\"; hash -r\n" "$quoted_dir"
+            ;;
+        fish)
+            echo "  For this shell, run:"
+            printf "    set -gx PATH \"%s\" \$PATH\n" "$fish_dir"
+            ;;
+        *)
+            echo "  Add this directory to PATH using your shell's syntax. Examples:"
+            printf "    Bash/zsh: export PATH=%s:\"\$PATH\"; hash -r\n" "$quoted_dir"
+            printf "    Fish: set -gx PATH \"%s\" \$PATH\n" "$fish_dir"
+            ;;
+    esac
+    echo "  For future shells, check your shell startup file."
+
+    local rc
     for rc in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile" "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.config/fish/conf.d/openclaw.fish"; do
         if [[ -f "$rc" ]] && {
             grep -Fq "$dir" "$rc" || grep -Fq "$dir_home_form" "$rc" ||
                 { [[ -n "$managed_node_bin" ]] && { grep -Fq "$managed_node_bin" "$rc" || grep -Fq "$managed_node_home_form" "$rc"; }; }
         }; then
-            echo ""
-            ui_info "PATH updated in ${rc}: added ${label} (${dir})"
-            echo "  New terminals pick this up automatically."
-            if [[ "$rc" == *.fish ]]; then
-                echo "  For this shell, run: source ${rc}"
-            else
-                echo "  For this shell, run: source ${rc}; hash -r"
-            fi
+            printf '  If your shell reads %s and it adds this directory to PATH, reloading it may help.\n' "$rc"
             return 0
         fi
     done
-
-    echo ""
-    ui_warn "PATH missing ${label}: ${dir}"
-    echo "  This can make openclaw show as \"command not found\" in new terminals."
-    if [[ "${SHELL:-}" == */fish ]]; then
-        echo "  Fix (Fish: ~/.config/fish/conf.d/openclaw.fish):"
-        echo "    fish_add_path -- \"${dir}\""
-    else
-        echo "  Fix (zsh: ~/.zshrc, bash: ~/.bashrc):"
-        echo "    export PATH=\"${dir}:\$PATH\""
-    fi
 }
 
 openclaw_command_for_user() {
