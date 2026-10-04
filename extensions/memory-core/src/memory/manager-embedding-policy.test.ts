@@ -3,7 +3,6 @@ import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildMemoryEmbeddingBatches,
-  isSplittableMemoryEmbeddingBatchError,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
 } from "./manager-embedding-policy.js";
@@ -35,6 +34,28 @@ async function probeRetryAttempts(
     // Expected: the loop always rejects since `run` never succeeds.
   }
   return run.mock.calls.length;
+}
+
+async function probeBatchSplits(message: string): Promise<boolean> {
+  const failure = new Error(message);
+  const items = ["a", "b"];
+  try {
+    const outputs = await runMemoryEmbeddingBatchRetryWithSplit({
+      items,
+      run: async (batch) => {
+        if (batch.length > 1) {
+          throw failure;
+        }
+        return batch;
+      },
+      waitForRetry: async () => {},
+    });
+    expect(outputs).toEqual(items);
+    return true;
+  } catch (error) {
+    expect(error).toBe(failure);
+    return false;
+  }
 }
 
 function chunk(text: string) {
@@ -422,7 +443,7 @@ describe("memory embedding policy", () => {
     },
   );
 
-  it("identifies splittable transport errors", () => {
+  it("splits transport errors only when a smaller request can help", async () => {
     const splittableMessages = [
       "TypeError: fetch failed | other side closed",
       "undici error: UND_ERR_SOCKET",
@@ -431,14 +452,14 @@ describe("memory embedding policy", () => {
     ];
 
     for (const message of splittableMessages) {
-      expect(isSplittableMemoryEmbeddingBatchError(message)).toBe(true);
+      expect(await probeBatchSplits(message)).toBe(true);
     }
-    expect(isSplittableMemoryEmbeddingBatchError("ECONNREFUSED")).toBe(false);
-    expect(isSplittableMemoryEmbeddingBatchError("EHOSTUNREACH")).toBe(false);
-    expect(isSplittableMemoryEmbeddingBatchError("memory embeddings batch timed out")).toBe(false);
+    expect(await probeBatchSplits("ECONNREFUSED")).toBe(false);
+    expect(await probeBatchSplits("EHOSTUNREACH")).toBe(false);
+    expect(await probeBatchSplits("memory embeddings batch timed out")).toBe(false);
   });
 
-  it("recognizes only provider errors with an explicit numeric embedding item limit", () => {
+  it("splits only provider errors with an explicit numeric embedding item limit", async () => {
     for (const message of [
       "Embeddings API input limit exceeded: max 10, got 33. Request id: fixture-000597000",
       "embeddings max input length is 16",
@@ -449,7 +470,7 @@ describe("memory embedding policy", () => {
       // Zhipu embedding-3 rejects batches over 64 items with a Chinese message (#136261).
       'HTTP 400: {"error":{"code":"1214","message":"input数组最大不得超过64条"}}',
     ]) {
-      expect(isSplittableMemoryEmbeddingBatchError(message)).toBe(true);
+      expect(await probeBatchSplits(message)).toBe(true);
     }
 
     for (const message of [
@@ -472,7 +493,7 @@ describe("memory embedding policy", () => {
       "input array max 64tokens",
       "input array max 64.5",
     ]) {
-      expect(isSplittableMemoryEmbeddingBatchError(message)).toBe(false);
+      expect(await probeBatchSplits(message)).toBe(false);
     }
   });
 
@@ -499,10 +520,7 @@ describe("memory embedding policy", () => {
     expect(result).toEqual([[97], [98], [99], [100]]);
     expect(completed).toEqual([["a"], ["b"], ["c"], ["d"]]);
     expect(run.mock.calls.map(([items]) => items.length)).toEqual([4, 2, 1, 1, 2, 1, 1]);
-    expect(isSplittableMemoryEmbeddingBatchError("431 request_headers_too_large")).toBe(true);
-    expect(isSplittableMemoryEmbeddingBatchError("embedding validation failed at item 4312")).toBe(
-      false,
-    );
+    expect(await probeBatchSplits("embedding validation failed at item 4312")).toBe(false);
   });
 
   it("retries too-many-tokens-per-day errors", async () => {

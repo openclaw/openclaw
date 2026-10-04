@@ -30,17 +30,6 @@ export type ConfiguredBindingRecordResolution = {
 };
 
 /**
- * Factory that materializes a configured binding for one account/conversation pair.
- */
-export type ConfiguredBindingTargetFactory = {
-  driverId: string;
-  materialize: (params: {
-    accountId: string;
-    conversation: ChannelConfiguredBindingConversationRef;
-  }) => ConfiguredBindingRecordResolution;
-};
-
-/**
  * Compiled binding rule with provider matcher, target factory, and static target facts.
  */
 export type CompiledConfiguredBinding = {
@@ -51,7 +40,13 @@ export type CompiledConfiguredBinding = {
   target: ChannelConfiguredBindingConversationRef;
   agentId: string;
   provider: ChannelConfiguredBindingProvider;
-  targetFactory: ConfiguredBindingTargetFactory;
+  targetFactory: {
+    driverId: string;
+    materialize: (params: {
+      accountId: string;
+      conversation: ChannelConfiguredBindingConversationRef;
+    }) => ConfiguredBindingRecordResolution;
+  };
 };
 
 /**

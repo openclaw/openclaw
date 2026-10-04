@@ -83,7 +83,7 @@ type MemoryEmbeddingRetryBudget = {
   retryAfterMs?: number;
 };
 
-export function isSplittableMemoryEmbeddingBatchError(message: string): boolean {
+function isSplittableMemoryEmbeddingBatchError(message: string): boolean {
   return SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE.test(message);
 }
 

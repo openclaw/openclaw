@@ -20,7 +20,7 @@ const resolveMocks = vi.hoisted(() => ({
 
 // mock-isolation: Keep the ACP control plane's session-state dependencies outside this driver fixture.
 vi.mock("../../acp/persistent-bindings.lifecycle.js", () => ({
-  ensureConfiguredAcpBindingReadyCore: vi.fn(),
+  ensureConfiguredAcpBindingSession: vi.fn(),
 }));
 vi.mock("../../gateway/session-reset-service.js", () => ({
   performGatewaySessionReset: resetMocks.performGatewaySessionReset,
