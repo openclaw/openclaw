@@ -1,4 +1,7 @@
-import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asNonArrayRecord,
+  isRecord as isObjectRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.js";
 import type { TtsAutoMode, TtsConfig, TtsProvider } from "../config/types.tts.js";
@@ -54,10 +57,6 @@ function sanitizeBaseUrlForStatus(value: unknown): string | undefined {
   }
 }
 
-function isCustomOpenAiTtsBaseUrl(baseUrl: string | undefined): boolean {
-  return baseUrl ? baseUrl.replace(/\/+$/, "") !== DEFAULT_OPENAI_TTS_BASE_URL : false;
-}
-
 function firstStatusDetail(
   record: Record<string, unknown> | undefined,
   keys: readonly string[],
@@ -78,10 +77,8 @@ function resolveProviderConfigRecord(
   raw: TtsConfig,
   provider: TtsProvider,
 ): Record<string, unknown> | undefined {
-  const rawRecord: Record<string, unknown> = isObjectRecord(raw)
-    ? (raw as Record<string, unknown>)
-    : {};
-  const providers: Record<string, unknown> = isObjectRecord(raw.providers) ? raw.providers : {};
+  const rawRecord = asNonArrayRecord(raw);
+  const providers = asNonArrayRecord(raw.providers);
   if (provider === "microsoft") {
     return {
       ...(isObjectRecord(rawRecord.edge) ? rawRecord.edge : {}),
@@ -107,7 +104,9 @@ function resolveStatusProviderDetails(raw: TtsConfig, provider: TtsProvider) {
   }
   const record = resolveProviderConfigRecord(raw, provider);
   const sanitizedBaseUrl = sanitizeBaseUrlForStatus(record?.baseUrl);
-  const customBaseUrl = provider === "openai" && isCustomOpenAiTtsBaseUrl(sanitizedBaseUrl);
+  const customBaseUrl =
+    provider === "openai" &&
+    Boolean(sanitizedBaseUrl && sanitizedBaseUrl !== DEFAULT_OPENAI_TTS_BASE_URL);
   const details: Partial<TtsStatusSnapshot> = {};
   for (const [field, keys] of [
     ["displayName", ["displayName"]],

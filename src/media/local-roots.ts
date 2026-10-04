@@ -17,22 +17,14 @@ function resolveCanonicalRoot(root: string): string {
   return resolvePathViaExistingAncestorSync(path.resolve(root));
 }
 
-function resolveCachedPreferredTmpDir(): string {
-  if (!cachedPreferredTmpDir) {
-    // Temp-root discovery can hit platform/env state; keep one process-local
-    // snapshot so media root lists stay stable during a run.
-    cachedPreferredTmpDir = resolvePreferredOpenClawTmpDir();
-  }
-  return cachedPreferredTmpDir;
-}
-
 function buildMediaLocalRoots(stateDir: string, configDir: string): string[] {
   const resolvedStateDir = path.resolve(stateDir);
   const resolvedConfigDir = path.resolve(configDir);
-  const preferredTmpDir = resolveCachedPreferredTmpDir();
+  // Keep platform/env temp-root discovery stable for the lifetime of the process.
+  cachedPreferredTmpDir ||= resolvePreferredOpenClawTmpDir();
   return Array.from(
     new Set([
-      preferredTmpDir,
+      cachedPreferredTmpDir,
       path.join(resolvedConfigDir, "media"),
       path.join(resolvedStateDir, "media"),
       // Queue-owned copies of undelivered attachments. Recovery replays in a
