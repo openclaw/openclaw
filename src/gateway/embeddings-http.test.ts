@@ -244,7 +244,11 @@ async function expectGenericProviderEmbeddingRequest(expectedProviderCall: {
     { object: "embedding", index: 0, embedding: [9.1, 9.2] },
     { object: "embedding", index: 1, embedding: [10.1, 9.2] },
   ]);
-  expect(latestCreateGenericEmbeddingProviderOptions()).toMatchObject(expectedProviderCall);
+  expect(genericEmbeddingServer.requests.at(-1)?.body).toMatchObject({
+    model: expectedProviderCall.model,
+    dimensions: expectedProviderCall.dimensions,
+    input_type: expectedProviderCall.inputType,
+  });
 }
 
 function latestCreateEmbeddingProviderOptions(): {
@@ -259,22 +263,6 @@ function latestCreateEmbeddingProviderOptions(): {
     throw new Error("expected embedding provider create call");
   }
   return call[0];
-}
-
-function latestCreateGenericEmbeddingProviderOptions(): {
-  model?: string;
-  dimensions?: number;
-  inputType?: string;
-} {
-  const request = genericEmbeddingServer.requests.at(-1);
-  if (!request) {
-    throw new Error("expected generic embedding provider request");
-  }
-  return {
-    model: typeof request.body.model === "string" ? request.body.model : undefined,
-    dimensions: typeof request.body.dimensions === "number" ? request.body.dimensions : undefined,
-    inputType: typeof request.body.input_type === "string" ? request.body.input_type : undefined,
-  };
 }
 
 describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
