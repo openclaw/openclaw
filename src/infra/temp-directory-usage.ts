@@ -10,6 +10,39 @@ export type TemporaryDirectoryUsage =
 
 /** Tokenless scratch needs both producer and open-file evidence before reclamation. */
 export function inspectTemporaryDirectoryUsage(directory: string): TemporaryDirectoryUsage {
+  if (process.platform === "linux") {
+    try {
+      const [mount, ...otherMounts] = fs
+        .readFileSync("/proc/self/mountinfo", "utf8")
+        .split("\n")
+        .map((line) => line.split(" "))
+        .filter((fields) => fields[4] === "/proc");
+      const separator = mount?.indexOf("-") ?? -1;
+      if (
+        !mount ||
+        otherMounts.length > 0 ||
+        separator < 6 ||
+        mount[separator + 1] !== "proc" ||
+        !mount[5] ||
+        !mount[separator + 3]
+      ) {
+        throw new Error("Procfs mount information is incomplete or ambiguous.");
+      }
+      // A visible current PID cannot establish completeness when procfs hides its peers.
+      const options = `${mount[5]},${mount[separator + 3]}`.split(",");
+      if (
+        options.some(
+          (option) =>
+            option === "subset=pid" ||
+            (option.startsWith("hidepid=") && option !== "hidepid=0" && option !== "hidepid=off"),
+        )
+      ) {
+        return { kind: "unknown", reason: "restricted-procfs" };
+      }
+    } catch (error) {
+      return { kind: "unknown", reason: `Could not inspect procfs visibility: ${String(error)}` };
+    }
+  }
   const census = inspectOtherOpenClawProcesses();
   if ("error" in census) {
     return { kind: "unknown", reason: census.error };

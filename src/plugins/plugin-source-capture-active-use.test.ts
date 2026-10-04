@@ -82,7 +82,14 @@ it("preserves live open files and warns once when the process census is unreadab
     vi.setSystemTime(Date.now() + 2 * 60 * 60 * 1_000);
     mockProcessPlatform("linux");
     vi.spyOn(container, "isContainerEnvironment").mockReturnValue(false);
-    const { readdirSync: readdir } = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const { readdirSync: readdir, readFileSync: readFile } =
+      await vi.importActual<typeof import("node:fs")>("node:fs");
+    const mountInfo = path.join(stateDir, "proc-mountinfo");
+    const unrestrictedMount = "20 1 0:1 / /proc rw,nosuid - proc proc rw\n";
+    fs.writeFileSync(mountInfo, unrestrictedMount);
+    vi.spyOn(fs, "readFileSync").mockImplementation((file, options) =>
+      readFile(file === "/proc/self/mountinfo" ? mountInfo : file, options),
+    );
     let injectedEacces = 0;
     procRead.mockImplementation((target, options) => {
       if (target === "/proc") {
@@ -110,11 +117,22 @@ it("preserves live open files and warns once when the process census is unreadab
       const inventory = path.join(stateDir, "process-inventory");
       fs.mkdirSync(inventory);
       fs.mkdirSync(path.join(inventory, String(process.pid)));
-      fs.mkdirSync(path.join(inventory, String(child.pid)));
       procRead.mockImplementation((target, options) =>
         readdir(target === "/proc" ? inventory : target, options),
       );
       vi.spyOn(census, "inspectOtherOpenClawProcesses").mockReturnValue({ pids: [] });
+      warning.mockClear();
+      fs.writeFileSync(mountInfo, `${unrestrictedMount.trimEnd()},hidepid=2\n`);
+      await sweepPluginSourceCapturesForTest(stateDir);
+      child.stdin.write("report\n");
+      const restrictedLinks = (await lines.next()).value;
+      console.log(`Restricted procfs proof: hidden holder nlink=${restrictedLinks}`);
+      expect(restrictedLinks).toBe("[1,1,1]");
+      expect(roots.every((root) => fs.existsSync(root))).toBe(true);
+      expect(warning).toHaveBeenCalledTimes(1);
+      expect(String(warning.mock.calls[0]?.[0])).toContain("restricted-procfs");
+      fs.writeFileSync(mountInfo, unrestrictedMount);
+      fs.mkdirSync(path.join(inventory, String(child.pid)));
       warning.mockClear();
       await sweepPluginSourceCapturesForTest(stateDir);
       child.stdin.write("report\n");

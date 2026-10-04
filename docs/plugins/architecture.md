@@ -417,7 +417,8 @@ to the current UID immediately before its rename, preserving other users' captur
 privileged runs. A live OpenClaw producer preserves tokenless roots. On Linux,
 cleanup also inspects process file descriptors, working directories, and mapped
 files, including holders that are not OpenClaw processes. Only a complete census
-with no holder permits removal. Unreadable or incomplete inspection preserves
+with no holder permits removal. Restricted procfs mounts (`hidepid` restrictions
+or `subset=pid`) preserve roots with a `restricted-procfs` warning. Unreadable or incomplete inspection preserves
 the roots and emits one warning per sweep with the reason; cleanup retries on a
 later sweep without interrupting loading or updates. Platforms without complete
 open-file inspection, including macOS and Windows, preserve tokenless roots.

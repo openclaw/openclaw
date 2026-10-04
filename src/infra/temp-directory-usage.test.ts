@@ -18,6 +18,9 @@ vi.mock("node:fs", async (importOriginal) => {
 
 const root = "/tmp/openclaw-plugin-build-unused";
 const pid = String(process.pid);
+const unrestrictedMount = "20 1 0:1 / /proc rw,nosuid - proc proc rw\n";
+let mountInfo: string;
+let mappings: string;
 const denied = (code: string) =>
   Object.assign(new Error(`${code}: fixture census denied`), { code });
 
@@ -25,7 +28,13 @@ beforeEach(() => {
   mockProcessPlatform("linux");
   vi.spyOn(census, "inspectOtherOpenClawProcesses").mockReturnValue({ pids: [] });
   directory.mockReset().mockImplementation((file: string) => (file === "/proc" ? [pid] : ["4"]));
-  read.mockReset().mockReturnValue("");
+  mountInfo = unrestrictedMount;
+  mappings = "";
+  read
+    .mockReset()
+    .mockImplementation((file: string) =>
+      file === "/proc/self/mountinfo" ? mountInfo : file.endsWith("/maps") ? mappings : "",
+    );
   link.mockReset().mockReturnValue("/unrelated/payload");
 });
 afterEach(() => vi.restoreAllMocks());
@@ -34,13 +43,39 @@ it.each(["descriptor", "mapping", "cwd"])(
   "recognizes a %s holder without an OpenClaw argv",
   (kind) => {
     if (kind === "mapping") {
-      read.mockReturnValue(`0123-4567 r--p 0000 00:01 42 ${root}/module.node\n`);
+      mappings = `0123-4567 r--p 0000 00:01 42 ${root}/module.node\n`;
     } else {
       link.mockImplementation((file: string) =>
         file.endsWith(kind === "cwd" ? "/cwd" : "/fd/4") ? `${root}/payload` : "/unrelated",
       );
     }
     expect(inspectTemporaryDirectoryUsage(root)).toEqual({ kind: "active" });
+  },
+);
+
+it.each([
+  "20 1 0:1 / /proc rw - proc proc rw,hidepid=2\n",
+  "20 1 0:1 / /proc rw,hidepid=1 - proc proc rw\n",
+  "20 1 0:1 / /proc rw - proc proc rw,hidepid=invisible\n",
+  "20 1 0:1 / /proc rw - proc proc rw,subset=pid\n",
+])("refuses a restricted procfs view that still contains this process: %s", (mount) => {
+  mountInfo = mount;
+  expect(inspectTemporaryDirectoryUsage(root)).toEqual({
+    kind: "unknown",
+    reason: "restricted-procfs",
+  });
+});
+
+it("accepts unrestricted procfs without mistaking another mount's options for restrictions", () => {
+  mountInfo = `${unrestrictedMount.trimEnd()},hidepid=0\n21 1 0:2 / /other-proc rw - proc proc rw,hidepid=2\n`;
+  expect(inspectTemporaryDirectoryUsage(root)).toEqual({ kind: "inactive" });
+});
+
+it.each(["", `${unrestrictedMount}${unrestrictedMount}`])(
+  "preserves roots when the proc mount cannot be identified unambiguously",
+  (mount) => {
+    mountInfo = mount;
+    expect(inspectTemporaryDirectoryUsage(root)).toMatchObject({ kind: "unknown" });
   },
 );
 
@@ -75,7 +110,10 @@ it.each(["descriptors", "maps", "cwd"])(
         throw denied("EACCES");
       });
     } else if (kind === "maps") {
-      read.mockImplementation(() => {
+      read.mockImplementation((file: string) => {
+        if (file === "/proc/self/mountinfo") {
+          return mountInfo;
+        }
         throw denied("EACCES");
       });
     } else {
