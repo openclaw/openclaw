@@ -66,6 +66,66 @@ describe("buildGuardedModelFetch SSE readability", () => {
     },
   );
 
+  it("reports discarded SSE comments without reporting other unreadable frames", async () => {
+    respond([": keep", 'alive\n\nevent: ping\n\ndata: {"ok": true}\n\n'], "text/event-stream");
+    const onSseComment = vi.fn();
+    const response = await buildGuardedModelFetch(model, undefined, { onSseComment })(url, {
+      method: "POST",
+    });
+
+    await expect(response.text()).resolves.toBe('data: {"ok": true}\n\n');
+    expect(onSseComment).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["sanitized", "official", "opt-out"])(
+    "observes comment lines without event separators on %s streams",
+    async (mode) => {
+      const chunks = ["\uFEFF: keep", "alive\r", "\n: second\n: third\r", 'data: {"ok": true}\n\n'];
+      respond(chunks, "text/event-stream");
+      const target =
+        mode === "official"
+          ? { ...model, provider: "openai", baseUrl: "https://api.openai.com/v1" }
+          : model;
+      const onSseComment = vi.fn();
+      const response = await buildGuardedModelFetch(target, undefined, {
+        onSseComment,
+        sanitizeSse: mode !== "opt-out",
+      })(`${target.baseUrl}/responses`, { method: "POST" });
+
+      if (mode === "sanitized") {
+        await expect(response.text()).resolves.toBe(chunks.join("").replace(/^\uFEFF/u, ""));
+      } else {
+        expect(new Uint8Array(await response.arrayBuffer())).toEqual(
+          new TextEncoder().encode(chunks.join("")),
+        );
+      }
+      expect(onSseComment).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it("propagates cancellation through comment observation and releases the request", async () => {
+    const cancel = vi.fn();
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(new ReadableStream<Uint8Array>({ cancel }), {
+        headers: { "content-type": "text/event-stream" },
+      }),
+      finalUrl: url,
+      release,
+    });
+    const onSseComment = vi.fn();
+    const response = await buildGuardedModelFetch(model, undefined, {
+      onSseComment,
+      sanitizeSse: false,
+    })(url, { method: "POST" });
+
+    await response.body?.cancel("caller stopped");
+
+    expect(cancel).toHaveBeenCalledWith("caller stopped");
+    expect(release).toHaveBeenCalledOnce();
+    expect(onSseComment).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "official OpenAI event-only frames",

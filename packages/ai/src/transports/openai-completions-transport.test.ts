@@ -3,6 +3,7 @@ import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import type { Model } from "../types.js";
+import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { processCompletionsStream } from "./openai-completions-stream.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 import {
@@ -50,6 +51,41 @@ async function captureTransportRequest(model: Model<"openai-completions">) {
 }
 
 describe("openai completions transport", () => {
+  it("reports SSE comments as transport liveness on the caller signal", async () => {
+    const previousHost = getAiTransportHost();
+    const signal = new AbortController().signal;
+    const listener = vi.fn();
+    const unsubscribe = onLlmRequestActivity(signal, listener);
+    configureAiTransportHost({
+      ...previousHost,
+      buildModelFetch: (_model, _timeoutMs, options) => async () => {
+        options?.onSseComment?.();
+        return new Response(
+          `data: ${JSON.stringify(makeCompletionsChunk({ content: "ok" }, "stop"))}\n\ndata: [DONE]\n\n`,
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      },
+    });
+    try {
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        makeCompletionsModel(),
+        { messages: [{ role: "user", content: "hello", timestamp: 1 }], tools: [] } as never,
+        { apiKey: "test-key", signal } as never,
+      );
+      if (stream instanceof Promise) {
+        throw new Error("OpenAI Chat transport must return its event stream synchronously");
+      }
+      for await (const event of stream) {
+        void event;
+      }
+
+      expect(listener).toHaveBeenCalledWith("transport-liveness");
+    } finally {
+      unsubscribe();
+      configureAiTransportHost(previousHost);
+    }
+  });
+
   it("passes provider request timeouts to OpenAI SDK per-request options", () => {
     const signal = new AbortController().signal;
     const model = {

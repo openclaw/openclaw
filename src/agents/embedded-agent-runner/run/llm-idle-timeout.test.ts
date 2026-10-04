@@ -277,36 +277,39 @@ describe("streamWithIdleTimeout", () => {
     expect(results).toHaveLength(3);
   });
 
-  it("treats quarantined provider events as stream activity", async () => {
-    vi.useFakeTimers();
-    let requestSignal: AbortSignal | undefined;
-    const baseFn: StreamFn = vi.fn((_model, _context, options) => {
-      requestSignal = options?.signal;
-      const stream = createAssistantMessageEventStream();
-      setTimeout(() => {
-        stream.push({ type: "text_delta", contentIndex: 0, delta: "done" });
-      }, 120);
-      return stream;
-    });
-    const wrapped = streamWithIdleTimeout(baseFn, 50);
-    const stream = wrapped(
-      {} as Parameters<typeof baseFn>[0],
-      {} as Parameters<typeof baseFn>[1],
-      {} as Parameters<typeof baseFn>[2],
-    ) as AssistantMessageEventStream;
-    const iterator = stream[Symbol.asyncIterator]();
-    const next = iterator.next();
+  it.each(["model-progress", "transport-liveness"] as const)(
+    "treats %s as watchdog activity",
+    async (kind) => {
+      vi.useFakeTimers();
+      let requestSignal: AbortSignal | undefined;
+      const baseFn: StreamFn = vi.fn((_model, _context, options) => {
+        requestSignal = options?.signal;
+        const stream = createAssistantMessageEventStream();
+        setTimeout(() => {
+          stream.push({ type: "text_delta", contentIndex: 0, delta: "done" });
+        }, 120);
+        return stream;
+      });
+      const wrapped = streamWithIdleTimeout(baseFn, 50);
+      const stream = wrapped(
+        {} as Parameters<typeof baseFn>[0],
+        {} as Parameters<typeof baseFn>[1],
+        {} as Parameters<typeof baseFn>[2],
+      ) as AssistantMessageEventStream;
+      const iterator = stream[Symbol.asyncIterator]();
+      const next = iterator.next();
 
-    setTimeout(() => notifyLlmRequestActivity(requestSignal), 40);
-    setTimeout(() => notifyLlmRequestActivity(requestSignal), 80);
-    await vi.advanceTimersByTimeAsync(120);
+      setTimeout(() => notifyLlmRequestActivity(requestSignal, kind), 40);
+      setTimeout(() => notifyLlmRequestActivity(requestSignal, kind), 80);
+      await vi.advanceTimersByTimeAsync(120);
 
-    await expect(next).resolves.toEqual({
-      done: false,
-      value: { type: "text_delta", contentIndex: 0, delta: "done" },
-    });
-    await iterator.return?.();
-  });
+      await expect(next).resolves.toEqual({
+        done: false,
+        value: { type: "text_delta", contentIndex: 0, delta: "done" },
+      });
+      await iterator.return?.();
+    },
+  );
 
   it("resets idle timer on tool activity", async () => {
     vi.useFakeTimers();

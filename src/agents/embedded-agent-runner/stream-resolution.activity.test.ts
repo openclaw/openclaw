@@ -80,11 +80,12 @@ describe("embedded provider stream activity", () => {
     const onCallerActivity = vi.fn();
     const unsubscribe = onLlmRequestActivity(callerController.signal, onCallerActivity);
     try {
-      notifyLlmRequestActivity(mergedSignal);
+      notifyLlmRequestActivity(mergedSignal, "transport-liveness");
       expect(onCallerActivity).toHaveBeenCalledTimes(1);
+      expect(onCallerActivity).toHaveBeenLastCalledWith("transport-liveness");
 
       runController.abort();
-      notifyLlmRequestActivity(mergedSignal);
+      notifyLlmRequestActivity(mergedSignal, "transport-liveness");
       expect(onCallerActivity).toHaveBeenCalledTimes(1);
     } finally {
       unsubscribe();
