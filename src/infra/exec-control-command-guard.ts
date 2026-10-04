@@ -260,14 +260,19 @@ export async function detectUnsafeExecControlShellCommand(
     // Fall back to line-local shell splitting below.
   }
   const argvCandidates = (() => {
+    const explainedCandidates = explanation
+      ? [...explanation.topLevelCommands, ...explanation.nestedCommands].flatMap((step) =>
+          buildCommandPayloadArgvCandidates(step.argv),
+        )
+      : [];
     if (explanation?.ok) {
-      const commands = [...explanation.topLevelCommands, ...explanation.nestedCommands];
-      return commands.flatMap((step) => buildCommandPayloadArgvCandidates(step.argv));
+      return explainedCandidates;
     }
-    return normalizeStringEntries(rawCommand.split(/\r?\n/)).flatMap((line) => {
+    const lineCandidates = normalizeStringEntries(rawCommand.split(/\r?\n/)).flatMap((line) => {
       const argv = splitShellArgs(line);
       return argv ? buildCommandPayloadArgvCandidates(argv) : [[line]];
     });
+    return [...explainedCandidates, ...lineCandidates];
   })();
   const controlCandidates = uniqueStrings(argvCandidates.map((argv) => argv.join(" ")));
   for (const candidate of controlCandidates) {

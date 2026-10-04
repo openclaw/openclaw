@@ -169,4 +169,54 @@ describeNonWin("exec live OpenClaw state SQLite guard", () => {
       await expect(fs.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
+
+  it("rejects a chained live target whose trailing comment carries vertical whitespace", async () => {
+    await withTempDir("openclaw-exec-live-sqlite-vt-", async (root) => {
+      const stateDir = path.join(root, "state");
+      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+      const copiedDatabasePath = path.join(root, "snapshot", "openclaw.sqlite");
+      const markerPath = path.join(root, "sqlite-spawned");
+      const sqlitePath = path.join(root, "sqlite3");
+      await fs.mkdir(path.dirname(databasePath), { recursive: true });
+      await fs.mkdir(path.dirname(copiedDatabasePath), { recursive: true });
+      await fs.writeFile(copiedDatabasePath, "fixture");
+      await fs.writeFile(sqlitePath, `#!/bin/sh\nprintf spawned > ${quote(markerPath)}\n`, {
+        mode: 0o755,
+      });
+
+      await expect(
+        detectUnsafeExecControlShellCommand(
+          `echo ok; sqlite3 ${quote(copiedDatabasePath)} .schema # \vmarker`,
+          { stateDir, workdir: root },
+        ),
+      ).resolves.toBeNull();
+
+      await withEnvAsync(
+        {
+          HOME: root,
+          USERPROFILE: root,
+          OPENCLAW_HOME: root,
+          OPENCLAW_STATE_DIR: stateDir,
+        },
+        async () => {
+          const tool = createExecTool({
+            host: "gateway",
+            security: "full",
+            ask: "off",
+            allowBackground: false,
+          });
+          await expect(
+            tool.execute("call-live-sqlite-vt", {
+              command: `echo ok; ${quote(sqlitePath)} ${quote(databasePath)} .schema # \vmarker`,
+              workdir: root,
+            }),
+          ).rejects.toThrow(
+            /external sqlite3 cannot open databases under the active OpenClaw state directory/,
+          );
+        },
+      );
+
+      await expect(fs.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
 });
