@@ -386,6 +386,34 @@ describe("executeAgentTurn: provider failures", () => {
     },
   );
 
+  it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
+    "surfaces a prompt-size rate-limit hint in $label chats",
+    async (testCase) => {
+      const promptSizeMessage =
+        "400 This prompt is longer than the free tier allows for a single request. Shorten it.";
+      state.runEmbeddedAgentMock.mockRejectedValueOnce(
+        new FailoverError(promptSizeMessage, {
+          reason: "rate_limit",
+          provider: "anthropic",
+          model: "claude-opus-4-1",
+          rawError: promptSizeMessage,
+        }),
+      );
+
+      const result = await executeTestTurn({
+        sessionCtx: createNonDirectFailureSessionCtx(testCase),
+      });
+
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        expect(result.payload.isError).toBe(true);
+        expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
+        expect(result.payload.text).toContain("Shorten it");
+        expect(result.payload.text).not.toContain("few minutes");
+      }
+    },
+  );
+
   it("scopes fallback exhaustion copy to the attempted models", () => {
     const payload = buildKnownAgentRunFailureReplyPayload({
       err: createTestFallbackSummaryError({
@@ -431,6 +459,27 @@ describe("executeAgentTurn: provider failures", () => {
     expect(payload?.text).not.toBe(SILENT_REPLY_TOKEN);
     expect(payload?.text).toContain("weekly limit");
     expect(payload?.text).toContain("resets 6pm");
+    expect(payload?.text).not.toContain("few minutes");
+  });
+
+  it("surfaces a prompt-size rate-limit hint through known failure payloads in group chats", () => {
+    const promptSizeMessage =
+      "400 This prompt is longer than the free tier allows for a single request. Shorten it.";
+    const payload = buildKnownAgentRunFailureReplyPayload({
+      err: new FailoverError(promptSizeMessage, {
+        reason: "rate_limit",
+        provider: "anthropic",
+        model: "claude-opus-4-1",
+        rawError: promptSizeMessage,
+      }),
+      sessionCtx: createNonDirectFailureSessionCtx(NON_DIRECT_FAILURE_SURFACE_CASES[0]),
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(payload).toBeDefined();
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).not.toBe(SILENT_REPLY_TOKEN);
+    expect(payload?.text).toContain("Shorten it");
     expect(payload?.text).not.toContain("few minutes");
   });
 
