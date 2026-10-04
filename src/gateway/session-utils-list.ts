@@ -26,7 +26,7 @@ import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js
 import type { SessionListDiagnostics } from "./session-list-diagnostics.types.js";
 import {
   filterSessionEntries,
-  type SessionListFilteredEntries,
+  type SessionEntrySelection,
   type SessionListFilterParams,
 } from "./session-list-filters.js";
 import {
@@ -48,15 +48,6 @@ import type { SessionRowProjection } from "./session-row-projection.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { getSessionDefaults } from "./session-utils-model.js";
 import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
-
-export type SessionEntrySelection = Omit<SessionListFilteredEntries, "ownerEntries"> & {
-  ownerCount: number;
-  totalCount: number;
-  limitApplied?: number;
-  offset: number;
-  nextOffset: number | null;
-  hasMore: boolean;
-};
 
 function resolveSessionsListWindowLimit(limit: number | undefined, offset: number) {
   if (limit === undefined) {

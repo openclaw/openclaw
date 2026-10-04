@@ -15,7 +15,7 @@ import {
   projectSessionParticipant,
   projectSessionProfileInvolvement,
 } from "./session-identity-projection.js";
-import { matchesSessionArchiveFilter } from "./session-list-filters.js";
+import { matchesSessionArchiveFilter, type SessionEntrySelection } from "./session-list-filters.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import type * as records from "./session-row-projection-record.js";
@@ -32,7 +32,6 @@ import {
   projectGatewaySessionActiveRun,
   projectGatewaySessionRunState,
 } from "./session-utils-display.js";
-import type { SessionEntrySelection } from "./session-utils-list.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 type PresentationOptions = Omit<

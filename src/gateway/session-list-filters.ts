@@ -55,6 +55,15 @@ export type SessionListFilteredEntries = {
   involvingProfileId?: string;
 };
 
+export type SessionEntrySelection = Omit<SessionListFilteredEntries, "ownerEntries"> & {
+  ownerCount: number;
+  totalCount: number;
+  limitApplied?: number;
+  offset: number;
+  nextOffset: number | null;
+  hasMore: boolean;
+};
+
 export type SessionListFilterParams = {
   cfg: OpenClawConfig;
   entries: Iterable<SessionEntryPair>;
