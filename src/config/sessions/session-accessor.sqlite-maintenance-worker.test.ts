@@ -29,6 +29,7 @@ import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sql
 import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import * as maintenanceKick from "./session-accessor.sqlite-maintenance-kick.js";
+import { registerSessionMaintenanceProtectionTests } from "./session-accessor.sqlite-maintenance-protection.test-support.js";
 import * as maintenance from "./session-accessor.sqlite-maintenance.js";
 import {
   observeSessionMaintenancePlanningWorker,
@@ -970,4 +971,5 @@ it("retains worker cadence for foreign writes until a committed worker backdate 
   });
 });
 
+registerSessionMaintenanceProtectionTests();
 registerSessionMaintenancePreparationTests();
