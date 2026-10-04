@@ -148,6 +148,7 @@ auth health, sandbox images, and plugin installs.
 
     - **State dir missing**: warns about catastrophic state loss, prompts to recreate the directory, and reminds you that it cannot recover missing data.
     - **State dir permissions**: verifies writability; offers to repair permissions (and emits a `chown` hint when owner/group mismatch is detected).
+      Config repairs, including during updates, preserve a writable state root owned by another user (for example a Kubernetes `fsGroup` volume with mode `2775`). They report its path, owner IDs, and retained mode as a warning. Config and backup files still require mode `600`; owned-directory hardening and private credential directory checks remain enforced.
     - **macOS cloud-synced state dir**: warns when state resolves under iCloud Drive (`~/Library/Mobile Documents/com~apple~CloudDocs/...`) or `~/Library/CloudStorage/...`, because sync-backed paths can cause slower I/O and lock/sync races.
     - **Windows cloud-synced state dir**: warns when state resolves under a OneDrive sync root (from `OneDrive`, `OneDriveConsumer`, or `OneDriveCommercial`), because sync-backed paths can cause slower I/O, lock/sync races, and Files On-Demand dehydration. To relocate, stop the Gateway, move the whole state directory, set `OPENCLAW_STATE_DIR` for the Gateway service (not just one shell), restart, and rerun doctor.
     - **Linux SD or eMMC state dir**: warns when state resolves to an `mmcblk*` mount source, because SD/eMMC-backed random I/O can be slower and wear faster under session and credential writes.
