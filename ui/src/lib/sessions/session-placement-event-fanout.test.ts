@@ -144,6 +144,10 @@ it.runIf(process.env.OPENCLAW_DB_WORKER_BENCH === "1").each(["invalidation", "ro
             updatedAtMs: 1,
             stateChangedAtMs: 1,
             environmentId: `environment-${index}`,
+            activeOwnerEpoch: 1,
+            workerBundleHash: "a".repeat(64),
+            workspaceBaseManifestRef: "synthetic-manifest",
+            remoteWorkspaceDir: "/workspace",
             runner: {
               kind: "device",
               deviceId: `device-${index}`,
@@ -202,4 +206,5 @@ it.runIf(process.env.OPENCLAW_DB_WORKER_BENCH === "1").each(["invalidation", "ro
       vi.useRealTimers();
     }
   },
+  120_000,
 );
