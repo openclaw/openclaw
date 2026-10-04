@@ -260,11 +260,11 @@ describe("markdownToStory list rendering", () => {
       name: "images inside list items",
       markdown: "- ![diagram](https://example.com/diagram.png)",
       expected: [
+        { inline: ["- "] },
         {
-          inline: [
-            "- !",
-            { link: { href: "https://example.com/diagram.png", content: "diagram" } },
-          ],
+          block: {
+            image: { src: "https://example.com/diagram.png", alt: "diagram", height: 0, width: 0 },
+          },
         },
       ],
     },

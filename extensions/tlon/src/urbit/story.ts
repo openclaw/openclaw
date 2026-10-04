@@ -87,15 +87,16 @@ const INLINE_MARKDOWN_RULES: ReadonlyArray<{
     }),
   },
   {
-    pattern: /^(https?:\/\/[^\s<>"\]]+)/,
+    // A URL never ends in sentence punctuation or a closing paren in running prose.
+    pattern: /^(https?:\/\/[^\s<>"\]]*[^\s<>"\].,;:!?)])/,
     render: (match) => {
       const url = expectDefined(match[1], "plain URL capture");
       return { link: { href: url, content: url } };
     },
   },
   {
-    // Stop before special characters and URL separators so earlier rules get priority.
-    pattern: /^[^*_`~[#\n:/]+/,
+    // Stop before special characters, image markers, and URL starts so earlier rules get priority.
+    pattern: /^(?:(?!https?:\/\/)[^*_`~[#\n!])+/,
     render: (match) => expectDefined(match[0], "plain text match"),
   },
 ];
@@ -154,17 +155,45 @@ export function isImageUrl(url: string): boolean {
   return imageExtensions.test(path);
 }
 
+// Stories carry images only as blocks, so move every image marker out of its
+// inline context and drop the styles it leaves empty.
+function hoistImageBlocks(inlines: StoryInline[], imageBlocks: StoryVerse[]): StoryInline[] {
+  const wrap = <T>(content: StoryInline[], make: (content: StoryInline[]) => T): T[] =>
+    content.length > 0 ? [make(content)] : [];
+  const hoisted = inlines.flatMap((inline): StoryInline[] => {
+    if (typeof inline !== "object") {
+      return [inline];
+    }
+    if ("imageBlock" in inline) {
+      imageBlocks.push(createImageBlock(inline.imageBlock.src, inline.imageBlock.alt));
+      return [];
+    }
+    if ("bold" in inline) {
+      return wrap(hoistImageBlocks(inline.bold, imageBlocks), (bold) => ({ bold }));
+    }
+    if ("italics" in inline) {
+      return wrap(hoistImageBlocks(inline.italics, imageBlocks), (italics) => ({ italics }));
+    }
+    if ("strike" in inline) {
+      return wrap(hoistImageBlocks(inline.strike, imageBlocks), (strike) => ({ strike }));
+    }
+    if ("blockquote" in inline) {
+      return wrap(hoistImageBlocks(inline.blockquote, imageBlocks), (blockquote) => ({
+        blockquote,
+      }));
+    }
+    return [inline];
+  });
+  return mergeAdjacentStrings(hoisted);
+}
+
 function parseInlinesWithBreaks(text: string): {
   inlines: StoryInline[];
   imageBlocks: StoryVerse[];
 } {
   const withBreaks: StoryInline[] = [];
   const imageBlocks: StoryVerse[] = [];
-  for (const inline of parseInlineMarkdown(text)) {
-    if (typeof inline === "object" && "imageBlock" in inline) {
-      imageBlocks.push(createImageBlock(inline.imageBlock.src, inline.imageBlock.alt));
-      continue;
-    }
+  for (const inline of hoistImageBlocks(parseInlineMarkdown(text), imageBlocks)) {
     if (typeof inline !== "string" || !inline.includes("\n")) {
       withBreaks.push(inline);
       continue;
@@ -498,14 +527,15 @@ export function markdownToStory(markdown: string): Story {
     if (headerMatch) {
       const tag =
         HEADING_TAGS[expectDefined(headerMatch[1], "header marker capture").length - 1] ?? "h6";
-      story.push({
-        block: {
-          header: {
-            tag,
-            content: parseInlineMarkdown(expectDefined(headerMatch[2], "header body capture")),
-          },
-        },
-      });
+      const imageBlocks: StoryVerse[] = [];
+      const content = hoistImageBlocks(
+        parseInlineMarkdown(expectDefined(headerMatch[2], "header body capture")),
+        imageBlocks,
+      );
+      if (content.length > 0) {
+        story.push({ block: { header: { tag, content } } });
+      }
+      story.push(...imageBlocks);
       i++;
       continue;
     }
@@ -527,9 +557,15 @@ export function markdownToStory(markdown: string): Story {
         i++;
       }
       const quoteText = quoteLines.join("\n");
-      story.push({
-        inline: [{ blockquote: parseInlineMarkdown(quoteText) }],
-      });
+      const imageBlocks: StoryVerse[] = [];
+      const inline = hoistImageBlocks(
+        [{ blockquote: parseInlineMarkdown(quoteText) }],
+        imageBlocks,
+      );
+      if (inline.length > 0) {
+        story.push({ inline });
+      }
+      story.push(...imageBlocks);
       continue;
     }
 
