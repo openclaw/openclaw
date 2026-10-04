@@ -5,8 +5,11 @@ import type {
   jsonSchemaValidator,
 } from "@modelcontextprotocol/sdk/validation/types.js";
 import { normalizeJsonSchemaForTypeBox } from "@openclaw/normalization-core/json-schema";
+import { Ajv } from "ajv";
+import ajvFormats from "ajv-formats";
 import { Compile } from "typebox/compile";
 import { toErrorObject } from "../infra/errors.js";
+import { logDebug } from "../logger.js";
 import { findJsonSchemaShapeError } from "../shared/json-schema-defaults.js";
 
 const DRAFT_2020_12_SCHEMA = "https://json-schema.org/draft/2020-12/schema";
@@ -26,9 +29,28 @@ function formatTypeBoxErrors(errors: Array<{ instancePath?: string; message?: st
   );
 }
 
+// Matches the MCP SDK's default Ajv options. Remote servers routinely publish
+// vendor formats (google-duration, uint) that Ajv ignores; its notice for each
+// one belongs in debug logs, not a console warning on every catalog load.
+function createAjv(): Ajv {
+  const ajv = new Ajv({
+    strict: false,
+    validateFormats: true,
+    validateSchema: false,
+    allErrors: true,
+    logger: {
+      log: console.log,
+      warn: (...args: unknown[]) => logDebug(`mcp schema: ${args.join(" ")}`),
+      error: console.error,
+    },
+  });
+  ajvFormats.default(ajv);
+  return ajv;
+}
+
 /** MCP SDK validator with draft-2020-12 support for external tool schemas. */
 export function createMcpJsonSchemaValidator(): jsonSchemaValidator {
-  const defaultValidator = new AjvJsonSchemaValidator();
+  const defaultValidator = new AjvJsonSchemaValidator(createAjv());
 
   return {
     getValidator<T>(schema: JsonSchemaType): JsonSchemaValidator<T> {
