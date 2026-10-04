@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { prepareCliPromptImagePayload } from "../../agents/cli-runner/helpers.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { detectAndLoadPromptImages } from "../../agents/embedded-agent-runner/run/images.js";
@@ -58,6 +58,12 @@ describe("executeAgentTurn: CLI session routing", () => {
   ])(
     "carries prepared route facts without leaking $provider identity into replies",
     async ({ provider, messageId, currentMessageId }) => {
+      const { isInternalMessageChannel } = await vi.importActual<
+        typeof import("../../utils/message-channel.js")
+      >("../../utils/message-channel.js");
+      state.isInternalMessageChannelMock.mockImplementation((channel) =>
+        isInternalMessageChannel(typeof channel === "string" ? channel : undefined),
+      );
       const followupRun = createCliRun("claude-cli", "claude-sonnet-4-6");
       state.runCliAgentMock.mockResolvedValueOnce({
         payloads: [{ text: "done" }],
