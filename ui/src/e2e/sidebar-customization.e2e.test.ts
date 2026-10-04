@@ -8,6 +8,7 @@ import {
   takeControlUiViewportScreenshot,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
+  controlUiBundledSettingsStorageKey,
   controlUiSessionPath,
   controlUiSessionUrl,
   installMockGateway,
@@ -90,6 +91,51 @@ async function setThemeMode(page: Page, mode: "dark" | "light") {
 }
 
 suite.define(() => {
+  it("keeps the first pinned row's grip left of its icon and clear of the editor", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1440 } },
+      async ({ page }) => {
+        await installMockGateway(page);
+        await page.addInitScript(
+          (key) =>
+            localStorage.setItem(
+              key,
+              JSON.stringify({
+                sidebarAgentsMode: "roster",
+                sidebarEntries: ["route:systems", "route:agents-home", "route:cron"],
+              }),
+            ),
+          controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+        );
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const sidebar = page.locator("openclaw-app-sidebar");
+        const row = sidebar.locator('[data-sidebar-entry="route:systems"]');
+        const grip = row.getByRole("button", { name: "Reorder Systems", exact: true });
+        const editor = sidebar.getByRole("button", { name: "Edit pinned items", exact: true });
+        await row.hover();
+        await expect
+          .poll(() => editor.evaluate((element) => getComputedStyle(element).opacity))
+          .toBe("1");
+        await expect
+          .poll(() => grip.evaluate((element) => getComputedStyle(element).opacity))
+          .toBe("1");
+        const [gripBox, editorBox, iconBox, rowBox] = await Promise.all([
+          grip.boundingBox(),
+          editor.boundingBox(),
+          row.locator(".nav-item__icon").boundingBox(),
+          row.boundingBox(),
+        ]);
+        expect(gripBox).not.toBeNull();
+        expect(editorBox).not.toBeNull();
+        expect(iconBox).not.toBeNull();
+        expect(rowBox).not.toBeNull();
+        expect(gripBox!.x).toBeGreaterThanOrEqual(rowBox!.x);
+        expect(gripBox!.x + gripBox!.width).toBeLessThanOrEqual(editorBox!.x);
+        expect(gripBox!.x + gripBox!.width).toBeLessThanOrEqual(iconBox!.x);
+      },
+    );
+  });
+
   it("uses catalog labels in the hidden-section recovery rows", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
@@ -492,7 +538,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       await captureUiProof(page, "01-default-pinned.png");
 
-      const moreButton = sidebar.locator(".sidebar-nav__head-action");
+      const moreButton = sidebar.getByRole("button", { name: "Edit pinned items", exact: true });
       const moreMenu = sidebar.locator("wa-dropdown.sidebar-more-menu");
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
       await openSidebarMoreMenu(page);
@@ -695,7 +741,7 @@ suite.define(() => {
     );
   });
 
-  it("moves Home activity clear of the aligned Pages editor", async () => {
+  it("reserves the Pages editor slot without moving Home activity on hover", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -753,7 +799,7 @@ suite.define(() => {
         });
 
         const activity = home.locator(".sidebar-home-session-states");
-        const editor = sidebar.locator(".sidebar-nav__head-action");
+        const editor = sidebar.getByRole("button", { name: "Edit pinned items", exact: true });
         await expect
           .poll(() => home.locator(".session-glyph--running .session-glyph__ring").count())
           .toBe(1);
@@ -781,10 +827,10 @@ suite.define(() => {
               centerDelta: Math.abs(
                 editorBox.y + editorBox.height / 2 - (homeBox.y + homeBox.height / 2),
               ),
-              gap: Math.round(editorBox.x - (activityBox.x + activityBox.width)),
+              clearOfEditor: activityBox.x + activityBox.width <= editorBox.x,
             };
           })
-          .toEqual({ activityShift: 25, centerDelta: 0, gap: 4 });
+          .toEqual({ activityShift: 0, centerDelta: 0, clearOfEditor: true });
         await captureUiProof(page, "07-home-activity-editor.png");
       },
     );
