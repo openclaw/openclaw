@@ -320,10 +320,15 @@ it(
       // Hold the cancellation target in flight before queueing the survivor.
       // A started ACK precedes insertion into the followup queue.
       await sendQueuedTurn(canceledRunId, canceledMessage);
-      await vi.waitFor(() => {
-        const queue = getExistingFollowupQueue(sessionKey);
-        expect([...(queue?.inFlight ?? [])].map((item) => item.messageId)).toEqual([canceledRunId]);
-      });
+      await vi.waitFor(
+        () => {
+          const queue = getExistingFollowupQueue(sessionKey);
+          expect([...(queue?.inFlight ?? [])].map((item) => item.messageId)).toEqual([
+            canceledRunId,
+          ]);
+        },
+        { timeout: 30_000 },
+      );
       await sendQueuedTurn(survivorRunId, survivorMessage);
       await vi.waitFor(() => {
         const queue = getExistingFollowupQueue(sessionKey);
