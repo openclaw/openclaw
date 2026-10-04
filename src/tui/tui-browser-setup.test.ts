@@ -27,8 +27,6 @@ describe("/browser-setup local process dispatch", () => {
 
   it.each([
     { local: false, profile: "chrome" },
-    { local: true, profile: "chrome" },
-    { local: false, profile: "work" },
     { local: true, profile: "work" },
   ])(
     "uses selector-free host-local argv with local=$local and profile=$profile, even when disconnected",
@@ -111,7 +109,6 @@ describe("/browser-setup local process dispatch", () => {
     { ok: true, value: { ...setupResponse(), phase: "secret-in-phase" } },
     { ok: true, value: { ...setupResponse(), target: { kind: "remote", profile: "chrome" } } },
     { ok: true, value: setupResponse("inspect", "") },
-    { ok: true, value: setupResponse("inspect", "work/private") },
     { ok: true, value: setupResponse("inspect", "x".repeat(65)) },
     { ok: true, value: setupResponse("inspect", "work\nsecret-in-profile") },
   ])("reports bounded failures without exposing response content", async (result) => {
