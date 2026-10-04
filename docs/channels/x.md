@@ -136,7 +136,7 @@ included.
 
 Replies are split into a self-reply chain with at most 280 weighted characters
 per post; each URL counts as 23 characters. The last chunk receives
-`replySignature`, whose default is `— Roboclaw 🦞 automated reply`. Set it to an
+`replySignature`, whose default is `🤖 automated reply`. Set it to an
 empty string to disable the signature.
 
 When the agent starts a visible work session, its first session URL is appended
@@ -177,25 +177,25 @@ configured usernames alone cannot authorize a reply.
 
 These fields work at `channels.x` and on individual account entries unless noted.
 
-| Field                    | Default                         | Purpose                                                                 |
-| ------------------------ | ------------------------------- | ----------------------------------------------------------------------- |
-| `enabled`                | `true`                          | Enables the channel or account.                                         |
-| `name`                   | Unset                           | Optional account display name.                                          |
-| `userId`                 | Required                        | Numeric user ID of the bot account.                                     |
-| `username`               | Required                        | Bot username without `@`.                                               |
-| `clientId`               | Required                        | OAuth2 confidential application client ID.                              |
-| `clientSecret`           | Required                        | Application secret; supports SecretRef.                                 |
-| `refreshToken`           | Required                        | Bot's user-context OAuth2 refresh token; supports SecretRef.            |
-| `bearerToken`            | Unset                           | App-only Activity API bearer token; supports SecretRef.                 |
-| `events.mode`            | `auto`                          | `auto`, `stream`, or `poll`.                                            |
-| `events.pollSeconds`     | `60`                            | Mentions polling interval, minimum 15 seconds.                          |
-| `allowFrom`              | `[]`                            | Numeric author IDs, optionally prefixed with `x:`.                      |
-| `groupPolicy`            | `allowlist`                     | `allowlist`, `open`, or `disabled`.                                     |
-| `dmPolicy`               | `disabled`                      | Only `disabled` is accepted.                                            |
-| `threadContext.maxPosts` | `50`                            | Maximum posts included in agent thread context, from 2 to 100.          |
-| `replySignature`         | `— Roboclaw 🦞 automated reply` | Added to the last reply chunk; up to 140 characters, empty disables it. |
-| `accounts`               | Unset                           | Named account overrides; channel root only.                             |
-| `defaultAccount`         | `default`                       | Account selected when none is specified; channel root only.             |
+| Field                    | Default              | Purpose                                                                 |
+| ------------------------ | -------------------- | ----------------------------------------------------------------------- |
+| `enabled`                | `true`               | Enables the channel or account.                                         |
+| `name`                   | Unset                | Optional account display name.                                          |
+| `userId`                 | Required             | Numeric user ID of the bot account.                                     |
+| `username`               | Required             | Bot username without `@`.                                               |
+| `clientId`               | Required             | OAuth2 confidential application client ID.                              |
+| `clientSecret`           | Required             | Application secret; supports SecretRef.                                 |
+| `refreshToken`           | Required             | Bot's user-context OAuth2 refresh token; supports SecretRef.            |
+| `bearerToken`            | Unset                | App-only Activity API bearer token; supports SecretRef.                 |
+| `events.mode`            | `auto`               | `auto`, `stream`, or `poll`.                                            |
+| `events.pollSeconds`     | `60`                 | Mentions polling interval, minimum 15 seconds.                          |
+| `allowFrom`              | `[]`                 | Numeric author IDs, optionally prefixed with `x:`.                      |
+| `groupPolicy`            | `allowlist`          | `allowlist`, `open`, or `disabled`.                                     |
+| `dmPolicy`               | `disabled`           | Only `disabled` is accepted.                                            |
+| `threadContext.maxPosts` | `50`                 | Maximum posts included in agent thread context, from 2 to 100.          |
+| `replySignature`         | `🤖 automated reply` | Added to the last reply chunk; up to 140 characters, empty disables it. |
+| `accounts`               | Unset                | Named account overrides; channel root only.                             |
+| `defaultAccount`         | `default`            | Account selected when none is specified; channel root only.             |
 
 ## Troubleshooting
 

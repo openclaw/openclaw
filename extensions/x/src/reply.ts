@@ -4,7 +4,7 @@ import tlds from "tlds" with { type: "json" };
 import type { XApiClient, XAssertActive } from "./api.js";
 import { normalizeXReplyTarget } from "./target.js";
 
-export const DEFAULT_X_REPLY_SIGNATURE = "— Roboclaw 🦞 automated reply";
+export const DEFAULT_X_REPLY_SIGNATURE = "🤖 automated reply";
 export type XVisibleWorkSession = { sessionKey: string; url: string; label?: string };
 const graphemes = new Intl.Segmenter("en", { granularity: "grapheme" });
 const emojiSequence = new RegExp("^\\p{RGI_Emoji}$", "v");
