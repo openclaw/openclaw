@@ -1,7 +1,4 @@
-import {
-  closeOpenClawStateDatabaseForTest,
-  observeChannelIngressQueueWrite,
-} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 // Zalouser tests cover durable socket admission, recovery, and replay semantics.
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -231,11 +228,9 @@ describe("Zalouser durable ingress", () => {
     });
   });
 
-  it("releases deferred bookkeeping for retry when the adoption watchdog aborts a claim", async () => {
-    vi.useFakeTimers();
+  it("holds a timed-out claim until deferred bookkeeping settles", async () => {
     await withZalouserIngressTestQueue(async (queue) => {
       const deferred = Promise.withResolvers<ZalouserIngressLifecycle>();
-      const released = observeChannelIngressQueueWrite(queue, "release");
       const ingress = createIngress({
         queue,
         dispatch: async (_message, lifecycle) => {
@@ -245,16 +240,12 @@ describe("Zalouser durable ingress", () => {
         pollIntervalMs: 60_000,
         adoptionStallTimeoutMs: 10,
       });
-      try {
-        await ingress.receive(createRawZalouserMessage({ msgId: "deferred-timeout" }));
-        const lifecycle = await deferred.promise;
-        await vi.advanceTimersByTimeAsync(9);
-        expect(lifecycle.abortSignal.aborted).toBe(false);
-        expect(await queue.listClaims()).toHaveLength(1);
-
-        await vi.advanceTimersByTimeAsync(1);
-        await expect(released).resolves.toBe(true);
-        expect(lifecycle.abortSignal.aborted).toBe(true);
+      await ingress.receive(createRawZalouserMessage({ msgId: "deferred-timeout" }));
+      const lifecycle = await deferred.promise;
+      await vi.waitFor(() => expect(lifecycle.abortSignal.aborted).toBe(true));
+      expect(await queue.listClaims()).toHaveLength(1);
+      await lifecycle.onAbandoned();
+      await vi.waitFor(async () => {
         expect(await queue.listClaims()).toEqual([]);
         expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
         expect(await queue.listPending({ limit: "all" })).toMatchObject([
@@ -264,9 +255,8 @@ describe("Zalouser durable ingress", () => {
             lastError: expect.stringContaining("handler-timeout"),
           },
         ]);
-      } finally {
-        await ingress.stop();
-      }
+      });
+      await ingress.stop();
     });
   });
 

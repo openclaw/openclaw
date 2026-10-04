@@ -1,7 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import type { ChannelIngressDispatchLifecycle } from "./ingress-drain-lifecycle.js";
 import { createChannelIngressDrain, isIngressAdoptionLostError } from "./ingress-drain.js";
@@ -47,6 +46,38 @@ describe("channel ingress drain watchdog", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
+  it.each([false, true])(
+    "retires a stalled release on dispose with external signal=%s",
+    async (externalSignal) => {
+      await withTempState(async (stateDir) => {
+        const queue = createTestIngressQueue(stateDir);
+        await queue.enqueue("evt-retired", { text: "x" }, { laneKey: "l1" });
+        const dispatch = createDeferred();
+        const controller = new AbortController();
+        const release = vi.spyOn(queue, "release");
+        const drain = createChannelIngressDrain<Payload>({
+          queue,
+          abortSignal: externalSignal ? controller.signal : undefined,
+          adoptionStallTimeoutMs: 1_000,
+          dispatchClaimedEvent: async () => {
+            await dispatch.promise;
+          },
+        });
+        await drain.drainOnce();
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(await queue.listClaims()).toHaveLength(1);
+        const settlement = drain.waitForStallSettlements?.();
+        drain.dispose();
+        dispatch.resolve();
+        await settlement;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(release).not.toHaveBeenCalled();
+        expect(await queue.listClaims()).toMatchObject([{ id: "evt-retired", attempts: 0 }]);
+        expect(controller.signal.aborted).toBe(false);
+      });
+    },
+  );
+
   it("retries pre-adoption stalls in lane order and fences late adoption", async () => {
     await withTempState(async (stateDir) => {
       let clock = 10_000;
@@ -54,9 +85,11 @@ describe("channel ingress drain watchdog", () => {
       await queue.enqueue("evt-stall", { text: "x" }, { laneKey: "l1" });
       await queue.enqueue("evt-next", { text: "next" }, { laneKey: "l1", receivedAt: clock + 1 });
       const dispatched: string[] = [];
-      const finishStalledHandler = createDeferredCore();
-      const release = vi.spyOn(queue, "release");
       let stalledLifecycle: ChannelIngressDispatchLifecycle | undefined;
+      let releaseStalledDispatch!: () => void;
+      const stalledDispatch = new Promise<void>((resolve) => {
+        releaseStalledDispatch = resolve;
+      });
 
       const drain = createChannelIngressDrain<Payload>({
         queue,
@@ -67,7 +100,7 @@ describe("channel ingress drain watchdog", () => {
           dispatched.push(event.id);
           if (!stalledLifecycle) {
             stalledLifecycle = lifecycle;
-            await finishStalledHandler.promise;
+            await stalledDispatch;
             return;
           }
           await lifecycle.onAdopted();
@@ -75,41 +108,29 @@ describe("channel ingress drain watchdog", () => {
       });
 
       await drain.drainOnce();
-      const stalledHandler = drain.waitForIdle();
-      try {
-        clock += 5_000;
-        await vi.advanceTimersByTimeAsync(5_000);
-        await expect(
-          expectDefined(release.mock.results[0]?.value, "watchdog release"),
-        ).resolves.toBe(true);
+      clock += 5_000;
+      await vi.advanceTimersByTimeAsync(5_000);
 
-        expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
-        expect(await queue.listPending({ limit: "all", orderBy: "received" })).toMatchObject([
-          { id: "evt-stall", attempts: 1, lastError: expect.stringContaining("handler-timeout") },
-          { id: "evt-next", attempts: 0 },
-        ]);
-        await expect(stalledLifecycle?.onAdopted()).rejects.toSatisfy(isIngressAdoptionLostError);
+      expect(await queue.listClaims()).toHaveLength(1);
+      expect(await drain.drainOnce()).toEqual({ started: 0 });
+      releaseStalledDispatch();
+      await drain.waitForIdle();
 
-        expect(await drain.drainOnce()).toEqual({ started: 0 });
-        finishStalledHandler.resolve();
-        await stalledHandler;
-        clock += 1_000;
-        expect(await drain.drainOnce()).toEqual({ started: 1 });
-        await drain.waitForIdle();
-        expect(await drain.drainOnce()).toEqual({ started: 1 });
-        await drain.waitForIdle();
-        expect(dispatched).toEqual(["evt-stall", "evt-stall", "evt-next"]);
-      } finally {
-        finishStalledHandler.resolve();
-        await stalledHandler;
-        await Promise.allSettled(
-          release.mock.results.flatMap((result) =>
-            result.type === "return" ? [result.value] : [],
-          ),
-        );
-        drain.dispose();
-        release.mockRestore();
-      }
+      expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
+      expect(await queue.listPending({ limit: "all", orderBy: "received" })).toMatchObject([
+        { id: "evt-stall", attempts: 1, lastError: expect.stringContaining("handler-timeout") },
+        { id: "evt-next", attempts: 0 },
+      ]);
+      await expect(stalledLifecycle?.onAdopted()).rejects.toSatisfy(isIngressAdoptionLostError);
+
+      expect(await drain.drainOnce()).toEqual({ started: 0 });
+      clock += 1_000;
+      expect(await drain.drainOnce()).toEqual({ started: 1 });
+      await drain.waitForIdle();
+      expect(await drain.drainOnce()).toEqual({ started: 1 });
+      await drain.waitForIdle();
+      expect(dispatched).toEqual(["evt-stall", "evt-stall", "evt-next"]);
+      drain.dispose();
     });
   });
 
@@ -178,65 +199,295 @@ describe("channel ingress drain watchdog", () => {
     });
   });
 
-  it("rearms a live deferred wait, then guillotines silence", async () => {
+  it.each([{ terminal: "rejects" }, { terminal: "returns failed-retryable" }] as const)(
+    "releases after an abort-aware deferred dispatcher $terminal",
+    async ({ terminal }) => {
+      await withTempState(async (stateDir) => {
+        let clock = 20_000;
+        const queue = createTestIngressQueue(stateDir, { now: () => clock });
+        await queue.enqueue("evt-abort-aware", { text: "x" }, { laneKey: "l1" });
+
+        const drain = createChannelIngressDrain<Payload>({
+          queue,
+          now: () => clock,
+          adoptionStallTimeoutMs: 5_000,
+          dispatchClaimedEvent: async (_event, lifecycle) => {
+            lifecycle.onDeferred();
+            return await new Promise<{ kind: "failed-retryable"; error: unknown }>(
+              (resolve, reject) => {
+                lifecycle.abortSignal.addEventListener(
+                  "abort",
+                  () => {
+                    if (terminal === "rejects") {
+                      reject(
+                        lifecycle.abortSignal.reason instanceof Error
+                          ? lifecycle.abortSignal.reason
+                          : new Error(String(lifecycle.abortSignal.reason)),
+                      );
+                      return;
+                    }
+                    resolve({
+                      kind: "failed-retryable",
+                      error: lifecycle.abortSignal.reason,
+                    });
+                  },
+                  { once: true },
+                );
+              },
+            );
+          },
+        });
+
+        await drain.drainOnce();
+        clock += 5_000;
+        await vi.advanceTimersByTimeAsync(5_000);
+        await drain.waitForIdle();
+
+        expect(await queue.listClaims()).toEqual([]);
+        expect(await queue.listPending()).toMatchObject([
+          { id: "evt-abort-aware", lastError: expect.stringContaining("handler-timeout") },
+        ]);
+        drain.dispose();
+      });
+    },
+  );
+
+  it("rearms a live deferred wait, then releases after terminal failure", async () => {
     await withTempState(async (stateDir) => {
       let clock = 30_000;
       const queue = createTestIngressQueue(stateDir, { now: () => clock });
       await queue.enqueue("evt-def-stall", { text: "x" }, { laneKey: "l1" });
-      const finishDeferredHandler = createDeferredCore();
-      const release = vi.spyOn(queue, "release");
       let heartbeat: (() => void) | undefined;
-      let heartbeatIntervalMs: number | undefined;
+      let deferredLifecycle: ChannelIngressDispatchLifecycle | undefined;
 
       const drain = createChannelIngressDrain<Payload>({
         queue,
         now: () => clock,
         adoptionStallTimeoutMs: 5_000,
         dispatchClaimedEvent: async (_event, lifecycle) => {
+          deferredLifecycle = lifecycle;
           lifecycle.onDeferred();
           heartbeat = lifecycle.onDeferredHeartbeat;
-          heartbeatIntervalMs = lifecycle.deferredHeartbeatIntervalMs;
-          // Stay deferred without adoption -- watchdog must still fire.
-          await finishDeferredHandler.promise;
+          return { kind: "deferred" };
         },
       });
 
       await drain.drainOnce();
-      const deferredHandler = drain.waitForIdle();
-      try {
-        expect(await queue.listClaims()).toHaveLength(1);
-        expect(heartbeatIntervalMs).toBe(1_666);
-        clock += 4_000;
-        await vi.advanceTimersByTimeAsync(4_000);
-        heartbeat?.();
-        clock += 1_000;
-        await vi.advanceTimersByTimeAsync(1_000);
-        expect(await queue.listClaims()).toHaveLength(1);
-        clock += 4_000;
-        await vi.advanceTimersByTimeAsync(4_000);
-        await expect(
-          expectDefined(release.mock.results[0]?.value, "watchdog release"),
-        ).resolves.toBe(true);
+      expect(await queue.listClaims()).toHaveLength(1);
+      clock += 4_000;
+      await vi.advanceTimersByTimeAsync(4_000);
+      heartbeat?.();
+      clock += 1_000;
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await queue.listClaims()).toHaveLength(1);
+      clock += 4_000;
+      await vi.advanceTimersByTimeAsync(4_000);
 
-        expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
-        expect(await queue.listPending({ limit: "all" })).toMatchObject([
-          {
-            id: "evt-def-stall",
-            attempts: 1,
-            lastError: expect.stringContaining("handler-timeout"),
-          },
-        ]);
-      } finally {
-        finishDeferredHandler.resolve();
-        await deferredHandler;
-        await Promise.allSettled(
-          release.mock.results.flatMap((result) =>
-            result.type === "return" ? [result.value] : [],
-          ),
-        );
-        drain.dispose();
-        release.mockRestore();
-      }
+      expect(await queue.listClaims()).toHaveLength(1);
+      await deferredLifecycle?.onFailed?.(new Error("provider failed after timeout"));
+      await drain.waitForIdle();
+
+      expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
+      expect(await queue.listPending({ limit: "all" })).toMatchObject([
+        {
+          id: "evt-def-stall",
+          attempts: 1,
+          lastError: expect.stringContaining("handler-timeout"),
+        },
+      ]);
+      drain.dispose();
+    });
+  });
+
+  it("keeps terminal callbacks pending until watchdog release commits", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 35_000;
+      const queue = createTestIngressQueue(stateDir, { now: () => clock });
+      await queue.enqueue("evt-slow-release", { text: "x" }, { laneKey: "l1" });
+      let finishRelease!: () => void;
+      const releaseGate = new Promise<void>((resolve) => {
+        finishRelease = resolve;
+      });
+      const release = vi.fn(async (...args: Parameters<typeof queue.release>) => {
+        await releaseGate;
+        return await queue.release(...args);
+      });
+      let deferredLifecycle: ChannelIngressDispatchLifecycle | undefined;
+
+      const drain = createChannelIngressDrain<Payload>({
+        queue: { ...queue, release },
+        now: () => clock,
+        adoptionStallTimeoutMs: 5_000,
+        dispatchClaimedEvent: async (_event, lifecycle) => {
+          deferredLifecycle = lifecycle;
+          lifecycle.onDeferred();
+          return { kind: "deferred" };
+        },
+      });
+
+      await drain.drainOnce();
+      await drain.waitForIdle();
+      clock += 5_000;
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      let terminalSettled = false;
+      const terminal = Promise.resolve(deferredLifecycle?.onAbandoned()).then(() => {
+        terminalSettled = true;
+      });
+      await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+      expect(terminalSettled).toBe(false);
+      expect(await queue.listClaims()).toHaveLength(1);
+
+      finishRelease();
+      await terminal;
+      await drain.waitForIdle();
+      expect(terminalSettled).toBe(true);
+      expect(await queue.listClaims()).toEqual([]);
+      expect(await queue.listPending()).toHaveLength(1);
+      drain.dispose();
+    });
+  });
+
+  it("recovers when deferred failure settlement exhausts before the watchdog", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 40_000;
+      const queue = createTestIngressQueue(stateDir, { now: () => clock });
+      await queue.enqueue("evt-recover-release", { text: "x" }, { laneKey: "l1" });
+      const releaseClaim = queue.release.bind(queue);
+      let releases = 0;
+      queue.release = async (...args) => {
+        releases += 1;
+        if (releases <= 8) {
+          throw new Error("transient release outage");
+        }
+        return await releaseClaim(...args);
+      };
+      let deferredLifecycle: ChannelIngressDispatchLifecycle | undefined;
+
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        now: () => clock,
+        adoptionStallTimeoutMs: 200_000,
+        dispatchClaimedEvent: async (_event, lifecycle) => {
+          deferredLifecycle = lifecycle;
+          lifecycle.onDeferred();
+          return { kind: "deferred" };
+        },
+      });
+
+      await drain.drainOnce();
+      await drain.waitForIdle();
+      const failed = Promise.resolve(
+        expectDefined(
+          deferredLifecycle?.onFailed,
+          "failure callback",
+        )(new Error("provider failed")),
+      ).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      clock += 127_000;
+      await vi.advanceTimersByTimeAsync(127_000);
+      await expect(failed).resolves.toMatchObject({ message: "transient release outage" });
+      expect(releases).toBe(8);
+
+      clock += 73_000;
+      await vi.advanceTimersByTimeAsync(73_000);
+      await drain.waitForIdle();
+      expect(releases).toBe(9);
+      expect(await queue.listClaims()).toEqual([]);
+      expect(await queue.listPending()).toMatchObject([
+        { id: "evt-recover-release", lastError: expect.stringContaining("handler-timeout") },
+      ]);
+      drain.dispose();
+    });
+  });
+
+  it("retries watchdog settlement after a bounded release batch fails", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 50_000;
+      const queue = createTestIngressQueue(stateDir, { now: () => clock });
+      await queue.enqueue("evt-watchdog-release", { text: "x" }, { laneKey: "l1" });
+      const releaseClaim = queue.release.bind(queue);
+      let releases = 0;
+      queue.release = async (...args) => {
+        releases += 1;
+        if (releases <= 8) {
+          throw new Error("transient release outage");
+        }
+        return await releaseClaim(...args);
+      };
+      let deferredLifecycle: ChannelIngressDispatchLifecycle | undefined;
+
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        now: () => clock,
+        adoptionStallTimeoutMs: 5_000,
+        dispatchClaimedEvent: async (_event, lifecycle) => {
+          deferredLifecycle = lifecycle;
+          lifecycle.onDeferred();
+          return { kind: "deferred" };
+        },
+      });
+
+      await drain.drainOnce();
+      await drain.waitForIdle();
+      clock += 5_000;
+      await vi.advanceTimersByTimeAsync(5_000);
+      const terminal = Promise.resolve(deferredLifecycle?.onAbandoned());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(releases).toBe(1);
+      clock += 127_000;
+      await vi.advanceTimersByTimeAsync(127_000);
+      expect(releases).toBe(8);
+      clock += 1_000;
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(releases).toBe(9);
+      await terminal;
+      await drain.waitForIdle();
+
+      expect(await queue.listClaims()).toEqual([]);
+      expect(await queue.listPending()).toMatchObject([
+        { id: "evt-watchdog-release", lastError: expect.stringContaining("handler-timeout") },
+      ]);
+      drain.dispose();
+    });
+  });
+
+  it("keeps a timed-out claim fenced while adoption finalizes", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 40_000;
+      const queue = createTestIngressQueue(stateDir, { now: () => clock });
+      await queue.enqueue("evt-finalizing", { text: "x" }, { laneKey: "l1" });
+      let deferredLifecycle: ChannelIngressDispatchLifecycle | undefined;
+
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        now: () => clock,
+        adoptionStallTimeoutMs: 5_000,
+        dispatchClaimedEvent: async (_event, lifecycle) => {
+          deferredLifecycle = lifecycle;
+          lifecycle.onDeferred();
+          return { kind: "deferred" };
+        },
+      });
+
+      await drain.drainOnce();
+      clock += 5_000;
+      await vi.advanceTimersByTimeAsync(5_000);
+      deferredLifecycle?.onAdoptionFinalizing();
+
+      expect(await queue.listClaims()).toHaveLength(1);
+      expect(await queue.listPending()).toEqual([]);
+      expect(await drain.drainOnce()).toEqual({ started: 0 });
+
+      await expect(deferredLifecycle?.onAdopted()).rejects.toSatisfy(isIngressAdoptionLostError);
+      await drain.waitForIdle();
+      expect(await queue.listClaims()).toEqual([]);
+      expect(await queue.listPending()).toMatchObject([
+        { id: "evt-finalizing", lastError: expect.stringContaining("handler-timeout") },
+      ]);
+      drain.dispose();
     });
   });
 

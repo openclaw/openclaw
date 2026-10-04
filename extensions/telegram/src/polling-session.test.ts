@@ -26,6 +26,7 @@ import {
   forumUpdate,
   openTelegramSpoolTestKysely,
   topicUpdate,
+  waitForTelegramTestState,
   type TestTelegramUpdate,
 } from "./polling-session-spool.test-support.js";
 import { installPollingStallWatchdogHarness } from "./polling-session-watchdog.test-support.js";
@@ -41,10 +42,6 @@ import {
 } from "./telegram-ingress-worker.js";
 import { createTestLifetime } from "./test-lifetime.test-support.js";
 import { createTelegramUpdateOffsetPersistence } from "./update-offset-persistence.js";
-
-async function waitForTelegramTestState<T>(assertion: () => T | Promise<T>): Promise<T> {
-  return await vi.waitFor(assertion, { interval: 1 });
-}
 
 const createTelegramBotMock = vi.hoisted(() => vi.fn());
 const isRecoverableTelegramNetworkErrorMock = vi.hoisted(() => vi.fn(() => true));
@@ -2196,8 +2193,10 @@ describe("TelegramPollingSession", () => {
       handleUpdate: vi.fn(async (update: { update_id?: number }) => {
         events.push(`bot:${update.update_id}`);
         if (update.update_id === 42 && events.filter((event) => event === "bot:42").length === 1) {
-          // Hang until the core watchdog aborts the drain lifecycle.
-          await new Promise<void>(() => {});
+          // Let the watchdog fire, then finish the old handler before retry.
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 200);
+          });
         }
         if (update.update_id === 43) {
           abort.abort();

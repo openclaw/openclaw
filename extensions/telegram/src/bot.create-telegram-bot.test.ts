@@ -45,6 +45,7 @@ import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
 import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
+import { registerTelegramSpooledRetryTests } from "./test-support/bot-spooled-retry.js";
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", { spy: true });
 vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", { spy: true });
@@ -78,11 +79,8 @@ type BuildModelsProviderDataMock = ReturnType<
 const { defaultTelegramNativeCommandDeps } = await import("./bot-native-command-deps.runtime.js");
 const messageDispatchDedupe = await import("./message-dispatch-dedupe.js");
 const { createTelegramBotCore: createTelegramBotBase } = await import("./bot-core.js");
-const {
-  recordTelegramMessageProcessingResult,
-  runWithTelegramSpooledReplayUpdate,
-  TelegramSpooledReplayProcessingError,
-} = await import("./bot-processing-outcome.js");
+const { runWithTelegramSpooledReplayUpdate, TelegramSpooledReplayProcessingError } =
+  await import("./bot-processing-outcome.js");
 const {
   clearTelegramRuntimeForTest,
   resetTelegramAccountThrottlersForTest,
@@ -2434,48 +2432,10 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(2);
   });
 
-  it("persists recorded dispatch failures during normal polling", async () => {
-    const { onUpdateId, run: runMiddlewareChain } = await setupUpdateOffsetTracker({
-      lastUpdateId: 500,
-    });
-
-    const dispatchError = new Error("dispatch exploded");
-    await runMiddlewareChain({ update: { update_id: 501 } }, async () => {
-      recordTelegramMessageProcessingResult({
-        kind: "failed-retryable",
-        error: dispatchError,
-      });
-    });
-    await flushTelegramTestMicrotasks();
-    expect(onUpdateId.mock.calls.map((call) => call[0])).toEqual([501]);
-
-    await runMiddlewareChain({ update: { update_id: 502 } }, async () => {});
-    await flushTelegramTestMicrotasks();
-    expect(onUpdateId.mock.calls.map((call) => call[0])).toEqual([501, 502]);
-  });
-
-  it("rejects recorded dispatch failures during isolated spool replay", async () => {
-    const { onUpdateId, run: runMiddlewareChain } = await setupUpdateOffsetTracker({
-      lastUpdateId: 600,
-    });
-
-    const update = { update_id: 601 };
-    const dispatchError = new Error("dispatch exploded");
-    await expect(
-      withTelegramSpooledReplayUpdate(update, async () => {
-        await runMiddlewareChain({ update }, async () => {
-          recordTelegramMessageProcessingResult({
-            kind: "failed-retryable",
-            error: dispatchError,
-          });
-        });
-      }),
-    ).rejects.toMatchObject({
-      name: TelegramSpooledReplayProcessingError.name,
-      cause: dispatchError,
-    });
-    await flushTelegramTestMicrotasks();
-    expect(onUpdateId).not.toHaveBeenCalled();
+  registerTelegramSpooledRetryTests({
+    setupUpdateOffsetTracker,
+    flushTelegramTestMicrotasks,
+    withTelegramSpooledReplayUpdate,
   });
 
   it("retries a deferred spooled update after its queued turn is abandoned", async () => {

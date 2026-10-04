@@ -5,6 +5,11 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateKyselyDatabaseForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { vi } from "vitest";
+
+export async function waitForTelegramTestState<T>(assertion: () => T | Promise<T>): Promise<T> {
+  return await vi.waitFor(assertion, { interval: 1 });
+}
 
 type TelegramPollingTestDatabase = Pick<
   OpenClawStateKyselyDatabaseForTests,

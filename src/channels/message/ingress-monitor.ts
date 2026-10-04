@@ -10,7 +10,8 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { sleep } from "../../utils/sleep.js";
-import { createChannelIngressDrain, type ChannelIngressDrain } from "./ingress-drain.js";
+import { createIngressDrainWakeScheduler } from "./ingress-drain-wake.js";
+import { createChannelIngressDrain } from "./ingress-drain.js";
 import { createAdmissionClaimLock, waitForPending } from "./ingress-monitor-tasks.js";
 import type {
   ChannelIngressMonitorDeliveryResult,
@@ -81,8 +82,6 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   let stopped = false;
   let requested = false;
   let pumping: Promise<void> | undefined;
-  let drainIdleWake: Promise<void> | undefined;
-  let drainIdleWakeRequested = false;
   let restartFenceWake: Promise<void> | undefined;
   let releaseRestartFenceWake = () => {};
   let suspensionDrainPending = false;
@@ -379,36 +378,11 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     lastPrunedAt = currentTime;
   };
 
-  const scheduleDrainIdleWake = (activeDrain: ChannelIngressDrain): void => {
-    if (drainIdleWake) {
-      drainIdleWakeRequested = true;
-      return;
-    }
-    drainIdleWakeRequested = false;
-    const wake = activeDrain.waitForIdle();
-    drainIdleWake = wake;
-    void wake.then(
-      () => {
-        if (drainIdleWake !== wake) {
-          return;
-        }
-        const shouldRearm = drainIdleWakeRequested && running && !isAborted();
-        drainIdleWake = undefined;
-        drainIdleWakeRequested = false;
-        if (shouldRearm) {
-          scheduleDrainIdleWake(activeDrain);
-        }
-        requestDrain();
-      },
-      (error: unknown) => {
-        if (drainIdleWake === wake) {
-          drainIdleWake = undefined;
-          drainIdleWakeRequested = false;
-        }
-        reportError(error);
-      },
-    );
-  };
+  const drainWakeScheduler = createIngressDrainWakeScheduler({
+    isRunning: () => running && !isAborted(),
+    requestDrain: () => requestDrain(),
+    reportError,
+  });
 
   const runPump = async (): Promise<void> => {
     try {
@@ -439,7 +413,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         } else if (started > 0) {
           // Failed-retryable delivery settles after the channel callback returns.
           // Wake once the drain has released or failed those claims.
-          scheduleDrainIdleWake(activeDrain);
+          drainWakeScheduler.schedule(activeDrain);
         }
         if (
           !running ||
@@ -727,10 +701,10 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         await waitForActiveDeliveries();
         await drain?.waitForIdle();
         // A settled claim may still own a wake for the next queued event.
-        await drainIdleWake;
+        await drainWakeScheduler.waitForIdleWake();
         await restartFenceWake;
         if (
-          !drainIdleWake &&
+          !drainWakeScheduler.hasIdleWake() &&
           !pumping &&
           activeInspections.size === 0 &&
           activeDeliveries.size === 0 &&

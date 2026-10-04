@@ -105,11 +105,12 @@ describe("channel ingress monitor asynchronous inspection", () => {
     },
   );
 
-  it("joins pending inspection after the watchdog retires its claim", async () => {
+  it("joins pending inspection while the watchdog keeps its claim fenced", async () => {
     const queue = createQueue();
     const release = createDeferred();
     const entered = createDeferred();
     const deliver = vi.fn();
+    const logs: string[] = [];
     const monitor = createMonitor(queue, {
       inspectAsync: async (raw, context) => {
         if (context.phase === "claim") {
@@ -119,7 +120,7 @@ describe("channel ingress monitor asynchronous inspection", () => {
         return { eventId: raw.id, laneKey: raw.lane };
       },
       deliver,
-      drain: { startLimit: 1, adoptionStallTimeoutMs: 10 },
+      drain: { startLimit: 1, adoptionStallTimeoutMs: 10, onLog: (message) => logs.push(message) },
     });
     await monitor.admit({ id: "watchdog", lane: "a" });
     monitor.start();
@@ -127,7 +128,10 @@ describe("channel ingress monitor asynchronous inspection", () => {
     let idle = false;
     let waiting: Promise<void> | undefined;
     try {
-      await vi.waitFor(async () => expect(await queue.listClaims()).toEqual([]));
+      await vi.waitFor(() =>
+        expect(logs.some((message) => message.includes("handler-timeout"))).toBe(true),
+      );
+      expect(await queue.listClaims()).toMatchObject([{ id: "watchdog", attempts: 0 }]);
       waiting = monitor.waitForIdle().then(() => {
         idle = true;
       });
