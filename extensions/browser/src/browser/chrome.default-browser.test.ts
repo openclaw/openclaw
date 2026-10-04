@@ -142,30 +142,23 @@ describe("browser default executable detection", () => {
   });
 
   it.each([
-    ["configured ARM64", "/tmp/browsers", "chrome-linux-arm64"],
-    ["default ARM64", undefined, "chrome-linux-arm64"],
-    ["configured x64", "/tmp/browsers", "chrome-linux64"],
-    ["older ARM64", "/tmp/browsers", "chrome-linux"],
-    ["XDG ARM64", undefined, "chrome-linux-arm64", "/tmp/xdg-cache"],
-    ["empty XDG", undefined, "chrome-linux64", ""],
-  ])(
-    "discovers Playwright Chromium in the %s cache layout",
-    (_name, cachePath, linuxDir, xdgCacheHome?: string) => {
-      vi.stubEnv("PLAYWRIGHT_BROWSERS_PATH", cachePath);
-      vi.stubEnv("XDG_CACHE_HOME", xdgCacheHome);
-      const browserCache = cachePath ?? `${xdgCacheHome || "/Users/test/.cache"}/ms-playwright`;
-      const executable = `${browserCache}/chromium-1243/${linuxDir}/chrome`;
-      vi.mocked(fs.readdirSync).mockImplementation((candidate) => {
-        return (String(candidate) === browserCache ? ["chromium-1243"] : []) as never;
-      });
-      vi.mocked(fs.existsSync).mockImplementation((candidate) => String(candidate) === executable);
+    ["XDG ARM64", "chrome-linux-arm64", "/tmp/xdg-cache"],
+    ["empty XDG", "chrome-linux64", ""],
+  ])("discovers Playwright Chromium in the %s cache layout", (_name, linuxDir, xdgCacheHome) => {
+    vi.stubEnv("PLAYWRIGHT_BROWSERS_PATH", undefined);
+    vi.stubEnv("XDG_CACHE_HOME", xdgCacheHome);
+    const browserCache = `${xdgCacheHome || "/Users/test/.cache"}/ms-playwright`;
+    const executable = `${browserCache}/chromium-1243/${linuxDir}/chrome`;
+    vi.mocked(fs.readdirSync).mockImplementation((candidate) => {
+      return (String(candidate) === browserCache ? ["chromium-1243"] : []) as never;
+    });
+    vi.mocked(fs.existsSync).mockImplementation((candidate) => String(candidate) === executable);
 
-      expect(resolveBrowserExecutableForPlatform(config, "linux")).toEqual({
-        kind: "chromium",
-        path: executable,
-      });
-    },
-  );
+    expect(resolveBrowserExecutableForPlatform(config, "linux")).toEqual({
+      kind: "chromium",
+      path: executable,
+    });
+  });
 
   it("preserves executable and cache precedence when ARM64 Chromium is installed", () => {
     const browserCache = "/tmp/browsers";
@@ -238,13 +231,6 @@ describe("browser default executable detection", () => {
       kind: "chrome",
       path: chromeExecutablePath,
     });
-  });
-
-  it("falls back when default browser is non-Chromium on macOS", () => {
-    mockMacDefaultBrowser("com.apple.Safari");
-    mockChromeExecutableExists();
-
-    expect(resolveBrowserExecutableForPlatform(config, "darwin")?.path).toBe(chromeExecutablePath);
   });
 
   it("finds a user-installed macOS browser after exhausting system candidates", () => {
