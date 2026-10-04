@@ -1,6 +1,6 @@
 // Covers startup update check and auto-update behavior.
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -249,9 +249,10 @@ describe("update-startup", () => {
     resetUpdateAvailableStateForTest(scheduler);
     await scheduler.stop();
     vi.restoreAllMocks();
-    await closeStateDatabaseForTest();
     await testState.cleanup();
   });
+
+  afterAll(closeStateDatabaseForTest);
 
   it("retries install identity initialization after a failed probe", async () => {
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");

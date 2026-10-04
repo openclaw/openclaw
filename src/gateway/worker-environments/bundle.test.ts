@@ -30,6 +30,7 @@ type WorkerBundleArtifact = Extract<WorkerInstallationArtifact, { install: "bund
 async function writeFixture(
   packageRoot: string,
   workerSource = "export const worker = true;\n",
+  chunkCount = 0,
 ): Promise<void> {
   await fs.mkdir(path.join(packageRoot, "dist", "worker"), { recursive: true });
   await fs.writeFile(
@@ -61,6 +62,12 @@ async function writeFixture(
       mode: 0o755,
     });
   }
+  for (let index = 0; index < chunkCount; index++) {
+    await fs.writeFile(
+      path.join(packageRoot, "dist/worker", `worker-chunk-${index}.mjs`),
+      `export const value = ${index};${" ".repeat(index)}\n`,
+    );
+  }
 }
 
 async function listTarball(tarballPath: string): Promise<string[]> {
@@ -88,17 +95,22 @@ function bundleArtifact(overrides: Partial<WorkerBundleArtifact> = {}): WorkerBu
 }
 
 describe("worker bundle producer", () => {
-  it("seals split chunks and verifies them after relocation", async () => {
+  it("stages many chunks deterministically", async () => {
     await withTestDir({ prefix: "openclaw-worker-chunks-" }, async (root) => {
       const packageRoot = path.join(root, "package");
-      await writeFixture(packageRoot, 'export { value } from "./worker-chunk-runtime.mjs";');
-      const chunk = path.join(packageRoot, "dist/worker/worker-chunk-runtime.mjs");
-      await fs.writeFile(chunk, "export const value = 1;");
+      await writeFixture(packageRoot, 'export { value } from "./worker-chunk-0.mjs";', 48);
+      const chunk = path.join(packageRoot, "dist/worker/worker-chunk-0.mjs");
       const first = await createWorkerBundleProducer({
         packageRoot,
         cacheDir: path.join(root, "cache"),
       }).prepare();
-      expect(await listTarball(first.tarballPath)).toContain("worker-chunk-runtime.mjs");
+      const second = await createWorkerBundleProducer({
+        packageRoot,
+        cacheDir: path.join(root, "second-cache"),
+      }).prepare();
+      expect(second.bundleHash).toBe(first.bundleHash);
+      expect(second.tarballSha256).toBe(first.tarballSha256);
+      expect(await listTarball(first.tarballPath)).toContain("worker-chunk-0.mjs");
       const destination = path.join(root, "installed");
       await extractWorkerBundleArchive({
         tarballPath: first.tarballPath,
@@ -106,8 +118,8 @@ describe("worker bundle producer", () => {
         expectedBundleHash: first.bundleHash,
         limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
       });
-      expect(await fs.readFile(path.join(destination, "worker-chunk-runtime.mjs"), "utf8")).toBe(
-        "export const value = 1;",
+      expect(await fs.readFile(path.join(destination, "worker-chunk-0.mjs"), "utf8")).toBe(
+        "export const value = 0;\n",
       );
       await fs.writeFile(chunk, "export const value = 2;");
       const changed = await createWorkerBundleProducer({
@@ -731,13 +743,13 @@ describe("worker bundle producer", () => {
         }
         await fs.rename(artifactPath, `${artifactPath}.target`);
         await fs.symlink(`${artifactName}.target`, artifactPath);
+        const cacheDir = path.join(root, "cache");
 
         await expect(
-          createWorkerBundleProducer({
-            packageRoot,
-            cacheDir: path.join(root, "cache"),
-          }).prepare(),
+          createWorkerBundleProducer({ packageRoot, cacheDir }).prepare(),
         ).rejects.toThrow("Unsafe worker deploy artifact");
+        // Sibling artifacts stage concurrently; their writes must settle before staging cleanup.
+        await expect(fs.readdir(cacheDir)).resolves.toEqual([]);
       });
     }
   });

@@ -325,6 +325,38 @@ metadata, retention, durability, update behavior, or operator configuration and
 retires no T1 sites. The following audit is an activation checklist, not a claim
 that current production has already completed the cutover.
 
+### Incognito Board and lifecycle composition (P7b, inactive)
+
+The Board facade accepts a captured actor and executes its existing domain commands
+on that actor. Session existence is checked by the Board kernel in the worker;
+interactive preparation runs outside the transaction and retains the selected
+session generation. Reads release their FIFO turn before invoking a consumer that
+may enqueue another write. Commit results publish through `sessionChanges`;
+failed disclosure invalidates the captured Board without replaying the operation.
+
+Internal ACP read/write facades, report selection and append, and the closed-turn
+outbox store accept explicit actor bindings. Released ACP helpers keep their
+one-argument signatures; actor bindings stay outside the Plugin SDK. ACP metadata
+remains in shared storage.
+Report selection retries only a confirmed no-write version mismatch. Outbox
+commands constrain reads, recovery, and acknowledgments to the captured session.
+Deletion and reclamation prepare through the existing lifecycle owner and settle
+host companions from the actor receipt. Existing host lifecycle facades accept an
+explicit actor target, leaving their ordinary deletion safeguards unchanged.
+Repository cleanup checks committed actor
+facts instead of opening the sentinel. Fork preparation retains both actors while
+awaiting the destination entry, without holding either actor's writer turn.
+
+Runtime deletion-journal checks on worker threads use the existing current,
+read-only connection path. They keep live fencing and admission without spawning
+an inspection subprocess for every actor command. Host, maintenance, and
+artifact-preserving reads retain their existing behavior.
+
+Production does not supply these bindings until the atomic P7d activation. Native
+incognito arms remain for that cutover; worker failure never selects them. Durable
+flows, schemas, retention, update behavior, and operator configuration are unchanged.
+This stage retires no T1 sites.
+
 #### Remaining synchronous contracts before P7
 
 All synchronous kernels below must execute only inside the actor after activation,
@@ -343,7 +375,7 @@ Retained durable SDK and offline kernels do not justify a native incognito fallb
 | Reports/outbox, deletion/reclamation/fork and SessionManager writes                                                                                                                                                                                                                | P4 commands retain their settlement owner. Finish the general SessionManager metadata, suffix/rewrite, and admission composition before routing every awaited twin to the actor.                                                                                                                     |
 | Hydration, context/history, title/preview, search/match, branches/stats/watermarks/receipts, usage/projection, Memory and Codex history                                                                                                                                            | P5 adapters exist; switch all runtime entry points together and remove native extraction/reverse-RPC branches.                                                                                                                                                                                       |
 | Pending-input source/history/store/withdrawal, message-tool run outcomes, cold-storage inspection, historical eviction, maintenance sizing and page reclamation                                                                                                                    | Audit and route these remaining native branches; a maintenance filename is not proof of an offline-only contract.                                                                                                                                                                                    |
-| `SqliteBoardStore.requireExistingSession`, native `write` and sentinel `consumeRead`                                                                                                                                                                                               | Add actor Board commands using transaction-local `hasBoardSession`; host grants consume prepared routing/authority. Do not replace the native opening guard with same-actor RPC.                                                                                                                     |
+| `SqliteBoardStore.requireExistingSession`, native `write` and sentinel `consumeRead`                                                                                                                                                                                               | P7b prepares typed Board commands and captured actor bindings. Activation must supply those bindings and remove native admission, writes, and sentinel reads; grants consume transaction-local facts without same-actor RPC.                                                                         |
 | ACP projection and lifecycle consumers                                                                                                                                                                                                                                             | Supply awaited metadata to `readAcpMetaForDeletedAgentCheck` and `resolveGatewaySessionRuntimeProjection`; keep controller shared-row predicates separate from actor predicates. Discord and Telegram startup reconciliation must not treat a refused join as absent metadata or delete its binding. |
 
 `readAcpSessionMetaForEntry` and `readAcpSessionMetaBatch` read shared metadata,

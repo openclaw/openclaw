@@ -122,6 +122,8 @@ export type CompactEmbeddedAgentSessionParams = Pick<
   maxAttempts?: number;
   /** @internal Refreshes the host watchdog when delegated native compaction makes progress. */
   compactionTimeoutReset?: () => void;
+  /** @internal Host watchdog ceiling (epoch ms); the summary request ends one window before it. */
+  compactionDeadlineAt?: number;
   onCompactionHookMessages?: (payload: {
     phase: "before" | "after";
     messages: string[];

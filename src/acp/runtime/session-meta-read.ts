@@ -2,9 +2,11 @@ import {
   withSessionEntryReadOnlyInWorker,
   type SessionEntryReadWorkerOwner,
 } from "../../config/sessions/session-entry-read-runtime.js";
+import type { IncognitoSessionAuthority } from "../../config/sessions/session-incognito-contract.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
 import {
   captureAcpSessionReadContext,
   type AcpSessionReadContextInput,
@@ -28,8 +30,38 @@ export type AcpSessionEntryReadInput = AcpSessionReadContextInput & {
 /** Retain the canonical session source through its lifecycle-bound ACP metadata join. */
 export async function readAcpSessionEntryAsync(
   params: AcpSessionEntryReadInput,
+  incognito?: { actor: IncognitoAgentDatabaseExecution; authority: IncognitoSessionAuthority },
 ): Promise<AcpSessionStoreEntry | null> {
-  return withAcpSessionEntryRead(params, (entry) => entry);
+  const sessionKey = params.sessionKey.trim();
+  // Empty keys share the reader's null result without opening a session store.
+  if (!incognito || !sessionKey) {
+    return withAcpSessionEntryRead(params, (entry) => entry);
+  }
+  const { actor, authority } = incognito;
+  actor.assertCurrent();
+  authority.assertCurrent();
+  const input = { ...params, sessionKey };
+  const context = captureAcpSessionReadContext(input);
+  return actor.sessions.withSharedState(async () => {
+    const captured = await context;
+    const target = resolveSessionStorePathForAcp({ ...input, ...captured });
+    if (target.agentId !== actor.agentId) {
+      throw new Error("ACP read differs from its captured incognito actor");
+    }
+    const entry = await actor.acp.readEntry({
+      ...captured,
+      sessionKey: target.storeSessionKey,
+      authority: {
+        assertCurrent() {
+          captured.assertCurrent();
+          authority.assertCurrent();
+        },
+        authorize: (stage, facts) => authority.authorize?.(stage, facts),
+      },
+    });
+    captured.assertCurrent();
+    return { ...target, cfg: captured.cfg, sessionKey: input.sessionKey, entry, acp: entry?.acp };
+  });
 }
 
 /** The consuming owner can verify the exact selected physical source before custody ends. */

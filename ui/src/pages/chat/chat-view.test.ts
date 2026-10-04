@@ -3866,76 +3866,78 @@ describe("chat model controls", () => {
     }
   });
 
-  it.each(["current execution", "previous run", "locked unknown", "unknown"] as const)(
-    "keeps the %s model visible during send admission",
-    (mode) => {
-      const observed = mode === "current execution";
-      const sending = mode === "locked unknown" || mode === "unknown";
-      const model = sending ? null : observed ? "shared" : "primary";
-      const activeModel = observed ? "shared" : "fallback";
-      const runIds = observed ? ["current-run"] : undefined;
-      const expected = sending
-        ? "Model pending"
-        : observed
-          ? "fallback-provider/shared"
-          : "Primary";
-      const { state } = createChatHeaderState({
-        model,
-        modelProvider: model ? "example" : null,
-        models:
-          model === "shared"
-            ? [{ id: "shared", name: "Configured model", provider: "example" }]
-            : [
-                { id: "primary", name: "Primary", provider: "example" },
-                {
-                  id: sending ? "default" : "fallback",
-                  name: sending ? "Default" : "Fallback",
-                  provider: "example",
-                },
-              ],
+  it.each([
+    "current execution",
+    "previous run",
+    "new message",
+    "locked unknown",
+    "unknown",
+  ] as const)("keeps the %s model visible during send admission", (mode) => {
+    const observed = mode === "current execution";
+    const unidentified = mode === "locked unknown" || mode === "unknown";
+    const sending = unidentified || mode === "new message";
+    const model = unidentified ? null : observed ? "shared" : "primary";
+    const activeModel = observed ? "shared" : "fallback";
+    const runIds = observed ? ["current-run"] : undefined;
+    const expected = unidentified
+      ? "Model pending"
+      : observed
+        ? "fallback-provider/shared"
+        : "Primary";
+    const { state } = createChatHeaderState({
+      model,
+      modelProvider: model ? "example" : null,
+      models:
+        model === "shared"
+          ? [{ id: "shared", name: "Configured model", provider: "example" }]
+          : [
+              { id: "primary", name: "Primary", provider: "example" },
+              {
+                id: unidentified ? "default" : "fallback",
+                name: unidentified ? "Default" : "Fallback",
+                provider: "example",
+              },
+            ],
+    });
+    if (!sending) {
+      state.chatRunId = "current-run";
+      Object.assign(expectDefined(state.sessionsResult?.sessions[0], "selected session"), {
+        hasActiveRun: true,
+        activeRunIds: runIds,
+        activeModel,
+        activeModelProvider: runIds ? "fallback-provider" : "example",
       });
-      if (!sending) {
-        state.chatRunId = "current-run";
-        Object.assign(expectDefined(state.sessionsResult?.sessions[0], "selected session"), {
-          hasActiveRun: true,
-          activeRunIds: runIds,
-          activeModel,
-          activeModelProvider: runIds ? "fallback-provider" : "example",
-        });
+    }
+    const trigger = getChatModelSelect(
+      renderModelControls(
+        state,
+        unidentified
+          ? {
+              sending,
+              agentDefaultModel: mode === "locked unknown" ? "example/default" : "",
+              sessionsResult: null,
+              modelSelectionLocked: mode === "locked unknown",
+            }
+          : { sending },
+      ),
+    );
+    expect(trigger.textContent).toContain(expected);
+    if (!unidentified) {
+      expect(trigger.dataset.chatSelectValue).toBe(`example/${model}`);
+    }
+    expect(trigger.getAttribute("aria-label")).toBe("Chat model: " + expected);
+    expect(trigger.getAttribute("aria-busy")).toBe("false");
+    expect(trigger.querySelector(".btn__spinner")).toBeNull();
+    expect(trigger.querySelector(".chat-controls__inline-select-chevron svg")).not.toBeNull();
+    if (!runIds) {
+      if (!unidentified) {
+        expect(trigger.textContent).not.toContain("Model pending");
+        expect(trigger.textContent).not.toContain("Fallback");
+      } else {
+        expect(trigger.querySelector(".chat-controls__model-trigger-skeleton")).toBeNull();
       }
-      const trigger = getChatModelSelect(
-        renderModelControls(
-          state,
-          sending
-            ? {
-                sending,
-                agentDefaultModel: mode === "locked unknown" ? "example/default" : "",
-                sessionsResult: null,
-                modelSelectionLocked: mode === "locked unknown",
-              }
-            : {},
-        ),
-      );
-      expect(trigger.textContent).toContain(expected);
-      if (!sending) {
-        expect(trigger.dataset.chatSelectValue).toBe(`example/${model}`);
-      }
-      if (!runIds) {
-        const starting = !sending;
-        expect(trigger.getAttribute("aria-label")).toBe(
-          `Chat model: ${expected}${starting ? " · Starting…" : ""}`,
-        );
-        expect(trigger.getAttribute("aria-busy")).toBe(String(starting));
-        expect(trigger.querySelector(".btn__spinner") !== null).toBe(starting);
-        if (starting) {
-          expect(trigger.textContent).not.toContain("Model pending");
-          expect(trigger.textContent).not.toContain("Fallback");
-        } else {
-          expect(trigger.querySelector(".chat-controls__model-trigger-skeleton")).toBeNull();
-        }
-      }
-    },
-  );
+    }
+  });
 
   it.each([false, true])("preserves known selections while the catalog loads (%s)", (known) => {
     const { state } = createChatHeaderState(known ? { model: "gpt-5.6-sol", models: [] } : {});

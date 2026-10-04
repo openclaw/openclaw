@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage, StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
@@ -1380,6 +1381,194 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     );
   });
 
+  describe("progress-aware compaction watchdog", () => {
+    registerAgentSessionLoopTestLifecycle();
+    // compact.hooks.harness resolves every compaction watchdog to 30 s.
+    const windowMs = 30_000;
+    const ceilingMs = 10 * windowMs;
+    // The summary request ends one window before the operation ceiling.
+    const summaryCutoffMs = ceilingMs - windowMs;
+    const deltaEveryMs = 20_000;
+
+    // Real host watchdog, runtime delegate, native watchdog, session and summarizer;
+    // only the provider stream is scripted: one text delta every 20 s. `prepMs` delays
+    // session setup, so the host watchdog starts that much before the summary watchdog.
+    async function compactWhileStreaming(
+      deltas: number,
+      end: "done" | "silent" | "keepalive",
+      opts: { trigger?: "budget"; prepMs?: number } = {},
+    ) {
+      const [{ createAgentSession }, { guardSessionManager }, { resolveEmbeddedAgentStream }] =
+        await Promise.all([
+          import("../sessions/sdk.js"),
+          import("../session-tool-result-guard-wrapper.js"),
+          import("./stream-resolution.js"),
+        ]);
+      const sessionManager = SessionManager.inMemory(TEST_WORKSPACE_DIR);
+      for (const content of ["Review the checklist.", "Compare options.", "Keep the notes."]) {
+        sessionManager.appendMessage({ role: "user", content, timestamp: 1 });
+      }
+      const streamStarted = createDeferred();
+      const stream = vi.fn<StreamFn>((activeModel, _context, options) => {
+        const events = createAssistantMessageEventStream();
+        let sent = 0;
+        const timer = setInterval(() => {
+          if (sent < deltas) {
+            sent += 1;
+            events.push({ type: "text_delta", contentIndex: 0, delta: "Kept the notes. " });
+            return;
+          }
+          if (end === "keepalive") {
+            events.push({ type: "text_delta", contentIndex: 0, delta: "" });
+            return;
+          }
+          clearInterval(timer);
+          if (end === "done") {
+            const text = "Kept the checklist, options and notes.";
+            const message = createAssistant(activeModel, [{ type: "text", text }]);
+            events.push({ type: "done", reason: "stop", message });
+            events.end();
+          }
+        }, deltaEveryMs);
+        options?.signal?.addEventListener(
+          "abort",
+          () => {
+            clearInterval(timer);
+            const error = createAssistant(activeModel, [], "aborted");
+            events.push({ type: "error", reason: "aborted", error });
+            events.end();
+          },
+          { once: true },
+        );
+        streamStarted.resolve();
+        return events;
+      });
+      vi.mocked(guardSessionManager).mockReturnValue(sessionManager);
+      limitHistoryTurnsMock.mockImplementation((messages) => messages);
+      vi.mocked(resolveEmbeddedAgentStream).mockReturnValue({
+        streamFn: stream,
+        strategy: "session-custom",
+      });
+      const prepStarted = createDeferred();
+      vi.mocked(createAgentSession).mockImplementation(async ({ model }) => {
+        if (!model) {
+          throw new Error("Expected the prepared compaction model");
+        }
+        if (opts.prepMs) {
+          const prepared = Promise.withResolvers<void>();
+          setTimeout(prepared.resolve, opts.prepMs);
+          prepStarted.resolve();
+          await prepared.promise;
+        }
+        return await createTestSession({
+          model: { ...testModel, ...model },
+          sessionManager,
+          settingsManager: SettingsManager.inMemory({
+            compaction: { enabled: false, reserveTokens: 1_024, keepRecentTokens: 1 },
+            retry: { enabled: false },
+          }),
+          resourceLoader: createResourceLoader(),
+        });
+      });
+      resolveContextEngineMock.mockResolvedValue({
+        info: { ownsCompaction: false },
+        compact: (params: Parameters<ContextEngine["compact"]>[0]) =>
+          delegateCompactionToRuntime(params),
+      } as never);
+
+      vi.useFakeTimers();
+      let settled = false;
+      const pending = compactEmbeddedAgentSession(
+        wrappedCompactionArgs(opts.trigger ? { trigger: opts.trigger } : {}),
+      ).finally(() => {
+        settled = true;
+      });
+      void pending.catch(() => undefined);
+      if (opts.prepMs) {
+        await prepStarted.promise;
+        await vi.advanceTimersByTimeAsync(opts.prepMs);
+      }
+      await streamStarted.promise;
+      return { pending, stream, sessionManager, settled: () => settled };
+    }
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("keeps a request alive while it streams for longer than the window", async () => {
+      const run = await compactWhileStreaming(10, "done");
+      await vi.advanceTimersByTimeAsync(11 * deltaEveryMs);
+
+      await expect(run.pending).resolves.toMatchObject({ ok: true, compacted: true });
+      expect(run.stream).toHaveBeenCalledOnce();
+    });
+
+    it.each(["silent", "keepalive"] as const)(
+      "stops a request one window after its last output delta (%s)",
+      async (end) => {
+        const run = await compactWhileStreaming(5, end);
+        await vi.advanceTimersByTimeAsync(5 * deltaEveryMs + windowMs - 1);
+        expect(run.settled()).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+
+        await expect(run.pending).resolves.toMatchObject({
+          ok: false,
+          compacted: false,
+          reason: expect.stringContaining("timed out"),
+        });
+        expect(run.stream).toHaveBeenCalledOnce();
+      },
+    );
+
+    it("stops a stream that never goes silent one window before the operation ceiling", async () => {
+      // After 5 s of setup, the last delta before the cutoff (265 s) leaves less than a window.
+      const prepMs = 5_000;
+      const run = await compactWhileStreaming(Number.POSITIVE_INFINITY, "done", { prepMs });
+      await vi.advanceTimersByTimeAsync(summaryCutoffMs - prepMs - 1);
+      expect(run.settled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+
+      await expect(run.pending).resolves.toMatchObject({
+        ok: false,
+        compacted: false,
+        reason: expect.stringContaining("timed out"),
+      });
+      expect(run.stream).toHaveBeenCalledOnce();
+    });
+
+    // An automatic summary that times out commits the deterministic reduction (#164246),
+    // also when the operation ceiling stops it. Times count from the stream start, 5 s
+    // after the host watchdog armed.
+    const prepMs = 5_000;
+    it.each([
+      {
+        stop: "idle window",
+        deltas: 5,
+        end: "silent" as const,
+        stopMs: 5 * deltaEveryMs + windowMs,
+      },
+      {
+        stop: "operation ceiling",
+        deltas: Number.POSITIVE_INFINITY,
+        end: "done" as const,
+        stopMs: summaryCutoffMs - prepMs,
+      },
+    ])(
+      "commits the deterministic reduction when an automatic summary reaches the $stop",
+      async ({ deltas, end, stopMs }) => {
+        const run = await compactWhileStreaming(deltas, end, { trigger: "budget", prepMs });
+        await vi.advanceTimersByTimeAsync(stopMs);
+
+        await expect(run.pending).resolves.toMatchObject({ ok: true, compacted: true });
+        expect(
+          run.sessionManager.getBranch().findLast((entry) => entry.type === "compaction"),
+        ).toMatchObject({ summary: expect.stringContaining("removed without a summary") });
+        expect(run.stream).toHaveBeenCalledOnce();
+      },
+    );
+  });
+
   it.each([
     { source: "workspace manifest", fallback: "anthropic/legacy", modelId: "claude-modern" },
     { source: "configured alias", fallback: "summary-backup", modelId: "claude-fallback" },
@@ -2302,13 +2491,12 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
   });
 
   it("does not impose a second aggregate timeout on delegated native compaction", async () => {
-    const { compactionWatchdogResets } =
-      await import("../../context-engine/compaction-watchdog.js");
+    const { compactionWatchdogs } = await import("../../context-engine/compaction-watchdog.js");
     const started = createDeferred<() => void>();
     const terminal = createDeferred<Awaited<ReturnType<ContextEngine["compact"]>>>();
     // Stand in for the runtime delegate: it finds the reset through the host signal.
     const compact = vi.fn<ContextEngine["compact"]>(async ({ abortSignal }) => {
-      const resetTimeout = abortSignal && compactionWatchdogResets.get(abortSignal);
+      const resetTimeout = abortSignal && compactionWatchdogs.get(abortSignal)?.reset;
       if (!resetTimeout) {
         throw new Error("Delegated compaction must receive its progress reset callback");
       }

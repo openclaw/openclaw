@@ -209,6 +209,19 @@ canonical worker writer; incognito retains its process-local owner until its
 separate cutover. Schemas, persisted bytes, and supported update paths are
 unchanged. Removal still requires explicit breaking-release approval.
 
+### ACP metadata binding compatibility
+
+`openclaw/plugin-sdk/acp-runtime` retains the one-argument
+`readAcpSessionEntryAsync` callable published in `v2026.9.8`. The returned ACP
+manager's `loadSessionEntryAsync` and `upsertSessionMeta` injection callbacks also
+keep their released one-argument signatures and Promise results. Plugins do not
+supply internal incognito actor bindings.
+
+The `acp-session-metadata-released-signatures` compatibility record is active:
+these APIs remain supported, with no deprecation warning or required migration.
+Worker activation must preserve them; changing these released contracts requires
+an explicitly approved Plugin SDK major release.
+
 ### Native session generation authority
 
 The production-private `agent-harness-session-runtime` subpath retains the

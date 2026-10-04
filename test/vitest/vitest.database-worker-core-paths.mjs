@@ -364,6 +364,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/boards/board-store.parity.test.ts",
   "src/boards/board-store.test.ts",
   "src/boards/sqlite-board-store.batching.test.ts",
+  "src/boards/sqlite-board-store.incognito.test.ts",
   "src/boards/sqlite-board-store.worker.test.ts",
   "src/canvas/widget-tool.report.test.ts",
   "src/canvas/widget-tool.test.ts",

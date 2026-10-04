@@ -49,8 +49,12 @@ function fixture() {
   return { dir, target, proof, assertCurrent, revoke, refusal, options, backups };
 }
 
-async function prepare(f: ReturnType<typeof fixture>, io: typeof fs = fs) {
-  const guarded = createConfigFileWriteGuard(f.target, io, f.assertCurrent, f.options);
+async function prepare(
+  f: ReturnType<typeof fixture>,
+  io: typeof fs = fs,
+  options: Parameters<typeof createConfigFileWriteGuard>[3] = f.options,
+) {
+  const guarded = createConfigFileWriteGuard(f.target, io, f.assertCurrent, options);
   const prepared = await prepareConfigFileWrite({
     configPath: f.target,
     previousRaw: original,
@@ -66,6 +70,78 @@ async function prepare(f: ReturnType<typeof fixture>, io: typeof fs = fs) {
 }
 
 describe("guarded config final effects", () => {
+  it.runIf(process.platform !== "win32").each([
+    { name: "foreign state root", foreign: true, stateRoot: true, fileFailure: false },
+    { name: "owned state root", foreign: false, stateRoot: true, fileFailure: false },
+    { name: "foreign credential directory", foreign: true, stateRoot: false, fileFailure: false },
+    { name: "private file chmod failure", foreign: true, stateRoot: true, fileFailure: true },
+  ])("preserves only optional directory hardening: $name", async (scenario) => {
+    const f = fixture();
+    fs.chmodSync(f.dir, 0o2775);
+    const root = fs.statSync(f.dir);
+    const uid = scenario.foreign ? root.uid + 1 : root.uid;
+    const denied = Object.assign(new Error("EPERM: operation not permitted, fchmod"), {
+      code: "EPERM",
+    });
+    const io: typeof fs = {
+      ...fs,
+      fstatSync: new Proxy(fs.fstatSync, {
+        apply(target, self, args) {
+          const stat: fs.Stats | fs.BigIntStats = Reflect.apply(target, self, args);
+          if (typeof stat.uid === "number" && stat.dev === root.dev && stat.ino === root.ino) {
+            stat.uid = uid;
+          }
+          return stat;
+        },
+      }),
+      fchmodSync(fd, mode) {
+        if (fs.fstatSync(fd).isDirectory() || scenario.fileFailure) {
+          throw denied;
+        }
+        fs.fchmodSync(fd, mode);
+      },
+    };
+    const warn = vi.fn();
+    const stateDirectory = { path: scenario.stateRoot ? f.dir : path.dirname(f.dir), warn };
+    const { prepared, guarded } = await prepare(f, io, {
+      ...f.options,
+      preserveDirectoryMode: false,
+      stateDirectory,
+    });
+    try {
+      if (!scenario.foreign || !scenario.stateRoot || scenario.fileFailure) {
+        expect(() => prepared.publish()).toThrow(denied);
+        expect(fs.readFileSync(f.target, "utf8")).toBe(original);
+        expect(f.backups()).toEqual([null, null, null, null, null]);
+        return;
+      }
+      prepared.publish();
+      expect(fs.readFileSync(f.target, "utf8")).toBe(content);
+      expect(fs.readFileSync(`${f.target}.bak`, "utf8")).toBe(original);
+      expect(fs.statSync(f.target).mode & 0o7777).toBe(0o600);
+      expect(fs.statSync(`${f.target}.bak`).mode & 0o7777).toBe(0o600);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(`uid ${uid}, gid ${root.gid}; leaving mode 2775`),
+      );
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(f.dir));
+      await expect(
+        rollbackConfigFileWriteIfUnchanged({
+          configPath: f.target,
+          previousSnapshot: f.options.snapshot,
+          committedHash: hashConfigRaw(content),
+          fsModule: io,
+          stateDirectory,
+          ...guarded.captureRollbackProof(f.assertCurrent),
+        }),
+      ).resolves.toBe(true);
+      expect(fs.readFileSync(f.target, "utf8")).toBe(original);
+      expect(fs.statSync(f.target).mode & 0o7777).toBe(0o600);
+    } finally {
+      expect(fs.statSync(f.dir).mode & 0o7777).toBe(0o2775);
+      await prepared[Symbol.asyncDispose]();
+    }
+  });
+
   it("finishes Windows fallback partial writes through the same descriptor", async () => {
     const f = fixture();
     let calls = 0;

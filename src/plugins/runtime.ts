@@ -516,7 +516,11 @@ export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir
                 await clearActivePluginRegistry(previous);
               } else {
                 const retainedRegistry = survivor?.activeRegistry ?? null;
-                retirePluginRegistryIfUnused(previous, () => retainedRegistry);
+                preparePluginRegistryRetirement(
+                  previous,
+                  () => retainedRegistry,
+                  false,
+                )?.retireIfUnused();
               }
               return await waitForPluginRegistryRetirement(previous);
             }));
@@ -659,11 +663,11 @@ export async function clearActivePluginRegistry(
         if (previousRegistry) {
           await waitForPluginCommandExecutions(previousRegistry);
           if (registryHasPluginHostCleanupWork(previousRegistry)) {
+            // Gateway shutdown releases runtime resources; only disable/removal erases session state.
             await cleanupWork.track(() =>
               disposePluginRegistryInstances(previousRegistry, () => state.activeRegistry, {
                 cfg,
                 runContextCleanup,
-                cleanupPersistentState: true,
               }),
             );
           }
