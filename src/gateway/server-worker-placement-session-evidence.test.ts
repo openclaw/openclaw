@@ -120,16 +120,20 @@ describe("worker placement session evidence", () => {
           state === "present" ? "current" : state === "removed" ? "absent" : "unknown",
         );
         // Physical cloud custody and ordinary legacy-key fallback are unaffected.
-        await expect(
-          resolvePlacementEvidence({
-            ...subject,
-            state: "active",
-            environmentId: "environment",
-            activeOwnerEpoch: 1,
-            remoteWorkspaceDir: "/workspace",
-            workerBundleHash: "bundle",
-          }),
-        ).resolves.toBe(state === "invalid" ? "unknown" : "current");
+        const activeSubject: Extract<WorkerSessionPlacementRecord, { state: "active" }> = {
+          ...subject,
+          state: "active",
+          generation: 2,
+          turnClaim: null,
+          environmentId: "environment",
+          activeOwnerEpoch: 1,
+          workspaceBaseManifestRef: "manifest",
+          remoteWorkspaceDir: "/workspace",
+          workerBundleHash: "bundle",
+        };
+        await expect(resolvePlacementEvidence(activeSubject)).resolves.toBe(
+          state === "invalid" ? "unknown" : "current",
+        );
         await expect(
           resolvePlacementEvidence(localPlacement(sessionId, "agent:main:legacy")),
         ).resolves.toBe(state === "present" || state === "invalid" ? "unknown" : "current");

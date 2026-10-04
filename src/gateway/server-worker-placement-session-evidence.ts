@@ -94,7 +94,7 @@ export async function createWorkerPlacementSessionEvidenceResolver(
         placement.state === "local" &&
         parseCronRunScopeSuffix(placement.sessionKey).runId &&
         result.status === "current" &&
-        result.sessionKey !== identity.sessionKey
+        result.sessionKey !== placement.sessionKey
           ? "absent"
           : result.status;
       if (subject.evidence !== "current" && status !== "absent") {

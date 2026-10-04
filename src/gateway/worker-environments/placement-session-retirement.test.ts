@@ -255,15 +255,31 @@ describe("placement session retirement", () => {
     async (changed) => {
       const original = activePlacement("session-teardown");
       const failed = failedPlacement(original);
-      const replacement = {
-        ...failed,
-        ...(changed === "owner" ? { agentId: "replacement" } : {}),
-        ...(changed === "key" ? { sessionKey: "agent:main:replacement" } : {}),
-        ...(changed === "state" ? { state: "reclaimed" as const } : {}),
-        ...(changed === "generation" ? { generation: failed.generation + 1 } : {}),
-        ...(changed === "environment" ? { environmentId: "replacement-environment" } : {}),
-        ...(changed === "epoch" ? { activeOwnerEpoch: failed.activeOwnerEpoch! + 1 } : {}),
-      };
+      const replacement: WorkerSessionPlacementRecord =
+        changed === "state"
+          ? {
+              ...failed,
+              state: "reclaimed",
+              turnClaim: null,
+              environmentId: original.environmentId,
+              activeOwnerEpoch: original.activeOwnerEpoch,
+              workspaceBaseManifestRef: original.workspaceBaseManifestRef,
+              remoteWorkspaceDir: original.remoteWorkspaceDir,
+              workerBundleHash: original.workerBundleHash,
+              lastTranscriptAckCursor: original.lastTranscriptAckCursor,
+              lastLiveEventAckCursor: original.lastLiveEventAckCursor,
+              recoveryError: null,
+              terminalReason: null,
+              terminalAtMs: 3,
+            }
+          : {
+              ...failed,
+              ...(changed === "owner" ? { agentId: "replacement" } : {}),
+              ...(changed === "key" ? { sessionKey: "agent:main:replacement" } : {}),
+              ...(changed === "generation" ? { generation: failed.generation + 1 } : {}),
+              ...(changed === "environment" ? { environmentId: "replacement-environment" } : {}),
+              ...(changed === "epoch" ? { activeOwnerEpoch: failed.activeOwnerEpoch! + 1 } : {}),
+            };
       const harness = createHarness([original]);
       const destroyEnvironment = harness.forceDestroyEnvironment.getMockImplementation()!;
       harness.forceDestroyEnvironment.mockImplementationOnce(async (environmentId) => {
