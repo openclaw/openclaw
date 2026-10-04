@@ -555,7 +555,7 @@ export function createSessionRosterObservations(
       return observations.publishedRow(
         (row, ownerAgentId) =>
           observations.hasLiveObservation(row) &&
-          matchesExistingSession(row, key, agentId ?? ownerAgentId),
+          matchesExistingSession(row, key, agentId ?? ownerAgentId ?? null),
       );
     },
     mergeRows: merge,
