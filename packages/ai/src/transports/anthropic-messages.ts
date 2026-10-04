@@ -129,7 +129,7 @@ async function convertContentBlocks(
       [
         {
           type: "image" as const,
-          data: typeof record.data === "string" ? record.data : "",
+          data: record.data,
           mimeType:
             typeof record.mimeType === "string"
               ? record.mimeType
@@ -474,7 +474,7 @@ function buildAnthropicGenerationParams({
 function convertAnthropicTools(
   tools: Tool[],
   isOAuthTokenLocal: boolean,
-  supportsEagerToolInputStreaming = false,
+  supportsEagerToolInputStreaming: boolean,
 ): {
   projection: AnthropicToolProjection;
   tools: AnthropicTool[];

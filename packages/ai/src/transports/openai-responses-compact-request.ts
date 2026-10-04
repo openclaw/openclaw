@@ -41,13 +41,12 @@ export async function requestPreparedOpenAIResponsesCompaction(
   options: OpenAIResponsesOptions,
 ): Promise<OpenAIResponsesCompactEndpointResult> {
   const preparedOptions = { ...options };
-  let resolveResult!: (result: OpenAIResponsesCompactEndpointResult) => void;
-  let rejectResult!: (error: unknown) => void;
-  const result = new Promise<OpenAIResponsesCompactEndpointResult>((resolve, reject) => {
-    resolveResult = resolve;
-    rejectResult = reject;
-  });
-  const controller = { claimed: false, resolve: resolveResult, reject: rejectResult };
+  const {
+    promise: result,
+    resolve,
+    reject,
+  } = Promise.withResolvers<OpenAIResponsesCompactEndpointResult>();
+  const controller = { claimed: false, resolve, reject };
   Reflect.set(preparedOptions, COMPACT_REQUEST, controller);
   const stream = await Promise.resolve(
     streamFn(model, context, preparedOptions as Parameters<StreamFn>[2]),
