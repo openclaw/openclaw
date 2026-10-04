@@ -257,6 +257,7 @@ function prepareDocument(input, { sourceFile, root, seen = new Set() }, firstLin
   let literalLine = 0;
   let depth = 0;
   let fenceEndLine = 0;
+  let fenceIndent = 0;
   const projectionLines = [];
   const recordLine = (line, projection = line) => {
     projectionLines.push(projection);
@@ -266,32 +267,34 @@ function prepareDocument(input, { sourceFile, root, seen = new Set() }, firstLin
   let text = new DocsSource(input, firstLine).replace(
     /(?<=^|\n)[^\n]*/g,
     (line, offset, source) => {
+      const lineIndex = projectionLines.length;
+      if (lineIndex < fenceEndLine) {
+        return recordLine(fenceIndent ? line.replace(new RegExp(`^ {1,${fenceIndent}}`), "") : line);
+      }
       const insideLiteral = offset < literalEnd;
       let normalized =
         depth && (!insideLiteral || inlineCode)
           ? line.replace(new RegExp(`^ {1,${depth * 2}}`), "")
           : line;
-      const lineIndex = projectionLines.length;
       if (insideLiteral && !inlineCode) {
         literalContinuationLines.add(lineIndex);
       }
-      if (lineIndex < fenceEndLine) {
-        return recordLine(normalized);
-      }
       if (!insideLiteral && /`{3,}|~{3,}/.test(normalized)) {
         const suffix = source.slice(offset + line.length);
+        const indent = line.length - normalized.length;
         // Keep the processed prefix for list/quote context. Component depth is
         // fixed inside this fence; CommonMark owns its closing/container boundary.
         const projection = [
           ...projectionLines,
           normalized +
-            (depth ? suffix.replace(new RegExp(`^ {1,${depth * 2}}`, "gm"), "") : suffix),
+            (indent ? suffix.replace(new RegExp(`^ {1,${indent}}`, "gm"), "") : suffix),
         ].join("\n");
         const token = codeParser
           .parse(projection, {})
           .find((entry) => entry.type === "fence" && entry.map[0] === lineIndex);
         if (token) {
           fenceEndLine = token.map[1];
+          fenceIndent = indent;
           return recordLine(normalized);
         }
       }

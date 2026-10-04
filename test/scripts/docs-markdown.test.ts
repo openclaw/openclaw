@@ -3,6 +3,40 @@ import { createDocsMarkdown, parseDocsDocument } from "../../scripts/lib/docs-ma
 
 describe("docs Markdown rendering", () => {
   it.each([
+    { name: "top level", open: "", close: "", indent: "" },
+    { name: "Tabs", open: '<Tabs>\n<Tab title="Example">\n', close: "</Tab>\n</Tabs>", indent: "" },
+    { name: "Steps", open: '<Steps>\n<Step title="Example">\n', close: "</Step>\n</Steps>", indent: "  " },
+    { name: "CodeGroup", open: "<CodeGroup>\n", close: "</CodeGroup>", indent: "  " },
+    {
+      name: "nested Slack components",
+      open: '<Tabs>\n<Tab title="Socket">\n<Steps>\n<Step title="App">\n<CodeGroup>\n',
+      close: "</CodeGroup>\n</Step>\n</Steps>\n</Tab>\n</Tabs>",
+      indent: "",
+    },
+  ])("preserves code indentation in $name", ({ open, close, indent }) => {
+    const json = '{\n  "display_information": {\n    "name": "OpenClaw"\n  }\n}\n';
+    const yaml = "app:\n  scopes:\n    - chat:write\n  description: |\n    Nested content\n";
+    const source =
+      open +
+      [
+        ["json", json],
+        ["yaml", yaml],
+      ]
+        .map(([language, content]) =>
+          [`~~~${language}`, ...content.trimEnd().split("\n"), "~~~"]
+            .map((line) => indent + line)
+            .join("\n"),
+        )
+        .join("\n\n") +
+      "\n" +
+      close;
+    const document = parseDocsDocument(source);
+    expect(
+      document.tokens.filter((token) => token.type === "fence").map((token) => token.content),
+    ).toEqual([json, yaml]);
+  });
+
+  it.each([
     {
       name: "APIUsage",
       title: "سلوك إعادة المحاولة",
