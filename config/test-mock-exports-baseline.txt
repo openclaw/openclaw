@@ -1154,7 +1154,6 @@
 ["extensions/memory-core/src/memory-workspace-lock.cas.test.ts","./dreaming-state.js","f20ed71534a970e301435288ceeb18d5d0cf6822d21ef85a6807063d9f2af277",1]
 ["extensions/memory-core/src/memory-workspace-lock.cas.test.ts","openclaw/plugin-sdk/process-runtime","03b18c14758ddfde64a51af9687f05e3cd33a71ba51774bfc74e431f454728c3",1]
 ["extensions/memory-core/src/memory-workspace-lock.cas.test.ts","openclaw/plugin-sdk/runtime-env","2b6ff10d2e3fef0a26225950a2d784fc3e4d80826dcde9166c07072ad6b7cd12",1]
-["extensions/memory-core/src/memory/embeddings.test.ts","openclaw/plugin-sdk/memory-core-host-engine-embeddings","41427a31ebe14dc86d39f87d92dc361039ce81f01601c3db89a5df2d0cd245f8",1]
 ["extensions/memory-core/src/memory/manager-index-generation-lease.async.test.ts","./manager-sqlite-lease.js","f0b4758d5a57c5730530cde927768bfce7c433778d9868905130f6b9b21e0f43",1]
 ["extensions/memory-core/src/memory/manager-sync-yield.test.ts","./embeddings.js","ebb8fff40836b2bb2cc9b79ee71c224a01cee2847d37ba26caf51aa1e3371204",1]
 ["extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts","./embeddings.js","39a5c7e02e6c076f88561b0f11aae022947971660d55c6b29f99960942e66c9e",1]
