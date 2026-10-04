@@ -2,6 +2,7 @@ import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { fetchControlUiResource } from "../../../app/browser-http.ts";
 import { LazyCustomElementRequestController } from "../../../app/lazy-custom-element.ts";
 import { renderCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
@@ -10,6 +11,7 @@ import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
+import { downloadBlobFile } from "../../../lib/download.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
@@ -54,10 +56,13 @@ class ChatTextAttachment extends OpenClawLightDomContentsElement {
   @state() private text: string | null = null;
   @state() private failed = false;
   @state() private source = false;
+  @state() private downloadPending = false;
+  @state() private downloadFailed = false;
 
   private readonly htmlPreviewLoader = new LazyCustomElementRequestController(this);
   private loadVersion = 0;
   private abortController: AbortController | undefined;
+  private downloadAbortController: AbortController | undefined;
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -99,6 +104,7 @@ class ChatTextAttachment extends OpenClawLightDomContentsElement {
         this.text = null;
       }
       this.failed = false;
+      this.downloadFailed = false;
       if (this.src) {
         void this.loadText();
       }
@@ -109,6 +115,9 @@ class ChatTextAttachment extends OpenClawLightDomContentsElement {
     this.loadVersion += 1;
     this.abortController?.abort();
     this.abortController = undefined;
+    this.downloadAbortController?.abort();
+    this.downloadAbortController = undefined;
+    this.downloadPending = false;
   }
 
   private async loadText(): Promise<void> {
@@ -133,6 +142,38 @@ class ChatTextAttachment extends OpenClawLightDomContentsElement {
     } finally {
       if (this.abortController === controller) {
         this.abortController = undefined;
+      }
+    }
+  }
+
+  private async downloadAttachment(): Promise<void> {
+    if (this.downloadPending || !this.src) {
+      return;
+    }
+    this.downloadPending = true;
+    this.downloadFailed = false;
+    const src = this.src;
+    const label = this.label;
+    const version = this.loadVersion;
+    const controller = new AbortController();
+    this.downloadAbortController = controller;
+    try {
+      const response = await fetchControlUiResource(src, { signal: controller.signal });
+      if (!response.ok) {
+        throw new Error("Attachment download failed");
+      }
+      const blob = await response.blob();
+      if (version === this.loadVersion && this.isConnected) {
+        downloadBlobFile(label, blob);
+      }
+    } catch {
+      if (version === this.loadVersion && this.isConnected) {
+        this.downloadFailed = true;
+      }
+    } finally {
+      if (this.downloadAbortController === controller) {
+        this.downloadAbortController = undefined;
+        this.downloadPending = false;
       }
     }
   }
@@ -221,14 +262,13 @@ ${this.text}</pre>`,
                       </button>`
                     : nothing
                 }
-                <a
+                <button
+                  type="button"
                   class="rail-header__action"
-                  href=${this.src || nothing}
-                  download=${this.label}
-                  target="_blank"
-                  rel="noreferrer"
+                  ?disabled=${this.downloadPending || !this.src}
+                  @click=${() => void this.downloadAttachment()}
                   aria-label=${t("chat.mediaPlayer.download", { filename: this.label })}
-                  >${icons.download}</a
+                  >${icons.download}</button
                 >
               </span>
             </div>`
@@ -237,10 +277,11 @@ ${this.text}</pre>`,
               label: this.label,
               mimeType: this.mimeType,
               sizeBytes: this.sizeBytes,
-              downloadHref: this.src,
-              downloadPending: !this.src,
+              onDownload: () => void this.downloadAttachment(),
+              downloadPending: this.downloadPending || !this.src,
             })
       }
+      ${this.downloadFailed ? html`<p class="muted" role="alert">${t("chat.toolCards.outputDownloadFailed")}</p>` : nothing}
       ${
         this.failed
           ? html`<p class="muted" role="status">

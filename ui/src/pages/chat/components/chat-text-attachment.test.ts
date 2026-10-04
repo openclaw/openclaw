@@ -26,21 +26,22 @@ async function mountAttachment(
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
 it("reads a text attachment in Files without downloading or interpreting its contents", async () => {
   const text = "Pasted notes 🦞\n  preserve indentation\n<script>not executable</script>\n";
-  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(text));
+  const fetchMock = vi
+    .fn<typeof fetch>().mockResolvedValue(new Response(text));
   vi.stubGlobal("fetch", fetchMock);
   const panel = await mountAttachment();
 
   await vi.waitFor(() => expect(panel.querySelector("pre")?.textContent).toBe(text));
   expect(panel.querySelector("script, iframe, textarea")).toBeNull();
-  expect(panel.querySelector<HTMLAnchorElement>("a[download]")?.getAttribute("href")).toBe(
-    "/__openclaw__/assistant-media?mediaTicket=text-preview",
-  );
+  expect(panel.querySelector("button[aria-label=\"Download notes.txt\"]")).not.toBeNull();
+  expect(panel.querySelector("a[download]")).toBeNull();
   expect(fetchMock).toHaveBeenCalledOnce();
   expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).has("Authorization")).toBe(false);
 });
@@ -135,7 +136,7 @@ it.each([
   expect(reader?.querySelector("pre code")?.textContent).toBe("const ready = true;\n");
   expect(reader?.querySelector("a")?.getAttribute("href")).toBe("https://example.com");
   expect(panel.querySelector(".sidebar-attachment-preview__text")).toBeNull();
-  expect(panel.querySelector("a[download]")).not.toBeNull();
+  expect(panel.querySelector("button[aria-label^=\"Download \"]")).not.toBeNull();
 });
 
 it("renders bounded Markdown documents beyond the chat message parse limit", async () => {
@@ -164,11 +165,12 @@ it.each([
   { title: "notes.txt", src: "https://files.example/notes.txt" },
   { title: "page.html", mimeType: "text/html", src: "https://files.example/page.html" },
 ])("does not fetch unsupported or external documents: $title $mimeType $src", async (content) => {
-  const fetchMock = vi.fn<typeof fetch>();
+  const fetchMock = vi
+    .fn<typeof fetch>();
   vi.stubGlobal("fetch", fetchMock);
   const panel = await mountAttachment(content);
   expect(panel.querySelector("pre")).toBeNull();
-  expect(panel.querySelector("a[download]")).not.toBeNull();
+  expect(panel.querySelector("button[aria-label^=\"Download \"]")).not.toBeNull();
   expect(fetchMock).not.toHaveBeenCalled();
 });
 
@@ -179,7 +181,8 @@ it.each([
 ])(
   "declines an oversized $title (plainText=$plainText) without fetching",
   async ({ limit, ...content }) => {
-    const fetchMock = vi.fn<typeof fetch>();
+    const fetchMock = vi
+    .fn<typeof fetch>();
     vi.stubGlobal("fetch", fetchMock);
     const panel = await mountAttachment({ ...content, sizeBytes: limit + 1 });
     await vi.waitFor(() =>
@@ -214,7 +217,7 @@ it.each([
     );
     expect(cancel).toHaveBeenCalledOnce();
     expect(panel.querySelector("pre")).toBeNull();
-    expect(panel.querySelector("a[download]")).not.toBeNull();
+    expect(panel.querySelector("button[aria-label^=\"Download \"]")).not.toBeNull();
   },
 );
 
@@ -272,7 +275,6 @@ it.each(["same", "different"])(
     expect(panel.querySelector("pre")?.textContent).toBe("Current file");
   },
 );
-
 it("aborts a closed preview and reloads it after remount", async () => {
   const fetchMock = vi
     .fn<typeof fetch>()
@@ -358,7 +360,8 @@ it.each([
   "revalidates retained HTML after classification changes: $change",
   async ({ change, ...content }) => {
     const text = "x".repeat(256 * 1024 + 1);
-    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => new Response(text));
+    const fetchMock = vi
+    .fn<typeof fetch>().mockImplementation(async () => new Response(text));
     vi.stubGlobal("fetch", fetchMock);
     const panel = await mountAttachment({
       ...content,
@@ -422,9 +425,8 @@ it.each([
     await panel.querySelector("openclaw-chat-text-attachment")!.updateComplete;
     expect(panel.querySelector("iframe")).toBe(frame);
     expect(request).toHaveBeenCalledOnce();
-    expect(panel.querySelector<HTMLAnchorElement>("a[download]")?.getAttribute("href")).toBe(
-      "/__openclaw__/assistant-media?mediaTicket=text-preview",
-    );
+    expect(panel.querySelector("button[aria-label^=\"Download \"]")).not.toBeNull();
+    expect(panel.querySelector("a[download]")).toBeNull();
     Reflect.set(panel, "embedSandboxMode", "strict");
     await expect
       .poll(() => {
@@ -454,3 +456,139 @@ it.each([
     });
   },
 );
+
+it.each([false, true])(
+  "downloads Markdown from the visible control (compact=%s) without navigation",
+  async (compact) => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => new Response("# Notes"));
+    vi.stubGlobal("fetch", fetchMock);
+    const createObjectURL = vi.fn(() => "blob:attachment-download");
+    vi.stubGlobal("URL", class extends URL {
+      static createObjectURL = createObjectURL;
+      static revokeObjectURL = vi.fn();
+    });
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const attachment = document.createElement("openclaw-chat-text-attachment");
+    attachment.compact = compact;
+    attachment.src = "/notes.md";
+    attachment.label = "notes.md";
+    attachment.mimeType = "text/markdown";
+    document.body.append(attachment);
+    await attachment.updateComplete;
+    await vi.waitFor(() => expect(attachment.querySelector("article")).not.toBeNull());
+    const download = attachment.querySelector<HTMLButtonElement>(
+    'button[aria-label="Download notes.md"]',
+  )!;
+    expect(download).not.toBeNull();
+    expect(attachment.querySelector("a[download]")).toBeNull();
+    download.click();
+    download.click();
+    await vi.waitFor(() => expect(anchorClick).toHaveBeenCalledOnce());
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(createObjectURL).toHaveBeenCalledOnce();
+    const anchor = anchorClick.mock.instances[0]!;
+    expect(anchor.href).toBe("blob:attachment-download");
+    expect(anchor.download).toBe("notes.md");
+    expect(anchor.target).toBe("");
+    expect(attachment.isConnected).toBe(true);
+  },
+);
+
+it("reports failed downloads and lets the same control retry", async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(new Response("# Notes"))
+    .mockRejectedValueOnce(new Error("private URL must not appear"))
+    .mockResolvedValueOnce(new Response("# Notes"));
+  vi.stubGlobal("fetch", fetchMock);
+  const createObjectURL = vi.fn(() => "blob:attachment-download");
+  vi.stubGlobal("URL", class extends URL {
+    static createObjectURL = createObjectURL;
+    static revokeObjectURL = vi.fn();
+  });
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+  const attachment = document.createElement("openclaw-chat-text-attachment");
+  attachment.src = "/notes.md";
+  attachment.label = "notes.md";
+  attachment.mimeType = "text/markdown";
+  document.body.append(attachment);
+  await attachment.updateComplete;
+  await vi.waitFor(() => expect(attachment.querySelector("article")).not.toBeNull());
+  const download = attachment.querySelector<HTMLButtonElement>(
+    'button[aria-label="Download notes.md"]',
+  )!;
+  download.click();
+  await vi.waitFor(() =>
+    expect(attachment.querySelector('[role="alert"]')?.textContent).toContain("Could not download"),
+  );
+  expect(attachment.textContent).not.toContain("private URL");
+  expect(download.disabled).toBe(false);
+  download.click();
+  await vi.waitFor(() => expect(createObjectURL).toHaveBeenCalledOnce());
+  expect(attachment.querySelector('[role="alert"]')).toBeNull();
+});
+
+it("aborts an old download and allows the new attachment to download immediately", async () => {
+  let resolveOldDownload!: (response: Response) => void;
+  let resolveNewDownload!: (response: Response) => void;
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(new Response("# Old"))
+    .mockImplementationOnce(
+      () => new Promise((resolve) => {
+        resolveOldDownload = resolve;
+      }),
+    )
+    .mockResolvedValueOnce(new Response("# New"))
+    .mockImplementationOnce(
+      () => new Promise((resolve) => {
+        resolveNewDownload = resolve;
+      }),
+    );
+  vi.stubGlobal("fetch", fetchMock);
+  const createObjectURL = vi.fn(() => "blob:new-download");
+  vi.stubGlobal("URL", class extends URL {
+    static createObjectURL = createObjectURL;
+    static revokeObjectURL = vi.fn();
+  });
+  const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+  const attachment = document.createElement("openclaw-chat-text-attachment");
+  attachment.src = "/old.md";
+  attachment.label = "old.md";
+  attachment.mimeType = "text/markdown";
+  document.body.append(attachment);
+  await attachment.updateComplete;
+  await vi.waitFor(() => expect(attachment.querySelector("article")).not.toBeNull());
+  attachment.querySelector<HTMLButtonElement>('button[aria-label="Download old.md"]')!.click();
+  await attachment.updateComplete;
+  const oldSignal = fetchMock.mock.calls[1]?.[1]?.signal;
+  expect(oldSignal?.aborted).toBe(false);
+  attachment.src = "/new.md";
+  attachment.label = "new.md";
+  await attachment.updateComplete;
+  expect(oldSignal?.aborted).toBe(true);
+  const download = attachment.querySelector<HTMLButtonElement>(
+    'button[aria-label="Download new.md"]',
+  )!;
+  expect(download.disabled).toBe(false);
+  download.click();
+  await attachment.updateComplete;
+  expect(download.disabled).toBe(true);
+  const oldResponse = new Response("# Old");
+  const oldBlob = vi.spyOn(oldResponse, "blob");
+  resolveOldDownload(oldResponse);
+  await vi.waitFor(() => expect(oldBlob).toHaveBeenCalledOnce());
+  await oldBlob.mock.results[0]!.value;
+  await Promise.resolve();
+  await attachment.updateComplete;
+  expect(download.disabled).toBe(true);
+  expect(createObjectURL).not.toHaveBeenCalled();
+  resolveNewDownload(new Response("# New"));
+  await vi.waitFor(() => expect(anchorClick).toHaveBeenCalledOnce());
+  expect(anchorClick.mock.instances[0]!.download).toBe("new.md");
+  await attachment.updateComplete;
+  expect(download.disabled).toBe(false);
+  expect(attachment.querySelector('[role="alert"]')).toBeNull();
+});

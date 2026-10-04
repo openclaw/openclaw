@@ -72,7 +72,7 @@ suite.define(() => {
           .getByRole("button", { name: `Open ${filename} in the side panel`, exact: true })
           .click();
         const panel = page.locator("openclaw-chat-detail-panel:visible");
-        await panel.locator("a[download]").waitFor();
+        await panel.getByRole("button", { name: `Download ${filename}`, exact: true }).waitFor();
         const reader = panel.locator(extension === "md" ? "article" : "pre");
         await reader.waitFor();
         await page.screenshot({
@@ -120,10 +120,12 @@ suite.define(() => {
         });
         const [download] = await Promise.all([
           page.waitForEvent("download"),
-          panel.locator("a[download]").click(),
+          panel.getByRole("button", { name: `Download ${filename}`, exact: true }).click(),
         ]);
         expect(download.suggestedFilename()).toBe(filename);
         expect(await download.failure()).toBeNull();
+        expect(page.url()).toBe(`${suite.server.baseUrl}chat`);
+        expect(await panel.isVisible()).toBe(true);
       } finally {
         await suite.closeBrowserContext(context);
       }
