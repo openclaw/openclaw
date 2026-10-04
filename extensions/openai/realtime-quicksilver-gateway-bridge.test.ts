@@ -58,6 +58,7 @@ describe("GPT-Live gateway relay bridge", () => {
     });
     const onClose = vi.fn();
     const logger = { debug: vi.fn(), warn: vi.fn() };
+    let socket: FakeSocket | undefined;
     const bridge = new OpenAIQuicksilverGatewayBridge(
       {
         providerConfig: {},
@@ -77,7 +78,10 @@ describe("GPT-Live gateway relay bridge", () => {
         })),
         createPeer,
         fetchImpl: vi.fn(async () => createCallResponse("v=answer\r\n", "rtc_pending_audio")),
-        webSocketFactory: () => new FakeSocket(),
+        webSocketFactory: () => {
+          socket = new FakeSocket();
+          return socket;
+        },
       },
       openAIRealtimeHost,
     );
@@ -90,6 +94,12 @@ describe("GPT-Live gateway relay bridge", () => {
       peer,
       rejectPeer: (error: Error) => rejectPeer?.(error),
       resolvePeer: () => resolvePeer?.(peer),
+      startSession: () => {
+        if (!socket) {
+          throw new Error("expected sideband socket");
+        }
+        emitSideband(socket, { type: "session.started", session: { id: "rtc_pending_audio" } });
+      },
       triggerPeerError: (error: Error) => peerCallbacks?.onError(error),
       triggerPeerMediaError: (error: Error) => peerCallbacks?.onMediaError?.(error),
       waitForPeerStart: async () => {
@@ -120,7 +130,7 @@ describe("GPT-Live gateway relay bridge", () => {
   });
 
   it("preserves caller-owned microphone frames while the media peer is starting", async () => {
-    const { bridge, connection, peer, resolvePeer } = createPendingPeerBridge();
+    const { bridge, connection, peer, resolvePeer, startSession } = createPendingPeerBridge();
     const testBridge = bridge as unknown as TestableGatewayBridge;
     try {
       expect(bridge.connect()).toBe(connection);
@@ -132,6 +142,7 @@ describe("GPT-Live gateway relay bridge", () => {
 
       resolvePeer();
       await connection;
+      startSession();
 
       expect(peer.adoptPendingAudio).toHaveBeenCalledOnce();
       expect(peer.adoptPendingAudio).toHaveBeenCalledWith(pendingAudio);
