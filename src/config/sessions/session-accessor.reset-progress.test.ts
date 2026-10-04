@@ -1,5 +1,6 @@
 /** A fresh conversation must not inherit the prior task's progress card. */
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { readBoardHtml } from "../../boards/board-store.test-support.js";
@@ -123,9 +124,14 @@ it.each(
         unsubscribe();
       }
       // A fresh read-only connection proves this is durable state, not client/cache invalidation.
-      expect(readSessionProgressCard(database.path, sessionKey)).toEqual(
-        context === "clear" && !rollback ? null : before,
-      );
+      const reader = new DatabaseSync(database.path, { readOnly: true });
+      try {
+        expect(readSessionProgressCard(reader, sessionKey)).toEqual(
+          context === "clear" && !rollback ? null : before,
+        );
+      } finally {
+        reader.close();
+      }
       expect(await boards.getSnapshot({ sessionKey })).toEqual(boardBefore);
       expect((await readBoardHtml(boards, { sessionKey }, "retained-widget"))?.html).toBe(
         "<p>Keep this dashboard</p>",

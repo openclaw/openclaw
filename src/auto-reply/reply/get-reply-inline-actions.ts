@@ -356,7 +356,7 @@ export async function handleInlineActions(params: {
       const authProfileStoreSource = authSourceAgentDir
         ? await hasAnyAuthProfileStoreSourceAsync(authSourceAgentDir)
         : false;
-      const authorizedTools = resolveSkillDispatchTools(
+      const authorizedTools = await resolveSkillDispatchTools(
         {
           message: {
             surface: ctx.Surface,

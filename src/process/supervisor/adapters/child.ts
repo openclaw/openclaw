@@ -136,6 +136,7 @@ export async function createChildAdapter(
     return await createServiceChildRelayAdapter({
       assertCurrent: params.assertCurrent,
       beforeSpawn: params.beforeSpawn,
+      initiateSpawn: params.initiateSpawn,
       command: process.platform === "win32" ? params.anchoredShellCommand : "/bin/sh",
       args: process.platform === "win32" ? [] : ["-c", params.anchoredShellCommand],
       windowsShellCommand: process.platform === "win32" ? params.anchoredShellCommand : undefined,
@@ -177,6 +178,7 @@ export async function createChildAdapter(
     return await createServiceChildRelayAdapter({
       assertCurrent: params.assertCurrent,
       beforeSpawn: params.beforeSpawn,
+      initiateSpawn: params.initiateSpawn,
       command: preparedSpawn.command,
       args: preparedSpawn.args,
       argv0: preparedSpawn.argv0,
@@ -229,9 +231,10 @@ export async function createChildAdapter(
     spawnWithFallback({
       ...(process.platform === "win32"
         ? {
-            spawnImpl: (command, args, spawnOptions) => {
+            spawnImpl: (command, args, spawnOptions, initiateSpawn) => {
+              const launchNative = () => spawn(command, args, spawnOptions);
               if (!tryWindowsJob) {
-                return spawn(command, args, spawnOptions);
+                return initiateSpawn ? initiateSpawn(launchNative) : launchNative();
               }
               const owned = spawnWindowsJobChild(
                 command,
@@ -241,11 +244,23 @@ export async function createChildAdapter(
                   await launchGate.promise;
                   assertCurrent();
                   params.beforeSpawn?.();
-                  launch();
+                  if (initiateSpawn) {
+                    // A failed Job observation is uncertainty, not permission to release custody.
+                    const settlement = windowsJob?.ready.catch(async () => {
+                      const outcome = await windowsJob?.certify();
+                      if (outcome?.status !== "confirmed") {
+                        throw new Error("Windows Job launch retirement is unconfirmed");
+                      }
+                    });
+                    void settlement?.catch(() => {});
+                    initiateSpawn(launch, settlement);
+                  } else {
+                    launch();
+                  }
                 },
               );
               if (!owned) {
-                return spawn(command, args, spawnOptions);
+                return initiateSpawn ? initiateSpawn(launchNative) : launchNative();
               }
               windowsJob = owned.job;
               windowsCleanup = owned.job.certify();
@@ -259,6 +274,7 @@ export async function createChildAdapter(
         assertCurrent();
         params.beforeSpawn?.();
       },
+      initiateSpawn: params.initiateSpawn,
       argv: [preparedSpawn.command, ...preparedSpawn.args],
       options,
       fallbacks: useDetached && params.ownedWorker === undefined ? [{ detached: false }] : [],

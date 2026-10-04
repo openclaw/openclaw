@@ -105,6 +105,10 @@ import type { SessionMember } from "./session-sharing-store.kernel.js";
 import type { StoredSessionSuggestion } from "./session-sharing-store.types.js";
 import type { ResolvedSqliteStoreTarget } from "./session-sqlite-target.js";
 import type {
+  SessionStoreProjectionWorkerInput,
+  SessionStoreProjectionWorkerResult,
+} from "./session-store-projection.types.js";
+import type {
   SessionStoreTargetInventoryRequest,
   SessionStoreTargetInventoryResult,
   SessionStoreTargetReadRequest,
@@ -417,6 +421,7 @@ type SessionArchivedEvictionCandidatesWorkerInput = Omit<
 > & { archived: ArchivedSessionEvictionQuery };
 
 export type SessionHistoryWorkerInput =
+  | SessionStoreProjectionWorkerInput
   | { kind: "cli-process-history"; request: ChatHistoryDisplayRequest }
   | LifecycleArtifactCleanupRequest
   | { kind: "prewarm"; database: { agentId: string; path: string }; env: NodeJS.ProcessEnv }
@@ -546,6 +551,7 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     receipts: ReturnType<typeof listSessionPendingInputReceipts>;
   };
   "session-entry-list": { kind: "session-entry-list"; entries: SessionEntrySummary[] };
+  "session-store-projection": SessionStoreProjectionWorkerResult;
   "session-store-summary": {
     kind: "session-store-summary";
     summary: ReturnType<
@@ -692,6 +698,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
     signal?: AbortSignal,
   ) => Promise<SessionExactEntriesWorkerResult>;
   readRowFacts: SessionHistoryReader<SessionRowFactsWorkerInput>;
+  readStoreProjection: SessionHistoryReader<SessionStoreProjectionWorkerInput>;
   readEntries: (
     scope: SessionEntryListWorkerInput["scope"],
     continuation?: CanonicalSessionReaderContinuation,

@@ -130,6 +130,59 @@ async function createFixture(options: {
 }
 
 describe("Sessions board rules and live facts", () => {
+  it("filters automation at the roster source unless the scope opts in", async () => {
+    await withService({ facts: [] }, async ({ service, request, store }) => {
+      await service.read(BOARD_ID);
+      expect(request.mock.calls[0]?.[1]).toMatchObject({
+        excludeCron: true,
+        excludeSystem: true,
+      });
+      expect(request.mock.calls[0]?.[1]).not.toHaveProperty("excludeSubagents");
+      await expect(service.move(BOARD_ID, "agent:main:cron:job:trigger", "other")).rejects.toThrow(
+        "not available in this board's scope",
+      );
+      expect(request.mock.lastCall?.[1]).toMatchObject({ excludeCron: true, excludeSystem: true });
+      expect(await store.listSessionPlacements(BOARD_ID)).toEqual([]);
+      await service.update(BOARD_ID, { scope: { includeAutomation: true } });
+      await service.read(BOARD_ID);
+      expect(request.mock.lastCall?.[1]).not.toHaveProperty("excludeCron");
+      expect(request.mock.lastCall?.[1]).not.toHaveProperty("excludeSystem");
+      expect(request.mock.lastCall?.[1]).not.toHaveProperty("excludeSubagents");
+    });
+  });
+
+  it.each([undefined, "home"])(
+    "excludes each agent's configured Home session (%s) before facts reads and moves",
+    async (mainKey) => {
+      const home = { ...facts(mainKey ?? "main"), isMain: true };
+      const otherHome = {
+        ...facts("other-home", { key: `agent:ops:${mainKey ?? "main"}`, agentId: "ops" }),
+        isMain: true,
+      };
+      const work = facts("subagent:worker");
+      await withService(
+        { facts: [home, otherHome, work] },
+        async ({ service, readSessionFacts, store }) => {
+          expect((await service.read(BOARD_ID)).sessions.map(({ key }) => key)).toEqual([work.key]);
+          expect(readSessionFacts).toHaveBeenCalledExactlyOnceWith({ sessionKeys: [work.key] });
+          await expect(service.move(BOARD_ID, home.key, "other")).rejects.toThrow(
+            "not available in this board's scope",
+          );
+          expect(await store.listSessionPlacements(BOARD_ID)).toEqual([]);
+          await service.update(BOARD_ID, { scope: { includeHome: true } });
+          expect((await service.read(BOARD_ID)).sessions.map(({ key }) => key)).toEqual([
+            home.key,
+            otherHome.key,
+            work.key,
+          ]);
+          await service.move(BOARD_ID, home.key, "focus");
+          await service.update(BOARD_ID, { scope: { includeHome: false } });
+          expect((await service.read(BOARD_ID)).sessions.map(({ key }) => key)).toEqual([work.key]);
+        },
+      );
+    },
+  );
+
   it("rejects a move when caller authority ends during the facts read", async () => {
     await withService({ facts: [facts("one")] }, async ({ service, store, readSessionFacts }) => {
       const entered = Promise.withResolvers<void>();

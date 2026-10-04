@@ -44,13 +44,16 @@ type AuthorityOwner = {
   pending: Set<string>;
   observations: Set<Observation>;
   uses: Set<{ observation: Observation; retire: () => void }>;
-  failure?: unknown;
+  failure?:
+    | { origin: "admission" | "reconciliation"; error: unknown }
+    | { origin: "native-initiation"; error: Error };
 };
 
 export type CronReceiptAuthorityUse = {
   assertCurrent: () => void;
   /** Invoke only the synchronous native initiation, never an async preparation wrapper. */
-  initiate: <T>(effect: () => T) => T;
+  /** Remote initiation settles at native acknowledgement or proven actor retirement. */
+  initiate: <T>(effect: () => T, settlement?: Promise<unknown>) => T;
   release: () => void;
   /** Other database owners keep this interval until their accepted write settles. */
   persist: <T>(run: (assertCurrent: () => void) => Promise<T>) => Promise<T>;
@@ -75,7 +78,14 @@ function unavailable(): Error {
   );
 }
 
+function assertNoNativeInitiationFailure(owner: AuthorityOwner): void {
+  if (owner.failure?.origin === "native-initiation") {
+    throw owner.failure.error;
+  }
+}
+
 function assertOwner(owner: AuthorityOwner, context?: OpenClawStateWorkerContext): void {
+  assertNoNativeInitiationFailure(owner);
   (owner.context.assertPublicationCurrent ?? owner.context.admission.assertCurrent)();
   context?.admission.assertCurrent();
   if (
@@ -126,7 +136,7 @@ function ownerFor(context: OpenClawStateWorkerContext): AuthorityOwner {
   };
   // Custody belongs to this host, so losing a SQLite worker cannot release it.
   void owner.custody.catch((error: unknown) => {
-    owner.failure = error;
+    owner.failure = { origin: "admission", error };
   });
   owners.set(key, owner);
   const unregister = registerOpenClawStateDatabaseAsyncResource({
@@ -139,6 +149,7 @@ function ownerFor(context: OpenClawStateWorkerContext): AuthorityOwner {
         use.retire();
       }
       await owner.work.drain();
+      assertNoNativeInitiationFailure(owner);
       if (owner.pending.size > 0) {
         throw unavailable();
       }
@@ -170,6 +181,9 @@ export function beginCronReceiptAuthorityClose(): void {
 /** A new serving lifetime follows complete retirement of the previous authority host. */
 export function startCronReceiptAuthorityHost(): void {
   if (lifetime.closing && owners.size > 0) {
+    for (const owner of owners.values()) {
+      assertNoNativeInitiationFailure(owner);
+    }
     throw unavailable();
   }
   lifetime.closing = false;
@@ -185,6 +199,7 @@ export async function drainCronReceiptAuthority(): Promise<void> {
       () => [owner.work],
       () => undefined,
     );
+    assertNoNativeInitiationFailure(owner);
     if (owner.pending.size > 0) {
       throw unavailable();
     }
@@ -242,6 +257,9 @@ function acquireUse(
   expectedReceipt: CronRunReceiptCurrentFacts["receipt"],
   options: UseOptions,
 ): Promise<CronReceiptAuthorityUse> {
+  if (owner.failure?.origin === "native-initiation") {
+    return Promise.reject(owner.failure.error);
+  }
   if (owner.closing || observation.retired) {
     return Promise.reject(new CronReceiptAuthorityRefusal("retired"));
   }
@@ -249,8 +267,9 @@ function acquireUse(
   const released = createDeferredCore();
   let ended: CronReceiptAuthorityRefusal | undefined;
   let borrowing = false;
+  let initiating = false;
   const finish = () => {
-    if (!borrowing) {
+    if (!borrowing && !initiating) {
       released.resolve();
     }
   };
@@ -301,6 +320,7 @@ function acquireUse(
     }
   };
   const assertCurrent = () => {
+    assertNoNativeInitiationFailure(owner);
     assertAuthority();
     if (borrowing || owner.pending.size > 0) {
       throw new CronReceiptAuthorityRefusal("busy");
@@ -323,11 +343,29 @@ function acquireUse(
         release();
       }
     },
-    initiate(effect) {
+    initiate(effect, settlement) {
       try {
         assertCurrent();
         // Spend before invoking user code, including reentrant initiation and thrown launches.
         ended = new CronReceiptAuthorityRefusal("spent");
+        initiating = settlement !== undefined;
+        if (settlement) {
+          void settlement.then(
+            () => {
+              initiating = false;
+              finish();
+            },
+            (error: unknown) => {
+              const failure = new Error(
+                "Cron native launch retirement is unconfirmed; receipt authority custody is retained. Retire the Gateway process before reopening this database.",
+                { cause: error },
+              );
+              owner.failure = { origin: "native-initiation", error: failure };
+              // Settle the queue as failed, without releasing physical custody or enabling reuse.
+              released.reject(failure);
+            },
+          );
+        }
         return effect();
       } finally {
         release();
@@ -368,9 +406,11 @@ function acquireUse(
   })
     .catch((error: unknown) => {
       acquired.reject(
-        error instanceof CronReceiptAuthorityRefusal
-          ? error
-          : new CronReceiptAuthorityRefusal("unavailable", { cause: error }),
+        owner.failure?.origin === "native-initiation"
+          ? owner.failure.error
+          : error instanceof CronReceiptAuthorityRefusal
+            ? error
+            : new CronReceiptAuthorityRefusal("unavailable", { cause: error }),
       );
     })
     .finally(() => {
@@ -618,7 +658,7 @@ function executeMutation<T>(
         new SqliteWorkerError("Cron receipt authority reconciliation failed", "outcome-unknown"),
         { cause: error },
       );
-      owner.failure = failure;
+      owner.failure = { origin: "reconciliation", error: failure };
       // Sealed read admission cannot rebuild, but settled writers still permit custody to close.
       if (nativeSettled) {
         owner.pending.delete(nonce);

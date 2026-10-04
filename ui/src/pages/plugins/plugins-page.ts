@@ -13,6 +13,7 @@ import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { isComposingKeyboardEvent } from "../../lib/ime.ts";
 import {
   loadPluginDiscoveryDetail,
   uninstallPlugin,
@@ -218,8 +219,17 @@ class PluginsPage extends OpenClawLightDomElement {
     // owner close the menu and restore focus before this page handles Escape.
     if (
       event.key !== "Escape" ||
+      isComposingKeyboardEvent(event) ||
       document.querySelector(".shell-nav[aria-modal='true']") ||
       (event.target instanceof Element && event.target.closest("wa-dropdown[open]"))
+    ) {
+      return;
+    }
+    if (
+      event.target instanceof Node &&
+      event.target !== document &&
+      event.target !== document.body &&
+      !this.contains(event.target)
     ) {
       return;
     }

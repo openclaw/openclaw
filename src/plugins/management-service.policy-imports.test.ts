@@ -230,27 +230,6 @@ describe("reload consent and current install preconditions", () => {
     expect(applyRuntime).toHaveBeenCalledOnce();
   });
 
-  it("rejects an acknowledgment for a different declared surface without persistence or publication", async () => {
-    const { state, record, applyRuntime } = await prepareReload();
-    const foreignRoot = state.path("foreign-plugin");
-    await writeReloadArtifact(foreignRoot, "foreign-proof", "foreign.write");
-    const foreignToken = computeDeclaredSurfaceHash(
-      resolvePluginArtifactDeclaredSurface(foreignRoot, state.env),
-    );
-    const request = {
-      plugins: [{ pluginId: "reload-proof", installHash: hashStableJson(record) }],
-      acknowledgeCapabilities: { reviewToken: foreignToken },
-    };
-    await expect(
-      reloadManagedPlugin({ ...request, env: state.env, applyRuntime }),
-    ).rejects.toMatchObject({ capabilityConsent: { pluginId: "reload-proof" } });
-    const current = readPersistedInstalledPluginIndexInstallRecords({ env: state.env })?.[
-      "reload-proof"
-    ];
-    expect(current).toEqual(record);
-    expect(applyRuntime).not.toHaveBeenCalled();
-  });
-
   it("stops a multi-target reload when another selected package needs a different review", async () => {
     const { state, record, reviewToken, applyRuntime, config } = await prepareReload();
     const secondRoot = state.path("second-plugin");

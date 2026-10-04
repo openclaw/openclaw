@@ -15,7 +15,6 @@ import {
   registerSubagentRun,
 } from "../../agents/subagents/registry/subagent-registry.js";
 import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { upsertSubagentRunRowInDatabase } from "../../agents/subagents/registry/subagent-registry.store.kernel.js";
 import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
@@ -24,10 +23,12 @@ import {
   testing as registryTesting,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import * as admissionController from "../agent-turn/agent-admission-controller.js";
 import { resolveAgentRunExpiresAtMs } from "../chat-abort.js";
-import { withPluginSubagentTestState } from "./agent.spawned-child.test-support.js";
+import {
+  seedReleasedYieldedSubagentRun,
+  withPluginSubagentTestState,
+} from "./agent.spawned-child.test-support.js";
 import {
   backendGatewayClient,
   describe0AfterEach0,
@@ -206,49 +207,13 @@ describe("gateway agent follow-up activity", () => {
           canonicalKey: childSessionKey,
         }));
         if (persisted) {
-          // Frozen v2026.9.6 (eb377ac59e6c) codec/normalizer output after sessions_yield.
-          // Seed the released bytes without passing through the candidate's serializer.
-          runOpenClawStateWriteTransaction((database) =>
-            upsertSubagentRunRowInDatabase(database, {
-              run_id: previousRunId,
-              child_session_key: childSessionKey,
-              controller_session_key: requesterSessionKey,
-              requester_session_key: requesterSessionKey,
-              requester_store_path: storePath,
-              controller_store_path: storePath,
-              created_at: 1,
-              payload_json: JSON.stringify({
-                runId: previousRunId,
-                taskRunId: previousRunId,
-                childSessionKey,
-                controllerSessionKey: requesterSessionKey,
-                requesterSessionKey,
-                requesterStorePath: storePath,
-                controllerStorePath: storePath,
-                requesterDisplayKey: requesterSessionKey,
-                requesterAgentId: "main",
-                task: "Review the candidate",
-                cleanup: "keep",
-                expectsCompletionMessage: true,
-                spawnMode: "run",
-                runTimeoutSeconds: budget,
-                generation: 1,
-                createdAt: 1,
-                execution: {
-                  status: "terminal",
-                  startedAt: 1,
-                  endedAt: 2,
-                  lifecycleGeneration: "released-generation",
-                },
-                completion: { required: true },
-                delivery: { status: "pending" },
-                sessionStartedAt: 1,
-                accumulatedRuntimeMs: 0,
-                cleanupHandled: false,
-                pauseReason: "sessions_yield",
-              }),
-            }),
-          );
+          seedReleasedYieldedSubagentRun({
+            previousRunId,
+            childSessionKey,
+            requesterSessionKey,
+            storePath,
+            budget,
+          });
           expect(getSubagentRunByChildSessionKey(childSessionKey)).toBeNull();
           await initSubagentRegistry();
           expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({

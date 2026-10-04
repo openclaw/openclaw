@@ -164,7 +164,16 @@ export function registerWorkboardGatewayMethods(params: {
     [
       "workboard.cards.list",
       READ_SCOPE,
-      ({ params: requestParams }) => store.listCards(requestParams.boardId),
+      async ({ params: requestParams }) => {
+        const result = await store.listCards(requestParams.boardId);
+        const since = requestParams.sinceRevision;
+        return isRecord(since) &&
+          since.epoch === result.revision.epoch &&
+          since.revision === result.revision.revision &&
+          since.boardId === result.revision.boardId
+          ? { unchanged: true, revision: result.revision }
+          : result;
+      },
     ],
   ]);
 

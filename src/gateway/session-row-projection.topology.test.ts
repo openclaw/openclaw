@@ -13,6 +13,7 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -44,6 +45,97 @@ import { ready } from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it.for(["publication", "source", "dispose"] as const)(
+  "fences cold store admission across a delayed worker reply: %s",
+  async (change, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const cfg: OpenClawConfig = { agents: { entries: { main: {}, late: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const readDatabases = history.withSessionHistoryWorkerDatabases;
+      let held = false;
+      vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
+        (targets, consume, lane) =>
+          readDatabases(
+            targets,
+            (owners) =>
+              consume(
+                owners.map((owner) => ({
+                  ...owner,
+                  async readStoreProjection(input) {
+                    const result = await owner.readStoreProjection(input);
+                    if (!held) {
+                      held = true;
+                      entered.resolve();
+                      await release.promise;
+                    }
+                    return result;
+                  },
+                })),
+              ),
+            lane,
+          ),
+      );
+      const scope = { agentId: "late", sessionKey: "agent:late:admission" };
+      replaceSessionEntrySync(scope, { sessionId: "admission", updatedAt: 1, label: "Original" });
+      const reading = projection.prepareMembership();
+      const settled = Promise.allSettled([reading]);
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            reading,
+            "Cold admission bypassed the worker read",
+          ),
+          signal,
+        );
+        const query = { agentId: scope.agentId, key: scope.sessionKey };
+        expect(projection.capture(query)).toBeUndefined();
+        if (change === "publication") {
+          replaceSessionEntrySync(scope, {
+            sessionId: "admission",
+            updatedAt: 2,
+            label: "Current",
+          });
+          replaceSessionEntrySync(
+            { ...scope, sessionKey: "agent:late:created-during-admission" },
+            { sessionId: "created-during-admission", updatedAt: 2 },
+          );
+        } else if (change === "source") {
+          const pathname = resolveOpenClawAgentSqlitePath({ ...scope, env: state.env });
+          const replacement = `${pathname}.replacement`;
+          await copyFile(pathname, replacement);
+          await rename(replacement, pathname);
+        } else {
+          projection.dispose();
+        }
+        release.resolve();
+        if (change === "source") {
+          await expect(reading).rejects.toThrow(/identity changed/);
+          expect(projection.capture(query)).toBeUndefined();
+        } else {
+          await reading;
+          if (change === "publication") {
+            await projection.ensureMaterialized();
+            expect(projection.snapshot(query).row?.label).toBe("Current");
+            expect(
+              projection.capture({ agentId: "late", key: "agent:late:created-during-admission" }),
+            ).toBeDefined();
+          } else {
+            expect(projection.capture(query)).toBeUndefined();
+          }
+        }
+      } finally {
+        release.resolve();
+        await settled;
+        projection.dispose();
+      }
+    });
+  },
+);
 
 function holdTopologyRead() {
   const entered = createDeferredCore();

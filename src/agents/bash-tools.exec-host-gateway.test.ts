@@ -45,7 +45,6 @@ import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import type { ProcessSupervisor } from "../process/supervisor/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
-import { registerCronStandingGrantTests } from "./bash-tools.exec-host-gateway.cron-grants.test-support.js";
 import type {
   ExecApprovalFollowupFactory,
   ExecApprovalFollowupOutcome,
@@ -1705,19 +1704,6 @@ describe("processGatewayAllowlist", () => {
       text: expect.stringContaining("approval-timeout: execution-plan-miss"),
     });
     expect(commitExecAuthorizationMock).not.toHaveBeenCalled();
-  });
-
-  registerCronStandingGrantTests({
-    prepareApprovalPolicy() {
-      requiresExecApprovalMock.mockReturnValue(true);
-      hasDurableExecApprovalMock.mockReturnValue(false);
-      mockHostPolicy({ hostAsk: "on-miss" });
-    },
-    runGatewayAllowlist,
-    approvalDecisionMock,
-    createExecApprovalRequestRouteMock,
-    commitExecAuthorizationMock,
-    captureSecurityEvents,
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

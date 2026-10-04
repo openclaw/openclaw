@@ -21,6 +21,7 @@ import {
 import {
   captureCronJobMessageActionAuthority,
   captureCronJobMessageSourceAuthority,
+  captureCronJobStandingGrantAuthority,
 } from "./active-jobs.js";
 import type { CronCompletionDeliveryFence } from "./delivery-attempt-fence.js";
 import type { CronExecutionIdentityAdmission } from "./service/state.js";
@@ -138,6 +139,10 @@ export function prepareCronRunAdmission(params: {
     : undefined;
   return {
     preparedRunAdmission,
+    standingGrantAuthority: captureCronJobStandingGrantAuthority({
+      jobId: params.jobId,
+      operationalRunInstance,
+    }),
     messageActionTurnCapability,
     close: () => {
       revokeMessageActionTurnCapability(messageActionTurnCapability);

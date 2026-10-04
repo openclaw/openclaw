@@ -733,6 +733,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       upgradeSurvivorScenarios: "legacy-operator-state",
     });
     expect(plan.lanes.map((lane) => lane.name)).toEqual([
+      "published-upgrade-survivor-2026.6.34-legacy-operator-state",
       "published-upgrade-survivor-2026.9.1-legacy-operator-state",
       "published-upgrade-survivor-2026.9.4-legacy-operator-state",
       "published-upgrade-survivor-2026.9.6-legacy-operator-state",

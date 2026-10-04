@@ -926,9 +926,7 @@ describe("channel ingress monitor", () => {
   });
 
   it("fails start once when the durable queue cannot be opened", async () => {
-    const denial = new Error(
-      'openChannelIngressQueue is only available for trusted plugins in this release. Plugin "slack" loaded with origin "config"',
-    );
+    const denial = new Error("Cannot open the channel ingress database: disk is full");
     const queueFactory = vi.fn((): ChannelIngressQueue<StoredEvent> => {
       throw denial;
     });

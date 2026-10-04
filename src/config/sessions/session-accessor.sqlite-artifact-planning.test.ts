@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -23,6 +24,7 @@ import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import * as workerReaders from "./session-transcript-worker-readers.js";
+import type { SessionEntry } from "./types.js";
 
 let state: OpenClawTestState;
 let storePath: string;
@@ -48,6 +50,79 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await closeOpenClawAgentDatabasesAsync();
   await state.cleanup();
+});
+
+it("hydrates only scoped candidates while protecting out-of-scope history references", () => {
+  const database = openOpenClawAgentDatabase(options);
+  const snapshots = {
+    sessionDiffBaseline: { version: 1, sessionId, root: "/synthetic", files: [] },
+    skillsSnapshot: { prompt: "saved prompt".repeat(1024), skills: [] },
+    systemPromptReport: {
+      source: "run",
+      generatedAt: 1,
+      systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
+      injectedWorkspaceFiles: [],
+      skills: { promptChars: 0, entries: [] },
+      tools: { listChars: 0, schemaChars: 0, entries: [] },
+    },
+  } satisfies Partial<SessionEntry>;
+  const survivorReferences = {
+    previousSessionId: "protected-previous",
+    usageFamilySessionIds: ["protected-usage"],
+    compactionCheckpoints: [
+      {
+        sessionId: "protected-checkpoint",
+        preCompaction: { sessionId: "protected-pre" },
+        postCompaction: { sessionId: "protected-post" },
+      },
+    ],
+  };
+  const expectedEntry = {
+    ...entry,
+    ...snapshots,
+    ...survivorReferences,
+    delivery: { kind: "none" as const },
+  };
+  runOpenClawAgentWriteTransaction((transaction) => {
+    writeSessionEntry(transaction, sessionKey, expectedEntry);
+    writeSessionEntry(transaction, "agent:main:survivor", {
+      ...snapshots,
+      ...survivorReferences,
+      sessionId: "survivor",
+      updatedAt: 1,
+    });
+    writeSessionEntry(transaction, "agent:other:artifact-plan-victim", {
+      ...snapshots,
+      sessionId: "other-agent",
+      updatedAt: 1,
+    });
+  }, options);
+  const hydratedKeys: unknown[] = [];
+  database.db.function("artifact_snapshot_value", (key, valueJson) => {
+    hydratedKeys.push(key);
+    return valueJson;
+  });
+  database.db.exec(`CREATE TEMP VIEW session_entry_snapshots AS
+    SELECT session_key, field, artifact_snapshot_value(session_key, value_json) AS value_json
+    FROM main.session_entry_snapshots`);
+  try {
+    const plan = runSqliteDeferredTransactionSync(database.db, () =>
+      artifactPlanning.planSessionLifecycleArtifactCleanup(database, {
+        agentId: "main",
+        sessionKeySegmentPrefix: "artifact-plan-",
+        transcriptContentMarker: "artifact-plan-marker",
+        orphanTranscriptMinAgeMs: 0,
+        nowMs: Date.now(),
+        archiveRemovedEntryTranscripts: false,
+        archiveDirectory: state.sessionsDir(),
+      }),
+    );
+    expect(plan.entries).toEqual([{ sessionKey, expectedEntry }]);
+    expect(plan.deletePlans.map((planned) => planned.sessionId)).toEqual([sessionId]);
+    expect(hydratedKeys).toEqual([sessionKey, sessionKey, sessionKey]);
+  } finally {
+    database.db.exec("DROP VIEW temp.session_entry_snapshots");
+  }
 });
 
 it.each(["rejected", "admitted", "revoked", "referenced"] as const)(

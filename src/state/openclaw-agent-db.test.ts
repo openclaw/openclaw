@@ -76,6 +76,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import {
   createCacheExpiryIndexPhysicalDrift,
+  createCanonicalAgentIndexDrift,
   createTranscriptIdempotencyIndexDrift,
   createUnsafeIndexDrift,
 } from "./sqlite-index-drift.test-support.js";
@@ -83,7 +84,6 @@ import {
   collectSqliteSchemaShape,
   createSqliteSchemaShapeFromSql,
   normalizeSqliteSchemaShapeSql,
-  replaceNamedIndexesWithNoncanonicalIndexes,
 } from "./sqlite-schema-shape.test-support.js";
 
 const agentDbTempDirs: string[] = [];
@@ -2951,27 +2951,23 @@ describe("openclaw agent database", () => {
       createSqliteSchemaShapeFromSql(new URL("./openclaw-agent-schema.sql", import.meta.url)),
     );
 
-    const { DatabaseSync } = requireNodeSqlite();
-    const drifted = new DatabaseSync(databasePath);
-    try {
-      drifted.exec(`
-        DROP INDEX idx_agent_session_windows_session_key;
-        DROP INDEX idx_agent_transcript_event_identity_sequence;
-      `);
-      expect(replaceNamedIndexesWithNoncanonicalIndexes(drifted).length).toBeGreaterThan(25);
-      expect(drifted.prepare("PRAGMA integrity_check").get()).toEqual({
-        integrity_check: "ok",
-      });
-      expect(drifted.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-    } finally {
-      drifted.close();
-    }
+    createCanonicalAgentIndexDrift(databasePath);
 
     const reopened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
     expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(reopened.db))).toEqual(
       canonicalShape,
     );
     expect(readSqliteNumberPragma(reopened.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+    expect(
+      reopened.db
+        .prepare(
+          "SELECT seq, run_id, event_json, created_at FROM trajectory_runtime_events ORDER BY seq",
+        )
+        .all(),
+    ).toEqual([
+      { seq: 0, run_id: null, event_json: '{"type":"unassigned"}', created_at: 1 },
+      { seq: 1, run_id: "run-1", event_json: '{"type":"named"}', created_at: 2 },
+    ]);
   });
 
   it("repairs schema-19 additive session-key surfaces before upgrading schema validation", async () => {

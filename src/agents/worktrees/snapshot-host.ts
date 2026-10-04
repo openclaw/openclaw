@@ -374,7 +374,7 @@ async function retireManagedWorktreeSnapshot(params: {
     const assertCurrent = () => {
       params.assertCurrent();
       assertRegistrySnapshotRetirement(env, record);
-      if (projectionStore.get(record.id)) {
+      if (projectionStore.revision(record.id) !== undefined) {
         throw new Error(
           "Snapshot retains local workspace projection custody; preserve its recovery data",
         );
