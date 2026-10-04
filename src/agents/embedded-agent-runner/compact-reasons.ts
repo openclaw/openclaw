@@ -53,17 +53,17 @@ export function isSummaryTimeoutFailure(params: {
   safeguardCancellation?: CompactionSafeguardCancellation | null;
   abortSignal?: AbortSignal;
 }): boolean {
+  // Terminal failures (model-fallback stop) rethrow before any timeout verdict.
+  let providerFailure = resolveCompactionFailure(params).error;
   if (params.summarySignal?.aborted) {
     return true;
   }
-  let providerFailure = resolveCompactionFailure(params).error;
   while (providerFailure instanceof Error && !isSummaryProviderError(providerFailure)) {
     providerFailure = providerFailure.cause;
   }
-  if (!isSummaryProviderError(providerFailure)) {
-    return false;
-  }
-  const status = extractErrorHttpStatus(providerFailure.response.errorMessage?.trim() ?? "")?.code;
+  const status = isSummaryProviderError(providerFailure)
+    ? extractErrorHttpStatus(providerFailure.response.errorMessage?.trim() ?? "")?.code
+    : undefined;
   return status === 408 || status === 504;
 }
 
