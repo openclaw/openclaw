@@ -38,6 +38,7 @@ import {
   setMinimumTimeoutMsForTests,
   setSetupGraceTimeoutMsForTests,
 } from "./config.js";
+import { registerActiveMemoryDiagnosticTests } from "./index.diagnostics.test-support.js";
 import plugin from "./index.js";
 import { registerActiveMemoryProviderTests } from "./index.memory-provider.test-support.js";
 import * as recallRun from "./recall-run.js";
@@ -624,6 +625,18 @@ describe("active-memory plugin", () => {
     setSetupGraceTimeoutMsForTests(0);
     registerPluginConfig({ timeoutMs, logging: true, ...overrides });
   };
+
+  registerActiveMemoryDiagnosticTests({
+    logger: api.logger,
+    getActiveMemorySearchManager: hoisted.getActiveMemorySearchManager,
+    runPromptBuild,
+    runActiveMemoryCommand,
+    configure: (logging) => {
+      syncRuntimePluginConfig({ agents: ["sandbox"], mode: "off", logging });
+      configFile = { ...configFile, session: { dmScope: "main" } };
+    },
+    expectPrependContextContains,
+  });
 
   registerActiveMemoryProviderTests({
     memoryCapability: hoisted.memoryCapability,
@@ -1459,7 +1472,7 @@ describe("active-memory plugin", () => {
       args: "status",
     });
 
-    expect(statusResult.text).toBe("Active Memory: off for this session.");
+    expect(statusResult.text).toContain("Active Memory: off for this session.");
 
     const disabledResult = await runPromptBuild(
       { prompt: "what wings should i order? active memory toggle" },
@@ -1790,49 +1803,6 @@ describe("active-memory plugin", () => {
       }
     },
   );
-
-  it("logs deterministic trigger injections when invocation logging is enabled", async () => {
-    hoisted.getActiveMemorySearchManager.mockResolvedValueOnce({
-      manager: {
-        search: vi.fn(async () => []),
-        listTriggerCandidates: vi.fn(async () => [
-          {
-            path: "MEMORY.md",
-            startLine: 1,
-            endLine: 1,
-            score: 1,
-            snippet: "Prefer aisle seats.",
-            source: "memory" as const,
-            provenance: {
-              originClass: "agent" as const,
-              sessionKind: "interactive" as const,
-              observedAt: 1,
-            },
-            triggers: "booking a flight",
-          },
-        ]),
-      },
-    } as never);
-
-    const result = await runPromptBuild(
-      { prompt: "Help when booking a flight" },
-      {
-        sessionKey: "agent:main:telegram:direct:owner",
-        messageProvider: "telegram",
-        channelId: "owner",
-      },
-    );
-
-    expectPrependContextContains(result, "Prefer aisle seats.");
-    expect(
-      vi
-        .mocked(api.logger.info)
-        .mock.calls.some(
-          (call: unknown[]) =>
-            String(call[0]) === "active-memory: lane-1 injected 1 trigger-matched entries",
-        ),
-    ).toBe(true);
-  });
 
   it.each([-1_000])(
     "continues model recall after trigger timeout with a %d ms wall-clock change",
