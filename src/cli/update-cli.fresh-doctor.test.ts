@@ -1,6 +1,5 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
-import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { VERSION } from "../version.js";
 import {
   commandCalls,
@@ -33,6 +32,7 @@ import {
   resolveUpdateInstallKind,
   runCommandWithTimeout,
   runExec,
+  runUtf8CommandWithTimeout,
   runPostCorePluginConvergenceSpy,
   updateCommand,
   updateGitCheckout,
@@ -299,13 +299,14 @@ describe("update-cli", () => {
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
       "/tmp/openclaw-updated-entry.mjs",
     );
-    vi.mocked(runCommandWithTimeout).mockResolvedValueOnce(
-      createCommandResult({
-        code: 1,
-        stderr: "doctor process failed: optional plugin repair unavailable",
-        stdout: "doctor diagnostic output",
-      }),
-    );
+    vi.mocked(runUtf8CommandWithTimeout).mockResolvedValueOnce({
+      code: 1,
+      signal: null,
+      killed: false,
+      termination: "exit",
+      stderr: "doctor process failed: optional plugin repair unavailable",
+      stdout: "doctor diagnostic output",
+    });
     const result = await completeChangedPostCorePluginUpdate();
 
     expect(result.pluginUpdate).toMatchObject({
@@ -321,9 +322,14 @@ describe("update-cli", () => {
       "/tmp/openclaw-updated-entry.mjs",
     );
     const issues = [{ path: "channels.signal.httpUrl", message: "legacy Signal transport field" }];
-    vi.mocked(runCommandWithTimeout).mockResolvedValueOnce(
-      createCommandResult({ code: 1, stderr: "doctor process failed" }),
-    );
+    vi.mocked(runUtf8CommandWithTimeout).mockResolvedValueOnce({
+      code: 1,
+      signal: null,
+      killed: false,
+      termination: "exit",
+      stderr: "doctor process failed",
+      stdout: "",
+    });
     vi.mocked(runExec).mockRejectedValueOnce(createConfigValidationFailure(issues));
     vi.mocked(readConfigFileSnapshot).mockResolvedValueOnce(
       configSnapshot(baseConfig, {
