@@ -27,6 +27,7 @@ import {
   readSelectedSessionEntriesInDatabase,
 } from "./session-accessor.sqlite-entry-list.read.js";
 import {
+  prepareExactSessionEntryRowReads,
   readExactSessionEntryRow,
   readSessionEntryByIdInDatabase,
   readSessionEntryRow,
@@ -46,7 +47,6 @@ import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sql
 import {
   assertCanonicalSessionKeyWrite,
   assertCanonicalSqliteSessionKeysCurrent,
-  assertCanonicalSqliteSessionRowsCurrent,
   canonicalSessionKeyMigrationRequiredError,
   readWithCanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
@@ -581,18 +581,20 @@ export function readSessionRowDatabaseFacts(
       readWithCanonicalSessionReaderContinuation(database, request.continuation, () =>
         withSqlitePostCommitPublications(database.db, () =>
           runSqliteDeferredTransactionSync(database.db, () => {
-            assertCanonicalSqliteSessionRowsCurrent(database, request.sessionKeys);
-            const selected = expectDefined(
-              readExactSessionEntryCandidatesInDatabase(database, [request.sessionKeys], "list")[0],
-              "session row facts read result",
+            const readRow = prepareExactSessionEntryRowReads(
+              database,
+              request.sessionKeys,
+              "list",
+              "canonical",
             );
-            if (!selected.ok) {
-              throw selected.error;
-            }
             const boardKeys = readBoardSessionKeys(database, request.sessionKeys);
             return {
               kind: "session-row-facts" as const,
-              rows: selected.value.map(({ sessionKey, entry }) => {
+              rows: request.sessionKeys.flatMap((sessionKey) => {
+                const entry = readRow(sessionKey)?.entry;
+                if (!entry) {
+                  return [];
+                }
                 const facts: SessionRowDatabaseFacts = {
                   sessionKey,
                   entry,
