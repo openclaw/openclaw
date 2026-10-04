@@ -20,8 +20,8 @@ import {
 } from "./subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "./subagents/registry/subagent-registry-memory.js";
 import { restoreSubagentRunsFromDisk } from "./subagents/registry/subagent-registry-persistence.js";
-import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 import { resetSubagentRegistryForTests } from "./subagents/registry/subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 import { spawnSubagentDirect } from "./subagents/spawn/subagent-spawn.js";
 import { testing as subagentSpawnTesting } from "./subagents/spawn/subagent-spawn.test-support.js";
 import { prepareBoundedLaunch } from "./subagents/swarm/bounded-launch/bounded-launch.js";

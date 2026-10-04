@@ -1,14 +1,14 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  candidateBindingIdentity,
-  type BoundedLaunchCandidateBinding,
-} from "./candidate-binding.js";
 import { buildHandoffManifest, type HandoffPayload } from "./bounded-launch-handoff.js";
 import type {
   BoundedLaunchBoundary,
   BoundedLaunchRequirement,
   BoundedLaunchRequirements,
 } from "./bounded-launch-types.js";
+import {
+  candidateBindingIdentity,
+  type BoundedLaunchCandidateBinding,
+} from "./candidate-binding.js";
 
 export type PreparedBoundedLaunch = {
   task: string;
@@ -170,11 +170,7 @@ export function prepareBoundedLaunch(params: {
   const requirements = readRequirements(options.requirements);
   validateContract(boundary, requirements);
   const candidateBinding = readCandidateBinding(options.candidateBinding);
-  if (
-    candidateBinding &&
-    boundary !== "artifact-only" &&
-    boundary !== "evidence-only"
-  ) {
+  if (candidateBinding && boundary !== "artifact-only" && boundary !== "evidence-only") {
     throw new Error(
       "boundedLaunch candidate binding cannot cross a boundary that drops candidate identity",
     );
