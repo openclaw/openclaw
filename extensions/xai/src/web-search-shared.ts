@@ -39,7 +39,6 @@ export function buildXaiWebSearchPayload(params: {
   };
 }
 
-
 export function wrapXaiWebSearchError(error: unknown, timeoutSeconds: number): never {
   if (
     error instanceof Error &&
