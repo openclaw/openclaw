@@ -536,7 +536,9 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     const schedule = vi.fn();
     expect(await settleRuns([entry], { runs, schedule })).toBe(true);
     if (kind === "valid delete receipt") {
-      expect(runs.has(entry.runId)).toBe(false);
+      expect(runs.has(entry.runId)).toBe(true);
+      expect(runs.get(entry.runId)?.requesterSettleWake).toBeUndefined();
+      expect(runs.get(entry.runId)?.retireAfterRequesterTurn).toBeUndefined();
     } else if (kind === "valid receipt") {
       expect(runs.get(entry.runId)!.requesterSettleWake).toBeUndefined();
       expect(runs.get(entry.runId)!.requesterTurnRunId).toBeUndefined();
@@ -629,7 +631,6 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
           yieldedFinalDeliverable: true,
           rearmGeneration: 1,
           ...(kind === "running" ? {} : { afterRequesterYield: true }),
-          ...(kind === "delete" ? { retireAfterSettle: true } : {}),
         });
         expect(runs.get(entry.runId)!.requesterTurnRunId).toBeUndefined();
         expect(runs.get(entry.runId)!.retireAfterRequesterTurn).toBeUndefined();

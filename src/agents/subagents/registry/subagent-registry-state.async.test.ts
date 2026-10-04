@@ -22,6 +22,7 @@ import {
 } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { buildControlledSubagentRunsReadContext } from "./subagent-control-scope.js";
+import { buildSubagentList } from "./subagent-list.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 // Real-storage proof that committed projections survive read-owner retirement.
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
@@ -294,7 +295,8 @@ it.each(["requester", "controller"] as const)(
     expect(context.list.pendingDescendants.get(latest.childSessionKey)).toBe(
       owner === "requester" ? 1 : 0,
     );
-    expect(context.list.childSessionsByController.get(latest.childSessionKey)).toEqual([
+    const list = buildSubagentList({ context: context.list, sessionEntries: new Map() });
+    expect(list.active.find((entry) => entry.runId === latest.runId)?.childSessions).toEqual([
       descendant.childSessionKey,
     ]);
     expect(read.mock.calls.map(([, command]) => command)).toEqual([

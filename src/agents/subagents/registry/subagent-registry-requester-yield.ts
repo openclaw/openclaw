@@ -221,7 +221,12 @@ function selectRequesterTurnChildren(
       entry.requesterSessionKey === requesterSessionKey &&
       (!requesterAgentId || entry.requesterAgentId === requesterAgentId) &&
       entry.requesterTurnRunId === requesterTurnRunId &&
-      entry.expectsCompletionMessage === true,
+      entry.expectsCompletionMessage === true &&
+      !(
+        entry.cleanup === "delete" &&
+        typeof entry.cleanupCompletedAt === "number" &&
+        entry.delivery?.status === "failed"
+      ),
   );
 }
 
@@ -529,7 +534,8 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
             ...(completionEnded ? { afterRequesterYield: true } : {}),
             rearmGeneration,
             progressOperationId,
-            ...(existing?.retireAfterSettle === true || entry.retireAfterRequesterTurn === true
+            ...(entry.cleanup !== "delete" &&
+            (existing?.retireAfterSettle === true || entry.retireAfterRequesterTurn === true)
               ? { retireAfterSettle: true }
               : {}),
           };
@@ -547,7 +553,9 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
             const existing = entry.requesterSettleWake;
             entry.requesterSettleWake = {
               ...(existing?.pauseNotice ? { pauseNotice: existing.pauseNotice } : {}),
-              ...(existing?.retireAfterSettle ? { retireAfterSettle: true } : {}),
+              ...(entry.cleanup !== "delete" && existing?.retireAfterSettle
+                ? { retireAfterSettle: true }
+                : {}),
               status: "pending",
               attemptCount: 0,
               batchRunIds,
@@ -574,6 +582,9 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
             entry.delivery.windowStartedAt ??= Date.now();
             entry.delivery.deadlineAt ??=
               entry.delivery.windowStartedAt + ANNOUNCE_COMPLETION_HARD_EXPIRY_MS;
+          }
+          if (entry.cleanup === "delete") {
+            entry.retireAfterRequesterTurn = undefined;
           }
           if (entry.retireAfterRequesterTurn === true) {
             if (entry.requesterSettleWake) {

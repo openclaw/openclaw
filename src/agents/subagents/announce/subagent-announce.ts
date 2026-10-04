@@ -166,7 +166,9 @@ type SubagentAnnounceFlowParams = {
   signal?: AbortSignal;
   onExecutionStarted?: () => void;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
+  expectedDeleteTarget?: { sessionId: string; lifecycleRevision: string };
   onBeforeDeleteChildSession?: () => boolean | Promise<boolean>;
+  onChildSessionDeleteResult?: (outcome: "deleted" | "changed" | "failed") => void | Promise<void>;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 };
 
@@ -637,16 +639,18 @@ async function runSubagentAnnounceFlowBound(
       ((await params.onBeforeDeleteChildSession?.()) ?? true) &&
       childSessionEffectsAllowed()
     ) {
-      await deleteSubagentSessionForCleanup({
+      const deleteOutcome = await deleteSubagentSessionForCleanup({
         callGateway: callSubagentLifecycleGateway,
         gatewayBinding: { resolveGatewayContext: params.resolveGatewayContext },
         prepareCurrent: prepareChildSessionEffects,
         isCurrent: childSessionEffectsAllowed,
         childSessionKey: params.childSessionKey,
         spawnMode: params.spawnMode,
-        expectedSessionId: childSessionId,
-        expectedLifecycleRevision: childSessionLifecycleRevision,
+        expectedSessionId: params.expectedDeleteTarget?.sessionId ?? childSessionId,
+        expectedLifecycleRevision:
+          params.expectedDeleteTarget?.lifecycleRevision ?? childSessionLifecycleRevision,
       });
+      await params.onChildSessionDeleteResult?.(deleteOutcome);
     }
   }
   return announceOutcome;

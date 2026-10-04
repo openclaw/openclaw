@@ -32,7 +32,8 @@ export type SubagentListReadContext = {
   now: number;
   recentMinutes: number;
   view: ReturnType<typeof buildSubagentRunView>;
-  childSessionsByController: ReadonlyMap<string, string[]>;
+  childSessionRuns: ReadonlyMap<string, SubagentRunReadRecord>;
+  childActiveDescendants: ReadonlyMap<string, number>;
   pendingDescendants: ReadonlyMap<string, number>;
   execution: ReadonlyMap<string, SubagentExecutionObservation>;
 };
@@ -45,7 +46,12 @@ export function captureSubagentListReadContext(
   recentMinutes: number,
 ): SubagentListReadContext {
   const now = Date.now();
-  const childSessionsByController = buildChildSessionIndex(readIndex, now);
+  const childSessionRuns = structuredClone(readIndex.latestRunsByChildSessionKey);
+  const childActiveDescendants = new Map(
+    [...childSessionRuns.keys()].map(
+      (key) => [key, readIndex.countActiveDescendantRuns(key)] as const,
+    ),
+  );
   const pendingDescendants = new Map(
     runs.map((entry) => [
       entry.childSessionKey,
@@ -73,7 +79,8 @@ export function captureSubagentListReadContext(
     now,
     recentMinutes,
     view: structuredClone(view),
-    childSessionsByController,
+    childSessionRuns,
+    childActiveDescendants,
     pendingDescendants,
     execution,
   };
@@ -85,7 +92,7 @@ export async function readSubagentListSessionEntries(
 ): Promise<Map<string, SessionEntry>> {
   const runs = [...context.view.active, ...context.view.recent];
   const keysByStore = new Map<string, string[]>();
-  for (const run of runs) {
+  for (const run of [...runs, ...context.childSessionRuns.values()]) {
     const storePath = resolveSessionStorePathCore(cfg.session?.store, {
       agentId: parseAgentSessionKey(run.childSessionKey)?.agentId,
     });
@@ -117,11 +124,12 @@ export async function readSubagentListSessionEntries(
 }
 
 function buildChildSessionIndex(
-  readIndex: SubagentRunReadIndex<SubagentRunReadRecord>,
-  now: number,
+  context: SubagentListReadContext,
+  sessionEntries?: ReadonlyMap<string, SessionEntry>,
 ) {
+  const { now } = context;
   const childSessionsByController = new Map<string, string[]>();
-  for (const [childSessionKey, entry] of readIndex.latestRunsByChildSessionKey) {
+  for (const [childSessionKey, entry] of context.childSessionRuns) {
     const controllerSessionKey =
       entry.controllerSessionKey?.trim() || entry.requesterSessionKey?.trim();
     if (!controllerSessionKey) {
@@ -129,7 +137,8 @@ function buildChildSessionIndex(
     }
     if (
       !shouldKeepSubagentRunChildLink(entry, {
-        activeDescendants: readIndex.countActiveDescendantRuns(childSessionKey),
+        activeDescendants: context.childActiveDescendants.get(childSessionKey),
+        childSessionExists: sessionEntries?.has(childSessionKey),
         now,
       })
     ) {
@@ -151,15 +160,17 @@ function buildChildSessionIndex(
   return childSessionsByController;
 }
 
+// Omission means unknown existence; a supplied empty lookup is authoritative absence.
 export function buildSubagentList(params: {
   context: SubagentListReadContext;
-  sessionEntries: ReadonlyMap<string, SessionEntry>;
+  sessionEntries?: ReadonlyMap<string, SessionEntry>;
   taskMaxChars?: number;
 }) {
-  const { now, view: runView, childSessionsByController } = params.context;
+  const { now, view: runView } = params.context;
+  const childSessionsByController = buildChildSessionIndex(params.context, params.sessionEntries);
   let index = 1;
   const buildListEntry = (entry: SubagentRunRecord, runtimeMs: number) => {
-    const sessionEntry = params.sessionEntries.get(entry.childSessionKey);
+    const sessionEntry = params.sessionEntries?.get(entry.childSessionKey);
     const modelSelection = {
       runtimeProvider: sessionEntry?.modelProvider,
       runtimeModel: sessionEntry?.model,

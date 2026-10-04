@@ -1,5 +1,7 @@
 import type { callGateway } from "../../../gateway/call.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import { normalizeDeleteCleanupTarget } from "./subagent-delivery-state.js";
+import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { isRestoredQueuedFailureSettlementClaimed } from "./subagent-registry-restore.js";
 import { isSuspendedPendingFinalDelivery } from "./subagent-registry-suspended-delivery.js";
@@ -10,12 +12,31 @@ import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
 
 export type FrozenSessionIdentity = { sessionId: string; lifecycleRevision: string };
 
-export function freezeSessionIdentity(childSessionKey: string): FrozenSessionIdentity | undefined {
+function freezeSessionIdentity(childSessionKey: string): FrozenSessionIdentity | undefined {
   const sessionEntry = loadSubagentSessionEntry({ childSessionKey });
   const sessionId = sessionEntry?.sessionId?.trim();
   const lifecycleRevision = sessionEntry?.lifecycleRevision?.trim();
   return sessionId && lifecycleRevision ? { sessionId, lifecycleRevision } : undefined;
 }
+
+export function freezeCleanupSessionIdentity(
+  entry: SubagentRunRecord,
+): FrozenSessionIdentity | undefined {
+  if (shouldSuppressSubagentRecoverySessionEffects(entry)) {
+    return undefined;
+  }
+  return entry.cleanup === "delete" &&
+    (entry.deleteCleanupDispatchedAt !== undefined || entry.deleteCleanupTarget)
+    ? normalizeDeleteCleanupTarget(entry.deleteCleanupTarget)
+    : freezeSessionIdentity(entry.childSessionKey);
+}
+
+export const shouldRunSweptSessionEffects = (
+  entry: SubagentRunRecord,
+  suppressSessionEffects = shouldSuppressSubagentRecoverySessionEffects(entry),
+) =>
+  !suppressSessionEffects &&
+  !(entry.cleanup === "delete" && typeof entry.cleanupCompletedAt === "number");
 
 export const sweptContext = (entry: SubagentRunRecord) => ({
   childSessionKey: entry.childSessionKey,
