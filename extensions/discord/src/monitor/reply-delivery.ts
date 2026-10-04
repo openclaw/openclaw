@@ -181,8 +181,8 @@ export async function deliverDiscordReply(params: {
     deps: {
       // Discord webhooks default to user-only parsing; bot messages need this
       // explicit policy to prevent a fresh preview final from broadcasting.
-      discord: (to: string, text: string, opts?: Parameters<typeof sendMessageDiscord>[2]) =>
-        sendMessageDiscord(to, text, {
+      discord: (recipient: string, text: string, opts?: Parameters<typeof sendMessageDiscord>[2]) =>
+        sendMessageDiscord(recipient, text, {
           ...opts,
           cfg: opts?.cfg ?? cfg,
           token,
@@ -190,11 +190,11 @@ export async function deliverDiscordReply(params: {
           ...(allowedMentions ? { allowedMentions } : {}),
         }),
       discordVoice: (
-        to: string,
+        recipient: string,
         audioPath: string,
         opts?: Parameters<typeof sendVoiceMessageDiscord>[2],
       ) =>
-        sendVoiceMessageDiscord(to, audioPath, {
+        sendVoiceMessageDiscord(recipient, audioPath, {
           ...opts,
           cfg: opts?.cfg ?? cfg,
           token,

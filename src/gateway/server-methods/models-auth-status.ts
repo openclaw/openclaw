@@ -383,7 +383,8 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         now,
       });
 
-      const providers = authHealth.providers.map((prov): ModelAuthStatusProvider => {
+      const providers: ModelAuthStatusProvider[] = [];
+      for (const prov of authHealth.providers) {
         const providerKey = normalizeProviderId(prov.provider);
         const authProviderKey = resolveProviderIdForAuth(prov.provider, authAliasLookupParams);
         const profileOrder = resolveExplicitAuthOrderSelection({
@@ -436,7 +437,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         const hasRefreshableProfile = prov.profiles.some(
           (profile) => profile.type === "oauth" || profile.type === "token",
         );
-        return {
+        providers.push({
           provider: prov.provider,
           authProvider: authProviderKey,
           displayName: providerDisplayName(prov.provider),
@@ -448,7 +449,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           profiles: prov.profiles.map((prof) => {
             const metadata = resolveAuthProfileMetadata({ cfg, store, profileId: prof.profileId });
             const lastUsedAt = store.usageStats?.[prof.profileId]?.lastUsed;
-            return {
+            const profile: ModelAuthStatusProvider["profiles"][number] = {
               profileId: prof.profileId,
               type: prof.type,
               status: prof.status,
@@ -464,17 +465,26 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
                 prof.expiresAt === undefined ? prof.remainingMs : prof.expiresAt - Date.now(),
                 prof.expiresAt,
               ),
-              ...(externalCliProfileIds.has(prof.profileId) ? { externallyManaged: true } : {}),
-              ...(includeProfileIdentity && metadata.displayName
-                ? { displayName: metadata.displayName }
-                : {}),
-              ...(prof.reasonCode === "setup_inactive"
-                ? { displayName: "Saved sign-in (inactive)" }
-                : {}),
-              ...(includeProfileIdentity && metadata.email ? { email: metadata.email } : {}),
-              ...(includeProfileIdentity && lastUsedAt ? { lastUsedAt } : {}),
-              ...(logoutProfileIds.has(prof.profileId) ? { logoutSupported: true } : {}),
             };
+            if (externalCliProfileIds.has(prof.profileId)) {
+              profile.externallyManaged = true;
+            }
+            if (includeProfileIdentity && metadata.displayName) {
+              profile.displayName = metadata.displayName;
+            }
+            if (prof.reasonCode === "setup_inactive") {
+              profile.displayName = "Saved sign-in (inactive)";
+            }
+            if (includeProfileIdentity && metadata.email) {
+              profile.email = metadata.email;
+            }
+            if (includeProfileIdentity && lastUsedAt) {
+              profile.lastUsedAt = lastUsedAt;
+            }
+            if (logoutProfileIds.has(prof.profileId)) {
+              profile.logoutSupported = true;
+            }
+            return profile;
           }),
           ...(profileOrder.order !== undefined ? { profileOrder: profileOrder.order } : {}),
           ...(profileOrder.fromStore && localOrderStored ? { profileOrderStored: true } : {}),
@@ -497,8 +507,8 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
                     : {}),
                 }
               : undefined,
-        };
-      });
+        });
+      }
       const result: ModelAuthStatusResult = { ts: now, providers, providerCapabilities };
       respond(true, result, undefined);
     });

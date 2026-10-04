@@ -148,9 +148,10 @@ export async function searchSharedMemory<M extends string>(
         maxResults: options.maxResults,
         ...(options.protectedSessionRecall ? { sources: ["sessions" as const] } : {}),
       });
-      return page.hits.map((result): SharedMemorySearchResult<M> => {
+      const results: SharedMemorySearchResult<M>[] = [];
+      for (const result of page.hits) {
         const citation = result.citations?.[0];
-        return {
+        results.push({
           corpus: "memory",
           reference: result.reference,
           lookup: memoryReferenceLookup(result.reference),
@@ -164,8 +165,9 @@ export async function searchSharedMemory<M extends string>(
           searchMode: options.mode,
           ...(citation ? { citation: citation.label } : {}),
           ...(result.citations ? { citations: result.citations } : {}),
-        };
-      });
+        });
+      }
+      return results;
     });
   }
   const sharedMemoryManager = await resolveActiveMemoryManager(params);
@@ -195,19 +197,23 @@ export async function searchSharedMemory<M extends string>(
       trustedAgentScope: !params.agentSessionKey && Boolean(params.agentId?.trim()),
     });
   }
-  return rawMemoryResults.map((result) => ({
-    corpus: "memory",
-    path: result.path,
-    title: buildMemorySearchTitle(result.path),
-    kind: "memory",
-    score: result.score,
-    snippet: result.snippet,
-    startLine: result.startLine,
-    endLine: result.endLine,
-    memorySource: result.source,
-    searchMode: options.mode,
-    ...(result.citation ? { citation: result.citation } : {}),
-  }));
+  const results: SharedMemorySearchResult<M>[] = [];
+  for (const result of rawMemoryResults) {
+    results.push({
+      corpus: "memory",
+      path: result.path,
+      title: buildMemorySearchTitle(result.path),
+      kind: "memory",
+      score: result.score,
+      snippet: result.snippet,
+      startLine: result.startLine,
+      endLine: result.endLine,
+      memorySource: result.source,
+      searchMode: options.mode,
+      ...(result.citation ? { citation: result.citation } : {}),
+    });
+  }
+  return results;
 }
 
 export type SharedMemoryReadParams = Omit<SharedMemorySearchParams, "query"> & {
