@@ -346,9 +346,12 @@ describe("SQLite trajectory runtime store", () => {
         const statement = prepare(sql);
         if (sql.includes('group by "session_id", "run_id"')) {
           const all = statement.all.bind(statement);
-          vi.spyOn(statement, "all").mockImplementation((...args) => {
+          const iterate = statement.iterate.bind(statement);
+          const assertAggregate = (
+            rows: ReturnType<typeof statement.all>,
+            args: Parameters<typeof statement.all>,
+          ) => {
             aggregates += 1;
-            const rows = all(...args);
             const previousRows = prepare(`
               WITH event_sizes AS MATERIALIZED (
                 SELECT session_id, run_id, created_at,
@@ -365,6 +368,13 @@ describe("SQLite trajectory runtime store", () => {
               expect.stringMatching(/SCAN trajectory_runtime_events USING COVERING INDEX/),
             ]);
             return rows;
+          };
+          vi.spyOn(statement, "all").mockImplementation((...args) =>
+            assertAggregate(all(...args), args),
+          );
+          vi.spyOn(statement, "iterate").mockImplementation(function* (...args) {
+            yield* assertAggregate([...iterate(...args)], args);
+            return undefined;
           });
         }
         return statement;
