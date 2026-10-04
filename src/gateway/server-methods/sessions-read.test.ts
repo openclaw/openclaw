@@ -796,6 +796,44 @@ test("sessions.search accepts an ACP allowlist owner for non-ACP agent keys", as
   });
 });
 
+test("sessions.search keeps validating ACP allowlist owners on alias, legacy, and malformed keys", async () => {
+  const agentId = "codex";
+  testState.sessionStorePath = path.join(requireStateDir(), "shared-store", "sessions.json");
+  await setAgentsConfig({ entries: { main: {} } });
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  getRuntimeConfig().acp = { allowedAgents: [agentId] };
+
+  const aliasKey = await directSessionReq("sessions.search", {
+    agentId,
+    query: "alias collapse probe",
+    sessionKeys: [`agent:${agentId}:main`],
+  });
+  expect(aliasKey).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST" },
+  });
+
+  const legacyKey = await directSessionReq("sessions.search", {
+    agentId,
+    query: "legacy key probe",
+    sessionKeys: ["existing"],
+  });
+  expect(legacyKey).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST" },
+  });
+
+  const malformedKey = await directSessionReq("sessions.search", {
+    agentId,
+    query: "malformed key probe",
+    sessionKeys: ["agent:"],
+  });
+  expect(malformedKey).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST" },
+  });
+});
+
 test("session reads find a retired store only reachable through its deterministic template", async () => {
   const agentId = "template-retired";
   const sessionKey = `agent:${agentId}:existing`;

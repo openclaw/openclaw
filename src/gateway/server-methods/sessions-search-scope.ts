@@ -3,7 +3,7 @@ import { listAgentIds } from "../../agents/agent-scope-config.js";
 import { isConfiguredSessionStoreAgentId } from "../../config/sessions.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeAgentIdStrict } from "../../routing/session-key.js";
+import { normalizeAgentIdStrict, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { invalidSessionRequest } from "../session-request-error.js";
 import {
@@ -22,12 +22,25 @@ export function resolveSessionSearchScope(cfg: OpenClawConfig, params: SessionsS
   const agentIds = new Set<string>();
   const rosterAgentIds = new Set(listAgentIds(cfg));
   for (const sessionKey of params.sessionKeys ?? []) {
-    const storeOwnerAgentId = resolveSessionStoreAgentId(cfg, sessionKey);
+    const parsedKey = parseAgentSessionKey(sessionKey);
+    const storeOwnerAgentId = parsedKey ? resolveSessionStoreAgentId(cfg, sessionKey) : undefined;
+    const storedSessionKey =
+      parsedKey && requestedAgentId
+        ? resolveStoredSessionKeyForAgentStore({
+            cfg,
+            agentId: requestedAgentId,
+            sessionKey,
+          })
+        : undefined;
     const configuredAcpOwner = Boolean(
       requestedAgentId &&
       !rosterAgentIds.has(requestedAgentId) &&
       isConfiguredSessionStoreAgentId(cfg, requestedAgentId) &&
       storeOwnerAgentId === requestedAgentId &&
+      parsedKey.rest !== "main" &&
+      storedSessionKey &&
+      storedSessionKey !== "global" &&
+      storedSessionKey !== "unknown" &&
       resolvePersistedSessionStoreOwnerForKey(cfg, sessionKey).kind === "none",
     );
     const requestedAgent =
