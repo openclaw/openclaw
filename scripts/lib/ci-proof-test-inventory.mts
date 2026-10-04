@@ -352,7 +352,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/codex/src/app-server/dynamic-tool-build.test.ts",
   "extensions/codex/src/app-server/dynamic-tools.test.ts",
   "extensions/codex/src/app-server/event-projector.async-delivery.test.ts",
-  "extensions/codex/src/app-server/event-projector.cyber-notices.test.ts",
   "extensions/codex/src/app-server/event-projector.dynamic-tools.test.ts",
   "extensions/codex/src/app-server/event-projector.media.test.ts",
   "extensions/codex/src/app-server/event-projector.native-failures.test.ts",
