@@ -286,7 +286,7 @@ function renderStatusBody(params: {
       <div class="login-gate__actions">
         ${renderRefreshAction(feedback, params.refreshAction)}
         <button class="btn login-gate__connect" @click=${props.onConnect}>
-          ${waitingForPairing ? t("login.failure.pairing.checkNow") : t("common.connect")}
+          ${feedback.kind === "pairing-rejected" || feedback.kind === "pairing-expired" ? t("login.failure.pairing.requestAgain") : waitingForPairing ? t("login.failure.pairing.checkNow") : t("common.connect")}
         </button>
       </div>
       <details class="login-gate__connection">

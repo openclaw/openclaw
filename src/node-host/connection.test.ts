@@ -501,6 +501,7 @@ it.each([
   { kind: "workspace", platform: "linux", bun: false },
   { kind: "workspace", platform: "linux", bun: true },
   { kind: "workspace", platform: "win32", bun: false },
+  { kind: "workspace", platform: "win32", bun: true },
   { kind: "workspace", platform: "darwin", bun: false },
 ] as const)(
   "negotiates $kind inventory per connection ($platform, Bun=$bun)",
@@ -576,7 +577,10 @@ it.each([
                             : [...CORE_WORKER_LAUNCH_TOOL_NAMES],
                       }
                     : {}),
-                  ...(supported && kind === "workspace" && platform === "linux" && !bun
+                  ...(supported &&
+                  kind === "workspace" &&
+                  (platform === "linux" || platform === "win32") &&
+                  !bun
                     ? { workspaceQuiescence: 1 }
                     : {}),
                 },

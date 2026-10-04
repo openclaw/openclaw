@@ -1,6 +1,11 @@
+import type {
+  AcpSessionEntryMutationInput,
+  AcpSessionEntryMutationResult,
+} from "../../acp/runtime/session-meta-entry.types.js";
 import type { HeartbeatOutcomeWorkerOperations } from "../../infra/heartbeat-outcome-store.worker.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import type { readSessionProgressCard } from "../../session-cards/progress-card-store.js";
+import type { readLegacyAcpMigrationContextInDatabase } from "./session-accessor.sqlite-acp-provenance.js";
 import type { SessionParticipantRecord } from "./session-accessor.sqlite-participant-projection.js";
 import type { SessionMembershipFact } from "./session-membership-facts.types.js";
 import type { listSessionReactionsInDatabase } from "./session-reaction-store.read.js";
@@ -22,6 +27,14 @@ type SharingOperations = {
 export type IncognitoSideDataOperations = {
   [Key in keyof SharingOperations as `session.sharing.${Key}`]: SharingOperations[Key];
 } & {
+  "session.acp.source": {
+    input: { sessionKey: string };
+    output: ReturnType<typeof readLegacyAcpMigrationContextInDatabase>;
+  };
+  "session.acp.entry": {
+    input: AcpSessionEntryMutationInput;
+    output: Pick<AcpSessionEntryMutationResult, "entry">;
+  };
   "session.category.apply": {
     input: { from: string; to?: string };
     output: SessionSharingWorkerOperations["category.apply"]["output"];
@@ -51,6 +64,7 @@ export type IncognitoSideDataOperations = {
 
 export function isIncognitoSideDataWrite(type: keyof IncognitoSideDataOperations): boolean {
   return (
+    type === "session.acp.entry" ||
     type === "session.category.apply" ||
     type === "session.reaction.set" ||
     type.startsWith("session.sharing.") ||

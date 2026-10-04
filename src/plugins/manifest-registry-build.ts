@@ -98,12 +98,13 @@ function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
   if (params.record.origin === "bundled" || params.record.format === "bundle") {
     return;
   }
-  const configuredEntry = params.normalized?.entries[params.record.id];
+  const policyId = normalizePluginPolicyId(params.record.id);
+  const configuredEntry = params.normalized?.entries[policyId];
   if (
     params.normalized?.enabled === false ||
     configuredEntry?.enabled === false ||
-    params.normalized?.deny.includes(params.record.id) ||
-    (params.normalized?.allow.length && !params.normalized.allow.includes(params.record.id))
+    params.normalized?.deny.includes(policyId) ||
+    (params.normalized?.allow.length && !params.normalized.allow.includes(policyId))
   ) {
     return;
   }

@@ -1,4 +1,5 @@
 import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
 import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { readSessionRuntimeOwnership } from "../../agents/harness/session-runtime-ownership.js";
@@ -25,6 +26,22 @@ export type ChatMetadataProjectionFacts = {
   authModes: PreparedAgentCredentialModes;
   modelCatalog: ModelCatalogSnapshot;
 };
+
+export async function prepareSessionAcpMeta(
+  params: Pick<ChatMetadataReadParams, "agentId" | "sessionKey" | "sessionEntry">,
+  cfg: OpenClawConfig,
+): Promise<SessionAcpMeta | null> {
+  if (!params.sessionKey) {
+    return null;
+  }
+  const [meta] = await readAcpSessionMetaForEntries({
+    cfg,
+    entries: [
+      { agentId: params.agentId, sessionKey: params.sessionKey, entry: params.sessionEntry },
+    ],
+  });
+  return meta ?? null;
+}
 
 export async function prepareChatMetadataModelProjection(params: {
   context: GatewayModelCatalogContext;

@@ -9,15 +9,18 @@ import type {
 import type { SessionEntryPatchReceipt } from "./session-entry-patch.types.js";
 import type { SessionEntry } from "./types.js";
 
-export type SessionNativeBindingDeletion = {
+export type SessionNativeBindingParticipants = {
   operationId: string;
   sharedSource: DatabasePathIdentity;
-  plan: Extract<SqliteSessionReclamationPlan, { kind: "entry" }>;
   participants: readonly {
     sessionKey: string;
     entry: SessionEntry;
     binding?: PluginStateNativeBindingPlan;
   }[];
+};
+
+export type SessionNativeBindingDeletion = SessionNativeBindingParticipants & {
+  plan: Extract<SqliteSessionReclamationPlan, { kind: "entry" }>;
 };
 
 export type SessionNativeBindingReceipt = {

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, assert, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -86,8 +86,10 @@ describe("markAuthProfileFailure", () => {
     expect(store.profiles[usageId]).toBeUndefined();
     expect(stats?.disabledReason).toBe("billing");
     expect(ensureAuthProfileStore(agentDir).usageStats?.[usageId]?.disabledReason).toBe("billing");
-    expect(stats?.disabledUntil).toBeGreaterThan(startedAt + 9 * 60_000);
-    expect(stats?.disabledUntil).toBeLessThan(startedAt + 11 * 60_000);
+    assert(stats?.lastFailureAt !== undefined);
+    expect(stats.lastFailureAt).toBeGreaterThanOrEqual(startedAt);
+    expect(stats.lastFailureAt).toBeLessThanOrEqual(Date.now());
+    expect(stats.disabledUntil).toBe(stats.lastFailureAt + 10 * 60_000);
   });
 
   it("resets old billing failures, then preserves the new deadline across retries", async () => {
@@ -104,8 +106,10 @@ describe("markAuthProfileFailure", () => {
     const first = store.usageStats?.[profileId];
     expect(first?.errorCount).toBe(1);
     expect(first?.failureCounts?.billing).toBe(1);
-    expect(first?.disabledUntil).toBeGreaterThan(now + 9 * 60_000);
-    expect(first?.disabledUntil).toBeLessThan(now + 11 * 60_000);
+    assert(first?.lastFailureAt !== undefined);
+    expect(first.lastFailureAt).toBeGreaterThanOrEqual(now);
+    expect(first.lastFailureAt).toBeLessThanOrEqual(Date.now());
+    expect(first.disabledUntil).toBe(first.lastFailureAt + 10 * 60_000);
     const deadline = first?.disabledUntil;
     await fail();
     expect(store.usageStats?.[profileId]?.disabledUntil).toBe(deadline);
@@ -127,8 +131,10 @@ describe("markAuthProfileFailure", () => {
     const first = store.usageStats?.[profileId];
     expect(first?.errorCount).toBe(1);
     expect(first?.failureCounts?.rate_limit).toBe(4);
-    expect(first?.cooldownUntil).toBeGreaterThan(now + 235_000);
-    expect(first?.cooldownUntil).toBeLessThan(now + 245_000);
+    assert(first?.lastFailureAt !== undefined);
+    expect(first.lastFailureAt).toBeGreaterThanOrEqual(now);
+    expect(first.lastFailureAt).toBeLessThanOrEqual(Date.now());
+    expect(first.cooldownUntil).toBe(first.lastFailureAt + 240_000);
     const deadline = first?.cooldownUntil;
     await fail();
     expect(store.usageStats?.[profileId]?.cooldownUntil).toBe(deadline);

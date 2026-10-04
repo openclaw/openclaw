@@ -311,17 +311,20 @@ describe("container image replacement Doctor repair and startup readiness", () =
         main.db.prepare("SELECT session_key, current_session_id FROM session_nodes").all(),
       ).toEqual([{ session_key: "agent:main:upgrade", current_session_id: "upgrade" }]);
 
-      await withAgentDatabaseStartupAdmission(async () => {
-        await runStartupConfigPreflight({ gateway: true });
-        expect(listAgentDatabaseAdmissionRefusals()).toEqual([
-          expect.objectContaining({
-            agentId: "auxiliary",
-            paths: [auxiliaryPath],
-            embeddedOwnerId: "main",
-            code: "agent-database-ownership-mismatch",
-          }),
-        ]);
-      });
+      await withAgentDatabaseStartupAdmission(
+        async () => {
+          await runStartupConfigPreflight({ gateway: true });
+          expect(listAgentDatabaseAdmissionRefusals()).toEqual([
+            expect.objectContaining({
+              agentId: "auxiliary",
+              paths: [auxiliaryPath],
+              embeddedOwnerId: "main",
+              code: "agent-database-ownership-mismatch",
+            }),
+          ]);
+        },
+        { deferInspections: false },
+      );
 
       expect(fs.readFileSync(auxiliaryPath)).toEqual(preservedBytes);
       expect(() => openOpenClawAgentDatabase({ agentId: "auxiliary" })).toThrow(

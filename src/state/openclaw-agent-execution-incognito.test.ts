@@ -7,6 +7,8 @@ import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
+import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import * as workerStores from "../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db.js";
@@ -17,6 +19,7 @@ import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution.js";
+import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const references = new Set<IncognitoAgentDatabaseExecution>();
@@ -38,8 +41,10 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   await Promise.all([...references].map((reference) => reference.close()));
   references.clear();
+  await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
@@ -261,6 +266,136 @@ it("retains FIFO publication and rechecks authority after queue waits and before
     }),
   ).rejects.toThrow(IncognitoSessionEndedError);
   await closing;
+});
+
+it.each(["existing", "future"] as const)(
+  "pins only its %s shared owner across actor loss until work and retried cleanup settle",
+  async (sharedOpening) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const existing = sharedOpening === "existing" ? openOpenClawStateDatabase({ env }) : undefined;
+    let cleanupAttempted = false;
+    let nativeStore: { close(): Promise<void> } | undefined;
+    const posted = vi.spyOn(Worker.prototype, "postMessage");
+    const openNative = workerStores.openEphemeralAgentDatabaseSqliteWorkerStore;
+    vi.spyOn(workerStores, "openEphemeralAgentDatabaseSqliteWorkerStore").mockImplementation(
+      async (...args) => {
+        const store = await openNative(...args);
+        assert(store);
+        nativeStore = store;
+        return store;
+      },
+    );
+    const reference = await open();
+    if (!existing) {
+      expect(fs.readdirSync(stateRoot, { recursive: true })).toEqual([]);
+    }
+    const shared = existing ?? openOpenClawStateDatabase({ env });
+    const unrelated = openOpenClawStateDatabase({
+      path: path.join(tempDirs.make("incognito-unrelated-state-"), "state.sqlite"),
+    });
+    await reference.release();
+    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS + 1);
+    expect(shared.db.isOpen).toBe(true);
+    expect(unrelated.db.isOpen).toBe(false);
+
+    const borrower = await open();
+    assert(nativeStore);
+    const cleanup = vi.spyOn(nativeStore, "close").mockImplementationOnce(async () => {
+      cleanupAttempted = true;
+      throw new Error("native cleanup refused");
+    });
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const work = expect(
+      borrower.run(authority, async () => {
+        entered.resolve();
+        await release.promise;
+      }),
+    ).rejects.toThrow(IncognitoSessionEndedError);
+    let failedClose: Promise<unknown> | undefined;
+    try {
+      await entered.promise;
+      const openIndex = posted.mock.calls.findIndex(
+        ([message]) =>
+          isRecord(message) && message.type === "open" && message.databasePath === borrower.path,
+      );
+      const owningWorker: unknown = posted.mock.contexts[openIndex];
+      assert(owningWorker instanceof Worker);
+      await owningWorker.terminate();
+      expect(() => borrower.assertCurrent()).toThrow(IncognitoSessionEndedError);
+      failedClose = expect(borrower.close()).rejects.toThrow("native cleanup refused");
+      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS + 1);
+      expect(shared.db.isOpen).toBe(true);
+      expect(cleanupAttempted).toBe(false);
+      release.resolve();
+      await Promise.all([work, failedClose]);
+      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS + 1);
+      expect(shared.db.isOpen).toBe(true);
+      expect(() => borrower.assertCurrent()).toThrow(IncognitoSessionEndedError);
+      await borrower.close();
+    } finally {
+      release.resolve();
+      await Promise.allSettled([work, failedClose]);
+      cleanup.mockRestore();
+      await borrower.close();
+    }
+    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS + 1);
+    expect(shared.db.isOpen).toBe(false);
+    const later = openOpenClawStateDatabase({ env });
+    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS + 1);
+    expect(later.db.isOpen).toBe(false);
+  },
+);
+
+it("keeps the outer actor reentrancy fence after nested grants consume prepared facts", async () => {
+  const reference = await open();
+  const sessionKey = "agent:main:dashboard:incognito-nested-grant";
+  const created = await reference.sessions.create(authority, {
+    sessionKey,
+    entry: { sessionId: "nested-grant", updatedAt: 1, incognito: true },
+  });
+  const reentered: Promise<unknown>[] = [];
+  const refusals: unknown[] = [];
+  const prepared: string[] = [];
+  const source: IncognitoSessionAuthority = {
+    assertCurrent() {},
+    authorize(stage, facts) {
+      created.claim.authorize(
+        {
+          assertCurrent() {},
+          authorize(_stage, nestedFacts) {
+            prepared.push(nestedFacts.sessionKey);
+          },
+        },
+        stage,
+      );
+      expect(facts.sessionKey).toBe(sessionKey);
+      const target = { authority, sessionKey, cfg: {}, env };
+      for (const reenter of [
+        () => memory(reference),
+        () => reference.sessions.withSharedState(() => memory(reference)),
+        () => reference.acp.readEntry(target),
+        () => reference.acp.upsertMeta({ ...target, mutate: () => undefined }),
+      ]) {
+        try {
+          reentered.push(reenter());
+        } catch (error) {
+          refusals.push(error);
+        }
+      }
+    },
+  };
+  const read = await reference.sessions.read(source, { sessionKey });
+  await Promise.allSettled(reentered);
+  expect(read.entry?.sessionId).toBe("nested-grant");
+  expect(prepared).toEqual([sessionKey]);
+  expect(refusals).toEqual([
+    new Error("Incognito authority callbacks cannot call their actor"),
+    new Error("Incognito authority callbacks cannot call their actor"),
+    new Error("Incognito authority callbacks cannot call their actor"),
+    new Error("Incognito authority callbacks cannot call their actor"),
+  ]);
+  expect(reentered).toEqual([]);
 });
 
 it("ends only the lost actor's sessions and refuses old handles after replacement", async () => {
