@@ -224,4 +224,95 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
     expect(spec?.input.enabled).toBe(true);
     expect(spec?.input.displayName).not.toContain("no-rooted-runtime");
   });
+
+  it("keeps reviews enabled while any maintenance tool remains callable", () => {
+    const cfg = {
+      agents: {
+        defaults: { model: "anthropic/claude-sonnet-4-6" },
+        list: [
+          { id: "unrestricted" },
+          { id: "partial", tools: { deny: ["process"] } },
+          {
+            id: "blocked",
+            tools: { profile: "messaging", deny: ["group:fs", "group:runtime"] },
+          },
+        ],
+      },
+      skills: { workshop: { autonomous: { mode: "auto" } } },
+    } as OpenClawConfig;
+
+    const byAgent = new Map(
+      Array.from(
+        resolveSkillCollectionReviewMonitorSpecs(cfg, [], { schedulerSeed: "test-seed" }),
+        (spec) => [spec.agentId, spec.input],
+      ),
+    );
+
+    expect(byAgent.get("unrestricted")?.enabled).toBe(true);
+    expect(byAgent.get("partial")?.enabled).toBe(true);
+    expect(byAgent.get("partial")?.displayName).not.toContain("tool-policy-denied");
+    expect(byAgent.get("blocked")?.enabled).toBe(false);
+    expect(byAgent.get("blocked")?.displayName).toContain("tool-policy-denied");
+  });
+
+  it("keeps an existing enabled review when only optional maintenance tools are denied", () => {
+    const cfg = {
+      agents: {
+        defaults: { model: "anthropic/claude-sonnet-4-6" },
+        list: [{ id: "partial", tools: { deny: ["process"] } }],
+      },
+      skills: { workshop: { autonomous: { mode: "auto" } } },
+    } as OpenClawConfig;
+    const options = { schedulerSeed: "test-seed" };
+    const [initial] = resolveSkillCollectionReviewMonitorSpecs(cfg, [], options);
+    const [projected] = resolveSkillCollectionReviewMonitorSpecs(
+      cfg,
+      [
+        {
+          ...initial!.input,
+          id: "existing-review",
+          enabled: true,
+          createdAtMs: 1,
+          updatedAtMs: 1,
+          state: {},
+        },
+      ],
+      options,
+    );
+    expect(projected?.input.enabled).toBe(true);
+    expect(projected?.input.displayName).not.toContain("tool-policy-denied");
+  });
+
+  it("disables an existing enabled review when no maintenance tool remains callable", () => {
+    const cfg = {
+      agents: {
+        defaults: { model: "anthropic/claude-sonnet-4-6" },
+        list: [
+          {
+            id: "blocked",
+            tools: { profile: "messaging", deny: ["group:fs", "group:runtime"] },
+          },
+        ],
+      },
+      skills: { workshop: { autonomous: { mode: "auto" } } },
+    } as OpenClawConfig;
+    const options = { schedulerSeed: "test-seed" };
+    const [initial] = resolveSkillCollectionReviewMonitorSpecs(cfg, [], options);
+    const [projected] = resolveSkillCollectionReviewMonitorSpecs(
+      cfg,
+      [
+        {
+          ...initial!.input,
+          id: "existing-review",
+          enabled: true,
+          createdAtMs: 1,
+          updatedAtMs: 1,
+          state: {},
+        },
+      ],
+      options,
+    );
+    expect(projected?.input.enabled).toBe(false);
+    expect(projected?.input.displayName).toContain("tool-policy-denied");
+  });
 });

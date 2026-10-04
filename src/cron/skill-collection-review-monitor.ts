@@ -6,6 +6,7 @@ import {
   resolveSubagentModelConfigSelectionResult,
   resolveSubagentModelFallbacksOverride,
 } from "../agents/agent-scope.js";
+import { resolveConfiguredToolPolicies } from "../agents/agent-tools.policy.js";
 import { resolveAvailableAgentHarnessPolicy } from "../agents/harness/availability.js";
 import { resolveModelCandidateChain } from "../agents/model-fallback-candidates.js";
 import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
@@ -17,6 +18,7 @@ import {
   normalizeModelSelection,
   resolveModelRefFromString,
 } from "../agents/model-selection-shared.js";
+import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
@@ -42,6 +44,7 @@ import type { CronJob, CronJobCreate } from "./types.js";
 
 const SKILL_COLLECTION_REVIEW_EVERY_MS = 7 * 24 * 60 * 60_000;
 const SKILL_COLLECTION_REVIEW_NO_ROOTED_RUNTIME_REASON = "no-rooted-runtime";
+const SKILL_COLLECTION_REVIEW_TOOL_POLICY_REASON = "tool-policy-denied";
 
 /** Returns undefined when static config cannot prove the full runtime chain. */
 function hasEligibleSkillCollectionReviewRuntime(
@@ -209,6 +212,28 @@ function hasStoredExecutionPreference(
   }
 }
 
+/**
+ * Static projection of whether the agent's configured tool policy leaves any
+ * maintenance tool callable. The runner reports failure only when no callable
+ * tool remains, so a policy that denies some maintenance tools still supports a
+ * working review through the remaining ones. Config that cannot restrict the
+ * toolset (no profile, no allow, no deny) stays eligible.
+ */
+function hasEligibleSkillCollectionReviewToolPolicy(cfg: OpenClawConfig, agentId: string): boolean {
+  const agentConfig = resolveAgentConfig(cfg, agentId);
+  const policies = resolveConfiguredToolPolicies({
+    cfg,
+    agentTools: agentConfig?.tools,
+    agentId,
+  });
+  if (policies.length === 0) {
+    return true;
+  }
+  return SKILL_WORKSHOP_MAINTENANCE_TOOLS.some((toolName) =>
+    isToolAllowedByPolicies(toolName, policies),
+  );
+}
+
 /** One system-owned review job per configured agent and its Workshop directory. */
 export function* resolveSkillCollectionReviewMonitorSpecs(
   cfg: OpenClawConfig,
@@ -236,15 +261,21 @@ export function* resolveSkillCollectionReviewMonitorSpecs(
       hasStoredExecutionPreference(cfg, agentId, existing.id)
         ? undefined
         : configuredEligibility;
-    const enabled = workshopEnabled && hasEligibleRuntime !== false;
+    const toolPolicyEligible = hasEligibleSkillCollectionReviewToolPolicy(cfg, agentId);
+    const enabled = workshopEnabled && hasEligibleRuntime !== false && toolPolicyEligible;
+    const ineligibleReason = !toolPolicyEligible
+      ? SKILL_COLLECTION_REVIEW_TOOL_POLICY_REASON
+      : hasEligibleRuntime === false
+        ? SKILL_COLLECTION_REVIEW_NO_ROOTED_RUNTIME_REASON
+        : undefined;
     yield {
       agentId,
       input: {
         declarationKey: `${SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX}${agentId}`,
         name: `skill-collection-review-${agentId}`,
         displayName:
-          workshopEnabled && hasEligibleRuntime === false
-            ? `[${SKILL_COLLECTION_REVIEW_NO_ROOTED_RUNTIME_REASON}] Skill collection review (${agentId})`
+          workshopEnabled && ineligibleReason
+            ? `[${ineligibleReason}] Skill collection review (${agentId})`
             : `Skill collection review (${agentId})`,
         agentId,
         enabled,
