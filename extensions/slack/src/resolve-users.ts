@@ -126,19 +126,21 @@ export async function resolveSlackUserAllowlist(params: {
     const match = parsed.id
       ? matches[0]
       : matches.toSorted((a, b) => scoreSlackUser(b) - scoreSlackUser(a))[0];
-    return parsed.id || match
-      ? {
-          input,
-          resolved: true,
-          id: parsed.id ?? match?.id,
-          name: match?.displayName ?? match?.realName ?? match?.name,
-          email: match?.email,
-          deleted: match?.deleted,
-          isBot: match?.isBot,
-          ...(!parsed.id
-            ? { note: matches.length > 1 ? "multiple matches; chose best" : undefined }
-            : {}),
-        }
-      : { input, resolved: false };
+    if (!parsed.id && !match) {
+      return { input, resolved: false };
+    }
+    const result: SlackUserResolution = {
+      input,
+      resolved: true,
+      id: parsed.id ?? match?.id,
+      name: match?.displayName ?? match?.realName ?? match?.name,
+      email: match?.email,
+      deleted: match?.deleted,
+      isBot: match?.isBot,
+    };
+    if (!parsed.id) {
+      result.note = matches.length > 1 ? "multiple matches; chose best" : undefined;
+    }
+    return result;
   });
 }

@@ -207,9 +207,9 @@ export function createFeishuVcMeetingInvitedHandler(params: {
           channelRuntime: params.channelRuntime,
           turnAdoptionLifecycle: adoption.lifecycle,
         });
-      } catch (error) {
+      } catch (dispatchError) {
         await adoption.lifecycle.onAbandoned();
-        throw error;
+        throw dispatchError;
       } finally {
         await adoption.finish();
       }
