@@ -372,10 +372,8 @@ export function markdownToText(markdown: string): string {
   text = text.replace(/^[^\S\n]*\d+\.\s+/gm, "");
   // Escaped input NUL pairs stay paired through prose formatting, so only our
   // single-NUL markers can restore code. Replacement output is not rescanned.
-  text = text.replace(
-    /\0(?:\0|(\d+)\0)/g,
-    (_match, index: string | undefined) =>
-      index === undefined ? "\0" : codeBlocks[Number(index)]!,
+  text = text.replace(/\0(?:\0|(\d+)\0)/g, (_match, index: string | undefined) =>
+    index === undefined ? "\0" : codeBlocks[Number(index)]!,
   );
   return normalizeWhitespace(text);
 }
