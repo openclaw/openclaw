@@ -983,9 +983,11 @@ struct ChatViewModelOutboxTests {
 
         await MainActor.run { vm.load() }
         try await sendWhileOffline(vm, text: "wait for upgrade")
+        let offlineError = await MainActor.run { vm.errorText }
         await transport.goOnline()
 
-        await waitForOutboxObservedState { vm.errorText == message }
+        // Wake on the next error change so a different message fails the expectation instead of hanging.
+        await waitForOutboxObservedState { vm.errorText != offlineError }
         #expect(await MainActor.run { vm.errorText == message })
         #expect(await store.loadCommands().map(\.status) == [.queued])
         #expect(await transport.state.sentMessages.isEmpty)
@@ -1468,8 +1470,9 @@ struct ChatViewModelOutboxTests {
             vm.messages.first { vm.outboxState(for: $0.id)?.isFailed == true }?.id
         })
 
+        let previousError = await MainActor.run { vm.errorText }
         await MainActor.run { vm.retryOutboxMessage(messageID) }
-        await waitForOutboxObservedState { vm.errorText == "Select an agent before retrying this message." }
+        await waitForOutboxObservedState { vm.errorText != previousError }
         #expect(await MainActor.run { vm.errorText == "Select an agent before retrying this message." })
         let command = await store.loadCommands().first
         #expect(command?.status == .failed)
