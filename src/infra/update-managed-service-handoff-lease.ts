@@ -436,14 +436,15 @@ export function createManagedHandoffLeaseStore(
             version: 2,
             helper: lease.helper,
             executor,
-            action: custody
-              ? {
-                  kind: "update",
-                  ...(lease.action.mutationProtocol
-                    ? { mutationProtocol: lease.action.mutationProtocol }
-                    : {}),
-                }
-              : lease.action,
+            action:
+              custody && lease.action.kind === "update"
+                ? {
+                    kind: "update",
+                    ...(lease.action.mutationProtocol
+                      ? { mutationProtocol: lease.action.mutationProtocol }
+                      : {}),
+                  }
+                : lease.action,
           });
           const updatedAt = Math.max(Date.now(), lease.updatedAt + 1);
           if (!updateRow(db, lease, { payload_json: payload, updated_at: updatedAt })) {
