@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
+import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -96,6 +96,7 @@ tasks:
   process.env.OPENCLAW_STATE_DIR = env.OPENCLAW_STATE_DIR;
   const cfg = {
     agents: {
+      ownership: "explicit",
       defaults: { heartbeat: { every: "30m" }, systemAgent: { agentId: "main" } },
       entries: { main: {}, [agentId]: {} },
     },
