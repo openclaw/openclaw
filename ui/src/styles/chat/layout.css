@@ -2984,6 +2984,59 @@ openclaw-chat-ci-details {
   color: var(--muted);
 }
 
+.agent-chat__disabled-banner--compact {
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  font-size: 12px;
+}
+
+.agent-chat__disabled-banner--compact .callout__content {
+  min-width: 0;
+}
+
+.agent-chat__disabled-banner-icon--eye {
+  color: var(--muted);
+}
+
+.agent-chat__disabled-banner-icon--eye svg {
+  width: 14px;
+  height: 14px;
+}
+
+.chat-subagent-detail__stop {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 4px 7px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+}
+
+.chat-subagent-detail__stop:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.chat-subagent-detail__stop svg {
+  width: 8px;
+  height: 8px;
+}
+
+@media (pointer: coarse) {
+  .chat-subagent-detail__stop {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
 .agent-chat__voice-turns {
   display: flex;
   flex-direction: column;

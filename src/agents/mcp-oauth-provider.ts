@@ -25,11 +25,6 @@ export type McpOAuthLoginLifecycle = {
   onTokensSaved: () => void;
 };
 
-type McpOAuthMutationAuthority = {
-  assertCurrent: () => void;
-  beforeCommit?: () => void;
-};
-
 function resolveTokenExpiresAt(tokens: OAuthTokens): number | undefined {
   const expiresIn = tokens.expires_in;
   return typeof expiresIn === "number" && Number.isFinite(expiresIn)
@@ -127,7 +122,7 @@ export async function createMcpOAuthClientProvider(params: {
     params.login?.assertCurrent();
     preparation++;
     const write = ++nextWrite;
-    const authority: McpOAuthMutationAuthority | undefined = params.login
+    const authority = params.login
       ? { assertCurrent: params.login.assertCurrent, beforeCommit: options.beforeCommit }
       : undefined;
     try {

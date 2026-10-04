@@ -35,13 +35,10 @@ export function externalHttpLinkFromEvent(
   if (!anchor || anchor.hasAttribute("download") || anchor.hasAttribute("data-file-path")) {
     return null;
   }
-  try {
-    const url = new URL(anchor.href, window.location.href);
-    return (url.protocol === "http:" || url.protocol === "https:") &&
-      url.origin !== window.location.origin
-      ? { anchor, url }
-      : null;
-  } catch {
-    return null;
-  }
+  const url = URL.parse(anchor.href, window.location.href);
+  return url &&
+    (url.protocol === "http:" || url.protocol === "https:") &&
+    url.origin !== window.location.origin
+    ? { anchor, url }
+    : null;
 }

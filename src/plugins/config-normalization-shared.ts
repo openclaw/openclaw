@@ -1,6 +1,9 @@
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import {
+  filterStringEntries,
+  normalizeArrayBackedTrimmedStringList,
+} from "@openclaw/normalization-core/string-normalization";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_PLUGINS_ENABLED } from "./default-enablement.js";
@@ -55,11 +58,8 @@ export function normalizePluginConfigList(
   value: unknown,
   normalizePluginId: NormalizePluginId,
 ): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map((entry) => (typeof entry === "string" ? normalizePluginId(entry) : ""))
+  return filterStringEntries(value)
+    .map((entry) => normalizePluginId(entry))
     .filter(Boolean);
 }
 

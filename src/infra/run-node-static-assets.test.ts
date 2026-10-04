@@ -73,45 +73,29 @@ describe("run-node static asset freshness", () => {
     });
   }
 
-  it("does not require static asset outputs when runtime static assets are disabled", async ({
-    tmp,
-  }) => {
-    await setupStampedProject(tmp, {
-      files: {
-        [DIFFS_PACKAGE]:
-          '{"openclaw":{"build":{"staticAssets":[{"source":"./assets/viewer-runtime.js","output":"assets/viewer-runtime.js"}]}}}\n',
-        [DIFFS_VIEWER_RUNTIME_SOURCE]: "export {};\n",
-        [DIST_RUNTIME_EXTENSION_PACKAGE]: '{"openclaw":{"extensions":["./index.js"]}}\n',
-        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
-      },
-    });
-
-    const requirement = resolveRuntimePostBuildRequirement(
-      createBuildRequirementDeps(tmp, { env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0" } }),
-    );
-
-    expect(requirement).toEqual({
-      shouldSync: false,
-      reason: "clean",
-    });
-  });
-
-  it("does not require static asset outputs when the declared source is absent", async ({
-    tmp,
-  }) => {
-    await setupStampedProject(tmp, {
-      files: {
-        [DIFFS_PACKAGE]:
-          '{"openclaw":{"build":{"staticAssets":[{"source":"./assets/viewer-runtime.js","output":"assets/viewer-runtime.js"}]}}}\n',
-        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
-      },
-    });
-
-    const requirement = resolveRuntimePostBuildRequirement(createBuildRequirementDeps(tmp));
-
-    expect(requirement).toEqual({
-      shouldSync: false,
-      reason: "clean",
-    });
-  });
+  it.for(["disabled", "absent source"])(
+    "does not require static assets when %s",
+    async (mode, { tmp }) => {
+      await setupStampedProject(tmp, {
+        files: {
+          [DIFFS_PACKAGE]:
+            '{"openclaw":{"build":{"staticAssets":[{"source":"./assets/viewer-runtime.js","output":"assets/viewer-runtime.js"}]}}}\n',
+          ...(mode === "disabled"
+            ? {
+                [DIFFS_VIEWER_RUNTIME_SOURCE]: "export {};\n",
+                [DIST_RUNTIME_EXTENSION_PACKAGE]: '{"openclaw":{"extensions":["./index.js"]}}\n',
+              }
+            : {}),
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
+        },
+      });
+      expect(
+        resolveRuntimePostBuildRequirement(
+          createBuildRequirementDeps(tmp, {
+            env: mode === "disabled" ? { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0" } : {},
+          }),
+        ),
+      ).toEqual({ shouldSync: false, reason: "clean" });
+    },
+  );
 });

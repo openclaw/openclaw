@@ -32,9 +32,17 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
     ((input.command.type === "deliveryQueue.outbound" &&
       (input.command.id === undefined || typeof input.command.id === "string") &&
       (input.command.mode === "pending" || input.command.mode === "unfinished")) ||
+      (input.command.type === "pairing.allowFrom" &&
+        isRecord(input.command.input) &&
+        typeof input.command.input.channel === "string" &&
+        typeof input.command.input.accountId === "string") ||
       (input.command.type === "sessionState.ambientTargets" &&
         isRecord(input.command.input) &&
         typeof input.command.input.watcherSessionKey === "string") ||
+      (input.command.type === "generatedHtmlProvenance.read" &&
+        typeof input.command.input === "string") ||
+      (input.command.type === "generatedHtmlProvenance.list" &&
+        input.command.input === undefined) ||
       (input.command.type === "mentions.snapshot" &&
         typeof input.command.input === "number" &&
         Number.isSafeInteger(input.command.input) &&
@@ -90,7 +98,6 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
             Array.isArray(entry.keys) &&
             entry.keys.length <= 3 &&
             entry.keys.every((key) => typeof key === "string") &&
-            (entry.legacyKey === undefined || typeof entry.legacyKey === "string") &&
             (entry.entry === undefined ||
               (isRecord(entry.entry) &&
                 (entry.entry.lifecycleRevision === undefined ||

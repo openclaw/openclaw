@@ -8,7 +8,10 @@ import {
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
-import { resolvePluginRootPublicSurfacePath } from "./public-surface-runtime.js";
+import {
+  resolvePluginRootPublicSurfacePath,
+  resolveRetainedDoctorPath,
+} from "./public-surface-runtime.js";
 
 export function loadValidatedPublicSurfaceModule(params: {
   modulePath: string;
@@ -78,10 +81,21 @@ export function loadBundledPluginPublicArtifactModuleFromCandidatesSync<T extend
   artifactCandidates: readonly string[];
   env?: NodeJS.ProcessEnv;
   owner?: Pick<PluginManifestRecord, "id" | "rootDir" | "source" | "origin">;
+  /** Admission pins host-retained checks to the staged candidate, independently of runtime selection. */
+  retainedAt?: string;
 }): T | null {
   for (const artifactBasename of params.artifactCandidates) {
     let location: FacadeModuleLocation | null;
-    if (params.owner) {
+    if (params.retainedAt) {
+      const modulePath = resolveRetainedDoctorPath({
+        rootDir: params.retainedAt,
+        dirName: params.dirName,
+        artifactBasename,
+      });
+      location = modulePath
+        ? { modulePath, boundaryRoot: params.retainedAt, origin: "bundled" }
+        : null;
+    } else if (params.owner) {
       const modulePath = resolvePluginRootPublicSurfacePath({
         pluginRoot: params.owner.rootDir,
         pluginId: params.owner.id,

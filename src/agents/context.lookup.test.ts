@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextWindowCatalog } from "./context-cache-projection.js";
 import { replaceDiscoveredContextTokenCache } from "./context-cache.js";
 import { CONTEXT_WINDOW_RUNTIME_STATE } from "./context-runtime-state.js";
+import { resetContextWindowCacheForTest } from "./context.test-support.js";
 
 const state = vi.hoisted(() => {
   const initialConfig: OpenClawConfig = {};
@@ -68,11 +69,11 @@ beforeEach(() => {
     config: state.config,
     modelCatalog: state.catalog,
   }));
-  context.resetContextWindowCacheForTest();
+  resetContextWindowCacheForTest();
 });
 
 afterEach(() => {
-  context.resetContextWindowCacheForTest();
+  resetContextWindowCacheForTest();
   vi.useRealTimers();
 });
 

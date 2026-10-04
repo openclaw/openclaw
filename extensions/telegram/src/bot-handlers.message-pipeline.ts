@@ -1,5 +1,5 @@
 import type { Message } from "grammy/types";
-import { firstDefined } from "openclaw/plugin-sdk/allow-from";
+import { firstDefined, isSenderIdAllowed } from "openclaw/plugin-sdk/allow-from";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
@@ -7,7 +7,7 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramAccount, resolveTelegramMediaRuntimeOptions } from "./accounts.js";
-import { isSenderAllowed, normalizeAllowFrom } from "./bot-access.js";
+import { normalizeAllowFrom } from "./bot-access.js";
 import {
   createTelegramMessageContextRuntime,
   createTelegramMessageSessionRuntime,
@@ -224,7 +224,7 @@ export function createTelegramMessagePipeline({
     ctx: TelegramContext,
     chain: TelegramCachedMessageNode[],
     shouldHydrateMedia: (
-      sender: Pick<TelegramReplyChainEntry, "senderId" | "senderUsername">,
+      sender: Pick<TelegramReplyChainEntry, "senderId">,
       index: number,
     ) => Promise<boolean>,
     durableMediaReplay: boolean,
@@ -449,7 +449,7 @@ export function createTelegramMessagePipeline({
         accountId,
       });
       const shouldHydrateReplyMedia = async (
-        node: Pick<TelegramReplyChainEntry, "senderId" | "senderUsername">,
+        node: Pick<TelegramReplyChainEntry, "senderId">,
         index: number,
       ): Promise<boolean> => {
         if (!isGroupConversation) {
@@ -463,11 +463,7 @@ export function createTelegramMessagePipeline({
         });
         const effectiveAllow = normalizeAllowFrom(expandedAllowFrom);
         const senderAllowed = effectiveAllow.hasEntries
-          ? isSenderAllowed({
-              allow: effectiveAllow,
-              senderId: node.senderId,
-              senderUsername: node.senderUsername,
-            })
+          ? isSenderIdAllowed(effectiveAllow, node.senderId, true)
           : true;
         return evaluateSupplementalContextVisibility({
           mode: contextVisibilityMode,

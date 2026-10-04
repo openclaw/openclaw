@@ -25,7 +25,6 @@ import type {
   ProviderPlugin,
 } from "../../../plugins/types.js";
 import type { RuntimeEnv } from "../../../runtime.js";
-import { createLazyRuntimeNamedExport } from "../../../shared/lazy-runtime.js";
 import { createNonInteractiveLoggingPrompter } from "../../non-interactive-prompter.js";
 import {
   prepareAgentModelDefaults,
@@ -38,11 +37,6 @@ import {
   CODEX_RUNTIME_PLUGIN_ID,
   ensureModelSelectionRuntimePlugins,
 } from "../../runtime-plugin-install.js";
-
-const loadAuthChoicePluginProvidersRuntime = createLazyRuntimeNamedExport(
-  () => import("./auth-choice.plugin-providers.runtime.js"),
-  "authChoicePluginProvidersRuntime",
-);
 
 /** Applies a plugin-defined auth choice, or returns undefined when it is not plugin-backed. */
 export async function applyNonInteractivePluginProviderChoice(
@@ -106,7 +100,7 @@ export async function applyNonInteractivePluginProviderChoice(
     resolveOwningPluginIdsForProviderRef,
     resolveProviderPluginChoice,
     resolvePluginProviders,
-  } = await loadAuthChoicePluginProvidersRuntime();
+  } = (await import("./auth-choice.plugin-providers.runtime.js")).authChoicePluginProvidersRuntime;
   const owningPluginIds = preferredProviderId
     ? resolveOwningPluginIdsForProviderRef({
         provider: preferredProviderId,

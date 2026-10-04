@@ -416,37 +416,74 @@ it("pins a dragged session and rereads the selected people view", async () => {
   expect(page.request.mock.calls.some(([method]) => method === "workboard.cards.move")).toBe(false);
 });
 
-it("creates a sessions board from the default Cards kind without submitting client-owned default columns", async () => {
-  const page = sessionsPage();
-  await page.connect();
-  button(page, "New board").click();
-  await vi.advanceTimersByTimeAsync(0);
-  const form = expectDefined(
-    page.container.querySelector<HTMLFormElement>(".workboard-board-draft"),
-    "new board",
-  );
-  expect(form.querySelector<HTMLInputElement>('input[value="cards"]')?.checked).toBe(true);
-  const name = expectDefined(
-    form.querySelector<HTMLInputElement>(".workboard-board-draft__name input"),
-    "board name",
-  );
-  name.value = "My sessions";
-  name.dispatchEvent(new Event("input", { bubbles: true }));
-  expectDefined(
-    form.querySelector<HTMLInputElement>('input[value="sessions"]'),
-    "Sessions kind",
-  ).click();
-  form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-  await vi.advanceTimersByTimeAsync(0);
-  expect(page.request).toHaveBeenCalledWith("workboard.boards.upsert", {
-    id: expect.stringMatching(/^board-/),
-    name: "My sessions",
-    kind: "sessions",
-  });
-  expect(
-    page.request.mock.calls.some(([method]) => method === "workboard.sessionsBoard.update"),
-  ).toBe(false);
-});
+it.each(["cards", "sessions"] as const)(
+  "registers and pins a created %s board before its catalog refresh completes",
+  async (kind) => {
+    const page = sessionsPage();
+    await page.connect();
+    const savedBoard = {
+      id: `created-${kind}`,
+      name: "My board",
+      kind,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const refreshed = createDeferred<unknown>();
+    const request = expectDefined(page.request.getMockImplementation(), "request");
+    let created = false;
+    page.request.mockImplementation(async (method, params) => {
+      if (method === "workboard.boards.upsert") {
+        created = true;
+        return { board: savedBoard };
+      }
+      if (method === "workboard.cards.list" && created) {
+        return refreshed.promise;
+      }
+      return request(method, params);
+    });
+    button(page, "New board").click();
+    await vi.advanceTimersByTimeAsync(0);
+    const form = expectDefined(
+      page.container.querySelector<HTMLFormElement>(".workboard-board-draft"),
+      "new board",
+    );
+    expect(form.querySelector<HTMLInputElement>('input[value="cards"]')?.checked).toBe(true);
+    const name = expectDefined(
+      form.querySelector<HTMLInputElement>(".workboard-board-draft__name input"),
+      "board name",
+    );
+    name.value = "My board";
+    name.dispatchEvent(new Event("input", { bubbles: true }));
+    expectDefined(
+      form.querySelector<HTMLInputElement>(`input[value="${kind}"]`),
+      "board kind",
+    ).click();
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(page.request).toHaveBeenCalledWith("workboard.boards.upsert", {
+      id: expect.stringMatching(/^board-/),
+      name: "My board",
+      ...(kind === "sessions" ? { kind } : {}),
+    });
+    expect(
+      page.request.mock.calls.some(([method]) => method === "workboard.sessionsBoard.update"),
+    ).toBe(false);
+    expect(page.registerBoardNavigation).toHaveBeenCalledExactlyOnceWith(savedBoard);
+    expect(page.fixture.host.ui.pinNavigation).toHaveBeenCalledExactlyOnceWith(
+      `board-created-${kind}`,
+    );
+    expect(page.registerBoardNavigation.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(page.fixture.host.ui.pinNavigation).mock.invocationCallOrder[0]!,
+    );
+    expect(page.fixture.host.navigation.openPage).not.toHaveBeenCalled();
+    refreshed.resolve({ cards: [], boards: [page.board] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(page.fixture.host.navigation.openPage).toHaveBeenCalledWith(
+      { id: "workboard", path: [savedBoard.id] },
+      { replace: true, preserveSearch: true },
+    );
+  },
+);
 
 it("validates session columns inline and preserves their ids and rules when labels change", async () => {
   const page = sessionsPage();

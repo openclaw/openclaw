@@ -8,7 +8,6 @@ import android.content.Context
 import android.location.Location
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -56,7 +55,6 @@ private class DefaultLocationDataSource(
 class LocationHandler internal constructor(
   private val appContext: Context,
   private val dataSource: LocationDataSource,
-  private val json: Json = Json { ignoreUnknownKeys = true },
   private val isForeground: () -> Boolean = { true },
   private val locationMode: () -> LocationMode = { LocationMode.WhileUsing },
   private val backgroundLocationEnabled: () -> Boolean = { false },
@@ -72,7 +70,6 @@ class LocationHandler internal constructor(
   constructor(
     appContext: Context,
     location: LocationCaptureManager,
-    json: Json,
     isForeground: () -> Boolean,
     locationMode: () -> LocationMode,
     backgroundLocationEnabled: () -> Boolean,
@@ -80,7 +77,6 @@ class LocationHandler internal constructor(
   ) : this(
     appContext = appContext,
     dataSource = DefaultLocationDataSource(location),
-    json = json,
     isForeground = isForeground,
     locationMode = locationMode,
     backgroundLocationEnabled = backgroundLocationEnabled,
@@ -128,15 +124,7 @@ class LocationHandler internal constructor(
       dataSource.hasBackgroundPermission(appContext)
 
   private fun parseLocationParams(paramsJson: String?): Triple<Long?, Long, String?> {
-    if (paramsJson.isNullOrBlank()) {
-      return Triple(null, 10_000L, null)
-    }
-    val root =
-      try {
-        json.parseToJsonElement(paramsJson).asObjectOrNull()
-      } catch (_: Throwable) {
-        null
-      }
+    val root = parseJsonParamsObject(paramsJson)
     val maxAgeMs = (root?.get("maxAgeMs") as? JsonPrimitive)?.content?.toLongOrNull()
     val timeoutMs =
       (root?.get("timeoutMs") as? JsonPrimitive)?.content?.toLongOrNull()?.coerceIn(1_000L, 60_000L)

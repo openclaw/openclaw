@@ -1,4 +1,3 @@
-/** Policy and execution pipeline for approved node-host system.run requests. */
 import crypto from "node:crypto";
 import path from "node:path";
 import {
@@ -6,6 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { validateSystemRunExecutionContext } from "../../packages/gateway-protocol/src/system-run-execution-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
 import { detectInlineEvalInSegments } from "../infra/command-analysis/risks.js";
@@ -53,7 +53,9 @@ import {
   inspectHostExecEnvOverrides,
   sanitizeHostExecEnv,
   sanitizeSystemRunEnvOverrides,
+  withHostExecInheritedEnvOmitted,
 } from "../infra/host-env-security.js";
+import { buildExecRoutingEnv, SUBAGENT_EXEC_ENV_VAR } from "../infra/openclaw-exec-env.js";
 import {
   APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
   prepareSystemRunExecutableIdentityBinding,
@@ -163,7 +165,6 @@ function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeni
   }
 }
 
-/** Resolves the effective exec security/ask policy for one system.run request. */
 export async function resolveEffectiveSystemRunExecPolicy(params: {
   cfg: OpenClawConfig;
   agentId: string | undefined;
@@ -186,24 +187,6 @@ export async function resolveEffectiveSystemRunExecPolicy(params: {
   };
 }
 
-async function resolveSystemRunAutoReviewer(params: {
-  opts: HandleSystemRunInvokeOptions;
-  cfg: OpenClawConfig;
-  agentId: string | undefined;
-  agentExec: ExecToolConfig | undefined;
-  globalExec: ExecToolConfig | undefined;
-}): Promise<ExecAutoReviewer> {
-  if (params.opts.autoReviewer) {
-    return params.opts.autoReviewer;
-  }
-  const { createModelExecAutoReviewer } = await import("../agents/exec-auto-reviewer.js");
-  return createModelExecAutoReviewer({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    reviewer: params.agentExec?.reviewer ?? params.globalExec?.reviewer,
-  });
-}
-
 type HandleSystemRunInvokeOptions = {
   params: SystemRunParams;
   skillBins: SkillBinsProvider;
@@ -217,14 +200,6 @@ type HandleSystemRunInvokeOptions = {
   autoReviewer?: ExecAutoReviewer;
   commitExecAuthorization?: typeof commitExecAuthorizationLocked;
 };
-
-async function loadSystemRunConfig(opts: HandleSystemRunInvokeOptions): Promise<OpenClawConfig> {
-  if (opts.getRuntimeConfig) {
-    return opts.getRuntimeConfig();
-  }
-  const { getRuntimeConfig } = await import("../config/config.js");
-  return getRuntimeConfig();
-}
 
 async function sendSystemRunDenied(
   opts: Pick<HandleSystemRunInvokeOptions, "sendNodeEvent" | "sendInvokeResult">,
@@ -307,7 +282,6 @@ async function parseSystemRunPhase(opts: HandleSystemRunInvokeOptions) {
     return invalid("command required");
   }
 
-  const shellPayload = command.shellPayload;
   const shellWrapperInvocation = isShellWrapperInvocation(command.argv);
   const commandText = command.commandText;
   const approvalPlan =
@@ -393,10 +367,20 @@ async function parseSystemRunPhase(opts: HandleSystemRunInvokeOptions) {
     overrides: opts.params.env ?? undefined,
     shellWrapper: shellWrapperInvocation,
   });
+  if (
+    opts.params.executionContext !== undefined &&
+    (opts.preferMacAppExecHost || !validateSystemRunExecutionContext(opts.params.executionContext))
+  ) {
+    return invalid("executionContext invalid or unsupported");
+  }
+  const env = withHostExecInheritedEnvOmitted(
+    opts.params.executionContext ? ["OPENCLAW_CHANNEL_CONTEXT", SUBAGENT_EXEC_ENV_VAR] : [],
+    () => sanitizeHostExecEnv({ overrides: envOverrides, blockPathOverrides: true }),
+  );
   const validatedApprovalSource: ExecHostRequest["approvalSource"] = approvalSource ?? undefined;
   return {
     argv: command.argv,
-    shellPayload,
+    shellPayload: command.shellPayload,
     shellWrapperInvocation,
     commandText,
     approvalPlan,
@@ -408,7 +392,7 @@ async function parseSystemRunPhase(opts: HandleSystemRunInvokeOptions) {
     approvalSource: validatedApprovalSource,
     delayedApprovalPolicySnapshot,
     envOverrides,
-    env: sanitizeHostExecEnv({ overrides: envOverrides, blockPathOverrides: true }),
+    env: { ...env, ...buildExecRoutingEnv(opts.params.executionContext) },
     cwd,
     timeoutMs: opts.params.timeoutMs ?? undefined,
     needsScreenRecording: opts.params.needsScreenRecording === true,
@@ -420,7 +404,7 @@ async function evaluateSystemRunPolicyPhase(
   opts: HandleSystemRunInvokeOptions,
   parsed: SystemRunParsePhase,
 ) {
-  const cfg = await loadSystemRunConfig(opts);
+  const cfg = opts.getRuntimeConfig?.() ?? (await import("../config/config.js")).getRuntimeConfig();
   const effectivePolicy = await resolveEffectiveSystemRunExecPolicy({
     cfg,
     agentId: parsed.agentId,
@@ -610,13 +594,13 @@ async function evaluateSystemRunPolicyPhase(
       autoReviewEligibility.eligible &&
       policy.eventReason !== "security=deny";
     if (canAutoReviewApprovalMiss) {
-      const reviewer = await resolveSystemRunAutoReviewer({
-        opts,
-        cfg,
-        agentId: parsed.agentId,
-        agentExec,
-        globalExec,
-      });
+      const reviewer =
+        opts.autoReviewer ??
+        (await import("../agents/exec-auto-reviewer.js")).createModelExecAutoReviewer({
+          cfg,
+          agentId: parsed.agentId,
+          reviewer: agentExec?.reviewer ?? globalExec?.reviewer,
+        });
       const decision = await resolveExecAutoReviewDecision(reviewer, {
         command: parsed.commandText,
         argv: autoReviewArgv,
@@ -1057,7 +1041,6 @@ async function executeSystemRunPhase(
   );
 }
 
-/** Executes a validated system.run request, emitting lifecycle events and approvals. */
 export async function handleSystemRunInvoke(opts: HandleSystemRunInvokeOptions): Promise<void> {
   if (opts.signal?.aborted) {
     return;

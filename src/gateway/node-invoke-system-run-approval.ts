@@ -163,6 +163,7 @@ function pickSystemRunParams(raw: Record<string, unknown>): Record<string, unkno
     "systemRunPlan",
     "cwd",
     "env",
+    "executionContext",
     "timeoutMs",
     "needsScreenRecording",
     "agentId",

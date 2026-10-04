@@ -59,6 +59,12 @@ const workerBuildTargets = [
     "src/worker/worker-deploy-image-processor.ts",
   ],
   ["sqlite-store", "worker/sqlite-store.worker", "src/worker/worker-deploy-sqlite-store.ts"],
+  ["state-read", "worker/openclaw-state-read.worker", "src/worker/worker-deploy-state-read.ts"],
+  [
+    "worker-native-lifecycle",
+    "worker/worker-native-lifecycle.worker",
+    "src/infra/worker-native-lifecycle.worker.ts",
+  ],
   ["receiver", "worker/workspace-rsync-receiver", "src/worker/workspace-rsync-receiver.ts"],
   ["github-launcher", "worker/github-exec-launcher", "src/agents/github-exec-launcher.ts"],
   ["service-relay", "worker/service-child-relay", "src/process/supervisor/service-child-relay.ts"],

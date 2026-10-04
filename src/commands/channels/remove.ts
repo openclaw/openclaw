@@ -20,7 +20,7 @@ import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { channelLabel } from "./runtime-label.js";
 import { type ChatChannel, requireValidConfigForWrite } from "./shared.js";
 
-export type ChannelsRemoveOptions = {
+type ChannelsRemoveOptions = {
   agent?: string;
   channel?: string;
   account?: string;

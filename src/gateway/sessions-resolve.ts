@@ -12,8 +12,6 @@ import {
   SESSION_UUID_SUFFIX_RE,
   SHORT_SESSION_ID_RE,
 } from "../../packages/session-url-contract/src/index.js";
-import { resolveLegacyFreeAcpSessionKey } from "../acp/runtime/session-meta-keys.js";
-import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
 import { listAgentIds } from "../agents/agent-scope.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -39,6 +37,14 @@ export type SessionsResolveResult =
   | { ok: true; missing: true }
   | { ok: true; ambiguous: true; candidates: SessionsResolveCandidate[] }
   | { ok: false; error: ErrorShape };
+
+type SessionResolveLookup = Parameters<SessionRowProjection["capture"]>[0];
+
+class SessionResolvePreparationRequired extends Error {
+  constructor(readonly queries: SessionResolveLookup[]) {
+    super("Session metadata must be prepared before resolution");
+  }
+}
 
 function resolveSessionVisibilityFilterOptions(p: SessionsResolveParams) {
   return {
@@ -101,24 +107,43 @@ export async function withPreparedSessionResolve<T>(
       throw new Error("Session projection changed while resolving the session; retry the request");
     }
   };
-  if (key) {
-    return withReadySessionRows(
-      projection,
-      (cfg) => {
-        const agent = resolveRequestedSessionAgentId(cfg, key, p.agentId);
-        return agent.ok ? [{ key, agentId: agent.agentId }] : [];
-      },
-      () => {
-        assertCurrent();
-        return consume(resolveSessionKeyFromResolveParams(params));
-      },
-    );
-  }
-  do {
-    await projection.ensureMaterialized();
+  const pending = new Map<string, SessionResolveLookup>();
+  const resolve = () => {
     assertCurrent();
-  } while (projection.needsMaterialization);
-  return consume(resolveSessionKeyFromResolveParams(params));
+    return consume(resolveSessionKeyFromResolveParams(params));
+  };
+  while (true) {
+    try {
+      if (key || pending.size > 0) {
+        return await withReadySessionRows(
+          projection,
+          (cfg) => {
+            const selected = [...pending.values()];
+            if (key) {
+              const agent = resolveRequestedSessionAgentId(cfg, key, p.agentId);
+              if (agent.ok) {
+                selected.push({ key, agentId: agent.agentId });
+              }
+            }
+            return selected;
+          },
+          resolve,
+        );
+      }
+      do {
+        await projection.ensureMaterialized();
+        assertCurrent();
+      } while (projection.needsMaterialization);
+      return resolve();
+    } catch (error) {
+      if (!(error instanceof SessionResolvePreparationRequired)) {
+        throw error;
+      }
+      for (const query of error.queries) {
+        pending.set(JSON.stringify([query.agentId, query.key, query.storePath]), query);
+      }
+    }
+  }
 }
 
 export function resolveSessionKeyFromResolveParams(params: {
@@ -150,13 +175,14 @@ export function resolveSessionKeyFromResolveParams(params: {
     getTarget: ReturnType<typeof prepare>["getTarget"],
   ) => {
     const facts = new Map<SessionEntry, SessionEntry["acp"]>();
-    const unresolved: Parameters<typeof readAcpSessionMetaBatch>[0]["entries"][number][] = [];
+    const unresolved: SessionResolveLookup[] = [];
     for (const [candidateKey, entry] of entries) {
-      const agentId = parseAgentSessionKey(candidateKey)?.agentId;
+      const parsed = parseAgentSessionKey(candidateKey);
       if (
-        !agentId ||
-        configuredAgentIds.has(agentId) ||
-        !resolveLegacyFreeAcpSessionKey(candidateKey)
+        !parsed ||
+        configuredAgentIds.has(parsed.agentId) ||
+        !parsed.rest.startsWith("acp:") ||
+        parsed.rest.startsWith("acp:binding:")
       ) {
         continue;
       }
@@ -169,24 +195,23 @@ export function resolveSessionKeyFromResolveParams(params: {
           storePath: target.storeTarget.storePath,
         });
       const source = current?.materialized?.source;
-      if (entry.acp || (source && source.entry === current?.entry)) {
-        facts.set(entry, entry.acp ?? source?.thinkingProjection.acpMeta);
-      } else {
-        unresolved.push({ sessionKey: candidateKey, agentId, entry });
+      if (source && source.entry === current?.entry) {
+        facts.set(entry, source.thinkingProjection.acpMeta);
+      } else if (current?.preparedAcpMeta !== undefined) {
+        facts.set(entry, current.preparedAcpMeta ?? undefined);
+      } else if (current) {
+        unresolved.push({
+          key: current.key,
+          agentId: current.agentId,
+          storePath: current.storeTarget.storePath,
+        });
       }
     }
     if (unresolved.length) {
-      for (const [entry, meta] of readAcpSessionMetaBatch({ cfg, entries: unresolved })) {
-        facts.set(entry, meta);
-      }
+      throw new SessionResolvePreparationRequired(unresolved);
     }
     return (candidateKey: string, entry: SessionEntry | undefined) =>
-      validateSessionAgentExists(
-        cfg,
-        candidateKey,
-        entry,
-        (entry && facts.get(entry)) ?? entry?.acp ?? null,
-      );
+      validateSessionAgentExists(cfg, candidateKey, entry, (entry && facts.get(entry)) ?? null);
   };
 
   const sessionIdMatches = (agentId?: string) => {

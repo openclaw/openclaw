@@ -132,6 +132,7 @@ export { planShellAuthorization } from "../infra/exec-authorization-plan.js";
 export { commitExecAuthorizationLocked } from "../infra/exec-approvals-authorization.js";
 export { updateExecApprovalsSync, readExecApprovalsSnapshot } from "../infra/exec-approvals-store.js";
 export { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+export { readSecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
 export { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
 export { WebSocket } from "../../packages/gateway-client/src/websocket.js";
 export { projectComputerActResult } from "../agents/tools/computer-tool-result.js";
@@ -199,7 +200,7 @@ export { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";`;
       }
     });
 
-    it("commits exec authorization through the SQLite worker in a relocated archive", ({
+    it("reads exec environment and commits authorization through SQLite workers in a relocated archive", ({
       signal,
     }) =>
       fixtureLifetime.run(async () => {
@@ -221,12 +222,14 @@ const {
   commitExecAuthorizationLocked,
   updateExecApprovalsSync,
   readExecApprovalsSnapshot,
+  readSecretStoreExecEnvironment,
   closeOpenClawStateDatabaseAsync,
 } = await import(pathToFileURL(entry).href);
 const match = { id: "portable-exec", pattern: process.execPath };
 const command = "portable exec authorization";
 updateExecApprovalsSync({ update: () => ({ version: 1, defaults: { security: "full", ask: "off" }, agents: { main: { allowlist: [match] } } }) });
 try {
+  assert.deepEqual(await readSecretStoreExecEnvironment({ includeSecretSentinels: false }), {});
   const assertCurrent = await commitExecAuthorizationLocked({
     agentId: "main", matches: [match], command, resolvedPath: process.execPath,
     authorization: { source: "current-policy", security: "full", ask: "off", allowlistSatisfied: true },

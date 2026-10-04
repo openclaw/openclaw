@@ -3279,6 +3279,16 @@ a:is(
     transform var(--duration-fast) ease;
 }
 
+.nav-item__children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.nav-item--child {
+  padding-inline-start: calc(var(--space-2) + var(--space-4));
+}
+
 .nav-item__icon {
   width: 20px;
   height: 16px;

@@ -174,7 +174,12 @@ describe("DashboardsPage", () => {
     await element.updateComplete;
 
     expect(subscribeList).toHaveBeenCalledWith(
-      { limit: SIDEBAR_SESSION_ROSTER_LIMIT, hasBoard: true, archivedFilter: "all" },
+      {
+        limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+        rowMode: "compact",
+        hasBoard: true,
+        archivedFilter: "all",
+      },
       expect.any(Function),
     );
     expect(refreshList).not.toHaveBeenCalled();
@@ -185,6 +190,7 @@ describe("DashboardsPage", () => {
     await vi.waitFor(() => expect(refreshList).toHaveBeenCalledTimes(1));
     expect(refreshList).toHaveBeenCalledWith({
       limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+      rowMode: "compact",
       hasBoard: true,
       archivedFilter: "all",
       agentId: "writer",
@@ -322,6 +328,7 @@ describe("DashboardsPage", () => {
       await settleDashboardPreviews(element, runFrame);
       expect(list).toHaveBeenCalledWith({
         limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+        rowMode: "compact",
         hasBoard: true,
         archivedFilter: "all",
         offset: 1,

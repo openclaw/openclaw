@@ -334,7 +334,14 @@ export function hasInternalRuntimeContext(text: string): boolean {
 
 /** Identifies hidden runtime context independently of its queue or transcript owner. */
 export function isOpenClawRuntimeContextCustomMessage(message: unknown): boolean {
-  return isRuntimeContextCarrier(message);
+  // Private transcript types stay hidden even without authority for provider replay.
+  return (
+    isRuntimeContextCarrier(message) ||
+    (typeof message === "object" &&
+      message !== null &&
+      Reflect.get(message, "role") === "custom" &&
+      Reflect.get(message, "customType") === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE)
+  );
 }
 
 /** Remove all structured runtime-context custom messages. */

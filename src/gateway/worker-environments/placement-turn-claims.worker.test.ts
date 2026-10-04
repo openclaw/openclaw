@@ -306,6 +306,7 @@ it("persists monotonic ACKs and their terminal fence through the gate without ho
   const queries = observeHostDataSql();
   try {
     await gate.updateAckCursors({ claim, transcriptSeq: 4 });
+    expect(await placements.listPendingWorkspaceResultsAsync(claim.sessionId)).toEqual([]);
     await gate.updateAckCursors({ claim, liveSeq: 9 });
     await gate.updateAckCursors({ claim, transcriptSeq: 3, liveSeq: 8 });
     await gate.updateAckCursors({ claim, transcriptSeq: 4, liveSeq: 9 });
@@ -314,11 +315,17 @@ it("persists monotonic ACKs and their terminal fence through the gate without ho
     queries.restore();
   }
   expect(placements.get(claim.sessionId)).toMatchObject({
+    generation: claim.placementGeneration,
     lastTranscriptAckCursor: 4,
     lastLiveEventAckCursor: 9,
   });
+  expect(gate.readWorkerTurnLiveAckCursor(claim)).toBe(9);
   expect(await placements.listPendingWorkspaceResultsAsync(claim.sessionId)).toMatchObject([
-    { claimId: claim.claimId, gatewayInstanceId: placements.workspaceResultInstanceId() },
+    {
+      claimId: claim.claimId,
+      runId: claim.runId,
+      gatewayInstanceId: placements.workspaceResultInstanceId(),
+    },
   ]);
   await placements.acceptWorkspaceResult(claim);
   await gate.updateAckCursors({ claim, liveSeq: 9 });
@@ -326,6 +333,8 @@ it("persists monotonic ACKs and their terminal fence through the gate without ho
     (await placements.listPendingWorkspaceResultsAsync(claim.sessionId))[0]?.workspaceAcceptedAtMs,
   ).toBe(1_000);
   await placements.completeWorkspaceResultAndReleaseTurn(claim);
+  expect(placements.get(claim.sessionId)?.turnClaim).toBeNull();
+  expect(gate.validateWorkerTurn(claim)).toBe(false);
   await expect(gate.updateAckCursors({ claim, liveSeq: 10 })).rejects.toThrow("stale worker turn");
   expect(await placements.listPendingWorkspaceResultsAsync(claim.sessionId)).toEqual([]);
   expect(placements.get(claim.sessionId)?.lastLiveEventAckCursor).toBe(9);
@@ -634,45 +643,11 @@ it("keeps a later same-byte native claim authoritative when the old release repl
   }
 });
 
-it("settles a failed local startup after precommit release contention without replaying it", async () => {
-  const claim = input("local-startup-busy");
-  const startupError = new Error("local backend startup failed");
-  const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-  let assertSettlementCurrent: (() => void) | undefined;
-  const runLocal = vi.fn(async () => {
-    assertSettlementCurrent = resolveSessionPlacementTurnSettlementAssertion();
-    vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
-      (admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "transaction") {
-            throw Object.assign(new Error("database is locked"), {
-              code: "ERR_SQLITE_ERROR",
-              errcode: 5,
-            });
-          }
-          admit(request, grant);
-        }, attachment),
-    );
-    throw startupError;
-  });
-  await expect(executeLocalTurn({ claim, placements, runLocal })).rejects.toBe(startupError);
-  expect(runLocal).toHaveBeenCalledOnce();
-  expect(assertSettlementCurrent).toBeDefined();
-  expect(() => assertSettlementCurrent?.()).toThrow("settlement is closed");
-  expect(placements.get(claim.sessionId)?.turnClaim).toBeNull();
-  await expect(
-    executeLocalTurn({
-      claim: { ...claim, runId: "local-startup-next" },
-      placements,
-      runLocal: async () => "next turn completed",
-    }),
-  ).resolves.toBe("next turn completed");
-});
-
-it.each(["authority", "entered writer"] as const)(
-  "retains %s cleanup refusal from forced settlement through ordinary completion",
+it.each(["precommit contention", "authority", "entered writer"] as const)(
+  "settles failed local startup without replaying it after %s",
   async (failure) => {
-    const claim = input(`release-refused-forced-${failure}`);
+    const retryable = failure === "precommit contention";
+    const claim = input(`release-refused-${failure}`);
     const refused =
       failure === "authority"
         ? new Error("release authority refused")
@@ -680,37 +655,60 @@ it.each(["authority", "entered writer"] as const)(
     const startupError = new Error("local backend startup failed");
     const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
     const release = vi.spyOn(placements, "releaseTurnIfOwned");
+    let assertSettlementCurrent: (() => void) | undefined;
     let forcedSettlement: (() => Promise<void>) | undefined;
     let forcedFailure: unknown;
     const runLocal = vi.fn(async () => {
+      if (retryable) {
+        assertSettlementCurrent = resolveSessionPlacementTurnSettlementAssertion();
+      }
       vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
         (admit, attachment) =>
           createAdmission((request, grant) => {
-            if (request.stage === (failure === "authority" ? "transaction" : "commit")) {
+            if (request.stage === (failure === "entered writer" ? "commit" : "transaction")) {
               throw refused;
             }
             admit(request, grant);
           }, attachment),
       );
-      forcedSettlement = resolveSessionPlacementForcedTerminalSettlement();
-      if (forcedSettlement) {
-        try {
-          await forcedSettlement();
-        } catch (error) {
-          forcedFailure = error;
+      if (!retryable) {
+        forcedSettlement = resolveSessionPlacementForcedTerminalSettlement();
+        if (forcedSettlement) {
+          try {
+            await forcedSettlement();
+          } catch (error) {
+            forcedFailure = error;
+          }
         }
       }
       throw startupError;
     });
-    await expect(executeLocalTurn({ claim, placements, runLocal })).rejects.toBe(refused);
-    expect(forcedSettlement).toBeTypeOf("function");
-    expect(forcedFailure).toBe(refused);
+    await expect(executeLocalTurn({ claim, placements, runLocal })).rejects.toBe(
+      retryable ? startupError : refused,
+    );
     expect(runLocal).toHaveBeenCalledOnce();
-    expect(release).toHaveBeenCalledOnce();
-    const retained = release.mock.calls[0]![0];
-    expect(placements.get(claim.sessionId)?.turnClaim).toMatchObject({ claimId: retained.claimId });
-    // Only the fixture reauthorizes this refused cleanup; production must not retry it.
-    await placements.releaseTurn(retained);
+    if (retryable) {
+      expect(assertSettlementCurrent).toBeDefined();
+      expect(() => assertSettlementCurrent?.()).toThrow("settlement is closed");
+      expect(placements.get(claim.sessionId)?.turnClaim).toBeNull();
+      await expect(
+        executeLocalTurn({
+          claim: { ...claim, runId: "local-startup-next" },
+          placements,
+          runLocal: async () => "next turn completed",
+        }),
+      ).resolves.toBe("next turn completed");
+    } else {
+      expect(forcedSettlement).toBeTypeOf("function");
+      expect(forcedFailure).toBe(refused);
+      expect(release).toHaveBeenCalledOnce();
+      const retained = release.mock.calls[0]![0];
+      expect(placements.get(claim.sessionId)?.turnClaim).toMatchObject({
+        claimId: retained.claimId,
+      });
+      // Only the fixture reauthorizes refused cleanup; production must not retry it.
+      await placements.releaseTurn(retained);
+    }
   },
 );
 

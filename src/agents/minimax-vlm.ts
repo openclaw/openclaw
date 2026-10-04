@@ -60,24 +60,16 @@ function coerceApiHost(params: {
     params.modelBaseUrl?.trim() ||
     defaultHost;
 
-  try {
-    const url = new URL(raw);
+  const url = URL.parse(raw);
+  if (url) {
     return url.origin;
-  } catch {
-    // Bare hosts are retried with https:// below; malformed absolute URLs fall
-    // back to provider defaults instead of sending requests to invalid endpoints.
   }
-
+  // Retry bare hosts only; malformed absolute URLs use the provider default.
   if (/^[a-z][a-z\d+.-]*:\/\//i.test(raw)) {
     return defaultHost;
   }
 
-  try {
-    const url = new URL(`https://${raw}`);
-    return url.origin;
-  } catch {
-    return defaultHost;
-  }
+  return URL.parse(`https://${raw}`)?.origin ?? defaultHost;
 }
 
 export async function minimaxUnderstandImage(params: {
