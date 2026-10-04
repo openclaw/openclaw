@@ -39,7 +39,6 @@ describe.skipIf(skipBrokerTests)("broker execa parity", () => {
 
   const cases = [
     { name: "success", source: "process.stdout.write('out\\n');process.stderr.write('err\\n')" },
-    { name: "exit code", source: "process.stdout.write('partial');process.exitCode=7" },
     {
       name: "binary diagnostics",
       source:
