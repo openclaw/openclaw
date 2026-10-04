@@ -102,6 +102,63 @@ describe("markdownToStory inline formatting", () => {
       },
     ]);
   });
+
+  it("links a bare URL that follows text", () => {
+    expect(markdownToStory("Docs: see https://docs.example.com/guide for details")).toEqual([
+      {
+        inline: [
+          "Docs: see ",
+          {
+            link: {
+              href: "https://docs.example.com/guide",
+              content: "https://docs.example.com/guide",
+            },
+          },
+          " for details",
+        ],
+      },
+    ]);
+  });
+
+  it("keeps sentence punctuation after a bare URL out of the link", () => {
+    const link = { link: { href: "https://example.com/a", content: "https://example.com/a" } };
+    expect(markdownToStory("see https://example.com/a. Or (https://example.com/a)!")).toEqual([
+      { inline: ["see ", link, ". Or (", link, ")!"] },
+    ]);
+  });
+
+  const chart = {
+    block: { image: { src: "https://example.com/chart.png", alt: "chart", height: 0, width: 0 } },
+  };
+
+  it.each([
+    {
+      markdown: "Here is the chart ![chart](https://example.com/chart.png)",
+      expected: [{ inline: ["Here is the chart "] }, chart],
+    },
+    {
+      markdown: "## Results ![chart](https://example.com/chart.png)",
+      expected: [{ block: { header: { tag: "h2", content: ["Results "] } } }, chart],
+    },
+    {
+      markdown: "## ![chart](https://example.com/chart.png)",
+      expected: [chart],
+    },
+    {
+      markdown: "> see ![chart](https://example.com/chart.png)",
+      expected: [{ inline: [{ blockquote: ["see "] }] }, chart],
+    },
+    {
+      markdown: "**look ![chart](https://example.com/chart.png)** now",
+      expected: [{ inline: [{ bold: ["look "] }, " now"] }, chart],
+    },
+    {
+      markdown: "- see **![chart](https://example.com/chart.png)**",
+      expected: [{ inline: ["- see "] }, chart],
+    },
+  ])("hoists the image in $markdown to a native image block", ({ markdown, expected }) => {
+    expect(markdownToStory(markdown)).toEqual(expected);
+  });
 });
 
 describe("markdownToStory paragraph boundaries", () => {
