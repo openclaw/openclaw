@@ -1,7 +1,7 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 import nodePath from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { listAgentIds } from "../agents/agent-scope-config.js";
+import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -297,7 +297,26 @@ export async function preflightOpenClawDatabaseSchemas(
   const startup = options.requireStartupMigrationReadiness
     ? getAgentDatabaseStartupAdmission()
     : undefined;
-  const scheduling = startup?.scheduling(options.env);
+  const admissionConfig = options.agentAdmissionConfig;
+  const admittedAgentIds = new Set(admissionConfig ? listAgentIds(admissionConfig) : []);
+  const scheduling = startup?.scheduling(
+    options.env,
+    admissionConfig
+      ? [
+          ...(options.configuredAgentDatabaseCandidatePaths ??
+            resolveConfiguredAgentDatabaseCandidatePaths(admissionConfig, {
+              env: options.env,
+            })),
+          ...Array.from(admittedAgentIds, (agentId) =>
+            nodePath.join(
+              resolveAgentDir(admissionConfig, agentId, options.env),
+              "openclaw-agent.sqlite",
+            ),
+          ),
+        ]
+      : [],
+    admittedAgentIds,
+  );
   const prepareSchemaHeader = startup?.prepareSchemaHeaders(options.env);
   const preparedStartup =
     options.reuseStartupSchemaPreparation &&
@@ -492,9 +511,6 @@ export async function preflightOpenClawDatabaseSchemas(
       presence: inspectCandidatePresence(path),
     }))
     .filter((row) => row.presence.status !== "absent");
-  const admittedAgentIds = options.agentAdmissionConfig
-    ? new Set(listAgentIds(options.agentAdmissionConfig))
-    : undefined;
   const stats = await preflightAgentDatabasesBounded(
     inspectionTargets,
     async (row, inspection, claimAgentTarget, inspectSchema) => {
@@ -532,7 +548,7 @@ export async function preflightOpenClawDatabaseSchemas(
         const recordPreparedSchemaHeader = prepareSchemaHeader?.(realAgentPath);
         const inspectOwnership =
           row.holdForDeletionRecovery ||
-          (row.agentId !== undefined && admittedAgentIds?.has(row.agentId) === true);
+          (row.agentId !== undefined && admittedAgentIds.has(row.agentId));
         const schemaInput = {
           pathname: realAgentPath,
           agentId: row.agentId,

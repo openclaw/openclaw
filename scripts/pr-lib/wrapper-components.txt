@@ -1475,6 +1475,7 @@ src/shared/model-context-message.ts
 src/shared/model-key.ts
 src/shared/node-list-parse.ts
 src/shared/path-array-index.ts
+src/shared/permit-pool.ts
 src/shared/pid-alive.ts
 src/shared/regexp.ts
 src/shared/sandbox-workspace-paths.ts
