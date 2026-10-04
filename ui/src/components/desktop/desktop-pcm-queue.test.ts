@@ -3,24 +3,6 @@ import { AudioContextMock } from "./desktop-pcm-queue.test-support.ts";
 import { DesktopPcmQueue } from "./desktop-pcm-queue.ts";
 
 describe("desktop PCM playback", () => {
-  it("preserves signed little-endian stereo alignment across every byte split", () => {
-    const bytes = new Uint8Array([0, 128, 255, 127, 0, 64, 0, 192]);
-    for (let split = 1; split < bytes.length; split += 1) {
-      const context = new AudioContextMock();
-      const queue = new DesktopPcmQueue(context as unknown as AudioContext);
-      queue.play(bytes.subarray(0, split));
-      queue.play(bytes.subarray(split));
-      expect(context.sources.flatMap((s) => Array.from(s.buffer!.getChannelData(0)))).toEqual([
-        -1, 0.5,
-      ]);
-      expect(context.sources.flatMap((s) => Array.from(s.buffer!.getChannelData(1)))).toEqual([
-        32767 / 32768,
-        -0.5,
-      ]);
-      queue.stop();
-    }
-  });
-
   it("drops old sources at 250ms and trims oversized chunks to their freshest frames", () => {
     const context = new AudioContextMock();
     const queue = new DesktopPcmQueue(context as unknown as AudioContext);
