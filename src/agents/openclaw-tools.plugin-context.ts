@@ -120,6 +120,7 @@ export function resolveOpenClawPluginToolInputs(params: {
       agentDir: options?.agentDir,
       agentId: sessionAgentId,
       sessionKey,
+      runId: options?.runId,
       sessionId: options?.sessionId,
       toolBindings: options?.toolBindings,
       activeProjectKeys: options?.activeProjectKeys,

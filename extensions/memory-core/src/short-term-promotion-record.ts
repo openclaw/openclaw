@@ -132,6 +132,10 @@ export async function recordShortTermRecalls(params: {
       dayBucket?: string;
     }
   >;
+  /** Revalidate an interactive caller after awaited work, before storage admission. */
+  assertCurrent?: () => void;
+  /** Claim one interactive signal under this owner's workspace mutation lock. */
+  shouldRecordRecall?: (result: MemorySearchResult) => boolean;
   signalType?: "recall" | "daily" | "grounded";
   dedupeByQueryPerDay?: boolean;
   dayBucket?: string;
@@ -206,6 +210,7 @@ export async function recordShortTermRecalls(params: {
       return;
     }
     const origins: MemoryEntryOrigin[] = [];
+    const countedResults: MemorySearchResult[] = [];
     for (const result of admitted) {
       const normalizedPath = normalizeMemoryPath(result.path);
       const rawSnippet = normalizeSnippet(result.snippet);
@@ -256,6 +261,26 @@ export async function recordShortTermRecalls(params: {
         dailyClaimEntry?.key ??
         (signalType !== "recall" || store.entries[claimKey] ? claimKey : buildEntryKey(result));
       const existing = store.entries[key];
+      if (
+        signalType === "recall" &&
+        params.shouldRecordRecall &&
+        !params.shouldRecordRecall(result)
+      ) {
+        // Repeated surfaced evidence can lower trust without becoming another
+        // recall signal. Clipped and full excerpts share the same starting line.
+        if (result.provenance) {
+          const matching = existing
+            ? [existing]
+            : Object.values(store.entries).filter(
+                (entry) => entry.path === normalizedPath && entry.startLine === result.startLine,
+              );
+          for (const entry of matching) {
+            entry.provenance = mergeRecallProvenance(entry.provenance, result.provenance);
+          }
+        }
+        continue;
+      }
+      countedResults.push(result);
       const score = clampScore(result.score);
       const effectiveQuery =
         signalType === "grounded" ? normalizeSnippet(result.query ?? query) || query : query;
@@ -356,6 +381,7 @@ export async function recordShortTermRecalls(params: {
         });
       }
     }
+    params.assertCurrent?.();
     // Reserve lineage before publishing candidates. A failed provenance write
     // must not leave durable staged content without its source-session facts.
     for (const agentId of sourceSessions.keys()) {
@@ -364,17 +390,19 @@ export async function recordShortTermRecalls(params: {
         origins: origins.filter((origin) => origin.agentId === agentId),
       });
     }
+    params.assertCurrent?.();
     store.updatedAt = nowIso;
     await writeStore(workspaceDir, store);
-    if (signalType === "grounded") {
+    if (signalType === "grounded" || (params.shouldRecordRecall && countedResults.length === 0)) {
       return;
     }
+    const eventResults = params.shouldRecordRecall ? countedResults : admitted;
     await appendMemoryHostEvent(workspaceDir, {
       type: "memory.recall.recorded",
       timestamp: nowIso,
       query,
-      resultCount: admitted.length,
-      results: admitted.map(recallEventResult),
+      resultCount: eventResults.length,
+      results: eventResults.map(recallEventResult),
     });
     if (skipped.length > 0) {
       await appendSkippedEvent(admitted.length);

@@ -17,6 +17,8 @@ export function createMemorySearchToolOrThrow(params?: {
   config?: OpenClawConfig;
   agentId?: string;
   agentSessionKey?: string;
+  runId?: string;
+  assertInvocationCurrent?: () => void;
   oneShotCliRun?: boolean;
   conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
   activeProjectKeys?: readonly string[];
@@ -25,6 +27,8 @@ export function createMemorySearchToolOrThrow(params?: {
     config: params?.config ? asOpenClawConfig(params.config) : createDefaultMemoryToolConfig(),
     ...(params?.agentId ? { agentId: params.agentId } : {}),
     ...(params?.agentSessionKey ? { agentSessionKey: params.agentSessionKey } : {}),
+    runId: params?.runId,
+    assertInvocationCurrent: params?.assertInvocationCurrent,
     ...(params?.oneShotCliRun ? { oneShotCliRun: params.oneShotCliRun } : {}),
     ...(params?.conversationRecall ? { conversationRecall: params.conversationRecall } : {}),
     ...(params?.activeProjectKeys ? { activeProjectKeys: params.activeProjectKeys } : {}),

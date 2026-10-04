@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it as baseIt, vi } from "vitest";
+import { recordMemoryRecall } from "./interactive-recall.js";
 import { recordShortTermRecalls, type ShortTermRecallEntry } from "./short-term-promotion.js";
 import {
   configureMemoryCoreDreamingStateForTests,
@@ -58,6 +59,72 @@ describe("short-term recall recording of Conversation Summary snippets", () => {
     }
     resetMemoryCoreDreamingStateForTests();
   });
+
+  baseIt(
+    "preserves native query diversity and conservative provenance through public recall admission",
+    async () => {
+      const workspaceDir = path.join(fixtureRoot, `api-case-${caseId++}`);
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      const snippet = "Verify the backup before changing the rollout.";
+      const result = memoryRecallResult("memory/2026-01-02.md", 1, 1, 0.9, snippet);
+      await fs.writeFile(path.join(workspaceDir, result.path), `${snippet}\n`);
+      const params = {
+        config: {
+          plugins: { entries: { "memory-core": { config: { dreaming: { enabled: true } } } } },
+        },
+        workspaceDir,
+        query: "rollout backup",
+        results: [result],
+        sessionKey: "agent:fixture:main",
+        runId: "synthetic-first-run",
+        assertActive: () => {},
+      };
+      const claim = () => true;
+      await recordMemoryRecall(params, claim);
+      await recordMemoryRecall(
+        { ...params, runId: "synthetic-next-run", query: "deployment recovery" },
+        claim,
+      );
+      let store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
+      let entry = Object.values(store.entries as Record<string, ShortTermRecallEntry>)[0];
+      expect(entry.recallCount).toBe(2);
+      expect(entry.userQueryHashes).toHaveLength(2);
+      expect(entry.provenance).toMatchObject({ originClass: "agent", sessionKind: "unknown" });
+      await recordMemoryRecall(
+        {
+          ...params,
+          results: [
+            {
+              ...result,
+              provenance: {
+                originClass: "untrusted",
+                sessionKind: "unknown",
+                observedAt: 1,
+              },
+            },
+          ],
+        },
+        claim,
+      );
+      store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
+      entry = Object.values(store.entries as Record<string, ShortTermRecallEntry>)[0];
+      expect(entry.provenance?.originClass).toBe("untrusted");
+      await expect(
+        recordShortTermRecalls({
+          workspaceDir,
+          query: "late query",
+          results: [result],
+          assertCurrent: () => {
+            throw new Error("closed");
+          },
+        }),
+      ).rejects.toThrow("closed");
+      store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
+      expect(
+        Object.values(store.entries as Record<string, ShortTermRecallEntry>)[0].recallCount,
+      ).toBe(3);
+    },
+  );
 
   baseIt.each([
     ["Conversation Summary: Router VLAN 20 was migrated successfully.", true],

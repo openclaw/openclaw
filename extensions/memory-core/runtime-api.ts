@@ -27,3 +27,5 @@ export type {
   ShortTermDreamingStatsEntry,
   ShortTermAuditSummary,
 } from "./src/short-term-promotion.js";
+
+export { recordMemoryRecall } from "./src/interactive-recall.js";

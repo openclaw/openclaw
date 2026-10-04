@@ -8,8 +8,13 @@ type RecordShortTermRecallsFn =
 
 const recallTrackingMock = vi.hoisted(() => ({
   recordShortTermRecalls: vi.fn<RecordShortTermRecallsFn>(async () => {}),
+  recordMemoryRecall: vi.fn(async (_params: unknown) => {}),
   moduleLoads: 0,
   onLoad: vi.fn<() => void>(),
+}));
+
+vi.mock("openclaw/plugin-sdk/memory-recall", () => ({
+  recordMemoryRecall: recallTrackingMock.recordMemoryRecall,
 }));
 
 vi.mock("./short-term-promotion-record.js", () => {
@@ -40,6 +45,7 @@ describe("memory_search recall tracking", () => {
   beforeEach(() => {
     clearMemoryPluginState();
     resetMemoryToolMockState({ searchImpl: async () => [recallHit] });
+    recallTrackingMock.recordMemoryRecall.mockClear();
     recallTrackingMock.recordShortTermRecalls.mockReset();
     recallTrackingMock.recordShortTermRecalls.mockResolvedValue(undefined);
   });
@@ -72,6 +78,67 @@ describe("memory_search recall tracking", () => {
     } finally {
       clock.mockRestore();
     }
+  });
+
+  it("routes host-turn native search through the shared surfaced-recall API", async () => {
+    const assertInvocationCurrent = vi.fn();
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { entries: { main: {} } },
+        plugins: { entries: { "memory-core": { config: { dreaming: { enabled: true } } } } },
+      },
+      agentSessionKey: "agent:main:main",
+      runId: "native-recall-run",
+      assertInvocationCurrent,
+    });
+    await tool.execute("call_scoped_recall", { query: "glacier" });
+    await vi.dynamicImportSettled();
+    expect(recallTrackingMock.recordMemoryRecall).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        query: "glacier",
+        results: [recallHit],
+        runId: "native-recall-run",
+        sessionKey: "agent:main:main",
+        assertActive: assertInvocationCurrent,
+      }),
+    );
+    expect(recallTrackingMock.recordShortTermRecalls).not.toHaveBeenCalled();
+  });
+
+  it("settles scoped recall before the host can close the tool invocation", async () => {
+    let finish: (() => void) | undefined;
+    let active = true;
+    const assertInvocationCurrent = () => {
+      if (!active) {
+        throw new Error("closed");
+      }
+    };
+    recallTrackingMock.recordMemoryRecall.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      assertInvocationCurrent();
+    });
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { entries: { main: {} } },
+        plugins: { entries: { "memory-core": { config: { dreaming: { enabled: true } } } } },
+      },
+      agentSessionKey: "agent:main:main",
+      runId: "native-live-recall",
+      assertInvocationCurrent,
+    });
+    let settled = false;
+    const execution = tool.execute("call_live_recall", { query: "glacier" }).then(() => {
+      settled = true;
+      active = false;
+    });
+    await vi.dynamicImportSettled();
+    expect(finish).toBeDefined();
+    expect(settled).toBe(false);
+    finish?.();
+    await execution;
+    expect(settled).toBe(true);
   });
 
   it("does not block tool results on slow best-effort recall writes", async () => {

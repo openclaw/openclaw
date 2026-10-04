@@ -301,3 +301,39 @@ the native operation.
 Use the plugin approval timeout independently of the agent-run timeout. Authenticated
 Control UI reviewers can inspect `detail`, while channel messages retain
 the bounded description. Oversized detail is rejected by the existing request schema.
+
+## Interactive memory recall recording
+
+Memory plugins can optionally import `recordMemoryRecall` from
+`openclaw/plugin-sdk/memory-recall`. This records interactive recall
+through memory-core's existing dreaming owner, even when another plugin owns the
+memory slot. It does not create a separate promotion engine.
+
+Call it only after final tool-result selection or successful prompt injection,
+with the actual query, canonical workspace, and literal surfaced file excerpts.
+Pass `config`, `workspaceDir`, `query`, `results`, `sessionKey`, `runId`, and
+`assertActive`. Tool factories receive the host `runId` and
+`assertInvocationCurrent`; agent hooks receive `runId` and the invocation-bound
+`hookInvocation.assertActive`. Preserve the assertion's receiver if needed.
+Skip recording when these host identities or live assertions are unavailable;
+never use a session ID as a turn ID.
+
+Results use `MemorySearchResult` fields: `source`, `path`, `startLine`, `endLine`,
+`snippet`, `score`, and any actual source `provenance`. Only eligible canonical
+short-term files under `memory/` can earn signals. The owner securely reads the
+cited lines and checks the literal snippet prefix before recording. Virtual
+vector IDs, generated summaries, curated memory, dreaming output, sessions,
+missing sources, and paths escaping the workspace do not qualify. Never invent
+owner provenance or relabel another store's IDs as source files. Omitted provenance
+keeps the native recorder's existing `agent`/`unknown` default for workspace-file
+hits; it is not proof that an owner authored the content. Explicit less-trusted
+provenance is preserved.
+
+The owner honors native dreaming configuration and filters, retains the actual
+query and provenance, and deduplicates the same workspace/source starting line across
+manual aliases and auto recall in one host run. Run-context lifecycle owns
+cleanup; subsequent turns remain independent observations. Daily ingestion must
+not call this API. Failed, empty, discarded, and late auto-injection results must
+not call it either. This is an optional additive API: plugins supporting older
+hosts should dynamically import it and skip recording when unavailable, without
+changing their normal recall result.

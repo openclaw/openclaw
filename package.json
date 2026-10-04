@@ -1395,6 +1395,10 @@
     "./plugin-sdk/memory-core-host-runtime-files": {
       "default": "./dist/plugin-sdk/memory-core-host-runtime-files.js"
     },
+    "./plugin-sdk/memory-recall": {
+      "types": "./dist/plugin-sdk/memory-recall.d.ts",
+      "default": "./dist/plugin-sdk/memory-recall.js"
+    },
     "./plugin-sdk/memory-host-core": {
       "types": "./dist/plugin-sdk/memory-host-core.d.ts",
       "default": "./dist/plugin-sdk/memory-host-core.js"
