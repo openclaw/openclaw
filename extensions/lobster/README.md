@@ -84,6 +84,7 @@ Use `llm.invoke --provider embedded --prompt 'Return a JSON object'` to request 
 - Model specified: request a host-authorized override, pinned without fallbacks. A caller without override permission is refused before inference.
 - Existing `openclaw`, `pi` and `http` routes remain remote routes. Provider auto-detection uses the final merged workflow and step environment; it never infers `embedded`.
 - Embedded stages do not read or write persistent LLM cache/run-state answers. Refresh flags and step environment settings cannot enable reuse. Re-executing an embedded stage, including after an approval checkpoint, spends a new completion.
+- A checkpoint that holds LLM stage output is authorized again before a resume returns or consumes it: the Gateway caller must still be current, and embedded output resumes only for the same agent and a caller still holding every operator scope the producing call held. A checkpoint with no plugin record is treated as holding a saved answer. Cancelling a checkpoint is not gated.
 - Other routes retain their existing cache. Before returning a replay, the plugin requires a host authority checker, revalidates the current Gateway caller and refuses cancellation or revoked authority. This is Gateway authorization, not a new check against a remote provider's credential or model policy.
 - The host background-completion API returns text only. The Lobster result does not report the actual selected model or token usage. This route does not expose per-stage sampling or output-token controls.
 

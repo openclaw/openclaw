@@ -332,6 +332,8 @@ describe("lobster plugin tool", () => {
       factory(fakeCtx({ agentId: "work" }));
       const options = runnerFactory.mock.calls[0]?.[0];
       expect(options?.authorizeReplay).toBeTypeOf("function");
+      expect(options?.authorizeCheckpoint).toBeTypeOf("function");
+      expect(options?.describeCaller?.()).toMatchObject({ agentId: "work" });
       expect(options?.llmAdapters?.embedded).toBeDefined();
     } finally {
       runnerFactory.mockRestore();

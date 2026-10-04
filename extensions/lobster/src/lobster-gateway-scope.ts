@@ -1,4 +1,11 @@
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
+import type {
+  LobsterCheckpointCaller,
+  LobsterCheckpointProvenance,
+} from "./lobster-checkpoint-provenance.js";
+
+/** Recorded alongside operator scopes when the host let the caller override models. */
+const MODEL_OVERRIDE_AUTHORITY = "model-override";
 
 /**
  * The embedded route spends the gateway's own model authority through the host
@@ -34,6 +41,59 @@ export async function authorizeSavedAnswerForCaller(): Promise<void> {
   if (scope.hasCurrentClientAuthority && !scope.hasCurrentClientAuthority()) {
     throw new Error(
       "lobster saved LLM answer refused: the caller's authority is no longer current",
+    );
+  }
+}
+
+/**
+ * The calling agent and the authority the current gateway request carries: its
+ * operator scopes, and whether the host lets it override models. Recorded when
+ * an embedded stage runs, because that stage spent exactly this authority.
+ */
+export function describeCurrentCaller(agentId: string | undefined): LobsterCheckpointCaller {
+  const client = getPluginRuntimeGatewayRequestScope()?.client;
+  const scopes = client?.connect?.scopes;
+  const authority = new Set(
+    Array.isArray(scopes) ? scopes.filter((scope) => typeof scope === "string") : [],
+  );
+  if (client?.internal?.allowModelOverride === true) {
+    authority.add(MODEL_OVERRIDE_AUTHORITY);
+  }
+  const trimmed = agentId?.trim();
+  return { ...(trimmed ? { agentId: trimmed } : {}), authority: [...authority].toSorted() };
+}
+
+/**
+ * Authorize a resume before Lobster discloses or consumes what its checkpoint
+ * stored. Output from an LLM stage gets the same check as a saved answer; output
+ * from an embedded stage also stays with the agent it was produced for, and with
+ * a caller who still holds every authority the producing caller held. A
+ * checkpoint with no record cannot be shown to carry no model output, so it is
+ * treated as carrying a saved answer.
+ */
+export async function authorizeCheckpointForCaller(
+  provenance: LobsterCheckpointProvenance | undefined,
+  callerAgentId: string | undefined,
+): Promise<void> {
+  if (provenance && !provenance.untrackedOrigin && provenance.stages.length === 0) {
+    return;
+  }
+  await authorizeSavedAnswerForCaller();
+  if (!provenance?.stages.some((stage) => stage.provider === "embedded")) {
+    return;
+  }
+  const producer = provenance.caller;
+  const current = describeCurrentCaller(callerAgentId);
+  if (!producer?.agentId || producer.agentId !== current.agentId) {
+    throw new Error(
+      "lobster checkpoint refused: its embedded LLM output was produced for another agent",
+    );
+  }
+  const held = new Set(current.authority);
+  const missing = producer.authority.filter((entry) => !held.has(entry));
+  if (missing.length > 0) {
+    throw new Error(
+      `lobster checkpoint refused: the caller no longer holds ${missing.join(", ")}, which produced its embedded LLM output`,
     );
   }
 }

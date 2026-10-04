@@ -5,7 +5,9 @@ import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import {
   assertEmbeddedRouteRunsInGateway,
+  authorizeCheckpointForCaller,
   authorizeSavedAnswerForCaller,
+  describeCurrentCaller,
 } from "./lobster-gateway-scope.js";
 import {
   createEmbeddedLobsterRunner,
@@ -148,6 +150,9 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
       // configured Gateway URL/token to host-owned inference on upgrade.
       llmAdapters: { embedded: createOpenClawLlmAdapter(api, options?.callerAgentId) },
       authorizeReplay: async () => await authorizeSavedAnswerForCaller(),
+      authorizeCheckpoint: async (provenance) =>
+        await authorizeCheckpointForCaller(provenance, options?.callerAgentId),
+      describeCaller: () => describeCurrentCaller(options?.callerAgentId),
     });
   return {
     name: "lobster",

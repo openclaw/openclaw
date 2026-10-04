@@ -6,6 +6,15 @@ import {
   toErrorObject as toLintErrorObject,
 } from "openclaw/plugin-sdk/error-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
+import {
+  deleteCheckpointProvenance,
+  readCheckpointProvenance,
+  writeCheckpointProvenance,
+  type LobsterCheckpointCaller,
+  type LobsterCheckpointHandle,
+  type LobsterCheckpointProvenance,
+  type LobsterLlmStage,
+} from "./lobster-checkpoint-provenance.js";
 
 type LobsterInputRequest = {
   type?: "input_request";
@@ -291,6 +300,58 @@ async function* replayItems(items: unknown[]): AsyncIterable<unknown> {
   yield* items;
 }
 
+/** LLM stages that executed during one runner call, and the caller an embedded one spent. */
+type LlmStageTrace = { stages: LobsterLlmStage[]; caller?: LobsterCheckpointCaller };
+
+function mergeCaller(
+  previous: LobsterCheckpointCaller | undefined,
+  current: LobsterCheckpointCaller | undefined,
+): LobsterCheckpointCaller | undefined {
+  if (!previous || !current) {
+    return previous ?? current;
+  }
+  // The resume was authorized, so both name the same agent; keep the union of
+  // authority so a later resume must hold everything either caller spent.
+  return {
+    ...(previous.agentId ? { agentId: previous.agentId } : {}),
+    authority: [...new Set([...previous.authority, ...current.authority])].toSorted(),
+  };
+}
+
+function nextProvenance(
+  previous: LobsterCheckpointProvenance | undefined,
+  resumed: boolean,
+  trace: LlmStageTrace,
+): LobsterCheckpointProvenance {
+  const stages = new Map<string, LobsterLlmStage>();
+  for (const stage of [...(previous?.stages ?? []), ...trace.stages]) {
+    stages.set(`${stage.provider}\u0000${stage.command}`, stage);
+  }
+  const caller = mergeCaller(previous?.caller, trace.caller);
+  return {
+    version: 1,
+    stages: [...stages.values()],
+    ...(caller ? { caller } : {}),
+    ...(resumed && (!previous || previous.untrackedOrigin) ? { untrackedOrigin: true } : {}),
+  };
+}
+
+function checkpointHandle(envelope: EmbeddedToolEnvelope): LobsterCheckpointHandle | undefined {
+  if (!envelope.ok) {
+    return undefined;
+  }
+  if (envelope.status === "needs_approval" && envelope.requiresApproval) {
+    return {
+      token: envelope.requiresApproval.resumeToken,
+      approvalId: envelope.requiresApproval.approvalId,
+    };
+  }
+  if (envelope.status === "needs_input" && envelope.requiresInput) {
+    return { token: envelope.requiresInput.resumeToken };
+  }
+  return undefined;
+}
+
 /**
  * Wrap Lobster's LLM commands at the one point every stage passes through,
  * inline, workflow and resumed alike, after the stage environment is merged:
@@ -307,6 +368,7 @@ async function* replayItems(items: unknown[]): AsyncIterable<unknown> {
 function wrapLlmCommands(
   base: LobsterRegistry,
   authorizeReplay: (request: LobsterReplayRequest) => Promise<void>,
+  onStage: (stage: LobsterLlmStage) => void,
 ): LobsterRegistry {
   return {
     list: () => base.list(),
@@ -324,6 +386,7 @@ function wrapLlmCommands(
               ? { refresh: true, "disable-cache": true, "state-key": "" }
               : {};
           const result = await command.run({ input, ctx, args: { ...args, provider, ...hidden } });
+          onStage({ provider, command: name });
           const items: unknown[] = [];
           for await (const item of result.output ?? replayItems([])) {
             items.push(item);
@@ -349,6 +412,14 @@ export function createEmbeddedLobsterRunner(options?: {
   llmAdapters?: Record<string, EmbeddedLlmAdapter>;
   /** Re-authorizes the caller before a saved non-embedded answer is shown. Required with llmAdapters. */
   authorizeReplay?: (request: LobsterReplayRequest) => Promise<void>;
+  /**
+   * Re-authorizes the caller before a resume discloses or consumes what a
+   * checkpoint stored. Receives undefined for a checkpoint with no record.
+   * Required with llmAdapters.
+   */
+  authorizeCheckpoint?: (provenance: LobsterCheckpointProvenance | undefined) => Promise<void>;
+  /** The current caller's agent and authority, recorded when an embedded stage runs. Required with llmAdapters. */
+  describeCaller?: () => LobsterCheckpointCaller;
 }): LobsterRunner {
   const loadRuntime = options?.loadRuntime ?? loadEmbeddedToolRuntimeFromPackage;
   let runtimePromise: Promise<EmbeddedToolRuntime> | undefined;
@@ -357,13 +428,32 @@ export function createEmbeddedLobsterRunner(options?: {
       runtimePromise ??= loadRuntime();
       const runtime = await runtimePromise;
       let registry: LobsterRegistry | undefined;
+      let checkpoints:
+        | {
+            authorize: (provenance: LobsterCheckpointProvenance | undefined) => Promise<void>;
+            trace: LlmStageTrace;
+          }
+        | undefined;
       if (options?.llmAdapters) {
-        if (!runtime.createDefaultRegistry || !options.authorizeReplay) {
+        const { authorizeReplay, authorizeCheckpoint, describeCaller } = options;
+        if (
+          !runtime.createDefaultRegistry ||
+          !authorizeReplay ||
+          !authorizeCheckpoint ||
+          !describeCaller
+        ) {
           throw new Error(
-            "lobster embedded route requires the Lobster command registry and a replay authorizer",
+            "lobster embedded route requires the Lobster command registry, a replay authorizer and a checkpoint authorizer",
           );
         }
-        registry = wrapLlmCommands(runtime.createDefaultRegistry(), options.authorizeReplay);
+        const trace: LlmStageTrace = { stages: [] };
+        checkpoints = { authorize: authorizeCheckpoint, trace };
+        registry = wrapLlmCommands(runtime.createDefaultRegistry(), authorizeReplay, (stage) => {
+          trace.stages.push(stage);
+          if (stage.provider === "embedded") {
+            trace.caller = mergeCaller(trace.caller, describeCaller());
+          }
+        });
       }
       return await withTimeout(params.timeoutMs, async (signal) => {
         const maxStdoutBytes = Math.max(1024, params.maxStdoutBytes);
@@ -379,6 +469,9 @@ export function createEmbeddedLobsterRunner(options?: {
           ...(options?.llmAdapters ? { llmAdapters: options.llmAdapters } : {}),
         };
         let envelope: EmbeddedToolEnvelope;
+        let resumed:
+          | { handle: LobsterCheckpointHandle; provenance?: LobsterCheckpointProvenance }
+          | undefined;
 
         if (params.action === "run") {
           const pipeline = params.pipeline?.trim() ?? "";
@@ -426,6 +519,21 @@ export function createEmbeddedLobsterRunner(options?: {
               throw new Error("responseJson must be valid JSON");
             }
           }
+          if (checkpoints && hasCancel) {
+            // Cancelling discloses nothing and deletes the stored output.
+            resumed = { handle: { token, approvalId } };
+          } else if (checkpoints) {
+            // Lobster hands a checkpoint's stored stage output to the remaining
+            // stages, or back to the caller, without running those stages again, so
+            // the LLM command wrapper never sees it. Authorize the caller against
+            // what the checkpoint carries before Lobster claims or consumes it; a
+            // refusal leaves the checkpoint intact for a caller who may resume it.
+            // A rejected approval is gated too: a workflow continues past one.
+            const handle = { token, approvalId };
+            const provenance = await readCheckpointProvenance(ctx.env ?? {}, handle);
+            await checkpoints.authorize(provenance);
+            resumed = { handle, ...(provenance ? { provenance } : {}) };
+          }
           envelope = await runtime.resumeToolRequest({
             ...(token ? { token } : {}),
             ...(approvalId ? { approvalId } : {}),
@@ -434,6 +542,23 @@ export function createEmbeddedLobsterRunner(options?: {
             ...(hasCancel ? { cancel: true } : {}),
             ctx,
           });
+        }
+        if (checkpoints) {
+          const next = checkpointHandle(envelope);
+          if (next) {
+            await writeCheckpointProvenance(
+              ctx.env ?? {},
+              next,
+              nextProvenance(resumed?.provenance, Boolean(resumed), checkpoints.trace),
+            );
+          }
+          if (
+            resumed &&
+            envelope.ok &&
+            (envelope.status === "ok" || envelope.status === "cancelled")
+          ) {
+            await deleteCheckpointProvenance(ctx.env ?? {}, resumed.handle);
+          }
         }
         return normalizeEnvelope(envelope, maxStdoutBytes);
       });

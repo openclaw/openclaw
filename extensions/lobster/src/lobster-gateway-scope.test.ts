@@ -2,7 +2,9 @@ import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertEmbeddedRouteRunsInGateway,
+  authorizeCheckpointForCaller,
   authorizeSavedAnswerForCaller,
+  describeCurrentCaller,
 } from "./lobster-gateway-scope.js";
 
 vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
@@ -82,5 +84,68 @@ describe("lobster gateway scope", () => {
       },
     });
     await expect(authorizeSavedAnswerForCaller()).rejects.toThrow("request ended");
+  });
+});
+
+describe("lobster checkpoint authority", () => {
+  type Client = NonNullable<ReturnType<typeof getPluginRuntimeGatewayRequestScope>>["client"];
+  function caller(scopes: string[], allowModelOverride = false, current = true) {
+    scopeMock.mockReturnValue({
+      ...base,
+      hasCurrentClientAuthority: () => current,
+      client: { connect: { scopes }, internal: { allowModelOverride } } as unknown as Client,
+    });
+  }
+  const embedded = {
+    version: 1 as const,
+    stages: [{ provider: "embedded", command: "llm.invoke" }],
+    caller: { agentId: "main", authority: ["operator.admin", "operator.write"] },
+  };
+
+  it("records the calling agent and the request's authority", () => {
+    caller(["operator.write", "operator.admin", "operator.write"], true);
+    expect(describeCurrentCaller(" main ")).toEqual({
+      agentId: "main",
+      authority: ["model-override", "operator.admin", "operator.write"],
+    });
+  });
+  it("lets a checkpoint without LLM output resume outside a gateway request", async () => {
+    await expect(
+      authorizeCheckpointForCaller({ version: 1, stages: [] }, undefined),
+    ).resolves.toBeUndefined();
+  });
+  it("treats an unrecorded checkpoint as a saved answer", async () => {
+    await expect(authorizeCheckpointForCaller(undefined, "main")).rejects.toThrow(
+      "gateway request scope",
+    );
+    caller(["operator.write"]);
+    await expect(authorizeCheckpointForCaller(undefined, "main")).resolves.toBeUndefined();
+  });
+  it("re-checks current authority before stored remote output is consumed", async () => {
+    const remote = { version: 1 as const, stages: [{ provider: "http", command: "llm.invoke" }] };
+    caller(["operator.write"], false, false);
+    await expect(authorizeCheckpointForCaller(remote, "main")).rejects.toThrow("no longer current");
+  });
+  it("resumes embedded output for the same agent holding the same authority", async () => {
+    caller(["operator.write", "operator.admin", "operator.read"]);
+    await expect(authorizeCheckpointForCaller(embedded, "main")).resolves.toBeUndefined();
+  });
+  it("refuses embedded output to another agent", async () => {
+    caller(["operator.write", "operator.admin"]);
+    await expect(authorizeCheckpointForCaller(embedded, "other")).rejects.toThrow(
+      "produced for another agent",
+    );
+  });
+  it("refuses embedded output to a caller that lost authority during the pause", async () => {
+    caller(["operator.write", "operator.read"]);
+    await expect(authorizeCheckpointForCaller(embedded, "main")).rejects.toThrow(
+      "no longer holds operator.admin",
+    );
+  });
+  it("refuses embedded output with no recorded producer", async () => {
+    caller(["operator.write", "operator.admin"]);
+    await expect(
+      authorizeCheckpointForCaller({ version: 1, stages: embedded.stages }, "main"),
+    ).rejects.toThrow("produced for another agent");
   });
 });

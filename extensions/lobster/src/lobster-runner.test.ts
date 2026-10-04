@@ -5,6 +5,7 @@ import path from "node:path";
 import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { LobsterCheckpointProvenance } from "./lobster-checkpoint-provenance.js";
 import {
   createEmbeddedLobsterRunner,
   resolveLobsterCwd,
@@ -397,7 +398,10 @@ describe("createEmbeddedLobsterRunner", () => {
       let calls = 0;
       let denied = false;
       let replayAllowed = true;
+      let checkpointAllowed = true;
       const replayChecks: unknown[] = [];
+      const checkpointChecks: Array<LobsterCheckpointProvenance | undefined> = [];
+      const caller = { agentId: "main", authority: ["operator.write"] };
       const runner = createEmbeddedLobsterRunner({
         llmAdapters: {
           embedded: {
@@ -417,6 +421,13 @@ describe("createEmbeddedLobsterRunner", () => {
             throw new Error("replay not authorized");
           }
         },
+        authorizeCheckpoint: async (provenance) => {
+          checkpointChecks.push(provenance);
+          if (!checkpointAllowed) {
+            throw new Error("checkpoint not authorized");
+          }
+        },
+        describeCaller: () => ({ ...caller, authority: [...caller.authority] }),
       });
       const run = (pipeline: string) =>
         runner.run(runParams({ pipeline, cwd: dir, maxStdoutBytes: 64_000 }));
@@ -446,7 +457,21 @@ describe("createEmbeddedLobsterRunner", () => {
         denyReplay: () => {
           replayAllowed = false;
         },
+        setCheckpointAllowed: (allowed: boolean) => {
+          checkpointAllowed = allowed;
+        },
+        resume: (decision: Partial<LobsterRunnerParams>) =>
+          runner.run(
+            runParams({
+              action: "resume",
+              pipeline: undefined,
+              cwd: dir,
+              maxStdoutBytes: 64_000,
+              ...decision,
+            }),
+          ),
         replayChecks,
+        checkpointChecks,
       };
     }
 
@@ -550,6 +575,133 @@ describe("createEmbeddedLobsterRunner", () => {
         ),
       ).rejects.toThrow("authority denied");
       expect(f.calls()).toBe(2);
+    });
+
+    function approvalToken(envelope: Awaited<ReturnType<ReturnType<typeof fixture>["run"]>>) {
+      if (!envelope.ok || envelope.status !== "needs_approval") {
+        throw new Error("expected an approval checkpoint");
+      }
+      const token = envelope.requiresApproval?.resumeToken;
+      if (!token) {
+        throw new Error("expected a resume token");
+      }
+      return token;
+    }
+
+    const embeddedProvenance = {
+      version: 1,
+      stages: [{ provider: "embedded", command: "llm.invoke" }],
+      caller: { agentId: "main", authority: ["operator.write"] },
+    };
+
+    it("authorizes a checkpoint holding embedded output before a resume returns it", async () => {
+      const f = fixture();
+      const paused = await f.run(embedded + " | approve --emit --prompt use-answer");
+      const token = approvalToken(paused);
+      expect(f.calls()).toBe(1);
+      f.setCheckpointAllowed(false);
+      await expect(f.resume({ token, approve: true })).rejects.toThrow("checkpoint not authorized");
+      expect(f.checkpointChecks).toEqual([embeddedProvenance]);
+      // The refusal came before Lobster claimed the checkpoint, so an authorized
+      // caller can still resume it, and the stage is not run again.
+      f.setCheckpointAllowed(true);
+      await expect(f.resume({ token, approve: true })).resolves.toMatchObject({
+        ok: true,
+        status: "ok",
+        output: [expect.objectContaining({ source: "openclaw-embedded" })],
+      });
+      expect(f.calls()).toBe(1);
+    });
+
+    it("authorizes a workflow checkpoint before a later step consumes embedded output", async () => {
+      const f = fixture();
+      const filePath = path.join(f.dir, "consume.json");
+      const consumed = path.join(f.dir, "consumed.json");
+      await fs.writeFile(
+        filePath,
+        JSON.stringify({
+          name: "consume",
+          steps: [
+            { id: "ask", pipeline: embedded, approval: "Use the answer?" },
+            { id: "use", command: "cat > consumed.json", stdin: "$ask.stdout" },
+          ],
+        }),
+      );
+      const paused = await f.runner.run(
+        runParams({ pipeline: filePath, cwd: f.dir, maxStdoutBytes: 64_000 }),
+      );
+      const token = approvalToken(paused);
+      f.setCheckpointAllowed(false);
+      await expect(f.resume({ token, approve: true })).rejects.toThrow("checkpoint not authorized");
+      await expect(fs.stat(consumed)).rejects.toMatchObject({ code: "ENOENT" });
+      // A rejected approval does not end a workflow, so it is gated as well.
+      await expect(f.resume({ token, approve: false })).rejects.toThrow(
+        "checkpoint not authorized",
+      );
+      await expect(fs.stat(consumed)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(f.checkpointChecks).toEqual([embeddedProvenance, embeddedProvenance]);
+      f.setCheckpointAllowed(true);
+      await expect(f.resume({ token, approve: true })).resolves.toMatchObject({
+        ok: true,
+        status: "ok",
+      });
+      expect(JSON.parse(await fs.readFile(consumed, "utf8"))).toMatchObject({
+        source: "openclaw-embedded",
+      });
+      expect(f.calls()).toBe(1);
+    });
+
+    it("carries embedded provenance through later checkpoints of the same run", async () => {
+      const f = fixture();
+      const first = approvalToken(
+        await f.run(embedded + " | approve --emit --prompt one | approve --emit --prompt two"),
+      );
+      const second = approvalToken(await f.resume({ token: first, approve: true }));
+      f.setCheckpointAllowed(false);
+      await expect(f.resume({ token: second, approve: true })).rejects.toThrow(
+        "checkpoint not authorized",
+      );
+      expect(f.checkpointChecks).toEqual([embeddedProvenance, embeddedProvenance]);
+    });
+
+    it("records a checkpoint without LLM output as carrying none", async () => {
+      const f = fixture();
+      const token = approvalToken(await f.run("approve --emit --prompt plain"));
+      await expect(f.resume({ token, approve: true })).resolves.toMatchObject({ status: "ok" });
+      expect(f.checkpointChecks).toEqual([{ version: 1, stages: [] }]);
+    });
+
+    it("hands an unrecorded checkpoint to the authorizer as unknown", async () => {
+      const f = fixture();
+      const untracked = createEmbeddedLobsterRunner();
+      const paused = await untracked.run(
+        runParams({ pipeline: "approve --emit --prompt legacy", cwd: f.dir }),
+      );
+      const token = approvalToken(paused);
+      f.setCheckpointAllowed(false);
+      await expect(f.resume({ token, approve: true })).rejects.toThrow("checkpoint not authorized");
+      expect(f.checkpointChecks).toEqual([undefined]);
+    });
+
+    it("lets a caller cancel a checkpoint without disclosing it", async () => {
+      const f = fixture();
+      const token = approvalToken(await f.run(embedded + " | approve --emit --prompt drop"));
+      f.setCheckpointAllowed(false);
+      await expect(f.resume({ token, cancel: true })).resolves.toMatchObject({
+        status: "cancelled",
+        output: [],
+      });
+      expect(f.checkpointChecks).toEqual([]);
+    });
+
+    it("refuses to supply the embedded adapter without a checkpoint authorizer", async () => {
+      const dir = tempDirs.make("openclaw-lobster-checkpoint-missing-");
+      stageEnv(dir);
+      const runner = createEmbeddedLobsterRunner({
+        llmAdapters: { embedded: { source: "openclaw-embedded", invoke: vi.fn() } },
+        authorizeReplay: vi.fn(),
+      });
+      await expect(runner.run(runParams({ cwd: dir }))).rejects.toThrow("checkpoint authorizer");
     });
 
     it("refuses a provider-omitted stage with no route instead of inferring embedded", async () => {
