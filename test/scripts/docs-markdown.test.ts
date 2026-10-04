@@ -6,6 +6,7 @@ describe("docs Markdown rendering", () => {
     "preserves nested fence indentation for $fence with newline %j",
     ({ fence, newline }) => {
       const body = '{\n  "features": {\n    "example": "<Tab title=\\"literal\\">"\n  }\n}';
+      const yaml = "app:\n  scopes:\n    - chat:write\n  description: |\n    Nested content";
       const source = [
         "<Tabs>",
         '  <Tab title="Manifest">',
@@ -18,6 +19,9 @@ describe("docs Markdown rendering", () => {
         `          ${fence}json Minimal`,
         ...body.split("\n").map((line) => `          ${line}`),
         `          ${fence}`,
+        `  ${fence}yaml`,
+        ...yaml.split("\n").map((line) => `  ${line}`),
+        `  ${fence}`,
         "        </CodeGroup>",
         "      </Step>",
         "    </Steps>",
@@ -32,7 +36,7 @@ describe("docs Markdown rendering", () => {
 
       expect(
         document.tokens.filter((token) => token.type === "fence").map((token) => token.content),
-      ).toEqual(Array(3).fill(`${body}\n`));
+      ).toEqual([`${body}\n`, `${body}\n`, `${yaml}\n`, `${body}\n`]);
       expect(document.ids).toContain("param-live");
       expect(document.links).toEqual(["/visible"]);
     },
