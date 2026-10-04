@@ -62,7 +62,6 @@ it.each([false, true])(
       trajectoryRecorder: null,
       trajectoryEndRecorded: false,
       buildAbortSettlePromise: () => null,
-      sessionAgentId: "main",
       state: { terminal: { kind: "ok" }, beforeAgentRunBlockedBy: undefined },
       transcriptLifecycle: {
         beginCleanup: async () => {},

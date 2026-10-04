@@ -183,7 +183,7 @@ export function createBashToolDefinition(
         env: getBashShellEnv(options?.shellPath),
       };
       const spawnContext = spawnHook ? spawnHook(baseContext) : baseContext;
-      const output = new OutputAccumulator({ tempFilePrefix: "openclaw-bash" });
+      const output = new OutputAccumulator();
       let acceptingOutput = true;
       let updateTimer: NodeJS.Timeout | undefined;
       let updateDirty = false;
@@ -195,7 +195,7 @@ export function createBashToolDefinition(
         }
         updateDirty = false;
         lastUpdateAt = Date.now();
-        const snapshot = output.snapshot({ persistIfTruncated: true });
+        const snapshot = output.snapshot();
         onUpdate({
           content: [{ type: "text", text: snapshot.content || "" }],
           details: {
@@ -246,7 +246,7 @@ export function createBashToolDefinition(
         output.finish();
         clearUpdateTimer();
         emitOutputUpdate();
-        const snapshot = output.snapshot({ persistIfTruncated: true });
+        const snapshot = output.snapshot();
         await output.closeTempFile();
         return snapshot;
       };

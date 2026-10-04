@@ -100,7 +100,11 @@ function budgetCompactionSummaryText(
   suffix: string,
   maxChars = MAX_COMPACTION_SUMMARY_CHARS,
 ): string {
-  return (budgetCompactionSummary(body, suffix, maxChars) as { summary: string }).summary;
+  return (
+    budgetCompactionSummary(body, { text: suffix, contextRanges: [] }, maxChars) as {
+      summary: string;
+    }
+  ).summary;
 }
 
 function preservedTurnsText(messages: AgentMessage[]): string {
@@ -496,7 +500,7 @@ describe("compaction-safeguard summary budgets", () => {
     const identifier = "REAL-OLD-ID-MUST-SURVIVE";
     const body = structuredSummary({ decisions: "No related decision.", identifiers: identifier });
     const first = requireRecord(
-      budgetCompactionSummary(body, "", 1_000, {
+      budgetCompactionSummary(body, { text: "", contextRanges: [] }, 1_000, {
         identifiers: [identifier],
         latestAsk,
         latestUnresolvedUserRequest: latestAsk,
@@ -509,7 +513,7 @@ describe("compaction-safeguard summary budgets", () => {
     );
 
     const second = requireRecord(
-      budgetCompactionSummary(String(first.summary), "", 700, {
+      budgetCompactionSummary(String(first.summary), { text: "", contextRanges: [] }, 700, {
         identifiers: [identifier],
         latestAsk,
         latestUnresolvedUserRequest: latestAsk,
@@ -1260,7 +1264,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const maxChars = 4_000;
     expect(body.length).toBeGreaterThan(maxChars);
 
-    const finalized = budgetCompactionSummary(body, "", maxChars, {
+    const finalized = budgetCompactionSummary(body, { text: "", contextRanges: [] }, maxChars, {
       identifiers: [identifier],
       latestAsk,
       identifierPolicy: "strict",

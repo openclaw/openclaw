@@ -203,11 +203,8 @@ export function createWorkerInferenceSessionControls(params: {
     predicate: (entry: ActiveInference) => boolean,
     reason: WorkerInferenceErrorReason,
   ) => cancelCaptured(captureCancellationEntries(predicate), reason);
-  const cancelEnvironment = (
-    environmentId: string,
-    reason: WorkerInferenceErrorReason = "session-not-attached",
-  ): Promise<void> =>
-    cancelWhere((entry) => entry.identity.environmentId === environmentId, reason);
+  const cancelEnvironment = (environmentId: string): Promise<void> =>
+    cancelWhere((entry) => entry.identity.environmentId === environmentId, "session-not-attached");
   const cancelClaim = (claimKey: string): Promise<void> =>
     cancelWhere((entry) => entry.claimKey === claimKey, "session-not-attached");
   const captureSessionCancellation = (

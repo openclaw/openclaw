@@ -104,7 +104,6 @@ vi.mock("../../runtime.js", createRuntimeMock);
 function createProfilesMock() {
   return {
     DEFAULT_BROWSER_ACTION_TIMEOUT_MS: 60_000,
-    DEFAULT_BROWSER_EVALUATE_ENABLED: true,
     DEFAULT_OPENCLAW_BROWSER_COLOR: "#FF4500",
     DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME: "openclaw",
     resolveProfile: (
@@ -257,8 +256,13 @@ export function createSandboxBrowserTestHarness() {
     typeof import("./browser.js").ensureSandboxBrowser
   >[0];
 
-  async function ensureTestSandboxBrowser(params: Omit<EnsureSandboxBrowserParams, "bridgeAuth">) {
+  async function ensureTestSandboxBrowser(
+    params: Omit<EnsureSandboxBrowserParams, "bridgeAuth" | "evaluateEnabled"> & {
+      evaluateEnabled?: boolean;
+    },
+  ) {
     return await ensureSandboxBrowser({
+      evaluateEnabled: true,
       ...params,
       bridgeAuth: { token: "test-bridge-token" },
     });

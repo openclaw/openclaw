@@ -71,10 +71,6 @@ const PACKAGE_LIFECYCLE_SCRIPTS: readonly PackageLifecycleScript[] = [
     relativePath: path.join("scripts", "postinstall-bundled-plugins.mjs"),
   },
 ];
-function resolveLifecycleBudgetMs(scriptTimeoutMs: number): number {
-  return scriptTimeoutMs * PACKAGE_LIFECYCLE_SCRIPTS.length;
-}
-
 function hasErrorCode(error: unknown, code: string): boolean {
   return error instanceof Error && "code" in error && error.code === code;
 }
@@ -163,7 +159,7 @@ async function acquireLifecycleLock(
 ) {
   // Preserve the shipped admission envelope without timing or expiring healthy script work.
   const waitBudgetMs =
-    resolveLifecycleBudgetMs(scriptTimeoutMs) + PACKAGE_LIFECYCLE_LOCK_WAIT_GRACE_MS;
+    scriptTimeoutMs * PACKAGE_LIFECYCLE_SCRIPTS.length + PACKAGE_LIFECYCLE_LOCK_WAIT_GRACE_MS;
   if (!Number.isFinite(scriptTimeoutMs) || scriptTimeoutMs < 0 || !Number.isFinite(waitBudgetMs)) {
     throw new RangeError("Package lifecycle script timeout must be finite and non-negative");
   }

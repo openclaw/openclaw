@@ -20,13 +20,8 @@ import {
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
-import { listSessionTranscriptInstances } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { listSessionTranscriptArchivesReadOnly } from "../config/sessions/session-accessor.sqlite-history.js";
-import {
-  loadTranscriptEventsSync,
-  readTranscriptStatsBatchReadOnlySync,
-  readTranscriptStatsSync,
-} from "../config/sessions/session-accessor.sqlite-read.js";
+import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
   listDurableSqliteTargetPathsForSessionStorePath,
@@ -48,13 +43,13 @@ const USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY = 32;
 
 export type UsageCostCollectionAccess = {
   env?: NodeJS.ProcessEnv;
-  materializeArchive?: (sourcePath: string) => Promise<string>;
-  readSqliteMetadata?: <T>(storePath: string, read: () => T) => Promise<T>;
-  listSqliteInstances?: (
+  materializeArchive: (sourcePath: string) => Promise<string>;
+  readSqliteMetadata: <T>(storePath: string, read: () => T) => Promise<T>;
+  listSqliteInstances: (
     agentId: string,
     storePath: string,
   ) => Promise<Array<{ agentId: string; sessionId: string; updatedAtMs: number }>>;
-  readSqliteStats?: (
+  readSqliteStats: (
     markers: readonly SqliteSessionFileMarker[],
   ) => Promise<Array<SessionTranscriptStats | undefined>>;
 };
@@ -72,7 +67,7 @@ type UsageCostTranscriptSource = UsageCostJsonlSource | UsageCostSqliteFile;
 
 async function materializeUsageCostTranscriptSource(
   source: UsageCostTranscriptSource,
-  access?: UsageCostCollectionAccess,
+  access: UsageCostCollectionAccess,
 ): Promise<UsageCostTranscriptFile> {
   if (source.kind === "sqlite") {
     return source;
@@ -80,9 +75,7 @@ async function materializeUsageCostTranscriptSource(
   const { sourcePath, stats: sourceStats } = source;
   // Identity and freshness belong to the source; incremental offsets and
   // byte signatures must describe the decompressed file used by readers.
-  const filePath = access?.materializeArchive
-    ? await access.materializeArchive(sourcePath)
-    : materializeSessionArchiveForRead(sourcePath);
+  const filePath = await access.materializeArchive(sourcePath);
   const stats = filePath === sourcePath ? sourceStats : await fs.promises.stat(filePath);
   return {
     filePath,
@@ -136,9 +129,7 @@ async function listUsageCountedTranscriptFileSources(
         storePath: databasePath,
         env: params.env,
       });
-    archivesByStore.push(
-      params.readSqliteMetadata ? await params.readSqliteMetadata(databasePath, read) : read(),
-    );
+    archivesByStore.push(await params.readSqliteMetadata(databasePath, read));
   }
   const archives = new Map(archivesByStore.flat().map((archive) => [archive.archiveName, archive]));
   const tasks = transcripts
@@ -179,14 +170,9 @@ async function listUsageCountedTranscriptFileSources(
 
 async function readUsageCostSqliteFiles(
   markers: SqliteSessionFileMarker[],
-  access: UsageCostCollectionAccess = {},
+  access: UsageCostCollectionAccess,
 ): Promise<Array<UsageCostSqliteFile | undefined>> {
-  const scopes = markers.map((marker) => ({ ...marker, env: access.env }));
-  const statsByIndex = access.readSqliteStats
-    ? await access.readSqliteStats(markers)
-    : scopes.length === 1
-      ? scopes.map(readTranscriptStatsSync)
-      : readTranscriptStatsBatchReadOnlySync(scopes);
+  const statsByIndex = await access.readSqliteStats(markers);
   return markers.map((marker, index): UsageCostSqliteFile | undefined => {
     const stats = statsByIndex[index];
     if (!stats) {
@@ -212,7 +198,7 @@ async function readUsageCostSqliteFiles(
 
 export async function listUsageCountedTranscriptSources(
   agentId: string,
-  params?: {
+  params: {
     minMtimeMs?: number;
     sessionsDir?: string;
     storePath?: string;
@@ -221,30 +207,25 @@ export async function listUsageCountedTranscriptSources(
   const logicalAgentId = normalizeAgentId(agentId);
   const storePath = resolveSessionStorePathForScope({
     agentId,
-    env: params?.env,
+    env: params.env,
     storePath:
-      params?.storePath ??
-      (params?.sessionsDir ? path.join(params.sessionsDir, "sessions.json") : undefined),
+      params.storePath ??
+      (params.sessionsDir ? path.join(params.sessionsDir, "sessions.json") : undefined),
   });
-  const sessionsDir = params?.sessionsDir ?? resolveSessionArtifactDirectory(storePath);
+  const sessionsDir = params.sessionsDir ?? resolveSessionArtifactDirectory(storePath);
   const fileBacked = await listUsageCountedTranscriptFileSources(logicalAgentId, {
-    minMtimeMs: params?.minMtimeMs,
+    ...params,
     sessionsDir,
     storePath,
-    env: params?.env,
-    readSqliteMetadata: params?.readSqliteMetadata,
-    materializeArchive: params?.materializeArchive,
   });
-  const instances = params?.listSqliteInstances
-    ? await params.listSqliteInstances(agentId, storePath)
-    : listSessionTranscriptInstances({ agentId, storePath, env: params?.env, projection: "list" });
+  const instances = await params.listSqliteInstances(agentId, storePath);
   const sqliteBacked = (
     await readUsageCostSqliteFiles(
       instances
         .filter(
           (instance) =>
             instance.agentId === logicalAgentId &&
-            (params?.minMtimeMs === undefined || instance.updatedAtMs >= params.minMtimeMs),
+            (params.minMtimeMs === undefined || instance.updatedAtMs >= params.minMtimeMs),
         )
         .map((instance) => ({ agentId: logicalAgentId, sessionId: instance.sessionId, storePath })),
       params,
@@ -259,7 +240,7 @@ export async function listUsageCountedTranscriptSources(
 
 export async function listUsageCountedTranscriptStats(
   agentId: string,
-  params?: {
+  params: {
     minMtimeMs?: number;
     sessionsDir?: string;
     storePath?: string;
@@ -288,7 +269,7 @@ export async function listUsageCountedTranscriptStats(
 
 async function resolveUsageCostTranscriptSource(
   sessionFile: string,
-  access?: UsageCostCollectionAccess,
+  access: UsageCostCollectionAccess,
 ): Promise<UsageCostTranscriptSource | undefined> {
   const marker = parseSqliteSessionFileMarker(sessionFile);
   if (marker) {
@@ -310,7 +291,7 @@ async function resolveUsageCostTranscriptSource(
 
 export async function resolveUsageCostTranscriptSources(
   sessionFiles: readonly string[],
-  access?: UsageCostCollectionAccess,
+  access: UsageCostCollectionAccess,
 ): Promise<Array<UsageCostTranscriptSource | undefined>> {
   const markers = sessionFiles.map(parseSqliteSessionFileMarker);
   const sqliteFiles = await readUsageCostSqliteFiles(
@@ -337,7 +318,7 @@ export async function resolveUsageCostTranscriptSources(
 
 export async function resolveUsageCostTranscriptFile(
   sessionFile: string,
-  access?: UsageCostCollectionAccess,
+  access: UsageCostCollectionAccess,
 ): Promise<UsageCostTranscriptFile | undefined> {
   const source = await resolveUsageCostTranscriptSource(sessionFile, access);
   return materializeUsageCostTranscriptSourceBestEffort(source, access);
@@ -345,7 +326,7 @@ export async function resolveUsageCostTranscriptFile(
 
 async function materializeUsageCostTranscriptSourceBestEffort(
   source: UsageCostTranscriptSource | undefined,
-  access?: UsageCostCollectionAccess,
+  access: UsageCostCollectionAccess,
 ): Promise<UsageCostTranscriptFile | undefined> {
   if (!source) {
     return undefined;
@@ -359,7 +340,7 @@ async function materializeUsageCostTranscriptSourceBestEffort(
 
 export async function resolveUsageCostTranscriptFiles(
   sessionFiles: readonly string[],
-  access?: UsageCostCollectionAccess,
+  access: UsageCostCollectionAccess,
 ): Promise<Array<UsageCostTranscriptFile | undefined>> {
   const sources = await resolveUsageCostTranscriptSources(sessionFiles, access);
   const { results } = await runTasksWithConcurrency({

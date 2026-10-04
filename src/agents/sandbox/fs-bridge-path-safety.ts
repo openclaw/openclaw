@@ -67,8 +67,6 @@ type RunCommand = (
   script: string,
   options?: {
     args?: string[];
-    stdin?: Buffer | string;
-    allowFailure?: boolean;
     signal?: AbortSignal;
   },
 ) => Promise<{ stdout: Buffer }>;

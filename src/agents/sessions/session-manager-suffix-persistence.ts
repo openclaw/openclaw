@@ -454,7 +454,7 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
     // Preserve its opaque identity so the serialized leaf control can restore it on a full reopen.
     prepared.leafId = replacementParentId;
     prepared.appendParentId = replacementParentId;
-    const events = prepared.getPersistedFileEntries(prepared.appendParentId, prepared.appendMode);
+    const events = prepared.getPersistedFileEntries(prepared.appendMode);
     const suffixEvents = preparedSuffixOffset > 0 ? events.slice(preparedSuffixOffset) : events;
     const incrementalPlanningBytes = [...expectedPersistedEntries, ...suffixEvents].reduce<number>(
       (sum, event) => sum + Buffer.byteLength(JSON.stringify(event), "utf8"),

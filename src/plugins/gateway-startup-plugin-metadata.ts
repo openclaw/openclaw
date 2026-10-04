@@ -105,7 +105,6 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
     configs,
     env: params.env,
     ambientEnvTriggers: params.ambientEnvTriggers,
-    includePersistedAuthState: false,
   });
   if (!lookup.hasDirectChannelOwners(configuredChannelIds)) {
     return undefined;

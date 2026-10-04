@@ -228,25 +228,13 @@ function hasDeliverableAgentPayload(payload: unknown): boolean {
 /** Collect automatic-delivery media proven sent by aggregate or per-payload evidence. */
 export function collectAutomaticDeliveredMediaUrls(
   result: Pick<AgentDeliveryEvidence, "deliveryStatus" | "payloads">,
-  options: {
-    includeAmbiguousSinglePayloadFailure?: boolean;
-    includeSuppressedOutcomes?: boolean;
-  } = {},
 ): string[] {
-  const outcomes = getPayloadDeliveryOutcomes(result);
-  if (outcomes) {
-    const payloads = Array.isArray(result.payloads) ? result.payloads : [];
+  if (getPayloadDeliveryOutcomes(result)) {
     return collectPayloadOutcomeMediaUrls(
       result,
       (outcome) =>
         normalizeEvidenceStatus(outcome.status) === "sent" ||
-        (options.includeSuppressedOutcomes !== false &&
-          normalizeEvidenceStatus(outcome.status) === "suppressed") ||
-        (options.includeAmbiguousSinglePayloadFailure === true &&
-          normalizeEvidenceStatus(outcome.status) === "failed" &&
-          outcome.sentBeforeError === true &&
-          outcomes.length === 1 &&
-          payloads.length === 1),
+        normalizeEvidenceStatus(outcome.status) === "suppressed",
     );
   }
   const status = normalizeEvidenceStatus(result.deliveryStatus?.status);

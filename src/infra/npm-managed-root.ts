@@ -262,7 +262,6 @@ function applyManagedNpmRootOverrides(params: {
 
 /** Read host OpenClaw pnpm overrides for reuse inside a managed npm root. */
 export async function readOpenClawManagedNpmRootOverrides(params?: {
-  argv1?: string;
   cwd?: string;
   moduleUrl?: string;
   packageRoot?: string | null;
@@ -270,7 +269,7 @@ export async function readOpenClawManagedNpmRootOverrides(params?: {
   const packageRoot =
     params?.packageRoot ??
     resolveOpenClawPackageRootSync({
-      argv1: params?.argv1 ?? process.argv[1],
+      argv1: process.argv[1],
       moduleUrl: params?.moduleUrl ?? import.meta.url,
       cwd: params?.cwd ?? process.cwd(),
     });
@@ -737,10 +736,8 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
           "--package-lock-only",
           "--force",
           ...createSafeNpmInstallArgs({
-            omitDev: true,
             omitPeer: true,
             legacyPeerDeps,
-            loglevel: "error",
             ignoreWorkspaces: true,
             noAudit: true,
             noFund: true,

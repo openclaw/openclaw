@@ -10,7 +10,7 @@ import {
 
 describe("HandshakeAuthLogLimiter", () => {
   it("suppresses repeated selected failures for the same client key within the interval", () => {
-    const limiter = new HandshakeAuthLogLimiter({ intervalMs: 1_000 });
+    const limiter = new HandshakeAuthLogLimiter();
     const key = buildHandshakeAuthLogKey({
       reason: "token_missing",
       remoteAddr: "127.0.0.1",
@@ -31,14 +31,14 @@ describe("HandshakeAuthLogLimiter", () => {
       shouldLog: false,
       suppressedSinceLastLog: 0,
     });
-    expect(limiter.register(key, 11_001)).toEqual({
+    expect(limiter.register(key, 40_001)).toEqual({
       shouldLog: true,
       suppressedSinceLastLog: 2,
     });
   });
 
   it("does not suppress distinct clients", () => {
-    const limiter = new HandshakeAuthLogLimiter({ intervalMs: 1_000 });
+    const limiter = new HandshakeAuthLogLimiter();
 
     expect(limiter.register("token_missing|127.0.0.1|gateway:sessions.list", 10)).toEqual({
       shouldLog: true,
@@ -50,11 +50,8 @@ describe("HandshakeAuthLogLimiter", () => {
     });
   });
 
-  it("uses default limits for non-finite options", () => {
-    const limiter = new HandshakeAuthLogLimiter({
-      intervalMs: Number.NaN,
-      maxEntries: Number.POSITIVE_INFINITY,
-    });
+  it("evicts the oldest client after reaching its entry limit", () => {
+    const limiter = new HandshakeAuthLogLimiter();
 
     expect(limiter.register("first", 0)).toEqual({
       shouldLog: true,

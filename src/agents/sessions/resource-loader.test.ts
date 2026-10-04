@@ -1,6 +1,6 @@
 // Prepared resource loader tests cover extension resources and diagnostics.
 import { chmod, mkdir, symlink, writeFile } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -123,7 +123,6 @@ describe("DefaultResourceLoader", () => {
     expect(loader.getPrompts().diagnostics).toEqual([]);
     expect(loader.getThemes().diagnostics).toEqual([]);
 
-    const relativeRoot = relative(process.cwd(), root);
     await symlink(
       resources,
       join(root, "prompts"),
@@ -132,13 +131,12 @@ describe("DefaultResourceLoader", () => {
     expect(
       loadPromptTemplates({
         cwd: root,
-        agentDir: relativeRoot,
-        promptPaths: [],
-        includeDefaults: true,
+        agentDir: root,
+        promptPaths: [join(root, "prompts")],
       })
         .map((prompt) => prompt.filePath)
         .toSorted(),
-    ).toEqual(expectedNames.map((name) => join(relativeRoot, "prompts", `${name}.md`)));
+    ).toEqual(expectedNames.map((name) => join(root, "prompts", `${name}.md`)));
   });
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(

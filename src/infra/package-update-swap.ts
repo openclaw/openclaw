@@ -75,7 +75,13 @@ export async function swapStagedPackageInstall(
   const results = createPackageSwapResults(params, targetLayout, targetPackageRoot, startedAt);
   const { warnings, step } = results;
   if (!targetLayout || !targetPackageRoot || !targetSwapRoot) {
-    return results.invalidLayout(activePackageRoot);
+    return {
+      status: "failed",
+      activePackageRoot,
+      step: step(1, null, "cannot resolve npm global prefix layout"),
+      postVerifyStep: null,
+      packageRollbackVerified: false,
+    };
   }
 
   if (!native) {

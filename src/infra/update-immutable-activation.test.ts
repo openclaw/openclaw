@@ -257,7 +257,6 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
     mocks.unchanged.mockImplementation((_snapshot, { assertCurrent: check }) => check());
     mocks.verifyProtection.mockImplementation((_snapshot, { assertCurrent: check }) => {
       check();
-      return { configMigrated: false };
     });
     mocks.wait.mockImplementation(async ({ generation, assertCurrent: check }) => {
       check();
@@ -623,7 +622,6 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
       mocks.unchanged.mockImplementation(checkProtection);
       mocks.verifyProtection.mockImplementation((snapshot, options) => {
         checkProtection(snapshot, options);
-        return { configMigrated: false };
       });
       await expect(activateImmutableUpdate({ root, expectedPrepared: candidate })).rejects.toThrow(
         "foreign config write",

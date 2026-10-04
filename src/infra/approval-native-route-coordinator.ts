@@ -41,7 +41,6 @@ type ApprovalRouteSkipReason = "ambiguous-owner" | "ineligible" | "owner-unavail
 
 type ApprovalRouteReport = {
   runtimeId: string;
-  request: ApprovalRequest;
   channel?: string;
   channelLabel?: string;
   accountId?: string | null;
@@ -533,7 +532,6 @@ function createApprovalNativeRouteReporterForState(
       });
     entry.reports.set(runtimeId, {
       runtimeId,
-      request: payload.request,
       channel: params.channel,
       channelLabel: params.channelLabel,
       accountId: params.accountId,

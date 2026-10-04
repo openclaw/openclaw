@@ -344,7 +344,6 @@ describe("model runtime generation scope", () => {
       }
       const resolve = () =>
         resolveModelPluginMetadataSnapshot({
-          useRuntimeConfig: true,
           workspaceDir: state.workspaceDir,
           ...(mode === "explicit-config" ? { config } : {}),
         });

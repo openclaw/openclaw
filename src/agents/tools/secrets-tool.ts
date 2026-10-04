@@ -73,9 +73,6 @@ const SecretsToolSchema = Type.Object(
 
 type NormalizedSecretsRequestParams = {
   name: string;
-  kind: "secret";
-  allowedHosts?: string[];
-  reason?: string;
   timeoutSeconds: number;
   questions: QuestionRequestQuestion[];
 };
@@ -129,7 +126,7 @@ export function normalizeSecretsRequestParams(params: unknown): NormalizedSecret
     ...(reason ? { reason } : {}),
   } satisfies NonNullable<QuestionRequestQuestion["secretStore"]>;
   return {
-    ...binding,
+    name,
     timeoutSeconds,
     questions: [
       {
@@ -162,7 +159,7 @@ async function fetchSecretStore(gatewayCall: GatewayQuestionCall, signal?: Abort
 }
 
 async function storedSecretResult(
-  params: NormalizedSecretsRequestParams,
+  name: string,
   provider: string,
   gatewayCall: GatewayQuestionCall,
   signal?: AbortSignal,
@@ -171,7 +168,7 @@ async function storedSecretResult(
   // cannot undo a committed save; never expose the inventory or read error.
   const currentPolicy = await fetchSecretStore(gatewayCall, signal)
     .then(({ entries }) => {
-      const entry = entries.find((candidate) => candidate.name === params.name);
+      const entry = entries.find((candidate) => candidate.name === name);
       if (!entry) {
         return { status: "missing" as const };
       }
@@ -192,9 +189,9 @@ async function storedSecretResult(
 
   const details = {
     status: "stored" as const,
-    name: params.name,
-    kind: params.kind,
-    ref: { source: "store", provider, id: params.name } satisfies SecretRef,
+    name,
+    kind: "secret",
+    ref: { source: "store", provider, id: name } satisfies SecretRef,
     currentPolicy,
   };
   const guidance = [
@@ -373,7 +370,7 @@ export function createSecretsTool(params: {
           if (questionResult.answers.answers.secret_value?.[0] !== "stored") {
             throw new Error("credential request returned an unexpected answer marker");
           }
-          return await storedSecretResult(request, storeProvider, gatewayCall, signal);
+          return await storedSecretResult(request.name, storeProvider, gatewayCall, signal);
         }
         if (
           questionResult.status === "pending" ||

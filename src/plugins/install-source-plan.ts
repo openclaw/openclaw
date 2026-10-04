@@ -346,7 +346,6 @@ export function resolveManagedPluginInstallRequest(
         source: "official",
         spec: primary.spec,
         installSources,
-        pluginId,
         expectedPluginId: resolveDeclaredOfficialPluginId(entry),
         mode,
         ...(request.pin ? { pin: true } : {}),

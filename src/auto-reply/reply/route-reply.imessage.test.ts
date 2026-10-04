@@ -122,10 +122,10 @@ describe("routed iMessage reply threading", () => {
       expect(
         [1, 2, 3].map(
           () =>
-            policy.applyReplyToConsumption(
-              { replyToId: resolved.replyToId, replyToIdSource: resolved.source },
-              { consumeImplicitReply: resolved.source === "implicit" },
-            ).replyToId,
+            policy.applyReplyToConsumption({
+              replyToId: resolved.replyToId,
+              replyToIdSource: resolved.source,
+            }).replyToId,
         ),
       ).toEqual(expected);
     },

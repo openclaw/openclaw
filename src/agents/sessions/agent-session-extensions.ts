@@ -26,10 +26,8 @@ export abstract class AgentSessionExtensions extends AgentSessionCompaction {
     }
 
     this.applyExtensionBindings(this.currentExtensionRunner);
-    await this.currentExtensionRunner.emit(this.sessionStartEvent);
-    await this.extendResourcesFromExtensions(
-      this.sessionStartEvent.reason === "reload" ? "reload" : "startup",
-    );
+    await this.currentExtensionRunner.emit({ type: "session_start", reason: "startup" });
+    await this.extendResourcesFromExtensions("startup");
   }
 
   private async extendResourcesFromExtensions(reason: "startup" | "reload"): Promise<void> {

@@ -317,13 +317,12 @@ describe("commitConfigWithPendingPluginInstalls", () => {
         unsetPaths: [["plugins", "installs"]],
       },
     );
-    expect(result.installRecords).toEqual({
-      stale: existingRecords.stale,
-      missing: sourceConfig.plugins?.installs?.missing,
-      codex: nextConfig.plugins?.installs?.codex,
-      concurrent: nextConfig.plugins?.installs?.concurrent,
-    });
-    expect(Object.getPrototypeOf(result.installRecords)).toBeNull();
+    expect(result.movedInstallRecords).toBe(true);
+    expect(
+      Object.getPrototypeOf(
+        mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease.mock.calls[0]?.[0],
+      ),
+    ).toBeNull();
   });
 
   it.each([

@@ -175,11 +175,9 @@ describe("Control UI plugin auth cookie profile binding", () => {
             setControlUiPluginAuthCookieForRequest(
               { headers: {} } as IncomingMessage,
               issued.res,
-              "tailscale",
-              true,
               generation,
               getRuntimeConfig(),
-              undefined,
+              ["operator.read"],
               profile.id,
             ),
           ).toEqual([

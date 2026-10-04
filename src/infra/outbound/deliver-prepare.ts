@@ -70,7 +70,7 @@ async function createPreparationHandler(params: DeliverOutboundPayloadsParams) {
     gifPlayback: params.gifPlayback,
     forceDocument: params.forceDocument,
     silent: params.silent,
-    mediaAccess: resolveOutboundMediaAccessForSend(params, params.channel, []),
+    mediaAccess: resolveOutboundMediaAccessForSend(params, []),
     gatewayClientScopes: params.gatewayClientScopes,
     conversationReadOrigin: params.conversationReadOrigin,
     preparedMessageId: params.preparedMessageId,

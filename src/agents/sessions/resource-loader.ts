@@ -195,7 +195,6 @@ export class DefaultResourceLoader implements ResourceLoader {
       cwd: this.cwd,
       agentDir: this.agentDir,
       promptPaths,
-      includeDefaults: false,
     });
     const { resources, diagnostics } = this.dedupeResources(
       allPrompts,

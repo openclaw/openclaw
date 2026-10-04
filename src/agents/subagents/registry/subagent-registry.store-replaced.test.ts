@@ -211,7 +211,7 @@ it("keeps an observed late-result store retirement after the original selector r
     },
   );
   try {
-    expect(driver.controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
+    expect(driver.controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
     const announce = await entered.promise;
     expect(announce.isCompletionDeliveryAllowed?.()).toBe(false);
     publishSystemEventStoreResolver(() => "original-store");

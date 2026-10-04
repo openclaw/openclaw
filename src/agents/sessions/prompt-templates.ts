@@ -85,8 +85,6 @@ interface LoadPromptTemplatesOptions {
   agentDir: string;
   /** Explicit prompt template paths (files or directories). */
   promptPaths: string[];
-  /** Include default prompt directories. */
-  includeDefaults: boolean;
 }
 
 function resolvePromptPath(p: string, cwd: string): string {
@@ -94,17 +92,11 @@ function resolvePromptPath(p: string, cwd: string): string {
   return isAbsolute(normalized) ? normalized : resolve(cwd, normalized);
 }
 
-/**
- * Load all prompt templates from:
- * 1. Global: agentDir/prompts/
- * 2. Project: cwd/{CONFIG_DIR_NAME}/prompts/
- * 3. Explicit prompt paths
- */
+/** Load explicit prompt paths with metadata for their source scope. */
 export function loadPromptTemplates({
   cwd,
   agentDir,
   promptPaths,
-  includeDefaults,
 }: LoadPromptTemplatesOptions): PromptTemplate[] {
   const templates: PromptTemplate[] = [];
 
@@ -131,11 +123,6 @@ export function loadPromptTemplates({
       baseDir: statSync(resolvedPath).isDirectory() ? resolvedPath : dirname(resolvedPath),
     });
   };
-
-  if (includeDefaults) {
-    templates.push(...loadTemplatesFromDir(globalPromptsDir, getSourceInfo));
-    templates.push(...loadTemplatesFromDir(projectPromptsDir, getSourceInfo));
-  }
 
   for (const rawPath of promptPaths) {
     const resolvedPath = resolvePromptPath(rawPath, cwd);

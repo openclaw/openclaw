@@ -62,8 +62,8 @@ export interface SubagentLifecycleCompletionContext extends SubagentLifecycleCom
   bindTerminalSessionEffects(entry: SubagentRunRecord, effects?: SubagentSessionEffects): void;
   bumpCleanupGeneration(entry: SubagentRunRecord): number;
   bumpTerminalGeneration(entry: SubagentRunRecord, bindingChanged?: boolean): number;
-  isTerminalCallbackCurrent(runId: string, entry: SubagentRunRecord, generation: number): boolean;
-  startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecord): boolean;
+  isTerminalCallbackCurrent(entry: SubagentRunRecord, generation: number): boolean;
+  startSubagentAnnounceCleanupFlow(entry: SubagentRunRecord): boolean;
 }
 
 export interface SubagentLifecycleCleanupContext extends SubagentLifecycleCommonContext {
@@ -74,11 +74,11 @@ export interface SubagentLifecycleCleanupContext extends SubagentLifecycleCommon
   pruneRetiredRuns(runIds?: readonly string[]): void;
   bumpCleanupGeneration(entry: SubagentRunRecord): number;
   incrementCleanupFailureCount(entry: SubagentRunRecord): number;
-  isCleanupAttemptCurrent(runId: string, entry: SubagentRunRecord, generation: number): boolean;
+  isCleanupAttemptCurrent(entry: SubagentRunRecord, generation: number): boolean;
   isCleanupGeneration(entry: SubagentRunRecord, generation: number): boolean;
-  isCleanupGenerationCurrent(runId: string, entry: SubagentRunRecord, generation: number): boolean;
-  isCleanupOwnerCurrent(runId: string, entry: SubagentRunRecord): boolean;
-  startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecord): boolean;
+  isCleanupGenerationCurrent(entry: SubagentRunRecord, generation: number): boolean;
+  isCleanupOwnerCurrent(entry: SubagentRunRecord): boolean;
+  startSubagentAnnounceCleanupFlow(entry: SubagentRunRecord): boolean;
 }
 
 export interface SubagentLifecycleAnnounceCleanupContext

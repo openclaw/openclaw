@@ -36,7 +36,7 @@ export async function enforceWorktreeCleanupLimits(
   };
   let state = await refresh();
   if (!state.exceeded) {
-    progress.recordLimitState(true);
+    progress.result.limitsSatisfied = true;
     return [];
   }
   const idle: ManagedWorktreeRecord[] = [];
@@ -114,7 +114,7 @@ export async function enforceWorktreeCleanupLimits(
     }
     state = await refresh();
   }
-  progress.recordLimitState(!state.exceeded);
+  progress.result.limitsSatisfied = !state.exceeded;
   return removed;
 }
 

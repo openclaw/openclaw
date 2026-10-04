@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -117,7 +118,7 @@ describe("undelivered generated media", () => {
         } finally {
           creationSql?.restore();
         }
-        expect(handle).not.toBeNull();
+        assert(handle);
         const scheduled: Array<() => Promise<void>> = [];
         const mediaPath = state.statePath("media", "synthetic-lighthouse.png");
         scheduleMediaGenerationTaskCompletion({

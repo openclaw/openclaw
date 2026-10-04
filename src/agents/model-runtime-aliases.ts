@@ -51,14 +51,12 @@ export function createModelPickerVisibleProviderPredicate(
 /** True for CLI runtime provider ids such as `claude-cli` and `google-gemini-cli`. */
 export function isCliRuntimeProvider(
   provider: string,
-  params: { config?: OpenClawConfig; env?: NodeJS.ProcessEnv; includeSetupRegistry?: boolean } = {},
+  params: { config?: OpenClawConfig } = {},
 ): boolean {
   const normalized = normalizeProviderId(provider);
   return listCliRuntimeProviderIds({
     config: params.config,
-    env: params.env,
-    includeSetupRegistry:
-      params.includeSetupRegistry ?? (params.config !== undefined || params.env !== undefined),
+    includeSetupRegistry: params.config !== undefined,
   }).includes(normalized);
 }
 
@@ -83,8 +81,6 @@ export function isCliRuntimeAliasForProvider(params: {
 
 type RuntimeAliasComparisonOptions = {
   config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  includeSetupRegistry?: boolean;
 };
 
 function canonicalizeRuntimeAliasProvider(
@@ -95,9 +91,7 @@ function canonicalizeRuntimeAliasProvider(
     resolveCliRuntimeCanonicalProvider({
       runtime: provider,
       config: options.config,
-      env: options.env,
-      includeSetupRegistry:
-        options.includeSetupRegistry ?? (options.config !== undefined || options.env !== undefined),
+      includeSetupRegistry: options.config !== undefined,
     }) ?? provider
   );
 }

@@ -13,7 +13,7 @@ describe("createReplyToDeliveryPolicy", () => {
     const policy = createReplyToDeliveryPolicy({
       reply: { source: "implicit", replyToId: "source", mode: "first" },
     });
-    policy.applyReplyToConsumption({ replyToId: "source" }, { consumeImplicitReply: true });
+    policy.applyReplyToConsumption({ replyToId: "source", replyToIdSource: "implicit" });
 
     expect(policy.resolveCurrentReplyTo({ text: "later" })).toEqual({});
     expect(policy.resolveCurrentReplyTo({ text: "explicit", replyToId: "chosen" })).toEqual({

@@ -42,7 +42,8 @@ it.each(["transition", "complete"] as const)(
       });
       const warn = vi.fn();
       const cleanup = createSubagentRegistryContextCleanup({
-        isEndedHookOwnerCurrent: (id, entry) => isSameSubagentRunOwner(subagentRuns.get(id), entry),
+        isEndedHookOwnerCurrent: (entry) =>
+          isSameSubagentRunOwner(subagentRuns.get(entry.runId), entry),
         warn,
       });
       const acknowledged = createDeferred();

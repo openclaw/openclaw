@@ -13,7 +13,6 @@ import {
 } from "../../plugin-sdk/browser-bridge.js";
 import {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
-  DEFAULT_BROWSER_EVALUATE_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
   resolveProfile,
@@ -29,7 +28,6 @@ import {
 import { computeSandboxBrowserConfigHash } from "./config-hash.js";
 import { resolveSandboxBrowserDockerCreateConfig } from "./config.js";
 import {
-  DEFAULT_SANDBOX_BROWSER_IMAGE,
   SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH,
   SANDBOX_BROWSER_SECURITY_HASH_EPOCH,
   SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
@@ -121,7 +119,6 @@ async function waitForSandboxCdp(params: {
 }
 
 function buildSandboxBrowserResolvedConfig(params: {
-  controlPort: number;
   cdpPort: number;
   cdpAuthToken: string;
   headless: boolean;
@@ -129,11 +126,11 @@ function buildSandboxBrowserResolvedConfig(params: {
   ssrfPolicy?: SsrFPolicy;
 }): ResolvedBrowserConfig {
   const cdpHost = "127.0.0.1";
-  const cdpPortRange = deriveDefaultBrowserCdpPortRange(params.controlPort);
+  const cdpPortRange = deriveDefaultBrowserCdpPortRange(0);
   return {
     enabled: true,
     evaluateEnabled: params.evaluateEnabled,
-    controlPort: params.controlPort,
+    controlPort: 0,
     cdpProtocol: "http",
     cdpHost,
     cdpIsLoopback: true,
@@ -229,7 +226,7 @@ type EnsureSandboxBrowserParams = {
   agentWorkspaceDir: string;
   skillsWorkspaceDir?: string;
   cfg: SandboxConfig;
-  evaluateEnabled?: boolean;
+  evaluateEnabled: boolean;
   bridgeAuth?: { token?: string; password?: string };
   ssrfPolicy?: SsrFPolicy;
   /** Joins managed workspace custody for late browser starts as well as allocation. */
@@ -293,7 +290,7 @@ async function ensureSandboxBrowserContainer(
   };
   const state = await dockerContainerState(containerName);
   params.assertCurrent?.();
-  const browserImage = params.cfg.browser.image ?? DEFAULT_SANDBOX_BROWSER_IMAGE;
+  const browserImage = params.cfg.browser.image;
   const cdpSourceRange = normalizeOptionalString(params.cfg.browser.cdpSourceRange);
   const browserDockerCfg = resolveSandboxBrowserDockerCreateConfig({
     docker: params.cfg.docker,
@@ -438,7 +435,6 @@ async function ensureSandboxBrowserContainer(
         "openclaw.browserConfigEpoch": SANDBOX_BROWSER_SECURITY_HASH_EPOCH,
       },
       configHash: expectedHash,
-      includeBinds: false,
       bindSourceRoots: [params.workspaceDir, params.agentWorkspaceDir],
     });
     for (const bind of mountPlan.skippedBinds) {
@@ -505,7 +501,6 @@ async function ensureSandboxBrowserContainer(
   const existingProfile = existing
     ? resolveProfile(existing.bridge.state.resolved, DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME)
     : null;
-  const desiredEvaluateEnabled = params.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
 
   let desiredAuthToken = normalizeOptionalString(params.bridgeAuth?.token);
   let desiredAuthPassword = normalizeOptionalString(params.bridgeAuth?.password);
@@ -529,7 +524,7 @@ async function ensureSandboxBrowserContainer(
     isSameSsrFPolicy(existing.bridge.state.resolved.ssrfPolicy, params.ssrfPolicy) &&
     existing.authToken === desiredAuthToken &&
     existing.authPassword === desiredAuthPassword &&
-    existing.bridge.state.resolved.evaluateEnabled === desiredEvaluateEnabled,
+    existing.bridge.state.resolved.evaluateEnabled === params.evaluateEnabled,
   );
   if (existing && !canReuse) {
     await stopCachedBrowserBridge(params.scopeKey, existing, params.assertCurrent);
@@ -566,11 +561,10 @@ async function ensureSandboxBrowserContainer(
       params.assertCurrent?.();
       bridge = await startBrowserBridgeServer({
         resolved: buildSandboxBrowserResolvedConfig({
-          controlPort: 0,
           cdpPort: mappedCdp,
           cdpAuthToken,
           headless: params.cfg.browser.headless,
-          evaluateEnabled: desiredEvaluateEnabled,
+          evaluateEnabled: params.evaluateEnabled,
           ssrfPolicy: params.ssrfPolicy,
         }),
         authToken: desiredAuthToken,

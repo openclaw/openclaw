@@ -12,7 +12,6 @@ import {
 import type { ClientToolDefinition } from "./run/params.js";
 import {
   collectAllowedToolNames,
-  collectCoreBuiltinToolNames,
   collectRegisteredToolNames,
   AGENT_RESERVED_TOOL_NAMES,
   toSessionToolAllowlist,
@@ -46,7 +45,7 @@ describe("tool name allowlists", () => {
       config: { tools: { toolSearch: true } } as never,
       catalogRef: createToolSearchCatalogRef(),
     });
-    const names = collectCoreBuiltinToolNames(uncompactedTools);
+    const names = collectRegisteredToolNames(uncompactedTools);
 
     expect([...names]).toEqual([TOOL_CALL_RAW_TOOL_NAME, "exec", "message"]);
     expect(compacted.tools.map((tool) => tool.name)).toEqual([TOOL_CALL_RAW_TOOL_NAME, "exec"]);

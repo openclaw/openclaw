@@ -70,7 +70,6 @@ type WorkerNpmReleaseVerifier = (params: {
   bundleHash: string;
   version: string;
 }) => Promise<string>;
-type WorkerNpmProofCommandRunner = typeof runCommandWithTimeout;
 
 function normalizeProtocolFeatures(features: readonly string[]): string[] {
   const normalized = features.map((feature) => feature.trim());
@@ -134,10 +133,9 @@ async function runNpmProofCommand(params: {
   argv: string[];
   cwd: string;
   failureMessage: string;
-  runCommand: WorkerNpmProofCommandRunner;
 }): Promise<unknown> {
   try {
-    const result = await params.runCommand(params.argv, {
+    const result = await runCommandWithTimeout(params.argv, {
       cwd: params.cwd,
       timeoutMs: NPM_RELEASE_PROOF_TIMEOUT_MS,
       env: {
@@ -165,9 +163,7 @@ async function hashNpmTarballIntegrity(tarballPath: string): Promise<string> {
 async function verifyPublishedNpmRelease(params: {
   bundleHash: string;
   version: string;
-  runCommand?: WorkerNpmProofCommandRunner;
 }): Promise<string> {
-  const runCommand = params.runCommand ?? runCommandWithTimeout;
   const temporaryRoot = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-worker-npm-proof-"),
   );
@@ -187,7 +183,6 @@ async function verifyPublishedNpmRelease(params: {
           ],
           cwd: temporaryRoot,
           failureMessage: `OpenClaw ${params.version} is not published; use the worker bundle install`,
-          runCommand,
         }),
       )[0],
     );
@@ -214,7 +209,6 @@ async function verifyPublishedNpmRelease(params: {
       cwd: temporaryRoot,
       failureMessage:
         "Unable to verify the installed OpenClaw package; use the worker bundle install",
-      runCommand,
     });
     const packed = parseNpmPackageIdentity(resolveNpmJsonEntries(packedValue)[0]);
     if (!packed?.filename || path.basename(packed.filename) !== packed.filename) {

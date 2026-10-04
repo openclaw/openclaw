@@ -73,7 +73,6 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     persistenceTarget?: SessionManagerPersistenceTarget,
     loadedEntries?: readonly unknown[],
     boundedContext?: SessionManagerBoundedContext,
-    transcriptMutationAt?: number | null,
     version?: SessionTranscriptContextVersion,
   ) {
     super();
@@ -84,7 +83,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     this.persistedBoundaryCount = boundedContext?.boundaryCount;
     this.persistedSuffixStartSeq = boundedContext?.persistedSuffixStartSeq;
     this.transcriptMutationAt =
-      boundedContext !== undefined ? boundedContext.transcriptMutationAt : transcriptMutationAt;
+      boundedContext !== undefined ? boundedContext.transcriptMutationAt : version?.updatedAt;
     this.transcriptVersion = version ?? boundedContext?.version;
     if (persistenceTarget || loadedEntries) {
       this.setLoadedSessionTarget(persistenceTarget, loadedEntries ?? [], boundedContext, version);
@@ -652,10 +651,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     return this.appendMode;
   }
 
-  protected getPersistedFileEntries(
-    leafAppendParentId: string | null = this.appendParentId,
-    leafAppendMode?: "side",
-  ): unknown[] {
+  protected getPersistedFileEntries(leafAppendMode?: "side"): unknown[] {
     this.assertTranscriptViewAvailable();
     this.clampOpaqueFileEntryIndexes();
     const entries: unknown[] = [];
@@ -706,7 +702,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
       }
     }
     if (persistedLeafId !== this.leafId || persistedAppendParentId !== this.appendParentId) {
-      const leafEntry = this.createLeafControl(rawTailId, leafAppendParentId, leafAppendMode);
+      const leafEntry = this.createLeafControl(rawTailId, this.appendParentId, leafAppendMode);
       this.rememberLeafControl(leafEntry);
       entries.push(leafEntry);
     }

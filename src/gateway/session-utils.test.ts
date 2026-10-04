@@ -2323,7 +2323,7 @@ describe("gateway session utils", () => {
     if (kind === "data") {
       cfg.agents!.entries!.main!.identity!.avatar = dataUrl;
     }
-    const browser = await listAgentsForGateway(cfg, undefined, { httpAvatarBasePath: "/control" });
+    const browser = await listAgentsForGateway(cfg, { httpAvatarBasePath: "/control" });
     expect(browser.agents[0]?.identity?.avatarUrl).toMatch(
       /^\/control\/avatar\/main\?v=[a-f0-9]+$/,
     );
@@ -2352,7 +2352,7 @@ describe("gateway session utils", () => {
       fs.mkdirSync(path.join(stateDir, "agents", "openclaw"), { recursive: true });
       fs.mkdirSync(path.join(stateDir, "agents", "research"), { recursive: true });
 
-      const result = await listAgentsForGateway({}, undefined, { includeSystem: true });
+      const result = await listAgentsForGateway({}, { includeSystem: true });
 
       expect(result.agents.map(({ id, kind }) => ({ id, kind }))).toEqual([
         { id: "main", kind: "agent" },
@@ -2526,7 +2526,7 @@ describe("gateway session utils", () => {
     const disabledCatalog = [{ ...catalogEntry, reasoning: false }];
     const enabledCatalog = [{ ...catalogEntry, reasoning: true }];
 
-    const result = await listAgentsForGateway(cfg, disabledCatalog, {
+    const result = await listAgentsForGateway(cfg, {
       modelCatalogByAgentId: new Map([
         ["main", { entries: disabledCatalog }],
         ["work", { entries: enabledCatalog }],
@@ -2572,7 +2572,11 @@ describe("gateway session utils", () => {
         },
       ];
 
-      const agent = (await listAgentsForGateway(cfg, catalog)).agents[0];
+      const agent = (
+        await listAgentsForGateway(cfg, {
+          modelCatalogByAgentId: new Map([["main", { entries: catalog }]]),
+        })
+      ).agents[0];
 
       expect(agent).toMatchObject({
         model: {

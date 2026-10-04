@@ -90,10 +90,9 @@ function resolveProviderSurfacePluginIdSet(
   },
 ): ReadonlySet<string> {
   return new Set(
-    resolveManifestRegistry({
-      ...params,
-      includeDisabled: true,
-    }).plugins.flatMap((plugin) => (plugin.providers.length > 0 ? [plugin.id] : [])),
+    resolveManifestRegistry(params).plugins.flatMap((plugin) =>
+      plugin.providers.length > 0 ? [plugin.id] : [],
+    ),
   );
 }
 
@@ -210,7 +209,6 @@ export function resolveExternalAuthProfileProviderPluginIds(params: {
   return resolveManifestRegistry({
     ...params,
     registry: loadProviderRegistrySnapshot(params),
-    includeDisabled: true,
   })
     .plugins.filter((plugin) => (plugin.contracts?.externalAuthProviders?.length ?? 0) > 0)
     .map((plugin) => plugin.id)
@@ -321,7 +319,6 @@ export function resolveActivatableProviderOwnerPluginIds(params: {
   env?: PluginLoadOptions["env"];
   registry?: PluginRegistrySnapshot;
   manifestRegistry?: PluginManifestRegistry;
-  includeUntrustedWorkspacePlugins?: boolean;
 }): string[] {
   return resolveProviderOwnerPluginIds({
     ...params,
@@ -340,7 +337,6 @@ function resolveManifestRegistry(params: {
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
   manifestRegistry?: PluginManifestRegistry;
   registry?: PluginRegistrySnapshot;
-  includeDisabled?: boolean;
 }): PluginManifestRegistry {
   if (params.manifestRegistry) {
     return params.manifestRegistry;
@@ -365,7 +361,7 @@ function resolveManifestRegistry(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    includeDisabled: params.includeDisabled,
+    includeDisabled: true,
   });
 }
 
@@ -593,10 +589,7 @@ export function resolveOwningPluginIdsForModelRef(params: {
     });
   }
 
-  const manifestRegistry = resolveManifestRegistry({
-    ...params,
-    includeDisabled: true,
-  });
+  const manifestRegistry = resolveManifestRegistry(params);
   const matchedByPattern = manifestRegistry.plugins.filter((plugin) =>
     matchesModelPattern(plugin, parsed.modelId),
   );
@@ -633,7 +626,6 @@ export function resolveOwningPluginIdsForModelRefs(params: {
     resolveManifestRegistry({
       ...params,
       registry: loadProviderRegistrySnapshot(params),
-      includeDisabled: true,
     });
   return sortUniqueStrings(
     params.models.flatMap(
@@ -681,7 +673,6 @@ export function resolveCatalogHookProviderPluginIds(params: {
   const manifestRegistry = resolveManifestRegistry({
     ...params,
     registry,
-    includeDisabled: true,
   });
   const providerSurfacePluginIds = new Set(
     manifestRegistry.plugins.flatMap((plugin) => (plugin.providers.length > 0 ? [plugin.id] : [])),
@@ -714,7 +705,6 @@ export function resolveUsageHookProviderPluginContracts(params: {
     ...params,
     registry,
     manifestRegistry: preparedManifestRegistry,
-    includeDisabled: true,
   });
   const usagePluginIds = new Set(
     manifestRegistry.plugins.flatMap((plugin) =>

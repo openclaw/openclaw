@@ -563,7 +563,7 @@ describe("registered session PR check details", () => {
           },
           client: f.client,
           context: f.context,
-          extraHandlers: createControlUiHandlers(undefined, undefined, load),
+          extraHandlers: createControlUiHandlers(undefined, load),
           isWebchatConnect: () => false,
           respond,
         });

@@ -105,10 +105,6 @@ export type ManagedPluginSourceInstallRequest =
       spec: string;
       installSources: PluginInstallSource[];
       expectedPluginId?: string;
-      /** Spec recorded for the install; keeps user intent when `spec` is channel-resolved. */
-      recordSpec?: string;
-      pluginId: string;
-      expectedIntegrity?: string;
       mode: "install" | "update";
       pin?: boolean;
     }

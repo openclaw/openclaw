@@ -181,7 +181,6 @@ describe("model auth checker", () => {
     expect(modelAuthAvailabilityMocks.createModelAuthAvailabilityResolver).toHaveBeenCalledWith(
       expect.objectContaining({
         cfg,
-        allowPreparedRuntimeAuth: true,
         externalCliProviderIds: ["openai"],
         syntheticAuthProviderRefs: [],
       }),

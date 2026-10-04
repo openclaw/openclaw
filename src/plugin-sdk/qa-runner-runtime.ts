@@ -528,9 +528,7 @@ export async function runLiveTransportQaSuiteCommand(params: LiveTransportQaSuit
   return await loadQaRuntimeModule().runLiveTransportQaSuiteCommand(params);
 }
 
-function listDeclaredQaRunnerPlugins(
-  env: NodeJS.ProcessEnv | undefined = resolvePrivateQaBundledPluginsEnv(),
-): Array<
+function listDeclaredQaRunnerPlugins(env: NodeJS.ProcessEnv | undefined): Array<
   PluginManifestRecord & {
     qaRunners: NonNullable<PluginManifestRecord["qaRunners"]>;
   }

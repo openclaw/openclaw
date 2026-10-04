@@ -69,15 +69,17 @@ type SessionKeyCanonicalizationOptions = {
   agentId: string;
   mainKey: string;
   scope?: SessionScope;
-  skipCrossAgentRemap?: boolean;
-  preserveCanonicalAgentOwner?: boolean;
   preserveAmbiguousKeys?: boolean;
   preserveForeignMainAliases?: boolean;
   legacySessionSurfaces?: PreparedLegacySessionSurfaces["surfaces"];
 };
 
 function canonicalizeSessionKeyForAgent(
-  params: SessionKeyCanonicalizationOptions & { key: string },
+  params: SessionKeyCanonicalizationOptions & {
+    key: string;
+    skipCrossAgentRemap?: boolean;
+    preserveCanonicalAgentOwner?: boolean;
+  },
 ): string {
   const raw = params.key.trim();
   if (!raw) {
@@ -230,7 +232,12 @@ export function canonicalizeSessionStore({
     if (!entry || typeof entry !== "object") {
       continue;
     }
-    const canonicalKey = canonicalizeSessionKeyForAgent({ ...options, key });
+    const canonicalKey = canonicalizeSessionKeyForAgent({
+      ...options,
+      key,
+      skipCrossAgentRemap: options.preserveAmbiguousKeys,
+      preserveCanonicalAgentOwner: true,
+    });
     const isCanonical = canonicalKey === key;
     if (!isCanonical) {
       legacyKeys.push(key);
@@ -366,10 +373,7 @@ function sessionStoreMayNeedCanonicalization(params: {
 export function listLegacySessionKeys({
   store,
   ...options
-}: Omit<
-  SessionKeyCanonicalizationOptions,
-  "skipCrossAgentRemap" | "preserveCanonicalAgentOwner"
-> & {
+}: SessionKeyCanonicalizationOptions & {
   store: Record<string, SessionEntryLike>;
 }): string[] {
   return Object.keys(store).filter(
@@ -580,8 +584,6 @@ export async function migrateOrphanedSessionKeys(params: {
         agentId: storeAgentId,
         mainKey,
         scope,
-        skipCrossAgentRemap: preserveAmbiguousKeys,
-        preserveCanonicalAgentOwner: true,
         preserveAmbiguousKeys,
         preserveForeignMainAliases: pluginForeignMainAliasRisk,
         legacySessionSurfaces: legacySessionSurfaces.surfaces,
@@ -941,10 +943,10 @@ function isManagedLegacySessionStorePathSafe(storePath: string): boolean {
 function resolveStorePathFromTemplate(
   template: string,
   agentId: string,
-  env?: NodeJS.ProcessEnv,
+  env: NodeJS.ProcessEnv,
 ): string {
   const expand = (s: string) =>
-    s.startsWith("~") ? expandHomePrefix(s, { env: env ?? process.env, homedir: os.homedir }) : s;
+    s.startsWith("~") ? expandHomePrefix(s, { env, homedir: os.homedir }) : s;
   return path.resolve(expand(template.replaceAll("{agentId}", agentId)));
 }
 

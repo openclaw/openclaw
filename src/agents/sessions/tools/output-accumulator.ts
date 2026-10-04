@@ -14,9 +14,7 @@ import {
 } from "./truncate.js";
 
 interface OutputAccumulatorOptions {
-  maxLines?: number;
   maxBytes?: number;
-  tempFilePrefix?: string;
   /**
    * Builds the decoded-text transform. Called once per stream lane so stateful
    * transforms (ANSI parsers) cannot consume another stream's pending sequence.
@@ -47,10 +45,8 @@ interface OutputSnapshot {
  * to be preserved.
  */
 export class OutputAccumulator {
-  private readonly maxLines: number;
   private readonly maxBytes: number;
   private readonly maxRollingBytes: number;
-  private readonly tempFilePrefix: string;
   private readonly createTextTransform?: () => (text: string) => string;
   private readonly lanes = new Map<OutputStream | undefined, DecodeLane>();
 
@@ -70,12 +66,10 @@ export class OutputAccumulator {
     | undefined;
 
   constructor(options: OutputAccumulatorOptions = {}) {
-    this.maxLines = options.maxLines ?? DEFAULT_MAX_LINES;
     this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
     // UTF-8 trimming can drop three bytes; truncateTail also ignores a final newline.
     // Keep enough extra bytes that an incomplete leading line cannot fit the display.
     this.maxRollingBytes = Math.max(this.maxBytes * 2, this.maxBytes + 5);
-    this.tempFilePrefix = options.tempFilePrefix ?? "openclaw-output";
     this.createTextTransform = options.createTextTransform;
   }
 
@@ -139,12 +133,12 @@ export class OutputAccumulator {
     return flushed;
   }
 
-  snapshot(options: { persistIfTruncated?: boolean } = {}): OutputSnapshot {
+  snapshot(): OutputSnapshot {
     const tailTruncation = truncateTail(this.tailText, {
-      maxLines: this.maxLines,
+      maxLines: DEFAULT_MAX_LINES,
       maxBytes: this.maxBytes,
     });
-    const truncated = this.totalLines > this.maxLines || this.totalDecodedBytes > this.maxBytes;
+    const truncated = this.totalLines > DEFAULT_MAX_LINES || this.totalDecodedBytes > this.maxBytes;
     const truncatedBy = truncated
       ? (tailTruncation.truncatedBy ?? (this.totalDecodedBytes > this.maxBytes ? "bytes" : "lines"))
       : null;
@@ -154,13 +148,9 @@ export class OutputAccumulator {
       truncatedBy,
       totalLines: this.totalLines,
       totalBytes: this.totalDecodedBytes,
-      maxLines: this.maxLines,
+      maxLines: DEFAULT_MAX_LINES,
       maxBytes: this.maxBytes,
     };
-
-    if (options.persistIfTruncated && truncation.truncated) {
-      this.ensureTempFile();
-    }
 
     return {
       content: truncation.content,
@@ -217,7 +207,7 @@ export class OutputAccumulator {
     return (
       this.totalRawBytes > this.maxBytes ||
       this.totalDecodedBytes > this.maxBytes ||
-      this.totalLines > this.maxLines
+      this.totalLines > DEFAULT_MAX_LINES
     );
   }
 
@@ -236,7 +226,7 @@ export class OutputAccumulator {
     if (this.tempFile) {
       return;
     }
-    const tempFile = createPrivateTempWriteStream(this.tempFilePrefix);
+    const tempFile = createPrivateTempWriteStream("openclaw-bash");
     // Own stream errors before the first write, retaining finished()'s listeners.
     // Handle early rejection now; closeTempFile still awaits the original promise.
     const completion = finished(tempFile.stream);

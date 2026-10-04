@@ -592,7 +592,6 @@ export async function autoMigrateLegacyPluginDoctorState(params: {
   const stateDirResult = await autoMigrateLegacyStateDir({
     env,
     homedir: params.homedir,
-    log: params.log,
   });
   const stateDir = resolveStateDir(env, params.homedir ?? os.homedir);
   const oauthDir = resolveOAuthDir(env, stateDir);

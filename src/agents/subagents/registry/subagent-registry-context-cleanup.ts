@@ -36,7 +36,7 @@ import type {
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 export function createSubagentRegistryContextCleanup(config: {
-  isEndedHookOwnerCurrent: (runId: string, entry: SubagentRunRecord) => boolean;
+  isEndedHookOwnerCurrent: (entry: SubagentRunRecord) => boolean;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }) {
   const { warn } = config;
@@ -220,7 +220,7 @@ export function createSubagentRegistryContextCleanup(config: {
         );
         if (
           params.entry.generation !== generation ||
-          !config.isEndedHookOwnerCurrent(params.entry.runId, params.entry) ||
+          !config.isEndedHookOwnerCurrent(params.entry) ||
           params.isCurrent?.() === false
         ) {
           throw new Error("Subagent ended hook lost its original owner");

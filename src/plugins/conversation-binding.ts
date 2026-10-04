@@ -308,17 +308,15 @@ export function buildPluginBindingErrorText(binding: PluginConversationBinding):
   return `The bound plugin ${resolvePluginBindingDisplayName(binding)} hit an error handling this message. This conversation is still bound to that plugin.${buildDetachHintSuffix(binding.detachHint)}`;
 }
 
-function buildPluginBindingFallbackNoticeKey(bindingId: string, scope?: SessionBindingScope) {
+function buildPluginBindingFallbackNoticeKey(bindingId: string, scope: SessionBindingScope) {
   const normalized = bindingId.trim();
   // Adapter binding IDs are local to their channel/account, just like mutations.
-  return normalized && scope
-    ? JSON.stringify([buildChannelAccountKey(scope), normalized])
-    : normalized;
+  return normalized ? JSON.stringify([buildChannelAccountKey(scope), normalized]) : normalized;
 }
 
 export function hasShownPluginBindingFallbackNotice(
   bindingId: string,
-  scope?: SessionBindingScope,
+  scope: SessionBindingScope,
 ): boolean {
   const normalized = buildPluginBindingFallbackNoticeKey(bindingId, scope);
   const cache = pluginBindingGlobalState.fallbackNoticeBindingIds;
@@ -331,7 +329,7 @@ export function hasShownPluginBindingFallbackNotice(
 
 export function markPluginBindingFallbackNoticeShown(
   bindingId: string,
-  scope?: SessionBindingScope,
+  scope: SessionBindingScope,
 ): void {
   pluginBindingGlobalState.fallbackNoticeBindingIds.check(
     buildPluginBindingFallbackNoticeKey(bindingId, scope),

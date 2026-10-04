@@ -63,7 +63,6 @@ function prepareComputerArguments(args: unknown): unknown {
 
 export function createComputerTool(options?: {
   config?: OpenClawConfig;
-  modelHasVision?: boolean;
   /** Stable run scope used to deduplicate a replayed model tool call on the node. */
   idempotencyScope?: string;
   /** Tracks whether the current screenshot pixels still reach model context. */
@@ -126,8 +125,6 @@ export function createComputerTool(options?: {
     contextEpoch: options?.contextEpoch,
     transport: options?.transport,
     gatewayStatus: options?.pairedNodeComputerUse?.gateway,
-    availableActions,
-    defaultActions: COMPUTER_TOOL_ACTIONS,
     onCapabilitiesChanged: (capabilities) => {
       replaceParameterSchema(availableActions(capabilities?.actions ?? COMPUTER_TOOL_ACTIONS));
       tool.description = buildComputerToolDescription(capabilities, targetScope);
@@ -150,13 +147,11 @@ export function createComputerTool(options?: {
       target: params.resolved.target,
       action: params.action,
       referenceWidth,
-      modelHasVision: options?.modelHasVision,
     });
     const previousFrame = session.refreshUnchangedFrame({
       target: params.resolved.target,
       capture,
       imageIdentity: projected.imageIdentity,
-      modelHasVision: options?.modelHasVision,
     });
     if (previousFrame) {
       const text = [
@@ -177,7 +172,6 @@ export function createComputerTool(options?: {
       frameId: projected.frameId,
       toolCallId: params.toolCallId,
       imageIdentity: projected.imageIdentity,
-      modelHasVision: options?.modelHasVision,
     });
     return projected.result;
   };
@@ -218,7 +212,6 @@ export function createComputerTool(options?: {
             target: resolved.target,
             action: observationAction,
             referenceWidth,
-            modelHasVision: options?.modelHasVision,
           });
           session.recordObservation(resolved, result, projected.imageCoordinates);
           return action === "get_window_state"

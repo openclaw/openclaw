@@ -140,16 +140,12 @@ export function parseGatewayJsonRequest<T extends z.ZodType>(
   return undefined;
 }
 
-export function sendMissingScopeForbidden(
-  res: ServerResponse,
-  missingScope: string | undefined,
-  requiredScopes?: readonly string[],
-) {
+export function sendMissingScopeForbidden(res: ServerResponse, missingScope: string | undefined) {
   const details =
     typeof missingScope === "string" && missingScope.length > 0
       ? buildMissingScopeErrorDetails({
           missingScope,
-          requiredScopes: requiredScopes ?? [missingScope],
+          requiredScopes: [missingScope],
         })
       : undefined;
   sendJson(res, 403, {
@@ -229,8 +225,8 @@ export function retainGatewayHttpResponseWork(res: ServerResponse): () => void {
 
 /** Abort reason used when the HTTP client disconnects before delivery. */
 class ClientDisconnectError extends Error {
-  constructor(message = "HTTP client disconnected") {
-    super(message);
+  constructor() {
+    super("HTTP client disconnected");
     this.name = "ClientDisconnectError";
   }
 }

@@ -10,7 +10,6 @@ import type { ReplyToOverride } from "./reply-policy.js";
 export type OutboundMessageSendOverrides = ReplyToOverride & {
   threadId?: string | number | null;
   audioAsVoice?: boolean;
-  forceDocument?: boolean;
   formatting?: OutboundDeliveryFormattingOptions;
   /** Stable zero-based platform-send index within one durable payload. */
   deliveryPartIndex?: number;
@@ -19,7 +18,6 @@ export type OutboundMessageSendOverrides = ReplyToOverride & {
 };
 
 type OutboundTextMessageUnit = {
-  kind: "text";
   text: string;
   overrides: OutboundMessageSendOverrides;
 };
@@ -86,7 +84,6 @@ export function planOutboundTextMessageUnits(params: {
       deliveryPartIndex,
     };
     return {
-      kind: "text",
       text,
       overrides: chunkedTextFormatting
         ? { ...overrides, formatting: { ...overrides.formatting, ...chunkedTextFormatting } }
@@ -141,7 +138,6 @@ export function planOutboundMediaMessageUnits(params: {
 }) {
   const deliveryPartCount = params.mediaUrls.length;
   return params.mediaUrls.map((mediaUrl, index) => ({
-    kind: "media" as const,
     mediaUrl,
     ...(index === 0 ? { caption: params.caption } : {}),
     overrides: {

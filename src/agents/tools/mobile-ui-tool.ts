@@ -91,16 +91,14 @@ type MobileUiSnapshot = ReturnType<typeof parseMobileUiSnapshot>;
 function readInteger(
   record: Record<string, unknown>,
   key: string,
-  options: { minimum?: number; maximum?: number } = {},
+  options: { minimum: number; maximum?: number },
 ): number {
   const value = asSafeIntegerInRange(record[key], { min: options.minimum, max: options.maximum });
   if (value === undefined) {
     const range =
-      options.minimum !== undefined && options.maximum !== undefined
+      options.maximum !== undefined
         ? ` between ${options.minimum} and ${options.maximum}`
-        : options.minimum !== undefined
-          ? ` >= ${options.minimum}`
-          : "";
+        : ` >= ${options.minimum}`;
     throw new ToolInputError(`${key} must be an integer${range}`);
   }
   return value;

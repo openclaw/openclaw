@@ -28,7 +28,6 @@ import { resolveToolSearchConfig, type ToolSearchCatalogRef } from "../../tool-s
 import { log } from "../logger.js";
 import {
   AGENT_RESERVED_TOOL_NAMES,
-  collectCoreBuiltinToolNames,
   collectRegisteredToolNames,
   toSessionToolAllowlist,
 } from "../tool-name-allowlist.js";
@@ -114,10 +113,9 @@ export function prepareEmbeddedAttemptClientTools(params: {
         trustedLocalMediaToolNames.add(name);
       }
     }
-    const coreBuiltinToolNames = collectCoreBuiltinToolNames(params.uncompactedEffectiveTools, {
-      isPluginTool: (tool) =>
-        Boolean(getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0])),
-    });
+    const coreBuiltinToolNames = collectRegisteredToolNames(
+      params.uncompactedEffectiveTools.filter((tool) => !getPluginToolMeta(tool)),
+    );
     const isReplaySafeTool = (tool: { name?: string }) =>
       isAgentToolReplaySafe(tool, params.replaySafetyOptions);
     const replaySafeTools = new Set(params.uncompactedEffectiveTools.filter(isReplaySafeTool));

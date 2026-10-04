@@ -49,7 +49,6 @@ function sameTarget(a: UpdateCampaignTarget, b: UpdateCampaignTarget): boolean {
 
 /** Owns the single in-memory automatic-update campaign for this process. */
 export class UpdateCampaignController {
-  private readonly createId = randomUUID;
   private campaign: UpdateCampaignState | undefined;
   private target: UpdateCampaignTarget | undefined;
   private announcement: UpdateCampaignAnnouncement | undefined;
@@ -89,7 +88,7 @@ export class UpdateCampaignController {
     this.announcement = announcement;
     const now = this.scheduler.now();
     this.campaign = {
-      id: this.createId(),
+      id: randomUUID(),
       state: "waiting-for-idle",
       announcedAtMs: now,
       forceAtMs: now + CAMPAIGN_FORCE_DELAY_MS,

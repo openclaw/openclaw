@@ -11,9 +11,8 @@ type HighlightJs = {
   getLanguage(name: string): unknown;
   highlight(
     code: string,
-    options: { language: string; ignoreIllegals?: boolean },
+    options: { language: string; ignoreIllegals: boolean },
   ): { value: string };
-  highlightAuto(code: string, languageSubset?: string[]): { value: string };
 };
 
 let highlightJsRuntime: HighlightJs | undefined;
@@ -25,9 +24,7 @@ function isHighlightJs(value: unknown): value is HighlightJs {
     "getLanguage" in value &&
     typeof value.getLanguage === "function" &&
     "highlight" in value &&
-    typeof value.highlight === "function" &&
-    "highlightAuto" in value &&
-    typeof value.highlightAuto === "function"
+    typeof value.highlight === "function"
   );
 }
 
@@ -48,13 +45,6 @@ function loadHighlightJsRuntime(): HighlightJs {
 type HighlightFormatter = (text: string) => string;
 /** Mapping from highlight.js scope names to text formatters. */
 type HighlightTheme = Partial<Record<string, HighlightFormatter>>;
-
-interface HighlightOptions {
-  language?: string;
-  ignoreIllegals?: boolean;
-  languageSubset?: string[];
-  theme?: HighlightTheme;
-}
 
 const SPAN_CLOSE = "</span>";
 const HIGHLIGHT_CLASS_PREFIX = "hljs-";
@@ -126,7 +116,7 @@ function isSpanOpenTagStart(html: string, index: number): boolean {
 }
 
 /** Renders highlight.js span HTML into themed plain text. */
-function renderHighlightedHtml(html: string, theme: HighlightTheme = {}): string {
+function renderHighlightedHtml(html: string, theme: HighlightTheme): string {
   let output = "";
   let textBuffer = "";
   const scopes: Array<string | undefined> = [];
@@ -171,16 +161,10 @@ function renderHighlightedHtml(html: string, theme: HighlightTheme = {}): string
   return output;
 }
 
-/** Highlights code using an explicit language or highlight.js auto-detection. */
-export function highlight(code: string, options: HighlightOptions = {}): string {
-  const hljs = loadHighlightJsRuntime();
-  const html = options.language
-    ? hljs.highlight(code, {
-        language: options.language,
-        ignoreIllegals: options.ignoreIllegals,
-      }).value
-    : hljs.highlightAuto(code, options.languageSubset).value;
-  return renderHighlightedHtml(html, options.theme);
+/** Highlights code after the caller has selected a registered language. */
+export function highlight(code: string, language: string, theme: HighlightTheme): string {
+  const { value } = loadHighlightJsRuntime().highlight(code, { language, ignoreIllegals: true });
+  return renderHighlightedHtml(value, theme);
 }
 
 /** Returns whether highlight.js has a registered language by this name. */

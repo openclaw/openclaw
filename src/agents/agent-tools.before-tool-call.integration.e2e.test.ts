@@ -753,14 +753,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     const runId = "run-reconcile-before-ready";
     const sessionKey = "agent:main:reconcile-before-ready";
     const state = getDiagnosticSessionState({ sessionKey, sessionId: "session-reconcile" });
-    recordToolCall(
-      state,
-      "read",
-      { path: "/tmp/original" },
-      "reconcile-call",
-      { enabled: true },
-      { runId },
-    );
+    recordToolCall(state, "read", { path: "/tmp/original" }, "reconcile-call", { runId });
     const execute = vi.fn().mockResolvedValue({ content: [], details: {} });
     const hookContext = {
       runId,

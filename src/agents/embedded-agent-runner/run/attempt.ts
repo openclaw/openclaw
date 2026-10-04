@@ -491,8 +491,6 @@ async function runEmbeddedAttemptOwned(
           bundleMcpRuntime: sessionMcpRuntime,
           bundleLspRuntime: sessionLspRuntime,
           toolSearchCatalogRef,
-          sandboxSessionKey,
-          sessionAgentId,
           trajectoryEndRecorded: executionState.trajectoryEndRecorded,
           deferredLifecycleOwner: executionState.deferredLifecycleOwner,
           emitDiagnosticRunCompleted,

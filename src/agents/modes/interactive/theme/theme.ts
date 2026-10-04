@@ -465,13 +465,8 @@ export function highlightCode(code: string, lang?: string): string[] {
   if (!validLang) {
     return code.split("\n").map((line) => interactiveAgentTheme.fg("mdCodeBlock", line));
   }
-  const opts = {
-    language: validLang,
-    ignoreIllegals: true,
-    theme: cliHighlightTheme,
-  };
   try {
-    return highlight(code, opts).split("\n");
+    return highlight(code, validLang, cliHighlightTheme).split("\n");
   } catch {
     return code.split("\n");
   }

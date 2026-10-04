@@ -141,18 +141,13 @@ export function resolveChatRunExpiresAtMs(params: {
   return Math.min(max, Math.max(min, target));
 }
 
-export function resolveAgentRunExpiresAtMs(params: {
-  now: number;
-  timeoutMs: number;
-  graceMs?: number;
-}): number {
-  const graceMs = Math.max(0, params.graceMs ?? DEFAULT_CHAT_RUN_ABORT_GRACE_MS);
+export function resolveAgentRunExpiresAtMs(params: { now: number; timeoutMs: number }): number {
   return resolveChatRunExpiresAtMs({
     now: params.now,
     timeoutMs: params.timeoutMs,
-    graceMs,
-    minMs: graceMs,
-    maxMs: Math.max(0, params.timeoutMs) + graceMs,
+    graceMs: DEFAULT_CHAT_RUN_ABORT_GRACE_MS,
+    minMs: DEFAULT_CHAT_RUN_ABORT_GRACE_MS,
+    maxMs: Math.max(0, params.timeoutMs) + DEFAULT_CHAT_RUN_ABORT_GRACE_MS,
   });
 }
 

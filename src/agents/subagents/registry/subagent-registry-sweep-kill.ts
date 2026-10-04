@@ -224,7 +224,7 @@ export async function reconcileProvisionalSubagentKill(params: {
     source: string,
   ) => Promise<void>;
   retireSupersededRun: (runId: string, entry: SubagentRunRecord) => Promise<void>;
-  startSubagentAnnounceCleanupFlow: (runId: string, entry: SubagentRunRecord) => boolean;
+  startSubagentAnnounceCleanupFlow: (entry: SubagentRunRecord) => boolean;
   getRunsForChildSession: (
     childSessionKey: string,
     childAgentId?: string,
@@ -373,5 +373,5 @@ export async function reconcileProvisionalSubagentKill(params: {
   if (!published) {
     return false;
   }
-  return !params.startSubagentAnnounceCleanupFlow(runId, published);
+  return !params.startSubagentAnnounceCleanupFlow(published);
 }

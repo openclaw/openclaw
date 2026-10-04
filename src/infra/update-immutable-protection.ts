@@ -248,7 +248,7 @@ export function verifyImmutableProtection(
   context: ProtectionContext & {
     candidate: ImmutableProtectionCandidate;
   },
-): { configMigrated: boolean } {
+): void {
   context.assertCurrent();
   context.candidate.assertCurrent();
   assertState(snapshot);
@@ -258,7 +258,6 @@ export function verifyImmutableProtection(
       ? recent.length
       : recent.findIndex((record) => auditKey(record) === snapshot.auditBoundary);
   const records = (boundary < 0 ? recent : recent.slice(0, boundary)).toReversed();
-  let configMigrated = false;
   for (const file of snapshot.config) {
     const current = readFile(file, context.env);
     if (current.hash === file.hash && isDeepStrictEqual(current.identity, file.identity)) {
@@ -341,10 +340,8 @@ export function verifyImmutableProtection(
     ) {
       throw new Error("Config migration is missing its complete config-audit publication receipt.");
     }
-    configMigrated = true;
   }
   assertState(snapshot);
   context.candidate.assertCurrent();
   context.assertCurrent();
-  return { configMigrated };
 }

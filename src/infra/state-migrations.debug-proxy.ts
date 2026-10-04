@@ -66,7 +66,6 @@ const CAPTURE_EVENT_COLUMNS = [
 type LegacyCaptureBlobRow = {
   blobId: string;
   contentType: string | null;
-  encoding: "gzip";
   sizeBytes: number;
   sha256: string;
   data: Buffer;
@@ -236,7 +235,6 @@ function readLegacyDebugProxyCapture(params: { sourcePath: string; blobDir: stri
       blobs.push({
         blobId,
         contentType: referencingEvents.find((event) => event.content_type)?.content_type ?? null,
-        encoding: "gzip",
         sizeBytes: raw.byteLength,
         sha256,
         data,
@@ -391,7 +389,7 @@ export function migrateLegacyDebugProxyCaptureSidecar(params: {
             | undefined;
           if (existing) {
             if (
-              existing.encoding !== blob.encoding ||
+              existing.encoding !== "gzip" ||
               Number(existing.sizeBytes) !== blob.sizeBytes ||
               existing.sha256 !== blob.sha256 ||
               !existing.data ||
@@ -404,7 +402,7 @@ export function migrateLegacyDebugProxyCaptureSidecar(params: {
           insertBlob.run(
             blob.blobId,
             blob.contentType,
-            blob.encoding,
+            "gzip",
             blob.sizeBytes,
             blob.sha256,
             blob.data,

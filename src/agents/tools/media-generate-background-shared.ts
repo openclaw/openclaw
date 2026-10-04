@@ -334,28 +334,6 @@ function clearMediaGenerationTaskRunContext(handle: MediaGenerationTaskHandle): 
   );
 }
 
-async function withMediaGenerationTaskKeepalive<T>(params: {
-  handle: MediaGenerationTaskHandle | null;
-  progressSummary: string;
-  run: () => Promise<T>;
-}): Promise<T> {
-  if (!params.handle) {
-    return await params.run();
-  }
-  const interval = setInterval(() => {
-    recordMediaGenerationTaskProgress({
-      handle: params.handle,
-      progressSummary: params.progressSummary,
-    });
-  }, MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS);
-  interval.unref?.();
-  try {
-    return await params.run();
-  } finally {
-    clearInterval(interval);
-  }
-}
-
 export function createDefaultMediaGenerateBackgroundScheduler(params: {
   toolName: string;
   onCrash: (message: string, meta?: Record<string, unknown>) => void;
@@ -373,30 +351,35 @@ export function createDefaultMediaGenerateBackgroundScheduler(params: {
   };
 }
 
-export function scheduleMediaGenerationTaskCompletion<
-  T extends MediaGenerationExecutionResult,
->(params: {
+export function scheduleMediaGenerationTaskCompletion(params: {
   lifecycle: ReturnType<typeof createMediaGenerationTaskLifecycle>;
-  handle: MediaGenerationTaskHandle | null;
+  handle: MediaGenerationTaskHandle;
   scheduleBackgroundWork: MediaGenerateBackgroundScheduler;
   progressSummary: string;
   toolName: string;
-  run: () => Promise<T>;
+  run: () => Promise<MediaGenerationExecutionResult>;
   onWakeFailure: (message: string, meta?: Record<string, unknown>) => void;
 }) {
   const runBackgroundWork = async () => {
-    let executed: T;
-    if (params.handle && !isMediaGenerationOperationCurrent(params.handle.runId)) {
+    let executed: MediaGenerationExecutionResult;
+    if (!isMediaGenerationOperationCurrent(params.handle.runId)) {
       return;
     }
     try {
-      executed = await withMediaGenerationTaskKeepalive({
-        handle: params.handle,
-        progressSummary: params.progressSummary,
-        run: params.run,
-      });
+      const interval = setInterval(() => {
+        recordMediaGenerationTaskProgress({
+          handle: params.handle,
+          progressSummary: params.progressSummary,
+        });
+      }, MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS);
+      interval.unref?.();
+      try {
+        executed = await params.run();
+      } finally {
+        clearInterval(interval);
+      }
     } catch (error) {
-      if (params.handle && !isMediaGenerationOperationCurrent(params.handle.runId)) {
+      if (!isMediaGenerationOperationCurrent(params.handle.runId)) {
         clearMediaGenerationTaskRunContext(params.handle);
         return;
       }
@@ -412,14 +395,14 @@ export function scheduleMediaGenerationTaskCompletion<
         });
         if (wakeOutcome.status !== "delivered") {
           params.onWakeFailure(`${params.toolName} failure completion delivery was not confirmed`, {
-            taskId: params.handle?.taskId,
-            runId: params.handle?.runId,
+            taskId: params.handle.taskId,
+            runId: params.handle.runId,
           });
         }
       } catch (wakeError) {
         params.onWakeFailure(`${params.toolName} failure wake failed`, {
-          taskId: params.handle?.taskId,
-          runId: params.handle?.runId,
+          taskId: params.handle.taskId,
+          runId: params.handle.runId,
           error: wakeError,
         });
       }
@@ -427,7 +410,7 @@ export function scheduleMediaGenerationTaskCompletion<
       return;
     }
 
-    if (params.handle && !isMediaGenerationOperationCurrent(params.handle.runId)) {
+    if (!isMediaGenerationOperationCurrent(params.handle.runId)) {
       clearMediaGenerationTaskRunContext(params.handle);
       return;
     }
@@ -439,8 +422,8 @@ export function scheduleMediaGenerationTaskCompletion<
         });
       } catch (error) {
         params.onWakeFailure(`${params.toolName} completion progress update failed`, {
-          taskId: params.handle?.taskId,
-          runId: params.handle?.runId,
+          taskId: params.handle.taskId,
+          runId: params.handle.runId,
           error,
         });
       }
@@ -466,8 +449,8 @@ export function scheduleMediaGenerationTaskCompletion<
         const failureReason = "completion delivery was not confirmed after successful generation";
         terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(failureReason);
         params.onWakeFailure(`${params.toolName} ${failureReason}`, {
-          taskId: params.handle?.taskId,
-          runId: params.handle?.runId,
+          taskId: params.handle.taskId,
+          runId: params.handle.runId,
         });
       }
     } catch (error) {
@@ -477,8 +460,8 @@ export function scheduleMediaGenerationTaskCompletion<
       params.onWakeFailure(
         `${params.toolName} completion wake failed after successful generation`,
         {
-          taskId: params.handle?.taskId,
-          runId: params.handle?.runId,
+          taskId: params.handle.taskId,
+          runId: params.handle.runId,
           error,
         },
       );
@@ -493,8 +476,8 @@ export function scheduleMediaGenerationTaskCompletion<
       });
     } catch (error) {
       params.onWakeFailure(`${params.toolName} blocked completion retention failed`, {
-        taskId: params.handle?.taskId,
-        runId: params.handle?.runId,
+        taskId: params.handle.taskId,
+        runId: params.handle.runId,
         error,
       });
     }
@@ -508,8 +491,8 @@ export function scheduleMediaGenerationTaskCompletion<
       });
     } catch (error) {
       params.onWakeFailure(`${params.toolName} completion state update failed`, {
-        taskId: params.handle?.taskId,
-        runId: params.handle?.runId,
+        taskId: params.handle.taskId,
+        runId: params.handle.runId,
         error,
       });
       params.lifecycle.failTaskRun({

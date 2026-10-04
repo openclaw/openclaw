@@ -144,7 +144,11 @@ async function createContainerSandboxBackend(
     assertCurrent,
     githubIdentity,
   });
-  handle.createFsBridge = ({ sandbox }) => createSandboxFsBridge({ sandbox, containerOnlyMounts });
+  handle.createFsBridge = ({ sandbox }) =>
+    createSandboxFsBridge({
+      sandbox: { ...sandbox, backend: sandbox.backend ?? handle },
+      containerOnlyMounts,
+    });
   return handle;
 }
 
@@ -336,17 +340,6 @@ async function runContainerSandboxShellCommand(
     input: params.stdin,
     allowFailure: params.allowFailure,
     signal: params.signal,
-  });
-}
-
-export function runDockerSandboxShellCommand(
-  params: {
-    containerName: string;
-  } & SandboxBackendCommandParams,
-) {
-  return runContainerSandboxShellCommand({
-    engine: DOCKER_SANDBOX_ENGINE,
-    ...params,
   });
 }
 

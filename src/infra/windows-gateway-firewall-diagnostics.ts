@@ -146,7 +146,6 @@ export type WindowsGatewayFirewallDiagnostic = {
 type WindowsGatewayFirewallCommandResult = {
   code: number | null;
   stdout: string;
-  stderr?: string;
   stdoutTruncatedBytes?: number;
   stderrTruncatedBytes?: number;
 };

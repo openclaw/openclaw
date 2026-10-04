@@ -7,8 +7,6 @@ import {
 } from "./compaction-retry-aggregate-timeout.js";
 
 type AggregateTimeoutParams = Parameters<typeof waitForCompactionRetryWithAggregateTimeout>[0];
-type TimeoutCallback = NonNullable<AggregateTimeoutParams["onTimeout"]>;
-type TimeoutCallbackMock = ReturnType<typeof vi.fn<TimeoutCallback>>;
 
 async function withFakeTimers(run: () => Promise<void>) {
   // Ensure timer state is fully drained between cases because aggregate timeout
@@ -24,34 +22,22 @@ async function withFakeTimers(run: () => Promise<void>) {
   }
 }
 
-function expectClearedTimeoutState(onTimeout: TimeoutCallbackMock, timedOut: boolean) {
-  if (timedOut) {
-    expect(onTimeout).toHaveBeenCalledTimes(1);
-  } else {
-    expect(onTimeout).not.toHaveBeenCalled();
-  }
-  expect(vi.getTimerCount()).toBe(0);
-}
-
 function buildAggregateTimeoutParams(
   overrides: Partial<AggregateTimeoutParams> &
     Pick<AggregateTimeoutParams, "waitForCompactionRetry">,
-): AggregateTimeoutParams & { onTimeout: TimeoutCallbackMock } {
+): AggregateTimeoutParams {
   // Defaults model the normal wait path; tests override only the timeout or
   // in-flight signal under review.
-  const onTimeout =
-    (overrides.onTimeout as TimeoutCallbackMock | undefined) ?? vi.fn<TimeoutCallback>();
   return {
     waitForCompactionRetry: overrides.waitForCompactionRetry,
     abortable: overrides.abortable ?? (async (promise) => await promise),
     aggregateTimeoutMs: overrides.aggregateTimeoutMs ?? 60_000,
     isCompactionRetryStillActive: overrides.isCompactionRetryStillActive,
-    onTimeout,
   };
 }
 
 describe("waitForCompactionRetryWithAggregateTimeout", () => {
-  it("times out and fires callback when compaction retry never resolves", async () => {
+  it("times out when compaction retry never resolves", async () => {
     await withFakeTimers(async () => {
       const waitForCompactionRetry = vi.fn(async () => await new Promise<void>(() => {}));
       const params = buildAggregateTimeoutParams({ waitForCompactionRetry });
@@ -62,7 +48,7 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
       const result = await resultPromise;
 
       expect(result.timedOut).toBe(true);
-      expectClearedTimeoutState(params.onTimeout, true);
+      expect(vi.getTimerCount()).toBe(0);
     });
   });
 
@@ -91,7 +77,7 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
       const result = await resultPromise;
 
       expect(result.timedOut).toBe(false);
-      expectClearedTimeoutState(params.onTimeout, false);
+      expect(vi.getTimerCount()).toBe(0);
     });
   });
 
@@ -113,7 +99,7 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
       const result = await resultPromise;
 
       expect(result.timedOut).toBe(true);
-      expectClearedTimeoutState(params.onTimeout, true);
+      expect(vi.getTimerCount()).toBe(0);
     });
   });
 
@@ -125,7 +111,7 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
       const result = await waitForCompactionRetryWithAggregateTimeout(params);
 
       expect(result.timedOut).toBe(false);
-      expectClearedTimeoutState(params.onTimeout, false);
+      expect(vi.getTimerCount()).toBe(0);
     });
   });
 
@@ -142,7 +128,7 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
 
       expect(result.timedOut).toBe(false);
       expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-      expectClearedTimeoutState(params.onTimeout, false);
+      expect(vi.getTimerCount()).toBe(0);
       timeoutSpy.mockRestore();
     });
   });
@@ -159,7 +145,7 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
         "compaction wait failed",
       );
 
-      expectClearedTimeoutState(params.onTimeout, false);
+      expect(vi.getTimerCount()).toBe(0);
     });
   });
 
@@ -183,7 +169,7 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
       await Promise.resolve();
 
       expect(result.timedOut).toBe(true);
-      expectClearedTimeoutState(params.onTimeout, true);
+      expect(vi.getTimerCount()).toBe(0);
     });
   });
 
@@ -201,7 +187,7 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
 
       await expect(waitForCompactionRetryWithAggregateTimeout(params)).rejects.toThrow("aborted");
 
-      expectClearedTimeoutState(params.onTimeout, false);
+      expect(vi.getTimerCount()).toBe(0);
     });
   });
 });

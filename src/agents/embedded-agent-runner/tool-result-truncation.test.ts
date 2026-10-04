@@ -226,7 +226,7 @@ describe("truncateToolResultText", () => {
   it("supports custom suffix and min keep chars", () => {
     const text = "x".repeat(5_000);
     const result = truncateToolResultText(text, 300, {
-      suffix: "\n\n[custom-truncated]",
+      suffix: () => "\n\n[custom-truncated]",
       minKeepChars: 250,
     });
     expect(result).toContain("[custom-truncated]");
@@ -234,8 +234,8 @@ describe("truncateToolResultText", () => {
   });
 
   it.each([
-    { text: "aaa😀z", maxChars: 5, suffix: "!", minKeepChars: 0, expected: "aaa!" },
-    { text: "abcdef", maxChars: 1, suffix: "😀", minKeepChars: 0, expected: "" },
+    { text: "aaa😀z", maxChars: 5, suffix: () => "!", minKeepChars: 0, expected: "aaa!" },
+    { text: "abcdef", maxChars: 1, suffix: () => "😀", minKeepChars: 0, expected: "" },
     {
       text: "x".repeat(100),
       maxChars: 4,
@@ -257,7 +257,7 @@ describe("truncateToolResultText", () => {
       const text = `${"a".repeat(6)}😀${middle.repeat(100)}😀${"x".repeat(22)} Error`;
       expect(
         truncateToolResultText(text, 100, {
-          suffix: "!",
+          suffix: () => "!",
           minKeepChars: 1,
         }),
       ).toBe(`${"a".repeat(6)}${marker}${"x".repeat(22)} Error!`);
@@ -285,7 +285,7 @@ describe("truncateToolResultMessage", () => {
     } as unknown as ToolResultMessage;
 
     const result = truncateToolResultMessage(msg, 10_000, {
-      suffix: "\n\n[persist-truncated]",
+      suffix: () => "\n\n[persist-truncated]",
       minKeepChars: 2_000,
     });
     expect(result.role).toBe("toolResult");
@@ -326,13 +326,13 @@ describe("truncateToolResultMessage", () => {
       kind: "small blocks",
       texts: ["a".repeat(50), "b".repeat(50), "c".repeat(500)],
       maxChars: 100,
-      options: { suffix: "!", minKeepChars: 99 },
+      options: { suffix: () => "!", minKeepChars: 99 },
     },
     {
       kind: "empty blocks",
       texts: [...Array<string>(150).fill(""), "x".repeat(500)],
       maxChars: 100,
-      options: { suffix: "!", minKeepChars: 0 },
+      options: { suffix: () => "!", minKeepChars: 0 },
     },
   ])("reserves the weighted notice budget for $kind", ({ kind, texts, maxChars, options }) => {
     const msg = {

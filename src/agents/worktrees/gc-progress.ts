@@ -64,10 +64,6 @@ export class WorktreeGcProgress {
     this.record(stage, "deferred", detail, id);
   }
 
-  recordLimitState(satisfied: boolean, inventoryComplete = true): void {
-    this.result.limitsSatisfied = satisfied ? (inventoryComplete ? true : null) : false;
-  }
-
   error(
     stage: ManagedWorktreeGcResult["issues"][number]["stage"],
     error: unknown,

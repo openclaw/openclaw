@@ -226,7 +226,6 @@ export class ModelRegistry {
         : {}),
       ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
       allowWorkspaceScopedCurrent: true,
-      useRuntimeConfig: true,
     });
     this.loadModels();
     this.baseCatalogSnapshot = this.captureCatalogSnapshot();

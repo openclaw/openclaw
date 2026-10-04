@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
-import { ensureSandboxContainer } from "./docker.js";
+import { DOCKER_SANDBOX_ENGINE, ensureSandboxContainer } from "./docker.js";
 import type { SandboxConfig } from "./types.js";
 
 const containerMocks = vi.hoisted(() => ({ execContainer: vi.fn() }));
@@ -78,6 +78,7 @@ async function expectPartialRuntimeCleanup(params: {
 
 function containerParams(workspaceDir: string, setupCommand?: string) {
   return {
+    engine: DOCKER_SANDBOX_ENGINE,
     scopeKey: "partial-create",
     workspaceDir,
     agentWorkspaceDir: workspaceDir,

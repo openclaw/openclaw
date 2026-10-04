@@ -2,7 +2,7 @@
  * Unit tests for the shared POST JSON endpoint helper used by gateway HTTP surfaces.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
@@ -10,7 +10,7 @@ import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 vi.mock("./http-utils.js", () => {
   return {
     authorizeGatewayHttpRequestOrReply: vi.fn(),
-    resolveTrustedHttpOperatorScopes: vi.fn(),
+    resolveSharedSecretHttpOperatorScopes: vi.fn(),
   };
 });
 
@@ -31,7 +31,7 @@ vi.mock("./method-scopes.js", () => {
 
 const { readJsonBodyOrError, sendMethodNotAllowed, sendMissingScopeForbidden } =
   await import("./http-common.js");
-const { authorizeGatewayHttpRequestOrReply, resolveTrustedHttpOperatorScopes } =
+const { authorizeGatewayHttpRequestOrReply, resolveSharedSecretHttpOperatorScopes } =
   await import("./http-utils.js");
 const { authorizeOperatorScopesForMethod } = await import("./method-scopes.js");
 
@@ -89,6 +89,11 @@ function handleEndpoint(
 }
 
 describe("handleGatewayPostJsonEndpoint", () => {
+  beforeEach(() => {
+    vi.mocked(authorizeOperatorScopesForMethod).mockReturnValue({ allowed: true });
+    vi.mocked(resolveSharedSecretHttpOperatorScopes).mockReturnValue(["operator.write"]);
+  });
+
   it("does not admit a parsed body after its authority was revoked while reading", async () => {
     const body = createDeferred<unknown>();
     const reading = createDeferred();
@@ -139,7 +144,6 @@ describe("handleGatewayPostJsonEndpoint", () => {
     const requestAuth = authorizedRequest();
     vi.mocked(authorizeGatewayHttpRequestOrReply).mockResolvedValue(requestAuth);
     vi.mocked(readJsonBodyOrError).mockResolvedValue({ hello: "world" });
-    vi.mocked(resolveTrustedHttpOperatorScopes).mockReturnValue(["operator.write"]);
     const result = await handleEndpoint();
     expect(result).toEqual({
       body: { hello: "world" },
@@ -152,7 +156,6 @@ describe("handleGatewayPostJsonEndpoint", () => {
     const requestAuth = authorizedRequest();
     vi.mocked(authorizeGatewayHttpRequestOrReply).mockResolvedValue(requestAuth);
     vi.mocked(readJsonBodyOrError).mockResolvedValue({ ok: true });
-    vi.mocked(resolveTrustedHttpOperatorScopes).mockReturnValue(["operator.write"]);
 
     const result = await handleEndpoint({ request: { host: "[" } });
 
@@ -167,7 +170,7 @@ describe("handleGatewayPostJsonEndpoint", () => {
     vi.mocked(authorizeGatewayHttpRequestOrReply).mockResolvedValue(
       authorizedRequest({ trustDeclaredOperatorScopes: false }),
     );
-    vi.mocked(resolveTrustedHttpOperatorScopes).mockReturnValue(["operator.approvals"]);
+    vi.mocked(resolveSharedSecretHttpOperatorScopes).mockReturnValue(["operator.approvals"]);
     vi.mocked(authorizeOperatorScopesForMethod).mockReturnValue({
       allowed: false,
       missingScope: "operator.write",
@@ -179,9 +182,6 @@ describe("handleGatewayPostJsonEndpoint", () => {
 
     const result = await handleEndpoint({
       response: res,
-      endpoint: {
-        requiredOperatorMethod: "chat.send",
-      },
     });
 
     expect(result).toBeUndefined();
@@ -190,34 +190,5 @@ describe("handleGatewayPostJsonEndpoint", () => {
     ]);
     expect(mockedSendMissingScopeForbidden).toHaveBeenCalledWith(res, "operator.write");
     expect(vi.mocked(readJsonBodyOrError)).not.toHaveBeenCalled();
-  });
-
-  it("uses a custom operator scope resolver when provided", async () => {
-    const requestAuth = authorizedRequest({
-      authMethod: "token",
-      trustDeclaredOperatorScopes: false,
-    });
-    vi.mocked(authorizeGatewayHttpRequestOrReply).mockResolvedValue(requestAuth);
-    vi.mocked(authorizeOperatorScopesForMethod).mockReturnValue({ allowed: true });
-    vi.mocked(readJsonBodyOrError).mockResolvedValue({ ok: true });
-    const resolveOperatorScopes = vi.fn<NonNullable<EndpointOptions["resolveOperatorScopes"]>>(
-      () => ["operator.admin", "operator.write"],
-    );
-
-    const result = await handleEndpoint({
-      endpoint: {
-        requiredOperatorMethod: "chat.send",
-        resolveOperatorScopes,
-      },
-    });
-
-    const [, resolvedAuth] = resolveOperatorScopes.mock.calls.at(0) ?? [undefined, undefined];
-    expect(resolvedAuth?.authMethod).toBe("token");
-    expect(resolvedAuth?.trustDeclaredOperatorScopes).toBe(false);
-    expect(result).toEqual({
-      body: { ok: true },
-      requestAuth,
-      operatorScopes: ["operator.admin", "operator.write"],
-    });
   });
 });

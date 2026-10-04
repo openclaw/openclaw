@@ -629,7 +629,7 @@ export function createImageTool(options?: {
             imageModelConfig: imageRoute.imageModelConfig,
             modelOverride,
             prompt: promptRaw,
-            images: loadedImages.map((img) => ({ buffer: img.buffer, mimeType: img.mimeType })),
+            images: loadedImages,
             workspaceDir: options?.workspaceDir,
             preparedModelRuntime: options?.preparedModelRuntime,
           },

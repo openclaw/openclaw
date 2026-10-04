@@ -218,11 +218,9 @@ function hasRawNpmConfigKey(
   key: string,
   scope: NpmConfigScope = {},
 ): boolean {
-  const userNpmrc =
-    resolveEnvPath(env, "NPM_CONFIG_USERCONFIG", "npm_config_userconfig") ?? resolveHomeNpmrc(env);
   const files = [
     resolveScopedProjectNpmrc(scope),
-    userNpmrc,
+    resolveEnvPath(env, "NPM_CONFIG_USERCONFIG", "npm_config_userconfig") ?? resolveHomeNpmrc(env),
     resolveEnvPath(env, "NPM_CONFIG_GLOBALCONFIG", "npm_config_globalconfig"),
     resolveScopedGlobalNpmrc(scope),
     readNpmGlobalConfigPath(env, scope),

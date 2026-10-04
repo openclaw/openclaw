@@ -450,7 +450,6 @@ describe("terminal tool", () => {
       const { backend, manager, sessionId } = await openAgentTerminal();
       const tool = makeTool(manager, {
         ...options,
-        runId: "terminal-run",
         approvalReviewerDeviceIds: ["reviewer-device"],
       });
 
@@ -493,7 +492,6 @@ describe("terminal tool", () => {
     const { backend, manager, sessionId } = await openAgentTerminal();
     const tool = makeTool(manager, {
       execSession: { permissionMode: "guarded" },
-      runId: "terminal-run",
     });
     let resolveDecision!: (decision: string) => void;
     approvalMocks.decide.mockImplementationOnce(

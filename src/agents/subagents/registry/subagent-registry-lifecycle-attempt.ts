@@ -44,7 +44,7 @@ export function scheduleResumeSubagentRun(
         return;
       }
       if (cleanupGeneration !== undefined) {
-        if (!context.isCleanupGenerationCurrent(runId, entry, cleanupGeneration)) {
+        if (!context.isCleanupGenerationCurrent(entry, cleanupGeneration)) {
           return;
         }
         if (current.cleanupHandled) {
@@ -52,7 +52,7 @@ export function scheduleResumeSubagentRun(
             entry,
             stateContext,
             assertCurrent() {
-              if (!context.isCleanupGenerationCurrent(runId, entry, cleanupGeneration)) {
+              if (!context.isCleanupGenerationCurrent(entry, cleanupGeneration)) {
                 throw new Error("Subagent cleanup resume generation changed.");
               }
             },
@@ -68,7 +68,7 @@ export function scheduleResumeSubagentRun(
       if (
         !resumedEntry ||
         (cleanupGeneration !== undefined &&
-          !context.isCleanupGenerationCurrent(runId, entry, cleanupGeneration))
+          !context.isCleanupGenerationCurrent(entry, cleanupGeneration))
       ) {
         return;
       }
@@ -110,7 +110,7 @@ export function runDetachedCleanupAttempt(
     }
   };
   const assertCurrent = () => {
-    if (!context.isCleanupGenerationCurrent(args.runId, args.entry, args.cleanupGeneration)) {
+    if (!context.isCleanupGenerationCurrent(args.entry, args.cleanupGeneration)) {
       throw new Error("Subagent cleanup generation changed before persistence.");
     }
   };
@@ -156,8 +156,8 @@ export function runDetachedCleanupAttempt(
           !current ||
           current.cleanupCompletedAt ||
           !(startCommitted
-            ? context.isCleanupAttemptCurrent(args.runId, args.entry, args.cleanupGeneration)
-            : context.isCleanupGenerationCurrent(args.runId, args.entry, args.cleanupGeneration))
+            ? context.isCleanupAttemptCurrent(args.entry, args.cleanupGeneration)
+            : context.isCleanupGenerationCurrent(args.entry, args.cleanupGeneration))
         ) {
           assertSubagentRegistryWriteSourceCurrent(stateContext);
           await retireSupersededCleanupIfNeeded(context, args.entry, args.cleanupGeneration);
@@ -181,7 +181,7 @@ export function runDetachedCleanupAttempt(
         } catch {
           return;
         }
-        if (!context.isCleanupGenerationCurrent(args.runId, args.entry, args.cleanupGeneration)) {
+        if (!context.isCleanupGenerationCurrent(args.entry, args.cleanupGeneration)) {
           return;
         }
         const failureCount = context.incrementCleanupFailureCount(current);

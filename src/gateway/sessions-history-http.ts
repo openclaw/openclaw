@@ -31,7 +31,6 @@ import {
   authorizeScopedGatewayHttpRequestOrReply,
   checkGatewayHttpRequestAuth,
   getHeader,
-  resolveSharedSecretHttpOperatorScopes,
   type AuthorizedGatewayHttpRequest,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
@@ -164,7 +163,6 @@ export async function handleSessionHistoryHttpRequest(
     req,
     res,
     operatorMethod: "chat.history",
-    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
   });
   if (!authResult) {
     return true;

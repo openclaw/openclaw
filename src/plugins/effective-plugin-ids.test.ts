@@ -31,9 +31,6 @@ vi.mock("../channels/config-presence.js", () => ({
   listPotentialConfiguredChannelIds: (
     ...args: Parameters<typeof mocks.listPotentialConfiguredChannelIds>
   ) => mocks.listPotentialConfiguredChannelIds(...args),
-  listPotentialConfiguredChannelPresenceSignals: () => [
-    { channelId: "credential-only", source: "persisted-auth" },
-  ],
 }));
 
 vi.mock("./channel-presence-policy.js", () => ({
@@ -101,19 +98,17 @@ describe("resolveEffectivePluginIds", () => {
     mocks.passesManifestOwnerBasePolicy.mockReturnValue(true);
   });
 
-  it("uses persisted auth for migration discovery but never activation", () => {
+  it("does not activate channels from persisted auth", () => {
     mocks.listExplicitlyDisabledChannelIdsForConfig.mockReturnValue(["credential-only"]);
     mocks.listPotentialConfiguredChannelIds.mockImplementation((_config, _env, options) =>
       options?.includePersistedAuthState ? ["credential-only"] : [],
     );
-    const collect = (includePersistedAuthState = false) =>
+    expect(
       collectConfiguredStartupChannelIds({
         configs: [{}, {}],
         env: {},
-        ...(includePersistedAuthState ? { includePersistedAuthState: true } : {}),
-      });
-    expect(collect()).toEqual([]);
-    expect(collect(true)).toEqual(["credential-only"]);
+      }),
+    ).toEqual([]);
   });
 
   it("includes a selected context-engine slot even when omitted from explicit allow and entries", () => {

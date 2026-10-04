@@ -383,8 +383,7 @@ async function finalizeInput(
   if (
     !transferredRun ||
     "executorFence" in transferredRun ||
-    (!input.recoveryHandoff &&
-      input.params.rollbackBlockedReason !== "state-migrated-no-rollback" &&
+    (input.params.rollbackBlockedReason !== "state-migrated-no-rollback" &&
       input.params.rollbackBlockedReason !== "rollback-state-unverified")
   ) {
     throw new Error("Update finalization requires its migrated update run.");

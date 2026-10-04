@@ -477,7 +477,7 @@ async function resolveProvisionedSandboxContext(
         })
       : null;
 
-  const sandboxContext: SandboxContext = {
+  const sandboxContext: SandboxContext & { backend: typeof backend } = {
     enabled: true,
     ...(runtime.sandboxRequired ? { required: true } : {}),
     ...(localWorkspace

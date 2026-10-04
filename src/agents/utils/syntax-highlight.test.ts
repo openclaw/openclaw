@@ -7,11 +7,8 @@ describe("syntax highlighting", () => {
   it("loads highlight.js through the package export and renders themed output", () => {
     expect(supportsLanguage("javascript")).toBe(true);
 
-    const highlighted = highlight("const answer = 42;", {
-      language: "javascript",
-      theme: {
-        keyword: (text) => `[${text}]`,
-      },
+    const highlighted = highlight("const answer = 42;", "javascript", {
+      keyword: (text) => `[${text}]`,
     });
 
     expect(highlighted).toContain("[const]");

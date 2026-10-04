@@ -361,11 +361,7 @@ export class SubagentLifecycleController {
 
   isCleanupGeneration = (entry: SubagentRunRecord, generation: number): boolean =>
     this.cleanupGenerations.get(getSubagentRunRuntimeKey(entry)) === generation;
-  isCleanupGenerationCurrent = (
-    _runId: string,
-    entry: SubagentRunRecord,
-    generation: number,
-  ): boolean => {
+  isCleanupGenerationCurrent = (entry: SubagentRunRecord, generation: number): boolean => {
     const current = getCurrentSubagentRunOwner(this.options.runs, entry);
     return (
       current !== undefined &&
@@ -373,22 +369,18 @@ export class SubagentLifecycleController {
       this.isCleanupGeneration(entry, generation)
     );
   };
-  isCleanupAttemptCurrent = (
-    runId: string,
-    entry: SubagentRunRecord,
-    generation: number,
-  ): boolean =>
+  isCleanupAttemptCurrent = (entry: SubagentRunRecord, generation: number): boolean =>
     getCurrentSubagentRunOwner(this.options.runs, entry)?.cleanupHandled === true &&
-    this.isCleanupGenerationCurrent(runId, entry, generation);
-  isCleanupOwnerCurrent = (_runId: string, entry: SubagentRunRecord): boolean => {
+    this.isCleanupGenerationCurrent(entry, generation);
+  isCleanupOwnerCurrent = (entry: SubagentRunRecord): boolean => {
     const current = this.liveRow(entry);
     return (
       (current === undefined || isSameSubagentRunOwner(current, entry)) &&
       (current ?? entry).pauseReason !== "sessions_yield"
     );
   };
-  isEndedHookOwnerCurrent = (runId: string, entry: SubagentRunRecord): boolean =>
-    this.isCleanupOwnerCurrent(runId, entry) && !this.newerGenerationOwnsSession(entry);
+  isEndedHookOwnerCurrent = (entry: SubagentRunRecord): boolean =>
+    this.isCleanupOwnerCurrent(entry) && !this.newerGenerationOwnsSession(entry);
 
   bumpTerminalGeneration(entry: SubagentRunRecord, bindingChanged = false): number {
     const identity = this.trackRun(entry);
@@ -401,11 +393,7 @@ export class SubagentLifecycleController {
     return generation;
   }
 
-  isTerminalCallbackCurrent = (
-    _runId: string,
-    entry: SubagentRunRecord,
-    generation: number,
-  ): boolean => {
+  isTerminalCallbackCurrent = (entry: SubagentRunRecord, generation: number): boolean => {
     const current = getCurrentSubagentRunOwner(this.options.runs, entry);
     return (
       current !== undefined &&
@@ -678,6 +666,6 @@ export class SubagentLifecycleController {
       },
     });
 
-  startSubagentAnnounceCleanupFlow = (runId: string, entry: SubagentRunRecord): boolean =>
-    startSubagentAnnounceCleanupFlow(this, runId, entry);
+  startSubagentAnnounceCleanupFlow = (entry: SubagentRunRecord): boolean =>
+    startSubagentAnnounceCleanupFlow(this, entry);
 }

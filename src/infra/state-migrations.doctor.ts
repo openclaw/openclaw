@@ -2551,7 +2551,7 @@ async function executeLegacyStateMigrations(
         requiredness: "required",
         reversibility: "checkpoint-required",
         run: async () => {
-          const result = await autoMigrateLegacyStateDir({ env, homedir, log: params.log });
+          const result = await autoMigrateLegacyStateDir({ env, homedir });
           const stillPending = resolvePendingLegacyStateDirMigrationPaths({ env, homedir });
           return stillPending
             ? {

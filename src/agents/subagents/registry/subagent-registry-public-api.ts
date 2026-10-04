@@ -33,7 +33,7 @@ import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 export function createSubagentRegistryPublicApi(config: {
   runs: Map<string, SubagentRunRecord>;
   restoreOnce: (context?: OpenClawStateWorkerContext) => Promise<void>;
-  startAnnounceCleanup: (runId: string, entry: SubagentRunRecord) => boolean;
+  startAnnounceCleanup: (entry: SubagentRunRecord) => boolean;
   settleRequesterTurn: SubagentLifecycleController["settleRequesterTurnAfterSessionSpawns"];
   markRequesterYielded: SubagentLifecycleController["markRequesterTurnYielded"];
 }) {
@@ -94,9 +94,9 @@ export function createSubagentRegistryPublicApi(config: {
       {
         runs,
         onPublished: (postimages) => {
-          for (const [runId, entry] of postimages) {
+          for (const entry of postimages.values()) {
             if (entry && typeof entry.cleanupCompletedAt !== "number") {
-              startAnnounceCleanup(runId, entry);
+              startAnnounceCleanup(entry);
             }
           }
         },

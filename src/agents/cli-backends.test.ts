@@ -300,12 +300,12 @@ describe("CLI backend metadata and bindings", () => {
 
   it("lists canonical provider to CLI runtime bindings", () => {
     expect(listCliRuntimeModelBackendBindings()).toEqual([
-      { provider: "acme", runtime: "acme-cli", pluginId: "acme-plugin" },
+      { provider: "acme", runtime: "acme-cli" },
     ]);
     expect(listCliRuntimeProviderIds()).toEqual(["acme-cli"]);
     expect(resolveCliRuntimeCanonicalProvider({ runtime: "ACME-CLI" })).toBe("acme");
     expect(resolveCliRuntimeModelBackendBinding({ provider: "acme", runtime: "acme-cli" })).toEqual(
-      { provider: "acme", runtime: "acme-cli", pluginId: "acme-plugin" },
+      { provider: "acme", runtime: "acme-cli" },
     );
     expect(isCliRuntimeModelBackendForProvider({ provider: "acme", runtime: "acme-cli" })).toBe(
       true,
@@ -322,7 +322,7 @@ describe("CLI backend metadata and bindings", () => {
 
     expect(listCliRuntimeModelBackendBindings()).toEqual([]);
     expect(listCliRuntimeModelBackendBindings({ includeSetupRegistry: true })).toEqual([
-      { provider: "acme", runtime: "acme-cli", pluginId: "acme-plugin" },
+      { provider: "acme", runtime: "acme-cli" },
     ]);
   });
 });

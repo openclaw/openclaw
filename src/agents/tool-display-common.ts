@@ -133,7 +133,7 @@ function lookupValueByPath(args: unknown, path: string): unknown {
 }
 
 /** Format a detail path/key into a short display label. */
-export function formatDetailKey(raw: string, overrides: Record<string, string> = {}): string {
+export function formatDetailKey(raw: string, overrides: Record<string, string>): string {
   const last = raw.split(".").findLast(Boolean) || raw;
   const override = overrides[last];
   if (override) {
@@ -313,7 +313,6 @@ function resolveDetailFromKeys(
   opts: {
     mode: "first" | "summary";
     coerce?: CoerceDisplayValueOptions;
-    maxEntries?: number;
     formatKey?: (raw: string) => string;
   },
 ): string | undefined {
@@ -337,9 +336,8 @@ function resolveDetailFromKeys(
   }
 
   const unique = dedupeByKey(entries, (entry) => `${entry.label}:${entry.value}`);
-  const maxEntries = opts.maxEntries ?? 8;
   const parts: string[] = [];
-  for (let index = 0; index < unique.length && index < maxEntries; index += 1) {
+  for (let index = 0; index < unique.length && index < 8; index += 1) {
     const entry = unique[index];
     if (entry) {
       parts.push(`${entry.label} ${entry.value}`);
@@ -358,7 +356,6 @@ export function resolveToolVerbAndDetailForArgs(params: {
   detailMode: "first" | "summary";
   toolDetailMode?: ToolDetailMode;
   detailCoerce?: CoerceDisplayValueOptions;
-  detailMaxEntries?: number;
   detailFormatKey?: (raw: string) => string;
 }): { verb?: string; detail?: string } {
   // Card arguments belong to the card renderer; generic summaries must not expose them.
@@ -368,15 +365,8 @@ export function resolveToolVerbAndDetailForArgs(params: {
   // Keep the existing read order when caller-owned options expose accessors.
   const { toolKey, args, meta } = params;
   const action = normalizeOptionalString(asRecord(params.args)?.action);
-  const {
-    spec,
-    fallbackDetailKeys,
-    detailMode,
-    toolDetailMode,
-    detailCoerce,
-    detailMaxEntries,
-    detailFormatKey,
-  } = params;
+  const { spec, fallbackDetailKeys, detailMode, toolDetailMode, detailCoerce, detailFormatKey } =
+    params;
   const actionSpec = spec && action ? (spec.actions?.[action] ?? undefined) : undefined;
   const fallbackVerb =
     toolKey === "web_search"
@@ -411,7 +401,6 @@ export function resolveToolVerbAndDetailForArgs(params: {
     detail = resolveDetailFromKeys(args, detailKeys, {
       mode: detailMode,
       coerce: detailCoerce,
-      maxEntries: detailMaxEntries,
       formatKey: detailFormatKey,
     });
   }

@@ -147,9 +147,6 @@ describe("secrets request normalization", () => {
 
     expect(normalized).toEqual({
       name: "SERVICE_API_KEY",
-      kind: "secret",
-      allowedHosts: ["api.example.test"],
-      reason: "Deploy the service",
       timeoutSeconds: 30,
       questions: [
         {

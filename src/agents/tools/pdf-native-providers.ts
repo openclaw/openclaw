@@ -18,11 +18,6 @@ import type { ModelProviderRequestTransportOverrides } from "../provider-request
 import { unwrapSecretSentinelsForProviderEgress } from "../provider-secret-egress.js";
 import { resolveProviderTransportSsrFPolicy } from "../provider-transport-fetch.js";
 
-type PdfInput = {
-  base64: string;
-  filename?: string;
-};
-
 const NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS = 120_000;
 const NATIVE_PDF_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const NATIVE_PDF_ERROR_BODY_MAX_CHARS = 400;
@@ -36,7 +31,7 @@ type NativePdfAnalysisParams = {
   apiKey: string;
   modelId: string;
   prompt: string;
-  pdfs: PdfInput[];
+  pdfs: Array<{ base64: string }>;
   baseUrl?: string;
   requestConfig?: NativePdfProviderRequestConfig;
   signal?: AbortSignal;

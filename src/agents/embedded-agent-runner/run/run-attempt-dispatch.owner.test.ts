@@ -460,7 +460,9 @@ it.each(dispatchCases)(
           },
           runShellCommand: remoteBridgeCommand,
         };
-        remoteSandbox.fsBridge = createSandboxFsBridge({ sandbox: remoteSandbox });
+        remoteSandbox.fsBridge = createSandboxFsBridge({
+          sandbox: { ...remoteSandbox, backend: remoteSandbox.backend },
+        });
       }
       const remoteImageRead = remoteSandbox?.fsBridge
         ? vi.spyOn(remoteSandbox.fsBridge, "readFile")

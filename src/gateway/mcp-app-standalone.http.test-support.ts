@@ -51,7 +51,6 @@ function issueTicket(
 }
 
 const nowMs = 1_800_000_000_000;
-const secret = Buffer.alloc(32, 7);
 const releaseRuntimeLease = vi.fn();
 const runtime = {
   sessionId: "runtime-session",
@@ -134,7 +133,6 @@ async function request(params: {
     sandboxPort: 18_790,
     now: params.clock,
     nowMs: params.now ?? nowMs,
-    ticketSecret: secret,
   });
   return { handled, res, end, setHeader };
 }
@@ -145,7 +143,7 @@ async function createSerializedHost(options: StandaloneHostBrowserOptions = {}) 
   if (!source) {
     throw new Error("standalone shell script missing");
   }
-  const ticket = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret }).ticket;
+  const ticket = issueTicket({ sessionKey: "agent:main:main", view, nowMs }).ticket;
   const loaded = await request({
     url: "/__openclaw__/mcp-app/view",
     authorization: `MCP-App ${ticket}`,
@@ -184,7 +182,6 @@ export {
   request,
   resolveMcpAppActiveView,
   runtime,
-  secret,
   view,
   verifyMcpAppStandaloneTicket,
 };

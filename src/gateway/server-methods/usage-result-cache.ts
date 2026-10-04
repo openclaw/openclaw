@@ -115,7 +115,6 @@ export async function loadCostUsageSummaryCached(params: {
             config: params.config,
             agentId: expectDefined(agentId, "non-aggregate usage agent id"),
             requestRefresh: true,
-            refreshMode: "background",
           }),
   });
 }
@@ -141,7 +140,6 @@ async function loadAllAgentCostUsageSummary(params: {
           config: params.config,
           agentId,
           requestRefresh: true,
-          refreshMode: "background",
         }),
     ),
   );

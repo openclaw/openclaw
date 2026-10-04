@@ -100,7 +100,6 @@ type MediaGenerationTaskResources = {
 
 /** Preflight retains resources until a duplicate result releases them or task admission takes over. */
 export async function prepareMediaGenerationTask<
-  T extends MediaGenerationExecutionResult,
   Resources extends (MediaGenerationTaskResources & { assertOpen: () => void }) | undefined,
 >(params: {
   generationLabel: "image" | "video" | "music";
@@ -127,10 +126,7 @@ export async function prepareMediaGenerationTask<
     | { kind: "result"; result: MediaGenerateActionResult }
     | {
         kind: "task";
-        params: Omit<
-          Parameters<typeof runMediaGenerationTask<T>>[0],
-          "resources" | "generationLabel"
-        >;
+        params: Omit<Parameters<typeof runMediaGenerationTask>[0], "resources" | "generationLabel">;
       }
   >;
 }) {
@@ -231,7 +227,7 @@ export async function prepareMediaGenerationTask<
   });
 }
 
-export async function runMediaGenerationTask<T extends MediaGenerationExecutionResult>(params: {
+export async function runMediaGenerationTask(params: {
   lifecycle: ReturnType<typeof createMediaGenerationTaskLifecycle>;
   generationLabel: "image" | "video" | "music";
   sessionKey?: string;
@@ -250,7 +246,9 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
   assertAdmissionCurrent?: () => void;
   run: (
     handle: MediaGenerationTaskHandle | null,
-  ) => Promise<T & { contentText: string; details: Record<string, unknown> }>;
+  ) => Promise<
+    MediaGenerationExecutionResult & { contentText: string; details: Record<string, unknown> }
+  >;
 }) {
   const resources = params.resources;
   const assertAdmissionCurrent = captureMediaGenerationAdmission(params.assertAdmissionCurrent);
@@ -258,7 +256,7 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
   const run = resources
     ? async (handle: MediaGenerationTaskHandle | null) => {
         resourcesTransferred = true;
-        let executed: T & { contentText: string; details: Record<string, unknown> };
+        let executed: Awaited<ReturnType<typeof params.run>>;
         try {
           executed = await resources.run(() => params.run(handle));
         } catch (error) {

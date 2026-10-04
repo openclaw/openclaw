@@ -127,7 +127,7 @@ describe("sandbox fs bridge local backend e2e", () => {
           },
         });
 
-        const bridge = createSandboxFsBridge({ sandbox });
+        const bridge = createSandboxFsBridge({ sandbox: { ...sandbox, backend } });
         if (!bridge.readDirectory) {
           throw new Error("The mounted bridge must support directory discovery.");
         }
@@ -211,15 +211,17 @@ describe("sandbox fs bridge local backend e2e", () => {
       try {
         const { createSandboxTestContext } = await import("./test-fixtures.js");
         const bridge = createSandboxFsBridge({
-          sandbox: createSandboxTestContext({
-            overrides: {
-              workspaceDir,
-              agentWorkspaceDir: workspaceDir,
-              containerName: "local-backend-fsbridge-copy",
-              containerWorkdir: workspaceDir,
-              backend,
-            },
-          }),
+          sandbox: {
+            ...createSandboxTestContext({
+              overrides: {
+                workspaceDir,
+                agentWorkspaceDir: workspaceDir,
+                containerName: "local-backend-fsbridge-copy",
+                containerWorkdir: workspaceDir,
+              },
+            }),
+            backend,
+          },
         });
 
         const copyFile = bridge.copyFile?.bind(bridge);
@@ -281,7 +283,7 @@ describe("sandbox fs bridge local backend e2e", () => {
           },
         });
 
-        const bridge = createSandboxFsBridge({ sandbox });
+        const bridge = createSandboxFsBridge({ sandbox: { ...sandbox, backend } });
         const realDir = path.join(workspaceDir, "real");
         const decoyDir = path.join(workspaceDir, "decoy");
         await fs.mkdir(realDir);

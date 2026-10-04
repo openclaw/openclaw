@@ -8,7 +8,6 @@ import type {
   ComputerActParams,
   ComputerActResult,
   ComputerUseCapabilityDescriptor,
-  ComputerUseV2ActionName,
   ScreenSnapshotParams,
 } from "../../plugins/computer-use-contract.js";
 import {
@@ -24,6 +23,7 @@ import {
 } from "./computer-tool-bindings.js";
 import type { GatewayComputerStatus } from "./computer-tool-gateway.js";
 import { computerActionNeedsFrame, validateCapabilityBoundInput } from "./computer-tool-request.js";
+import { availableComputerActions, COMPUTER_TOOL_ACTIONS } from "./computer-tool-schema.js";
 import type {
   ComputerContextEpoch,
   ComputerFrame,
@@ -166,10 +166,6 @@ export class ComputerToolSession {
       contextEpoch?: ComputerContextEpoch;
       transport?: ComputerToolTransport;
       gatewayStatus?: GatewayComputerStatus;
-      availableActions: (
-        actions: readonly ComputerUseV2ActionName[],
-      ) => readonly ComputerUseV2ActionName[];
-      defaultActions: readonly ComputerUseV2ActionName[];
       onCapabilitiesChanged: (capabilities?: ComputerUseCapabilityDescriptor) => void;
       registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
       getOperationQueue: () => Promise<unknown>;
@@ -228,13 +224,11 @@ export class ComputerToolSession {
     target: ComputerTarget;
     capture: ScreenshotCapture;
     imageIdentity?: string;
-    modelHasVision?: boolean;
   }): ComputerFrame | undefined {
     const frame = this.computerState;
     const contextEpoch = this.options.contextEpoch;
     // Without context tracking, the earlier screenshot may already have been pruned.
     if (
-      params.modelHasVision === false ||
       !contextEpoch?.frameImageIdentity ||
       contextEpoch.frameImageIdentity !== params.imageIdentity ||
       frame.kind !== "frame" ||
@@ -255,9 +249,8 @@ export class ComputerToolSession {
     frameId: string;
     toolCallId: string;
     imageIdentity?: string;
-    modelHasVision?: boolean;
   }): void {
-    if (params.modelHasVision === false || !params.imageIdentity) {
+    if (!params.imageIdentity) {
       this.setTarget(params.resolved.target);
       return;
     }
@@ -400,8 +393,9 @@ export class ComputerToolSession {
     this.assertOpen();
     const capabilities = binding.capabilities;
     this.bindCapabilities(binding, refreshNode);
-    const advertisedActions = this.options.availableActions(
-      capabilities?.actions ?? this.options.defaultActions,
+    const advertisedActions = availableComputerActions(
+      capabilities?.actions ?? COMPUTER_TOOL_ACTIONS,
+      this.options.registerRunCleanup !== undefined,
     );
     if (
       params.action === "take_control" &&
@@ -569,8 +563,6 @@ export class ComputerToolSession {
         base64: parsed.base64,
         displayFrameId: parsed.displayFrameId,
         mimeType: imageMimeFromFormat(parsed.format) ?? "image/jpeg",
-        width: parsed.width,
-        height: parsed.height,
       };
     } catch (error) {
       this.setTarget(resolved.target);

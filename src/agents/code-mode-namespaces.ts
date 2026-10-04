@@ -88,7 +88,6 @@ type CodeModeNamespaceCatalogEntry = {
   id?: string;
   source?: string;
   name: string;
-  sourceName?: string;
   description?: string;
   parameters?: unknown;
   mcp?: PluginToolMcpMeta;
@@ -228,7 +227,6 @@ type McpNamespaceModel = {
 
 type McpNamespaceServer = {
   key: string;
-  serverName: string;
   safeServerName: string;
   node?: NonNullable<NonNullable<CodeModeNamespaceCatalogEntry["mcp"]>["node"]>;
 };
@@ -299,7 +297,6 @@ function createMcpNamespacePlan(catalog: readonly CodeModeNamespaceCatalogEntry[
     if (!serversByKey.has(key)) {
       serversByKey.set(key, {
         key,
-        serverName: mcp.serverName,
         safeServerName: mcp.safeServerName,
         ...(mcp.node ? { node: mcp.node } : {}),
       });
@@ -351,7 +348,6 @@ function createMcpNamespaceModel(
       serverDoc = {
         identifier: serverIdentifier,
         serverName: mcp.serverName,
-        ...(mcp.node ? { nodeLabel: mcpNodeLabel(mcp.node) } : {}),
         tools: [],
       };
       serverDocs.set(serverIdentifier, serverDoc);

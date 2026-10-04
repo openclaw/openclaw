@@ -1,5 +1,4 @@
 // Rate limiter for noisy websocket handshake auth logs.
-import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { pruneMapToMaxSize } from "../../../infra/map-size.js";
 
 /** Decision returned for a handshake auth log attempt. */
@@ -15,20 +14,13 @@ type HandshakeAuthLogState = {
 
 /** Per-key log limiter that reports suppressed auth attempts on the next emitted log. */
 export class HandshakeAuthLogLimiter {
-  private readonly intervalMs: number;
-  private readonly maxEntries: number;
   private readonly entries = new Map<string, HandshakeAuthLogState>();
-
-  constructor(options?: { intervalMs?: number; maxEntries?: number }) {
-    this.intervalMs = resolveIntegerOption(options?.intervalMs, 30_000, { min: 1 });
-    this.maxEntries = resolveIntegerOption(options?.maxEntries, 256, { min: 1 });
-  }
 
   /** Register one auth event key and decide whether it should be logged now. */
   register(key: string, nowMs = Date.now()): HandshakeAuthLogDecision {
     const entry = this.entries.get(key);
     if (!entry) {
-      pruneMapToMaxSize(this.entries, this.maxEntries - 1);
+      pruneMapToMaxSize(this.entries, 255);
       this.entries.set(key, {
         lastLoggedAtMs: nowMs,
         suppressedSinceLastLog: 0,
@@ -36,7 +28,7 @@ export class HandshakeAuthLogLimiter {
       return { shouldLog: true, suppressedSinceLastLog: 0 };
     }
 
-    if (nowMs - entry.lastLoggedAtMs < this.intervalMs) {
+    if (nowMs - entry.lastLoggedAtMs < 30_000) {
       entry.suppressedSinceLastLog += 1;
       return { shouldLog: false, suppressedSinceLastLog: 0 };
     }

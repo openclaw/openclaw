@@ -53,7 +53,6 @@ import {
 } from "./provider-synthetic-auth.js";
 import {
   resolveCatalogHookProviderPluginIds,
-  resolveOwningPluginIdsForProvider,
   resolveOwningPluginIdsForProviderRef,
   resolveProviderRefOwnership,
   resolveUsageHookProviderPluginContracts,
@@ -149,25 +148,6 @@ function resolveProviderHookRefs(
 
 function matchesAnyProviderPluginRef(provider: ProviderPlugin, providerRefs: readonly string[]) {
   return providerRefs.some((providerRef) => matchesProviderPluginRef(provider, providerRef));
-}
-
-function hasExplicitProviderRuntimePluginActivation(params: ProviderRuntimeLookup): boolean {
-  if (!params.config) {
-    return true;
-  }
-  const ownerPluginIds =
-    resolveOwningPluginIdsForProvider({
-      provider: params.provider,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-    }) ?? [];
-  if (ownerPluginIds.length === 0) {
-    return false;
-  }
-  const allow = new Set(params.config.plugins?.allow ?? []);
-  const entries = params.config.plugins?.entries ?? {};
-  return ownerPluginIds.some((pluginId) => allow.has(pluginId) || entries[pluginId] !== undefined);
 }
 
 export {
@@ -312,7 +292,6 @@ export function shouldPreferProviderRuntimeResolvedModel(
 
 export function normalizeProviderResolvedModelWithPlugin(
   params: ProviderRuntimeLookup & {
-    modelId?: string | null;
     pluginMetadataSnapshot?: PluginMetadataRegistryView;
     context: ProviderNormalizeResolvedModelContext;
   },
@@ -336,7 +315,6 @@ export function normalizeProviderResolvedModelWithPlugin(
 
 export function applyProviderResolvedTransportWithPlugin(
   params: ProviderRuntimeLookup & {
-    modelId?: string | null;
     context: ProviderNormalizeResolvedModelContext;
   },
 ): ProviderRuntimeModel | undefined {
@@ -415,52 +393,27 @@ export function normalizeProviderTransportWithPlugin(
   return undefined;
 }
 
-export function normalizeProviderConfigWithPlugin(
-  params: ProviderRuntimeLookup & {
-    manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-    context: ProviderNormalizeConfigContext;
-    allowRuntimePluginLoad?: boolean;
-  },
-): ModelProviderConfig | undefined {
-  const hasConfigChange = (normalized: ModelProviderConfig) =>
-    normalized !== params.context.providerConfig;
+export function normalizeProviderConfigWithPlugin(params: {
+  provider: string;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  context: ProviderNormalizeConfigContext;
+}): ModelProviderConfig | undefined {
   const bundledSurface = resolveBundledProviderPolicySurface(params.provider, {
     manifestRegistry: params.manifestRegistry,
   });
-  if (bundledSurface?.normalizeConfig) {
-    const normalized = bundledSurface.normalizeConfig(params.context);
-    return normalized && hasConfigChange(normalized) ? normalized : undefined;
-  }
-  if (!hasExplicitProviderRuntimePluginActivation(params)) {
-    return undefined;
-  }
-  if (params.allowRuntimePluginLoad === false) {
-    return undefined;
-  }
-  const matchedPlugin = resolveProviderRuntimePlugin(params);
-  const normalizedMatched = matchedPlugin?.normalizeConfig?.(params.context);
-  return normalizedMatched && hasConfigChange(normalizedMatched) ? normalizedMatched : undefined;
+  const normalized = bundledSurface?.normalizeConfig?.(params.context);
+  return normalized && normalized !== params.context.providerConfig ? normalized : undefined;
 }
 
-export function resolveProviderConfigApiKeyWithPlugin(
-  params: ProviderRuntimeLookup & {
-    manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-    context: ProviderResolveConfigApiKeyContext;
-    allowRuntimePluginLoad?: boolean;
-  },
-): string | undefined {
+export function resolveProviderConfigApiKeyWithPlugin(params: {
+  provider: string;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  context: ProviderResolveConfigApiKeyContext;
+}): string | undefined {
   const bundledSurface = resolveBundledProviderPolicySurface(params.provider, {
     manifestRegistry: params.manifestRegistry,
   });
-  if (bundledSurface?.resolveConfigApiKey) {
-    return normalizeOptionalString(bundledSurface.resolveConfigApiKey(params.context));
-  }
-  if (params.allowRuntimePluginLoad === false) {
-    return undefined;
-  }
-  return normalizeOptionalString(
-    resolveProviderRuntimePlugin(params)?.resolveConfigApiKey?.(params.context),
-  );
+  return normalizeOptionalString(bundledSurface?.resolveConfigApiKey?.(params.context));
 }
 
 export {
