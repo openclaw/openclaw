@@ -334,24 +334,20 @@ export function normalizeWhitespace(value: string): string {
 }
 
 export function markdownToText(markdown: string): string {
-  let marker = "\0";
-  while (markdown.includes(marker)) {
-    marker += marker;
-  }
   const codeBlocks: string[] = [];
   let text = "";
   let pos = 0;
   while (pos < markdown.length) {
     const open = markdown.indexOf("```", pos);
     if (open === -1) {
-      text += markdown.slice(pos);
+      text += markdown.slice(pos).replaceAll("\0", "\0\0");
       break;
     }
-    text += markdown.slice(pos, open);
+    text += markdown.slice(pos, open).replaceAll("\0", "\0\0");
     const afterOpen = open + 3;
     const close = markdown.indexOf("```", afterOpen);
     if (close === -1) {
-      text += markdown.slice(open);
+      text += markdown.slice(open).replaceAll("\0", "\0\0");
       break;
     }
     const firstLineEnd = markdown.indexOf("\n", afterOpen);
@@ -362,15 +358,17 @@ export function markdownToText(markdown: string): string {
     const lineEnd = /[\r\n\u2028\u2029]$/.test(code) ? code.slice(-1) : "";
     const literal = code.slice(0, code.length - lineEnd.length);
     if (literal) {
-      text += `${marker}${codeBlocks.length}${marker}`;
+      text += `\0${codeBlocks.length}\0`;
       codeBlocks.push(literal);
     }
     text += lineEnd;
     pos = close + 3;
   }
+  // Escaped input NUL pairs stay paired through prose formatting, so only our
+  // single-NUL markers can restore code. Replacement output is not rescanned.
   text = stripMarkdownFormatting(text).replace(
-    new RegExp(`${marker}(\\d+)${marker}`, "g"),
-    (_match, index: string) => codeBlocks[Number(index)]!,
+    /\0(?:\0|(\d+)\0)/g,
+    (_match, index: string | undefined) => (index === undefined ? "\0" : codeBlocks[Number(index)]!),
   );
   return normalizeWhitespace(text);
 }

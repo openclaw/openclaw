@@ -459,6 +459,7 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     ["[```label```](https://example.com)", "label"],
     ["```text\ncode\n```# heading", "code\nheading"],
     ["\0```text\n$&\n```", "\0$&"],
+    ["\0![](u)\0" + "0" + "\0![](u)\0", "\0\0" + "0" + "\0\0"],
     ["```js\n# heading", "```js\nheading"],
     [
       "before\n```text\n  # literal \r\n\r\n\r\n  body\n```\nafter",
@@ -466,6 +467,13 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     ],
   ])("preserves fenced code literals and existing extraction boundaries: %s", (markdown, text) => {
     expect(markdownToText(markdown)).toBe(text);
+  });
+
+  it("keeps code extraction bounded when prose contains long NUL runs", () => {
+    const prefix = "\0".repeat(32_768);
+    expect(markdownToText(`${prefix}${"```x```\n".repeat(5_000)}`)).toBe(
+      `${prefix}${"x\n".repeat(5_000)}`.trim(),
+    );
   });
 
   it("keeps blank lines between paragraphs, headings, and lists in text mode", async () => {
