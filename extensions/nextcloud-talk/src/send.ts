@@ -88,14 +88,7 @@ export async function sendMessageNextcloudTalk(
     accountId: account.accountId,
   });
   const message = convertMarkdownTables(text.trim(), tableMode);
-
-  const body: Record<string, unknown> = {
-    message,
-  };
-  if (opts.replyTo) {
-    body.replyTo = opts.replyTo;
-  }
-  const bodyStr = JSON.stringify(body);
+  const body = JSON.stringify({ message, replyTo: opts.replyTo || undefined });
 
   // Nextcloud Talk verifies signature against the extracted message text,
   // not the full JSON body. See ChecksumVerificationService.php:
@@ -120,7 +113,7 @@ export async function sendMessageNextcloudTalk(
         "X-Nextcloud-Talk-Bot-Random": random,
         "X-Nextcloud-Talk-Bot-Signature": signature,
       },
-      body: bodyStr,
+      body,
     },
     auditContext: "nextcloud-talk-send",
     policy: ssrfPolicyFromPrivateNetworkOptIn(account.config),
