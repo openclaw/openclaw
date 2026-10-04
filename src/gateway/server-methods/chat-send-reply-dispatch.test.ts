@@ -226,6 +226,15 @@ describe("chat delivery watermark preparation", () => {
       expect(await dispatch.resolveReplyDelivery()).toBe("missing");
       await append("current-answer", { role: "assistant", content: "Current answer." });
       expect(await dispatch.resolveReplyDelivery()).toBe("delivered");
+      expect(
+        dispatch.captureAgentTranscriptStart(runId, {
+          ...scope,
+          sessionKey: `${scope.sessionKey}:bound`,
+          generation: null,
+          maxSeq: 0,
+        }),
+      ).toBe(false);
+      expect(await dispatch.resolveReplyDelivery()).toBe("missing");
     });
   });
 

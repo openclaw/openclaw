@@ -165,11 +165,7 @@ export function createChatSendReplyDispatch(params: {
   const { backingSessionId, cfg, clientRunId } = session;
   // Extract scalar transcript bindings from borrowed entries; reread after asynchronous work.
   const sessionLoadOptions = { ...session.sessionLoadOptions, clone: false };
-  let assistantTranscriptRewriteState = {
-    sessionId: undefined as string | undefined,
-    generation: null as string | null,
-    afterSeq: 0,
-  };
+  let assistantTranscriptRewriteState: ReturnType<typeof resolveChatReplyTranscriptStart>;
   let agentRunId = clientRunId;
   let agentTranscriptLifecycleRevision: string | undefined;
   const captureAgentTranscriptStart = (
@@ -179,12 +175,11 @@ export function createChatSendReplyDispatch(params: {
     agentRunId = runId;
     const current = loadSessionEntry(session.sessionKey, sessionLoadOptions);
     const transcriptStart = resolveChatReplyTranscriptStart(session, current, prepared);
-    if (!transcriptStart) {
-      return false;
-    }
     assistantTranscriptRewriteState = transcriptStart;
-    agentTranscriptLifecycleRevision = current.entry?.lifecycleRevision;
-    return true;
+    agentTranscriptLifecycleRevision = transcriptStart
+      ? current.entry?.lifecycleRevision
+      : undefined;
+    return transcriptStart !== undefined;
   };
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg,
@@ -244,7 +239,12 @@ export function createChatSendReplyDispatch(params: {
         }) === admission.storePath
       );
     };
-    if (!admission || transcriptStart.sessionId !== admission.sessionId || !isCurrent()) {
+    if (
+      !admission ||
+      !transcriptStart ||
+      transcriptStart.sessionId !== admission.sessionId ||
+      !isCurrent()
+    ) {
       return "missing";
     }
     const scope = admission;
@@ -495,12 +495,8 @@ export function createChatSendReplyDispatch(params: {
     } else if (assistantMessageIndex !== undefined && transcriptScope) {
       // Embedded runtimes identify their owned turn by message index, not a persisted key.
       // Require that exact current-turn row and media set so a sibling reply cannot be rewritten.
-      if (assistantTranscriptRewriteState.sessionId !== sessionId) {
-        assistantTranscriptRewriteState = {
-          sessionId,
-          generation: null,
-          afterSeq: 0,
-        };
+      if (assistantTranscriptRewriteState?.sessionId !== sessionId) {
+        return;
       }
       const indexedRewrite = await rewriteAssistantTranscriptMessageByTurnIndexAndMedia({
         afterSeq: assistantTranscriptRewriteState.afterSeq,
@@ -699,6 +695,7 @@ export function createChatSendReplyDispatch(params: {
         const commentaryRewrite = await commentaryMedia.close();
         if (
           commentaryRewrite &&
+          assistantTranscriptRewriteState &&
           commentaryRewrite.sessionId === assistantTranscriptRewriteState.sessionId
         ) {
           assistantTranscriptRewriteState.generation = commentaryRewrite.generation;

@@ -417,10 +417,9 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                       { accessChanged: false },
                     );
                   }
-                  agentRunStarted = replyDispatch.captureAgentTranscriptStart(
-                    runId,
-                    transcriptStart,
-                  );
+                  // A bound runtime can start on a different transcript than the source chat.
+                  agentRunStarted = true;
+                  replyDispatch.captureAgentTranscriptStart(runId, transcriptStart);
                   emitServerTiming(
                     "agent-run-started",
                     runId !== clientRunId ? { agentRunId: runId } : undefined,

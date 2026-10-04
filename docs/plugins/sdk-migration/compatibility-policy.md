@@ -209,6 +209,26 @@ canonical worker writer; incognito retains its process-local owner until its
 separate cutover. Schemas, persisted bytes, and supported update paths are
 unchanged. Removal still requires explicit breaking-release approval.
 
+### Reply run-start transcript facts
+
+`GetReplyOptions.onAgentRunStart` from `openclaw/plugin-sdk/reply-runtime`, also
+provided to `reply_dispatch` hooks, retains the callback shipped in OpenClaw
+2026.9.8: `(runId, executionIdentityToken?, options?) => unknown`. Existing
+callbacks and producers that omit later arguments remain supported. Completion
+ownership still requires returning `"reply-dispatch"` synchronously.
+
+Current runtime helpers supply prepared transcript facts in an optional fourth
+argument. Wrappers should forward every argument and the callback's return value;
+see [message hooks](/plugins/hooks/messages). The facts describe the transcript
+boundary and do not grant session or write authority. When a released producer
+omits them, the Gateway retains its synchronous transcript-read fallback.
+
+Only that omitted-facts fallback is deprecated as of October 4, 2026; the callback
+itself remains supported. The fallback stays until the next Plugin SDK major and
+explicit breaking-release approval. The compatibility registry records the
+migration without runtime warnings. Schemas, retained data, and update behavior
+are unchanged.
+
 ### Native session generation authority
 
 The production-private `agent-harness-session-runtime` subpath retains the

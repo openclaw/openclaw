@@ -262,6 +262,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           markAutoFallbackPrimaryProbe({ probe: activeProbe, sessionKey: turn.sessionKey });
         }
         turn.opts?.onModelSelected?.({ provider, model, thinkLevel: candidateThinkLevel });
+        const runStart = params.createAgentRunStartCallbacks();
         const signalExecutionPhaseForCandidate: AgentFallbackCandidateCommonParams["signalExecutionPhaseForTyping"] =
           (info) => {
             if (
@@ -270,7 +271,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             ) {
               params.state.postCompactionModelAttempted = true;
             }
-            params.signalExecutionPhaseForTyping(info);
+            runStart.signalExecutionPhaseForTyping(info);
           };
         const messageActionTurnCapability = mintReplyMessageActionTurnCapability(
           turn,
@@ -304,8 +305,8 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             bootstrapPromptWarningSignaturesSeen: params.state.bootstrapPromptWarningSignaturesSeen,
             currentTurnImages: params.currentTurnImages,
             signalExecutionPhaseForTyping: signalExecutionPhaseForCandidate,
-            prepareAgentRunStart: params.prepareAgentRunStart,
-            notifyAgentRunStart: params.notifyAgentRunStart,
+            prepareAgentRunStart: runStart.prepareAgentRunStart,
+            notifyAgentRunStart: runStart.notifyAgentRunStart,
             preserveProgressCallbackStartOrder,
             presentation: params.presentation,
             timing: params.timing,
@@ -349,6 +350,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           );
           return result;
         } finally {
+          runStart.close();
           revokeMessageActionTurnCapability(messageActionTurnCapability);
         }
       },

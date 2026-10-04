@@ -1,18 +1,109 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { InternalSessionEntry } from "../../config/sessions.js";
 import * as transcriptWatermarks from "../../config/sessions/session-transcript-watermark.js";
 import { deriveGatewaySessionLifecycleSnapshot } from "../../gateway/session-lifecycle-state.js";
 import { emitAgentEvent, onAgentEvent, type AgentEventPayload } from "../../infra/agent-events.js";
 import {
   createMinimalRunAgentTurnParams,
+  fallbackAttemptOptions,
+  initialFallbackAttemptOptions,
   setupAgentRunnerExecutionTestState,
   type EmbeddedAgentParams,
+  type FallbackRunnerParams,
 } from "./agent-runner-execution.test-support.js";
 
 vi.mock("../../gateway/session-utils.js", () => ({ loadSessionEntry: vi.fn() }));
 
 const state = await setupAgentRunnerExecutionTestState();
+
+it.each(["settled", "pending"] as const)(
+  "uses the starting fallback candidate's facts after a prior %s preparation",
+  async (preparationState) => {
+    const { executeAgentTurn } = await import("./agent-runner-execution.js");
+    const onAgentRunStart = vi.fn();
+    const fallbackModel = "claude-opus-4-6";
+    const turn = createMinimalRunAgentTurnParams({ opts: { onAgentRunStart } });
+    turn.followupRun.run.thinkingCatalog = [
+      ...(turn.followupRun.run.thinkingCatalog ?? []),
+      { provider: "anthropic", id: fallbackModel, input: ["text"] },
+    ];
+    const entered = createDeferred();
+    const retiredRead =
+      createDeferred<
+        Awaited<ReturnType<typeof transcriptWatermarks.readSessionTranscriptStartAsync>>
+      >();
+    const priorStart = {
+      agentId: "main",
+      sessionId: "session",
+      sessionKey: "main",
+      storePath: "/synthetic/sessions.json",
+      generation: "transcript-generation",
+      maxSeq: 7,
+    };
+    const currentStart = { ...priorStart, maxSeq: 11 };
+    const prepare = vi
+      .spyOn(transcriptWatermarks, "readSessionTranscriptStartAsync")
+      .mockImplementationOnce(async () => {
+        entered.resolve();
+        return preparationState === "pending" ? retiredRead.promise : priorStart;
+      })
+      .mockResolvedValue(currentStart);
+    const preparationFailure = new Error("candidate failed before visible execution");
+    let retiredEvent = Promise.resolve();
+    let startsBeforeCurrentPhase = -1;
+    state.runEmbeddedAgentMock.mockImplementationOnce(
+      async (params: RunEmbeddedAgentInternalParams) => {
+        if (preparationState === "pending") {
+          retiredEvent = Promise.resolve(
+            params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } }),
+          );
+          await entered.promise;
+        } else {
+          await params.onExecutionStarted?.();
+        }
+        throw preparationFailure;
+      },
+    );
+    state.runEmbeddedAgentMock.mockImplementationOnce(
+      async (params: RunEmbeddedAgentInternalParams) => {
+        const currentPreparation = params.onExecutionStarted?.();
+        retiredRead.resolve(priorStart);
+        await retiredEvent;
+        await currentPreparation;
+        startsBeforeCurrentPhase = onAgentRunStart.mock.calls.length;
+        params.onExecutionPhase?.({ phase: "model_call_started" });
+        return { payloads: [{ text: "done" }], meta: {} };
+      },
+    );
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      await expect(
+        params.run("anthropic", "claude", initialFallbackAttemptOptions(params)),
+      ).rejects.toBe(preparationFailure);
+      return {
+        result: await params.run(
+          "anthropic",
+          fallbackModel,
+          fallbackAttemptOptions(params, "unknown"),
+        ),
+        provider: "anthropic",
+        model: fallbackModel,
+        attempts: [{ provider: "anthropic", model: "claude", error: preparationFailure.message }],
+      };
+    });
+    try {
+      const result = await executeAgentTurn(turn);
+      expect(result.outcome.kind).toBe("settled");
+      expect(startsBeforeCurrentPhase).toBe(0);
+      expect(onAgentRunStart).toHaveBeenCalledTimes(1);
+      expect(onAgentRunStart.mock.lastCall?.[3]).toEqual(currentStart);
+    } finally {
+      retiredRead.resolve(priorStart);
+      await retiredEvent.finally(() => prepare.mockRestore());
+    }
+  },
+);
 
 it("keeps native start facts when an earlier event's preparation settles late", async () => {
   const { executeAgentTurn } = await import("./agent-runner-execution.js");

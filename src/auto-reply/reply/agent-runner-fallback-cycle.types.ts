@@ -113,9 +113,10 @@ export type AgentFallbackCycleParams = {
   state: AgentFallbackCycleState;
   presentation: ReturnType<typeof createAgentTurnPresentation>;
   directBlockDeliveries: DirectBlockDelivery[];
-  prepareAgentRunStart: () => void | Promise<void>;
-  notifyAgentRunStart: (transcriptStart?: PreparedReplyTranscriptStart | null) => void;
-  signalExecutionPhaseForTyping: NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>;
+  createAgentRunStartCallbacks: () => Pick<
+    AgentFallbackCandidateCommonParams,
+    "prepareAgentRunStart" | "notifyAgentRunStart" | "signalExecutionPhaseForTyping"
+  > & { close: () => void };
   notifyUserAboutCompaction: boolean;
   timing: AgentTurnTimingTracker;
   modelPatch: AgentFallbackModelPatch;

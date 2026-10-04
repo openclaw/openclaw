@@ -1514,6 +1514,8 @@ cold markers and hot rows remain in one synchronous snapshot, and restoration
 keeps its existing owner. Native reply-start callbacks consume the SessionManager's
 acknowledged transcript version at the first execution event. Other bundled
 execution paths prepare that boundary before their synchronous start notification.
+Each fallback candidate owns its prepared facts and callbacks until it settles;
+retired candidates cannot publish a boundary or start notification for a successor.
 Activity recap settlement rechecks its current owner after reading the final
 watermark. These facts select transcript boundaries, never writer or turn authority.
 Released synchronous SDK callbacks and process-held incognito retain their existing
