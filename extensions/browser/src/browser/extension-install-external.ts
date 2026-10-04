@@ -6,7 +6,6 @@ import {
   chromeProductRoots,
   type ChromeProductRoot,
   ensurePrivateDirectory,
-  type ExtensionInstallDeps,
   pathInfo,
 } from "./extension-install-layout.js";
 
@@ -70,25 +69,22 @@ async function inspectRequest(root: ChromeProductRoot): Promise<ChromeStoreInsta
   }
 }
 
-function supportedRoots(deps: ExtensionInstallDeps): ChromeProductRoot[] {
-  return (deps.platform ?? process.platform) === "darwin"
-    ? chromeProductRoots(deps).filter((root) => root.product === "chrome")
+function supportedRoots(): ChromeProductRoot[] {
+  return process.platform === "darwin"
+    ? chromeProductRoots().filter((root) => root.product === "chrome")
     : [];
 }
 
 /** Registration requests installation; only Chrome can install and approve it. */
-export async function chromeStoreInstallRequests(
-  deps: ExtensionInstallDeps = {},
-): Promise<ChromeStoreInstallRequest[]> {
-  return await Promise.all(supportedRoots(deps).map(inspectRequest));
+export async function chromeStoreInstallRequests(): Promise<ChromeStoreInstallRequest[]> {
+  return await Promise.all(supportedRoots().map(inspectRequest));
 }
 
 /** The caller must register the native host successfully before requesting installation. */
 export async function requestChromeStoreInstall(
   root: ChromeProductRoot,
-  deps: ExtensionInstallDeps,
 ): Promise<ChromeStoreInstallRequest | undefined> {
-  if (!supportedRoots(deps).some((candidate) => candidate.userDataDir === root.userDataDir)) {
+  if (!supportedRoots().some((candidate) => candidate.userDataDir === root.userDataDir)) {
     return undefined;
   }
   const before = await inspectRequest(root);
@@ -108,12 +104,13 @@ export async function requestChromeStoreInstall(
 }
 
 /** Chrome may remove an externally installed extension after this request is removed. */
-export async function removeChromeStoreInstallRequests(
-  deps: ExtensionInstallDeps = {},
-): Promise<{ removed: string[]; refused: string[] }> {
+export async function removeChromeStoreInstallRequests(): Promise<{
+  removed: string[];
+  refused: string[];
+}> {
   const removed: string[] = [];
   const refused: string[] = [];
-  for (const root of supportedRoots(deps)) {
+  for (const root of supportedRoots()) {
     const current = await inspectRequest(root);
     if (current.state === "requested") {
       await fs.unlink(current.path);

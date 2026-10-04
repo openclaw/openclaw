@@ -523,6 +523,9 @@ export function buildInboundUserContextPrefix(
   sessionEntry?: SessionEntry,
 ): string {
   const blocks: string[] = [];
+  const appendJsonContext = (label: string, payload: unknown) => {
+    blocks.push(formatContextJsonBlock(markInboundContextLabel(label), payload));
+  };
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
   const directChannelValue = resolveInboundChannel(ctx);
@@ -609,18 +612,12 @@ export function buildInboundUserContextPrefix(
     history_truncated: truncated ? true : undefined,
   };
   if (Object.values(conversationInfo).some((v) => v !== undefined)) {
-    blocks.push(
-      formatContextJsonBlock(markInboundContextLabel("Conversation info:"), conversationInfo),
-    );
+    appendJsonContext("Conversation info:", conversationInfo);
   }
 
   const threadStarterBody = sanitizePromptBody(ctx.ThreadStarterBody);
   if (threadStarterBody) {
-    blocks.push(
-      formatContextJsonBlock(markInboundContextLabel("Thread starter:"), {
-        body: threadStarterBody,
-      }),
-    );
+    appendJsonContext("Thread starter:", { body: threadStarterBody });
   }
 
   const rawReplyToBody = sanitizePromptBody(ctx.ReplyToBody);
@@ -628,21 +625,14 @@ export function buildInboundUserContextPrefix(
   const replyToSender = normalizePromptMetadataString(ctx.ReplyToSender);
   const hasReplyTargetMetadata = Boolean(replyToId || replyToSender || replyToBody);
   if (replyChainPayload.length > 0 && !chatWindowCoversReplyContext && !currentMessageContext) {
-    blocks.push(
-      formatContextJsonBlock(
-        markInboundContextLabel("Reply chain of current user message (nearest first):"),
-        replyChainPayload,
-      ),
-    );
+    appendJsonContext("Reply chain of current user message (nearest first):", replyChainPayload);
   } else if (hasReplyTargetMetadata && !chatWindowCoversReplyContext && !currentMessageContext) {
-    blocks.push(
-      formatContextJsonBlock(markInboundContextLabel("Reply target of current user message:"), {
-        message_id: replyToId,
-        sender_label: replyToSender,
-        is_quote: ctx.ReplyToIsQuote === true ? true : undefined,
-        body: replyToBody || undefined,
-      }),
-    );
+    appendJsonContext("Reply target of current user message:", {
+      message_id: replyToId,
+      sender_label: replyToSender,
+      is_quote: ctx.ReplyToIsQuote === true ? true : undefined,
+      body: replyToBody || undefined,
+    });
   }
 
   const forwardedFrom = normalizePromptMetadataString(ctx.ForwardedFrom);
@@ -656,17 +646,12 @@ export function buildInboundUserContextPrefix(
     date_ms: typeof ctx.ForwardedDate === "number" ? ctx.ForwardedDate : undefined,
   };
   if (forwardedFrom) {
-    blocks.push(
-      formatContextJsonBlock(
-        markInboundContextLabel("Forwarded message context:"),
-        forwardedContext,
-      ),
-    );
+    appendJsonContext("Forwarded message context:", forwardedContext);
   }
 
   const locationContext = buildLocationContextPayload(ctx);
   if (locationContext) {
-    blocks.push(formatContextJsonBlock(markInboundContextLabel("Location:"), locationContext));
+    appendJsonContext("Location:", locationContext);
   }
 
   for (const entry of structuredContext) {
@@ -678,16 +663,11 @@ export function buildInboundUserContextPrefix(
       blocks.push(chatWindow);
       continue;
     }
-    blocks.push(
-      formatContextJsonBlock(
-        markInboundContextLabel(formatChannelStructuredContextLabel(entry.label)),
-        {
-          source: normalizePromptMetadataString(entry.source),
-          type: normalizePromptMetadataString(entry.type),
-          payload: entry.payload,
-        },
-      ),
-    );
+    appendJsonContext(formatChannelStructuredContextLabel(entry.label), {
+      source: normalizePromptMetadataString(entry.source),
+      type: normalizePromptMetadataString(entry.type),
+      payload: entry.payload,
+    });
   }
 
   if (boundedHistory.length > 0 && !chatWindowCoversHistory) {

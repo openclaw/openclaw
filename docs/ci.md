@@ -62,6 +62,11 @@ Current iOS Debug builds log CPU count, memory, machine model, booted simulators
 
 iOS screenshot shards, release qualification, Store Release, and its screenshot-only operation use [larger hosted capacity](/ci/runners). Screenshot capture uses stock simulators and creates and cleans up one at a time; the screenshot-only operation can validate a selected branch without signing or uploading a release. The pairing, chat, and native Overview tests retain their existing assertions and deadlines.
 
+Android screenshot-input PRs and ordinary full manual CI run the existing phone
+and Wear store capture script in one hosted Ubuntu job. The final CI gate requires
+capture to succeed; unit-test-only and documentation changes omit it. See
+[the job graph](/ci/pipeline#pipeline-overview) for capture evidence and scope details.
+
 Eligible core-source and core-test PRs use targeted type checks when every selected path exists in the checkout. GitHub and hybrid profiles distribute the selected consumers across their existing core stripes; the Blacksmith profile checks them in the central row. Ambiguous ownership and deleted core tests keep the full type-check coverage.
 
 Preflight passes the complete changed-path manifest between steps as a local JSON

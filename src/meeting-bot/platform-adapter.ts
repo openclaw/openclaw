@@ -31,10 +31,11 @@ import {
 import { createMeetingRuntimeFacade } from "./runtime-facade.js";
 import { createMeetingRuntimeProbes, resolveMeetingProbeTimeoutMs } from "./runtime-probes.js";
 import { createMeetingRuntimeSetup } from "./runtime-setup.js";
-import type {
-  MeetingBrowserHealth,
-  MeetingTranscriptLine,
-  MeetingTranscriptSnapshot,
+import {
+  meetingCaptionSourceSchema,
+  type MeetingBrowserHealth,
+  type MeetingTranscriptLine,
+  type MeetingTranscriptSnapshot,
 } from "./session-types.js";
 import { createMeetingStatusCallSource } from "./status-call-source.js";
 import { createMeetingStatusPreludeSource } from "./status-prejoin-source.js";
@@ -82,13 +83,6 @@ const optionalBrowserString = z.string().optional().catch(undefined);
 const optionalBrowserBoolean = z.boolean().optional().catch(undefined);
 const optionalBrowserNumber = z.number().optional().catch(undefined);
 const invalidBrowserArrayItemSchema = z.unknown().transform(() => null);
-const meetingCaptionSourceSchema = z.object({
-  id: z.string().min(1).max(512),
-  epoch: z.string().min(1).max(512),
-  revision: z.string().min(1).max(128),
-  finalized: z.boolean(),
-  ownEcho: z.boolean().optional(),
-});
 const meetingTranscriptLineSchema = z
   .object({
     at: optionalBrowserString,

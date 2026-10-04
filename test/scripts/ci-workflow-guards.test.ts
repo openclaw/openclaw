@@ -534,6 +534,28 @@ describe("release fast lane label", () => {
 });
 
 describe("ci workflow guards", () => {
+  it("keeps Android PR capture on the release script without store authority", () => {
+    const job = readCiWorkflow().jobs["android-screenshots"];
+    expect(job.permissions).toEqual({ contents: "read" });
+    expect(job.environment).toBeUndefined();
+    expect(job["runs-on"]).toBe("ubuntu-24.04");
+    const toolchain = job.steps.find(
+      (step: WorkflowStep) => step.uses === "./.ci-harness/.github/actions/setup-android-toolchain",
+    );
+    expect(toolchain.with["install-screenshot-emulators"]).toBe("true");
+    const capture = job.steps.find((step: WorkflowStep) => step.run === "pnpm android:screenshots");
+    expect(capture).toBeDefined();
+    expect(capture.env.SIPS).toBe(
+      "${{ runner.temp }}/openclaw-android-tools/android-sips-linux.sh",
+    );
+    expect(JSON.stringify(job)).not.toContain("secrets.");
+    expect(job.steps.filter((step: WorkflowStep) => step["continue-on-error"])).toEqual([]);
+    const evidence = job.steps.find((step: WorkflowStep) => step.uses === UPLOAD_ARTIFACT_V7);
+    expect(evidence.if).toBe("always()");
+    expect(evidence.with.path).toContain("phoneScreenshots/*.jpg");
+    expect(evidence.with.path).toContain("wearScreenshots/*.jpg");
+  });
+
   it("separates release QA lanes without weakening their resource locks", () => {
     const workflowPath = ".github/workflows/qa-live-transports-convex.yml";
     const workflowSource = readFileSync(workflowPath, "utf8");

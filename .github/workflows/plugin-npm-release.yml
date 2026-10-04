@@ -1,5 +1,5 @@
 name: Plugin NPM Release
-run-name: ${{ github.event_name == 'workflow_dispatch' && (inputs.preflight_only && inputs.trusted_publisher_preflight && format('Plugin NPM Trusted Publisher Preflight [{0}] {1}', inputs.npm_dist_tag, inputs.ref) || inputs.preflight_only && format('Plugin NPM Artifact Preflight [{0}] {1}', inputs.npm_dist_tag, inputs.ref) || format('Plugin NPM Release [{0}] {1}', inputs.npm_dist_tag, inputs.ref)) || format('Plugin NPM Release [default] {0}', github.sha) }}
+run-name: ${{ github.event_name == 'workflow_dispatch' && (inputs.preflight_only && inputs.trusted_publisher_preflight && format('Plugin NPM Trusted Publisher Preflight [{0}] {1}', inputs.npm_dist_tag, inputs.ref) || inputs.preflight_only && inputs.dispatch_id != '' && format('Plugin NPM Artifact Preflight [{0}] {1} ({2})', inputs.npm_dist_tag, inputs.ref, inputs.dispatch_id) || inputs.preflight_only && format('Plugin NPM Artifact Preflight [{0}] {1}', inputs.npm_dist_tag, inputs.ref) || format('Plugin NPM Release [{0}] {1}', inputs.npm_dist_tag, inputs.ref)) || format('Plugin NPM Release [default] {0}', github.sha) }}
 
 on:
   schedule:
@@ -58,6 +58,11 @@ on:
       ref:
         description: Exact commit SHA reachable from main/release ancestry or the canonical extended-stable branch
         required: true
+        type: string
+      dispatch_id:
+        description: Optional immutable parent dispatch identity for exact run recovery
+        required: false
+        default: ""
         type: string
       plugins:
         description: Comma-separated plugin package names to publish when publish_scope=selected
@@ -349,12 +354,34 @@ jobs:
                   f"refs/remotes/origin/{extended_branch}",
               ):
                   fail(f"Extended-stable plugin source must equal the exact {extended_branch} branch tip.")
-              # Nonpublishing preflight still accepts the canonical branch or main.
-              if os.environ["WORKFLOW_REF"] in (f"refs/heads/{extended_branch}", "refs/heads/main"):
+              # Nonpublishing preflight accepts the canonical branch, main, or an
+              # immutable release-ci transport whose pinned tooling is on main.
+              workflow_ref = os.environ["WORKFLOW_REF"]
+              if workflow_ref in (f"refs/heads/{extended_branch}", "refs/heads/main"):
+                  raise SystemExit(0)
+              release_ci = re.fullmatch(
+                  r"refs/heads/release-ci/([a-f0-9]{12})-[0-9]+",
+                  workflow_ref,
+              )
+              if release_ci:
+                  workflow_sha = os.environ["WORKFLOW_SHA"]
+                  if not workflow_sha.startswith(release_ci.group(1)):
+                      fail("Extended-stable release-ci ref does not match the workflow SHA.")
+                  run_git(
+                      workspace,
+                      "fetch",
+                      "--no-tags",
+                      "origin",
+                      "+refs/heads/main:refs/remotes/origin/main",
+                      timeout=120,
+                      reclaim_locks=True,
+                  )
+                  if not is_ancestor("origin/main", workflow_sha):
+                      fail("Extended-stable release-ci workflow revision is not reachable from current main.")
                   raise SystemExit(0)
               fail(
                   f"Extended-stable plugin npm preflights must run from {extended_branch} "
-                  "or trusted main, targeting the exact canonical branch tip."
+                  "trusted main, or a main-pinned release-ci ref, targeting the exact canonical branch tip."
               )
 
           if candidate_branch.strip():
@@ -896,6 +923,19 @@ jobs:
           if (!readmes.get(findPackedPackageReadmePath(files))) throw new Error("Qualified plugin artifact must contain a non-empty README.");
           console.log(`Qualified packed runtime and README for ${manifest.package.name}@${manifest.package.version}.`);
           NODE
+
+      - name: Scan exact plugin npm artifact
+        env:
+          ARTIFACT_DIR: ${{ steps.preflight_artifact.outputs.dir }}
+          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
+          PACKAGE_VERSION: ${{ matrix.plugin.version }}
+        run: |
+          set -euo pipefail
+          tarball_name="$(jq -er '.artifact.tarballName' "${ARTIFACT_DIR}/preflight-manifest.json")"
+          node --import tsx .release-tooling/scripts/plugin-npm-security-scan.mts \
+            --package-name "$PACKAGE_NAME" \
+            --package-version "$PACKAGE_VERSION" \
+            --tarball "${ARTIFACT_DIR}/${tarball_name}"
 
       - name: Upload immutable npm preflight artifact
         id: upload_preflight_artifact

@@ -416,6 +416,8 @@ function shouldAlwaysBundleDependency(id: string): boolean {
     id === "@openclaw/normalization-core" ||
     id.startsWith("@openclaw/normalization-core/") ||
     id === "@openclaw/retry" ||
+    id === "@openclaw/worker-runtime" ||
+    id.startsWith("@openclaw/worker-runtime/") ||
     id === "@openclaw/media-core" ||
     id.startsWith("@openclaw/media-core/") ||
     [
@@ -681,6 +683,11 @@ function buildUnifiedDistEntries(): Record<string, string> {
       ]),
     ),
     ...Object.fromEntries(
+      Object.entries(buildPackageDistEntriesFromExports("worker-runtime")).map(
+        ([entry, source]) => [`worker-runtime/${entry}`, source],
+      ),
+    ),
+    ...Object.fromEntries(
       Object.entries(buildPackageDistEntriesFromExports("media-core")).map(([entry, source]) => [
         `media-core/${entry}`,
         source,
@@ -863,6 +870,7 @@ const configs: UserConfig[] = [
   }),
   nodeWorkspacePackageBuildConfig("normalization-core"),
   nodeWorkspacePackageBuildConfig("retry"),
+  nodeWorkspacePackageBuildConfig("worker-runtime"),
   nodeWorkspacePackageBuildConfig("sdk", {
     deps: withExternalPackageSubpaths({
       neverBundle: [

@@ -188,6 +188,13 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
     ["native high", "high", {}, "high"],
     ["local max fallback", "max", {}, "high"],
     ["cloud max", "max", { provider: "ollama-cloud", id: "glm-5.2" }, "max"],
+    ["new cloud max", "max", { provider: "ollama-cloud", id: "glm-5.3" }, "max"],
+    [
+      "new cloud configured max",
+      "off",
+      { provider: "ollama-cloud", id: "glm-5.3", params: { thinking: "max" } },
+      "max",
+    ],
     ["cloud max fallback", "max", { provider: "ollama-cloud", id: "kimi-k2.5" }, "high"],
   ] as const)(
     "forwards native thinking: %s",

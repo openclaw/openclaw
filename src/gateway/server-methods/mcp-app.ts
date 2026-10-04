@@ -76,7 +76,7 @@ function optionalRecord(params: Record<string, unknown>, key: string) {
 
 function optionalCursor(params: Record<string, unknown>): { cursor?: string } | undefined {
   const cursor = params.cursor;
-  return typeof cursor === "string" && cursor.trim() ? { cursor: cursor.trim() } : undefined;
+  return typeof cursor === "string" ? { cursor } : undefined;
 }
 
 class McpAppRequestError extends Error {

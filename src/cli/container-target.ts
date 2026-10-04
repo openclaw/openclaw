@@ -16,13 +16,6 @@ type CliContainerTargetResult =
   | { handled: true; exitCode: number }
   | { handled: false; argv: string[] };
 
-type ContainerTargetDeps = {
-  env: NodeJS.ProcessEnv;
-  spawnSync: typeof spawnSync;
-  stdinIsTTY: boolean;
-  stdoutIsTTY: boolean;
-};
-
 const CONTAINER_RUNTIMES = ["podman", "docker"] as const;
 type ContainerRuntime = (typeof CONTAINER_RUNTIMES)[number];
 
@@ -63,14 +56,11 @@ export function resolveCliContainerTarget(
   return parsed.container ?? normalizeOptionalString(env.OPENCLAW_CONTAINER) ?? null;
 }
 
-function resolveRunningContainer(params: {
-  containerName: string;
-  deps: Pick<ContainerTargetDeps, "spawnSync">;
-}): ContainerRuntime | null {
+function resolveRunningContainer(containerName: string): ContainerRuntime | null {
   const matches = CONTAINER_RUNTIMES.filter((runtime) => {
-    const result = params.deps.spawnSync(
+    const result = spawnSync(
       runtime,
-      ["inspect", "--format", "{{.State.Running}}", params.containerName],
+      ["inspect", "--format", "{{.State.Running}}", containerName],
       { encoding: "utf8", killSignal: "SIGKILL", timeout: CONTAINER_RUNTIME_PROBE_TIMEOUT_MS },
     );
     return result.status === 0 && result.stdout.trim() === "true";
@@ -81,7 +71,7 @@ function resolveRunningContainer(params: {
   if (matches.length > 1) {
     const runtimes = matches.join(", ");
     throw new Error(
-      `Container "${params.containerName}" is running under multiple runtimes (${runtimes}); use a unique container name.`,
+      `Container "${containerName}" is running under multiple runtimes (${runtimes}); use a unique container name.`,
     );
   }
   return expectDefined(matches[0], "matches capture group 0");
@@ -214,18 +204,8 @@ function isBlockedContainerCommand(argv: string[]): boolean {
   return false;
 }
 
-export function maybeRunCliInContainer(
-  argv: string[],
-  deps?: Partial<ContainerTargetDeps>,
-): CliContainerTargetResult {
-  const resolvedDeps: ContainerTargetDeps = {
-    env: deps?.env ?? process.env,
-    spawnSync: deps?.spawnSync ?? spawnSync,
-    stdinIsTTY: deps?.stdinIsTTY ?? process.stdin.isTTY,
-    stdoutIsTTY: deps?.stdoutIsTTY ?? process.stdout.isTTY,
-  };
-
-  if (resolvedDeps.env.OPENCLAW_CLI_CONTAINER_BYPASS === "1") {
+export function maybeRunCliInContainer(argv: string[]): CliContainerTargetResult {
+  if (process.env.OPENCLAW_CLI_CONTAINER_BYPASS === "1") {
     return { handled: false, argv };
   }
 
@@ -233,8 +213,7 @@ export function maybeRunCliInContainer(
   if (!parsed.ok) {
     throw new Error(parsed.error);
   }
-  const containerName =
-    parsed.container ?? normalizeOptionalString(resolvedDeps.env.OPENCLAW_CONTAINER);
+  const containerName = parsed.container ?? normalizeOptionalString(process.env.OPENCLAW_CONTAINER);
   if (!containerName) {
     return { handled: false, argv: parsed.argv };
   }
@@ -244,27 +223,24 @@ export function maybeRunCliInContainer(
     );
   }
 
-  const runningContainer = resolveRunningContainer({
-    containerName,
-    deps: resolvedDeps,
-  });
+  const runningContainer = resolveRunningContainer(containerName);
   if (!runningContainer) {
     throw new Error(`No running container matched "${containerName}" under podman or docker.`);
   }
 
-  const result = resolvedDeps.spawnSync(
+  const result = spawnSync(
     runningContainer,
     buildContainerExecArgs({
       runtime: runningContainer,
       containerName,
       argv: parsed.argv.slice(2),
-      env: resolvedDeps.env,
-      stdinIsTTY: resolvedDeps.stdinIsTTY,
-      stdoutIsTTY: resolvedDeps.stdoutIsTTY,
+      env: process.env,
+      stdinIsTTY: process.stdin.isTTY,
+      stdoutIsTTY: process.stdout.isTTY,
     }),
     {
       stdio: "inherit",
-      env: buildContainerExecEnv(resolvedDeps.env),
+      env: buildContainerExecEnv(process.env),
     },
   );
   if (result.error) {

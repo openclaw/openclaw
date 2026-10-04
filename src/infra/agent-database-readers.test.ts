@@ -1,4 +1,5 @@
 import path from "node:path";
+import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { describe, expect, it, vi } from "vitest";
 import { reviveAgentDatabases } from "../state/openclaw-agent-db-readers.js";
 import {
@@ -10,7 +11,6 @@ import {
   matchesAgentDatabaseReadCandidatePath,
   registerAgentDatabaseReaderCloser,
 } from "./agent-database-readers.js";
-import { createRetainedOperation } from "./retained-operation.js";
 import { liveWorkerTaskPools } from "./worker-task-pool-registry.js";
 
 const agentDir = path.resolve("/state/agents/alpha/agent");

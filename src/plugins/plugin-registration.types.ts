@@ -16,6 +16,7 @@ import type { DiagnosticTracePropagationBridge as DiagnosticTracePropagationBrid
 import type { SecurityAuditFinding } from "../security/audit.types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { PluginLogger } from "./logger-types.js";
+import type { PluginManifestCliCommand } from "./manifest-types.js";
 import type { PluginServiceSchedulerV1 } from "./service-scheduler.types.js";
 import type { OpenClawPluginNodeWorkspace } from "./types.node-host.js";
 
@@ -156,11 +157,7 @@ export type OpenClawPluginCliRegistrar = (ctx: OpenClawPluginCliContext) => void
  * advertising it at the root CLI level, provide descriptors that cover every
  * top-level command root registered by that plugin CLI surface.
  */
-type OpenClawPluginCliCommandDescriptor = {
-  name: string;
-  description: string;
-  hasSubcommands: boolean;
-};
+type OpenClawPluginCliCommandDescriptor = PluginManifestCliCommand;
 
 /** Root-command metadata that is available before a plugin registrar is activated. */
 export type OpenClawPluginCliRootCommandDescriptor = OpenClawPluginCliCommandDescriptor & {
@@ -284,18 +281,10 @@ export type OpenClawPluginNodeInvokePolicyContext = {
 };
 
 export type OpenClawPluginNodeInvokePolicyResult =
-  | {
-      ok: true;
-      payload?: unknown;
-      payloadJSON?: string | null;
-    }
-  | {
-      ok: false;
-      message: string;
-      code?: string;
-      details?: Record<string, unknown>;
+  | Extract<OpenClawPluginNodeInvokeTransportResult, { ok: true }>
+  | (Extract<OpenClawPluginNodeInvokeTransportResult, { ok: false }> & {
       unavailable?: boolean;
-    };
+    });
 
 export type OpenClawPluginNodeInvokePolicy = {
   commands: string[];

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -7,7 +8,6 @@ import {
   waitForSignalExitBarriers,
 } from "../cli/signal-exit-barrier.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createRetainedOperation } from "./retained-operation.js";
 import {
   adoptPreparedLocation,
   adoptRetainedPreparedLocation,

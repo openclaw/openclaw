@@ -3,6 +3,7 @@ import { sleepWithAbort } from "@openclaw/retry";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasOperatorApprovalsAccess } from "../../app/operator-access.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { resolveGatewayReadRetryDelayMs } from "../../lib/gateway-availability.ts";
 import type { SessionCapability, SessionMessageSubscription } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -16,7 +17,6 @@ import {
   CHAT_HISTORY_RETRY_WINDOW_MS,
   formatChatHistoryLoadError,
   isRetryableChatReadError,
-  resolveChatReadRetryDelayMs,
 } from "./chat-history-retry.ts";
 import {
   chatHistoryRequests,
@@ -278,7 +278,7 @@ async function synchronizeSelectedSessionMessageSubscription(
         }
         setChatHistoryRetrying(state, "subscription", true);
         await sleepWithAbort(
-          Math.min(resolveChatReadRetryDelayMs(error, attempt++), remaining),
+          Math.min(resolveGatewayReadRetryDelayMs(error, attempt++), remaining),
           signal,
         );
         if (!isCurrent()) {

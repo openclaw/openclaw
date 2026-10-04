@@ -1,16 +1,12 @@
 import { Option, type Command } from "commander";
+import type { ChannelSetupFieldMetadata } from "../channels/plugins/setup-contract.js";
 import { getCommandArgsWithRootOptions } from "../infra/cli-root-options.js";
 import { createLazyPromise } from "../shared/lazy-promise.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
 type ChannelSetupFlagArity = "boolean" | "value" | "conflict";
 
-export type ChannelSetupCliOption = {
-  flags: string;
-  negatedFlags?: string;
-  description: string;
-  defaultValue?: boolean | string;
-};
+export type ChannelSetupCliOption = ChannelSetupFieldMetadata["cli"];
 
 const CHANNEL_ADD_SHARED_BOOLEAN_OPTIONS = new Set(["--help", "-h"]);
 const CHANNEL_ADD_SHARED_VALUE_OPTIONS = new Set(["--agent", "--channel", "--account", "--name"]);

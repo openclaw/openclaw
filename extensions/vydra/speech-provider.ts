@@ -12,13 +12,6 @@ import {
   normalizeVydraBaseUrl,
 } from "./defaults.js";
 
-type VydraSpeechConfig = {
-  apiKey?: string;
-  baseUrl: string;
-  model: string;
-  voiceId: string;
-};
-
 const VYDRA_SPEECH_VOICES = [
   {
     id: DEFAULT_VYDRA_VOICE_ID,
@@ -26,7 +19,7 @@ const VYDRA_SPEECH_VOICES = [
   },
 ] as const;
 
-function normalizeVydraSpeechConfig(rawConfig: Record<string, unknown>): VydraSpeechConfig {
+function normalizeVydraSpeechConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
   const raw = asOptionalRecord(providers?.vydra) ?? asOptionalRecord(rawConfig.vydra);
   return {
@@ -48,7 +41,7 @@ function normalizeVydraSpeechConfig(rawConfig: Record<string, unknown>): VydraSp
   };
 }
 
-function readVydraSpeechConfig(config: SpeechProviderConfig): VydraSpeechConfig {
+function readVydraSpeechConfig(config: SpeechProviderConfig) {
   const normalized = normalizeVydraSpeechConfig({});
   return {
     apiKey: normalizeOptionalString(config.apiKey) ?? normalized.apiKey,

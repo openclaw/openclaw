@@ -610,28 +610,23 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       const retiring = [...retiredEntries].filter(
         (entry) => entry.environmentId === request.environmentId,
       );
-      if (retiring.some((entry) => entry.ownerEpoch > request.ownerEpoch)) {
+      if ([current, ...retiring].some((owner) => owner && owner.ownerEpoch > request.ownerEpoch)) {
         throw new Error("node worker tunnel owner epoch is stale");
       }
-      if (current) {
-        if (request.ownerEpoch < current.ownerEpoch) {
-          throw new Error("node worker tunnel owner epoch is stale");
+      if (current?.ownerEpoch === request.ownerEpoch) {
+        if (
+          current.abortController.signal.aborted ||
+          current.executionMode !== request.executionMode ||
+          current.deviceId !== request.deviceId ||
+          current.sessionId !== request.sessionId ||
+          !sameWorkerBuild(current.expectedBuild, request.expectedBuild)
+        ) {
+          throw new Error("node worker tunnel owner binding changed within one epoch");
         }
-        if (request.ownerEpoch === current.ownerEpoch) {
-          if (
-            current.abortController.signal.aborted ||
-            current.executionMode !== request.executionMode ||
-            current.deviceId !== request.deviceId ||
-            current.sessionId !== request.sessionId ||
-            !sameWorkerBuild(current.expectedBuild, request.expectedBuild)
-          ) {
-            throw new Error("node worker tunnel owner binding changed within one epoch");
-          }
-          const handle = await current.readiness.promise;
-          // Recheck the joining caller without stopping the independently owned tunnel.
-          request.authorize?.();
-          return handle;
-        }
+        const handle = await current.readiness.promise;
+        // Recheck the joining caller without stopping the independently owned tunnel.
+        request.authorize?.();
+        return handle;
       }
       const readiness = createDeferredCore<WorkerTurnTunnelHandle>();
       void readiness.promise.catch(() => undefined);
@@ -707,17 +702,21 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
     },
     stop,
     async stopAll(): Promise<void> {
-      const environmentIds = new Set([
+      const live = new Set([
         ...entries.keys(),
         ...[...retiredEntries].map((entry) => entry.environmentId),
-        ...options
-          .listEnvironments()
-          .filter((record) => record.nodeDeviceId)
-          .map((record) => record.environmentId),
       ]);
-      const stopped = await Promise.allSettled(
-        [...environmentIds].map((environmentId) => stop(environmentId)),
-      );
+      const stopped = await Promise.allSettled([
+        ...[...live].map((environmentId) => stop(environmentId)),
+        // A revoked inventory reports its failure without stranding live tunnels.
+        (async () =>
+          joinWorkerTunnelStops(
+            options
+              .listEnvironments()
+              .filter((record) => record.nodeDeviceId && !live.has(record.environmentId))
+              .map((record) => stop(record.environmentId)),
+          ))(),
+      ]);
       // Shared transfer state outlives every tunnel, even when a sibling's cleanup fails.
       stopped.push(...(await Promise.allSettled([options.workspaceTransfer.closeAll()])));
       const failure = stopped.find((result) => result.status === "rejected");

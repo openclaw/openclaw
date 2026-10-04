@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
 import * as pidAlive from "../shared/pid-alive.js";
+import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -284,20 +285,37 @@ describe("Gateway owner lease", () => {
     },
   );
 
-  it("Doctor refuses a fresh foreign lease and names the heartbeat wait", async () => {
-    let env: NodeJS.ProcessEnv;
-    {
-      await using owner = fixture();
-      env = owner.env;
-      seedOwner(env, { host: "previous-container" });
-    }
-    const run = vi.fn();
-    await expect(
-      withDoctorSqliteMaintenanceLock({ env, operation: "state repair", run }),
-    ).rejects.toThrow("wait up to 90 seconds");
-    expect(run).not.toHaveBeenCalled();
-    expect(readGatewayOwnerLease({ env })?.owner).toBe("previous-generation");
-  });
+  it.each([false, true])(
+    "Doctor refuses a fresh foreign lease with quarantine=%s",
+    async (quarantined) => {
+      let env: NodeJS.ProcessEnv;
+      {
+        await using owner = fixture();
+        env = owner.env;
+        seedOwner(env, { host: "previous-container" });
+      }
+      if (quarantined) {
+        expect(
+          recordOpenClawDatabaseQuarantine({
+            env,
+            kind: "state",
+            path: resolveOpenClawStateSqlitePath(env),
+            reason: "synthetic index damage",
+          }),
+        ).toBe(true);
+      }
+      const run = vi.fn();
+      await expect(
+        withDoctorSqliteMaintenanceLock({ env, operation: "state repair", run }),
+      ).rejects.toThrow("wait up to 90 seconds");
+      expect(run).not.toHaveBeenCalled();
+      if (quarantined) {
+        expect(() => readGatewayOwnerLease({ env })).toThrow("synthetic index damage");
+      } else {
+        expect(readGatewayOwnerLease({ env })?.owner).toBe("previous-generation");
+      }
+    },
+  );
 
   it.each([false, true])(
     "startup waits at most 95 seconds for an unverifiable lease (renewing=%s)",

@@ -441,6 +441,14 @@ final class WebChatManager {
         self.gatewayWindowOrder.count { self.gatewayWindows[$0]?.target == target }
     }
 
+    var openProfileIDs: Set<String> {
+        // Hidden windows still retain their saved route until the window owner closes them.
+        Set(self.gatewayWindows.values.compactMap {
+            guard case let .profile(id) = $0.target else { return nil }
+            return id
+        })
+    }
+
     func closeGatewayWindows(profileID: String) {
         self.unavailableProfileIDs.insert(profileID)
         self.closeGatewayWindows(target: .profile(profileID))

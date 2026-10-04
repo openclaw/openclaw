@@ -13,6 +13,7 @@ import type { SessionCapability } from "../lib/sessions/index.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import {
+  discardEmptyChildSessionSnapshot,
   hydrateSidebarChildSessions,
   retireStaleChildSessionRows,
 } from "./app-sidebar-child-session-data.ts";
@@ -75,6 +76,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   sessionsResult: SessionsListResult | null = null;
   sessionsAgentId: string | null = null;
   sessionsLoading = false;
+  sessionsStartupPending = false;
   childSessionRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>> = {};
   loadedChildSessionKeys: ReadonlySet<string> = new Set();
   childSessionErrorsByParent: ReadonlyMap<string, string> = new Map();
@@ -168,6 +170,10 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   get isSessionDataHostConnected(): boolean {
     return this.host.isConnected;
+  }
+
+  get sessionsStartingUp(): boolean {
+    return this.sessionsStartupPending || this.sessionCatalogLive.startupPending;
   }
 
   get sessionDataHostConnected(): boolean {
@@ -478,6 +484,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.cachedSessionResult = null;
     this.sessionsResult = null;
     this.sessionsAgentId = null;
+    this.sessionsStartupPending = false;
     this.sessionResultsByAgent = {};
     this.resetChildSessionState();
     this.visibleSessionLimits = new Map();
@@ -707,15 +714,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   }
 
   discardEmptyChildSessionSnapshot(sessionKey: string): void {
-    if (this.childSessionRowsByParent[sessionKey]?.length === 0) {
-      const childRows = { ...this.childSessionRowsByParent };
-      delete childRows[sessionKey];
-      this.childSessionRowsByParent = childRows;
-      const loadedKeys = new Set(this.loadedChildSessionKeys);
-      loadedKeys.delete(sessionKey);
-      this.loadedChildSessionKeys = loadedKeys;
-      this.requestSessionDataUpdate();
-    }
+    discardEmptyChildSessionSnapshot(this, sessionKey);
   }
 
   retryChildSessions(sessionKey: string): void {

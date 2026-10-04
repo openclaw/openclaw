@@ -700,7 +700,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
         replayState: { hadPotentialSideEffects: true, replayInvalid: false },
       });
       const terminal = await resolveEmbeddedRunTerminal(terminalInput);
-      expect(terminalInput.activateInternalPrompt).not.toHaveBeenCalled();
+      expect(terminalInput.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
       expect(terminal.action).toBe("complete");
       if (terminal.action !== "complete") {
         throw new Error("expected completed fallback");

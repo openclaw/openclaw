@@ -194,50 +194,6 @@ type RunCliAgentPrepareParams = RunCliAgentParams & {
   systemAgentTool?: import("../tools/system-agent-tool.js").SystemAgentToolOptions;
 };
 
-const defaultPrepareDeps = {
-  isWorkspaceBootstrapPending: isWorkspaceBootstrapPendingImpl,
-  makeBootstrapWarn: makeBootstrapWarnImpl,
-  resolveBootstrapContextForRun: resolveBootstrapContextForRunImpl,
-  getActiveMcpLoopbackRuntime,
-  ensureMcpLoopbackServer,
-  createMcpLoopbackServerConfig,
-  activateMcpLoopbackClientGrantCapture,
-  bindMcpLoopbackClientGrantAdmission,
-  deactivateMcpLoopbackClientGrantCapture,
-  mintMcpLoopbackClientGrant,
-  revokeMcpLoopbackClientGrant,
-  transferMcpLoopbackClientGrant,
-  resolveMcpLoopbackPolicyTools,
-  resolveMcpLoopbackScopedTools,
-  resolveOpenClawReferencePaths: async (
-    params: Parameters<typeof import("../docs-path.js").resolveOpenClawReferencePaths>[0],
-  ) => (await import("../docs-path.js")).resolveOpenClawReferencePaths(params),
-  prepareClaudeCliSkillsPlugin,
-  claudeCliSessionTranscriptHasContent,
-  claudeCliSessionTranscriptHasOrphanedToolUse,
-  getCliLiveSessionGeneration,
-  resolveApiKeyForProfile,
-  loadManifestModelCatalog,
-};
-const prepareDeps = { ...defaultPrepareDeps };
-
-function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): void {
-  Object.assign(prepareDeps, overrides);
-}
-
-function resetCliRunnerPrepareTestDeps(): void {
-  Object.assign(prepareDeps, defaultPrepareDeps);
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cliRunnerPrepareTestApi")] = {
-    resetCliRunnerPrepareTestDeps,
-    setCliRunnerPrepareTestDeps: (overrides: Record<string, unknown>) => {
-      setCliRunnerPrepareTestDeps(overrides as Partial<typeof prepareDeps>);
-    },
-  };
-}
-
 export async function prepareCliRunContext(
   inputParams: RunCliAgentParams,
 ): Promise<PreparedCliRunContext> {
@@ -576,7 +532,7 @@ async function prepareCliRunContextWithinReadFence(
       });
     };
     const writableAuthStore = loadScopedAuthStore({ profileId: authProfileId, readOnly: false });
-    const resolvedAuth = await prepareDeps.resolveApiKeyForProfile({
+    const resolvedAuth = await resolveApiKeyForProfile({
       cfg: params.config,
       store: writableAuthStore,
       profileId: authProfileId,
@@ -780,7 +736,7 @@ async function prepareCliRunContextWithinReadFence(
   // so the selected (or default) option must apply after it or a 200k session
   // would auto-compact against a 1M budget.
   const modelCatalog = overlayConfiguredModelCatalog({
-    catalog: prepareDeps.loadManifestModelCatalog({ config: runConfig, workspaceDir }),
+    catalog: loadManifestModelCatalog({ config: runConfig, workspaceDir }),
     config: runConfig,
     workspaceDir,
   });
@@ -824,7 +780,7 @@ async function prepareCliRunContextWithinReadFence(
   const sessionLabel = params.sessionKey ?? params.sessionId;
   const { bootstrapFiles, contextFiles: resolvedContextFiles } = skipsTurnPreparation
     ? { bootstrapFiles: [], contextFiles: [] }
-    : await prepareDeps.resolveBootstrapContextForRun({
+    : await resolveBootstrapContextForRunImpl({
         workspaceDir: params.bootstrapWorkspaceDir ?? workspaceDir,
         config: params.config,
         sessionKey: params.sessionKey,
@@ -834,7 +790,7 @@ async function prepareCliRunContextWithinReadFence(
         agentId: sessionAgentId,
         contextMode: params.bootstrapContextMode,
         runKind: params.bootstrapContextRunKind,
-        warn: prepareDeps.makeBootstrapWarn({
+        warn: makeBootstrapWarnImpl({
           sessionLabel,
           workspaceDir,
           warn: (message) => cliBackendLog.warn(message),
@@ -857,7 +813,7 @@ async function prepareCliRunContextWithinReadFence(
     skipsTurnPreparation || !canTransportSystemPrompt(backendResolved.config)
       ? undefined
       : await resolveWorkspaceBootstrapRouting({
-          isWorkspaceBootstrapPending: prepareDeps.isWorkspaceBootstrapPending,
+          isWorkspaceBootstrapPending: isWorkspaceBootstrapPendingImpl,
           bootstrapFiles,
           bootstrapFilesProvideAccess: false,
           bootstrapContextRunKind: params.bootstrapContextRunKind,
@@ -907,17 +863,17 @@ async function prepareCliRunContextWithinReadFence(
     !systemAgentMcpConfig &&
     backendResolved.bundleMcp &&
     params.disableTools !== true;
-  let mcpLoopbackRuntime = bundleMcpEnabled ? prepareDeps.getActiveMcpLoopbackRuntime() : undefined;
+  let mcpLoopbackRuntime = bundleMcpEnabled ? getActiveMcpLoopbackRuntime() : undefined;
   if (bundleMcpEnabled && !mcpLoopbackRuntime) {
     try {
-      await prepareDeps.ensureMcpLoopbackServer();
+      await ensureMcpLoopbackServer();
     } catch (error) {
       throw new Error(
         `Bundled MCP is enabled, but the OpenClaw MCP loopback server failed to start: ${String(error)}`,
         { cause: error },
       );
     }
-    mcpLoopbackRuntime = prepareDeps.getActiveMcpLoopbackRuntime();
+    mcpLoopbackRuntime = getActiveMcpLoopbackRuntime();
   }
   if (bundleMcpEnabled && !mcpLoopbackRuntime) {
     throw new Error(
@@ -979,8 +935,8 @@ async function prepareCliRunContextWithinReadFence(
             ...(mcpToolAuth ? { authProfileStore: mcpToolAuth.store } : {}),
             ...(mcpToolAuth?.agentDir ? { authProfileStoreAgentDir: mcpToolAuth.agentDir } : {}),
           },
-          resolvePolicyTools: prepareDeps.resolveMcpLoopbackPolicyTools,
-          resolveScopedTools: prepareDeps.resolveMcpLoopbackScopedTools,
+          resolvePolicyTools: resolveMcpLoopbackPolicyTools,
+          resolveScopedTools: resolveMcpLoopbackScopedTools,
         })
       : { params, tools: [] };
   params = mcpProjection.params;
@@ -1108,7 +1064,7 @@ async function prepareCliRunContextWithinReadFence(
   try {
     const mcpClientGrant =
       mcpLoopbackRuntime && mcpGrant
-        ? prepareDeps.mintMcpLoopbackClientGrant({
+        ? mintMcpLoopbackClientGrant({
             ...mcpGrant,
             runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
             bindQuestionAnswerAuthority: (assertActive) =>
@@ -1124,7 +1080,7 @@ async function prepareCliRunContextWithinReadFence(
       if (
         mcpClientGrant &&
         mcpLoopbackRuntime &&
-        !prepareDeps.bindMcpLoopbackClientGrantAdmission({
+        !bindMcpLoopbackClientGrantAdmission({
           token: mcpClientGrant.token,
           runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
           admittedRunContext,
@@ -1145,7 +1101,7 @@ async function prepareCliRunContextWithinReadFence(
                   return;
                 }
                 if (
-                  !prepareDeps.transferMcpLoopbackClientGrant({
+                  !transferMcpLoopbackClientGrant({
                     sourceToken: mcpClientGrant.token,
                     targetToken: processToken,
                     runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
@@ -1158,10 +1114,10 @@ async function prepareCliRunContextWithinReadFence(
                 activeToken = processToken;
               },
               revokeProcessToken: () => {
-                prepareDeps.revokeMcpLoopbackClientGrant(activeToken);
+                revokeMcpLoopbackClientGrant(activeToken);
               },
               activate: (captureKey: string, assertCurrent: () => void) => {
-                const activated = prepareDeps.activateMcpLoopbackClientGrantCapture({
+                const activated = activateMcpLoopbackClientGrantCapture({
                   token: activeToken,
                   runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
                   captureKey,
@@ -1175,7 +1131,7 @@ async function prepareCliRunContextWithinReadFence(
                 activeCapture = activated;
               },
               deactivate: (captureKey: string) => {
-                prepareDeps.deactivateMcpLoopbackClientGrantCapture({
+                deactivateMcpLoopbackClientGrantCapture({
                   token: activeToken,
                   runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
                   captureKey,
@@ -1221,12 +1177,12 @@ async function prepareCliRunContextWithinReadFence(
             return;
           }
           mcpClientGrantRevoked = true;
-          prepareDeps.revokeMcpLoopbackClientGrant(mcpClientGrant.token);
+          revokeMcpLoopbackClientGrant(mcpClientGrant.token);
         }
       : undefined;
     cleanupPreparedResources = cleanupMcpClientGrant;
     const rawLoopbackServerConfig = mcpLoopbackRuntime
-      ? prepareDeps.createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
+      ? createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
       : undefined;
     const loopbackServerConfig =
       rawLoopbackServerConfig && backendResolved.bundleMcpMode === "claude-config-file"
@@ -1431,7 +1387,7 @@ async function prepareCliRunContextWithinReadFence(
     const claudeSkillsPlugin =
       rootedExecution || skipsTurnPreparation || nodeClaudePlacement
         ? { args: [], cleanup: async () => {} }
-        : await prepareDeps.prepareClaudeCliSkillsPlugin({
+        : await prepareClaudeCliSkillsPlugin({
             backendId: backendResolved.id,
             skillsSnapshot: params.skillsSnapshot,
           });
@@ -1539,7 +1495,7 @@ async function prepareCliRunContextWithinReadFence(
       isClaudeCliBackendId(params.provider);
     const claudeCliTranscriptMissing =
       hasClaudeCliCandidate &&
-      !(await prepareDeps.claudeCliSessionTranscriptHasContent({
+      !(await claudeCliSessionTranscriptHasContent({
         sessionId: candidateClaudeCliSessionId,
         workspaceDir: cwd,
       }));
@@ -1550,7 +1506,7 @@ async function prepareCliRunContextWithinReadFence(
       preparedBackendFinal.backend.liveSession === "claude-stdio" &&
       preparedBackendFinal.backend.output === "jsonl" &&
       preparedBackendFinal.backend.input === "stdin" &&
-      prepareDeps.getCliLiveSessionGeneration({
+      getCliLiveSessionGeneration({
         backendId: backendResolved.id,
         agentAccountId: params.agentAccountId,
         agentId: workspaceResolution.agentId,
@@ -1562,7 +1518,7 @@ async function prepareCliRunContextWithinReadFence(
     const claudeCliTranscriptOrphanedToolUse =
       hasClaudeCliCandidate &&
       !claudeCliTranscriptMissing &&
-      (await prepareDeps.claudeCliSessionTranscriptHasOrphanedToolUse({
+      (await claudeCliSessionTranscriptHasOrphanedToolUse({
         sessionId: candidateClaudeCliSessionId,
         workspaceDir: cwd,
       }));
@@ -1585,7 +1541,9 @@ async function prepareCliRunContextWithinReadFence(
     }
     const openClawReferences = skipsTurnPreparation
       ? { docsPath: null, sourcePath: null }
-      : await prepareDeps.resolveOpenClawReferencePaths({
+      : await (
+          await import("../docs-path.js")
+        ).resolveOpenClawReferencePaths({
           workspaceDir,
           argv1: process.argv[1],
           cwd,

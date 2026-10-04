@@ -11,7 +11,6 @@ import {
   loadSessionEntry,
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
-  updateSessionEntry,
   type SessionTranscriptRuntimeTarget,
 } from "../../../config/sessions/session-accessor.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../../../config/sessions/session-store-owner.js";
@@ -424,7 +423,7 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
   }
 
   const previousWriterRunId = normalizeOptionalString(snapshot.entry.activeWriterRunId);
-  const claimed = await updateSessionEntry(
+  const claimed = await patchSessionEntryCore(
     {
       ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
       sessionKey: snapshot.sessionKey,
@@ -441,7 +440,7 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
         activeWriterRunId: params.runId,
       });
     },
-    { skipMaintenance: true },
+    { skipMaintenance: true, workerGuard: {} },
   );
   if (!claimed || (claimed as InternalSessionEntry).activeWriterRunId !== params.runId) {
     throw new Error(`Session writer claim was not persisted: ${snapshot.sessionKey}`);

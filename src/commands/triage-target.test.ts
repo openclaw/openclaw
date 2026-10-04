@@ -330,10 +330,11 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
         payloads: [{ text: "fixture completed" }],
         meta: { durationMs: 1 },
       }));
+      mocks.agentCommand.mockReset().mockImplementation(runAgent);
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
       const target = resolveInstallationTarget();
       const result = await withInstallationTarget(target, () =>
-        agentExec.agentExecCommand("inspect", { cwd: state.workspaceDir }, runtime, { runAgent }),
+        agentExec.agentExecCommand("inspect", { cwd: state.workspaceDir }, runtime),
       );
       expect(result.exitCode).toBe(1);
       expect(result.envelope.error?.message).toContain("saved prompt");
@@ -344,7 +345,6 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
         "inspect",
         { cwd: state.workspaceDir },
         runtime,
-        { runAgent },
       );
       expect(ordinary.exitCode).toBe(0);
       expect(runAgent).toHaveBeenCalledOnce();
