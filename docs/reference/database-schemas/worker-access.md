@@ -720,6 +720,18 @@ and update behavior are unchanged.
 
 ## Carry facts, publish after commit
 
+Device join-code registration and redemption use the existing device-pairing
+worker and FIFO. The setup RPC captures its physical store and requester authority
+before preparing the setup payload; public HTTP redemption captures the store
+before waiting for its rate-limit turn. Transaction and commit grants recheck
+those captured owners. Selection and deletion remain one synchronous transaction,
+and malformed payloads are decoded only after the burn is acknowledged. Expiry is
+rechecked before disclosing an acknowledged result. Unknown
+outcomes never replay a burn. HTTP response shapes, no-store caching, expiry,
+throttling, schemas, and update behavior are unchanged.
+Join operations acknowledge their own result without scanning or republishing
+unrelated paired-device records.
+
 Durable progress-card replacements and conditional clears use a narrow adapter
 on the canonical agent writer. The host captures the session, physical store, and
 input before waiting; the worker rereads the current revision and preserves clear
