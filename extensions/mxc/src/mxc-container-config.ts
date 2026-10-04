@@ -1,7 +1,7 @@
 import { statSync } from "node:fs";
 import path from "node:path";
 import type { ContainerConfig } from "@microsoft/mxc-sdk";
-import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { isPathInside, resolvePathPrefixSync } from "openclaw/plugin-sdk/file-access-runtime";
 import type { MxcConfig } from "./config.js";
 import { normalizeMxcPathForComparison } from "./path-comparison.js";
 import { resolveBaselineReadonlyPaths, type BaselineHostEnv } from "./sandbox-baseline.js";
@@ -322,20 +322,49 @@ function assertNoMxcReadwriteReadonlyOverlap(params: {
   readwritePaths: readonly string[];
   readonlyPaths: readonly string[];
 }): void {
-  for (const readwritePath of params.readwritePaths) {
-    for (const readonlyPath of params.readonlyPaths) {
-      if (pathsOverlap(readwritePath, readonlyPath)) {
+  // Keep mount identity and output lexical; resolve aliases only for admission.
+  // This snapshot catches static overlap, not reparse-point retargeting races.
+  const readwritePaths = params.readwritePaths.map(resolveOverlapComparisonPath);
+  const readonlyPaths = params.readonlyPaths.map(resolveOverlapComparisonPath);
+  for (const readwritePath of readwritePaths) {
+    for (const readonlyPath of readonlyPaths) {
+      if (
+        pathsOverlap(readwritePath.lexical, readonlyPath.lexical) ||
+        pathsOverlap(readwritePath.physical, readonlyPath.physical)
+      ) {
         throw new Error(
-          `MXC readwrite path ${readwritePath} overlaps read-only path ${readonlyPath}. Windows MXC cannot safely enforce nested read-only overlays under writable paths.`,
+          `MXC readwrite path ${readwritePath.original} overlaps read-only path ${readonlyPath.original}. Windows MXC cannot safely enforce nested read-only overlays under writable paths.`,
         );
       }
     }
   }
 }
 
-function pathsOverlap(first: string, second: string): boolean {
-  const left = normalizeMxcPathForComparison(first);
-  const right = normalizeMxcPathForComparison(second);
+function resolveOverlapComparisonPath(original: string): {
+  original: string;
+  lexical: string;
+  physical: string;
+} {
+  try {
+    // Protected virtual mount destinations can have a not-yet-created suffix.
+    // Resolve existing ancestors without treating other filesystem errors as missing.
+    const prefix = resolvePathPrefixSync(original);
+    return {
+      original,
+      lexical: normalizeMxcPathForComparison(original),
+      physical: normalizeMxcPathForComparison(
+        path.join(prefix.existingPath, ...prefix.unresolvedSegments),
+      ),
+    };
+  } catch (cause) {
+    throw new Error(
+      `MXC cannot resolve filesystem path ${original} for read-only overlap admission. Check host path permissions and symlink/junction targets before launching the sandbox.`,
+      { cause },
+    );
+  }
+}
+
+function pathsOverlap(left: string, right: string): boolean {
   return isPathInside(left, right) || isPathInside(right, left);
 }
 

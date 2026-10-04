@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import {
   existsSync,
   lstatSync,
@@ -241,6 +242,56 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test.each(["host", "registration"])(
+    "retained factory handles reject expired %s authority",
+    async (authority) => {
+      const reason = "retired";
+      let current = true;
+      const assertRuntimeCurrent = () => {
+        if (!current) {
+          throw new Error("owner " + reason);
+        }
+      };
+      const factory = createMxcSandboxBackendFactory(
+        resolveConfig({
+          agents: { analyst: { network: "none" } },
+        }),
+        authority === "registration" ? assertRuntimeCurrent : undefined,
+      );
+      const handle = await factory({
+        agentId: "analyst",
+        sessionKey: "opaque-owner-test",
+        scopeKey: "agent:analyst",
+        workspaceDir: baseParams.workdir,
+        agentWorkspaceDir: baseParams.workdir,
+        cfg: createSandboxBackendTestConfig({ scope: "agent" }),
+        assertRuntimeCurrent: authority === "host" ? assertRuntimeCurrent : undefined,
+      });
+      const spec = await handle.buildExecSpec({ command: "echo admitted", env: {}, usePty: false });
+      try {
+        current = false;
+        expect(() => spec.assertCurrent?.()).toThrow("owner " + reason);
+        await expect(
+          handle.buildExecSpec({ command: "echo stale", env: {}, usePty: false }),
+        ).rejects.toThrow("owner " + reason);
+        await expect(handle.runShellCommand({ script: "echo stale" })).rejects.toThrow(
+          "owner " + reason,
+        );
+        await expect(handle.validateWorkdir?.(baseParams.workdir)).rejects.toThrow(
+          "owner " + reason,
+        );
+        expect(spawnCommandMock).not.toHaveBeenCalled();
+      } finally {
+        await handle.finalizeExec?.({
+          status: "failed",
+          exitCode: null,
+          timedOut: false,
+          token: spec.finalizeToken,
+        });
+      }
+    },
+  );
 
   test("buildExecSpec returns a launcher argv with Windows process containment by default", async () => {
     const handle = createMxcSandboxBackendHandle(baseParams);
@@ -1323,6 +1374,187 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
     });
 
     expect(processConfig?.timeout).toBe(5_000);
+    expect(spawnCommandMock).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({ timeoutMs: 5_000 }),
+    );
+  });
+
+  test.each([3, 60])(
+    "internal shell retains per-agent ceiling %i and blocks network",
+    async (timeoutSeconds) => {
+      const createBackend = createMxcSandboxBackendFactory(
+        resolveConfig({ agents: { analyst: { network: "default", timeoutSeconds } } }),
+      );
+      const handle = await createBackend({
+        agentId: "analyst",
+        sessionKey: "opaque-session",
+        scopeKey: "opaque-scope",
+        workspaceDir: baseParams.workdir,
+        agentWorkspaceDir: baseParams.workdir,
+        cfg: createSandboxBackendTestConfig(),
+      });
+      let payload: Record<string, unknown> | undefined;
+      spawnCommandMock.mockImplementationOnce(async (argv: string[]) => {
+        payload = decodeContainerConfig(argv);
+        return { code: 0, termination: "exit", stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+      });
+      await handle.runShellCommand({ script: "echo hello" });
+      expect(payload).toMatchObject({
+        process: { timeout: Math.min(30, timeoutSeconds) * 1000 },
+        network: { defaultPolicy: "block" },
+        processContainer: { capabilities: [] },
+      });
+      expect(spawnCommandMock).toHaveBeenCalledWith(
+        expect.any(Array),
+        expect.objectContaining({ timeoutMs: Math.min(30, timeoutSeconds) * 1000 }),
+      );
+    },
+  );
+
+  test("snapshots selected agent policy layers across A/B/A and concurrent payloads", async () => {
+    const grantA = mkdtempSync(path.join(tmpdir(), "mxc-agent-a-"));
+    const grantDefault = mkdtempSync(path.join(tmpdir(), "mxc-agent-default-"));
+    testDirs.push(grantA, grantDefault);
+    const policyA = sandboxPolicyConfig({
+      filesystem: { additionalReadonlyPaths: [grantA] },
+      process: { timeoutSeconds: 4 },
+    }).mxcPolicyPaths!;
+    const defaultPaths = sandboxPolicyConfig({
+      filesystem: { additionalReadonlyPaths: [grantDefault] },
+      process: { timeoutSeconds: 9 },
+    }).mxcPolicyPaths!;
+    const config = resolveConfig({
+      network: "default",
+      mxcPolicyPaths: defaultPaths,
+      agents: {
+        analyst: { network: "none", timeoutSeconds: 7, mxcPolicyPaths: policyA },
+        reviewer: { timeoutSeconds: 15, mxcPolicyPaths: [] },
+      },
+    });
+    const createBackend = createMxcSandboxBackendFactory(config);
+    const create = (agentId: string) =>
+      createBackend({
+        agentId,
+        sessionKey: "not-an-agent-key",
+        scopeKey: "opaque-scope",
+        workspaceDir: baseParams.workdir,
+        agentWorkspaceDir: baseParams.workdir,
+        cfg: createSandboxBackendTestConfig(),
+      });
+    const handles = await Promise.all([
+      create("analyst"),
+      create("reviewer"),
+      create("analyst"),
+      create("other"),
+    ]);
+    // Existing handles retain the loaded policy snapshot; a new malformed file fails closed.
+    const policyAPath = policyA[0];
+    assert.ok(policyAPath);
+    writeFileSync(policyAPath, "not json");
+    await expect(create("analyst")).rejects.toThrow();
+    const specs = await Promise.all(
+      handles.map((handle) =>
+        handle.buildExecSpec({ command: "echo hello", env: {}, usePty: false }),
+      ),
+    );
+    try {
+      const payloads = specs.map(
+        (spec) => decodePayload(spec.argv, { cleanupPayloadFile: false }).config,
+      );
+      expect(new Set(payloads.map((payload) => payload.containerId)).size).toBe(4);
+      for (const index of [0, 2]) {
+        const payload = payloads[index];
+        assert.ok(payload);
+        expect(payload).toMatchObject({
+          process: { timeout: 4000 },
+          network: { defaultPolicy: "block" },
+          lifecycle: { destroyOnExit: true },
+        });
+        expect(objectField(payload, "filesystem").readonlyPaths).toContain(grantA);
+        expect(objectField(payload, "filesystem").readonlyPaths).not.toContain(grantDefault);
+      }
+      const reviewerPayload = payloads[1];
+      const defaultPayload = payloads[3];
+      assert.ok(reviewerPayload);
+      assert.ok(defaultPayload);
+      expect(reviewerPayload).toMatchObject({
+        process: { timeout: 15000 },
+        network: { defaultPolicy: "allow" },
+      });
+      expect(objectField(reviewerPayload, "filesystem").readonlyPaths).not.toContain(grantA);
+      expect(objectField(reviewerPayload, "filesystem").readonlyPaths).not.toContain(grantDefault);
+      expect(defaultPayload).toMatchObject({ process: { timeout: 9000 } });
+      expect(objectField(defaultPayload, "filesystem").readonlyPaths).toContain(grantDefault);
+      expect(config.agents?.reviewer?.mxcPolicyPaths).toEqual([]);
+      const bridge = handles[0].createFsBridge?.({
+        sandbox: {
+          workspaceDir: baseParams.workdir,
+          agentWorkspaceDir: baseParams.workdir,
+          containerWorkdir: baseParams.workdir,
+          containerName: handles[0].runtimeId,
+          workspaceAccess: "rw",
+          docker: { binds: [] },
+          backend: handles[0],
+        },
+      });
+      expect(bridge).toBeDefined();
+      await expect(bridge?.readFile({ filePath: path.join(grantA, "data.txt") })).rejects.toThrow(
+        /Path escapes sandbox root/,
+      );
+      await expect(
+        bridge?.writeFile({ filePath: path.join(grantA, "data.txt"), data: "not permitted" }),
+      ).rejects.toThrow(/Path escapes sandbox root/);
+    } finally {
+      await Promise.all(
+        specs.map(async (spec, index) => {
+          const handle = handles[index];
+          assert.ok(handle);
+          return handle.finalizeExec?.({
+            status: "completed",
+            exitCode: 0,
+            timedOut: false,
+            token: spec.finalizeToken,
+          });
+        }),
+      );
+    }
+  });
+
+  test("factory rejects missing identity, shared overrides and missing selected files before launch", async () => {
+    const createBackend = createMxcSandboxBackendFactory(
+      resolveConfig({
+        agents: {
+          analyst: { mxcPolicyPaths: [path.join(baseParams.workdir, "missing-policy.json")] },
+        },
+      }),
+    );
+    const params = {
+      sessionKey: "agent:analyst:main",
+      scopeKey: "agent:analyst",
+      workspaceDir: baseParams.workdir,
+      agentWorkspaceDir: baseParams.workdir,
+      cfg: createSandboxBackendTestConfig(),
+    };
+    await expect(createBackend(params)).rejects.toThrow(/canonical agentId/);
+    await expect(
+      createBackend({
+        ...params,
+        agentId: "analyst",
+        cfg: createSandboxBackendTestConfig({ scope: "shared" }),
+      }),
+    ).rejects.toThrow(/shared sandbox scope/);
+    await expect(createBackend({ ...params, agentId: "analyst" })).rejects.toThrow(
+      /missing-policy/,
+    );
+    await expect(
+      createBackend({
+        ...params,
+        agentId: "other",
+        cfg: createSandboxBackendTestConfig({ scope: "shared" }),
+      }),
+    ).resolves.toBeDefined();
+    expect(spawnCommandMock).not.toHaveBeenCalled();
   });
 
   test("runShellCommand uses curated Windows env and passes stdin through unchanged", async () => {
@@ -1527,7 +1759,55 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
     });
   });
 
-  test("factory carries protected skill workspace context into the exec guard", async () => {
+  test.each(["ro", "none"] as const)(
+    "selected agent policy preserves private skill protection with workspaceAccess %s",
+    async (workspaceAccess) => {
+      const workdir = mkdtempSync(path.join(tmpdir(), "mxc-private-workspace-"));
+      const agentWorkspaceDir = mkdtempSync(path.join(tmpdir(), "mxc-private-agent-"));
+      testDirs.push(workdir, agentWorkspaceDir);
+      const privateSkillRoot = path.join(workdir, "skills", "private-guide");
+      mkdirSync(privateSkillRoot, { recursive: true });
+      const createBackend = createMxcSandboxBackendFactory(
+        resolveConfig({
+          network: "default",
+          timeoutSeconds: 120,
+          agents: { analyst: { network: "none", timeoutSeconds: 7, mxcPolicyPaths: [] } },
+        }),
+      );
+      const handle = await createBackend({
+        agentId: "analyst",
+        sessionKey: "agent:analyst:private-task",
+        scopeKey: "private-selection-scope",
+        workspaceDir: workdir,
+        agentWorkspaceDir,
+        skillsWorkspaceDir: workdir,
+        cfg: createSandboxBackendTestConfig({ scope: "agent", workspaceAccess }),
+      });
+      const spec = await handle.buildExecSpec({ command: "echo hello", env: {}, usePty: false });
+      try {
+        const payload = decodePayload(spec.argv, { cleanupPayloadFile: false }).config;
+        expect(payload).toMatchObject({
+          process: { timeout: 7000 },
+          network: { defaultPolicy: "block" },
+        });
+        const filesystem = objectField(payload, "filesystem");
+        const readonlyPaths = stringArrayField(filesystem, "readonlyPaths");
+        const writablePaths = stringArrayField(filesystem, "readwritePaths");
+        expect(readonlyPaths.some((root) => isPathInside(root, privateSkillRoot))).toBe(true);
+        expect(writablePaths.some((root) => isPathInside(root, privateSkillRoot))).toBe(false);
+        expect(spawnCommandMock).not.toHaveBeenCalled();
+      } finally {
+        await handle.finalizeExec?.({
+          status: "completed",
+          exitCode: 0,
+          timedOut: false,
+          token: spec.finalizeToken,
+        });
+      }
+    },
+  );
+
+  test("selected agent policy carries protected skill workspace context into the exec guard", async () => {
     const workdir = mkdtempSync(path.join(tmpdir(), "mxc-factory-workspace-"));
     const skillsWorkspaceDir = mkdtempSync(path.join(tmpdir(), "mxc-factory-skills-"));
     try {
@@ -1535,19 +1815,25 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       mkdirSync(path.join(workdir, ".openclaw", "sandbox-skills", "skills", "demo"), {
         recursive: true,
       });
-      const createBackend = createMxcSandboxBackendFactory(baseConfig);
+      const createBackend = createMxcSandboxBackendFactory(
+        resolveConfig({
+          agents: { analyst: { network: "none", timeoutSeconds: 7, mxcPolicyPaths: [] } },
+        }),
+      );
       const handle = await createBackend({
-        sessionKey: "agent:main:main",
-        scopeKey: "mxc-test",
+        agentId: "analyst",
+        sessionKey: "agent:analyst:private-task",
+        scopeKey: "private-selection-scope",
         workspaceDir: workdir,
         agentWorkspaceDir: workdir,
         skillsWorkspaceDir,
-        cfg: createSandboxBackendTestConfig({ workspaceAccess: "rw" }),
+        cfg: createSandboxBackendTestConfig({ scope: "agent", workspaceAccess: "rw" }),
       });
 
       await expect(
         handle.buildExecSpec({ command: "echo hello", env: {}, usePty: false }),
       ).rejects.toThrow(/overlaps read-only path/u);
+      expect(spawnCommandMock).not.toHaveBeenCalled();
     } finally {
       rmSync(workdir, { recursive: true, force: true });
       rmSync(skillsWorkspaceDir, { recursive: true, force: true });
@@ -1583,8 +1869,8 @@ describeOnWindows("mxcSandboxBackendManager (Windows-only MXC backend tests)", (
       config: {} as never,
     });
     expect(info.running).toBe(false);
-    expect(info.actualConfigLabel).toBe("mxc-process");
-    expect(info.configLabelMatch).toBe(true);
+    expect(info.actualConfigLabel).toBe("mxc-ephemeral (policy not compared)");
+    expect(info.configLabelMatch).toBe(false);
   });
 
   test("removeRuntime completes without error", async () => {

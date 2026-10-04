@@ -31,8 +31,12 @@ type ResolvedMxcPath = SandboxResolvedPath & {
   mount: MxcFsMount;
 };
 
-export function createMxcFsBridge(params: { sandbox: MxcFsBridgeContext }): SandboxFsBridge {
-  return new MxcFsBridge(params.sandbox);
+export function createMxcFsBridge(params: {
+  sandbox: MxcFsBridgeContext;
+  assertCurrent?: () => void;
+}): SandboxFsBridge {
+  params.assertCurrent?.();
+  return new MxcFsBridge(params.sandbox, params.assertCurrent);
 }
 
 class MxcFsBridge implements SandboxFsBridge {
@@ -51,7 +55,10 @@ class MxcFsBridge implements SandboxFsBridge {
     (target, action) => this.ensureWritable(target, action),
   );
 
-  constructor(private readonly sandbox: MxcFsBridgeContext) {
+  constructor(
+    private readonly sandbox: MxcFsBridgeContext,
+    private readonly assertCurrent?: () => void,
+  ) {
     this.defaultContainerRoot = path.resolve(sandbox.containerWorkdir);
     this.protectedSkillMounts = resolveMxcProtectedSkillMounts(sandbox);
     this.workspaceMounts = resolveWorkspaceMounts(sandbox);
@@ -73,7 +80,7 @@ class MxcFsBridge implements SandboxFsBridge {
   async readFile(params: { filePath: string; cwd?: string; maxBytes?: number }): Promise<Buffer> {
     const target = this.resolveTarget(params);
     return (await (
-      await fsRoot(target.mount.hostRoot)
+      await this.openRoot(target)
     ).readBytes(target.relativePath, {
       hardlinks: "reject",
       ...(params.maxBytes === undefined ? {} : { maxBytes: params.maxBytes }),
@@ -84,7 +91,7 @@ class MxcFsBridge implements SandboxFsBridge {
     params: Parameters<NonNullable<SandboxFsBridge["readDirectory"]>>[0],
   ): Promise<DirectoryEntry[]> {
     const target = this.resolveTarget(params);
-    const root = await fsRoot(target.mount.hostRoot);
+    const root = await this.openRoot(target);
     const entries = await root.list(target.relativePath, { withFileTypes: true });
     return entries.map(({ name, isDirectory }) => ({ name, isDirectory }));
   }
@@ -96,7 +103,7 @@ class MxcFsBridge implements SandboxFsBridge {
       ? params.data
       : Buffer.from(params.data, params.encoding ?? "utf8");
     await (
-      await fsRoot(target.mount.hostRoot)
+      await this.openRoot(target)
     ).write(target.relativePath, buffer, {
       mkdir: params.mkdir !== false,
     });
@@ -112,7 +119,7 @@ class MxcFsBridge implements SandboxFsBridge {
       : Buffer.from(params.data, params.encoding ?? "utf8");
     try {
       await (
-        await fsRoot(target.mount.hostRoot)
+        await this.openRoot(target)
       ).create(target.relativePath, buffer, {
         mkdir: params.mkdir !== false,
       });
@@ -131,7 +138,7 @@ class MxcFsBridge implements SandboxFsBridge {
     if (target.relativePath.length === 0) {
       return;
     }
-    await (await fsRoot(target.mount.hostRoot)).mkdir(target.relativePath);
+    await (await this.openRoot(target)).mkdir(target.relativePath);
   }
 
   async remove(params: Parameters<SandboxFsBridge["remove"]>[0]): Promise<void> {
@@ -142,6 +149,7 @@ class MxcFsBridge implements SandboxFsBridge {
       relativePath: target.relativePath,
       recursive: params.recursive,
       force: params.force ?? false,
+      assertBeforeMutation: this.assertCurrent,
     });
   }
 
@@ -156,7 +164,7 @@ class MxcFsBridge implements SandboxFsBridge {
       );
     }
 
-    const root = await fsRoot(source.mount.hostRoot);
+    const root = await this.openRoot(source);
     const targetParent = path.dirname(target.relativePath);
     if (targetParent !== "." && targetParent !== "") {
       await root.mkdir(targetParent);
@@ -166,11 +174,12 @@ class MxcFsBridge implements SandboxFsBridge {
 
   async stat(params: { filePath: string; cwd?: string }): Promise<SandboxFsStat | null> {
     const target = this.resolveTarget(params);
-    const root = await fsRoot(target.mount.hostRoot);
+    const root = await this.openRoot(target);
     if (!(await root.exists(target.relativePath))) {
       return null;
     }
 
+    this.assertCurrent?.();
     const stats = await root.stat(target.relativePath);
     return {
       type: stats.isDirectory ? "directory" : stats.isFile ? "file" : "other",
@@ -179,7 +188,16 @@ class MxcFsBridge implements SandboxFsBridge {
     };
   }
 
+  private async openRoot(target: ResolvedMxcPath) {
+    const root = await fsRoot(target.mount.hostRoot, {
+      assertBeforeMutation: this.assertCurrent,
+    });
+    this.assertCurrent?.();
+    return root;
+  }
+
   private resolveTarget(params: { filePath: string; cwd?: string }): ResolvedMxcPath {
+    this.assertCurrent?.();
     const input = params.filePath.trim();
     const cwd = params.cwd?.trim() ? path.resolve(params.cwd) : this.defaultContainerRoot;
     const containerPath = path.isAbsolute(input) ? path.resolve(input) : path.resolve(cwd, input);

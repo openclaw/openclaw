@@ -174,8 +174,8 @@ export function registerPluginServiceReloadTests() {
           reload: true,
         },
         { next: { agents: { ownership: "explicit", ...sole.agents } }, reload: true },
-        { previous: {}, next: { agents: { entries: {} } }, reload: true },
-        { next: { agents: { entries: { roboclaw: {}, added: {} } } }, reload: true },
+        { previous: {}, next: { agents: { entries: {} } }, reload: true, plugins: true },
+        { next: { agents: { entries: { roboclaw: {}, added: {} } } }, reload: true, plugins: true },
         {
           next: { agents: { entries: { roboclaw: {}, added: { decisionModel: "fixture/fast" } } } },
           reload: true,

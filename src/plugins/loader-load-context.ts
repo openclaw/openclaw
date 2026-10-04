@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { listAgentIds } from "../agents/agent-roster.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import { getRuntimeConfigCapture } from "../config/runtime-config-capture-state.js";
@@ -228,6 +229,12 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     runtimeEntries: normalized.entries,
     sourceEntries: activationSource.plugins.entries,
   });
+  // Plugins may validate owner references against api.config during registration.
+  // Membership changes must invalidate successful and failed cached registrations.
+  const agentRosterKey = JSON.stringify([
+    listAgentIds(runtimeConfig).toSorted(),
+    listAgentIds(activationConfig).toSorted(),
+  ]);
   const shouldActivate = options.mode !== "cli-metadata" && options.activate !== false;
   // Staged runtime registration is independent of publishing the process registry.
   const runtimeSideEffects = options.runtimeSideEffects ?? shouldActivate;
@@ -265,6 +272,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
       entries: Object.entries(trustNormalized.entries).map(([id, entry]) => [id, entry.enabled]),
     },
     registrationConfigKey,
+    agentRosterKey,
     installs,
     // Supplied candidates own physical source selection even when ids/config match.
     // Keep the selection facts in the loader key instead of a second hook cache.
@@ -397,6 +405,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
       return capture().cfg;
     },
     registrationConfigKey,
+    agentRosterKey,
     metadataSnapshot: currentMetadataSnapshot,
     get normalized() {
       return capture().normalized;

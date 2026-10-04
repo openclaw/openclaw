@@ -5,12 +5,12 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import type { AgentSandboxConfig } from "../config/types.agents-shared.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
-import { registerSandboxBackend, type SandboxBackendHandle } from "./sandbox/backend.js";
+import { registerSandboxBackend } from "./sandbox/backend.js";
 import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
 import { isSandboxProvisioningError } from "./sandbox/provisioning-error.js";
+import { createBackend, sandboxConfig } from "./test-helpers/sandbox-backend-fixtures.js";
 
 const updateRegistryMock = vi.hoisted(() => vi.fn());
 const readRegisteredSandboxRuntimeIdsMock = vi.hoisted(() => vi.fn(async () => [] as string[]));
@@ -70,39 +70,6 @@ vi.mock("../skills/runtime/remote.js", () => ({
 vi.mock("../skills/loading/workspace-skill-sync.runtime.js", () => ({
   syncWorkspaceSkills: syncSkillsToWorkspaceMock,
 }));
-
-function createBackend(
-  params: Pick<SandboxBackendHandle, "id" | "runtimeId" | "runtimeLabel"> &
-    Partial<SandboxBackendHandle>,
-): SandboxBackendHandle {
-  return {
-    workdir: "/workspace",
-    buildExecSpec: async () => ({
-      argv: [params.id, "exec"],
-      env: process.env,
-      stdinMode: "pipe-closed",
-    }),
-    runShellCommand: async () => ({ stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), code: 0 }),
-    ...params,
-  };
-}
-
-function sandboxConfig(backend: string, overrides: AgentSandboxConfig = {}): OpenClawConfig {
-  return {
-    agents: {
-      defaults: {
-        sandbox: {
-          mode: "all",
-          backend,
-          scope: "session",
-          workspaceAccess: "rw",
-          prune: { idleHours: 0, maxAgeDays: 0 },
-          ...overrides,
-        },
-      },
-    },
-  };
-}
 
 let sandboxFixtureRoot = "";
 let sandboxFixtureCount = 0;
@@ -269,7 +236,10 @@ describe("resolveSandboxContext", () => {
       expect(sandbox?.workspaceDir).not.toBe(workspaceDir);
       expect(await warnLogs.findText("workspaceAccess")).toMatch(/rw.*ro/i);
       expect(backendFactory).toHaveBeenCalledWith(
-        expect.objectContaining({ cfg: expect.objectContaining({ scope: "agent" }) }),
+        expect.objectContaining({
+          agentId: "main",
+          cfg: expect.objectContaining({ scope: "agent" }),
+        }),
       );
     } finally {
       warnLogs.cleanup();
@@ -333,9 +303,10 @@ describe("resolveSandboxContext", () => {
         workdir: "/runtime/workspace",
       }),
     );
+    const resolveWorkdir = vi.fn(() => "/runtime/workspace");
     const restore = registerSandboxBackend("test-backend", {
       factory: backendFactory,
-      resolveWorkdir: () => "/runtime/workspace",
+      resolveWorkdir,
     });
     try {
       const cfg = sandboxConfig("test-backend");
@@ -360,6 +331,7 @@ describe("resolveSandboxContext", () => {
       expect(backendFactory).toHaveBeenCalledWith(
         expect.objectContaining({
           registeredRuntimeIds: ["registered-runtime"],
+          agentId: "worker",
         }),
       );
       expect(resolveNodeExecEligibilityMock).toHaveBeenCalledWith(
@@ -377,6 +349,7 @@ describe("resolveSandboxContext", () => {
         workspaceDir: "/tmp/openclaw-test",
       });
       expect(workspace?.containerWorkdir).toBe("/runtime/workspace");
+      expect(resolveWorkdir).toHaveBeenCalledWith(expect.objectContaining({ agentId: "worker" }));
     } finally {
       readRegisteredSandboxRuntimeIdsMock.mockResolvedValue([]);
       restore();

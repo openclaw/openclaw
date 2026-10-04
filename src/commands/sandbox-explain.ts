@@ -198,6 +198,7 @@ export async function sandboxExplainCommand(
     workspaceDir: effectiveAgentWorkspaceDir,
   });
   const sandboxWorkdir = getSandboxBackendWorkdirResolver(sandboxCfg.backend)?.({
+    agentId: sandboxRuntime.agentId,
     sessionKey,
     scopeKey: workspaceLayout.scopeKey,
     workspaceDir: workspaceLayout.workspaceDir,

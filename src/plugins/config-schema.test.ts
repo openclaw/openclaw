@@ -36,6 +36,20 @@ describe("buildPluginConfigSchema", () => {
     });
   });
 
+  it("preserves constrained record keys in exported schemas", () => {
+    const result = buildPluginConfigSchema(z.record(z.string().regex(/^[a-z]+$/), z.boolean()));
+    expect(result.jsonSchema).toMatchObject({
+      propertyNames: { type: "string", pattern: "^[a-z]+$" },
+    });
+    if (!result.jsonSchema) {
+      throw new Error("expected exported schema");
+    }
+    const admission = buildJsonPluginConfigSchema(result.jsonSchema);
+    expect(admission.safeParse?.({ valid: true })).toMatchObject({ success: true });
+    expect(admission.safeParse?.({ INVALID: true })).toMatchObject({ success: false });
+    expect(result.safeParse?.({ INVALID: true })).toMatchObject({ success: false });
+  });
+
   it("uses the host converter and preserves metadata, references and runtime transforms", () => {
     const policy = z.string().describe("Policy name").meta({
       id: "Plugin/Policy~v1",

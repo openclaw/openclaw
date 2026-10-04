@@ -102,11 +102,12 @@ describe("plugin SDK fs-safe compatibility exports", () => {
           relativePath: string;
           recursive?: boolean;
           force?: boolean;
+          assertBeforeMutation?: () => void;
         },
       ]
     >();
     expectTypeOf<keyof Parameters<typeof removePathWithinRoot>[0]>().toEqualTypeOf<
-      "rootDir" | "relativePath" | "recursive" | "force"
+      "rootDir" | "relativePath" | "recursive" | "force" | "assertBeforeMutation"
     >();
     expectTypeOf(removePathWithinRoot).returns.toEqualTypeOf<Promise<void>>();
 
@@ -129,6 +130,17 @@ describe("plugin SDK fs-safe compatibility exports", () => {
         expect(result.realPath).toBe(fs.realpathSync(path.join(root, "nested", "file.txt")));
       }
 
+      const refusal = new Error("retired file owner");
+      await expect(
+        removePathWithinRoot({
+          rootDir: root,
+          relativePath: "nested/file.txt",
+          assertBeforeMutation: () => {
+            throw refusal;
+          },
+        }),
+      ).rejects.toBe(refusal);
+      expect(fs.existsSync(path.join(root, "nested", "file.txt"))).toBe(true);
       await removePathWithinRoot({
         rootDir: root,
         relativePath: "nested/file.txt",

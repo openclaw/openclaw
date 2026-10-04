@@ -578,6 +578,12 @@ export function buildGatewayReloadPlan(
         (plan.reloadPluginPaths ??= []).push(path);
       }
     }
+    // diffGatewayReloadPaths preserves membership boundaries even for empty entries.
+    // Re-register plugins that validate roster references, but not ordinary agent settings.
+    if (/^agents\.entries(?:\.[^.]+)?$/.test(path) && !plan.reloadPluginPaths?.includes(path)) {
+      plan.reloadPlugins = true;
+      (plan.reloadPluginPaths ??= []).push(path);
+    }
     if (rule?.replaceChannelPlugins) {
       // Manifest channel IDs survive even when registration has no active channel.
       for (const record of getReloadPolicyCatalog().registry?.plugins ?? []) {

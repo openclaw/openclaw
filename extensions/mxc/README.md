@@ -57,9 +57,92 @@ and out-of-range values fail plugin activation with an actionable error
 | `debug`          | `boolean`                         | `false`                                | Forwards debug output from the MXC SDK launcher.                                                                                                              |
 | `mxcPolicyPaths` | `string[]`                        | unset (built-in baseline only)         | Every entry must be a non-empty absolute path. See [Sandbox policy files](#sandbox-policy-files).                                                             |
 
-Any other key is rejected. `openclaw.plugin.json` publishes the same schema
+The `agents` map below is also supported; any other key is rejected.
+`openclaw.plugin.json` publishes the same schema
 (enums, `minimum`/`maximum` bounds) so `openclaw config` validation and CLI
 help stay in sync with plugin runtime validation.
+
+### Per-agent policy
+
+Set `plugins.entries.mxc.config.agents.<agentId>` to override `network`,
+`timeoutSeconds`, or `mxcPolicyPaths` for one configured agent. Keys must be
+canonical lowercase IDs matching `^[a-z0-9_][a-z0-9_-]{0,63}$`, including
+underscore-prefixed IDs such as `_worker`. Unsafe object keys (`__proto__`,
+`prototype`, and `constructor`), unknown agents, unknown fields, invalid values,
+and relative policy paths are rejected. Roster membership changes hot-reload
+plugins and revalidate these references even when the MXC settings are unchanged.
+Executor location, containment, and debug settings remain plugin-wide.
+
+```json5
+{
+  agents: {
+    ownership: "explicit",
+    entries: {
+      analyst: {
+        sandbox: { mode: "all", backend: "mxc", scope: "agent", workspaceAccess: "none" },
+      },
+      reviewer: {
+        sandbox: { mode: "all", backend: "mxc", scope: "agent", workspaceAccess: "none" },
+      },
+    },
+  },
+  plugins: {
+    entries: {
+      mxc: {
+        enabled: true,
+        config: {
+          network: "none",
+          agents: {
+            analyst: { timeoutSeconds: 20, mxcPolicyPaths: ["C:\\Policies\\analyst.json"] },
+            reviewer: { mxcPolicyPaths: [] },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Plugin-wide policy settings are **defaults, not mandatory common constraints**.
+An absent agent entry or absent override field inherits the plugin default.
+An explicit `mxcPolicyPaths` array **replaces** the default list, including `[]`;
+it is never unioned with another agent's grants. Selected files augment filesystem
+access and cap timeouts using the policy-file rules below; built-in validation
+and protected-path checks still apply. To apply a common file, explicitly include
+it in every replacement list that needs it.
+
+Per-agent overrides require an updated host that supplies resolved `agentId` to
+the sandbox factory; a nonempty map fails closed on older hosts missing that
+context. Overrides reject effective `scope: "shared"`. Role-required and private
+skill sandbox paths that core forces to isolated scope remain supported. With no
+selected override, existing shared-scope behavior is unchanged.
+
+Policy files are loaded when each backend handle is created. Editing a file does
+not revoke grants from an existing handle or an in-flight command. This snapshot
+is not execution authority: MXC retains the host's `assertRuntimeCurrent` callback
+and rejects new work after that owner retires or is replaced. The exec spec carries
+the same callback through core's deferred native process admission; cleanup remains
+available after retirement. Disabling or replacing the plugin registration also
+retires its retained factories, handles, and exec specs; resolve a fresh context
+after reload. Every command still receives a fresh native container ID and
+`destroyOnExit`; scope controls
+workspace reuse, not native container lifetime. Internal filesystem shell helpers
+always block network and use the smallest of 30 seconds, the configured timeout,
+and the selected policy baseline timeout.
+
+These overrides do not isolate a common writable host workspace or host/elevated
+tools. Extra exec policy paths do not become filesystem-tool read/write mounts;
+the filesystem bridge keeps its existing workspace and protected-skill checks.
+
+## Future per-tool policy integration
+
+Per-agent settings select backend defaults; they do not implement tool or intent
+authorization. A future policy-store integration must resolve and authorize each
+invocation using trusted host context, compose a fresh effective configuration
+before execution, and keep tool-specific results out of the backend handle's
+retained baseline. Missing or unsupported catalog results must not broaden access.
+Catalog requirements are not authorization grants; their composition must preserve
+consumer-owned restrictions rather than assume an implicit SDK policy intersection.
 
 ## Supported
 
@@ -79,7 +162,7 @@ help stay in sync with plugin runtime validation.
     beneath a writable parent. The filesystem bridge also rejects writes to
     those protected paths.
   - Use policy `filesystem.additionalReadwritePaths` for additional explicit
-    writable host paths shared by every MXC sandbox.
+    writable host paths for sandboxes selecting that policy file.
 - `scope` workspace selection:
   - `session`, `agent`, and `shared` choose the OpenClaw workspace directory
     passed to MXC.
@@ -154,8 +237,8 @@ if ($LASTEXITCODE -ne 0) { throw "Sandbox setup failed; use Cleanup to remove th
 ## Sandbox policy files
 
 MXC reads optional host policy files listed in
-`plugins.entries.mxc.config.mxcPolicyPaths`. Policy files constrain the
-filesystem and process defaults used by every MXC sandbox run on the host.
+`plugins.entries.mxc.config.mxcPolicyPaths`, or the selected per-agent replacement
+list. Policy files supply filesystem grants and process caps for that selection.
 Omitting `mxcPolicyPaths` (or configuring an empty array) uses the built-in
 sandbox baseline only; MXC never reads an implicit user or machine policy
 path.

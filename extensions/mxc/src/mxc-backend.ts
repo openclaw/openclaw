@@ -138,12 +138,14 @@ function createMxcLauncherPayload(
  */
 export function createMxcSandboxBackendHandle(params: {
   config: MxcConfig;
+  assertRuntimeCurrent?: () => void;
   runtimeId: string;
   workdir: string;
   agentWorkspaceDir?: string;
   skillsWorkspaceDir?: string;
   workspaceAccess?: MxcWorkspaceAccess;
 }): SandboxBackendHandle {
+  params.assertRuntimeCurrent?.();
   const baseline = loadSandboxBaselinePolicy({ policyPaths: params.config.mxcPolicyPaths });
 
   return {
@@ -153,6 +155,7 @@ export function createMxcSandboxBackendHandle(params: {
     workdir: params.workdir,
     workdirValidation: "backend",
     async validateWorkdir(workdir) {
+      params.assertRuntimeCurrent?.();
       try {
         return resolveWorkdirInsideWorkspace(params.workdir, workdir);
       } catch (err) {
@@ -165,6 +168,7 @@ export function createMxcSandboxBackendHandle(params: {
     capabilities: {},
 
     async buildExecSpec({ command, workdir, env, usePty }): Promise<SandboxBackendExecSpec> {
+      params.assertRuntimeCurrent?.();
       const effectiveWorkdir = resolveWorkdirInsideWorkspace(
         params.workdir,
         workdir ?? params.workdir,
@@ -209,6 +213,8 @@ export function createMxcSandboxBackendHandle(params: {
             payloadFile.payloadFile,
           ],
           env: buildLauncherEnv(),
+          // Core retains this check through asynchronous preflight to native process admission.
+          assertCurrent: params.assertRuntimeCurrent,
           stdinMode: usePty ? "pipe-open" : "pipe-closed",
           finalizeToken: payloadFile satisfies MxcExecFinalizeToken,
         };
@@ -222,16 +228,22 @@ export function createMxcSandboxBackendHandle(params: {
       cleanupLauncherPayloadFile(token);
     },
 
-    createFsBridge: ({ sandbox }) => createMxcFsBridge({ sandbox }),
+    createFsBridge: ({ sandbox }) =>
+      createMxcFsBridge({ sandbox, assertCurrent: params.assertRuntimeCurrent }),
 
     async runShellCommand(
       cmdParams: SandboxBackendCommandParams,
     ): Promise<SandboxBackendCommandResult> {
-      // Shell commands use a restrictive policy (no network, 30s timeout)
+      params.assertRuntimeCurrent?.();
+      // Internal shell helpers cannot widen an explicitly configured execution ceiling.
       const restrictiveConfig: MxcConfig = {
         ...params.config,
         network: "none",
-        timeoutSeconds: 30,
+        timeoutSeconds: Math.min(
+          30,
+          baseline.process.timeoutSeconds,
+          params.config.timeoutSecondsConfigured ? params.config.timeoutSeconds : 30,
+        ),
         timeoutSecondsConfigured: true,
       };
       const effectiveWorkdir = path.resolve(params.workdir);
@@ -277,12 +289,13 @@ export function createMxcSandboxBackendHandle(params: {
           payloadFile.payloadFile,
         ];
         try {
+          params.assertRuntimeCurrent?.();
           const result = await runCommandBuffered(argv, {
             baseEnv: buildLauncherEnv(),
             input: execInput,
             maxOutputBytes: { stdout: 10 * 1024 * 1024, stderr: 10 * 1024 * 1024 },
             signal: cmdParams.signal,
-            timeoutMs: 30_000,
+            timeoutMs: restrictiveConfig.timeoutSeconds * 1000,
           });
           if (cmdParams.signal?.aborted) {
             throw cmdParams.signal.reason instanceof Error
@@ -322,8 +335,8 @@ export const mxcSandboxBackendManager: SandboxBackendManager = {
   async describeRuntime() {
     return {
       running: false,
-      actualConfigLabel: "mxc-process",
-      configLabelMatch: true,
+      actualConfigLabel: "mxc-ephemeral (policy not compared)",
+      configLabelMatch: false,
     };
   },
   async removeRuntime() {

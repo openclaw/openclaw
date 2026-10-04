@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createOpenClawCodingTools, type AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { createMxcFsBridge } from "../src/fs-bridge.js";
 
 function createDirectoryReader(params: {
@@ -28,6 +28,48 @@ function createDirectoryReader(params: {
 }
 
 describe("MXC filesystem directory reads", () => {
+  test("recursive removal stops when its retained owner retires during path preparation", async () => {
+    await using workspace = await tempWorkspace({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-mxc-removal-owner-",
+    });
+    const root = await fs.realpath(workspace.dir);
+    await fs.mkdir(path.join(root, "tree"));
+    const file = path.join(root, "tree", "retained.txt");
+    await fs.writeFile(file, "retained");
+    let current = true;
+    const bridge = createMxcFsBridge({
+      sandbox: {
+        workspaceDir: root,
+        agentWorkspaceDir: root,
+        workspaceAccess: "rw",
+        containerName: "mxc-removal-test",
+        containerWorkdir: root,
+        docker: {},
+      },
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("owner retired");
+        }
+      },
+    });
+    const realpath = fs.realpath.bind(fs);
+    const inspect = vi.spyOn(fs, "realpath").mockImplementation(async (...args) => {
+      const result = await realpath(...args);
+      if (String(args[0]) === root) {
+        current = false;
+      }
+      return result;
+    });
+    try {
+      await expect(bridge.remove({ filePath: "tree", recursive: true })).rejects.toThrow(
+        "owner retired",
+      );
+      expect(await fs.readFile(file, "utf8")).toBe("retained");
+    } finally {
+      inspect.mockRestore();
+    }
+  });
   test("returns entry names and directory types relative to the mounted directory", async () => {
     await using workspace = await tempWorkspace({
       rootDir: resolvePreferredOpenClawTmpDir(),

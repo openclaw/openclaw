@@ -40,7 +40,7 @@ describe("decision model reload planning", () => {
       name: "adds an agent without a decision override",
       previous: { agents: { entries: {} } },
       next: { agents: { entries: { worker: {} } } },
-      reloadPlugins: false,
+      reloadPlugins: true,
     },
   ])(
     "preserves roster actions and scopes provider reloads when it $name",

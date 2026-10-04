@@ -60,14 +60,45 @@
         "type": "array",
         "items": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "pattern": "^\\s*(?:[a-zA-Z]:[\\\\/]|[\\\\/])"
         },
         "description": "Absolute MXC policy file paths applied on top of the built-in sandbox baseline policy."
+      },
+      "agents": {
+        "type": "object",
+        "propertyNames": { "type": "string", "pattern": "^(?!__proto__$|prototype$|constructor$)[a-z0-9_][a-z0-9_-]{0,63}$" },
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "network": {
+              "type": "string",
+              "enum": ["none", "default"],
+              "description": "Outbound network policy. 'none' blocks all network; 'default' allows outbound access via the internetClient capability."
+            },
+            "timeoutSeconds": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 2147000,
+              "description": "Per-command execution timeout in seconds. Capped to the sandbox policy baseline timeout when both are set."
+            },
+            "mxcPolicyPaths": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1, "pattern": "^\\s*(?:[a-zA-Z]:[\\\\/]|[\\\\/])" },
+              "description": "Absolute MXC policy file paths applied on top of the built-in sandbox baseline policy."
+            }
+          }
+        },
+        "description": "Per-agent policy defaults overrides, keyed by configured canonical agent ID. Explicit policy file lists replace plugin defaults, including empty lists."
       }
     }
   },
   "configContracts": {
-    "dangerousFlags": [{ "path": "network", "equals": "default" }]
+    "dangerousFlags": [
+      { "path": "network", "equals": "default" },
+      { "path": "agents.*.network", "equals": "default" }
+    ]
   },
   "uiHints": {
     "mxcBinaryPath": {

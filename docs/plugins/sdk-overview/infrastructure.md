@@ -73,6 +73,15 @@ flight, and calls `onFailure` when output fails or closes unexpectedly. Await
 retiring the worker; the stream remains caller-owned. This carries current
 observation state, not a complete history of filesystem events.
 
+### Owner-bound filesystem removal
+
+`removePathWithinRoot` from `openclaw/plugin-sdk/file-access-runtime` accepts an
+optional synchronous `assertBeforeMutation` callback. Pass the retained owner's
+assertion so recursive removal revalidates authority before each mutation, not
+only before asynchronous path preparation. Throwing refuses the mutation and
+preserves the original refusal; cleanup that owns only temporary artifacts can
+omit the callback. Existing path-identity and symlink protections remain unchanged.
+
 ### Streaming file verification
 
 `sha256File(pathOrHandle, { maxBytes, signal })` from

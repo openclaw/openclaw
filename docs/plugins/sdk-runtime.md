@@ -381,6 +381,25 @@ current hosts supply this assertion, and bundled providers reject missing
 allocation authority before performing work. An older host must be updated to
 use these providers.
 
+## Sandbox backend agent context
+
+Sandbox factories and workspace-only `resolveWorkdir` callbacks registered through
+`openclaw/plugin-sdk/sandbox` receive `CreateSandboxBackendParams.agentId` from
+core's resolved runtime agent. Use this canonical ID for plugin-owned per-agent
+policy; never infer ownership from `sessionKey`, `scopeKey`, or a workspace path.
+During provisioning and workspace setup, `cfg.scope` reflects core's required
+isolation, private-skill selections, and managed-workspace rules. `sandbox explain`
+passes the resolved agent ID and role-required scope but does not prepare private
+skills or managed workspaces. Runtime reservation and live-authority callbacks
+remain unchanged.
+
+The field is optional in the SDK type for older callers. A backend requiring
+per-agent policy must reject missing context rather than silently using another
+agent's policy. Use `listAgentIds(api.config)` from
+`openclaw/plugin-sdk/agent-scope-runtime` for registration-time roster validation.
+Legacy implicit `main` applies only when the roster is absent, not explicitly
+empty. See [MXC policy configuration](/plugins/reference/mxc#per-agent-sandbox-policy).
+
 ## Other top-level `api` fields
 
 Beyond `api.runtime`, the API object also provides:

@@ -40,12 +40,14 @@ export {
   syncDirectory,
   type DirectorySyncOutcome,
 } from "../infra/directory-durability.js";
-// Keep updater controls outside this facade's existing contract.
+// Expose owner revalidation without admitting updater-only removal controls.
 export const removePathWithinRoot: (params: {
   rootDir: string;
   relativePath: string;
   recursive?: boolean;
   force?: boolean;
+  /** Synchronously revalidate retained owner authority before each mutation. */
+  assertBeforeMutation?: () => void;
 }) => Promise<void> = removePathWithinRootCore;
 export { basenameFromMediaSource, safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 export { isPathInside, isPathStrictlyInside } from "../infra/path-guards.js";
