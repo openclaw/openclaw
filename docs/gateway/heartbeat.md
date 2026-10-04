@@ -104,6 +104,16 @@ string. `heartbeat.target` accepts `owner`, `last`, `none`, or a channel ID such
 - Scheduled heartbeats defer while the main queue or automation work is active or queued, while any reply or embedded run for the same agent is active, and while the resolved target session has active or queued work. An event-free plain monitor poll that has not begun preparation is recorded as skipped and waits for its next persisted cadence tick, instead of keeping a running automation open behind busy work. Wakes carrying queued events or scheduled tasks, and work already admitted or retained after execution, still retry. Immediate and manual wakes bypass the broad same-agent active-run check, but still honor the main, automation, and target-session busy guards. Sibling agents do not pause each other.
 - A targeted background-command completion waits for its own session to become free, including final-delivery recovery, but does not wait for unrelated sessions or automations. A completion coalesced with scheduled heartbeat work retains the scheduled work's busy guards.
 
+Heartbeat attempts release their own native CLI processes and tool resources when
+an attempt completes, fails, or is canceled, including fallback attempts. Shared
+Codex clients remain open while another conversation or native child owns a lease;
+a heartbeat never bulk-closes unrelated sessions. Ordinary chat retains its warm
+runtime behavior.
+
+Claude CLI heartbeats use the shared CLI account selector: explicit selections
+and existing session accounts retain their meaning, while fresh sessions can use
+eligible saved Anthropic subscription credentials in the configured auth order.
+
 ## What the heartbeat prompt is for
 
 The default prompt is intentionally narrow: follow the heartbeat monitor scratch

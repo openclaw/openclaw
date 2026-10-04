@@ -100,6 +100,62 @@ describe("executeAgentTurn: CLI credential selection", () => {
       profiles: [customProfile],
       expected: customProfile,
     },
+    {
+      name: "selects the saved canonical account for a fresh heartbeat",
+      selected: undefined,
+      source: undefined,
+      primary: "anthropic",
+      provider: "anthropic",
+      backend: "claude-cli",
+      profiles: [canonicalProfile],
+      expected: canonicalProfile,
+      heartbeat: true,
+    },
+    {
+      name: "does not forward another provider account into a heartbeat fallback",
+      selected: primaryProfile,
+      source: "auto",
+      primary: "openai",
+      provider: "anthropic",
+      backend: "claude-cli",
+      profiles: [primaryProfile, canonicalProfile],
+      expected: canonicalProfile,
+      heartbeat: true,
+    },
+    {
+      name: "preserves an explicit native account for heartbeats",
+      selected: nativeProfile,
+      source: "user",
+      primary: "anthropic",
+      provider: "anthropic",
+      backend: "claude-cli",
+      profiles: [nativeProfile, canonicalProfile],
+      expected: undefined,
+      heartbeat: true,
+    },
+    {
+      name: "honors an empty canonical auth order for heartbeats",
+      selected: undefined,
+      source: undefined,
+      primary: "anthropic",
+      provider: "anthropic",
+      backend: "claude-cli",
+      profiles: [canonicalProfile],
+      expected: undefined,
+      heartbeat: true,
+      excludeCanonical: true,
+    },
+    {
+      name: "rejects a missing explicit account even for heartbeats",
+      selected: canonicalProfile,
+      source: "user",
+      primary: "anthropic",
+      provider: "anthropic",
+      backend: "claude-cli",
+      profiles: [managedProfile],
+      error: 'No credentials found for profile "anthropic:managed"',
+      heartbeat: true,
+    },
   ] as const)("$name", async (testCase) => {
     const followupRun = createFollowupRun();
     onTestFinished(() => {
@@ -116,7 +172,10 @@ describe("executeAgentTurn: CLI credential selection", () => {
     const profiles = Object.fromEntries(testCase.profiles.map((id) => [id, credentials[id]]));
     followupRun.run.config = {
       auth: {
-        order: Object.fromEntries(testCase.profiles.map((id) => [credentials[id].provider, [id]])),
+        order: {
+          ...Object.fromEntries(testCase.profiles.map((id) => [credentials[id].provider, [id]])),
+          ...("excludeCanonical" in testCase ? { anthropic: [] } : {}),
+        },
       },
       agents: {
         defaults: {
@@ -164,7 +223,9 @@ describe("executeAgentTurn: CLI credential selection", () => {
     }));
     state.runCliAgentMock.mockResolvedValueOnce({ payloads: [{ text: "done" }], meta: {} });
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
+    const params = createMinimalRunAgentTurnParams({ followupRun });
+    params.isHeartbeat = "heartbeat" in testCase && testCase.heartbeat === true;
+    const result = executeAgentTurn(params);
     if ("error" in testCase) {
       expect(await result).toMatchObject({ kind: "final", payload: { isError: true } });
       expect(state.runCliAgentMock).not.toHaveBeenCalled();

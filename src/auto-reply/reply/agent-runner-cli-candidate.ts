@@ -429,8 +429,14 @@ export async function runCliFallbackCandidate(
             sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,
             taskSuggestionDeliveryMode: turn.followupRun.run.taskSuggestionDeliveryMode,
             // Heartbeat ambient routes are never implicit message recipients.
-            ...(turn.isHeartbeat ? { requireExplicitMessageTarget: true } : {}),
-            cleanupBundleMcpOnRunEnd: turn.opts?.cleanupBundleMcpOnRunEnd,
+            ...(turn.isHeartbeat
+              ? {
+                  requireExplicitMessageTarget: true,
+                  cleanupCliLiveSessionOnRunEnd: true,
+                  cleanupBundleMcpOnRunEnd: true,
+                  oneShotCliRun: true,
+                }
+              : { cleanupBundleMcpOnRunEnd: turn.opts?.cleanupBundleMcpOnRunEnd }),
             silentReplyPromptMode: turn.followupRun.run.silentReplyPromptMode,
             terminalReplyExpectation: turn.followupRun.run.terminalReplyExpectation,
             extraSystemPromptStatic: turn.followupRun.run.extraSystemPromptStatic,
