@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
@@ -36,6 +37,8 @@ import type { SnapshotDatabaseRef } from "./snapshot-provider.js";
 const GIT_BACKUP_DIAGNOSTIC_MAX_LENGTH = 500;
 const GIT_BACKUP_NON_BACKUP_HISTORY_WARNING =
   "repository history contains non-backup commits; use a dedicated backup repository";
+const GIT_BACKUP_SCOPES = ["global", "agents"];
+const GIT_BACKUP_METADATA_EXCLUSIONS = [":(exclude,glob)**/.DS_Store"];
 
 type GitBackupCreateResult = {
   repositoryPath: string;
@@ -191,7 +194,9 @@ async function isBackupOwnedScope(scopePath: string): Promise<boolean> {
   if (identity === undefined) {
     return true;
   }
-  if (!identity?.isDirectory()) {
+  // Only regular Finder metadata is ignored; a namesake directory or symlink
+  // must never be adopted as an empty backup scope and removed.
+  if (!identity?.isDirectory() || path.basename(scopePath) === ".DS_Store") {
     return false;
   }
   try {
@@ -222,16 +227,18 @@ async function removeStaleAgentScopes(
   retainedScopes: Set<string>,
 ): Promise<void> {
   const agentsPath = path.join(repositoryPath, "agents");
-  let entries: string[];
+  let entries: Dirent[];
   try {
-    entries = await fs.readdir(agentsPath);
+    entries = await fs.readdir(agentsPath, { withFileTypes: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return;
     }
     throw error;
   }
-  const scopes = entries.map((entry) => path.join(agentsPath, entry));
+  const scopes = entries
+    .filter((entry) => !(entry.name === ".DS_Store" && entry.isFile()))
+    .map((entry) => path.join(agentsPath, entry.name));
   await Promise.all(scopes.map(async (scope) => await assertBackupOwnedScope(scope)));
   await Promise.all(
     scopes
@@ -257,7 +264,7 @@ async function copyStagedScope(
 async function commitGitBackup(params: {
   repositoryPath: string;
   message: string;
-  scopes: string[];
+  paths: string[];
   env?: NodeJS.ProcessEnv;
 }): Promise<string> {
   const email = await runGit(params.repositoryPath, ["config", "--get", "user.email"], {
@@ -267,11 +274,54 @@ async function commitGitBackup(params: {
     email.code === 0 && email.stdout.trim()
       ? []
       : ["-c", "user.name=OpenClaw", "-c", "user.email=backup@openclaw.local"];
-  await requireGit(
-    params.repositoryPath,
-    [...identityArgs, "commit", "-m", params.message, "--", ...params.scopes],
-    { env: params.env },
-  );
+  const indexWorkspace = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-git-backup-index-",
+  });
+  try {
+    // A path-scoped commit re-reads working files, re-adding metadata we only
+    // untracked. Build a private index from HEAD plus the selected staged paths
+    // so preserved files and unrelated operator staging cannot enter the commit.
+    const env = { ...process.env, ...params.env, GIT_INDEX_FILE: indexWorkspace.path("index") };
+    const head = await runGit(params.repositoryPath, ["rev-parse", "--verify", "--quiet", "HEAD"], {
+      env,
+    });
+    if (head.code !== 0 && head.code !== 1) {
+      requireGitCommandOutput("git rev-parse HEAD", head);
+    }
+    await requireGit(params.repositoryPath, ["read-tree", head.code === 0 ? "HEAD" : "--empty"], {
+      env,
+    });
+    const selectedPaths = new Set(params.paths);
+    const entries = (
+      await requireGit(
+        params.repositoryPath,
+        ["ls-files", "--stage", "-z", "--", ...GIT_BACKUP_SCOPES],
+        { env: params.env },
+      )
+    )
+      .split("\0")
+      .filter((entry) => selectedPaths.has(entry.slice(entry.indexOf("\t") + 1)));
+    if (entries.length > 0) {
+      await requireGit(params.repositoryPath, ["update-index", "-z", "--index-info"], {
+        env,
+        input: entries.join("\0") + "\0",
+      });
+    }
+    const presentPaths = new Set(entries.map((entry) => entry.slice(entry.indexOf("\t") + 1)));
+    const deletedPaths = params.paths.filter((file) => !presentPaths.has(file));
+    if (deletedPaths.length > 0) {
+      await requireGit(params.repositoryPath, ["update-index", "--force-remove", "-z", "--stdin"], {
+        env,
+        input: deletedPaths.join("\0") + "\0",
+      });
+    }
+    await requireGit(params.repositoryPath, [...identityArgs, "commit", "-m", params.message], {
+      env,
+    });
+  } finally {
+    await indexWorkspace.cleanup();
+  }
   return await requireGit(params.repositoryPath, ["rev-parse", "HEAD"], { env: params.env });
 }
 
@@ -349,38 +399,76 @@ export async function createGitBackup(params: {
   // Keep both owned roots present so Git accepts both scoped pathspecs even on a first global-only
   // or agent-only backup. Empty directories remain untracked.
   await Promise.all(
-    ["global", "agents"].map(async (scope) =>
+    GIT_BACKUP_SCOPES.map(async (scope) =>
       fs.mkdir(path.join(repositoryPath, scope), { recursive: true, mode: 0o700 }),
     ),
   );
-  await requireGit(repositoryPath, ["add", "-A", "--", "global", "agents"], {
+  const backupPaths = [...GIT_BACKUP_SCOPES, ...GIT_BACKUP_METADATA_EXCLUSIONS];
+  await requireGit(repositoryPath, ["add", "-A", "--", ...backupPaths], {
     env: params.gitEnv,
   });
-  const changed = await requireGit(
-    repositoryPath,
-    ["status", "--porcelain", "--", "global", "agents"],
-    {
-      env: params.gitEnv,
-    },
+  // Untrack regular Finder files from older commits, including at the agents
+  // root. Preserve files on disk and metadata staged as a new operator addition.
+  const addedPaths = new Set(
+    (
+      await requireGit(
+        repositoryPath,
+        ["diff", "--cached", "--diff-filter=A", "--name-only", "-z", "--", ...GIT_BACKUP_SCOPES],
+        {
+          env: params.gitEnv,
+        },
+      )
+    ).split("\0"),
   );
+  const trackedMetadata = (
+    await requireGit(repositoryPath, ["ls-files", "--stage", "-z", "--", ...GIT_BACKUP_SCOPES], {
+      env: params.gitEnv,
+    })
+  )
+    .split("\0")
+    .filter(
+      (entry) =>
+        (entry.startsWith("100644 ") || entry.startsWith("100755 ")) && entry.includes(" 0\t"),
+    )
+    .map((entry) => entry.slice(entry.indexOf("\t") + 1))
+    .filter((file) => file.endsWith("/.DS_Store") && !addedPaths.has(file));
+  if (trackedMetadata.length > 0) {
+    await requireGit(
+      repositoryPath,
+      ["rm", "--cached", "--force", "--pathspec-from-file=-", "--pathspec-file-nul"],
+      {
+        env: params.gitEnv,
+        input: trackedMetadata.map((file) => `:(literal)${file}\0`).join(""),
+      },
+    );
+  }
+  const stagedBackupPaths = await requireGit(
+    repositoryPath,
+    ["diff", "--cached", "--name-only", "-z", "--", ...backupPaths],
+    { env: params.gitEnv },
+  );
+  const deletedMetadata = (
+    await requireGit(
+      repositoryPath,
+      ["diff", "--cached", "--diff-filter=D", "--name-only", "-z", "--", ...GIT_BACKUP_SCOPES],
+      {
+        env: params.gitEnv,
+      },
+    )
+  )
+    .split("\0")
+    .filter((file) => file.endsWith("/.DS_Store"));
+  const commitPaths = [...stagedBackupPaths.split("\0").filter(Boolean), ...deletedMetadata];
   let commit: string | undefined;
-  if (changed) {
+  if (commitPaths.length > 0) {
     const now = params.now ?? new Date();
     if (!Number.isFinite(now.getTime())) {
       throw new Error("Git backup timestamp is invalid.");
     }
-    const stagedBackupPaths = await requireGit(
-      repositoryPath,
-      ["diff", "--cached", "--name-only", "--", "global", "agents"],
-      { env: params.gitEnv },
-    );
-    const commitScopes = ["global", "agents"].filter((scope) =>
-      stagedBackupPaths.split("\n").some((entry) => entry.startsWith(`${scope}/`)),
-    );
     commit = await commitGitBackup({
       repositoryPath,
       message: `openclaw backup ${now.toISOString()}`,
-      scopes: commitScopes,
+      paths: commitPaths,
       env: params.gitEnv,
     });
   }
@@ -410,7 +498,7 @@ export async function createGitBackup(params: {
   return {
     repositoryPath,
     ...(commit ? { commit } : {}),
-    noChanges: !changed,
+    noChanges: commitPaths.length === 0,
     pushed,
     ...(pushWarning ? { pushWarning } : {}),
     manifests,
