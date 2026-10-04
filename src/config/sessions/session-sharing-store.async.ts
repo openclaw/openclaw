@@ -28,7 +28,10 @@ import {
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
-import type { SessionSharingWorkerOperations } from "./session-sharing-store.worker.js";
+import type {
+  MembershipPublication,
+  SessionSharingWorkerOperations,
+} from "./session-sharing-store.types.js";
 
 export async function runSessionCollaborationWrite<
   Key extends keyof SessionSharingWorkerOperations,
@@ -179,6 +182,18 @@ export async function runSessionCollaborationWrite<
   }
 }
 
+function publishSessionMembership(
+  { facts }: MembershipPublication,
+  location: { agentId: string; storePath: string; sessionKey: string },
+  database: OpenClawAgentDatabase,
+) {
+  if (facts) {
+    publishSessionSharingMemberChange(database, location.sessionKey, facts, location.agentId);
+  } else {
+    sessionChanges.emit({ ...location, factsInvalidated: true });
+  }
+}
+
 export function addSessionMemberInWorker(
   scope: SessionAccessScope,
   params: Parameters<typeof addSessionMember>[1],
@@ -191,16 +206,7 @@ export function addSessionMemberInWorker(
     (capturedScope) => addSessionMember(capturedScope, capturedParams),
     (result, location, database) => {
       if (result.value.inserted) {
-        if (result.facts) {
-          publishSessionSharingMemberChange(
-            database,
-            location.sessionKey,
-            result.facts,
-            location.agentId,
-          );
-        } else {
-          sessionChanges.emit({ ...location, factsInvalidated: true });
-        }
+        publishSessionMembership(result, location, database);
       }
       return result.value;
     },
@@ -243,16 +249,7 @@ export function removeSessionMemberInWorker(
       ),
     (result, location, database) => {
       if (result.value) {
-        if (result.facts) {
-          publishSessionSharingMemberChange(
-            database,
-            location.sessionKey,
-            result.facts,
-            location.agentId,
-          );
-        } else {
-          sessionChanges.emit({ ...location, factsInvalidated: true });
-        }
+        publishSessionMembership(result, location, database);
       }
       return result.value;
     },

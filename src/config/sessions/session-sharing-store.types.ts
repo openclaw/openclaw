@@ -47,7 +47,6 @@ export type SessionSuggestionClaimParams = {
   expectedSessionId?: string;
   resolution: StoredSessionSuggestionResolution;
   now?: number;
-  claimTtlMs?: number;
   expectedEntry?: SessionMetadataExpectedEntry;
 };
 export type SessionSuggestionReleaseParams = {

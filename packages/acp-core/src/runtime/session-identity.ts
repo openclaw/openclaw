@@ -98,11 +98,8 @@ export function identityEquals(
 ): boolean {
   const a = normalizeIdentity(left);
   const b = normalizeIdentity(right);
-  if (!a && !b) {
-    return true;
-  }
   if (!a || !b) {
-    return false;
+    return a === b;
   }
   return (
     a.state === b.state &&

@@ -162,7 +162,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-outbound": 2,
   // +2: WhatsApp ack-policy bridge (function + mode type).
   "channel-feedback": 2,
-  "channel-pairing": 0,
+  // Released synchronous allowlist compatibility during the approved worker-read migration.
+  "channel-pairing": 1,
   "channel-policy": 7,
   "channel-send-result": 1,
   "reply-runtime": 1,

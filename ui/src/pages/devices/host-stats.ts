@@ -2,7 +2,10 @@ import type { SystemInfoResult } from "@openclaw/gateway-protocol";
 import { html, nothing, type TemplateResult } from "lit";
 import { renderCapacityMeter } from "../../components/capacity-meter.ts";
 import { t } from "../../i18n/index.ts";
+import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { formatByteSize, formatTimeAgo } from "../../lib/format.ts";
+
+registerDevicesEnglish();
 
 type HostResources = Pick<
   SystemInfoResult,

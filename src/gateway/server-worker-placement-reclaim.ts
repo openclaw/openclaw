@@ -36,14 +36,16 @@ export function createGatewayWorkerPlacementReclaimBarriers(
     agentId,
   }: WorkerPlacementReclaimRequest) => {
     const sessionRuntime = await params.loadSessionRuntime();
-    const target = sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
-      cfg: getRuntimeConfig(),
-      key: sessionKey,
-      agentId,
-      preserveQualifiedAddress: true,
-      clone: false,
-      exactRead: true,
-    });
+    const resolveTarget = () =>
+      sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
+        cfg: getRuntimeConfig(),
+        key: sessionKey,
+        agentId,
+        preserveQualifiedAddress: true,
+        clone: false,
+        exactRead: true,
+      });
+    const target = resolveTarget();
     const lifecycleIdentities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];
     const cancelAndDrain = async (
       closeWorkAdmissions: (reason: Error) => void,
@@ -113,7 +115,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
       await runExclusiveSessionStoreWrite(target.storePath, async () => {}, { reentrant: true });
     };
 
-    return { sessionRuntime, target, lifecycleIdentities, cancelAndDrain };
+    return { sessionRuntime, target, resolveTarget, lifecycleIdentities, cancelAndDrain };
   };
 
   const runReclaimPreparation: WorkerPlacementReclaimBarriers["runReclaimPreparation"] = async ({
@@ -125,7 +127,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
     pendingOperations,
     run,
   }) => {
-    const { sessionRuntime, target, lifecycleIdentities, cancelAndDrain } =
+    const { sessionRuntime, target, resolveTarget, lifecycleIdentities, cancelAndDrain } =
       await resolveLifecycleContext({ sessionId, sessionKey, agentId });
     const entry = sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
       target.store,
@@ -134,14 +136,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
     const revision = entry?.lifecycleRevision ?? null;
     const assertCurrent = () => {
       authorize?.();
-      const current = sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
-        cfg: getRuntimeConfig(),
-        key: sessionKey,
-        agentId,
-        preserveQualifiedAddress: true,
-        clone: false,
-        exactRead: true,
-      });
+      const current = resolveTarget();
       const currentEntry = sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
         current.store,
         current.storeKeys,
@@ -297,21 +292,14 @@ export function createGatewayWorkerPlacementReclaimBarriers(
 
   const runFailedReclaimBarrier: WorkerPlacementReclaimBarriers["runFailedReclaimBarrier"] =
     async ({ sessionId, sessionKey, agentId, authorize, reclaim }) => {
-      const { sessionRuntime, target, lifecycleIdentities, cancelAndDrain } =
+      const { sessionRuntime, target, resolveTarget, lifecycleIdentities, cancelAndDrain } =
         await resolveLifecycleContext({
           sessionId,
           sessionKey,
           agentId,
         });
       const assertCurrent = () => {
-        const currentTarget = sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
-          cfg: getRuntimeConfig(),
-          key: sessionKey,
-          agentId,
-          preserveQualifiedAddress: true,
-          clone: false,
-          exactRead: true,
-        });
+        const currentTarget = resolveTarget();
         const currentEntry = sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
           currentTarget.store,
           currentTarget.storeKeys,

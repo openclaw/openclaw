@@ -103,11 +103,8 @@ function isLoopbackProbeTarget(target: Pick<GatewayStatusTarget, "kind" | "url">
   if (target.kind === "localLoopback") {
     return true;
   }
-  try {
-    return isLoopbackHost(new URL(target.url).hostname);
-  } catch {
-    return false;
-  }
+  const url = URL.parse(target.url);
+  return url !== null && isLoopbackHost(url.hostname);
 }
 
 export function resolveProbeBudgetMs(
@@ -131,14 +128,7 @@ export function resolveProbeBudgetMs(
 
 /** Normalizes user-entered SSH targets, accepting both raw targets and `ssh host` input. */
 export function sanitizeSshTarget(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return trimmed.replace(/^ssh\s+/, "");
+  return normalizeOptionalString(value)?.replace(/^ssh\s+/, "") ?? null;
 }
 
 export async function resolveAuthForTarget(

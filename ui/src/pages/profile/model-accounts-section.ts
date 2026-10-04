@@ -73,12 +73,8 @@ function inputValue(event: Event): string {
 }
 
 function gatewayEndpoint(gatewayUrl: string): string {
-  try {
-    const url = new URL(gatewayUrl);
-    return `${url.origin}${url.pathname}`;
-  } catch {
-    return t("profilePage.modelAccounts.gatewayUnavailable");
-  }
+  const url = URL.parse(gatewayUrl);
+  return url ? `${url.origin}${url.pathname}` : t("profilePage.modelAccounts.gatewayUnavailable");
 }
 
 function accountIdDetail(accounts: UserModelAccount[], account: UserModelAccount) {
