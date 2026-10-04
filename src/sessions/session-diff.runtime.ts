@@ -493,9 +493,9 @@ async function gitOutForBaseline(cwd: string, args: string[]): Promise<string | 
   return result.stdout.toString("utf8");
 }
 
-export async function collectCheckoutDiffBaseline(params: {
+async function collectBaselineCandidates(params: {
   cwd: string;
-}): Promise<GitReadOperations["checkout.baseline"]["output"]> {
+}): Promise<{ candidates: BaselineCandidate[]; root: string; truncated: boolean } | undefined> {
   const checkout = await loadCheckoutRevision(params.cwd);
   if (!checkout) {
     return undefined;
@@ -520,7 +520,7 @@ export async function collectCheckoutDiffBaseline(params: {
   const trackedText = trackedResult.value;
   const untrackedText = untrackedResult.value;
   if (trackedText === null || untrackedText === null) {
-    return { version: 1, root, files: [], truncated: true };
+    return { root, candidates: [], truncated: true };
   }
   const tracked = parseNameStatusZ(trackedText);
   const untrackedPaths = untrackedText.split("\0").filter(Boolean);
@@ -532,16 +532,26 @@ export async function collectCheckoutDiffBaseline(params: {
       untracked: true,
     })),
   ].toSorted((left, right) => left.path.localeCompare(right.path));
-  const fingerprinted = await fingerprintBaselineCandidates({ candidates, root });
+  return {
+    root,
+    candidates,
+    truncated: tracked.length > MAX_FILES || untrackedPaths.length > MAX_UNTRACKED_FILES,
+  };
+}
+
+export async function collectCheckoutDiffBaseline(params: {
+  cwd: string;
+}): Promise<GitReadOperations["checkout.baseline"]["output"]> {
+  const collected = await collectBaselineCandidates(params);
+  if (!collected) {
+    return undefined;
+  }
+  const fingerprinted = await fingerprintBaselineCandidates(collected);
   return {
     version: 1,
-    root,
+    root: collected.root,
     files: fingerprinted.files,
-    ...(tracked.length > MAX_FILES ||
-    untrackedPaths.length > MAX_UNTRACKED_FILES ||
-    fingerprinted.truncated
-      ? { truncated: true }
-      : {}),
+    ...(collected.truncated || fingerprinted.truncated ? { truncated: true } : {}),
   };
 }
 
