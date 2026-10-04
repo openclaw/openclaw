@@ -360,6 +360,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         (input.command.profileIds === undefined || isStringArray(input.command.profileIds))) ||
       isWorkspaceJournalReadCommand(input.command) ||
       input.command.type === "workers.placementRecoveryCandidates" ||
+      input.command.type === "workers.placementPreservation" ||
       (input.command.type === "workers.placementPendingResults" &&
         (input.command.sessionId === undefined || typeof input.command.sessionId === "string")) ||
       (input.command.type === "workers.placementProjection" &&

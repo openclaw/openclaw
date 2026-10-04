@@ -1069,6 +1069,19 @@ execution. Other placement lifecycle reads remain separate migration work; the
 released synchronous placement SDK contract is unchanged. No schema, retention,
 durability, or update change is required.
 
+Session maintenance prepares placement preservation through the shared-state
+reader before lifecycle or entry-replacement worker admission. A scan-wide
+observation from the placement authority owner fences newly created placements,
+pending mutations, uncertain outcomes, and physical-store replacement. Transaction
+and commit grants consume those prepared rows and the environment owner's current
+inventory without SQL or worker requests. Confirmed rollback restores observation
+availability; committed changes require fresh preparation outside the grant.
+Prepared custody lasts through settlement. Native SDK, process-held incognito,
+and offline maintenance keep their existing synchronous transaction view. Entry
+replacement also carries the prepared subagent basis into the existing worker
+validation before mutation and after the final host grant. Schemas,
+retention, durability, and update behavior are unchanged.
+
 Placement turn claims and releases execute through the shared-state writer,
 including their coordinator acquisition. Local turns retain durable claims:
 cloud dispatch closes admission and joins their settlement before preparing the
