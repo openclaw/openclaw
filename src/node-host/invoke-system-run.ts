@@ -53,8 +53,9 @@ import {
   inspectHostExecEnvOverrides,
   sanitizeHostExecEnv,
   sanitizeSystemRunEnvOverrides,
+  withHostExecInheritedEnvOmitted,
 } from "../infra/host-env-security.js";
-import { buildExecRoutingEnv } from "../infra/openclaw-exec-env.js";
+import { buildExecRoutingEnv, SUBAGENT_EXEC_ENV_VAR } from "../infra/openclaw-exec-env.js";
 import {
   APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
   prepareSystemRunExecutableIdentityBinding,
@@ -281,7 +282,6 @@ async function parseSystemRunPhase(opts: HandleSystemRunInvokeOptions) {
     return invalid("command required");
   }
 
-  const shellPayload = command.shellPayload;
   const shellWrapperInvocation = isShellWrapperInvocation(command.argv);
   const commandText = command.commandText;
   const approvalPlan =
@@ -373,11 +373,14 @@ async function parseSystemRunPhase(opts: HandleSystemRunInvokeOptions) {
   ) {
     return invalid("executionContext invalid or unsupported");
   }
-  const routingEnv = buildExecRoutingEnv(opts.params.executionContext);
+  const env = withHostExecInheritedEnvOmitted(
+    opts.params.executionContext ? ["OPENCLAW_CHANNEL_CONTEXT", SUBAGENT_EXEC_ENV_VAR] : [],
+    () => sanitizeHostExecEnv({ overrides: envOverrides, blockPathOverrides: true }),
+  );
   const validatedApprovalSource: ExecHostRequest["approvalSource"] = approvalSource ?? undefined;
   return {
     argv: command.argv,
-    shellPayload,
+    shellPayload: command.shellPayload,
     shellWrapperInvocation,
     commandText,
     approvalPlan,
@@ -389,10 +392,7 @@ async function parseSystemRunPhase(opts: HandleSystemRunInvokeOptions) {
     approvalSource: validatedApprovalSource,
     delayedApprovalPolicySnapshot,
     envOverrides,
-    env: {
-      ...sanitizeHostExecEnv({ overrides: envOverrides, blockPathOverrides: true }),
-      ...routingEnv,
-    },
+    env: { ...env, ...buildExecRoutingEnv(opts.params.executionContext) },
     cwd,
     timeoutMs: opts.params.timeoutMs ?? undefined,
     needsScreenRecording: opts.params.needsScreenRecording === true,

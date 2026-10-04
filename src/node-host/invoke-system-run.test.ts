@@ -1283,6 +1283,43 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expect(firstMockCall(runCommand)[2]).not.toHaveProperty("OPENCLAW_TEST");
   });
 
+  it.each<[InvokeOptions["params"]["executionContext"], string | undefined, string | undefined]>([
+    [{ chatId: "chat-1" }, '{"chat":{"id":"chat-1"}}', undefined],
+    [{ subagent: true }, undefined, "1"],
+    [{}, undefined, undefined],
+    [undefined, undefined, undefined],
+  ])(
+    "applies context %j while preserving legacy inheritance",
+    async (executionContext, channel, subagent) => {
+      await withEnvAsync(
+        {
+          OPENCLAW_CHANNEL_CONTEXT: '{"chat":{"id":"old"}}',
+          OPENCLAW_SUBAGENT_EXEC: "1",
+          OpenClaw_Channel_Context: '{"chat":{"id":"old"}}',
+          OpenClaw_Subagent_Exec: "1",
+        },
+        async () => {
+          const inheritedMarkers = Object.fromEntries(
+            Object.keys(process.env)
+              .filter((key) => /^OPENCLAW_(CHANNEL_CONTEXT|SUBAGENT_EXEC)$/i.test(key))
+              .map((key) => [key, process.env[key]]),
+          );
+          const { runCommand, sendInvokeResult } = await runLocal({ executionContext });
+          expectOk(sendInvokeResult);
+          const env = firstMockCall(runCommand)[2];
+          if (executionContext === undefined) {
+            expect(env).toMatchObject(inheritedMarkers);
+          } else {
+            expect(env?.OPENCLAW_CHANNEL_CONTEXT).toBe(channel);
+            expect(env?.OPENCLAW_SUBAGENT_EXEC).toBe(subagent);
+            expect(env).not.toHaveProperty("OpenClaw_Channel_Context");
+            expect(env).not.toHaveProperty("OpenClaw_Subagent_Exec");
+          }
+        },
+      );
+    },
+  );
+
   it("applies shell-wrapper env allowlist for shell executable commands without inline payload", async () => {
     const { runCommand, sendInvokeResult } = await runLocal({
       command: ["/bin/sh", "./script.sh"],

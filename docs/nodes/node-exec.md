@@ -54,6 +54,9 @@ are `senderId`, `chatId` (nonempty strings), and `subagent` (`true` when present
 The node injects `OPENCLAW_CHANNEL_CONTEXT` with the sender/chat identity JSON and
 `OPENCLAW_SUBAGENT_EXEC=1` into the child environment. These routing hints do not
 grant session, turn, or command approval authority, and do not modify approved argv.
+When context is present, it replaces both routing markers, including inherited
+values. Omitted fields do not retain a previous channel or subagent hint. Requests
+without typed context keep their existing environment behavior.
 
 Custom `env` overrides still follow the node's existing restrictions. Supporting
 this context does not enable arbitrary environment overrides on Windows companion
