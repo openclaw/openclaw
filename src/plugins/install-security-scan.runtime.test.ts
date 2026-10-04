@@ -293,6 +293,7 @@ describe("installed dependency tree scan", () => {
         packageDir,
         pluginId: "runtime-plugin",
         source: { kind: "npm", authority: "official", mutable: false, network: true },
+        trustedSourceLinkedOfficialInstall: true,
       }),
     ).rejects.toThrow("node_modules symlink target outside install root");
     expect(runInstallPolicyMock).not.toHaveBeenCalled();

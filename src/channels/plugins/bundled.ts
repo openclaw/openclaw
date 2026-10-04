@@ -268,7 +268,6 @@ function listBundledChannelMetadata(
     rootDir: rootScope.packageRoot,
     ...(scanDir ? { scanDir } : {}),
     includeChannelConfigs: false,
-    includeSyntheticChannelConfigs: false,
   }).filter((metadata) => (metadata.manifest.channels?.length ?? 0) > 0);
 }
 

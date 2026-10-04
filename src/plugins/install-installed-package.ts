@@ -207,6 +207,7 @@ export async function scanAndLinkInstalledPackage(params: {
   pluginId: string;
   peerDependencies: Record<string, string>;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
+  trustedSourceLinkedOfficialInstall?: boolean;
   mode?: "install" | "update";
   requestKind?: PluginInstallPolicyRequest["kind"];
   requestedSpecifier?: string;
@@ -240,6 +241,7 @@ export async function scanAndLinkInstalledPackage(params: {
         ...(params.requestKind ? { requestKind: params.requestKind } : {}),
         requestedSpecifier: params.requestedSpecifier,
         source: params.source,
+        trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
       }),
   });
   if (scanResult) {
@@ -295,6 +297,7 @@ export async function installPluginFromInstalledPackageDir(
     pluginId: validated.plugin.pluginId,
     peerDependencies: validated.plugin.peerDependencies,
     onInstallPolicyWarning: params.onInstallPolicyWarning,
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     config: params.config,
     mode: params.mode ?? "install",
     ...(params.installPolicyRequest?.kind ? { requestKind: params.installPolicyRequest.kind } : {}),

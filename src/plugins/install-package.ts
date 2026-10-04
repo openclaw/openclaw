@@ -299,6 +299,7 @@ async function installPluginFromPackageDir(
           pluginId: plugin.pluginId,
           peerDependencies: plugin.peerDependencies,
           onInstallPolicyWarning: params.onInstallPolicyWarning,
+          trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
           config: params.config,
           mode: effectiveMode,
           ...(params.installPolicyRequest?.kind
