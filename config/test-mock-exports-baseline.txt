@@ -3820,7 +3820,6 @@
 ["src/auto-reply/reply.test-harness.ts","../plugins/runtime/runtime-web-channel-plugin.js","f4fb243297352c7c22c80338b916063485014352265875e9ca5dda6615a838bb",1]
 ["src/auto-reply/reply.test-harness.ts","../skills/discovery/chat-commands.runtime.js","ddfd21e3d1a81b516fd5308f499e4bbb6963ded24481138ad984190e10a439fc",1]
 ["src/auto-reply/reply.test-harness.ts","./reply/agent-runner.runtime.js","188e02fff9886333d7ea892ce0eed517f06845b270189a9bd187f913d11aef0f",1]
-["src/auto-reply/reply.triggers.trigger-handling.e2e.test.ts","./reply/agent-runner.runtime.js","6e3de8deccf41c61b1db9daad5fb43994e20e2a5655d169c50c1f9c18dfd82db",1]
 ["src/auto-reply/reply.triggers.trigger-handling.stages-inbound-media-into-sandbox-workspace.test.ts","../agents/sandbox-paths.js","5d7879b6cfe366f225932280fbf91099922b098a117fe0e197d887c13ef07615",1]
 ["src/auto-reply/reply.triggers.trigger-handling.stages-inbound-media-into-sandbox-workspace.test.ts","../agents/sandbox.js","58c2430ea897b3968bb4a052a39ccb6f907d06acd9d72eca7fc5ba69b7639b3b",1]
 ["src/auto-reply/reply.triggers.trigger-handling.stages-inbound-media-into-sandbox-workspace.test.ts","../media/channel-inbound-roots.js","a566d678dd195c324861b6b41c833038a235b0b23afe519088c248f90dda6b01",1]
