@@ -9,6 +9,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds, tryResolveAgentOperationAgentId } from "../agents/agent-scope-config.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
+import { getAuthoredConfigSecretRef, hasUnresolvedConfigPath } from "../config/resolution-facts.js";
 import {
   type PersistedSessionStoreOwner,
   resolvePersistedSessionStoreOwnerForKey,
@@ -69,6 +70,15 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
   const token = normalizeOptionalString(cfg.hooks?.token);
   if (!token) {
     throw new Error("hooks.enabled requires hooks.token");
+  }
+  // Loaded literals may resemble references; only authored resolution facts can reject them.
+  if (
+    hasUnresolvedConfigPath(cfg, "hooks.token") ||
+    getAuthoredConfigSecretRef(cfg, "hooks.token")
+  ) {
+    throw new Error(
+      "hooks.token has an unresolved environment reference; supply the configured secret or disable hooks",
+    );
   }
   const rawPath = normalizeOptionalString(cfg.hooks?.path) || DEFAULT_HOOKS_PATH;
   const withSlash = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
