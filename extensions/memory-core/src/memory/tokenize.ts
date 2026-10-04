@@ -5,13 +5,10 @@ const CJK_RUN_RE = new RegExp(`${CJK_RE.source}+`, "g");
 
 // Only adjacent CJK characters form bigrams: "我喜欢hello你好" must not yield "欢你".
 export function tokenize(text: string): Set<string> {
-  const lower = normalizeLowercaseStringOrEmpty(text);
+  const lower = normalizeLowercaseStringOrEmpty(text).normalize("NFC");
   // Keep CJK in its existing bigram/unigram lane; word marks stay attached to a base.
   const words =
-    lower
-      .replace(CJK_RUN_RE, " ")
-      .normalize("NFC")
-      .match(/[\p{L}\p{N}_][\p{L}\p{M}\p{N}_]*/gu) ?? [];
+    lower.replace(CJK_RUN_RE, " ").match(/[\p{L}\p{N}_][\p{L}\p{M}\p{N}_]*/gu) ?? [];
   if (!CJK_RE.test(lower)) {
     return new Set(words);
   }
