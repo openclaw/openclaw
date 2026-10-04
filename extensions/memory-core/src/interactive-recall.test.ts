@@ -5,8 +5,10 @@ import type { MemoryRecallParams } from "openclaw/plugin-sdk/memory-recall";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { recordMemoryRecall } from "./interactive-recall.js";
+import { projectMemorySearchRow } from "./memory/manager-search-shared.js";
 
 const record = vi.hoisted(() => vi.fn(async (_params: unknown) => {}));
+// mock-isolation: Test secure file admission without starting durable-store workers.
 vi.mock("./short-term-promotion-record.js", () => ({ recordShortTermRecalls: record }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -22,7 +24,7 @@ const hit: MemoryRecallParams["results"][number] = {
 };
 
 async function fixture(): Promise<MemoryRecallParams> {
-  const workspaceDir = await tempDirs.make("interactive-recall-");
+  const workspaceDir = tempDirs.make("interactive-recall-");
   await fs.mkdir(path.join(workspaceDir, "memory"));
   await fs.writeFile(path.join(workspaceDir, hit.path), `${snippet}\nsecond line\n`);
   return {
@@ -71,6 +73,42 @@ describe("interactive memory recall admission", () => {
     expect(record).not.toHaveBeenCalled();
   });
 
+  it("accepts a native projected prefix of an EOF chunk without matching arbitrary substrings", async () => {
+    const params = await fixture();
+    const content = `${snippet}${"x".repeat(1000 - snippet.length)}\n`;
+    await fs.writeFile(path.join(params.workspaceDir, hit.path), content);
+    const chunk = chunkMarkdown(content, { tokens: 400, overlap: 80 })[0];
+    const projected = projectMemorySearchRow(
+      {
+        id: "fixture-chunk",
+        path: hit.path,
+        source: "memory",
+        start_line: chunk.startLine,
+        end_line: chunk.endLine,
+        text: chunk.text,
+      },
+      700,
+      hit.score,
+    );
+    expect(content).toHaveLength(1001);
+    expect(projected).toMatchObject({ startLine: 1, endLine: 2 });
+    expect(projected.snippet).toHaveLength(700);
+    params.results = [projected];
+    await recordMemoryRecall(params, claim);
+    expect(record).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ results: [projected] }),
+    );
+    record.mockClear();
+    for (const override of [
+      { endLine: 3 },
+      { endLine: 99 },
+      { snippet: chunk.text.slice(1, 701) },
+    ]) {
+      await recordMemoryRecall({ ...params, results: [{ ...projected, ...override }] }, claim);
+    }
+    expect(record).not.toHaveBeenCalled();
+  });
+
   it.each([
     { source: "sessions" },
     { path: "lancedb:virtual-id" },
@@ -93,7 +131,7 @@ describe("interactive memory recall admission", () => {
 
   it("rejects a date-named symlink to a file outside the workspace", async () => {
     const params = await fixture();
-    const outside = await tempDirs.make("interactive-recall-outside-");
+    const outside = tempDirs.make("interactive-recall-outside-");
     await fs.writeFile(path.join(outside, "2026-01-03.md"), snippet);
     await fs.symlink(outside, path.join(params.workspaceDir, "memory", "linked"));
     params.results = [{ ...hit, path: "memory/linked/2026-01-03.md" }];

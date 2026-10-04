@@ -13,6 +13,7 @@ const recallTrackingMock = vi.hoisted(() => ({
   onLoad: vi.fn<() => void>(),
 }));
 
+// mock-isolation: Control recording completion while testing the tool invocation lifetime.
 vi.mock("openclaw/plugin-sdk/memory-recall", () => ({
   recordMemoryRecall: recallTrackingMock.recordMemoryRecall,
 }));

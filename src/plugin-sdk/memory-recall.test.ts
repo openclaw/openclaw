@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 const loadBundledPluginPublicSurfaceModuleSyncCore = vi.hoisted(() => vi.fn());
 const configureMemoryCoreDreamingStateImpl = vi.hoisted(() => vi.fn());
+// mock-isolation: Keep real host run accounting while substituting the bundled recorder fixture.
 vi.mock("./facade-loader.js", () => ({ loadBundledPluginPublicSurfaceModuleSyncCore }));
+// mock-isolation: Run-context unit tests must not open a persistent state database.
 vi.mock("../plugin-state/plugin-state-store.js", () => ({ createPluginStateKeyedStore: vi.fn() }));
 
 describe("interactive recall run accounting", () => {

@@ -269,11 +269,12 @@ export async function recordShortTermRecalls(params: {
         // Repeated surfaced evidence can lower trust without becoming another
         // recall signal. Clipped and full excerpts share the same starting line.
         if (result.provenance) {
-          const matching = existing
-            ? [existing]
-            : Object.values(store.entries).filter(
-                (entry) => entry.path === normalizedPath && entry.startLine === result.startLine,
-              );
+          const matching = new Set([
+            ...(existing ? [existing] : []),
+            ...Object.values(store.entries).filter(
+              (entry) => entry.path === normalizedPath && entry.startLine === result.startLine,
+            ),
+          ]);
           for (const entry of matching) {
             entry.provenance = mergeRecallProvenance(entry.provenance, result.provenance);
           }

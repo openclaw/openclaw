@@ -331,7 +331,9 @@ provenance is preserved.
 
 The owner honors native dreaming configuration and filters, retains the actual
 query and provenance, and deduplicates the same workspace/source starting line across
-manual aliases and auto recall in one host run. Run-context lifecycle owns
+manual aliases and auto recall in one host run. Repeated observations can lower
+existing provenance trust without adding recall, query, score, or freshness signals.
+Run-context lifecycle owns
 cleanup; subsequent turns remain independent observations. Daily ingestion must
 not call this API. Failed, empty, discarded, and late auto-injection results must
 not call it either. This is an optional additive API: plugins supporting older

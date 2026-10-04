@@ -55,7 +55,7 @@ export async function recordMemoryRecall(
         const terminalNewlineChunk =
           !source.truncated &&
           source.lines === requestedLines - 1 &&
-          result.snippet === `${body}\n`;
+          (body.startsWith(result.snippet) || result.snippet === `${body}\n`);
         if (
           (source.lines === requestedLines && body.startsWith(result.snippet)) ||
           terminalNewlineChunk
