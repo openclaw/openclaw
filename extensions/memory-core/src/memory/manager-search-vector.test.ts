@@ -1,7 +1,11 @@
 import nodePath from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
+import {
+  cosineSimilarity,
+  decodeMemoryEmbedding,
+  truncateUtf16Safe,
+} from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import {
   encodeMemoryEmbedding,
   ensureMemoryIndexSchema,
@@ -11,6 +15,7 @@ import {
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runVectorKnnQuery } from "./manager-search-knn.js";
+import { createEmbeddingScorer } from "./manager-search-scorer.js";
 import { searchChunksByEmbedding, searchVector } from "./manager-search-vector.js";
 import { runMemorySearchWithDeadline } from "./search-deadline.js";
 import { vectorToBlob } from "./vector-blob.js";
@@ -309,6 +314,96 @@ describe("searchVector sqlite-vec KNN", () => {
         limit,
       });
       expect(results.map((r) => r.id)).toEqual(referenceTopIds);
+    } finally {
+      db.close();
+    }
+  });
+
+  function seededRandom(seed: number): () => number {
+    let state = seed >>> 0;
+    return () => {
+      state = (state + 0x6d2b79f5) >>> 0;
+      let t = state;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  it("scores blobs bit-identically to cosineSimilarity over the decoded vector", () => {
+    const random = seededRandom(7);
+    const queryDims = 24;
+    const queryVec = Array.from({ length: queryDims }, () => random() * 2 - 1);
+    const score = createEmbeddingScorer(queryVec);
+    const reference = (blob: Uint8Array) => cosineSimilarity(queryVec, decodeMemoryEmbedding(blob));
+    const blobs: Uint8Array[] = [];
+    // Equal, shorter and longer than the query, plus an empty and an all-zero vector.
+    for (const dims of [queryDims, queryDims, 5, 1, queryDims + 9, 0]) {
+      blobs.push(encodeMemoryEmbedding(Array.from({ length: dims }, () => random() * 2 - 1)));
+    }
+    blobs.push(encodeMemoryEmbedding(Array.from({ length: queryDims }, () => 0)));
+    // Odd byte lengths.
+    blobs.push(new Uint8Array([1, 2, 3]));
+    // Truncated by a stray byte: a whole coordinate is present but the blob is still invalid.
+    blobs.push(new Uint8Array([...encodeMemoryEmbedding([0.5, 0.25]), 7]));
+    // Non-finite coordinates at the start, the end of the query prefix, and past it.
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      const vector = Array.from({ length: queryDims + 3 }, () => random());
+      for (const position of [0, queryDims - 1, queryDims + 2]) {
+        const bytes = encodeMemoryEmbedding(vector);
+        new DataView(bytes.buffer).setFloat64(position * 8, bad, true);
+        blobs.push(bytes);
+      }
+    }
+    // Large finite coordinates whose squares overflow stay usable, as before.
+    blobs.push(encodeMemoryEmbedding(Array.from({ length: queryDims }, () => 1e200)));
+    // Blobs that are views into a larger buffer, at aligned and unaligned offsets, and a Buffer.
+    const whole = encodeMemoryEmbedding(Array.from({ length: queryDims }, () => random() - 0.5));
+    for (const offset of [1, 3, 8]) {
+      const backing = new Uint8Array(whole.length + offset + 5);
+      backing.set(whole, offset);
+      blobs.push(backing.subarray(offset, offset + whole.length));
+    }
+    blobs.push(Buffer.from(whole));
+    for (const blob of blobs) {
+      expect(Object.is(score(blob), reference(blob))).toBe(true);
+    }
+  });
+
+  it("returns the same ranked ids and exact scores as decoding every row", async () => {
+    const db = createFallbackDb();
+    try {
+      const random = seededRandom(20251003);
+      const queryDims = 48;
+      const limit = 7;
+      const queryVec = Array.from({ length: queryDims }, () => random() * 2 - 1);
+      const rows: Array<{ id: string; blob: Uint8Array }> = [];
+      // 700 rows span three batches; a few have mismatched dimensions or unusable bytes.
+      for (let index = 0; index < 700; index += 1) {
+        const dims =
+          index % 97 === 0 ? queryDims - 11 : index % 89 === 0 ? queryDims + 5 : queryDims;
+        const vector = Array.from({ length: dims }, () => random() * 2 - 1);
+        const id = `chunk-${index}`;
+        insertFallbackChunk(db, { id, model: "target-model", vector });
+        let blob = encodeMemoryEmbedding(vector);
+        if (index % 101 === 0) {
+          blob = new Uint8Array([9, 9, 9]);
+          db.prepare("UPDATE memory_index_chunks SET embedding = ? WHERE id = ?").run(blob, id);
+        }
+        rows.push({ id, blob });
+      }
+      const expected = rows
+        .map(({ id, blob }) => ({
+          id,
+          score: cosineSimilarity(queryVec, decodeMemoryEmbedding(blob)),
+        }))
+        .filter((row) => Number.isFinite(row.score))
+        .toSorted((a, b) => b.score - a.score)
+        .slice(0, limit);
+
+      const results = await searchVectorFixture(db, { queryVec, limit });
+
+      expect(results.map(({ id, score }) => ({ id, score }))).toEqual(expected);
     } finally {
       db.close();
     }
