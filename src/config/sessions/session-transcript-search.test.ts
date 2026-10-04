@@ -382,13 +382,18 @@ describe("searchSessionTranscripts", () => {
     ) {
       const statement = prepare.call(this, query);
       if (query.includes("snippet(")) {
-        const all = statement.all.bind(statement);
-        vi.spyOn(statement, "all").mockImplementation(
-          (...bindings: Parameters<StatementSync["all"]>) => {
-            statements.push({ db: this, query, bindings });
-            return all(...bindings);
-          },
-        );
+        // Older Node bindings execute Kysely reads through iterate() instead of all().
+        for (const method of ["all", "iterate"] as const) {
+          const execute = statement[method].bind(statement);
+          vi.spyOn(statement, method).mockImplementation(
+            new Proxy(execute, {
+              apply: (target, receiver, bindings: Parameters<StatementSync["all"]>) => {
+                statements.push({ db: this, query, bindings });
+                return Reflect.apply(target, receiver, bindings);
+              },
+            }),
+          );
+        }
       }
       return statement;
     });

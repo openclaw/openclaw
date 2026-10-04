@@ -147,8 +147,9 @@ export function searchSessionTranscriptsReadOnlySync(
                 .innerJoin(selectedWindows.as("window"), "window.session_id", "cold.session_id")
                 .select((eb) => eb.fn.countAll<number>().as("count")),
             )?.count ?? 0;
-          /* kysely-allow-raw: FTS5 table MATCH with a bound search query. */
-          const match = sql<boolean>`session_transcript_fts MATCH ${toFtsQuery(query, params.match)}`;
+          const match =
+            /* kysely-allow-raw: FTS5 table MATCH with a bound search query. */
+            sql<boolean>`session_transcript_fts MATCH ${toFtsQuery(query, params.match)}`;
           /* kysely-allow-raw: Shared FTS ordering, including SQLite-only rowid for recent ties. */
           const order =
             params.order === "recent"
@@ -165,8 +166,12 @@ export function searchSessionTranscriptsReadOnlySync(
             // Keep MATCH outermost; the narrow map rejects excluded content before hydration.
             .crossJoin("session_transcript_fts_rows as mapped")
             .crossJoin(selectedWindows.as("window"))
-            /* kysely-allow-raw: FTS5 implicit rowid stays inside SQLite, including 64-bit identities. */
-            .where("mapped.id", "=", sql<number>`session_transcript_fts.rowid`)
+            .where(
+              "mapped.id",
+              "=",
+              /* kysely-allow-raw: FTS5 implicit rowid stays inside SQLite, including 64-bit identities. */
+              sql<number>`session_transcript_fts.rowid`,
+            )
             .whereRef("window.session_id", "=", "mapped.session_id")
             .where(match)
             // Depend on the scoped window so SQLite cannot read role before excluding sessions.
