@@ -159,6 +159,30 @@ function defaultRunGh(args: string[]) {
   });
 }
 
+function defaultDownloadArchive(args: string[]) {
+  const options = {
+    encoding: null,
+    timeout: 60_000,
+    killSignal: "SIGKILL" as const,
+    maxBuffer: 512 * 1024,
+    stdio: ["ignore", "pipe", "pipe"] as const,
+  };
+  try {
+    return execFileSync("gh", [...args, "--allow-escape-sequences"], options);
+  } catch (error) {
+    const stderr =
+      error !== null && typeof error === "object" && "stderr" in error ? error.stderr : undefined;
+    if (
+      !String(stderr)
+        .split(/\r?\n/u)
+        .some((line) => line.trim() === "unknown flag: --allow-escape-sequences")
+    ) {
+      throw error;
+    }
+    return execFileSync("gh", args, options);
+  }
+}
+
 function verifyRemoteTooling(
   params: ReleaseInventorySource | ReleasePlanSource,
   runGh: RunGh,
@@ -284,19 +308,7 @@ function captureQualificationIdentity(
   const responses: Array<[string, string | Uint8Array]> = [];
   let totalBytes = 0;
   const capture = (args: string[], binary = false) => {
-    const value = binary
-      ? (
-          params.downloadArchive ??
-          ((argv: string[]) =>
-            execFileSync("gh", [...argv, "--allow-escape-sequences"], {
-              encoding: null,
-              timeout: 60_000,
-              killSignal: "SIGKILL",
-              maxBuffer: 512 * 1024,
-              stdio: ["ignore", "pipe", "pipe"],
-            }))
-        )(args)
-      : runGh(args);
+    const value = binary ? (params.downloadArchive ?? defaultDownloadArchive)(args) : runGh(args);
     const size = typeof value === "string" ? Buffer.byteLength(value) : value.byteLength;
     totalBytes += size;
     if (
