@@ -1780,6 +1780,8 @@ struct ChatViewModelOutboxTests {
         await transport.goOnline()
 
         try await finishOutboxFlush(vm, at: terminalGate)
+        // The held terminal write can coalesce a reconnect trigger into a successor pass.
+        await vm.outboxFlushTask?.value
         #expect(await store.loadCommands().map(\.status) == [.failed])
         let failed = try #require(await store.loadCommands().first)
         #expect(failed.retryCount == OpenClawChatViewModel.maxOutboxSendAttempts)
@@ -1839,6 +1841,8 @@ struct ChatViewModelOutboxTests {
         await transport.goOnline()
 
         try await finishOutboxFlush(vm, at: terminalGate)
+        // The held terminal write can coalesce a reconnect trigger into a successor pass.
+        await vm.outboxFlushTask?.value
         #expect(await store.loadCommands().first?.status == .sending)
         #expect(await MainActor.run { !vm.healthOK })
         #expect(await MainActor.run {
@@ -1861,6 +1865,8 @@ struct ChatViewModelOutboxTests {
         await transport.goOnline()
 
         try await finishOutboxFlush(vm, at: terminalGate)
+        // The held terminal write can coalesce a reconnect trigger into a successor pass.
+        await vm.outboxFlushTask?.value
         #expect(await store.loadCommands().map(\.status) == [.failed])
         let failed = try #require(await store.loadCommands().first)
         #expect(failed.retryCount == OpenClawChatViewModel.maxOutboxSendAttempts)
