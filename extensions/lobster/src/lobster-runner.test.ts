@@ -524,9 +524,7 @@ describe("createEmbeddedLobsterRunner", () => {
 
     async function jsonFiles(dir: string): Promise<string[]> {
       try {
-        return (await fs.readdir(dir, { recursive: true })).filter((f) =>
-          String(f).endsWith(".json"),
-        );
+        return (await fs.readdir(dir, { recursive: true })).filter((f) => f.endsWith(".json"));
       } catch {
         return [];
       }
@@ -597,6 +595,32 @@ describe("createEmbeddedLobsterRunner", () => {
         throw new Error("expected a resume token");
       }
       return token;
+    }
+
+    function approvalId(envelope: Awaited<ReturnType<ReturnType<typeof fixture>["run"]>>) {
+      if (!envelope.ok || envelope.status !== "needs_approval") {
+        throw new Error("expected an approval checkpoint");
+      }
+      const id = envelope.requiresApproval?.approvalId;
+      if (!id) {
+        throw new Error("expected an approval id");
+      }
+      return id;
+    }
+
+    // Re-encode a resume token with different JSON whitespace and property order.
+    // Lobster decodes base64url JSON and resumes by stateKey, so this is the same
+    // checkpoint behind a byte-different token.
+    function reencodeToken(token: string): string {
+      const payload = JSON.parse(Buffer.from(token, "base64url").toString("utf8")) as Record<
+        string,
+        unknown
+      >;
+      const reordered: Record<string, unknown> = {};
+      for (const key of Object.keys(payload).toReversed()) {
+        reordered[key] = payload[key];
+      }
+      return Buffer.from(JSON.stringify(reordered, null, 1), "utf8").toString("base64url");
     }
 
     const embeddedProvenance = {
@@ -675,6 +699,54 @@ describe("createEmbeddedLobsterRunner", () => {
       expect(f.checkpointChecks).toEqual([embeddedProvenance, embeddedProvenance]);
     });
 
+    it("authorizes a checkpoint through an equivalent token encoding", async () => {
+      const f = fixture();
+      const paused = await f.run(embedded + " | approve --emit --prompt equivalent");
+      const token = approvalToken(paused);
+      const equivalent = reencodeToken(token);
+      expect(equivalent).not.toBe(token);
+      await expect(f.resume({ token: equivalent, approve: true })).resolves.toMatchObject({
+        ok: true,
+        status: "ok",
+        output: [expect.objectContaining({ source: "openclaw-embedded" })],
+      });
+      // The producer record was resolved, not missed, so no stage ran again.
+      expect(f.checkpointChecks).toEqual([embeddedProvenance]);
+      expect(f.calls()).toBe(1);
+    });
+
+    it("refuses a resume whose authority was revoked mid-flight, before consuming it", async () => {
+      const f = fixture();
+      const paused = await f.run(embedded + " | approve --emit --prompt revoke");
+      const token = approvalToken(paused);
+      const equivalent = reencodeToken(token);
+      f.setCheckpointAllowed(false);
+      await expect(f.resume({ token: equivalent, approve: true })).rejects.toThrow(
+        "checkpoint not authorized",
+      );
+      // The refusal came from the real producer record, not a missed lookup.
+      expect(f.checkpointChecks).toEqual([embeddedProvenance]);
+      // The checkpoint is untouched, so an authorized caller can still consume it once.
+      f.setCheckpointAllowed(true);
+      await expect(f.resume({ token: equivalent, approve: true })).resolves.toMatchObject({
+        ok: true,
+        status: "ok",
+      });
+      expect(f.calls()).toBe(1);
+    });
+
+    it("refuses a resume that carries both a token and an approval ID", async () => {
+      const f = fixture();
+      const secret = await f.run(embedded + " | approve --emit --prompt secret");
+      const secretApprovalId = approvalId(secret);
+      const plainToken = approvalToken(await f.run("approve --emit --prompt plain"));
+      // Lobster gives the approval ID precedence, so authorizing the token's
+      // (empty) record would let this pair consume the embedded checkpoint.
+      await expect(
+        f.resume({ token: plainToken, approvalId: secretApprovalId, approve: true }),
+      ).rejects.toThrow(/either token or approvalId/);
+    });
+
     it("records a checkpoint without LLM output as carrying none", async () => {
       const f = fixture();
       const token = approvalToken(await f.run("approve --emit --prompt plain"));
@@ -717,7 +789,9 @@ describe("createEmbeddedLobsterRunner", () => {
 
     it("refuses a provider-omitted stage with no route instead of inferring embedded", async () => {
       const f = fixture();
-      await expect(f.run("llm.invoke --prompt no-route")).rejects.toThrow("opt-in");
+      await expect(f.run("llm.invoke --prompt no-route")).rejects.toThrow(
+        /could not resolve a provider/,
+      );
       expect(f.calls()).toBe(0);
     });
 

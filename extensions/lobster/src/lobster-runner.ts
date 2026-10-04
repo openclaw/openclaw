@@ -234,40 +234,55 @@ export type LobsterReplayRequest = { provider: string; command: string };
 
 const LLM_COMMANDS = new Set(["llm.invoke", "llm_task.invoke"]);
 
+/** True for a non-null, non-array object, so field access is safe without a cast. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 /**
- * The route a stage would take, read from its FINAL environment (process, then
- * workflow, then step blocks, which Lobster merges before the command runs).
- * Lobster itself would pick a sole registered direct adapter before its
- * environment auto-detect, which would move a provider-omitted step onto the
- * in-process embedded route on upgrade; the embedded route is opt-in, so it is
- * never inferred here.
+ * Whether a stage explicitly chose the embedded route, by its own provider
+ * argument or by LOBSTER_LLM_PROVIDER in its FINAL environment (process, then
+ * workflow, then step blocks, which Lobster merges before the command runs). The
+ * embedded route is opt-in, so it is never inferred from the routes the
+ * environment happens to configure.
  */
-function resolveStageProvider(
-  command: string,
+function embeddedRouteWasRequested(
   args: Record<string, unknown>,
   env: Record<string, string | undefined>,
+): boolean {
+  const stepProvider = typeof args.provider === "string" ? args.provider.trim().toLowerCase() : "";
+  if (stepProvider) {
+    return stepProvider === "embedded";
+  }
+  return (env.LOBSTER_LLM_PROVIDER ?? "").trim().toLowerCase() === "embedded";
+}
+
+/**
+ * The route label recorded for a non-embedded stage, for provenance and the
+ * saved-answer re-authorization request only. Embedded output is the
+ * `"embedded"` label, which is set separately; a provider-omitted stage is left
+ * for Lobster to resolve, so its label falls back to the adapter source Lobster
+ * reported.
+ */
+function nonEmbeddedRouteLabel(
+  args: Record<string, unknown>,
+  env: Record<string, string | undefined>,
+  items: unknown[],
 ): string {
-  const named = String(args.provider ?? env.LOBSTER_LLM_PROVIDER ?? "")
-    .trim()
-    .toLowerCase();
-  if (named) {
-    return named;
+  const stepProvider = typeof args.provider === "string" ? args.provider.trim().toLowerCase() : "";
+  if (stepProvider) {
+    return stepProvider;
   }
-  if (command === "llm_task.invoke") {
-    return "openclaw";
+  const configured = (env.LOBSTER_LLM_PROVIDER ?? "").trim().toLowerCase();
+  if (configured) {
+    return configured;
   }
-  if ((env.LOBSTER_PI_LLM_ADAPTER_URL ?? "").trim()) {
-    return "pi";
+  for (const item of items) {
+    if (isRecord(item) && typeof item.source === "string" && item.source) {
+      return item.source;
+    }
   }
-  if ((env.OPENCLAW_URL ?? env.CLAWD_URL ?? "").trim()) {
-    return "openclaw";
-  }
-  if ((env.LOBSTER_LLM_ADAPTER_URL ?? "").trim()) {
-    return "http";
-  }
-  throw new Error(
-    "lobster llm.invoke has no route: the embedded provider is opt-in, so pass --provider embedded or set LOBSTER_LLM_PROVIDER=embedded",
-  );
+  return "external";
 }
 
 async function* replayItems(items: unknown[]): AsyncIterable<unknown> {
@@ -337,13 +352,28 @@ function checkpointHandle(envelope: EmbeddedToolEnvelope): LobsterCheckpointHand
  *   environment or a `--refresh false` flag cannot override.
  * - Other routes keep their cache, but a saved answer is shown only after the
  *   caller is re-authorized. A fresh call is not gated here, because the remote
- *   provider applies its own credentials.
+ *   provider applies its own credentials. The direct adapter is hidden from the
+ *   runtime for these stages, so Lobster's sole-adapter preference cannot move a
+ *   provider-omitted step onto the embedded route: the runtime resolves the
+ *   route from the step, then the environment, exactly as it did before the
+ *   adapter existed.
  */
 function wrapLlmCommands(
   base: LobsterRegistry,
   authorizeReplay: (request: LobsterReplayRequest) => Promise<void>,
   onStage: (stage: LobsterLlmStage) => void,
 ): LobsterRegistry {
+  const drain = async (
+    result: { output?: AsyncIterable<unknown> } & Record<string, unknown>,
+  ): Promise<unknown[]> => {
+    const items: unknown[] = [];
+    for await (const item of result.output ?? replayItems([])) {
+      items.push(item);
+    }
+    return items;
+  };
+  const wasReplayed = (items: unknown[]): boolean =>
+    items.some((item) => isRecord(item) && item.replayed === true);
   return {
     list: () => base.list(),
     get(name) {
@@ -354,24 +384,35 @@ function wrapLlmCommands(
       return {
         ...command,
         async run({ input, args, ctx }) {
-          const provider = resolveStageProvider(name, args, ctx.env ?? {});
-          const hidden =
-            provider === "embedded"
-              ? { refresh: true, "disable-cache": true, "state-key": "" }
-              : {};
-          const result = await command.run({ input, ctx, args: { ...args, provider, ...hidden } });
-          onStage({ provider, command: name });
-          const items: unknown[] = [];
-          for await (const item of result.output ?? replayItems([])) {
-            items.push(item);
+          const env = ctx.env ?? {};
+          if (embeddedRouteWasRequested(args, env)) {
+            const result = await command.run({
+              input,
+              ctx,
+              args: {
+                ...args,
+                provider: "embedded",
+                refresh: true,
+                "disable-cache": true,
+                "state-key": "",
+              },
+            });
+            const items = await drain(result);
+            onStage({ provider: "embedded", command: name });
+            if (wasReplayed(items)) {
+              await authorizeReplay({ provider: "embedded", command: name });
+            }
+            return { ...result, output: replayItems(items) };
           }
-          const replayed = items.some(
-            (item) =>
-              Boolean(item) &&
-              typeof item === "object" &&
-              (item as { replayed?: unknown }).replayed === true,
-          );
-          if (replayed) {
+          const result = await command.run({
+            input,
+            ctx: { ...ctx, llmAdapters: undefined },
+            args,
+          });
+          const items = await drain(result);
+          const provider = nonEmbeddedRouteLabel(args, env, items);
+          onStage({ provider, command: name });
+          if (wasReplayed(items)) {
             await authorizeReplay({ provider, command: name });
           }
           return { ...result, output: replayItems(items) };
@@ -475,6 +516,15 @@ export function createEmbeddedLobsterRunner(options?: {
             const approvalId = params.approvalId?.trim() ?? "";
             if (!token && !approvalId) {
               throw new Error("token or approvalId required");
+            }
+            if (token && approvalId && checkpoints) {
+              // Lobster's resumeToolRequest gives the approval ID precedence, so a
+              // token that names one checkpoint could carry authorization for a
+              // different one. Refuse the ambiguous pair rather than authorize the
+              // wrong checkpoint.
+              throw new Error(
+                "resume accepts either token or approvalId, not both: the approval ID takes precedence, so the two can select different checkpoints",
+              );
             }
             const hasApproval = typeof params.approve === "boolean";
             const hasResponse = params.responseJson !== undefined;
