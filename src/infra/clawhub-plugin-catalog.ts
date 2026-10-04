@@ -537,11 +537,7 @@ export async function fetchClawHubPluginVersionCategories(
     throw new Error("ClawHub plugin category batch cannot exceed 200 packages.");
   }
   const value = await fetchClawHubJson<unknown>({
-    baseUrl: params.baseUrl,
-    token: params.token,
-    skipAuth: params.skipAuth,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
+    ...params,
     method: "POST",
     path: "/api/v1/packages/categories:batch",
     json: { packages: params.packages },
@@ -584,11 +580,7 @@ export async function fetchClawHubPluginDetail(
   params: ClawHubReadOptions & { packageName: string; version?: string },
 ): Promise<ClawHubPluginDetail> {
   const value = await fetchClawHubJson<unknown>({
-    baseUrl: params.baseUrl,
-    token: params.token,
-    skipAuth: params.skipAuth,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
+    ...params,
     path: `/api/v1/packages/${encodeURIComponent(params.packageName)}/detail`,
     search: { version: params.version },
   });
@@ -602,11 +594,11 @@ export async function fetchClawHubPluginDetail(
   if (catalog.packageName !== params.packageName.trim().toLowerCase()) {
     throw new Error("ClawHub returned a different plugin package identity.");
   }
-  const tagsRecord = readOptionalRecord(value.package, "tags", "plugin detail");
+  const tagsRecord = readOptionalRecord(value.package, "tags", "plugin detail") ?? {};
   const tags = Object.fromEntries(
-    Object.keys(tagsRecord ?? {}).map((tag) => [
+    Object.keys(tagsRecord).map((tag) => [
       tag,
-      readRequiredClawHubStringField(tagsRecord ?? {}, tag, "plugin tags"),
+      readRequiredClawHubStringField(tagsRecord, tag, "plugin tags"),
     ]),
   );
   const topics = readClawHubStringArrayField(value.package, "topics", "plugin detail") ?? [];
@@ -617,12 +609,12 @@ export async function fetchClawHubPluginDetail(
     "plugin compatibility",
   );
   const ownerRecord = readOptionalRecord(value, "owner", "plugin detail response");
-  const ownerHandle = ownerRecord
-    ? readClawHubStringField(ownerRecord, "handle", "plugin owner")
-    : undefined;
-  const ownerDisplayName = ownerRecord
-    ? readClawHubStringField(ownerRecord, "displayName", "plugin owner")
-    : undefined;
+  const ownerFields = readClawHubNonEmptyStringFields(
+    ownerRecord ?? {},
+    ["handle", "displayName"],
+    "plugin owner",
+  );
+  const ownerHandle = ownerFields.handle;
   const ownerImageUrl = ownerRecord
     ? readClawHubStringField(ownerRecord, "image", "plugin owner")
     : undefined;
@@ -643,8 +635,7 @@ export async function fetchClawHubPluginDetail(
     versionRecord ? readOptionalRecord(versionRecord, "verification", "plugin version") : undefined,
   );
   const owner = {
-    ...(ownerHandle ? { handle: ownerHandle } : {}),
-    ...(ownerDisplayName ? { displayName: ownerDisplayName } : {}),
+    ...ownerFields,
     ...(ownerImageUrl ? { imageUrl: ownerImageUrl } : {}),
     ...(typeof ownerRecord?.official === "boolean" ? { official: ownerRecord.official } : {}),
   };

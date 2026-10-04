@@ -149,6 +149,13 @@ refuses the swap and names both targets; filesystem mutation ownership checks
 remain in effect. This fix belongs to the installed updater, so a candidate
 cannot change an older updater's launcher checks during that first update.
 
+Journal-owned publication and rollback also compare launcher bytes or link targets,
+without requiring uid/gid metadata that a non-root updater cannot restore. They
+still require the recorded launcher identity before replacing it. New symlinks
+preserve the existing launcher's ownership when possible; otherwise they use the
+updater's effective user and group instead of inheriting an unusable bin-directory
+group. An ownership fallback produces a warning.
+
 Package publication verifies the candidate before activation and the installed
 package after publication. Launcher publication checks package identities without
 repeatedly hashing both generations. Retirement verifies the live package before
@@ -156,7 +163,13 @@ deleting obsolete backups; rollback still hashes a backup before restoring it
 and verifies the restored bytes. These improvements belong to the installed
 updater and do not change an older updater already running.
 
-Within one updater process, these checks still walk every entry to verify
+Candidate verification uses the same best-effort contract when its scan reaches
+the resource limits: activation and publication continue with directory identity,
+package version, and launcher verification, recording that full package contents
+are unverified. The reader allows **500,000 entries / 8 GiB**; the shared deadline
+still bounds scan time. When a scan completes, its fingerprint must still match.
+
+When full verification is available, these checks walk every entry to verify
 identity, metadata, directory listings, links, and a final metadata sweep. A
 file's content digest from the earlier baseline or staged-package scan is reused
 only when its complete metadata, including inode, link count, size, modification
@@ -172,12 +185,21 @@ synchronous reads, at most four files at a time. The sealed recovery helper uses
 the same path; if worker threads are unavailable, hashing runs in-process. A file
 whose digest is reused under the rule above is not re-read; every other file is
 read afresh in the workers. The asynchronous directory walk, serial final
-metadata recheck, entry and byte limits, deadlines, and refusal order are
-unchanged. Older installed updaters keep their own scanning behavior.
+metadata recheck, and deadlines are unchanged. Older installed updaters keep
+their own scanning behavior.
 
-An older installed updater that stops with `Package rollback verification byte
-limit exceeded` cannot obtain this repair from its staged candidate. Use the
-installation's [manual package update method](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
+The published 2026.9.7 and 2026.9.8 updaters still use their own **50,000-entry /
+1 GiB** caps for candidates; the candidate cannot change that installed driver.
+For a supervisor version of 2026.9.8 or earlier, including prereleases, candidate
+admission refuses a tree with more than 50,000 entries and directs you to run
+`npm i -g openclaw@latest` manually (preserving the requested version or tag when
+specified). This counts
+the package root and every entry, including hidden lockfiles, without following
+symlinks. Newer supervisors do not receive this size refusal.
+
+An older installed updater that stops with `Package rollback verification entry
+limit exceeded` or `Package rollback verification byte limit exceeded` likewise
+needs the installation's [manual package update method](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
 with a verified backup and the managed Gateway stopped during replacement.
 
 Interrupting a fresh local update before activation records a failed,

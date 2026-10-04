@@ -201,32 +201,22 @@ describe("worker Gateway tool runtime", () => {
     },
   );
 
-  it("rechecks a prepared invocation after yielding before starting the tool", async () => {
-    const execute = vi.fn(async () => success);
-    const f = fixture([tool("remote", execute)]);
-    const surface = await f.runtime.getSurface(identity);
-    const invocation = f.runtime.invoke(identity, request(surface), sink);
-    f.revoke();
-    await expect(invocation).rejects.toThrow("turn authority lost");
-    expect(execute).not.toHaveBeenCalled();
-    await f.runtime.close();
-  });
-
-  it.each(["during execution", "before publication"] as const)(
-    "fences results when authority is lost %s",
+  it.each(["before execution", "during execution", "before publication"] as const)(
+    "fences calls when authority is lost %s",
     async (stage) => {
       const entered = createDeferredCore();
       const completion = createDeferredCore<typeof success>();
-      const f = fixture([
-        tool("remote", () => {
-          entered.resolve();
-          return completion.promise;
-        }),
-      ]);
+      const execute = vi.fn(() => {
+        entered.resolve();
+        return completion.promise;
+      });
+      const f = fixture([tool("remote", execute)]);
       const surface = await f.runtime.getSurface(identity);
       const invocation = f.runtime.invoke(identity, request(surface), sink);
-      await entered.promise;
-      if (stage === "during execution") {
+      if (stage !== "before execution") {
+        await entered.promise;
+      }
+      if (stage !== "before publication") {
         f.revoke();
       }
       completion.resolve(success);
@@ -235,6 +225,7 @@ describe("worker Gateway tool runtime", () => {
         queueMicrotask(f.revoke);
       }
       await expect(invocation).rejects.toThrow("turn authority lost");
+      expect(execute).toHaveBeenCalledTimes(stage === "before execution" ? 0 : 1);
       await f.runtime.close();
     },
   );
@@ -372,29 +363,10 @@ describe("worker Gateway tool runtime", () => {
     await expect(runtime.getSurface(identity)).rejects.toThrow("surface closed");
   });
 
-  it("does not expose a successful result after a per-call cancellation", async () => {
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const { runtime } = fixture([
-      tool("remote", async () => {
-        entered.resolve();
-        await release.promise;
-        return success;
-      }),
-    ]);
-    const surface = await runtime.getSurface(identity);
-    const invocation = request(surface);
-    const call = runtime.invoke(identity, invocation, sink);
-    await entered.promise;
-    runtime.cancel(invocation);
-    release.resolve();
-    await expect(call).rejects.toThrow("cancelled");
-    await runtime.close();
-  });
-
-  it.each([true, false])(
-    "scopes socket cancellation only to live reads (%s)",
-    async (connectionScoped) => {
+  it.each(["call", "socket read", "socket replay"] as const)(
+    "fences cancelled calls while retaining socket-independent replays (%s)",
+    async (cancellation) => {
+      const connectionScoped = cancellation === "socket read";
       const entered = createDeferredCore<AbortSignal>();
       const release = createDeferredCore();
       const remote = tool("remote", async (_id, _args, signal) => {
@@ -416,12 +388,21 @@ describe("worker Gateway tool runtime", () => {
       const callSignal = await entered.promise;
       const joined = runtime.invoke(identity, request(surface), sink);
       await runtime.getSurface(identity);
-      socket.abort(new Error("socket closed"));
-      expect(callSignal.aborted).toBe(connectionScoped);
+      if (cancellation === "call") {
+        runtime.cancel(request(surface));
+      } else {
+        socket.abort(new Error("socket closed"));
+      }
+      expect(callSignal.aborted).toBe(cancellation !== "socket replay");
       release.resolve();
       const results = Promise.all([active, joined]);
-      if (connectionScoped) {
-        await expect(results).rejects.toThrow("socket closed");
+      if (cancellation !== "socket replay") {
+        await expect(results).rejects.toThrow(
+          cancellation === "call" ? "cancelled" : "socket closed",
+        );
+        if (cancellation === "call") {
+          await expect(active).rejects.toThrow("cancelled");
+        }
       } else {
         await expect(results).resolves.toEqual([success, success]);
       }

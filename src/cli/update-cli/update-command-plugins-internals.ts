@@ -87,7 +87,6 @@ export function collectPostCorePluginFailureFacts(
 // Legacy status/reason remain independent until callers qualify their policy cutover.
 export type PluginUpdateAssessment =
   | { kind: "no-payload-repair" }
-  | { kind: "optional-repair-needed"; failures: PluginPayloadSmokeFailure[] }
   | { kind: "core-critical"; reason: ReturnType<typeof createUpdateConfigFailure>["reason"] }
   | {
       kind: "unsafe";
@@ -95,10 +94,8 @@ export type PluginUpdateAssessment =
         | "capability-consent-required"
         | "integrity-drift"
         | "unowned-plugin-payload"
-        | "required-plugin-unavailable"
         | "plugin-requirement-unknown"
-        | "convergence-failed"
-        | "plugin-disabled-after-update";
+        | "convergence-failed";
     };
 
 export type ProducedPluginUpdateResult = PostCorePluginUpdateResult & {
@@ -107,11 +104,10 @@ export type ProducedPluginUpdateResult = PostCorePluginUpdateResult & {
 
 export function assessPluginUpdate(params: {
   smokeFailures: PluginPayloadSmokeFailure[];
-  disabledPluginIds: readonly string[];
+  hasDisabledPlugin: boolean;
   errored: boolean;
   outcomes: PluginUpdateOutcome[];
   integrityDrift: boolean;
-  requirements: Readonly<Record<string, "optional" | "required">>;
 }): PluginUpdateAssessment {
   if (
     params.outcomes.some(
@@ -128,25 +124,8 @@ export function assessPluginUpdate(params: {
   if (failures.some((failure) => !failure.installPath)) {
     return { kind: "unsafe", reason: "unowned-plugin-payload" };
   }
-  const unavailablePluginIds = [
-    ...failures.map((failure) => failure.pluginId),
-    ...params.disabledPluginIds,
-  ];
-  if (unavailablePluginIds.some((pluginId) => params.requirements[pluginId] === "required")) {
-    return { kind: "unsafe", reason: "required-plugin-unavailable" };
-  }
-  if (unavailablePluginIds.some((pluginId) => params.requirements[pluginId] !== "optional")) {
+  if (failures.length > 0 || params.hasDisabledPlugin) {
     return { kind: "unsafe", reason: "plugin-requirement-unknown" };
-  }
-  if (params.disabledPluginIds.length > 0) {
-    // The disable outcome loses its failure code. Optionality cannot establish
-    // that a consent/integrity refusal is safe to turn into repairable degradation.
-    return { kind: "unsafe", reason: "plugin-disabled-after-update" };
-  }
-  if (failures.length > 0) {
-    // Outcomes retain earlier failed repair attempts, including repaired payloads.
-    // Active payload failures come from final verification, not that history.
-    return { kind: "optional-repair-needed", failures };
   }
   return params.errored
     ? { kind: "unsafe", reason: "convergence-failed" }

@@ -59,6 +59,10 @@ host and view types). The contract and Control UI subpaths are browser safe;
 | `plugin-sdk/health`                 | Doctor health-check registration, detection, repair, selection, severity, and finding types for bundled health consumers                                                                                |
 | `plugin-sdk/channel-entry-contract` | Bundled channel entry and setup-entry contracts, feature declarations, and lazy module-loading helpers                                                                                                  |
 
+Navigation items registered with `host.ui.registerNavigation` can set `parent`
+to another navigation ID in the same plugin; `host.ui.pinNavigation(id)` pins an
+already registered item once using the user's existing sidebar preferences.
+
 ### Control UI conversation dock
 
 `ControlUiHost` from `openclaw/plugin-sdk/control-ui` has this optional member:
@@ -448,7 +452,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/routing` | Route/session-key/account binding helpers such as `resolveAgentRoute`, `buildAgentSessionKey`, and `resolveDefaultAgentBoundAccountId`. Use `normalizeAgentId` when omitted input should resolve to `main`; use the Result-returning `normalizeAgentIdStrict` for an explicitly supplied ID that must not fall back to the default agent. |
     | `plugin-sdk/status-helpers` | Shared channel/account status summary helpers, runtime-state defaults, and issue metadata helpers |
     | `plugin-sdk/target-resolver-runtime` | Private-local after July 2026; Shared target resolver helpers |
-    | `plugin-sdk/string-normalization-runtime` | Private-local after July 2026; Slug/string normalization helpers |
+    | `plugin-sdk/string-normalization-runtime` | Private-local after July 2026; Slug/string normalization and ASCII control-character detection helpers |
     | `plugin-sdk/request-url` | Private-local after July 2026; Extract string URLs from fetch/request-like inputs |
     | `plugin-sdk/run-command` | Timed command runner with normalized stdout/stderr results |
     | `plugin-sdk/param-readers` | Common tool/CLI param readers |

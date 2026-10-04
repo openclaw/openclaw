@@ -57,13 +57,6 @@ class ExecApprovalsStoreUnavailableError extends Error {
   }
 }
 
-function readExecApprovalsSnapshotFromDatabase(
-  options: OpenClawStateDatabaseOptions = {},
-): ExecApprovalsSnapshot {
-  assertNoPendingLegacyExecApprovals();
-  return snapshotFromExecApprovalsDatabase(openOpenClawStateDatabase(options).db);
-}
-
 function readExecApprovalsSnapshotFromDatabaseReadOnly(
   options: OpenClawStateDatabaseOptions,
 ): ExecApprovalsSnapshot {
@@ -81,7 +74,8 @@ function readExecApprovalsSnapshotWithOptions(
   options: OpenClawStateDatabaseOptions = {},
 ): ExecApprovalsSnapshot {
   try {
-    return readExecApprovalsSnapshotFromDatabase(options);
+    assertNoPendingLegacyExecApprovals();
+    return snapshotFromExecApprovalsDatabase(openOpenClawStateDatabase(options).db);
   } catch (error) {
     if (error instanceof ExecApprovalsMigrationRequiredError) {
       throw error;
@@ -453,16 +447,7 @@ function ensureExecApprovalsSocket(file: ExecApprovalsFile): ExecApprovalsFile {
   };
 }
 
-function requireInitializedExecApprovals(
-  snapshot: ExecApprovalsSnapshot | null,
-): ExecApprovalsSnapshot {
-  if (!snapshot) {
-    throw new Error("Failed to initialize exec approvals");
-  }
-  return snapshot;
-}
-
-function ensureExecApprovalsSnapshotSync(): ExecApprovalsSnapshot {
+export async function ensureExecApprovalsSnapshot(): Promise<ExecApprovalsSnapshot> {
   const snapshot = readExecApprovalsSnapshot();
   if (
     snapshot.file.socket?.path?.trim() &&
@@ -471,11 +456,9 @@ function ensureExecApprovalsSnapshotSync(): ExecApprovalsSnapshot {
   ) {
     return snapshot;
   }
-  return requireInitializedExecApprovals(
-    updateExecApprovalsInTransaction({ update: ensureExecApprovalsSocket }),
-  );
-}
-
-export async function ensureExecApprovalsSnapshot(): Promise<ExecApprovalsSnapshot> {
-  return ensureExecApprovalsSnapshotSync();
+  const initialized = updateExecApprovalsInTransaction({ update: ensureExecApprovalsSocket });
+  if (!initialized) {
+    throw new Error("Failed to initialize exec approvals");
+  }
+  return initialized;
 }

@@ -365,6 +365,16 @@ retain native transactions and yielding writer admission. Arbitrary async plugin
 updaters retain their existing nested-admission behavior. Schemas, durability,
 public callback contracts, and update behavior are unchanged.
 
+Embedded writer claims, live-model-switch consolidation, and pending-final delivery
+preparation, settlement, and cleanup explicitly select that worker patch path.
+Their reducers prepare outside the transaction; the worker rereads the selected
+rows before applying the patch and publishes acknowledged results before releasing
+the existing writer queue. Uncertain writes never replay. Writer-claim admission
+reads retain their current owner. Lifecycle-event persistence, cron preparation,
+and opaque SDK updaters retain their existing native routes; these callers do not
+change the default patch contract. Schemas, retention, durability, and update
+behavior are unchanged.
+
 Durable transcript turns append messages, consume pending inputs, evaluate typed
 latest-assistant and active-entry predicates, update entries, and commit goal
 receipts in one agent-executor transaction. Host preparation uses worker-read
@@ -529,6 +539,16 @@ the delivery queue's shared-state worker. Callers await creation before publishi
 spool files and await release during cleanup, so a concurrent writer waiting for
 host admission cannot block media sends on the Gateway thread. The existing custody
 rows, atomic enqueue, expiry, and update behavior are unchanged.
+
+Generated-HTML provenance lookup, upsert, and stale-marker cleanup use the shared-state
+reader and writer registries. The host captures the physical store before filesystem
+inspection, keeps realpath/root and exact-byte trust checks outside SQL, and awaits
+acknowledged writes. Cleanup deletes only the selected row values after inspecting
+files; concurrent marker updates survive. Transaction and commit grants recheck the
+original store, and unknown outcomes never replay. The media scheduler retains
+accepted cleanup through the Gateway close prelude before shared-state teardown.
+Public media APIs remain asynchronous; trust policy, schemas, retention, durability,
+and update behavior are unchanged.
 
 Published agent and shared-state database timers dispatch periodic WAL checkpoints
 and bounded page reclamation through those same writers. The existing timer keeps
@@ -697,6 +717,17 @@ revision within the writer FIFO, including after lost replies; unknown outcomes
 never replay. Database close joins accepted mutations. Workspace authoring guards
 retain their existing owner. Schemas, quotas, retention, publication security checks,
 and update behavior are unchanged.
+
+Channel pairing allowlist preparation uses the existing shared-state reader.
+The async SDK reader captures the physical store before yielding and reads current
+rows outside inherited discovery snapshots. Ingress retains its channel and
+message authority checks after preparation. The reader preserves account
+normalization and entry order, propagates admission failures, and joins accepted
+read cleanup before its transport closes. Missing state grants no permission and
+does not initialize a database; boot and Doctor retain initialization. The
+released synchronous SDK reader and pairing request/approval mutations retain
+their native paths, so their shared SQL sites remain T1. No schema, retention,
+durability, or update migration changes.
 
 ## Carry facts, publish after commit
 
@@ -1777,3 +1808,15 @@ Discord SDK's synchronous list, touch, lifecycle setter, and unbind compatibilit
 paths remain under the same owner, deprecated for removal at the next Plugin SDK
 major. Bundled callers use the awaited variants. ACP startup session reads are a
 separate worker migration.
+
+Shared and per-agent auth-profile success and failure bookkeeping use the existing
+auth-profile shared-state domain and canonical agent executor. The caller captures
+the physical stores and execution authority before preparing inherited ownership
+and provider observations. Workers reread the current rows and apply the same health
+reducers used for personal model accounts; inherited success clears health without
+changing the shared owner's last-good selection or rotation time. Committed facts
+update the existing runtime snapshot owner. Gateway close refuses new bookkeeping
+and joins accepted operations before closing worker transports. Uncertain outcomes
+are never replayed. Schemas, stored bytes, retention, and update behavior are
+unchanged. The released synchronous auth-store save SDK remains available; quota
+reprobe and explicit block mutations retain their existing owners.

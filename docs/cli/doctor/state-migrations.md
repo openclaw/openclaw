@@ -30,6 +30,12 @@ The pre-July plugin install index at `plugins/installs.json` is no longer import
 or archived. Doctor preserves it and stops with the same intermediate-upgrade
 guidance. July-era SQLite plugin install records remain supported.
 
+Sandbox container and browser JSON registries, including their sharded JSON
+directories, are retired pre-July state. Doctor reports the retained paths and
+refuses `--fix` without reading or changing their contents. Upgrade through
+OpenClaw `2026.9.7` and run `openclaw doctor --fix` on the original host before
+retrying. Current SQLite sandbox registries remain supported.
+
 Session records that need the retired `room` → `groupChannel` conversion are refused
 without changing their original bytes. Preserve the state, install OpenClaw
 `2026.9.5`, run `openclaw doctor --fix`, then upgrade again. A canonical

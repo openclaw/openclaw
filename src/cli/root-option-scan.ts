@@ -48,12 +48,7 @@ export function scanCliRootOptions(
 
     const consumedRootOption = consumeRootOptionToken(args, i);
     if (consumedRootOption > 0) {
-      for (let offset = 0; offset < consumedRootOption; offset += 1) {
-        const token = args[i + offset];
-        if (token !== undefined) {
-          out.push(token);
-        }
-      }
+      out.push(...args.slice(i, i + consumedRootOption));
       i += consumedRootOption - 1;
       continue;
     }

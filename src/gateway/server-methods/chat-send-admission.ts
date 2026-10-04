@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
 import {
   createAgentRunRestartAbortError,
   isAgentRunDirectAbortReason,
@@ -56,7 +57,11 @@ import {
 } from "./chat-send-pre-admission.js";
 import { bindChatSendPreparedSession } from "./chat-send-session-binding.js";
 import { captureAdmittedChatSendSessionSettings } from "./chat-send-session-settings.js";
-import { prepareChatSendSessionEntry, type PreparedChatSendSession } from "./chat-send-session.js";
+import {
+  loadCurrentChatSendSession,
+  prepareChatSendSessionEntry,
+  type PreparedChatSendSession,
+} from "./chat-send-session.js";
 import {
   admitChatSendUploads,
   assertChatSendExclusiveAdmission,
@@ -215,7 +220,7 @@ export async function admitChatSend(
   let reservationSuperseded = false;
   let supersedingResult: DedupeEntry | undefined;
   let preparedGoalEntry: Awaited<ReturnType<typeof prepareChatSendSessionEntry>> | undefined;
-  const commitChatWorkAdmission = async (): Promise<void> => {
+  const commitChatWorkAdmission = async (acpMeta: SessionEntry["acp"] | null): Promise<void> => {
     const current = prepareCurrentChatSendRetry(params, pendingAttemptId);
     retryComparison = current.comparison ? await current.comparison : undefined;
     const latestSession = current.readSession();
@@ -332,7 +337,7 @@ export async function admitChatSend(
           getRuntimeConfig: context.getRuntimeConfig,
         });
         // Preparation only read facts; re-enter all current reservation and authority checks once.
-        return commitChatWorkAdmission();
+        return commitChatWorkAdmission(acpMeta);
       }
       const prepared = preparedGoalEntry;
       initialSessionEntry = prepared.entry;
@@ -347,6 +352,7 @@ export async function admitChatSend(
       context,
       entry: latestEntry,
       initialSessionEntry,
+      acpMeta,
       now: Date.now(),
       request: restartSafeRequest,
       requestedSessionId,
@@ -397,7 +403,18 @@ export async function admitChatSend(
         assertSessionTargetCurrent();
         assertChatSendExclusiveAdmission(request, session);
       },
-      revalidateAllowed: commitChatWorkAdmission,
+      revalidateAllowed: async () => {
+        if (!restartSafeRequest) {
+          return commitChatWorkAdmission(null);
+        }
+        const latest = loadCurrentChatSendSession(session);
+        const [acpMeta] = await readAcpSessionMetaForEntries({
+          cfg: latest.cfg,
+          entries: [{ agentId, sessionKey: latest.canonicalKey, entry: latest.entry }],
+        });
+        // The writer barrier retains the selected row; commit rechecks request and run authority.
+        return commitChatWorkAdmission(acpMeta ?? null);
+      },
       onInterrupt: (reason) => {
         const stopReason = isAgentRunDirectAbortReason(reason) ? "rpc" : "restart";
         if (!admittedRunAbort) {

@@ -58,7 +58,7 @@ export function mutateAcpSessionEntryInWorker(
         prepared,
         sessionKey: input.sessionKey,
         writeBase: base,
-        next: mutation.kind === "clear-legacy" && !base.acp ? undefined : next,
+        next,
         options: {},
       });
       const publication = changed.identity

@@ -479,7 +479,6 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         }
         guard await self.performGatewayUpdate(
             resolution: resolution,
-            connectionMode: resolution.connectionMode,
             receipt: receipt,
             verifiedCompanion: verifiedCompanion,
             repairingNodeMigration: repairingNodeMigration)
@@ -498,7 +497,6 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
 
         let verification = await self.verifyRuntimeUpdates(
             resolution: resolution,
-            connectionMode: resolution.connectionMode,
             receipt: receipt,
             source: source,
             generation: generation)
@@ -1077,11 +1075,11 @@ extension PostUpdateController {
 
     private func verifyRuntimeUpdates(
         resolution: PostUpdateGatewayResolution,
-        connectionMode: AppState.ConnectionMode,
         receipt: PostAppUpdateReceipt,
         source: GatewayProcessManager.ActivationSource,
         generation: UInt64) async -> PostUpdateRuntimeVerification
     {
+        let connectionMode = resolution.connectionMode
         guard AppStateStore.shared.connectionMode == connectionMode else { return .deferred }
         self.model.phase = .verifying
         self.model.message = connectionMode == .local
@@ -1222,11 +1220,11 @@ extension PostUpdateController {
 
     private func performGatewayUpdate(
         resolution: PostUpdateGatewayResolution,
-        connectionMode: AppState.ConnectionMode,
         receipt: PostAppUpdateReceipt,
         verifiedCompanion: Bool,
         repairingNodeMigration: Bool) async -> Bool
     {
+        let connectionMode = resolution.connectionMode
         let restartGateway = resolution.shouldRestartGateway(
             connectionMode: AppStateStore.shared.connectionMode, paused: AppStateStore.shared.isPaused)
 

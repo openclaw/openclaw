@@ -35,7 +35,6 @@ export type StreamGroupPart = Extract<
 
 type StreamMessageOptions = Pick<
   Parameters<typeof renderGroupedMessage>[2],
-  | "onResolveReply"
   | "onOpenReply"
   | "replyNavigationId"
   | "sessionKey"

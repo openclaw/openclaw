@@ -378,12 +378,14 @@ describe("session sharing handlers", () => {
           createdActor: { type: "human", source: "profile", id: "owner@example.com" },
         },
       );
+      const previewContext = context(vi.fn());
+      await initializeSessionReadContext(previewContext);
       const previewFor = async (client: GatewayClient) => {
         const responses: Parameters<RespondFn>[] = [];
         await createControlUiHandlers()["controlUi.sessionPreview"]?.({
           params: { sessionKey },
           client,
-          context: context(vi.fn()),
+          context: previewContext,
           respond: (...response: Parameters<RespondFn>) => responses.push(response),
         } as never);
         return responses[0]?.[1];

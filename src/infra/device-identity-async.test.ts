@@ -136,9 +136,13 @@ describe("async device identity boundary", () => {
     },
   );
 
-  it.each([undefined, ".doctor-importing"])(
-    "uses captured primary scope after an existing-only miss (legacy suffix: %s)",
-    async (suffix) => {
+  it.each([
+    { result: undefined, suffix: undefined },
+    { result: undefined, suffix: ".doctor-importing" },
+    { result: null, suffix: "" },
+  ])(
+    "uses captured primary scope for an existing-only $result (legacy suffix: $suffix)",
+    async ({ result, suffix }) => {
       const options = syntheticOptions("missing-identity");
       const stateDir = options.env!.OPENCLAW_STATE_DIR!;
       const legacyPath = path.join(stateDir, "identity", "device.json");
@@ -146,16 +150,16 @@ describe("async device identity boundary", () => {
         boundary.legacyPaths.add(`${legacyPath}${suffix}`);
       }
       const opening = createDeferredCore();
-      boundary.run.mockImplementation(async (_context, _operation, admission) => {
+      boundary.run.mockImplementation(async (_context, operation, admission) => {
         if (!admission?.existingOnly) {
           throw new Error("A missing identity read attempted to create shared state");
         }
         await opening.promise;
-        return undefined;
+        return result === null ? operation({ execute: async () => null }) : undefined;
       });
       const loading = loadDeviceIdentityIfPresentAsync(options);
       const outcome =
-        suffix === undefined
+        suffix === undefined || result === null
           ? expect(loading).resolves.toBeNull()
           : expect(loading).rejects.toThrow(`Legacy device identity exists at ${legacyPath}`);
       options.env!.OPENCLAW_STATE_DIR = path.resolve("/synthetic/changed-missing");
@@ -165,17 +169,6 @@ describe("async device identity boundary", () => {
       await outcome;
     },
   );
-
-  it("preserves an authoritative worker miss without a second legacy decision", async () => {
-    const options = syntheticOptions("persisted-identity");
-    boundary.legacyPaths.add(
-      path.join(options.env!.OPENCLAW_STATE_DIR!, "identity", "device.json"),
-    );
-    boundary.run.mockImplementation(async (_context, operation) =>
-      operation({ execute: async () => null }),
-    );
-    await expect(loadDeviceIdentityIfPresentAsync(options)).resolves.toBeNull();
-  });
 
   it("converges concurrent process callers on one object and keeps keys independent", async () => {
     const options: DeviceIdentityStoreOptions = {

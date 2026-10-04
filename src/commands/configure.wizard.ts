@@ -20,7 +20,6 @@ import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-f
 import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
-import { createLazyPromise } from "../shared/lazy-promise.js";
 import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
@@ -62,10 +61,6 @@ import type { OnboardMode } from "./onboard-types.js";
 type ConfigureSectionChoice = WizardSection | "__continue";
 
 const GATEWAY_HINT_PROBE_TIMEOUT_MS = 300;
-
-const loadSetupPluginConfigModule = createLazyPromise(
-  () => import("../wizard/setup.plugin-config.js"),
-);
 
 async function promptConfigureSection(
   runtime: RuntimeEnv,
@@ -578,7 +573,7 @@ export async function runConfigureWizard(
       },
       channels: configureChannelsSection,
       plugins: async () => {
-        const { configurePluginConfig } = await loadSetupPluginConfigModule();
+        const { configurePluginConfig } = await import("../wizard/setup.plugin-config.js");
         nextConfig = await configurePluginConfig({
           config: nextConfig,
           prompter,

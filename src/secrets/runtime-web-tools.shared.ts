@@ -23,7 +23,7 @@ import {
   type SecretResolutionResult,
 } from "./runtime-web-tools-selection.types.js";
 import type { RuntimeWebDiagnostic, RuntimeWebSearchMetadata } from "./runtime-web-tools.types.js";
-import { isRecord } from "./shared.js";
+import { isRecord, parseDotPath } from "./shared.js";
 
 const loadResolveManifestContractOwnerPluginId = createLazyRuntimeNamedExport(
   () => import("./runtime-web-tools-manifest.runtime.js"),
@@ -121,10 +121,7 @@ function setResolvedCredentialPath(params: {
   path: string;
   value: string;
 }): void {
-  const pathSegments = params.path
-    .split(".")
-    .map((segment) => segment.trim())
-    .filter((segment) => segment.length > 0);
+  const pathSegments = parseDotPath(params.path);
   if (pathSegments.length === 0) {
     return;
   }

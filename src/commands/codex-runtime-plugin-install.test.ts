@@ -12,9 +12,11 @@ import { WizardSession } from "../wizard/session.js";
 import {
   ensureCodexRuntimePluginForModelSelection,
   ensureCodexRuntimePluginForSupervision,
-  repairCodexRuntimePluginInstallForModelSelection,
 } from "./codex-runtime-plugin-install.js";
-import { ensureModelSelectionRuntimePlugins } from "./runtime-plugin-install.js";
+import {
+  ensureModelSelectionRuntimePlugins,
+  repairModelSelectionRuntimePlugins,
+} from "./runtime-plugin-install.js";
 
 const mocks = vi.hoisted(() => ({
   loadInstalledPluginIndexInstallRecords: vi.fn(),
@@ -205,29 +207,41 @@ describe("Codex runtime plugin install repair", () => {
     }
   });
 
-  it("surfaces non-fatal ClawHub repair notices to warning-only callers", async () => {
-    const reviewNotice = "REVIEW RECOMMENDED - ClawHub has not completed a fresh clean check";
-    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
-      changes: ['Repaired missing configured plugin "codex".'],
-      warnings: [],
-      notices: [reviewNotice],
-    });
+  it.each([
+    { pluginId: "codex", provider: "openai" },
+    { pluginId: "copilot", provider: "github-copilot" },
+  ])(
+    "surfaces non-fatal $pluginId repair notices to command callers",
+    async ({ pluginId, provider }) => {
+      const reviewNotice = "REVIEW RECOMMENDED - ClawHub has not completed a fresh clean check";
+      mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
+        changes: [`Repaired missing configured plugin "${pluginId}".`],
+        warnings: [],
+        notices: [reviewNotice],
+      });
 
-    const result = await repairCodexRuntimePluginInstallForModelSelection({
-      cfg: {},
-      model: "openai/gpt-5.5",
-      env: {},
-    });
+      const result = await repairModelSelectionRuntimePlugins({
+        cfg: {
+          models: {
+            providers: {
+              [provider]: {
+                baseUrl: "https://provider.example.test",
+                models: [],
+                agentRuntime: { id: pluginId },
+              },
+            },
+          },
+        },
+        model: `${provider}/gpt-5.5`,
+        env: {},
+      });
 
-    const repairCall = readOnlyMissingPluginInstallRepairCall();
-    expect(repairCall.pluginIds).toStrictEqual(["codex"]);
-    expect(repairCall.env).toStrictEqual({});
-    expect(result).toStrictEqual({
-      required: true,
-      changes: ['Repaired missing configured plugin "codex".'],
-      warnings: [reviewNotice],
-    });
-  });
+      const repairCall = readOnlyMissingPluginInstallRepairCall();
+      expect(repairCall.pluginIds).toStrictEqual([pluginId]);
+      expect(repairCall.env).toStrictEqual({});
+      expect(result).toStrictEqual([reviewNotice]);
+    },
+  );
 
   it("does not report an existing Codex install as usable when plugins are disabled", async () => {
     const cfg = { plugins: { enabled: false } };

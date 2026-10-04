@@ -1,13 +1,8 @@
 /** Shared parsing helpers for secrets migration/runtime code. */
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 export { resolvePositiveTimerTimeoutMs as normalizePositiveTimerMs } from "@openclaw/normalization-core/number-coercion";
 export { isRecord } from "@openclaw/normalization-core/record-coerce";
-
-/**
- * Narrows to strings that contain non-whitespace content.
- */
-export function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
+export { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 
 /**
  * Parses a simple .env assignment value, stripping one matching quote pair after trimming.
@@ -37,8 +32,5 @@ export function normalizePositiveInt(value: unknown, fallback: number): number {
  * Splits a dotted config path into non-empty trimmed segments.
  */
 export function parseDotPath(pathname: string): string[] {
-  return pathname
-    .split(".")
-    .map((segment) => segment.trim())
-    .filter((segment) => segment.length > 0);
+  return normalizeStringEntries(pathname.split("."));
 }

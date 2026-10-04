@@ -97,11 +97,7 @@ function hasSlackDnsRequestSignal(err: unknown): boolean {
 function resolveSlackUploadTimeoutLogUrl(url: string): string | undefined {
   // Slack puts the upload capability in the URL path. Timeout diagnostics may
   // name the origin, but must not retain that capability-bearing path.
-  try {
-    return new URL(url).origin;
-  } catch {
-    return undefined;
-  }
+  return URL.parse(url)?.origin;
 }
 
 function buildSlackUploadFailureCause(error: unknown): Error {
@@ -123,13 +119,9 @@ function buildSlackUploadFailureCause(error: unknown): Error {
 }
 
 function parseSlackUploadHttpUrl(value: string, label: string): URL {
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
-      return parsed;
-    }
-  } catch {
-    // Fall through to the same capability-safe error below.
+  const parsed = URL.parse(value);
+  if (parsed && (parsed.protocol === "http:" || parsed.protocol === "https:")) {
+    return parsed;
   }
   throw new Error(`${label} must use a valid HTTP or HTTPS URL`);
 }

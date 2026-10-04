@@ -18,14 +18,13 @@ const MAX_DOCUMENT_CHARS = 262_144;
 
 const markdown = new MarkdownIt({ html: false, linkify: false, breaks: true });
 markdown.validateLink = (value) => {
-  try {
-    const url = new URL(value);
-    return (
-      (url.protocol === "https:" || url.protocol === "http:") && !url.username && !url.password
-    );
-  } catch {
-    return false;
-  }
+  const url = URL.parse(value);
+  return Boolean(
+    url &&
+    (url.protocol === "https:" || url.protocol === "http:") &&
+    !url.username &&
+    !url.password,
+  );
 };
 // Images must not contact third parties or load authenticated session media.
 markdown.renderer.rules.image = () => '<span class="omitted">[Image omitted]</span>';

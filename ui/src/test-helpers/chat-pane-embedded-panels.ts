@@ -129,5 +129,5 @@ export function createReviewFixture() {
     } as Parameters<typeof sidebarPanelDefinitions>[0]);
     await renderPanelFixture(mount, state.sidebarLayout, definitions, closePanelSlot);
   };
-  return { file, list, mount, preview, rails, renderPanels, sessions, state };
+  return { context, file, list, mount, preview, rails, renderPanels, sessions, state };
 }

@@ -8,7 +8,6 @@ import { logConfigUpdated } from "../config/logging.js";
 import type { AgentRouteBinding } from "../config/types.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { createLazyPromise } from "../shared/lazy-promise.js";
 import { describeBinding, describeBindingConflict } from "./agents.binding-format.js";
 import { requireValidConfig, requireValidConfigForWrite } from "./config-validation.js";
 
@@ -31,8 +30,6 @@ type AgentsUnbindOptions = {
   all?: boolean;
   json?: boolean;
 };
-
-const loadAgentBindingsModule = createLazyPromise(() => import("./agents.bindings.js"));
 
 function hasAgent(cfg: AgentConfig, agentId: string): boolean {
   const targetAgentId = normalizeAgentId(agentId);
@@ -78,7 +75,7 @@ async function resolveParsedBindings(params: {
     failAgentBinding(params.emptyMessage);
   }
 
-  const { parseBindingSpecs } = await loadAgentBindingsModule();
+  const { parseBindingSpecs } = await import("./agents.bindings.js");
   const parsed = parseBindingSpecs({ agentId: params.agentId, specs, config: params.cfg });
   if (parsed.errors.length > 0) {
     failAgentBinding(parsed.errors.join("\n"));
@@ -178,7 +175,7 @@ export async function agentsBindCommand(
     emptyMessage: "Provide at least one --bind <channel[:accountId]>.",
   });
 
-  const { applyAgentBindings } = await loadAgentBindingsModule();
+  const { applyAgentBindings } = await import("./agents.bindings.js");
   const result = applyAgentBindings(cfg, bindings);
   if (result.added.length > 0 || result.updated.length > 0) {
     await replaceConfigFile({
@@ -284,7 +281,7 @@ export async function agentsUnbindCommand(
     emptyMessage: "Provide at least one --bind <channel[:accountId]> or use --all.",
   });
 
-  const { removeAgentBindings } = await loadAgentBindingsModule();
+  const { removeAgentBindings } = await import("./agents.bindings.js");
   const result = removeAgentBindings(cfg, bindings);
   if (result.removed.length > 0) {
     await replaceConfigFile({

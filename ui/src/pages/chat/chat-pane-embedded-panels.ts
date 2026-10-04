@@ -26,6 +26,7 @@ import {
 import type { ControlUiRegistration } from "../../plugins/control-ui-capability.ts";
 import { renderPluginContribution } from "../../plugins/control-ui-view.ts";
 import { SIDEBAR_PANEL_SHORTCUTS } from "./chat-pane-panel-shortcuts.ts";
+import type { PaneSessionChangeOptions } from "./chat-pane-shared.ts";
 import type {
   ChatSessionCompanionThread,
   ChatSessionCompanionTurn,
@@ -52,6 +53,18 @@ registerFilePreviewEnglish();
 type SidebarPanelDefinitionParams = {
   panePresentation?: PresentationValue;
   state: ChatPageHost;
+  paneId: string;
+  panePresentationId: string;
+  subagentsInputRegion: "page" | "dock";
+  subagentsPresented: PresentationValue;
+  processesPresented?: PresentationValue;
+  onRefreshProcesses?: () => void;
+  subagentsAvailable: boolean;
+  onRefreshSubagents: () => void;
+  onSubagentSessionSelect: (
+    sessionKey: string,
+    options?: PaneSessionChangeOptions,
+  ) => boolean | void;
   themeMode: "dark" | "light";
   agentId: string | null;
   browserPresented: PresentationValue;
@@ -147,17 +160,21 @@ export function sidebarPanelDefinitions(
             "portal.list",
             "operator.read",
           )
-        : SIDEBAR_PANEL_SHORTCUTS[slot]?.available(panelContext)),
+        : slot === "subagents" || slot === "processes"
+          ? panelContext.subagentsAvailable
+          : SIDEBAR_PANEL_SHORTCUTS[slot]?.available(panelContext)),
     ),
     content,
     loading: renderPanelLoadingSkeleton(
       textKey === "conversation" || textKey === "companion"
         ? "chat"
-        : textKey === "portal"
-          ? "browser"
-          : textKey === "dashboard"
-            ? "board"
-            : textKey,
+        : textKey === "subagents" || textKey === "processes"
+          ? "file-list"
+          : textKey === "portal"
+            ? "browser"
+            : textKey === "dashboard"
+              ? "board"
+              : textKey,
       t(textKey === "desktop" ? "desktop.connecting" : "common.loading"),
     ),
     empty: { description: t(`chat.sidePanel.${textKey}Empty`) },
@@ -283,6 +300,58 @@ export function sidebarPanelDefinitions(
   }
   return [
     definePanel("conversation", "conversation", icons.messageSquare, nothing),
+    definePanel(
+      "subagents",
+      "subagents",
+      icons.bot,
+      state && params
+        ? html`<openclaw-chat-subagents-panel
+            .sessionKey=${state.sessionKey}
+            .agentId=${params.agentId ?? "main"}
+            .paneId=${params.paneId}
+            .presentationId=${params.panePresentationId}
+            .inputRegion=${params.subagentsInputRegion}
+            .presented=${livePresentation(params.subagentsPresented)}
+            .onSessionSelect=${params.onSubagentSessionSelect}
+          ></openclaw-chat-subagents-panel>`
+        : null,
+      params
+        ? html`<button
+            type="button"
+            class="rail-header__action"
+            aria-label=${t("chat.subagentsPanel.refresh")}
+            title=${t("chat.subagentsPanel.refresh")}
+            ?disabled=${!params.connected}
+            @click=${params.onRefreshSubagents}
+          >
+            ${icons.refresh}
+          </button>`
+        : undefined,
+    ),
+    definePanel(
+      "processes",
+      "processes",
+      icons.terminal,
+      state && params
+        ? html`<openclaw-chat-processes-panel
+            .sessionKey=${state.sessionKey}
+            .agentId=${params.agentId ?? "main"}
+            .presented=${livePresentation(params.processesPresented ?? false)}
+          ></openclaw-chat-processes-panel>`
+        : null,
+      params
+        ? html`<button
+            type="button"
+            class="rail-header__action"
+            aria-label=${t("chat.processesPanel.refresh")}
+            title=${t("chat.processesPanel.refresh")}
+            ?disabled=${!params.connected}
+            @click=${params.onRefreshProcesses}
+          >
+            ${icons.refresh}
+          </button>`
+        : undefined,
+    ),
     definePanel(
       "detail",
       "review",

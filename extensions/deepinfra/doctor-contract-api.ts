@@ -28,11 +28,7 @@ export const legacyConfigRules = [
 // video surfaces; rewriting a custom host's URL cannot make it speak the
 // OpenAI videos protocol, so custom endpoints are never auto-converted.
 function isDeepInfraApiHost(value: string): boolean {
-  try {
-    return new URL(value).host === "api.deepinfra.com";
-  } catch {
-    return false;
-  }
+  return URL.parse(value)?.host === "api.deepinfra.com";
 }
 
 function normalizeBaseUrlValue(value: unknown): string | undefined {

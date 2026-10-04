@@ -4,13 +4,6 @@ import {
   selectAcpSessionRows,
 } from "../acp/runtime/session-meta-keys.js";
 import {
-  countMcpOAuthPrincipalsInDatabase,
-  listMcpOAuthStoreKeysInDatabase,
-  readMcpOAuthPendingInDatabase,
-  readMcpOAuthStoreIfPresentInDatabase,
-  readMcpOAuthStatusesInDatabase,
-} from "../agents/mcp-oauth-store.kernel.js";
-import {
   loadSubagentMaintenanceRunsInDatabase,
   loadVersionedSubagentRunsInDatabase,
   loadSubagentRunsForSessionsInDatabase,
@@ -106,6 +99,7 @@ import {
   isStateDiagnosticCommand,
   readStateDiagnosticCommand,
 } from "./openclaw-state-read-diagnostics.js";
+import { readMcpOAuthStateCommand } from "./openclaw-state-read-mcp-oauth.js";
 import { stateReadRegistry } from "./openclaw-state-read-operation-registry.js";
 import { readStateRegistryCommand } from "./openclaw-state-read-registry.js";
 import type {
@@ -317,35 +311,14 @@ serveOwnedWorkerTasks(
                 runs: new Map(rows.map((entry) => [entry.runId, entry])),
               };
             }
-            if (command.type === "mcpOAuth.statuses") {
-              return {
-                type: command.type,
-                value: readMcpOAuthStatusesInDatabase(db, command.input),
-              };
-            }
-            if (command.type === "mcpOAuth.readOnly") {
-              return {
-                type: command.type,
-                value: readMcpOAuthStoreIfPresentInDatabase(db, command.input),
-              };
-            }
-            if (command.type === "mcpOAuth.keys") {
-              return {
-                type: command.type,
-                value: listMcpOAuthStoreKeysInDatabase(db, command.input),
-              };
-            }
-            if (command.type === "mcpOAuth.pending") {
-              return {
-                type: command.type,
-                value: readMcpOAuthPendingInDatabase(db, command.input),
-              };
-            }
-            if (command.type === "mcpOAuth.countPrincipals") {
-              return {
-                type: command.type,
-                value: countMcpOAuthPrincipalsInDatabase(db, command.input),
-              };
+            if (
+              command.type === "mcpOAuth.statuses" ||
+              command.type === "mcpOAuth.readOnly" ||
+              command.type === "mcpOAuth.keys" ||
+              command.type === "mcpOAuth.pending" ||
+              command.type === "mcpOAuth.countPrincipals"
+            ) {
+              return readMcpOAuthStateCommand(db, command);
             }
             if (command.type === "sessionGroups.snapshot") {
               return {

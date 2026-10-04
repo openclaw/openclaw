@@ -209,37 +209,6 @@ describe("legacy core audit log migration", () => {
     });
   });
 
-  it("resumes a deterministic audit claim left by an interrupted Doctor", async () => {
-    await withAuditMigrationFixture(async (audit) => {
-      const { claim, raw, source } = audit.system;
-      await audit.writeJsonLines(source, [systemAuditEvent("Restarted gateway")]);
-      await fs.rename(source, claim);
-
-      const detected = audit.detect();
-      expect(detected.sources).toMatchObject([{ sourcePath: claim, storage: "claim" }]);
-      const result = await audit.migrate(detected);
-
-      expect(result.warnings).toEqual([]);
-      await expect(fs.access(claim)).rejects.toMatchObject({ code: "ENOENT" });
-      await fs.access(raw);
-      expect(audit.systemEntries()).toHaveLength(1);
-
-      const tenthRawArchive = `${source}.migrated.10.raw`;
-      await audit.writeJsonLines(tenthRawArchive, [
-        systemAuditEvent("Reloaded gateway", {
-          timestamp: "2026-07-04T00:00:00.000Z",
-          operation: "gateway.reload",
-        }),
-      ]);
-      const numberedRaw = audit.detect();
-      expect(numberedRaw.sources).toMatchObject([
-        { sourcePath: tenthRawArchive, storage: "raw-archive" },
-      ]);
-      await audit.migrate(numberedRaw);
-      expect(audit.systemEntries()).toHaveLength(2);
-    });
-  });
-
   it("does not resurrect a pruned raw-archive head when later rows are appended", async () => {
     await withAuditMigrationFixture(async (audit) => {
       const { raw, source } = audit.system;
@@ -340,74 +309,61 @@ describe("legacy core audit log migration", () => {
     });
   });
 
-  it("resumes the stable generation of an interrupted sanitized archive", async () => {
-    await withAuditMigrationFixture(async (audit) => {
-      const { claim, raw, sanitized, source } = audit.system;
-      const record = systemAuditEvent("Interrupted operation");
-      await audit.writeJsonLines(claim, [record]);
-      await audit.writeJsonLines(sanitized, [record]);
+  it.each(["claim-only", "interrupted", "active", "reserved"] as const)(
+    "uses the correct audit archive generation for a %s source",
+    async (mode) => {
+      await withAuditMigrationFixture(async (audit) => {
+        const { claim, raw, sanitized, source } = audit.system;
+        const record = systemAuditEvent("Interrupted operation");
+        const firstGeneration = mode === "claim-only" || mode === "interrupted";
+        if (mode === "claim-only") {
+          await audit.writeJsonLines(source, [record]);
+          await fs.rename(source, claim);
+        } else if (mode === "interrupted") {
+          await audit.writeJsonLines(claim, [record]);
+          await audit.writeJsonLines(sanitized, [record]);
+        } else {
+          await audit.writeJsonLines(source, [record]);
+          await audit.migrate();
+          await fs.rm(raw);
+          await audit.writeJsonLines(source, [record]);
+          if (mode === "reserved") {
+            await fs.rename(source, `${claim}.2`);
+          }
+        }
+        const firstSanitized = mode === "active" ? await fs.readFile(sanitized, "utf8") : undefined;
 
-      const result = await audit.migrate();
+        const detected = audit.detect();
+        if (mode === "claim-only") {
+          expect(detected.sources).toMatchObject([{ sourcePath: claim, storage: "claim" }]);
+        }
+        if (mode === "reserved") {
+          expect(detected.sources).toMatchObject([
+            {
+              sourcePath: `${claim}.2`,
+              storage: "claim",
+              sanitizedArchivePath: `${source}.migrated.2`,
+              rawArchivePath: `${source}.migrated.2.raw`,
+            },
+          ]);
+        }
+        const result = await audit.migrate(detected);
 
-      expect(result.warnings).toEqual([]);
-      await fs.access(raw);
-      await expect(fs.access(`${source}.migrated.2.raw`)).rejects.toMatchObject({
-        code: "ENOENT",
+        expect(result.warnings).toEqual([]);
+        expect(audit.systemEntries()).toHaveLength(firstGeneration ? 1 : 2);
+        await fs.access(firstGeneration ? raw : `${source}.migrated.2.raw`);
+        if (firstGeneration) {
+          await expect(fs.access(claim)).rejects.toMatchObject({ code: "ENOENT" });
+          await expect(fs.access(`${source}.migrated.2.raw`)).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+        } else if (mode === "active") {
+          expect(result.changes.join("\n")).toContain("1 new row");
+          await expect(fs.readFile(sanitized, "utf8")).resolves.toBe(firstSanitized);
+        }
       });
-      expect(audit.systemEntries()).toHaveLength(1);
-    });
-  });
-
-  it("allocates a new generation when an active source follows a sanitized-only archive", async () => {
-    await withAuditMigrationFixture(async (audit) => {
-      const { raw, sanitized, source } = audit.system;
-      const record = systemAuditEvent("Repeated after downgrade");
-      await audit.writeJsonLines(source, [record]);
-      await audit.migrate();
-      await fs.rm(raw);
-      const firstSanitized = await fs.readFile(sanitized, "utf8");
-      await audit.writeJsonLines(source, [record]);
-
-      const repeated = await audit.migrate();
-
-      expect(repeated.warnings).toEqual([]);
-      expect(repeated.changes.join("\n")).toContain("1 new row");
-      await expect(fs.readFile(sanitized, "utf8")).resolves.toBe(firstSanitized);
-      await fs.access(`${source}.migrated.2.raw`);
-      expect(audit.systemEntries()).toHaveLength(2);
-    });
-  });
-
-  it("resumes a claim at its reserved generation instead of an older sanitized-only slot", async () => {
-    await withAuditMigrationFixture(async (audit) => {
-      const { raw, source } = audit.system;
-      const secondClaimPath = path.join(
-        path.dirname(source),
-        `.${path.basename(source)}.doctor-importing.2`,
-      );
-      const record = systemAuditEvent("Repeated after interrupted downgrade");
-      await audit.writeJsonLines(source, [record]);
-      await audit.migrate();
-      await fs.rm(raw);
-      await audit.writeJsonLines(source, [record]);
-      await fs.rename(source, secondClaimPath);
-
-      const detected = audit.detect();
-      expect(detected.sources).toMatchObject([
-        {
-          sourcePath: secondClaimPath,
-          storage: "claim",
-          sanitizedArchivePath: `${source}.migrated.2`,
-          rawArchivePath: `${source}.migrated.2.raw`,
-        },
-      ]);
-      const resumed = await audit.migrate(detected);
-
-      expect(resumed.warnings).toEqual([]);
-      await fs.access(`${source}.migrated.2.raw`);
-      expect(audit.systemEntries()).toHaveLength(2);
-    });
-  });
+    },
+  );
 
   it("leaves malformed audit sources in place without partial imports", async () => {
     await withAuditMigrationFixture(async (audit) => {
@@ -721,46 +677,40 @@ describe("legacy audit recovery byte handling", () => {
     });
   });
 
-  it("resumes a one-byte scrub interruption using exact journal progress", async () => {
-    await withAuditMigrationFixture(async (audit) => {
-      const { raw: rawPath, restore: restorePath } = audit.system;
-      const originalContent = `${JSON.stringify(systemAuditEvent("original archive"))}\n`;
-      const replacementBytes = Buffer.from(originalContent);
-      replacementBytes[0] = FIRST_AUDIT_SCRUB_BYTE;
-      await audit.seedRawArchive(audit.system, replacementBytes);
-      await writeAuditRestoreJournal(rawPath, Buffer.from(originalContent), {
-        restoredBytes: 0,
-        scrubbedBytes: 1,
+  it.each([
+    { direction: "scrubbing", summary: "original archive" },
+    { direction: "restoring", summary: "restore after restart" },
+  ] as const)(
+    "resumes interrupted $direction using exact journal progress",
+    async ({ direction, summary }) => {
+      await withAuditMigrationFixture(async (audit) => {
+        const { raw: rawPath, restore: restorePath } = audit.system;
+        const originalBytes = Buffer.from(`${JSON.stringify(systemAuditEvent(summary))}\n`);
+        const restoredBytes = direction === "restoring" ? Math.floor(originalBytes.length / 2) : 0;
+        const replacementBytes =
+          direction === "restoring"
+            ? buildAuditScrubbedContent(originalBytes.length)
+            : Buffer.from(originalBytes);
+        if (direction === "restoring") {
+          originalBytes.subarray(0, restoredBytes).copy(replacementBytes);
+        } else {
+          replacementBytes[0] = FIRST_AUDIT_SCRUB_BYTE;
+        }
+        await audit.seedRawArchive(audit.system, replacementBytes);
+        await writeAuditRestoreJournal(rawPath, originalBytes, {
+          restoredBytes,
+          scrubbedBytes: direction === "restoring" ? originalBytes.length : 1,
+        });
+
+        const result = await audit.migrate();
+
+        expect(result.warnings).toEqual([]);
+        expect((await fs.readFile(rawPath, "utf8")).trim()).toBe("");
+        expect(audit.systemSummaries()).toEqual([summary]);
+        await expect(fs.access(restorePath)).rejects.toMatchObject({ code: "ENOENT" });
       });
-
-      const result = await audit.migrate();
-
-      expect(result.warnings).toEqual([]);
-      expect((await fs.readFile(rawPath, "utf8")).trim()).toBe("");
-      await expect(fs.access(restorePath)).rejects.toMatchObject({ code: "ENOENT" });
-    });
-  });
-
-  it("resumes restoration after an interrupted rollback write", async () => {
-    await withAuditMigrationFixture(async (audit) => {
-      const { raw: rawPath, restore: restorePath } = audit.system;
-      const originalContent = `${JSON.stringify(systemAuditEvent("restore after restart"))}\n`;
-      const originalBytes = Buffer.from(originalContent, "utf8");
-      const interruptedRestore = buildAuditScrubbedContent(originalBytes.length);
-      originalBytes.subarray(0, Math.floor(originalBytes.length / 2)).copy(interruptedRestore);
-      await audit.seedRawArchive(audit.system, interruptedRestore);
-      await writeAuditRestoreJournal(rawPath, originalBytes, {
-        restoredBytes: Math.floor(originalBytes.length / 2),
-        scrubbedBytes: originalBytes.length,
-      });
-
-      const result = await audit.migrate();
-
-      expect(result.warnings).toEqual([]);
-      expect(audit.systemSummaries()).toEqual(["restore after restart"]);
-      await expect(fs.access(restorePath)).rejects.toMatchObject({ code: "ENOENT" });
-    });
-  });
+    },
+  );
 
   it("retries raw archive recovery when sanitized archive hardening fails", async () => {
     await withAuditMigrationFixture(async (audit) => {

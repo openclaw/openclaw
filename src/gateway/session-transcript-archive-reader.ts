@@ -15,6 +15,7 @@ import {
   type TranscriptRecentReadLimits,
 } from "../sessions/transcript-anchor-page.js";
 import { isVisibleTranscriptRecord } from "../sessions/transcript-visible-record.js";
+import { isPreSessionStartAssistantMessage } from "./chat-display-projection.history.js";
 import { projectTranscriptEntryMessage } from "./session-transcript-entry-message.js";
 import { resolveSessionTranscriptResetArchiveCandidatesAsync } from "./session-transcript-files.fs.js";
 import {
@@ -27,6 +28,7 @@ import {
 } from "./session-transcript-index.fs.js";
 import type {
   ReadRecentSessionMessagesOptions,
+  ReadSessionMessageByIdResult,
   ReadSessionMessagesAsyncOptions,
   ReadSessionMessagesResult,
 } from "./session-transcript-read.types.js";
@@ -196,7 +198,8 @@ export class ArchivedTranscriptReader {
 
   async readById(
     messageId: string,
-  ): Promise<{ message?: unknown; seq?: number; oversized: boolean; found: boolean }> {
+    historyVisibility?: { sessionStartedAt?: number },
+  ): Promise<ReadSessionMessageByIdResult> {
     const filePath = await this.resolvePath();
     if (!filePath) {
       return { oversized: false, found: false };
@@ -216,18 +219,36 @@ export class ArchivedTranscriptReader {
       return { oversized: false, found: false };
     }
     // Raw-byte limits still reject placeholders; only bounded, validated image recoveries qualify.
-    if (
+    const oversized =
       entry.byteLength > MAX_TRANSCRIPT_PARSE_LINE_BYTES &&
       (entry.recoveredImageData !== true ||
-        jsonUtf8Bytes(entry.record) > MAX_TRANSCRIPT_PARSE_LINE_BYTES)
-    ) {
+        jsonUtf8Bytes(entry.record) > MAX_TRANSCRIPT_PARSE_LINE_BYTES);
+    if (oversized && !historyVisibility) {
       return { oversized: true, found: true, seq: entry.seq };
     }
+    const message = indexedTranscriptEntryToMessage(entry);
+    const preceding =
+      historyVisibility &&
+      isPreSessionStartAssistantMessage(message, historyVisibility.sessionStartedAt)
+        ? index.entries[entry.seq - 2]
+        : undefined;
+    const previous = preceding
+      ? (await readIndexedTranscriptEntries(filePath, index, [preceding], this.scope.sessionId))[0]
+      : undefined;
     return {
-      message: indexedTranscriptEntryToMessage(entry),
+      message,
       seq: entry.seq,
-      oversized: false,
+      oversized,
       found: true,
+      ...(historyVisibility
+        ? {
+            historyContext: {
+              transcriptPath: filePath,
+              displaySource: index.displaySource,
+              ...(previous ? { precedingMessage: indexedTranscriptEntryToMessage(previous) } : {}),
+            },
+          }
+        : {}),
     };
   }
 
@@ -332,12 +353,15 @@ export class ArchivedTranscriptReader {
     }
   > {
     let displaySource: string | undefined;
-    for (const archivePath of await resolveSessionTranscriptResetArchiveCandidatesAsync(
-      this.scope.sessionId,
-      this.scope.storePath,
-      this.scope.sessionFile,
-      this.scope.agentId,
-    )) {
+    const candidates = this.scope.exactArchivePath
+      ? [this.scope.exactArchivePath]
+      : await resolveSessionTranscriptResetArchiveCandidatesAsync(
+          this.scope.sessionId,
+          this.scope.storePath,
+          this.scope.sessionFile,
+          this.scope.agentId,
+        );
+    for (const archivePath of candidates) {
       let filePath: string;
       try {
         filePath = materializeSessionArchiveForRead(archivePath);

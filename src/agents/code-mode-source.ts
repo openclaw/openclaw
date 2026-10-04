@@ -29,30 +29,17 @@ function containsModuleAccess(node: import("acorn").AnyNode): boolean {
   }
 
   for (const value of Object.values(node)) {
-    if (Array.isArray(value)) {
-      for (const child of value) {
-        if (
-          child !== null &&
-          typeof child === "object" &&
-          "type" in child &&
-          typeof child.type === "string" &&
-          // SAFETY: Children are taken directly from Acorn's parsed AST.
-          containsModuleAccess(child as import("acorn").AnyNode)
-        ) {
-          return true;
-        }
+    for (const child of Array.isArray(value) ? value : [value]) {
+      if (
+        child !== null &&
+        typeof child === "object" &&
+        "type" in child &&
+        typeof child.type === "string" &&
+        // SAFETY: Children are taken directly from Acorn's parsed AST.
+        containsModuleAccess(child as import("acorn").AnyNode)
+      ) {
+        return true;
       }
-      continue;
-    }
-    if (
-      value !== null &&
-      typeof value === "object" &&
-      "type" in value &&
-      typeof value.type === "string" &&
-      // SAFETY: Child fields are taken directly from Acorn's parsed AST.
-      containsModuleAccess(value as import("acorn").AnyNode)
-    ) {
-      return true;
     }
   }
   return false;
