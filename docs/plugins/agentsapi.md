@@ -288,8 +288,12 @@ requires a reset. It does not migrate files between hosts.
    controller to ensure the same session again.
 5. Reset, session deletion, or confirmed terminal native-session failure attempts
    `retire(binding, context)` after native work settles. It stops only that
-   binding's executor. Cleanup is best effort; an unreachable host or failed stop
-   is reported and does not prevent reset or deletion.
+   binding's executor. If native work cannot be confirmed settled, reset or
+   deletion fails and retains the binding so you can restore connectivity or
+   API-key authentication and retry. After settlement, executor retirement is
+   best effort: an unreachable host or failed stop is reported without blocking
+   reset or deletion. After a Gateway restart, cleanup reacquires the owning
+   agent's OpenAI API-key authentication before checking the saved native session.
 
 A controller typically launches this command on the execution host, in its
 prepared workspace, with the environment key supplied securely as `CODEX_API_KEY`:

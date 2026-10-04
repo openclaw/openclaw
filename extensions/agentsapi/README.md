@@ -246,7 +246,9 @@ and `AgentExecutorContext` types from `openclaw/plugin-sdk/agent-harness-runtime
   turns do not call the executor controller.
 - `retire(binding, context)` idempotently releases only that binding's executor
   after native work settles, before reset or session deletion discards the binding.
-  Executor cleanup is best effort: a failed stop does not prevent reset or deletion.
+  Native settlement is required: a failed status read or cancellation preserves
+  the binding and blocks reset or deletion until the operator can retry.
+  Retirement of an already-settled executor is best effort.
   Terminal native session failure also attempts to retire the executor after
   current API state confirms the failure.
 
@@ -267,8 +269,11 @@ Changing controllers requires a session reset. Cleanup uses the original stored
 controller owner, even after configuration changes. A missing or disabled owner
 is reported as a cleanup warning. Gateway disposal retains the executor and its
 binding. Cleanup uses the session's prepared authenticated handle when available;
-credentials are never stored in the binding. An unavailable cleanup handle or
-executor host does not block reset or deletion.
+credentials are never stored in the binding. After restart, cleanup resolves the
+owning agent's current OpenAI API-key authentication and settles the saved native
+session before discarding its binding. Unavailable authentication or failed native
+settlement preserves the binding; restore access and retry reset or deletion.
+An unavailable executor host does not block retirement after native settlement.
 Bindings from the earlier factory-injected controller have no plugin owner.
 Retire those sessions using the previous version before adopting plugin selection;
 ownerless controlled bindings are rejected and retained rather than reassigned.

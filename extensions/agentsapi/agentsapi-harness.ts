@@ -13,6 +13,8 @@ import {
   wrapNativeSessionDeletionMutation,
 } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { runAgentsApiAttempt, type AgentsApiPromptHistories } from "./agentsapi-attempt.js";
 import { createAgentsApiBindings, type AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient } from "./agentsapi-client.js";
@@ -49,15 +51,40 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
   const getBindings = () =>
     (bindings ??= createAgentsApiBindings(runtime, {
       settle: async (localSessionId, binding, assertCleanupCurrent) => {
-        const prepared = preparedNativeCleanup.get(localSessionId);
+        let prepared = preparedNativeCleanup.get(localSessionId);
         if (
-          prepared?.nativeSessionId === binding.sessionId &&
-          prepared.configFingerprint === binding.configFingerprint
+          prepared?.nativeSessionId !== binding.sessionId ||
+          prepared.configFingerprint !== binding.configFingerprint
         ) {
-          await attemptExecutorCleanup(
-            () => prepared.settle(assertCleanupCurrent),
-            assertCleanupCurrent,
-          );
+          assertCurrent();
+          assertCleanupCurrent();
+          // Reacquire agent-scoped auth after restart without persisting credentials
+          // or validating the new configuration against the session being removed.
+          const config = getRuntimeConfig();
+          const agentId = binding.executor!.agentId;
+          const auth = await resolveApiKeyForProvider({
+            provider: "openai",
+            cfg: config,
+            agentDir: runtime.agent.resolveAgentDir(config, agentId),
+            workspaceDir: runtime.agent.resolveAgentWorkspaceDir(config, agentId),
+            signal: AbortSignal.timeout(30_000),
+          });
+          assertCurrent();
+          assertCleanupCurrent();
+          if (auth.mode !== "api-key" || !auth.apiKey?.trim()) {
+            throw new Error(
+              "Agents API session cleanup requires an OpenAI API key; restore API-key authentication and retry reset or deletion",
+            );
+          }
+          prepared = prepareNativeCleanup(localSessionId, binding, auth.apiKey);
+        }
+        // Losing the binding before native settlement would orphan active work.
+        try {
+          await prepared.settle(assertCleanupCurrent);
+        } catch (error) {
+          // Retry with current authentication after an operator repairs access.
+          preparedNativeCleanup.delete(localSessionId);
+          throw error;
         }
       },
       retire: async (_localSessionId, binding, assertCleanupCurrent) => {
@@ -309,10 +336,10 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
 
   function prepareNativeCleanup(localSessionId: string, binding: AgentsApiBinding, apiKey: string) {
     assertCurrent();
-    preparedNativeCleanup.set(localSessionId, {
+    const prepared = {
       nativeSessionId: binding.sessionId,
       configFingerprint: binding.configFingerprint,
-      settle: async (assertCleanupCurrent) => {
+      settle: async (assertCleanupCurrent: () => void) => {
         const assertCleanup = () => {
           assertCurrent();
           assertCleanupCurrent();
@@ -327,7 +354,9 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
           assertCleanup();
         }
       },
-    });
+    };
+    preparedNativeCleanup.set(localSessionId, prepared);
+    return prepared;
   }
 }
 

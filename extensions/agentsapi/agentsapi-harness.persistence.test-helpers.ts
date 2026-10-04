@@ -14,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { vi } from "vitest";
@@ -115,7 +116,7 @@ export async function executorFixture(state: { stateDir: string; env: NodeJS.Pro
     .spyOn(AgentsApiClient.prototype, "environment")
     .mockResolvedValue(connectedEnvironment());
   const message = vi.spyOn(AgentsApiClient.prototype, "message").mockResolvedValue(undefined);
-  vi.spyOn(AgentsApiClient.prototype, "cancel").mockImplementation(async () => {
+  const cancel = vi.spyOn(AgentsApiClient.prototype, "cancel").mockImplementation(async () => {
     events.push("cancel");
   });
   vi.spyOn(AgentsApiClient.prototype, "setReasoningEffort").mockResolvedValue(undefined);
@@ -130,6 +131,7 @@ export async function executorFixture(state: { stateDir: string; env: NodeJS.Pro
     session,
     environment,
     message,
+    cancel,
     events,
     resolveController,
     createHarness: () => requireExecutorHarness(runtime),
@@ -152,6 +154,7 @@ export function requireExecutorHarness(runtime: PluginRuntime) {
 }
 
 function createBindingRuntime(env: NodeJS.ProcessEnv, current: () => OpenClawConfig) {
+  setRuntimeConfigSnapshot(current());
   const runtime = createPluginRuntimeMock({ config: { current } });
   runtime.state.openKeyedStore = <T>(options: Parameters<typeof runtime.state.openKeyedStore>[0]) =>
     createPluginStateKeyedStoreForTests<T>("agentsapi", { ...options, env });

@@ -9,6 +9,7 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -24,8 +25,10 @@ import {
 } from "./agentsapi-harness.persistence.test-helpers.js";
 import { createTurn } from "./agentsapi.test-support.js";
 
-const { createSession, fetchWithSsrFGuardMock } = vi.hoisted(() => ({
+const { createSession, fetchWithSsrFGuardMock, resolveProviderAuth } = vi.hoisted(() => ({
   createSession: vi.fn<typeof import("./agentsapi-session.js").createAgentsApiSession>(),
+  resolveProviderAuth:
+    vi.fn<typeof import("openclaw/plugin-sdk/provider-auth-runtime").resolveApiKeyForProvider>(),
   fetchWithSsrFGuardMock:
     vi.fn<typeof import("openclaw/plugin-sdk/ssrf-runtime").fetchWithSsrFGuard>(),
 }));
@@ -46,7 +49,17 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>()),
+  resolveApiKeyForProvider: resolveProviderAuth,
+}));
+
 beforeEach(() => {
+  resolveProviderAuth.mockReset().mockResolvedValue({
+    apiKey: "fixture-not-a-real-api-key",
+    mode: "api-key",
+    source: "fixture",
+  });
   fetchWithSsrFGuardMock.mockReset().mockImplementation(() => {
     throw new Error("Unexpected live request in the Agents API persistence fixture");
   });
@@ -75,6 +88,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   createSession.mockReset();
   resetPluginStateStoreForTests();
   vi.restoreAllMocks();
@@ -778,8 +792,29 @@ it("can reset an owned executor after Gateway restart when its controller is una
           'Agent executor controller plugin "fixture-executor" is missing, disabled, or unavailable',
         );
       });
+      const saved = await fixture.openStore().lookup(fixture.params.sessionId);
+      fixture.events.length = 0;
+      fixture.session.mockResolvedValue({ ...fixture.nativeSession, status: "in_progress" });
+      vi.mocked(fixture.runtime.agent.resolveAgentDir).mockReturnValue("/gateway/agents/main");
+      vi.mocked(fixture.runtime.agent.resolveAgentWorkspaceDir).mockReturnValue(
+        "/gateway/workspace",
+      );
       harness = requireExecutorHarness(fixture.runtime);
       await harness.reset({ sessionId: fixture.params.sessionId, reason: "reset" });
+      expect(resolveProviderAuth).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "openai",
+          agentDir: "/gateway/agents/main",
+          workspaceDir: "/gateway/workspace",
+          signal: expect.any(AbortSignal),
+        }),
+      );
+      expect(fixture.runtime.agent.resolveAgentDir).toHaveBeenCalledWith(
+        expect.any(Object),
+        saved?.executor?.agentId,
+      );
+      expect(fixture.events).toEqual(["cancel"]);
+      expect(fixture.cancel).toHaveBeenCalledWith(saved?.sessionId, expect.any(AbortSignal));
       expect((await fixture.openStore().lookup(fixture.params.sessionId)) ?? {}).toEqual({});
       expect(fixture.message).toHaveBeenCalledTimes(1);
     } finally {
@@ -879,6 +914,112 @@ it("ignores a stale connection action on a healthy retained session", async () =
     }
   });
 });
+
+it.each([
+  ["reset", "session"],
+  ["reset", "cancel"],
+  ["delete", "session"],
+  ["delete", "cancel"],
+] as const)(
+  "preserves executor binding when %s %s settlement fails and permits retry",
+  async (operation, failurePoint) => {
+    await withOpenClawTestState(
+      { label: "agentsapi-executor-settlement-failure" },
+      async (state) => {
+        const fixture = await executorFixture(state);
+        const harness = fixture.createHarness();
+        try {
+          await harness.runAttempt(fixture.params);
+          const saved = await fixture.openStore().lookup(fixture.params.sessionId);
+          fixture.events.length = 0;
+          fixture.session.mockResolvedValue({ ...fixture.nativeSession, status: "in_progress" });
+          const failure = new Error("Native settlement unavailable");
+          fixture[failurePoint].mockRejectedValueOnce(failure);
+          const cleanup = () =>
+            operation === "reset"
+              ? harness.reset({ sessionId: fixture.params.sessionId, reason: "reset" })
+              : harness.withSessionDeletion(
+                  { ...fixture.params.sessionTarget, assertCurrent: () => {} },
+                  async (mutation) => mutation.commit(),
+                );
+          await expect(cleanup()).rejects.toBe(failure);
+          expect(await fixture.openStore().lookup(fixture.params.sessionId)).toEqual(saved);
+          expect(fixture.events).toEqual([]);
+          await cleanup();
+          expect(resolveProviderAuth).toHaveBeenCalledTimes(1);
+          expect(fixture.events).toEqual(["cancel", "retire"]);
+          expect((await fixture.openStore().lookup(fixture.params.sessionId)) ?? {}).toEqual({});
+        } finally {
+          await harness.dispose();
+        }
+      },
+    );
+  },
+);
+
+it.each(["auth failure", "authority revoked", "missing key", "oauth credential"] as const)(
+  "preserves restarted executor binding on %s before native cleanup",
+  async (failureMode) => {
+    await withOpenClawTestState({ label: "agentsapi-executor-restart-auth" }, async (state) => {
+      const fixture = await executorFixture(state);
+      let harness = fixture.createHarness();
+      try {
+        await harness.runAttempt(fixture.params);
+        const saved = await fixture.openStore().lookup(fixture.params.sessionId);
+        await harness.dispose();
+        await reopenState();
+        harness = fixture.createHarness();
+        fixture.events.length = 0;
+        fixture.session
+          .mockClear()
+          .mockResolvedValue({ ...fixture.nativeSession, status: "in_progress" });
+        const failure = new Error(failureMode);
+        let current = true;
+        resolveProviderAuth.mockImplementationOnce(async () => {
+          await Promise.resolve();
+          if (failureMode === "auth failure") {
+            throw failure;
+          }
+          if (failureMode === "missing key") {
+            return { mode: "api-key", source: "fixture" };
+          }
+          if (failureMode === "oauth credential") {
+            return { apiKey: "fixture-oauth-token", mode: "oauth", source: "fixture" };
+          }
+          current = false;
+          return { apiKey: "fixture-not-a-real-api-key", mode: "api-key", source: "fixture" };
+        });
+        const cleanup = () =>
+          harness.withSessionDeletion(
+            {
+              ...fixture.params.sessionTarget,
+              assertCurrent: () => {
+                if (!current) {
+                  throw failure;
+                }
+              },
+            },
+            async (mutation) => mutation.commit(),
+          );
+        if (failureMode === "missing key" || failureMode === "oauth credential") {
+          await expect(cleanup()).rejects.toThrow();
+        } else {
+          await expect(cleanup()).rejects.toBe(failure);
+        }
+        expect(resolveProviderAuth).toHaveBeenCalledTimes(1);
+        expect(await fixture.openStore().lookup(fixture.params.sessionId)).toEqual(saved);
+        expect(fixture.session.mock.calls).toEqual([]);
+        expect(fixture.events).toEqual([]);
+        current = true;
+        await cleanup();
+        expect(fixture.events).toEqual(["cancel", "retire"]);
+        expect(await fixture.openStore().lookup(fixture.params.sessionId)).toBeUndefined();
+      } finally {
+        await harness.dispose();
+      }
+    });
+  },
+);
 
 function mockClient(sessionId: string) {
   const create = vi.spyOn(AgentsApiClient.prototype, "create").mockResolvedValue(sessionId);
