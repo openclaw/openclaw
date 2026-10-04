@@ -279,7 +279,7 @@ describe("Sessions board rules and live facts", () => {
         ["failed", "review"],
       ],
       columns: ["review", "active", "no-pr", "other"],
-      warning: "pull-request information is unavailable",
+      warning: "Pull-request facts for 1 session are not loaded yet.",
     },
     {
       name: "default rule priority for unobserved runs and PRs",
@@ -465,7 +465,84 @@ describe("Sessions board rules and live facts", () => {
     );
   });
 
-  it("announces new sessions and refreshes unavailable PR facts only on publication", async () => {
+  it.each([false, true])(
+    "retains ready PR facts through unavailable reads (rate limited: %s) while updating run and health",
+    async (rateLimited) => {
+      const known = [
+        facts("review", { pullRequests: [{ number: 1, state: "open" }] }),
+        facts("merged", { pullRequests: [{ number: 2, state: "merged" }] }),
+        facts("none"),
+      ];
+      await withService(
+        { facts: known, spec: createDefaultWorkboardSessionsBoardSpec() },
+        async ({ service, state, emit }) => {
+          await service.read(BOARD_ID);
+          state.roster = [...known, facts("unknown")];
+          state.facts = state.roster.map((row) => ({
+            ...row,
+            label: "Fresh facts",
+            pullRequests: [],
+            pullRequestsUnavailable: rateLimited ? undefined : true,
+            ...(rateLimited ? { pullRequestsRateLimited: true as const } : {}),
+          }));
+          for (const row of known) {
+            emit(row.key);
+          }
+          const read = await service.read(BOARD_ID);
+          expect(read.sessions.map(({ columnId }) => columnId)).toEqual([
+            "in-review",
+            "merged",
+            "done",
+            "done",
+          ]);
+          expect(read.sessions.map(({ pullRequests }) => pullRequests)).toEqual([
+            [{ number: 1, state: "open" }],
+            [{ number: 2, state: "merged" }],
+            [],
+            [],
+          ]);
+          expect(read.sessions.every(({ label }) => label === "Fresh facts")).toBe(true);
+          expect(read.sessions.slice(2).map(({ reason }) => reason)).toEqual([
+            "fallback",
+            "facts-unavailable",
+          ]);
+          const suffix = rateLimited ? " (GitHub rate limited)" : "";
+          expect(read.warning).toBe(
+            `Pull-request facts for 3 sessions are stale${suffix}. Pull-request facts for 1 session are not loaded yet${suffix}.`,
+          );
+          state.facts[0] = { ...state.facts[0]!, run: "active" };
+          state.facts[1] = {
+            ...state.facts[1]!,
+            observerDigest: { health: "waiting-on-user", headline: "Approval", revision: 1 },
+          };
+          emit(known[0]!.key);
+          emit(known[1]!.key);
+          const changed = await service.read(BOARD_ID);
+          expect(changed.sessions.slice(0, 2)).toMatchObject([
+            { run: "active", columnId: "working", pullRequests: known[0]!.pullRequests },
+            {
+              observerDigest: { health: "waiting-on-user" },
+              columnId: "needs-input",
+              pullRequests: known[1]!.pullRequests,
+            },
+          ]);
+          state.facts[0] = {
+            ...state.facts[0]!,
+            lifecycleRevision: "replacement",
+            run: "idle",
+          };
+          emit(known[0]!.key);
+          expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject({
+            pullRequests: [],
+            columnId: "done",
+            reason: "facts-unavailable",
+          });
+        },
+      );
+    },
+  );
+
+  it("announces new sessions and backs off unavailable PR retries until success", async () => {
     await withService({ facts: [] }, async ({ service, store, state, emit, readSessionFacts }) => {
       expect((await service.read(BOARD_ID)).sessions).toEqual([]);
       const changed = vi.spyOn(store, "announceChangeEpoch");
@@ -473,19 +550,54 @@ describe("Sessions board rules and live facts", () => {
       emit(facts("new").key);
       await vi.advanceTimersByTimeAsync(5_000);
       expect(changed).toHaveBeenCalledOnce();
-      expect((await service.read(BOARD_ID)).warning).toContain(
-        "pull-request information is unavailable",
-      );
-      state.facts = [facts("new", { pullRequests: [{ number: 1, state: "open" }] })];
-      expect((await service.read(BOARD_ID)).warning).toContain(
-        "pull-request information is unavailable",
-      );
-      vi.setSystemTime(NOW + 30 * 60_000);
       await service.read(BOARD_ID);
-      expect(readSessionFacts).toHaveBeenCalledOnce();
+      let calls = 1;
+      for (const delay of [60_000, 120_000, 240_000, 480_000, 900_000, 900_000]) {
+        await vi.advanceTimersByTimeAsync(delay - 1);
+        const before = await service.read(BOARD_ID);
+        expect(readSessionFacts).toHaveBeenCalledTimes(calls);
+        await vi.advanceTimersByTimeAsync(1);
+        const reads = await Promise.all([
+          service.read(BOARD_ID),
+          service.read(BOARD_ID),
+          service.read(BOARD_ID),
+        ]);
+        expect(readSessionFacts).toHaveBeenCalledTimes(++calls);
+        expect(reads.every((read) => read === reads[0])).toBe(true);
+        expect(reads[0]!.revision!.revision).toBe(before.revision!.revision);
+        expect(reads[0]!.revision!.scope).not.toBe(before.revision!.scope);
+      }
+      state.facts = [facts("new", { pullRequests: [{ number: 1, state: "open" }] })];
       emit(facts("new").key);
       expect((await service.read(BOARD_ID)).warning).toBeUndefined();
-      expect(readSessionFacts).toHaveBeenCalledTimes(2);
+      expect(readSessionFacts).toHaveBeenCalledTimes(++calls);
+      state.facts = [facts("new", { pullRequestsUnavailable: true })];
+      emit(facts("new").key);
+      await service.read(BOARD_ID);
+      expect(readSessionFacts).toHaveBeenCalledTimes(++calls);
+      await vi.advanceTimersByTimeAsync(30_000);
+      emit(facts("new").key);
+      await service.read(BOARD_ID);
+      expect(readSessionFacts).toHaveBeenCalledTimes(++calls);
+      state.roster = [...state.roster, facts("second")];
+      state.facts = [...state.facts, facts("second", { pullRequestsUnavailable: true })];
+      await service.read(BOARD_ID);
+      expect(readSessionFacts).toHaveBeenCalledTimes(++calls);
+      expect(readSessionFacts.mock.lastCall?.[0].sessionKeys).toEqual([
+        facts("new").key,
+        facts("second").key,
+      ]);
+      await vi.advanceTimersByTimeAsync(29_999);
+      await service.read(BOARD_ID);
+      expect(readSessionFacts).toHaveBeenCalledTimes(calls);
+      await vi.advanceTimersByTimeAsync(1);
+      await service.read(BOARD_ID);
+      expect(readSessionFacts).toHaveBeenCalledTimes(++calls);
+      expect(readSessionFacts.mock.lastCall?.[0].sessionKeys).toEqual([facts("new").key]);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await service.read(BOARD_ID);
+      expect(readSessionFacts).toHaveBeenCalledTimes(calls + 1);
+      expect(readSessionFacts.mock.lastCall?.[0].sessionKeys).toEqual([facts("second").key]);
     });
   });
 

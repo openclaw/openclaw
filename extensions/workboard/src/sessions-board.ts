@@ -48,7 +48,19 @@ type Operations = {
 export type WorkboardSessionsBoardService = OpenClawPluginService &
   Operations & { stop: () => Promise<void> };
 type Owner = Operations & { cancel: () => void; stop: () => Promise<void> };
+type CachedFacts = {
+  facts: WorkboardSessionFacts;
+  prRetry?: { at: number; delayMs: number; stale: boolean };
+};
+type PreparedProjection = {
+  read: Promise<{ snapshot: WorkboardSessionsBoardRead; complete: boolean }>;
+  expires: number;
+  retryAt: number;
+  facts?: Map<string, CachedFacts>;
+};
 const FACTS_BATCH_SIZE = 40;
+const FACTS_PR_RETRY_MS = 60_000;
+const FACTS_PR_RETRY_MAX_MS = 15 * 60_000;
 
 function activeState() {
   return resolveGlobalSingleton<{ owner?: Owner }>(
@@ -160,12 +172,9 @@ function createOwner(
   context: ParametersOfStart,
   isCurrent: () => boolean,
 ): Owner {
-  const lastKnown = new Map<string, WorkboardSessionFacts>();
+  const lastKnown = new Map<string, CachedFacts>();
   const boards = new Map<string, Promise<WorkboardSessionsBoard>>();
-  const projections = new Map<
-    string,
-    { read: Promise<{ snapshot: WorkboardSessionsBoardRead; complete: boolean }>; expires: number }
-  >();
+  const projections = new Map<string, PreparedProjection>();
   let revision = params.store.sessionsRevision;
   const now = params.now ?? Date.now;
   let stopped = false;
@@ -203,14 +212,25 @@ function createOwner(
     people: WorkboardSessionsBoardRead["people"],
     admittedRevision: typeof revision,
     caller?: CallerAuthority,
+    preparedFacts?: Map<string, CachedFacts>,
   ) => {
     const id = board.id;
     const assertReadCurrent = interactiveAuthority(caller);
     assertReadCurrent();
     const unavailable = new Set<string>();
     const reasons = new Set<string>();
-    const resolved = new Map<string, WorkboardSessionFacts>();
-    const rows = [...roster.values()].filter((row) => row.key !== board.sessions.agentSessionKey);
+    const resolved = new Map<string, CachedFacts>();
+    const rows = [...roster.values()].filter((row) => {
+      if (row.key === board.sessions.agentSessionKey) {
+        return false;
+      }
+      const previous = preparedFacts?.get(row.key);
+      if (previous && (!previous.prRetry || previous.prRetry.at > now())) {
+        resolved.set(row.key, previous);
+        return false;
+      }
+      return true;
+    });
     let complete = true;
     for (let offset = 0; offset < rows.length; offset += FACTS_BATCH_SIZE) {
       const batch = rows.slice(offset, offset + FACTS_BATCH_SIZE);
@@ -223,14 +243,44 @@ function createOwner(
         for (const row of batch) {
           const facts = returned.get(row.key);
           if (facts?.sessionId === row.sessionId) {
-            resolved.set(row.key, facts);
+            const cached = lastKnown.get(row.key);
+            const previous =
+              cached?.facts.sessionId === facts.sessionId &&
+              cached.facts.lifecycleRevision === facts.lifecycleRevision
+                ? cached
+                : undefined;
+            let prRetry: CachedFacts["prRetry"];
+            if (facts.pullRequestsUnavailable || facts.pullRequestsRateLimited) {
+              const retry = previous?.prRetry;
+              const delayMs = retry
+                ? Math.min(retry.delayMs * 2, FACTS_PR_RETRY_MAX_MS)
+                : FACTS_PR_RETRY_MS;
+              prRetry = {
+                // Fresh run/health reads do not advance an unexpired PR backoff.
+                ...(retry && retry.at > now() ? retry : { at: now() + delayMs, delayMs }),
+                stale: Boolean(
+                  previous &&
+                  (previous.prRetry?.stale ||
+                    (!previous.facts.pullRequestsUnavailable &&
+                      !previous.facts.pullRequestsRateLimited)),
+                ),
+              };
+            }
+            resolved.set(row.key, {
+              facts:
+                prRetry?.stale && previous
+                  ? { ...facts, pullRequests: previous.facts.pullRequests }
+                  : facts,
+              prRetry,
+            });
           } else {
             complete = false;
           }
           // Late snapshots may finish, but cannot replace a newer generation's fallback facts.
           if (params.store.sessionsRevision === admittedRevision) {
-            if (facts?.sessionId === row.sessionId) {
-              lastKnown.set(row.key, facts);
+            const current = resolved.get(row.key);
+            if (current) {
+              lastKnown.set(row.key, current);
             } else {
               lastKnown.delete(row.key);
             }
@@ -242,7 +292,7 @@ function createOwner(
         for (const row of batch) {
           unavailable.add(row.key);
           const previous = lastKnown.get(row.key);
-          if (previous?.sessionId === row.sessionId) {
+          if (previous?.facts.sessionId === row.sessionId) {
             resolved.set(row.key, previous);
           }
         }
@@ -255,21 +305,33 @@ function createOwner(
     assertReadCurrent();
     const fallback = sessionsBoardFallback(board);
     const sessions: WorkboardSessionsBoardRead["sessions"] = [];
+    const prWarnings = new Map<string, number>();
     for (const row of roster.values()) {
       if (!resolved.has(row.key) && !unavailable.has(row.key)) {
         continue;
       }
-      const known = resolved.get(row.key);
+      const cached = resolved.get(row.key);
+      const known = cached?.facts;
       const facts = known ?? row;
       if (!inScope(facts, board, now())) {
         continue;
+      }
+      if (facts.pullRequestsUnavailable || facts.pullRequestsRateLimited) {
+        const availability = cached?.prRetry?.stale ? "stale" : "not loaded yet";
+        const reason = `${availability}${facts.pullRequestsRateLimited ? " (GitHub rate limited)" : ""}`;
+        prWarnings.set(reason, (prWarnings.get(reason) ?? 0) + 1);
       }
       const pin = placements.get(row.key);
       const pinned =
         pin?.source === "operator" &&
         board.sessions.columns.some((column) => column.id === pin.columnId);
+      // Keep availability visible to callers while rules use the last confirmed PR list.
+      const ruleFacts =
+        facts.pullRequestsUnavailable || facts.pullRequestsRateLimited
+          ? { ...facts, pullRequestsUnavailable: !cached?.prRetry?.stale }
+          : facts;
       const match = known
-        ? board.sessions.columns.find((column) => sessionMatchesColumn(facts, column))
+        ? board.sessions.columns.find((column) => sessionMatchesColumn(ruleFacts, column))
         : undefined;
       sessions.push({
         ...facts,
@@ -277,7 +339,7 @@ function createOwner(
         source: pinned ? "operator" : "state",
         reason: pinned
           ? pin.reason
-          : !known || (!match && facts.pullRequestsUnavailable)
+          : !known || (!match && ruleFacts.pullRequestsUnavailable)
             ? "facts-unavailable"
             : match
               ? "Matched column rules"
@@ -295,13 +357,14 @@ function createOwner(
     } else {
       factsFailureLogged = false;
     }
-    if (sessions.some((session) => session.pullRequestsUnavailable)) {
+    for (const [reason, count] of prWarnings) {
       warnings.push(
-        "Some pull-request information is unavailable. The board updates when background facts are ready.",
+        `Pull-request facts for ${count} ${count === 1 ? "session" : "sessions"} are ${reason}.`,
       );
     }
     return {
       complete,
+      facts: resolved,
       snapshot: {
         board,
         columns: board.sessions.columns,
@@ -346,19 +409,30 @@ function createOwner(
     const key = JSON.stringify([id, view, [...sessions.values()], people]);
     const cacheable = params.store.sessionsRevision === admittedRevision;
     let projection = cacheable ? projections.get(key) : undefined;
-    if (projection && projection.expires < now()) {
+    let preparedFacts: Map<string, CachedFacts> | undefined;
+    if (projection && (projection.expires < now() || projection.retryAt <= now())) {
+      // Reuse facts only from this exact authorized roster and revision.
+      if (projection.expires >= now()) {
+        preparedFacts = projection.facts;
+      }
       projections.delete(key);
       projection = undefined;
     }
     const joined = Boolean(projection);
     if (!projection) {
-      const prepared = {
+      const prepared: PreparedProjection = {
         expires: Infinity,
-        read: project(board, sessions, people, admittedRevision, caller).then(
-          ({ snapshot: result, complete }) => {
+        retryAt: Infinity,
+        read: project(board, sessions, people, admittedRevision, caller, preparedFacts).then(
+          ({ snapshot: result, complete, facts }) => {
             const maxAge = (board.sessions.scope?.maxAgeHours ?? 72) * 3_600_000;
             prepared.expires = result.sessions.reduce(
               (expires, row) => Math.min(expires, row.lastActivityAt + maxAge),
+              Infinity,
+            );
+            prepared.facts = complete ? facts : undefined;
+            prepared.retryAt = result.sessions.reduce(
+              (retryAt, row) => Math.min(retryAt, facts.get(row.key)?.prRetry?.at ?? Infinity),
               Infinity,
             );
             const snapshot = {

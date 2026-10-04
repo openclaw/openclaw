@@ -125,7 +125,9 @@ exactly one column. Open a tile to continue its conversation; the tile also show
 its agent, run state, observer headline when available, pull requests, and recent
 activity. Message previews are plain text: Markdown formatting and HTML are removed,
 link labels are retained, and whitespace is collapsed before the 400-character limit.
-The agent filter narrows the displayed sessions without changing the
+Tiles link up to four pull requests, ordered by open, draft, merged,
+then closed state, with a count for any additional pull requests. The agent filter
+narrows the displayed sessions without changing the
 saved board scope.
 
 **People filter:** Choose **Everyone** (the default), **Involving me**, or a person
@@ -136,8 +138,9 @@ the Board agent. API clients can pass `view: { involvingMe?: boolean,
 involvingProfileId?: string, includePeople?: boolean }` to
 `workboard.sessionsBoard.read`; `includePeople` returns the people facet for the picker.
 
-Columns are rules over Gateway-owned session status, observer health, and
-pull-request state. Health comes from the Gateway session observer: live digests
+Columns are rules over Gateway-owned run state, observer health, and
+pull-request state. Run state comes from the live run registry and queued inputs;
+a saved `running` status without an active run is idle. Health comes from the Gateway session observer: live digests
 for sessions someone is watching in the Control UI, and a terminal digest when an
 observed run ends. Sessions nobody watches have no health, so they match only run
 and pull-request rules. Reads follow the current caller's session visibility; board specs and
@@ -178,16 +181,23 @@ still obtains its own caller-scoped roster; sharing never expands session visibi
 Reconnects and view changes request a full snapshot. The Workboard change event's
 `sessionsRevision` advances for board edits, operator pins, and session fact
 invalidations independently of `cardsRevision`.
-Reads use prepared Gateway facts without waiting for Git or pull-request requests.
-Missing pull-request facts refresh in the background and announce a board change
-when ready. An inline warning names the
-reason when facts or pull-request information are unavailable, including on an
-empty board. A failed facts read keeps the last known facts and placement;
-sessions with no known facts use the fallback column with reason
+
+Pull-request facts come from the Gateway's shared PR owner, independently of
+which sessions appear in a Control UI sidebar. Reads use prepared Gateway facts
+without waiting for Git or pull-request requests. Missing snapshots load through
+that owner's bounded background loader and announce a board change when ready.
+If PR facts become unavailable or GitHub rate limits requests, the board retains
+the last ready PR list for its cards and column rules while updating run state
+and health. Unavailable PR reads retry per session, starting after one minute
+and doubling to a 15-minute maximum; a successful read resets the delay.
+An inline warning distinguishes stale PR facts from facts not loaded yet and
+identifies GitHub rate limiting. A failed facts read keeps the last known facts
+and placement; sessions with no known facts use the fallback column with reason
 `facts-unavailable`. A session whose available facts match no rule also uses that
 reason while its pull-request facts are unknown. Opening a board starts any needed
-background refresh. Shared snapshots reuse prepared facts until a publication or
-board age-window expiry; failure fallback retains the last known facts.
+background refresh. Shared snapshots reuse prepared facts until a publication,
+board age-window expiry, or a pull-request retry becomes due; failure fallback
+retains the last known facts.
 
 When the Control UI host supports a session dock, **Board agent** opens a
 conversation beside the board. Its first use creates and saves a dedicated
