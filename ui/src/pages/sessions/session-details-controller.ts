@@ -49,7 +49,8 @@ export class SessionDetailsController<Scope extends DetailScope> implements Reac
     }
     const { key, sessionId } = row;
     const agentId = this.options.agentId(row, scope);
-    let observation: SessionRowObservation | undefined;
+    // Registration may notify before the observation handle is returned.
+    let observation: SessionRowObservation | null = null;
     let pending = false;
     const binding = {
       matches: () => {
