@@ -66,8 +66,18 @@ describe("update-cli", () => {
       throw new Error("Missing fresh Doctor command fixture");
     }
     vi.mocked(runUtf8CommandWithTimeout).mockImplementation(async (argv, options) => {
+      if (argv[2] === "doctor") {
+        return {
+          code: 1,
+          signal: null,
+          killed: false,
+          termination: "exit",
+          stdout: params.stdout ?? "",
+          stderr: params.stderr,
+        };
+      }
       const result = await runCommand(argv, options);
-      if (argv.at(-1) !== "--doctor" && argv[2] !== "doctor") {
+      if (argv.at(-1) !== "--doctor") {
         return result;
       }
       return {
