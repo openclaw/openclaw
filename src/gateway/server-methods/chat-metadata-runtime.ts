@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
 import { getPreparedRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-profiles.js";
@@ -139,6 +140,8 @@ export function createGatewayChatMetadataRuntime(params: {
     params: ChatStartupProjectionReadParams,
   ) => Promise<ChatStartupProjectionResult | undefined>;
 } {
+  // Publication callbacks can carry a temporary startup admission borrow.
+  const inOwnerContext = AsyncLocalStorage.snapshot();
   const deps: ChatMetadataRuntimeDeps = {
     getConfig: params.getConfig,
     getContext: params.getContext,
@@ -366,7 +369,7 @@ export function createGatewayChatMetadataRuntime(params: {
     }
   };
 
-  const refresh = (options: ChatMetadataRefreshOptions = {}): Promise<void> => {
+  const prepareRefresh = (options: ChatMetadataRefreshOptions = {}): Promise<void> => {
     if (stoppedError) {
       return Promise.reject(stoppedError);
     }
@@ -444,6 +447,8 @@ export function createGatewayChatMetadataRuntime(params: {
     );
     return promise;
   };
+  const refresh = (options?: ChatMetadataRefreshOptions) =>
+    inOwnerContext(() => prepareRefresh(options));
 
   const authStoresCurrent = (generation: PreparedMetadataGeneration) =>
     generation.facts.agents.every(
