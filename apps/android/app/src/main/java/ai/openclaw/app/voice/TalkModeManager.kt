@@ -351,7 +351,7 @@ class TalkModeManager internal constructor(
 
   @Volatile private var incomingCallMuted = false
 
-  @Volatile private var incomingCallResuming = false
+  @Volatile private var incomingCallStartup: IncomingCallAudioStartup? = null
 
   // Incoming calls must never enter ordinary Talk's native speech fallback or main session.
   private val talkModeRoute get() = if (incomingCallSessionKey != null) TalkModeRoute.RealtimeRelay else configCache.get().value.route
@@ -361,9 +361,11 @@ class TalkModeManager internal constructor(
   internal fun prepareIncomingCall(
     sessionKey: String?,
     resuming: Boolean = false,
+    beforeCapture: (() -> Unit)? = null,
+    interruptedAtMs: Long? = null,
   ) {
+    incomingCallStartup = sessionKey?.let { IncomingCallAudioStartup(resuming, interruptedAtMs, beforeCapture) }
     incomingCallSessionKey = sessionKey
-    incomingCallResuming = resuming
     if (sessionKey == null) incomingCallMuted = false
   }
 
@@ -1170,6 +1172,7 @@ class TalkModeManager internal constructor(
     generation: Long,
     change: RealtimeVoiceChange? = null,
   ) {
+    val incomingStartup = incomingCallStartup
     if (!isConnected()) {
       Log.w(tag, "realtime start: gateway not connected")
       disableRealtimeModeAndNotifyOwner(generation, nativeText("Gateway not connected"), recoverable = true)
@@ -1199,6 +1202,7 @@ class TalkModeManager internal constructor(
     val supportsVoiceSelection = listOf("talk.voice.get", "talk.voice.set", "talk.voice.complete").all(lease::supportsMethod)
     val transportGeneration = change?.gatewayGeneration ?: gatewayGeneration.get()
     val sessionKey = change?.sessionKey ?: incomingCallSessionKey ?: mainSessionKey.ifBlank { "main" }
+    var recoveryMetadataSupported = true
     val create: suspend (String?) -> String = { requestedLanguage ->
       val params =
         buildJsonObject {
@@ -1206,8 +1210,13 @@ class TalkModeManager internal constructor(
           put("mode", JsonPrimitive("realtime"))
           put("transport", JsonPrimitive("gateway-relay"))
           put("brain", JsonPrimitive("agent-consult"))
-          if (incomingCallSessionKey != null && !incomingCallResuming && change == null) {
+          if (incomingCallSessionKey != null && incomingStartup?.resuming != true && change == null) {
             put("greeting", JsonPrimitive("The user has answered this call. Greet them briefly and explain why you called using the prepared briefing in shared session history. Do not invent facts or claim actions; ask what they would like to discuss."))
+          }
+          if (change == null && recoveryMetadataSupported) {
+            incomingStartup?.interruptedForMs()?.let { elapsed ->
+              put("recovery", buildJsonObject { put("interruptedForMs", JsonPrimitive(elapsed)) })
+            }
           }
           if (supportsVoiceSelection) put("capabilities", JsonArray(listOf(JsonPrimitive("voice-selection"))))
           if (change != null) {
@@ -1227,7 +1236,16 @@ class TalkModeManager internal constructor(
       }
     }
     // A replacement is a single claimed operation; never retry it as a fresh call.
-    val payload = if (change == null) requestPhoneRealtimeSessionWithLanguageFallback(language, create) else create(language)
+    val payload =
+      try {
+        if (change == null) requestPhoneRealtimeSessionWithLanguageFallback(language, create) else create(language)
+      } catch (error: GatewayRequestRejected) {
+        // Older shipped Gateways reject this field before creating a session. Only that
+        // exact schema rejection is safe to retry; ambiguous or provider failures are not.
+        if (change != null || incomingStartup?.interruptedForMs() == null || !error.gatewayError.isUnsupportedIncomingCallRecovery()) throw error
+        recoveryMetadataSupported = false
+        requestPhoneRealtimeSessionWithLanguageFallback(language, create)
+      }
     val root = json.parseToJsonElement(payload).asObjectOrNull()
     val relaySession = root?.get("relaySessionId").asJsonStringOrNull()
     val sessionId = relaySession ?: root?.get("sessionId").asJsonStringOrNull()
@@ -1258,9 +1276,9 @@ class TalkModeManager internal constructor(
           realtimeOutputSuppressed = true
         } else {
           realtimeOutputSuppressed = false
-          _isListening.value = true
-          if (change == null) setStatus(nativeText("Listening"))
-          startRealtimeCaptureLocked(sessionId)
+          _isListening.value = incomingStartup?.resuming != true || incomingStartup.isProviderReady(sessionId)
+          if (change == null && _isListening.value) setStatus(nativeText("Listening"))
+          startRealtimeCaptureLocked(sessionId, incomingStartup)
         }
         true
       }
@@ -1272,6 +1290,7 @@ class TalkModeManager internal constructor(
       throw CancellationException("realtime talk stopped while connecting")
     }
     if (incomingCallSessionKey != null && change == null) {
+      if (incomingStartup?.resuming == true) checkNotNull(realtimeCaptureReady).await()
       // A post-Answer silent frame acknowledges adopted playback even when the user is muted.
       // The Gateway waits for this admission before delivering the prepared greeting.
       val readyAudio =
@@ -1550,7 +1569,10 @@ class TalkModeManager internal constructor(
 
   /** Caller holds [realtimeCapturePauseLock] so PTT cannot miss newly installed jobs. */
   @SuppressLint("MissingPermission")
-  private fun startRealtimeCaptureLocked(sessionId: String) {
+  private fun startRealtimeCaptureLocked(
+    sessionId: String,
+    incomingStartup: IncomingCallAudioStartup? = null,
+  ) {
     val ready = CompletableDeferred<Unit>()
     realtimeCaptureReady = ready
     val lease = realtimeRequestLease
@@ -1612,6 +1634,14 @@ class TalkModeManager internal constructor(
         val isCurrent = { captureJob?.isActive == true && audioInputGeneration.get() == inputGeneration && realtimeSessionId == sessionId }
         try {
           audioRetirement.await()
+          incomingStartup?.awaitProviderReady(sessionId)
+          val beforeCapture = incomingStartup?.beforeCapture
+          if (beforeCapture != null) {
+            withContext(Dispatchers.Main.immediate) {
+              check(isCurrent() && _isEnabled.value) { "Incoming call changed before microphone capture" }
+              beforeCapture()
+            }
+          }
           val frameBytes = realtimeSampleRateHz * 2 * realtimeAudioFrameMs / 1000
           val openedAudioInput =
             AndroidAudioInputSession.open(
@@ -1688,6 +1718,7 @@ class TalkModeManager internal constructor(
     var stopped: (() -> Unit)? = null
     var afterDispatch: (() -> Unit)? = null
     synchronized(realtimeCapturePauseLock) {
+      if (obj["type"].asJsonStringOrNull() == "ready" && sessionId != null) incomingCallStartup?.noteProviderReady(sessionId)
       val currentSessionId = realtimeSessionId
       if (currentSessionId == null || sessionId != currentSessionId) return
       val owner = realtimePlayoutSession
@@ -3382,9 +3413,15 @@ private fun GatewaySession.ErrorShape.isUnsupportedSessionLanguageParam(): Boole
     message
       .lowercase(Locale.ROOT)
       .contains("invalid talk.session.create params") &&
-    !isUnsupportedIncomingCallGreeting()
+    !isUnsupportedIncomingCallGreeting() &&
+    !isUnsupportedIncomingCallRecovery()
 
 private fun GatewaySession.ErrorShape.isUnsupportedIncomingCallGreeting(): Boolean =
   code == "INVALID_REQUEST" &&
     message.contains("invalid talk.session.create params", ignoreCase = true) &&
     message.contains("unexpected property 'greeting'", ignoreCase = true)
+
+private fun GatewaySession.ErrorShape.isUnsupportedIncomingCallRecovery(): Boolean =
+  code == "INVALID_REQUEST" &&
+    message.contains("invalid talk.session.create params", ignoreCase = true) &&
+    message.contains("unexpected property 'recovery'", ignoreCase = true)

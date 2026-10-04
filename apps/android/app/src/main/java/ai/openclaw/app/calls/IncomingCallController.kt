@@ -16,6 +16,7 @@ import android.media.AudioAttributes
 import android.os.Build
 import android.os.Bundle
 import android.os.OutcomeReceiver
+import android.os.SystemClock
 import android.telecom.CallAudioState
 import android.telecom.CallEndpoint
 import android.telecom.CallEndpointException
@@ -57,7 +58,7 @@ internal class IncomingCallController(
   private val gatewayId: () -> String?,
   private val captureAuthority: () -> (() -> Boolean)?,
   private val isBusy: () -> Boolean,
-  private val startAudio: suspend (String, String, Boolean) -> Unit,
+  private val startAudio: suspend (String, String, Boolean, Long?, () -> Unit) -> Unit,
   private val stopAudio: (String) -> Unit,
   private val setMuted: (Boolean) -> Unit,
   private val captureRecoveryAuthority: () -> (() -> Boolean)? = captureAuthority,
@@ -89,6 +90,7 @@ internal class IncomingCallController(
   private var audioJob: Job? = null
   private var recoveryDeadlineJob: Job? = null
   private var recovering = false
+  private var recoveryStartedAtMs: Long? = null
   private var recoveryAttempt = 0
   private var audioGeneration = 0L
   private var recoveryAuthority: (() -> Boolean)? = null
@@ -368,7 +370,9 @@ internal class IncomingCallController(
         scope.launch(Dispatchers.Main.immediate, start = CoroutineStart.LAZY) {
           try {
             // Answer is the sole microphone-start boundary; reconnects retain that accepted call.
-            startAudio(id, call.invite.sessionKey, false)
+            startAudio(id, call.invite.sessionKey, false, null) {
+              check(generation == audioGeneration && isCurrent(id)) { "Incoming call changed before microphone capture" }
+            }
             if (generation != audioGeneration) return@launch
             if (!isCurrent(id)) {
               transportInterrupted()
@@ -407,6 +411,7 @@ internal class IncomingCallController(
       stopAudio(call.invite.callId)
       if (!recovering) {
         recovering = true
+        recoveryStartedAtMs = SystemClock.elapsedRealtime()
         recoveryAttempt = 0
         // Independent of startup/retry cancellation: flapping cannot extend this deadline.
         recoveryDeadlineJob =
@@ -468,8 +473,10 @@ internal class IncomingCallController(
           authority = freshAuthority
           try {
             updateMute()
-            reconnectTone.stop()
-            startAudio(id, call.invite.sessionKey, true)
+            startAudio(id, call.invite.sessionKey, true, recoveryStartedAtMs) {
+              check(generation == audioGeneration && isCurrent(id)) { "Incoming call changed before microphone capture" }
+              reconnectTone.stop()
+            }
             // Never let an old completion stop a newer attempt sharing the same call id.
             if (generation != audioGeneration) return@launch
             if (!isCurrent(id)) {
@@ -498,6 +505,7 @@ internal class IncomingCallController(
   private fun audioConnected() {
     reconnectTone.stop()
     recovering = false
+    recoveryStartedAtMs = null
     recoveryAttempt = 0
     recoveryDeadlineJob?.cancel()
     recoveryDeadlineJob = null
@@ -569,6 +577,7 @@ internal class IncomingCallController(
     audioJob?.cancel()
     audioJob = null
     recovering = false
+    recoveryStartedAtMs = null
     recoveryDeadlineJob?.cancel()
     recoveryDeadlineJob = null
     stopAudio(call.invite.callId)

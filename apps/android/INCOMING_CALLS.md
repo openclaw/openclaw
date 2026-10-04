@@ -59,10 +59,14 @@ their expiration, so retries cannot reopen already-handled invitations.
 
 Only one call is allowed at a time. Other audio capture blocks acceptance. A
 transport drop during an answered call pauses audio and gives the same Gateway
-up to 30 seconds to reconnect. Recovery retains the call's session, mute, and
+up to 30 seconds to reconnect. A matching Gateway can tell the voice agent when
+the audio interruption lasted more than ten seconds, including reconnect setup
+time. It provides an approximate duration and a brief reconnection acknowledgment,
+without restarting the greeting or automatically replaying missed speech. Older
+Gateways keep the recovery and local cue but cannot supply this context. Recovery retains the call's session, mute, and
 audio route without repeating its opening greeting or replaying outage audio.
 A quiet local double beep repeats about every three seconds while waiting for
-recovery, using the current call audio route and volume. It stops before microphone
+recovery, using the current call audio route and volume. It continues through relay and provider setup, then stops immediately before microphone
 capture resumes, and on hangup or timeout. It does not play before Answer, change
 the selected route, or require a network connection.
 A disconnection while ringing, a Gateway switch, revoked consent or permission,

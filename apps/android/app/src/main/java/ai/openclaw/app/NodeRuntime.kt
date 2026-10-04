@@ -2414,11 +2414,11 @@ class NodeRuntime private constructor(
       isBusy = {
         _voiceCaptureMode.value != VoiceCaptureMode.Off || voiceNoteOwnsMic || dictationOwnsMic || cameraAudioOwnsMic || gatewayConnectionHandoff.value.pending
       },
-      startAudio = { callId, sessionKey, resuming ->
+      startAudio = { callId, sessionKey, resuming, interruptedAtMs, beforeCapture ->
         synchronized(voiceCaptureOwnershipLock) {
           check(incomingCallCaptureId == null && _voiceCaptureMode.value == VoiceCaptureMode.Off && !voiceNoteOwnsMic && !dictationOwnsMic && !cameraAudioOwnsMic) { "Microphone busy" }
           incomingCallCaptureId = callId
-          talkMode.prepareIncomingCall(sessionKey, resuming)
+          talkMode.prepareIncomingCall(sessionKey, resuming, beforeCapture, interruptedAtMs)
           talkMode.setIncomingCallMuted(incomingCalls.muted.value)
           setVoiceCaptureMode(VoiceCaptureMode.TalkMode)
         }

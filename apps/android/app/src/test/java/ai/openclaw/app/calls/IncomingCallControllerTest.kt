@@ -140,11 +140,13 @@ class IncomingCallControllerTest {
     var busy = false
     var appliedMute = false
     val resumptions = mutableListOf<Boolean>()
+    val interruptionTimes = mutableListOf<Long?>()
     val targets = mutableListOf<Pair<String, String>>()
     val startMuted = mutableListOf<Boolean>()
     var gateway: String? = "synthetic-gateway"
     var starts = 0
     var stops = 0
+    var capturedWithCue = false
     val id = UUID.randomUUID().toString()
     val expiresAtMs = System.currentTimeMillis() + 60_000
     val payload =
@@ -172,12 +174,15 @@ class IncomingCallControllerTest {
           captureAuthority = { { authority } },
           captureRecoveryAuthority = { { lifecycleAuthority } },
           isBusy = { busy },
-          startAudio = { callId, sessionKey, resuming ->
+          startAudio = { callId, sessionKey, resuming, interruptedAtMs, beforeCapture ->
             starts++
             resumptions += resuming
+            interruptionTimes += interruptedAtMs
             targets += callId to sessionKey
             startMuted += appliedMute
             start()
+            beforeCapture()
+            capturedWithCue = IncomingCallToneShadow.instances.any { !it.released }
           },
           stopAudio = { stops++ },
           setMuted = { appliedMute = it },
@@ -670,7 +675,7 @@ class IncomingCallControllerTest {
     runTest {
       Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
       try {
-        val f = Fixture(this) { assertTrue(IncomingCallToneShadow.instances.all { it.released }) }
+        val f = Fixture(this)
         answered(f)
         assertTrue("Normal Answer must not play the recovery cue", IncomingCallToneShadow.instances.isEmpty())
         f.gateway = null
@@ -691,10 +696,38 @@ class IncomingCallControllerTest {
         assertEquals(IncomingCallStatus.Active, status(f))
         assertTrue(tone.released)
         assertTrue(tone.stops > 0)
+        assertFalse("The cue must stop before microphone capture", f.capturedWithCue)
         val count = tone.starts
         advanceTimeBy(10_000)
         runCurrent()
         assertEquals(count, tone.starts)
+        f.controller.end(f.id)
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  fun `reconnect cue continues while an admitted voice setup is still waiting`() =
+    runTest {
+      Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+      try {
+        var reconnecting = false
+        val ready = CompletableDeferred<Unit>()
+        val f = Fixture(this) { if (reconnecting) ready.await() }
+        answered(f)
+        reconnecting = true
+        f.controller.transportInterrupted()
+        val tone = IncomingCallToneShadow.instances.single()
+        advanceTimeBy(7_000)
+        runCurrent()
+        assertEquals(IncomingCallStatus.Connecting, status(f))
+        assertFalse("Starting a request is not microphone readiness", tone.released)
+        assertEquals("The cue must repeat during provider setup", 3, tone.starts)
+        ready.complete(Unit)
+        runCurrent()
+        assertEquals(IncomingCallStatus.Active, status(f))
+        assertTrue(tone.released)
         f.controller.end(f.id)
       } finally {
         Dispatchers.resetMain()
@@ -807,6 +840,16 @@ class IncomingCallControllerTest {
         advanceTimeBy(4_000)
         runCurrent()
         assertEquals(4, f.starts)
+        assertNull("Normal Answer is not recovery", f.interruptionTimes.first())
+        assertTrue(f.interruptionTimes.drop(1).all { it != null })
+        assertEquals(
+          "Retries must preserve the original outage clock",
+          1,
+          f.interruptionTimes
+            .drop(1)
+            .distinct()
+            .size,
+        )
         advanceTimeBy(22_999)
         runCurrent()
         f.controller.transportInterrupted()

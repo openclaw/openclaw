@@ -189,7 +189,10 @@ class IncomingCallOptInRuntimeTest {
             captureAuthority = { if (connected) ({ connected }) else null },
             captureRecoveryAuthority = { { true } },
             isBusy = { false },
-            startAudio = { _, _, _ -> starts++ },
+            startAudio = { _, _, _, _, beforeCapture ->
+              beforeCapture()
+              starts++
+            },
             stopAudio = { stops++ },
             setMuted = {},
           )
@@ -376,7 +379,10 @@ class IncomingCallOptInRuntimeTest {
         gatewayId = { "synthetic-gateway" },
         captureAuthority = { { true } },
         isBusy = { false },
-        startAudio = { id, _, _ -> ReflectionHelpers.setField(runtime, "incomingCallCaptureId", id) },
+        startAudio = { id, _, _, _, beforeCapture ->
+          beforeCapture()
+          ReflectionHelpers.setField(runtime, "incomingCallCaptureId", id)
+        },
         stopAudio = {
           ReflectionHelpers.setField(runtime, "incomingCallCaptureId", null)
           talk.stopAllCapture()

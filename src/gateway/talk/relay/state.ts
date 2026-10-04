@@ -327,7 +327,9 @@ export type CreateTalkRealtimeRelaySessionParams = {
   voiceSelectionVoices?: readonly string[];
   initialItems?: Array<{ role: "user" | "assistant"; text: string }>;
   greeting?: string;
-  /** Rechecks retained request/session authority immediately before opening speech. */
+  /** Client elapsed time plus the Gateway's monotonic receipt time, never a wall-clock timestamp. */
+  recovery?: { interruptedForMs: number; receivedAt: number };
+  /** Rechecks retained request/session authority immediately before initial or resumed speech. */
   assertGreetingAllowed?: () => void;
   instructions: string;
   tools: RealtimeVoiceTool[];

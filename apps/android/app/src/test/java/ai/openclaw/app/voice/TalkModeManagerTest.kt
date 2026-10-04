@@ -1210,6 +1210,104 @@ class TalkModeManagerTest {
     }
 
   @Test
+  fun incomingCallRecoveryWaitsForExactProviderReadinessIncludingEarlyEvents() =
+    runBlocking {
+      for (early in listOf(false, true)) {
+        val creates =
+          java.util.concurrent.atomic
+            .AtomicInteger()
+        val pending = CompletableDeferred<Pair<String, WebSocket>>()
+        val beforeCapture =
+          java.util.concurrent.atomic
+            .AtomicBoolean()
+        withStartedTalk(
+          sendProviderReady = false,
+          interceptRequest = { request, socket ->
+            if (request.getValue("method").jsonPrimitive.content == "talk.session.create" && creates.incrementAndGet() == 2) {
+              pending.complete(request.getValue("id").jsonPrimitive.content to socket)
+              true
+            } else {
+              false
+            }
+          },
+        ) { proof ->
+          proof.manager.stopAllCapture()
+          proof.drainCancelledCapture()
+          proof.manager.prepareIncomingCall("agent:assistant:prepared-call", resuming = true, beforeCapture = {
+            beforeCapture.set(true)
+            // Stop at the actual capture boundary; this fixture must not open physical audio.
+            throw kotlinx.coroutines.CancellationException("Synthetic capture boundary reached")
+          })
+          proof.manager.setEnabled(true)
+          awaitTalkWork(proof) { pending.isCompleted }
+          val (requestId, socket) = pending.await()
+
+          fun ready(id: String) = proof.manager.realtimeEvent("""{"relaySessionId":"$id","type":"ready"}""")
+          ready("stale-relay")
+          if (early) ready("recovered-relay")
+          socket.send("""{"type":"res","id":"$requestId","ok":true,"payload":{"relaySessionId":"recovered-relay"}}""")
+          awaitTalkWork(proof) { readPrivateField(proof.manager, "realtimeSessionId") == "recovered-relay" }
+          proof.drainCancelledCapture()
+          proof.scheduler.runCurrent()
+          if (!early) {
+            assertFalse("A created relay without provider readiness must not open capture", beforeCapture.get())
+            assertFalse(proof.manager.isListening.value)
+            ready("recovered-relay")
+          }
+          awaitTalkWork(proof) {
+            proof.drainCancelledCapture()
+            beforeCapture.get()
+          }
+          assertTrue(beforeCapture.get())
+        }
+      }
+    }
+
+  @Test
+  fun incomingCallRecoveryMetadataRetriesOnlyExplicitUnsupportedSchema() =
+    runBlocking {
+      val requests = ConcurrentLinkedQueue<JsonObject>()
+      withStartedTalk(
+        interceptRequest = { request, socket ->
+          requests.add(request)
+          val params = request["params"]?.jsonObject
+          if (request.getValue("method").jsonPrimitive.content == "talk.session.create" && params?.containsKey("recovery") == true) {
+            val id = request.getValue("id").jsonPrimitive.content
+            socket.send("""{"type":"res","id":"$id","ok":false,"error":{"code":"INVALID_REQUEST","message":"invalid talk.session.create params: at root: unexpected property 'recovery'"}}""")
+            true
+          } else {
+            false
+          }
+        },
+      ) { proof ->
+        proof.manager.stopAllCapture()
+        proof.drainCancelledCapture()
+        proof.manager.prepareIncomingCall("agent:assistant:prepared-call", resuming = true, interruptedAtMs = android.os.SystemClock.elapsedRealtime() - 12_000)
+        proof.manager.setEnabled(true)
+        awaitTalkWork(proof) { proof.manager.isListening.value }
+        val creates = requests.filter { it.getValue("method").jsonPrimitive.content == "talk.session.create" }
+        assertEquals(3, creates.size)
+        val recovery =
+          creates[1]
+            .getValue("params")
+            .jsonObject
+            .getValue("recovery")
+            .jsonObject
+        assertEquals(
+          12_000L,
+          recovery
+            .getValue("interruptedForMs")
+            .jsonPrimitive.content
+            .toLong(),
+        )
+        val fallback = creates.last().getValue("params").jsonObject
+        assertFalse(fallback.containsKey("recovery"))
+        assertFalse("Recovery must not repeat the initial greeting", fallback.containsKey("greeting"))
+        assertEquals("agent:assistant:prepared-call", fallback.getValue("sessionKey").jsonPrimitive.content)
+      }
+    }
+
+  @Test
   fun incomingCallReportsUnsupportedGatewayWithoutRetryingOrStartingMicrophone() =
     runBlocking {
       val requests = ConcurrentLinkedQueue<JsonObject>()
@@ -3242,6 +3340,7 @@ class TalkModeManagerTest {
   private suspend fun withStartedTalk(
     sessionKey: String = "main",
     incomingCallSessionKey: String? = null,
+    sendProviderReady: Boolean = true,
     expectStartupFailure: Boolean = false,
     realtimeCaptureDispatcher: CoroutineDispatcher? = null,
     captureRelayStopNotification: () -> ((() -> Boolean) -> Unit) = { {} },
@@ -3327,6 +3426,15 @@ class TalkModeManagerTest {
                     else -> "{}"
                   }
                 webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":$payload}""")
+                if (sendProviderReady && request.getValue("method").jsonPrimitive.content == "talk.session.create") {
+                  val relayId =
+                    Json
+                      .parseToJsonElement(payload)
+                      .jsonObject["relaySessionId"]
+                      ?.jsonPrimitive
+                      ?.content
+                  if (relayId != null) webSocket.send("""{"type":"event","event":"talk.event","payload":{"relaySessionId":"$relayId","type":"ready"}}""")
+                }
               }
             },
           ),

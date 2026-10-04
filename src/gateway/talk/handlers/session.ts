@@ -111,6 +111,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       sessionMutationCommitGuard,
       hasCurrentClientAuthority,
     }) => {
+      const receivedAt = performance.now();
       const mode = normalizeTalkSessionMode(params);
       const transport = normalizeTalkSessionTransport({ mode, transport: params.transport });
       const brain = normalizeTalkSessionBrain({ mode, brain: params.brain });
@@ -125,6 +126,19 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       }
       try {
         sessionMutationAuthorization?.assertCurrent();
+        if (params.recovery !== undefined) {
+          if (mode !== "realtime" || transport !== "gateway-relay" || params.voiceChangeId) {
+            respondInvalidRequest(
+              respond,
+              "A recovery notice requires a new realtime relay session",
+            );
+            return;
+          }
+          if (params.greeting !== undefined) {
+            respondInvalidRequest(respond, "A recovery notice cannot include an opening greeting");
+            return;
+          }
+        }
         if (
           params.greeting !== undefined &&
           (mode !== "realtime" || transport !== "gateway-relay" || params.voiceChangeId)
@@ -352,9 +366,17 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
             clientCapabilities: params.capabilities,
             voiceChangeId: params.voiceChangeId,
             initialItems,
-            ...(params.greeting !== undefined
+            ...(params.greeting !== undefined || params.recovery !== undefined
               ? {
-                  greeting: params.greeting.trim(),
+                  ...(params.greeting !== undefined ? { greeting: params.greeting.trim() } : {}),
+                  ...(params.recovery !== undefined
+                    ? {
+                        recovery: {
+                          interruptedForMs: params.recovery.interruptedForMs,
+                          receivedAt,
+                        },
+                      }
+                    : {}),
                   assertGreetingAllowed: () => {
                     if (hasCurrentClientAuthority && !hasCurrentClientAuthority()) {
                       throw new Error("Talk greeting connection is no longer authorized");

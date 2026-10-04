@@ -273,6 +273,9 @@ export const TalkAgentControlResultSchema = closedObject({
 export const TalkSessionCreateParamsSchema = closedObject({
   sessionKey: Type.Optional(Type.String()),
   greeting: Type.Optional(Type.String({ minLength: 1, maxLength: 1000, pattern: "\\S" })),
+  recovery: Type.Optional(
+    closedObject({ interruptedForMs: Type.Integer({ minimum: 0, maximum: 30_000 }) }),
+  ),
   voiceChangeId: Type.Optional(NonEmptyString),
   capabilities: Type.Optional(Type.Array(Type.Literal("voice-selection"), { uniqueItems: true })),
   spawnedBy: Type.Optional(NonEmptyString),

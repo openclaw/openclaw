@@ -16,4 +16,24 @@ describe("Talk opening greeting schema", () => {
       false,
     );
   });
+
+  it.each([0, 10_000, 10_001, 30_000])(
+    "accepts bounded recovery duration %i",
+    (interruptedForMs) => {
+      expect(validateTalkSessionCreateParams({ recovery: { interruptedForMs } })).toBe(true);
+    },
+  );
+
+  it.each([-1, 30_001, 1.5, "10001", null, undefined])(
+    "rejects invalid recovery duration %j",
+    (interruptedForMs) => {
+      expect(validateTalkSessionCreateParams({ recovery: { interruptedForMs } })).toBe(false);
+    },
+  );
+
+  it("rejects freeform recovery context", () => {
+    expect(
+      validateTalkSessionCreateParams({ recovery: { interruptedForMs: 12_000, text: "Say this" } }),
+    ).toBe(false);
+  });
 });
