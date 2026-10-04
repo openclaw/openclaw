@@ -6,14 +6,13 @@
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   captureToolAuthoredSourceReply,
-  embeddedAgentLog,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type ToolAuthoredSourceReplyPayload = NonNullable<
   ReturnType<typeof captureToolAuthoredSourceReply>
->["payload"];
+>;
 
 export type CodexToolResultSourceReply = {
   /** The message tool itself marked its current-source reply terminal. */
@@ -25,10 +24,10 @@ export type CodexToolResultSourceReply = {
 };
 
 /**
- * Resolves the source-reply facts of one Codex dynamic tool result. A reply authored by
- * a `canDeliverSourceReply` tool is appended to `payloads` for host delivery; result
- * handling is synchronous here, so its transcript write is best effort and never
- * delays delivery.
+ * Resolves the source-reply facts of one Codex dynamic tool result. A final reply
+ * authored by a `canDeliverSourceReply` tool, read from the result after middleware and
+ * extensions, is appended to `payloads`; the host delivers it and writes its transcript
+ * row after the send.
  */
 export function resolveCodexToolResultSourceReply(params: {
   sourceReplyDeliveryMode: EmbeddedRunAttemptParams["sourceReplyDeliveryMode"];
@@ -40,8 +39,7 @@ export function resolveCodexToolResultSourceReply(params: {
   result: AgentToolResult<unknown>;
   deliveredSourceReply: boolean;
   executedArgs: Record<string, unknown>;
-  config: Parameters<typeof captureToolAuthoredSourceReply>[0]["cfg"];
-  hookContext: { agentId?: string; sessionId?: string; sessionKey?: string; runId?: string };
+  runId: string | undefined;
   payloads: ToolAuthoredSourceReplyPayload[];
 }): CodexToolResultSourceReply {
   const messageToolOnly =
@@ -73,24 +71,18 @@ function captureCodexToolAuthoredSourceReply(
   if (params.canDeliverSourceReply !== true || params.resultIsError) {
     return undefined;
   }
-  const captured = captureToolAuthoredSourceReply({
-    result: params.rawResult,
-    toolName: params.toolName,
+  // Middleware and extensions may withdraw or rewrite the reply, so read the
+  // effective result, never the raw tool output.
+  const payload = captureToolAuthoredSourceReply({
+    result: params.result,
     toolCallId: params.call.callId,
-    idempotencyScope: params.hookContext.runId ?? params.call.turnId,
-    cfg: params.config,
-    sessionKey: params.hookContext.sessionKey,
-    sessionId: params.hookContext.sessionId,
-    agentId: params.hookContext.agentId,
-    runId: params.hookContext.runId,
-    log: embeddedAgentLog,
+    idempotencyScope: params.runId ?? params.call.turnId,
   });
-  if (!captured) {
+  if (!payload) {
     return undefined;
   }
-  params.payloads.push(captured.payload);
-  void captured.persistence;
-  return captured.payload.sourceReplyFinal;
+  params.payloads.push(payload);
+  return true;
 }
 
 function isToolResultYield(result: AgentToolResult<unknown>): boolean {

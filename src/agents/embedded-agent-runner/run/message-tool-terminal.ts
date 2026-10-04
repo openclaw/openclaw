@@ -10,7 +10,6 @@ import {
   extractMessagingToolSendResult,
   extractToolAuthoredSourceReplyPayload,
   isDeliveredMessagingToolSendToCurrentSource,
-  resolveToolAuthoredSourceReplyFinal,
 } from "../../embedded-agent-messaging-extraction.js";
 import type { AfterToolCallContext, AfterToolCallResult, Agent } from "../../runtime/index.js";
 import { readToolResultDetails } from "../../tool-result-error.js";
@@ -102,10 +101,7 @@ export function installToolAuthoredSourceReplyTerminalHook(params: {
           ...(hookResult.details !== undefined ? { details: hookResult.details } : {}),
         }
       : context.result;
-    if (
-      extractToolAuthoredSourceReplyPayload(result) &&
-      resolveToolAuthoredSourceReplyFinal(result)
-    ) {
+    if (extractToolAuthoredSourceReplyPayload(result)) {
       return { ...hookResult, terminate: true };
     }
     return hookResult;

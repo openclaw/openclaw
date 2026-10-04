@@ -400,28 +400,18 @@ export async function handleToolExecutionEnd(
     !messageDelivery?.partialDelivery;
   ctx.state.lastToolTurnOnlySourceProgress = ctx.state.turnToolsOnlySourceProgress;
   // A tool whose author declared `canDeliverSourceReply` may hand the host a
-  // finished reply. The host delivers it to the current source and records it
-  // as the assistant turn, so no further model turn has to restate it.
+  // finished reply. The host delivers it to the current source and records it as
+  // the assistant turn, so no further model turn has to restate it. A call nested
+  // inside a Code Mode program returns to that program, never to the conversation.
   const toolAuthoredSourceReply =
-    !isToolError && ctx.params.sourceReplyCapableToolNames?.has(toolName) === true
-      ? captureToolAuthoredSourceReply({
-          result,
-          toolName,
-          toolCallId,
-          idempotencyScope: runId,
-          cfg: ctx.params.config,
-          sessionKey: ctx.params.sessionKey,
-          sessionId: ctx.params.sessionId,
-          agentId: ctx.params.agentId,
-          runId,
-          log: ctx.log,
-        })
+    !isToolError &&
+    !startData?.parentToolCallId &&
+    ctx.params.sourceReplyCapableToolNames?.has(toolName) === true
+      ? captureToolAuthoredSourceReply({ result, toolCallId, idempotencyScope: runId })
       : undefined;
   if (toolAuthoredSourceReply) {
-    ctx.state.messagingToolSourceReplyPayloads.push(toolAuthoredSourceReply.payload);
+    ctx.state.messagingToolSourceReplyPayloads.push(toolAuthoredSourceReply);
     ctx.trimMessagingToolSent();
-    // Persist before the turn settles so the transcript row precedes delivery.
-    await toolAuthoredSourceReply.persistence;
   }
   // Track committed reminders only when cron.add completed successfully.
   if (

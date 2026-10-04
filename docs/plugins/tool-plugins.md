@@ -390,19 +390,20 @@ api.registerTool({
 });
 ```
 
-OpenClaw delivers `sourceReply.text`, `mediaUrl`, `mediaUrls`, and
-`attachments` to the conversation the turn came from, records the reply as the
-assistant turn in the session transcript, and stops the tool batch, so no
-further model turn restates the result. `content` still reaches the model when
-the turn continues, for example after `sourceReply.final: false`, which sends
-the reply as progress and lets the model keep working. Error results and
-results without visible reply content are ignored.
+OpenClaw delivers the reply to the conversation the turn came from and stops the
+tool batch, so no further model turn restates the result. After a successful
+send, delivery records the reply as the assistant turn in the session
+transcript, with the same session checks as any other delivered reply. A reply
+needs `text`, `mediaUrl`, or `mediaUrls`; `attachments` ride along with them.
+Error results, results without a deliverable reply, and `sourceReply.final:
+false` are ignored, and the model continues as usual with `content`.
 
-Only the tool author can grant this: `canDeliverSourceReply` lives on the tool
-definition, never in a result, so a hook or a nested call cannot turn an
-ordinary result into a reply. Keep such tools out of Code Mode catalogs with
-`catalogMode: "direct-only"`; a tool called from inside an `exec` program
-returns to that program, not to the user.
+OpenClaw reads the reply after tool hooks and result middleware run, so
+middleware can rewrite or withdraw it. Only the tool author can grant the
+capability: `canDeliverSourceReply` lives on the tool definition, never in a
+result. A call made from inside a Code Mode `exec` program returns to that
+program and is never delivered as a reply; keep such tools model-visible with
+`catalogMode: "direct-only"`.
 
 ## Configuration
 

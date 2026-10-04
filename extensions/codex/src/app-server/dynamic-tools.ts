@@ -644,8 +644,7 @@ export function createCodexDynamicToolBridge(params: {
             result,
             deliveredSourceReply,
             executedArgs,
-            config: params.hookContext?.config,
-            hookContext: toolResultHookContext,
+            runId: toolResultHookContext.runId,
             payloads: telemetry.messagingToolSourceReplyPayloads,
           });
           const autoDeliveryTtsMediaUrls = getCoreTtsToolResultMediaUrls(rawResult);

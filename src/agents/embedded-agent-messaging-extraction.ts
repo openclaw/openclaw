@@ -39,34 +39,31 @@ export function extractMessagingToolSourceReplyPayload(
 }
 
 /**
- * Reads the reply a `canDeliverSourceReply` tool authored in `details.sourceReply`.
+ * Reads the final reply a `canDeliverSourceReply` tool authored in `details.sourceReply`.
  * Unlike internal-ui mirrors, nothing has been sent yet: the host delivers the payload
- * to the current source. Callers must already have verified the tool's capability.
+ * to the current source and records it in the transcript after delivery. A reply needs
+ * text or media; `final: false` is not a deliverable reply, so the model continues as
+ * usual. Callers must already have verified the tool's capability and invocation scope.
  */
 export function extractToolAuthoredSourceReplyPayload(
   result: unknown,
 ): MessagingToolSourceReplyPayload | undefined {
   const details = readToolResultDetails(result);
   const sourceReply = details ? readRecord(details.sourceReply) : undefined;
-  if (!details || !sourceReply) {
+  if (!details || !sourceReply || sourceReply.final === false) {
     return undefined;
   }
   const payload = readSourceReplyPayload(details, sourceReply);
   if (!payload) {
     return undefined;
   }
-  const hasVisibleContent =
+  // Same admission as final payload delivery: attachments ride along but do not
+  // qualify a reply on their own.
+  const hasDeliverableContent =
     Boolean(payload.text?.trim()) ||
     Boolean(payload.mediaUrl) ||
-    Boolean(payload.mediaUrls?.length) ||
-    Boolean(payload.attachments?.length);
-  return hasVisibleContent ? { ...payload, toolAuthored: true } : undefined;
-}
-
-/** A tool-authored source reply completes the turn unless it says `final: false`. */
-export function resolveToolAuthoredSourceReplyFinal(result: unknown): boolean {
-  const sourceReply = readRecord(readToolResultDetails(result)?.sourceReply);
-  return sourceReply?.final !== false;
+    Boolean(payload.mediaUrls?.length);
+  return hasDeliverableContent ? payload : undefined;
 }
 
 function readSourceReplyPayload(

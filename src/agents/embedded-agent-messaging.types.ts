@@ -34,9 +34,6 @@ export type MessagingToolSourceReplyPayload = Pick<
   transcriptOwner?: true;
   /** Current-source progress (`false`) or completed reply (`true`). */
   sourceReplyFinal?: boolean;
-  /**
-   * Authored by a `canDeliverSourceReply` tool and not yet sent: the host delivers it
-   * to the current source like assistant text instead of mirroring an already-sent reply.
-   */
+  /** Authored by a `canDeliverSourceReply` tool: the host sends it, so the turn is complete. */
   toolAuthored?: true;
 };

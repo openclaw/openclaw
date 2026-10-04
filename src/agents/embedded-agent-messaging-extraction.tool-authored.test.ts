@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import {
   extractMessagingToolSourceReplyPayload,
   extractToolAuthoredSourceReplyPayload,
-  resolveToolAuthoredSourceReplyFinal,
 } from "./embedded-agent-messaging-extraction.js";
 
 describe("tool-authored source replies", () => {
@@ -25,10 +24,17 @@ describe("tool-authored source replies", () => {
       text: "Pedido SO1 creado. 18 botellas · total 459,85 €.",
       mediaUrls: ["/tmp/albaran.pdf"],
       attachments: [{ path: "/tmp/albaran.pdf", mimeType: "application/pdf" }],
-      toolAuthored: true,
     });
     // The same result is not an already-sent internal-ui mirror.
     expect(extractMessagingToolSourceReplyPayload(result)).toBeUndefined();
+  });
+
+  it("admits a media-only reply", () => {
+    expect(
+      extractToolAuthoredSourceReplyPayload({
+        details: { sourceReply: { mediaUrls: ["/tmp/flyer.png"] } },
+      }),
+    ).toEqual({ mediaUrls: ["/tmp/flyer.png"] });
   });
 
   it.each([
@@ -36,19 +42,14 @@ describe("tool-authored source replies", () => {
     { label: "empty sourceReply", details: { sourceReply: {} } },
     { label: "whitespace text", details: { sourceReply: { text: "   " } } },
     { label: "non-record sourceReply", details: { sourceReply: "plain string" } },
+    // Delivery only admits text or media, so attachments alone cannot end a turn.
+    {
+      label: "attachment-only sourceReply",
+      details: { sourceReply: { attachments: [{ path: "/tmp/albaran.pdf" }] } },
+    },
+    // A non-final reply is not deliverable; the model keeps the turn.
+    { label: "final: false", details: { sourceReply: { text: "Comprobando…", final: false } } },
   ])("ignores results with $label", ({ details }) => {
     expect(extractToolAuthoredSourceReplyPayload({ content: [], details })).toBeUndefined();
-  });
-
-  it("treats the reply as final unless the tool says otherwise", () => {
-    expect(
-      resolveToolAuthoredSourceReplyFinal({ details: { sourceReply: { text: "done" } } }),
-    ).toBe(true);
-    expect(
-      resolveToolAuthoredSourceReplyFinal({
-        details: { sourceReply: { text: "working…", final: false } },
-      }),
-    ).toBe(false);
-    expect(resolveToolAuthoredSourceReplyFinal({ details: {} })).toBe(true);
   });
 });

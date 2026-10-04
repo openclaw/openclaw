@@ -1,7 +1,12 @@
 // A `canDeliverSourceReply` dynamic tool ends the Codex turn with its own reply;
-// ordinary tools returning the same details stay on the normal model path.
+// ordinary tools, non-final replies and middleware-withdrawn replies stay on the
+// normal model path.
+import {
+  createEmptyPluginRegistry,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { Type } from "typebox";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 
 function createBridge(params: {
@@ -37,6 +42,23 @@ function callOrderStatus(bridge: ReturnType<typeof createCodexDynamicToolBridge>
   });
 }
 
+function installResultMiddleware(
+  handler: ReturnType<
+    typeof createEmptyPluginRegistry
+  >["agentToolResultMiddlewares"][number]["handler"],
+) {
+  const registry = createEmptyPluginRegistry();
+  registry.agentToolResultMiddlewares.push({
+    pluginId: "test-result",
+    pluginName: "Test result",
+    rawHandler: handler,
+    handler,
+    runtimes: ["codex"],
+    source: "test",
+  });
+  setActivePluginRegistry(registry);
+}
+
 const replyDetails = {
   ok: true,
   sourceReply: {
@@ -44,6 +66,10 @@ const replyDetails = {
     mediaUrls: ["/tmp/a.pdf"],
   },
 };
+
+afterEach(() => {
+  setActivePluginRegistry(createEmptyPluginRegistry());
+});
 
 describe("Codex tool-authored source replies", () => {
   it("records the reply payload and terminates the turn for a capable tool", async () => {
@@ -57,16 +83,45 @@ describe("Codex tool-authored source replies", () => {
       {
         text: "Pedido SO1 creado. 18 botellas · total 459,85 €.",
         mediaUrls: ["/tmp/a.pdf"],
-        toolAuthored: true,
         idempotencyKey: "turn-1:tool-source-reply:call-1",
         sourceReplyFinal: true,
+        toolAuthored: true,
       },
     ]);
     // No message tool ran, so messaging delivery evidence stays untouched.
     expect(bridge.telemetry.didSendViaMessagingTool).toBe(false);
   });
 
-  it("keeps the turn running for a progress reply", async () => {
+  it("delivers the reply as rewritten by result middleware", async () => {
+    installResultMiddleware((event) => ({
+      result: {
+        content: event.result.content,
+        details: { sourceReply: { text: "Pedido SO1 creado." } },
+      },
+    }));
+    const bridge = createBridge({ canDeliverSourceReply: true, details: replyDetails });
+
+    const result = await callOrderStatus(bridge);
+
+    expect(result.terminate).toBe(true);
+    expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([
+      expect.objectContaining({ text: "Pedido SO1 creado." }),
+    ]);
+  });
+
+  it("delivers nothing when result middleware withdraws the reply", async () => {
+    installResultMiddleware((event) => ({
+      result: { content: event.result.content, details: { redacted: true } },
+    }));
+    const bridge = createBridge({ canDeliverSourceReply: true, details: replyDetails });
+
+    const result = await callOrderStatus(bridge);
+
+    expect(result.terminate).toBeUndefined();
+    expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([]);
+  });
+
+  it("keeps the turn running for a non-final reply", async () => {
     const bridge = createBridge({
       canDeliverSourceReply: true,
       details: { sourceReply: { text: "Comprobando stock…", final: false } },
@@ -75,9 +130,7 @@ describe("Codex tool-authored source replies", () => {
     const result = await callOrderStatus(bridge);
 
     expect(result.terminate).toBeUndefined();
-    expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([
-      expect.objectContaining({ text: "Comprobando stock…", sourceReplyFinal: false }),
-    ]);
+    expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([]);
   });
 
   it("ignores sourceReply details from a tool without the capability", async () => {
