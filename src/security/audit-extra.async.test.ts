@@ -160,6 +160,11 @@ description: test skill
     const stateDir = await makeTmpDir("audit-malformed-roster-workspaces");
     const workspaceA = path.join(stateDir, "workspace-a");
     const workspaceB = path.join(stateDir, "workspace-b");
+    for (const workspace of [workspaceA, workspaceB]) {
+      const skillDir = path.join(workspace, "skills", "evil-skill");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Test skill\n");
+    }
     const scannedDirs: string[] = [];
     vi.spyOn(skillScanner, "scanDirectoryWithSummary").mockImplementation(async (dirPath) => {
       scannedDirs.push(dirPath);
@@ -181,8 +186,11 @@ description: test skill
       },
     };
 
-    await collectInstalledSkillsCodeSafetyFindings({ cfg, stateDir });
+    const findings = await collectInstalledSkillsCodeSafetyFindings({ cfg, stateDir });
 
+    expect(findings.some((finding) => finding.checkId === "skills.code_safety.scan_failed")).toBe(
+      false,
+    );
     expect(scannedDirs).toEqual(
       expect.arrayContaining([
         path.join(workspaceA, "skills", "evil-skill"),

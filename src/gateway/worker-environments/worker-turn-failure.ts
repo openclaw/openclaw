@@ -1,4 +1,5 @@
 import { createDeferredCore } from "../../shared/deferred.js";
+import { reportPlacementTransition } from "./placement-record.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
@@ -132,7 +133,7 @@ export async function failHandedOffTurn(params: {
         assertCurrent,
       );
       const recoveryError = failures.join("; ");
-      await params.placements.fail(
+      const failed = await params.placements.fail(
         {
           sessionId: reconciling.sessionId,
           expectedGeneration: reconciling.generation,
@@ -140,6 +141,7 @@ export async function failHandedOffTurn(params: {
         },
         assertCurrent,
       );
+      reportPlacementTransition(undefined, failed);
       return recoveryError;
     } catch (error) {
       if (error instanceof AcceptedWorkspacePublicationIndeterminateError) {

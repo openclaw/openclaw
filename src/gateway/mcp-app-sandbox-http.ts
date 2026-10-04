@@ -24,10 +24,8 @@ type PublicResourceReader = NonNullable<
 >;
 
 function handleMcpAppSandboxHttpRequest(req: IncomingMessage, res: ServerResponse): boolean {
-  let url: URL;
-  try {
-    url = new URL(req.url ?? "/", "http://localhost");
-  } catch {
+  const url = URL.parse(req.url ?? "/", "http://localhost");
+  if (!url) {
     respondPlainText(res, 400, "Bad Request");
     return true;
   }

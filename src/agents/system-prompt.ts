@@ -36,7 +36,6 @@ import {
   type PreparedMemoryPromptSection,
 } from "../plugins/memory-state.js";
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
-import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import type { BootstrapMode } from "./bootstrap-mode.js";
@@ -71,6 +70,7 @@ import type {
   ProviderSystemPromptSectionId,
 } from "./system-prompt-contribution.js";
 import { buildMessagingSection, resolveSilentReplyPromptMode } from "./system-prompt-messaging.js";
+import { buildRuntimeLine } from "./system-prompt-runtime.js";
 import { buildSkillsSection } from "./system-prompt-skills.js";
 import { buildSystemPromptToolLines } from "./system-prompt-tool-list.js";
 import type {
@@ -1076,45 +1076,4 @@ export function buildAgentSystemPrompt(params: {
   return lines.filter(Boolean).join("\n");
 }
 
-function buildRuntimeLine(
-  runtimeInfo?: SystemPromptRuntimeInfo,
-  runtimeChannel?: string,
-  runtimeCapabilities: string[] = [],
-): string {
-  const normalizedRuntimeCapabilities = normalizePromptCapabilityIds(runtimeCapabilities);
-  // Transcript ids rotate on rewind; isolated cron keys also carry per-run ids.
-  // Keep only stable session identity in the cached Runtime line.
-  const { baseSessionKey } = parseCronRunScopeSuffix(runtimeInfo?.sessionKey);
-  return `Runtime: ${[
-    runtimeInfo?.agentName ? `name=${runtimeInfo.agentName}` : "",
-    runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",
-    baseSessionKey ? `session=${sanitizeForPromptLiteral(baseSessionKey)}` : "",
-    runtimeInfo?.sessionUrl ? `sessionUrl=${sanitizeForPromptLiteral(runtimeInfo.sessionUrl)}` : "",
-    runtimeInfo?.host ? `host=${runtimeInfo.host}` : "",
-    runtimeInfo?.repoRoot ? `repo=${runtimeInfo.repoRoot}` : "",
-    runtimeInfo?.os
-      ? `os=${runtimeInfo.os}${runtimeInfo?.arch ? ` (${runtimeInfo.arch})` : ""}`
-      : runtimeInfo?.arch
-        ? `arch=${runtimeInfo.arch}`
-        : "",
-    runtimeInfo?.node ? `node=${runtimeInfo.node}` : "",
-    runtimeInfo?.activeNode
-      ? `active_node=${sanitizeForPromptLiteral(runtimeInfo.activeNode)}`
-      : "",
-    runtimeInfo?.activeNodeIdentity ? `active_node_identity=${runtimeInfo.activeNodeIdentity}` : "",
-    runtimeInfo?.model ? `model=${runtimeInfo.model}` : "",
-    runtimeInfo?.defaultModel ? `default_model=${runtimeInfo.defaultModel}` : "",
-    runtimeInfo?.shell ? `shell=${runtimeInfo.shell}` : "",
-    runtimeChannel ? `channel=${runtimeChannel}` : "",
-    runtimeChannel
-      ? `capabilities=${
-          normalizedRuntimeCapabilities.length > 0
-            ? normalizedRuntimeCapabilities.join(",")
-            : "none"
-        }`
-      : "",
-  ]
-    .filter(Boolean)
-    .join(" | ")}`;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

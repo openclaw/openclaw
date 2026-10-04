@@ -1,7 +1,6 @@
 import { Option, type Command } from "commander";
 import type { ChannelSetupFieldMetadata } from "../channels/plugins/setup-contract.js";
 import { getCommandArgsWithRootOptions } from "../infra/cli-root-options.js";
-import { createLazyPromise } from "../shared/lazy-promise.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
 type ChannelSetupFlagArity = "boolean" | "value" | "conflict";
@@ -10,13 +9,6 @@ export type ChannelSetupCliOption = ChannelSetupFieldMetadata["cli"];
 
 const CHANNEL_ADD_SHARED_BOOLEAN_OPTIONS = new Set(["--help", "-h"]);
 const CHANNEL_ADD_SHARED_VALUE_OPTIONS = new Set(["--agent", "--channel", "--account", "--name"]);
-const CHANNEL_ADD_SHARED_VALUE_OPTION_PREFIXES = [...CHANNEL_ADD_SHARED_VALUE_OPTIONS].map(
-  (flag) => `${flag}=`,
-);
-
-export const loadChannelSetupCliOptions = createLazyPromise(
-  () => import("../channels/plugins/cli-add-options.js"),
-);
 
 export function getChannelSetupOptionSwitches(option: Option): string[] {
   return [option.short, option.long].filter((flag): flag is string => Boolean(flag));
@@ -91,7 +83,7 @@ export async function resolveChannelsAddChannelFromArgv(
       index += 1;
       continue;
     }
-    if (CHANNEL_ADD_SHARED_VALUE_OPTION_PREFIXES.some((prefix) => arg.startsWith(prefix))) {
+    if (arg.includes("=") && CHANNEL_ADD_SHARED_VALUE_OPTIONS.has(arg.slice(0, arg.indexOf("=")))) {
       continue;
     }
     if (CHANNEL_ADD_SHARED_BOOLEAN_OPTIONS.has(arg)) {
@@ -102,7 +94,8 @@ export async function resolveChannelsAddChannelFromArgv(
       // channel option. Lazily inspect serialized all-channel metadata for arity only; actual
       // option registration remains scoped to the selected channel.
       if (!channelFlagArities) {
-        const { resolveChannelSetupCliOptionMetadata } = await loadChannelSetupCliOptions();
+        const { resolveChannelSetupCliOptionMetadata } =
+          await import("../channels/plugins/cli-add-options.js");
         const { optionCandidates } = resolveChannelSetupCliOptionMetadata(undefined, {
           includeAll: true,
         });

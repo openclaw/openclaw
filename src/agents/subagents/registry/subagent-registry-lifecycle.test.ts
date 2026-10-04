@@ -3772,6 +3772,48 @@ describe("subagent registry lifecycle hardening", () => {
     },
   );
 
+  it("retires delivery expiry when requester execution starts and records its eventual success", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(2_000_000);
+    const entry = createRunEntry({
+      endedAt: Date.now() - 30 * 60_000 + 1_000,
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      expectsCompletionMessage: true,
+      completion: { required: true, resultText: "final answer" },
+      delivery: { status: "pending" },
+      outcome: { status: "ok" },
+      retainAttachmentsOnKeep: true,
+    });
+    const requesterFinished = createDeferredCore<AnnounceFlowOutcome>();
+    let deliverySignal: AbortSignal | undefined;
+    const runSubagentAnnounceFlow = vi.fn<LifecycleControllerParams["runSubagentAnnounceFlow"]>(
+      (params) => {
+        deliverySignal = params.signal;
+        params.onExecutionStarted?.();
+        return requesterFinished.promise;
+      },
+    );
+    const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
+    try {
+      expect(controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
+      await waitForLifecycleState(() => expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce());
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(deliverySignal?.aborted).toBe(false);
+      expect(readLifecycleRun(entry).delivery?.status).toBe("pending");
+      requesterFinished.resolve("delivered");
+      await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      expect(readLifecycleRun(entry).delivery?.status).toBe("delivered");
+      expect(readLifecycleRun(entry).delivery?.nextAttemptAt).toBeUndefined();
+      expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+      expect(completionDeliveryMocks.blockSubagentCompletionDelivery).not.toHaveBeenCalled();
+    } finally {
+      requesterFinished.resolve("delivered");
+      await vi.advanceTimersByTimeAsync(0);
+      controller.clearScheduledResumeTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("suspends successful keep-mode final delivery after its deadline", async () => {
     const beforeWrite = vi.fn();
     const entry = createRunEntry({

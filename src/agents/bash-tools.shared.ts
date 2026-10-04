@@ -7,8 +7,6 @@ import { sliceUtf16Safe } from "../utils.js";
 import type {
   SandboxBackendExecSpec,
   SandboxBackendHandle,
-  SandboxBackendWorkdirValidation,
-  SandboxBackendWorkdirValidator,
 } from "./sandbox/backend-handle.types.js";
 
 const CHUNK_LIMIT = 8 * 1024;
@@ -23,9 +21,9 @@ export type BashSandboxConfig = {
   containerName: string;
   workspaceDir: string;
   containerWorkdir: string;
-  workdirValidation?: SandboxBackendWorkdirValidation;
-  validateWorkdir?: SandboxBackendWorkdirValidator;
-  discardPreparedWorkdir?: (workdir: string) => void;
+  workdirValidation?: SandboxBackendHandle["workdirValidation"];
+  validateWorkdir?: SandboxBackendHandle["validateWorkdir"];
+  discardPreparedWorkdir?: SandboxBackendHandle["discardPreparedWorkdir"];
   workdirRoots?: readonly string[];
   /** Approved read-only skill mounts that may be selected as an exec workdir. */
   readOnlyWorkspaceSkillMounts?: readonly BashSandboxWorkdirMount[];
@@ -37,12 +35,7 @@ export type BashSandboxConfig = {
     env: Record<string, string>;
     usePty: boolean;
   }) => Promise<SandboxBackendExecSpec>;
-  finalizeExec?: (params: {
-    status: "completed" | "failed";
-    exitCode: number | null;
-    timedOut: boolean;
-    token?: unknown;
-  }) => Promise<void>;
+  finalizeExec?: SandboxBackendHandle["finalizeExec"];
 };
 
 /** Builds the environment passed into sandboxed exec calls. */
@@ -51,18 +44,12 @@ export function buildSandboxEnv(params: {
   paramsEnv?: Record<string, string>;
   sandboxEnv?: Record<string, string>;
   containerWorkdir: string;
-}) {
-  const env: Record<string, string> = {
-    PATH: params.defaultPath,
-    HOME: params.containerWorkdir,
-  };
-  for (const [key, value] of Object.entries(params.sandboxEnv ?? {})) {
-    env[key] = value;
-  }
-  for (const [key, value] of Object.entries(params.paramsEnv ?? {})) {
-    env[key] = value;
-  }
-  return env;
+}): Record<string, string> {
+  return Object.assign(
+    { PATH: params.defaultPath, HOME: params.containerWorkdir },
+    params.sandboxEnv,
+    params.paramsEnv,
+  );
 }
 
 /** Coerces process/env-like records to string-only environment variables. */
@@ -156,12 +143,9 @@ export function sliceLogLines(
 /** Derives a compact human label from a shell command. */
 export function deriveSessionName(command: string): string | undefined {
   const tokens = tokenizeCommand(command);
-  if (tokens.length === 0) {
-    return undefined;
-  }
   const verb = tokens[0];
   if (!verb) {
-    return "";
+    return undefined;
   }
   let target = tokens.slice(1).find((t) => !t.startsWith("-"));
   if (!target) {

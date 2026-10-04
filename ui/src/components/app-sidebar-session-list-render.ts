@@ -516,7 +516,6 @@ function renderSessionCatalog(params: {
   return html`
     ${renderer({
       catalogs: [catalog],
-      connected: host.connected,
       basePath: snapshot.basePath,
       routeSessionKey: snapshot.routeSessionKey,
       newSessionAgentId: snapshot.newSessionAgentId,

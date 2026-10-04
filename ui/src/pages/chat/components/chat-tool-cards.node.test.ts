@@ -348,48 +348,52 @@ describe("tool card outcomes", () => {
     expect(done.map((card) => resolveToolCardOutcome(card, true))).toEqual(["succeeded"]);
   });
 
-  it("distinguishes active and terminal calls when history has no outcome", () => {
-    const [card] = assistantCards(
-      [{ type: "toolcall", id: "call-live", name: "bash", arguments: { command: "sleep 5" } }],
-      {
-        activity: [
-          {
-            itemId: "tool:call-live",
-            toolCallId: "call-live",
-            kind: "tool",
-            name: "bash",
-            phase: "end",
-            title: "Command — outcome unknown",
-          },
-        ],
-        __openclawToolStreamLive: true,
-        __openclawToolStreamResultReceived: false,
-      },
-    );
-    expect(card?.activity?.status).toBeUndefined();
-    expect(resolveToolCardOutcome(card!, true)).toBe("running");
+  it.each(["start", "update", "end"] as const)(
+    "distinguishes %s activity from terminal results without outcomes",
+    (phase) => {
+      const [card] = assistantCards(
+        [{ type: "toolcall", id: "call-live", name: "bash", arguments: { command: "sleep 5" } }],
+        {
+          activity: [
+            {
+              itemId: "tool:call-live",
+              toolCallId: "call-live",
+              kind: "tool",
+              name: "bash",
+              phase,
+              title: "Command — outcome unknown",
+            },
+          ],
+          __openclawToolStreamLive: true,
+          __openclawToolStreamResultReceived: false,
+        },
+      );
+      expect(card?.activity?.status).toBeUndefined();
+      expect(resolveToolCardOutcome(card!, true)).toBe(phase === "end" ? "unknown" : "running");
+      expect(resolveToolCardOutcome(card!, false)).toBe("unknown");
 
-    const [terminal] = assistantCards(
-      [
-        { type: "toolcall", id: "call-done", name: "bash", arguments: { command: "echo ok" } },
-        { type: "toolresult", id: "call-done", name: "bash", text: "ok" },
-      ],
-      {
-        activity: [
-          {
-            itemId: "tool:call-done",
-            toolCallId: "call-done",
-            kind: "tool",
-            name: "bash",
-            phase: "end",
-            title: "Command — outcome unknown",
-            summary: "Outcome unknown",
-          },
+      const [terminal] = assistantCards(
+        [
+          { type: "toolcall", id: "call-done", name: "bash", arguments: { command: "echo ok" } },
+          { type: "toolresult", id: "call-done", name: "bash", text: "ok" },
         ],
-      },
-    );
-    expect(terminal).toMatchObject({ completed: true, outputText: "ok" });
-    expect(terminal?.activity?.status).toBeUndefined();
-    expect(resolveToolCardOutcome(terminal!, false)).toBe("unknown");
-  });
+        {
+          activity: [
+            {
+              itemId: "tool:call-done",
+              toolCallId: "call-done",
+              kind: "tool",
+              name: "bash",
+              phase: "end",
+              title: "Command — outcome unknown",
+              summary: "Outcome unknown",
+            },
+          ],
+        },
+      );
+      expect(terminal).toMatchObject({ completed: true, outputText: "ok" });
+      expect(terminal?.activity?.status).toBeUndefined();
+      expect(resolveToolCardOutcome(terminal!, false)).toBe("unknown");
+    },
+  );
 });

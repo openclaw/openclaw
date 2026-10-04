@@ -82,13 +82,7 @@ function stripResponsesRequestEncryptedReasoning<TRequest extends ResponsesEncry
   request: TRequest,
 ): TRequest {
   const stripped = stripEncryptedReasoningContentFields(request.input);
-  if (!stripped.changed) {
-    return request;
-  }
-  return {
-    ...request,
-    input: stripped.value as ResponseInput,
-  };
+  return stripped === request.input ? request : { ...request, input: stripped as ResponseInput };
 }
 
 function stripResponsesRequestCompaction<TRequest extends ResponsesEncryptedContentRequest>(

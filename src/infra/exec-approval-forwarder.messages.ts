@@ -115,21 +115,11 @@ export function buildForwardedExecApprovalExpired(request: ExecApprovalRequest) 
   return `⏱️ Exec approval expired. ID: ${request.id}`;
 }
 
-function buildApprovalRenderPayload<TParams>(params: {
-  target: ExecApprovalForwardTarget;
-  renderParams: TParams;
-  resolveRenderer: (
-    adapter: ReturnType<typeof resolveChannelApprovalAdapter> | undefined,
-  ) => ((params: TParams) => ReplyPayload | null) | undefined;
-  buildFallback: () => ReplyPayload;
-}): ReplyPayload {
-  const channel = normalizeMessageChannel(params.target.channel) ?? params.target.channel;
-  const adapterPayload = channel
-    ? params.resolveRenderer(resolveChannelApprovalAdapter(getLoadedChannelPlugin(channel)))?.(
-        params.renderParams,
-      )
-    : null;
-  return adapterPayload ?? params.buildFallback();
+function resolveApprovalRenderer(target: ExecApprovalForwardTarget) {
+  const channel = normalizeMessageChannel(target.channel) ?? target.channel;
+  return channel
+    ? resolveChannelApprovalAdapter(getLoadedChannelPlugin(channel))?.render
+    : undefined;
 }
 
 export function buildForwardedExecPendingPayload(params: {
@@ -138,21 +128,19 @@ export function buildForwardedExecPendingPayload(params: {
   target: ExecApprovalForwardTarget;
   nowMs: number;
 }): ReplyPayload {
-  return buildApprovalRenderPayload({
-    target: params.target,
-    renderParams: params,
-    resolveRenderer: (adapter) => adapter?.render?.exec?.buildPendingPayload,
-    buildFallback: () =>
-      buildTypedApprovalPendingReplyPayload({
-        approvalKind: "exec",
-        approvalId: params.request.id,
-        approvalSlug: params.request.id.slice(0, 8),
-        text: buildForwardedExecApprovalRequest(params.request, params.nowMs),
-        agentId: params.request.request.agentId ?? null,
-        allowedDecisions: resolveExecApprovalRequestAllowedDecisions(params.request.request),
-        sessionKey: params.request.request.sessionKey ?? null,
-      }),
-  });
+  const render = resolveApprovalRenderer(params.target)?.exec?.buildPendingPayload;
+  return (
+    render?.(params) ??
+    buildTypedApprovalPendingReplyPayload({
+      approvalKind: "exec",
+      approvalId: params.request.id,
+      approvalSlug: params.request.id.slice(0, 8),
+      text: buildForwardedExecApprovalRequest(params.request, params.nowMs),
+      agentId: params.request.request.agentId ?? null,
+      allowedDecisions: resolveExecApprovalRequestAllowedDecisions(params.request.request),
+      sessionKey: params.request.request.sessionKey ?? null,
+    })
+  );
 }
 
 export function buildForwardedExecResolvedPayload(params: {
@@ -160,17 +148,15 @@ export function buildForwardedExecResolvedPayload(params: {
   resolved: ExecApprovalResolved;
   target: ExecApprovalForwardTarget;
 }): ReplyPayload {
-  return buildApprovalRenderPayload({
-    target: params.target,
-    renderParams: params,
-    resolveRenderer: (adapter) => adapter?.render?.exec?.buildResolvedPayload,
-    buildFallback: () =>
-      buildApprovalResolvedReplyPayload({
-        approvalId: params.resolved.id,
-        approvalSlug: params.resolved.id.slice(0, 8),
-        text: buildForwardedExecApprovalResolved(params.resolved),
-      }),
-  });
+  const render = resolveApprovalRenderer(params.target)?.exec?.buildResolvedPayload;
+  return (
+    render?.(params) ??
+    buildApprovalResolvedReplyPayload({
+      approvalId: params.resolved.id,
+      approvalSlug: params.resolved.id.slice(0, 8),
+      text: buildForwardedExecApprovalResolved(params.resolved),
+    })
+  );
 }
 
 export function buildForwardedPluginPendingPayload(params: {
@@ -179,20 +165,18 @@ export function buildForwardedPluginPendingPayload(params: {
   target: ExecApprovalForwardTarget;
   nowMs: number;
 }): ReplyPayload {
-  return buildApprovalRenderPayload({
-    target: params.target,
-    renderParams: params,
-    resolveRenderer: (adapter) => adapter?.render?.plugin?.buildPendingPayload,
-    buildFallback: () =>
-      buildTypedPluginApprovalPendingReplyPayload({
-        request: params.request,
-        nowMs: params.nowMs,
-        text: buildPluginApprovalRequestMessage(params.request, params.nowMs),
-        allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions(
-          params.request.request,
-        ),
-      }),
-  });
+  const render = resolveApprovalRenderer(params.target)?.plugin?.buildPendingPayload;
+  return (
+    render?.(params) ??
+    buildTypedPluginApprovalPendingReplyPayload({
+      request: params.request,
+      nowMs: params.nowMs,
+      text: buildPluginApprovalRequestMessage(params.request, params.nowMs),
+      allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions(
+        params.request.request,
+      ),
+    })
+  );
 }
 
 export function buildForwardedPluginResolvedPayload(params: {
@@ -200,12 +184,8 @@ export function buildForwardedPluginResolvedPayload(params: {
   resolved: PluginApprovalResolved;
   target: ExecApprovalForwardTarget;
 }): ReplyPayload {
-  return buildApprovalRenderPayload({
-    target: params.target,
-    renderParams: params,
-    resolveRenderer: (adapter) => adapter?.render?.plugin?.buildResolvedPayload,
-    buildFallback: () => buildPluginApprovalResolvedReplyPayload({ resolved: params.resolved }),
-  });
+  const render = resolveApprovalRenderer(params.target)?.plugin?.buildResolvedPayload;
+  return render?.(params) ?? buildPluginApprovalResolvedReplyPayload({ resolved: params.resolved });
 }
 
 function buildForwardedSystemAgentApprovalRequest(

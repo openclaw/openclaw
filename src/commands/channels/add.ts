@@ -33,9 +33,6 @@ import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { channelLabel } from "./runtime-label.js";
 import { requireValidConfigForWrite } from "./shared.js";
 
-const loadChannelSetupPluginInstall = createLazyPromise(
-  () => import("../channel-setup/plugin-install.js"),
-);
 const loadOnboardChannels = createLazyPromise(() => import("../../flows/channel-setup.js"));
 
 export type ChannelsAddOptions = {
@@ -187,7 +184,7 @@ async function configureChannelAccount(
       return existing;
     }
     const { loadChannelSetupPluginRegistrySnapshotForChannel } =
-      await loadChannelSetupPluginInstall();
+      await import("../channel-setup/plugin-install.js");
     const snapshot = loadChannelSetupPluginRegistrySnapshotForChannel({
       cfg: nextConfig,
       runtime,
@@ -218,7 +215,8 @@ async function configureChannelAccount(
         workspaceDir,
       })
     ) {
-      const { ensureChannelSetupPluginInstalled } = await loadChannelSetupPluginInstall();
+      const { ensureChannelSetupPluginInstalled } =
+        await import("../channel-setup/plugin-install.js");
       const prompter = createClackPrompter();
       const result = await ensureChannelSetupPluginInstalled({
         cfg: nextConfig,

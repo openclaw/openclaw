@@ -234,6 +234,7 @@ export async function resolveDurableChatClaim(params: {
 
 function isRestartSafeChatSession(params: {
   entry?: SessionEntry;
+  acpMeta: SessionEntry["acp"] | null;
   requestedSessionId?: string;
   sessionKey: string;
 }): boolean {
@@ -251,7 +252,7 @@ function isRestartSafeChatSession(params: {
     entry.spawnedBy === undefined &&
     entry.subagentRole === undefined &&
     (entry.spawnDepth ?? 0) === 0 &&
-    entry.acp === undefined &&
+    params.acpMeta == null &&
     entry.cronRunContinuation === undefined &&
     !isSubagentSessionKey(params.sessionKey) &&
     !isCronSessionKey(params.sessionKey) &&
@@ -306,6 +307,7 @@ export function resolveRestartSafeChatAdmission(params: {
     "chatAbortControllers" | "chatQueuedTurns" | "workerSessionPlacementService"
   >;
   entry?: SessionEntry;
+  acpMeta: SessionEntry["acp"] | null;
   initialSessionEntry?: SessionEntry;
   now: number;
   request?: RestartSafeChatRequest;

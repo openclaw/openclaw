@@ -135,29 +135,23 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
       : nothing;
   const providerGroups = new Map<string, ChatModelPickerOption[]>();
   for (const option of params.modelOptions) {
-    const existing = providerGroups.get(option.provider);
-    if (existing) {
-      // Default restores inheritance; it stays ahead of ranked model choices.
-      if (option.isDefault) {
-        existing.unshift(option);
-      } else if (option === leadingModelOption) {
-        existing.splice(existing[0]?.isDefault ? 1 : 0, 0, option);
-      } else {
-        existing.push(option);
-      }
+    const existing = providerGroups.get(option.provider) ?? [];
+    // Default restores inheritance; it stays ahead of ranked model choices.
+    if (option.isDefault) {
+      existing.unshift(option);
+    } else if (option === leadingModelOption) {
+      existing.splice(existing[0]?.isDefault ? 1 : 0, 0, option);
     } else {
-      providerGroups.set(option.provider, [option]);
+      existing.push(option);
     }
+    providerGroups.set(option.provider, existing);
   }
   const orderedProviderGroups = [...providerGroups];
   const selectedProviderIndex = orderedProviderGroups.findIndex(
     ([provider]) => provider === leadingModelOption?.provider,
   );
   if (selectedProviderIndex > 0) {
-    const [selectedGroup] = orderedProviderGroups.splice(selectedProviderIndex, 1);
-    if (selectedGroup) {
-      orderedProviderGroups.unshift(selectedGroup);
-    }
+    orderedProviderGroups.unshift(...orderedProviderGroups.splice(selectedProviderIndex, 1));
   }
   const orderedOptions = orderedProviderGroups.flatMap(([, options]) => options);
   const optionIndex = new Map(

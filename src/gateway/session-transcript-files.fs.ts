@@ -13,6 +13,7 @@ import {
 } from "../config/sessions/artifacts.js";
 import { extractGeneratedTranscriptSessionId } from "../config/sessions/generated-transcript-session-id.js";
 import {
+  resolveSessionArtifactDirectory,
   resolveSessionFilePathCore,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptPathInDir,
@@ -59,7 +60,7 @@ export function resolveSessionTranscriptCandidates(
   };
 
   if (storePath) {
-    const sessionsDir = path.dirname(storePath);
+    const sessionsDir = resolveSessionArtifactDirectory(storePath);
     if (sessionFile && !staleSessionFile) {
       pushCandidate(() =>
         resolveSessionFilePathCore(sessionId, { sessionFile }, { sessionsDir, agentId }),

@@ -522,9 +522,11 @@ it.each([
       },
     },
   });
-  expect(input.request.kind === "rpc" ? undefined : input.request.params.target).not.toHaveProperty(
-    "env.UNRELATED_SECRET",
-  );
+  expect(
+    input.request.kind === "rpc" || input.request.kind === "rpc-message"
+      ? undefined
+      : input.request.params.target,
+  ).not.toHaveProperty("env.UNRELATED_SECRET");
 });
 
 it.each([false, true])(

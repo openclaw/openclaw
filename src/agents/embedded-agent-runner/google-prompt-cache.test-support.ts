@@ -1,7 +1,10 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
+import * as providerFetch from "../provider-transport-fetch.js";
 import { prepareGooglePromptCacheStreamFn } from "./google-prompt-cache.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 export type SessionCustomEntry = {
   type: "custom";
@@ -141,8 +144,7 @@ export function streamOptions(streamFn: { mock: { calls: unknown[][] } }, callIn
 
 export function preparePromptCacheStream(params: {
   apiKey?: string;
-  buildGuardedFetch?: () => typeof fetch;
-  fetchMock?: ReturnType<typeof vi.fn>;
+  fetchMock?: typeof fetch;
   model?: ReturnType<typeof makeGoogleModel>;
   now: number;
   sessionManager: TestGooglePromptCacheSessionManager;
@@ -150,24 +152,18 @@ export function preparePromptCacheStream(params: {
   streamFn: StreamFn;
 }) {
   const model = params.model ?? makeGoogleModel();
-  return prepareGooglePromptCacheStreamFn(
-    {
-      apiKey: params.apiKey ?? "gemini-api-key",
-      extraParams: { cacheRetention: "long" },
-      model,
-      modelId: model.id,
-      provider: "google",
-      sessionManager: params.sessionManager,
-      signal: params.signal,
-      streamFn: params.streamFn,
-    },
-    {
-      ...(params.buildGuardedFetch
-        ? { buildGuardedFetch: params.buildGuardedFetch }
-        : params.fetchMock
-          ? { buildGuardedFetch: () => params.fetchMock as typeof fetch }
-          : {}),
-      now: () => params.now,
-    },
-  );
+  vi.spyOn(Date, "now").mockReturnValue(params.now);
+  if (params.fetchMock) {
+    vi.spyOn(providerFetch, "buildGuardedModelFetch").mockReturnValue(params.fetchMock);
+  }
+  return prepareGooglePromptCacheStreamFn({
+    apiKey: params.apiKey ?? "gemini-api-key",
+    extraParams: { cacheRetention: "long" },
+    model,
+    modelId: model.id,
+    provider: "google",
+    sessionManager: params.sessionManager,
+    signal: params.signal,
+    streamFn: params.streamFn,
+  });
 }

@@ -1,3 +1,4 @@
+import type { WorktreeTemplateWorkerOperations } from "../agents/worktrees/template-registry.worker.js";
 import {
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
@@ -16,7 +17,6 @@ import {
   pluginStateWorkerOperations,
 } from "../plugin-state/plugin-state-worker-contract.js";
 import { readPluginMetadataStateRowSync } from "../plugins/installed-plugin-index-row.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   openClawStateDatabaseCache,
   retainOpenClawStateDatabase,
@@ -37,21 +37,19 @@ import type {
   OpenClawStateWorkerBackend,
   OpenClawStateWorkerOpenPreparation,
 } from "./openclaw-state-worker-contract.js";
+import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
 
-const loadAgentCleanup = createLazyRuntimeModule(
-  () => import("./openclaw-agent-execution-cleanup.worker.js"),
-);
+// PR provisioning has the template owner, but intentionally omits the application runtime.
+const templateRegistry = createWorkerOperationRegistry<WorktreeTemplateWorkerOperations>({
+  worktrees: () =>
+    import("../agents/worktrees/template-registry.worker.js").then(
+      (loaded) => loaded.worktreeTemplateOperations,
+    ),
+});
+
 let agentCleanup: typeof import("./openclaw-agent-execution-cleanup.worker.js") | undefined;
-
-const loadPluginState = createLazyRuntimeModule(
-  () => import("../plugin-state/plugin-state.worker.js"),
-);
 let pluginState: typeof import("../plugin-state/plugin-state.worker.js") | undefined;
-
-const loadCapture = createLazyRuntimeModule(() => import("../proxy-capture/store.worker.js"));
 let capture: typeof import("../proxy-capture/store.worker.js") | undefined;
-
-const loadRuntime = createLazyRuntimeModule(() => import("./openclaw-state-worker-runtime.js"));
 let runtime: typeof import("./openclaw-state-worker-runtime.js") | undefined;
 
 function stateDatabaseInitializationEnvironment(): NodeJS.ProcessEnv {
@@ -130,11 +128,14 @@ function createSharedStateWorkerBackend(
   };
   return {
     [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
+      if (commandType.startsWith("worktrees.templates.")) {
+        return templateRegistry.prepare(commandType);
+      }
       if (commandType.startsWith("capture.")) {
         if (capture) {
           return undefined;
         }
-        return loadCapture().then((loaded) => {
+        return import("../proxy-capture/store.worker.js").then((loaded) => {
           capture = loaded;
         });
       }
@@ -142,7 +143,7 @@ function createSharedStateWorkerBackend(
         if (agentCleanup) {
           return undefined;
         }
-        return loadAgentCleanup().then((loaded) => {
+        return import("./openclaw-agent-execution-cleanup.worker.js").then((loaded) => {
           agentCleanup = loaded;
         });
       }
@@ -150,7 +151,7 @@ function createSharedStateWorkerBackend(
         if (pluginState) {
           return undefined;
         }
-        return loadPluginState().then((loaded) => {
+        return import("../plugin-state/plugin-state.worker.js").then((loaded) => {
           pluginState = loaded;
         });
       }
@@ -170,7 +171,7 @@ function createSharedStateWorkerBackend(
       if (runtime) {
         return runtime.prepareSharedStateCommand(commandType);
       }
-      return loadRuntime().then((loaded) => {
+      return import("./openclaw-state-worker-runtime.js").then((loaded) => {
         runtime = loaded;
         return runtime.prepareSharedStateCommand(commandType);
       });
@@ -178,6 +179,15 @@ function createSharedStateWorkerBackend(
     execute(command) {
       if (closed) {
         throw new Error("Shared-state worker is closed");
+      }
+      if (templateRegistry.has(command)) {
+        return templateRegistry.execute(command, {
+          open,
+          stateOptions: () => ({
+            path: context.databasePath,
+            env: getSqliteWorkerStateContext().environment,
+          }),
+        });
       }
       if (
         command.type === "capture.upsertSession" ||

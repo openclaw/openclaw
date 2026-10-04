@@ -4,13 +4,9 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { beginLifecycleWriteCustody } from "../infra/lifecycle-write-custody.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { createLazyPromise } from "../shared/lazy-promise.js";
 import type { OffsiteBackupResult } from "./backup-remote.js";
 import { recordBackupOutcomeBestEffort } from "./backup-shared.js";
 import { formatBackupCreateSummary } from "./backup-summary.js";
-
-const loadBackupVerifyRuntime = createLazyPromise(() => import("./backup-verify.js"));
-const loadBackupRemoteRuntime = createLazyPromise(() => import("./backup-remote.js"));
 
 export type BackupCommandCreateOptions = BackupCreateOptions &
   BackupRetentionOptions & {
@@ -46,14 +42,14 @@ export async function backupCreateCommand(
         log: opts.log ?? (opts.json ? undefined : (message: string) => runtime.log(message)),
       };
       if (opts.to !== undefined) {
-        const { createOffsiteBackupArchive } = await loadBackupRemoteRuntime();
+        const { createOffsiteBackupArchive } = await import("./backup-remote.js");
         return await createOffsiteBackupArchive({ ...options, to: opts.to, namespace });
       }
       return await createBackupArchive(options);
     });
     archivePath = result.archivePath;
     if (opts.verify && !opts.dryRun && !result.verified) {
-      const { verifyBackupArchive } = await loadBackupVerifyRuntime();
+      const { verifyBackupArchive } = await import("./backup-verify.js");
       await verifyBackupArchive(result.archivePath);
       result.verified = true;
     }

@@ -169,14 +169,10 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     }
   };
 
-  const beginTaggedReasoningMessage = () => {
+  const beginClaudeMessage = (messageId?: string) => {
     finishTaggedReasoningMessage();
     taggedReasoningRouter = createLeadingTaggedReasoningRouter();
     currentTaggedReasoningText = "";
-  };
-
-  const beginClaudeMessage = (messageId?: string) => {
-    beginTaggedReasoningMessage();
     pendingMessageSeparator = true;
     previousMessageHadToolUse = currentMessageHadToolUse;
     currentMessageHadToolUse = false;
@@ -222,9 +218,6 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   };
 
   const handleCustomJsonlLine = (line: string, rawLine: string): boolean => {
-    if (parseErrorText) {
-      return true;
-    }
     const lifecycle = cliOutputLifecycle.parseCliBackendLifecycleLine({
       line,
       backendId: params.providerId,

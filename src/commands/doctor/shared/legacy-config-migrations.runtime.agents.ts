@@ -259,37 +259,6 @@ function migrateExplicitUnsupportedSandboxBrowserNetwork(
   );
 }
 
-function migrateAgentBrowserInheritedFromUnsupportedDefault(params: {
-  agent: unknown;
-  pathLabel: string;
-  defaultBrowserEnabled: boolean;
-  changes: string[];
-}): void {
-  const browser = getSandboxBrowserConfig(params.agent);
-  if (!browser) {
-    return;
-  }
-  const hasExplicitNetwork = typeof browser.network === "string";
-  const network = normalizeOptionalLowercaseString(browser.network);
-  if (network === "none") {
-    migrateExplicitUnsupportedSandboxBrowserNetwork(browser, params.pathLabel, params.changes);
-    return;
-  }
-  if (!hasExplicitNetwork && browser.enabled === true) {
-    browser.enabled = false;
-    params.changes.push(
-      `Disabled ${params.pathLabel} because it inherited unsupported browser network "none".`,
-    );
-    return;
-  }
-  if (hasExplicitNetwork && browser.enabled === undefined && params.defaultBrowserEnabled) {
-    browser.enabled = true;
-    params.changes.push(
-      `Set ${params.pathLabel}.enabled to true to preserve its explicit supported network while disabling the unsupported default browser network.`,
-    );
-  }
-}
-
 function migrateUnsupportedSandboxBrowserNetworks(
   raw: Record<string, unknown>,
   changes: string[],
@@ -300,19 +269,29 @@ function migrateUnsupportedSandboxBrowserNetworks(
   const defaultNetworkUnsupported = isUnsupportedSandboxBrowserNetwork(defaultBrowser?.network);
   const defaultBrowserEnabled = defaultBrowser?.enabled === true;
   visitAgentEntries(raw, (agent, path) => {
-    const pathLabel = `${path}.sandbox.browser`;
-    if (defaultNetworkUnsupported) {
-      migrateAgentBrowserInheritedFromUnsupportedDefault({
-        agent,
-        pathLabel,
-        defaultBrowserEnabled,
-        changes,
-      });
+    const browser = getSandboxBrowserConfig(agent);
+    if (!browser) {
       return;
     }
-    const browser = getSandboxBrowserConfig(agent);
-    if (browser) {
+    const pathLabel = `${path}.sandbox.browser`;
+    if (isUnsupportedSandboxBrowserNetwork(browser.network)) {
       migrateExplicitUnsupportedSandboxBrowserNetwork(browser, pathLabel, changes);
+      return;
+    }
+    if (!defaultNetworkUnsupported) {
+      return;
+    }
+    const hasExplicitNetwork = typeof browser.network === "string";
+    if (!hasExplicitNetwork && browser.enabled === true) {
+      browser.enabled = false;
+      changes.push(
+        `Disabled ${pathLabel} because it inherited unsupported browser network "none".`,
+      );
+    } else if (hasExplicitNetwork && browser.enabled === undefined && defaultBrowserEnabled) {
+      browser.enabled = true;
+      changes.push(
+        `Set ${pathLabel}.enabled to true to preserve its explicit supported network while disabling the unsupported default browser network.`,
+      );
     }
   });
 

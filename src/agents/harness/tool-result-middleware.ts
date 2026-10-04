@@ -100,14 +100,11 @@ function isValidMiddlewareToolResult(value: unknown): value is OpenClawAgentTool
 }
 
 function descendMiddlewareContentCoerceState(
-  value: unknown,
+  value: object,
   state: MiddlewareContentCoerceState,
 ): MiddlewareContentCoerceState | undefined {
   if (state.depth >= MAX_MIDDLEWARE_CONTENT_DEPTH) {
     return undefined;
-  }
-  if (value === null || typeof value !== "object") {
-    return { depth: state.depth + 1, seen: state.seen };
   }
   return state.seen.has(value)
     ? undefined

@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   dispatchCommittedSkillChangeBestEffort,
   hasCommittedSkillChangeHooks,
@@ -68,9 +67,11 @@ class SkillProposalLifecycleError extends Error {
 export async function applySkillProposalTransition(
   request: SkillProposalActionInput,
 ): Promise<SkillProposalApplyResult> {
-  const store = captureSkillWorkshopStoreOptions(
-    storeOptions(request.env, request.agentId, request.config),
-  );
+  const store = captureSkillWorkshopStoreOptions({
+    env: request.env,
+    agentId: request.agentId,
+    config: request.config,
+  });
   const input = { ...request, env: store.env, eventActor: structuredClone(request.eventActor) };
   const initial = await readRequiredProposal(input.proposalId, {
     ...store,
@@ -88,14 +89,8 @@ export async function applySkillProposalTransition(
   try {
     evaluated = await evaluateSkillProposal(
       {
-        workspaceDir: input.workspaceDir,
-        ...(input.agentId ? { agentId: input.agentId } : {}),
-        config: input.config,
-        ...(input.eventActor ? { eventActor: input.eventActor } : {}),
-        ...(input.env ? { env: input.env } : {}),
-        proposalId: input.proposalId,
+        ...input,
         expectedRevisionHash: initial.revisionHash,
-        ...(input.correlationId ? { correlationId: input.correlationId } : {}),
         trigger: "apply",
       },
       store,
@@ -402,8 +397,7 @@ async function quarantineSkillProposalAfterScan(params: {
       ...(params.input.correlationId ? { correlationId: params.input.correlationId } : {}),
       occurredAt: now,
     }),
-    store:
-      params.store ?? storeOptions(params.input.env, params.input.agentId, params.input.config),
+    store: params.store,
     operationLabel: "skill-workshop.quarantine.commit",
   });
   if (commit.state !== "committed") {
@@ -533,16 +527,4 @@ async function recoverAfterApplyCommitFailure(params: {
     store: params.store,
   }).catch(() => false);
   return null;
-}
-
-function storeOptions(
-  env: NodeJS.ProcessEnv | undefined,
-  agentId: string | undefined,
-  config: OpenClawConfig,
-): SkillWorkshopStoreOptions {
-  return {
-    ...(env ? { env } : {}),
-    ...(agentId ? { agentId } : {}),
-    config,
-  };
 }

@@ -3,7 +3,6 @@ import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core";
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
-import { isRuntimeContextMessage, setRuntimeContextRetention } from "../../../llm/types.js";
 import {
   attachRuntimePromptMediaFacts,
   readPersistedMediaFacts,
@@ -15,7 +14,6 @@ import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-trans
 import { createPreparedEmbeddedAgentSettingsManager } from "../../agent-project-settings.js";
 import {
   applyAgentAutoCompactionGuard,
-  applyAgentCompactionSettingsFromConfig,
   isSilentOverflowProneModel,
   resolveEffectiveCompactionMode,
 } from "../../agent-settings.js";
@@ -31,7 +29,8 @@ import {
   type CreateAgentSessionOptions,
   SessionManager,
 } from "../../sessions/index.js";
-import { createAgentSessionForEmbeddedRunner } from "../../sessions/sdk.js";
+import { DefaultResourceLoader } from "../../sessions/resource-loader.js";
+import { createAgentSession } from "../../sessions/sdk.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { resolveToolSearchCatalogTool } from "../../tool-search.js";
@@ -39,10 +38,8 @@ import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { log } from "../logger.js";
 import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
-import { createEmbeddedAgentResourceLoader } from "../resource-loader.js";
 import { recordRuntimeContextProjection } from "../session-prompt-state.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
-import { applySystemPromptToSession } from "../system-prompt.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
 import { createAttemptCompactionThinkingResolver } from "./attempt-compaction-thinking.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt-history.js";
@@ -65,7 +62,10 @@ import {
   preparePersistedCurrentUserTurn,
   reconcilePrePersistedCurrentUserTurn,
 } from "./pre-persisted-user-turn.js";
-import { setSteeringRuntimeContextRetention } from "./runtime-context-prompt.js";
+import {
+  applyRuntimeContextCarrierRetention,
+  setSteeringRuntimeContextRetention,
+} from "./runtime-context-prompt.js";
 import { resolveSessionBoundaryPromptCacheKey } from "./session-boundary-prompt-cache-key.js";
 import { resolveEmbeddedSessionContextLimits } from "./session-context-limits.js";
 import { withEmbeddedAttemptToolActivity } from "./tool-activity-heartbeat.js";
@@ -109,7 +109,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     pluginMetadataSnapshot: input.getCurrentAttemptPluginMetadataSnapshot(),
     contextTokenBudget: attempt.contextTokenBudget,
   });
-  const autoCompactionGuardArgs = {
+  applyAgentAutoCompactionGuard({
     settingsManager,
     contextEngineInfo: input.activeContextEngineInfo,
     compactionMode: resolveEffectiveCompactionMode(attempt.config),
@@ -118,8 +118,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
       modelId: attempt.modelId,
       baseUrl: attempt.model.baseUrl ?? undefined,
     }),
-  };
-  applyAgentAutoCompactionGuard(autoCompactionGuardArgs);
+  });
 
   // These factories carry compaction/pruning runtime state into the resource loader.
   const extensionFactories = buildEmbeddedExtensionFactories({
@@ -134,21 +133,12 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     sessionKey: attempt.sessionKey ?? attempt.sandboxSessionKey,
     runId: attempt.runId,
   });
-  const resourceLoader = createEmbeddedAgentResourceLoader({
+  const resourceLoader = new DefaultResourceLoader({
     cwd: input.effectiveCwd,
     agentDir: input.agentDir,
-    settingsManager,
     extensionFactories,
   });
   await resourceLoader.reload();
-  // reload() rehydrates disk settings. Reapply OpenClaw's context budget and
-  // auto-compaction guards before the session can submit a prompt (#75799).
-  applyAgentCompactionSettingsFromConfig({
-    settingsManager,
-    cfg: attempt.config,
-    contextTokenBudget: attempt.contextTokenBudget,
-  });
-  applyAgentAutoCompactionGuard(autoCompactionGuardArgs);
   input.markStage("session-resource-loader");
 
   // Tool creation needs the same runner later used by lifecycle hooks.
@@ -160,9 +150,8 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   const { allCustomTools, sessionToolAllowlist, ...clientToolRuntime } = preparedClientTools;
 
   const sessionOptions: CreateAgentSessionOptions = {
+    systemPrompt: input.initialSystemPrompt,
     cwd: input.effectiveCwd,
-    agentDir: input.agentDir,
-    authStorage: attempt.authStorage,
     modelRegistry: attempt.modelRegistry,
     model: attempt.model,
     thinkingLevel: input.agentCoreThinkingLevel,
@@ -210,7 +199,9 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     withSessionWriteSettlement: (operation) =>
       input.transcriptLifecycle.withTranscriptWrite(operation),
   };
-  const { session: activeSession } = await createAgentSessionForEmbeddedRunner(sessionOptions, {
+  const { session: activeSession } = await createAgentSession({
+    ...sessionOptions,
+    cleanupProviderSessionResourcesOnDispose: false,
     // Without a resolved model budget, the outer loop cannot own bounded recovery.
     contextOverflowRecoveryOwner: attempt.contextTokenBudget === undefined ? "session" : "caller",
     resolveCompactionThinkingLevel: createAttemptCompactionThinkingResolver(
@@ -228,7 +219,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   activeSession.setActiveToolsByName(sessionToolAllowlist);
   const setActiveSessionSystemPrompt = (nextSystemPrompt: string) => {
     input.onSystemPromptChanged(nextSystemPrompt);
-    applySystemPromptToSession(activeSession, nextSystemPrompt);
+    activeSession.setBaseSystemPrompt(nextSystemPrompt.trim());
     return nextSystemPrompt;
   };
   const setPermissionPromptPreparation = installAttemptPermissionPrompt({
@@ -436,11 +427,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
         ? normalized
         : relocateCurrentRuntimeContextCarrierToTail(normalized),
     );
-    for (const message of converted) {
-      if (isRuntimeContextMessage(message)) {
-        setRuntimeContextRetention(message, input.appendOnlyRuntimeContext);
-      }
-    }
+    applyRuntimeContextCarrierRetention(converted, input.appendOnlyRuntimeContext);
     if (
       !input.appendOnlyRuntimeContext &&
       recordRuntimeContextProjection(attempt.sessionId, removedRuntimeContext, converted)

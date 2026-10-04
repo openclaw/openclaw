@@ -64,6 +64,7 @@ export type SessionGroupMutationResult = "completed" | "stale";
 export type SessionGroupDefaultsStatus = "idle" | "loading" | "ready" | "unavailable";
 
 export type SessionListOptions = {
+  rowMode?: "compact";
   agentId?: string;
   spawnedBy?: string;
   boardFace?: "chat" | "dashboard";

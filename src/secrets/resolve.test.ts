@@ -28,9 +28,9 @@ import {
   describeSecretResolutionError,
   describeSecretResolutionOperatorDiagnostic,
   describeSecretResolutionOperatorRecovery,
+  isMissingSecretRefResolutionError,
 } from "./resolve-errors.js";
 import {
-  isMissingSecretRefResolutionError,
   isProviderScopedSecretResolutionError,
   resolveSecretRefString,
   resolveSecretRefValue,

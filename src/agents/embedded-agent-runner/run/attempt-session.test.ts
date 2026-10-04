@@ -24,17 +24,14 @@ import {
   getEmbeddedSessionPromptState,
   prepareSessionSystemPrompt,
 } from "../session-prompt-state.js";
-import * as embeddedSystemPrompt from "../system-prompt.js";
 import { withPromptFixture } from "./attempt-system-prompt.sandbox-info.test-support.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
   applyAgentAutoCompactionGuard: vi.fn(),
-  applyAgentCompactionSettingsFromConfig: vi.fn(),
-  applySystemPromptToSession: vi.fn(),
   buildEmbeddedExtensionFactories: vi.fn(),
-  createAgentSessionForEmbeddedRunner: vi.fn(),
-  createEmbeddedAgentResourceLoader: vi.fn(),
+  createAgentSession: vi.fn(),
+  DefaultResourceLoader: vi.fn<new () => { reload: () => Promise<void> }>(),
   createPreparedEmbeddedAgentSettingsManager: vi.fn(),
   getGlobalHookRunner: vi.fn(),
   installMessageToolOnlyTerminalHook: vi.fn(),
@@ -52,17 +49,18 @@ vi.mock("../../../plugins/hook-runner-global.js", () => ({
 vi.mock("../../agent-project-settings.js", () => ({
   createPreparedEmbeddedAgentSettingsManager: hoisted.createPreparedEmbeddedAgentSettingsManager,
 }));
+// mock-isolation: Keep configuration policy outside the session assembly fixture.
 vi.mock("../../agent-settings.js", () => ({
   applyAgentAutoCompactionGuard: hoisted.applyAgentAutoCompactionGuard,
-  applyAgentCompactionSettingsFromConfig: hoisted.applyAgentCompactionSettingsFromConfig,
   isSilentOverflowProneModel: hoisted.isSilentOverflowProneModel,
   resolveEffectiveCompactionMode: hoisted.resolveEffectiveCompactionMode,
 }));
 vi.mock("../../agent-tool-definition-adapter.js", () => ({
   toToolDefinitions: hoisted.toToolDefinitions,
 }));
+// mock-isolation: Keep session storage and provider runtime outside the preparation fixture.
 vi.mock("../../sessions/sdk.js", () => ({
-  createAgentSessionForEmbeddedRunner: hoisted.createAgentSessionForEmbeddedRunner,
+  createAgentSession: hoisted.createAgentSession,
 }));
 vi.mock("../../sessions/tools/tool-definition-wrapper.js", () => ({
   wrapToolDefinition: hoisted.wrapToolDefinition,
@@ -71,8 +69,8 @@ vi.mock("../extensions.js", () => ({
   buildEmbeddedExtensionFactories: hoisted.buildEmbeddedExtensionFactories,
 }));
 vi.mock("../logger.js", () => ({ log: { info: vi.fn() } }));
-vi.mock("../resource-loader.js", () => ({
-  createEmbeddedAgentResourceLoader: hoisted.createEmbeddedAgentResourceLoader,
+vi.mock("../../sessions/resource-loader.js", () => ({
+  DefaultResourceLoader: hoisted.DefaultResourceLoader,
 }));
 vi.mock("./attempt-client-tools.js", () => ({
   prepareEmbeddedAttemptClientTools: hoisted.prepareEmbeddedAttemptClientTools,
@@ -122,6 +120,10 @@ function createInput(options?: { activationError?: Error }) {
     [agentSessionQueuePromptContext]: queuePromptContext,
     agent: { id: "agent", subscribe: vi.fn(), state: { systemPrompt: "", tools: [] } },
     setActiveToolsByName,
+    setBaseSystemPrompt: vi.fn((prompt: string) => {
+      activeSession.agent.state.systemPrompt = prompt;
+      events.push("apply-system-prompt");
+    }),
     replaceCustomTools: vi.fn(),
   } as unknown as AgentSession;
   const sessionManager = { id: "session-manager" };
@@ -146,7 +148,11 @@ function createInput(options?: { activationError?: Error }) {
   hoisted.resolveEffectiveCompactionMode.mockReturnValue("safeguard");
   hoisted.isSilentOverflowProneModel.mockReturnValue(false);
   hoisted.buildEmbeddedExtensionFactories.mockReturnValue([{ id: "extension" }]);
-  hoisted.createEmbeddedAgentResourceLoader.mockReturnValue(resourceLoader);
+  hoisted.DefaultResourceLoader.mockImplementation(
+    class {
+      reload = resourceLoader.reload;
+    },
+  );
   hoisted.getGlobalHookRunner.mockReturnValue(hookRunner);
   hoisted.prepareEmbeddedAttemptClientTools.mockReturnValue({
     allCustomTools,
@@ -154,13 +160,9 @@ function createInput(options?: { activationError?: Error }) {
     ...clientToolRuntime,
     refreshTools: vi.fn(),
   });
-  hoisted.createAgentSessionForEmbeddedRunner.mockImplementation(async () => {
+  hoisted.createAgentSession.mockImplementation(async () => {
     events.push("create-session");
     return { session: activeSession };
-  });
-  hoisted.applySystemPromptToSession.mockImplementation((_session, prompt: string) => {
-    activeSession.agent.state.systemPrompt = prompt;
-    events.push("apply-system-prompt");
   });
   hoisted.installMessageToolOnlyTerminalHook.mockImplementation(
     (input: { onDeliveredSourceReply?: () => void }) => {
@@ -257,9 +259,6 @@ beforeEach(() => {
   vi.spyOn(toolSearch, "resolveToolSearchCatalogTool").mockImplementation(
     hoisted.resolveToolSearchCatalogTool,
   );
-  vi.spyOn(embeddedSystemPrompt, "applySystemPromptToSession").mockImplementation(
-    hoisted.applySystemPromptToSession,
-  );
 });
 
 afterEach(() => {
@@ -315,8 +314,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     });
     setEmbeddedMode(true);
     setEmbeddedPluginApprovalBroker(broker);
-    const resolveDeferredTool =
-      hoisted.createAgentSessionForEmbeddedRunner.mock.calls[0]![0].resolveDeferredTool;
+    const resolveDeferredTool = hoisted.createAgentSession.mock.calls[0]![0].resolveDeferredTool;
     const tool = resolveDeferredTool({ toolCall: { name: "mcp_write" } });
     const settled = Promise.allSettled([tool.execute("deferred-write", {})]);
     try {
@@ -630,6 +628,10 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
 
   it("prepares resources and publishes the activated session runtime", async () => {
     const fixture = createInput();
+    fixture.input.initialSystemPrompt = "  system prompt\n";
+    fixture.input.onSystemPromptChanged = vi.fn(() => {
+      fixture.events.push("publish-system-prompt");
+    });
 
     const result = await prepareEmbeddedAttemptAgentSession(fixture.input);
 
@@ -644,18 +646,16 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       "install-terminal-hook",
       "stage:agent-session",
     ]);
-    expect(hoisted.applyAgentAutoCompactionGuard).toHaveBeenCalledTimes(2);
-    expect(hoisted.applyAgentCompactionSettingsFromConfig).toHaveBeenCalledOnce();
-    expect(hoisted.applyAgentCompactionSettingsFromConfig.mock.invocationCallOrder[0]).toBeLessThan(
-      hoisted.applyAgentAutoCompactionGuard.mock.invocationCallOrder[1] ?? 0,
-    );
-    const sessionCall = hoisted.createAgentSessionForEmbeddedRunner.mock.calls[0];
+    expect(hoisted.applyAgentAutoCompactionGuard).toHaveBeenCalledOnce();
+    const sessionCall = hoisted.createAgentSession.mock.calls[0];
     expect(sessionCall?.[0]).toMatchObject({ resourceLoader: fixture.resourceLoader });
-    expect(sessionCall?.[1]).toMatchObject({
+    expect(sessionCall?.[0]).toMatchObject({
       beforeToolBatch: undefined,
       contextOverflowRecoveryOwner: "caller",
+      cleanupProviderSessionResourcesOnDispose: false,
     });
-    expect(sessionCall?.[0]).not.toHaveProperty("contextOverflowRecoveryOwner");
+    expect(fixture.activeSession.agent.state.systemPrompt).toBe("system prompt");
+    expect(fixture.input.onSystemPromptChanged).toHaveBeenCalledWith("  system prompt\n");
     expect(fixture.setActiveToolsByName).toHaveBeenCalledWith(fixture.sessionToolAllowlist);
     expect(result).toEqual(
       expect.objectContaining({
@@ -790,7 +790,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
 
     await prepareEmbeddedAttemptAgentSession(fixture.input);
 
-    expect(hoisted.createAgentSessionForEmbeddedRunner.mock.calls[0]?.[1]).toMatchObject({
+    expect(hoisted.createAgentSession.mock.calls[0]?.[0]).toMatchObject({
       beforeToolBatch: undefined,
       contextOverflowRecoveryOwner: "session",
     });

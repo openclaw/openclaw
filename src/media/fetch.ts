@@ -291,30 +291,28 @@ async function fetchGuardedMediaResponse(
     url,
   });
   const requestSignal = responseHeaderDeadline.signal;
-  const runGuardedFetch = async (attempt: FetchDispatcherAttempt) =>
-    await fetchWithSsrFGuard(
-      (trustExplicitProxyDns && attempt.dispatcherPolicy?.mode === "explicit-proxy"
-        ? withTrustedExplicitProxyGuardedFetchMode
-        : withStrictGuardedFetchMode)({
-        url,
-        fetchImpl,
-        ...(beforeRequest ? { beforeRequest } : {}),
-        init: requestInit,
-        maxRedirects,
-        ...(requireHttps !== undefined ? { requireHttps } : {}),
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-        ...(requestSignal ? { signal: requestSignal } : {}),
-        policy: ssrfPolicy,
-        lookupFn: attempt.lookupFn ?? lookupFn,
-        dispatcherPolicy: attempt.dispatcherPolicy,
-      }),
-    );
   try {
     let result!: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
     const attemptErrors: unknown[] = [];
-    for (let i = 0; i < attempts.length; i += 1) {
+    for (const [i, attempt] of attempts.entries()) {
       try {
-        result = await runGuardedFetch(expectDefined(attempts[i], "attempts entry at i"));
+        result = await fetchWithSsrFGuard(
+          (trustExplicitProxyDns && attempt.dispatcherPolicy?.mode === "explicit-proxy"
+            ? withTrustedExplicitProxyGuardedFetchMode
+            : withStrictGuardedFetchMode)({
+            url,
+            fetchImpl,
+            ...(beforeRequest ? { beforeRequest } : {}),
+            init: requestInit,
+            maxRedirects,
+            ...(requireHttps !== undefined ? { requireHttps } : {}),
+            ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+            ...(requestSignal ? { signal: requestSignal } : {}),
+            policy: ssrfPolicy,
+            lookupFn: attempt.lookupFn ?? lookupFn,
+            dispatcherPolicy: attempt.dispatcherPolicy,
+          }),
+        );
         break;
       } catch (err) {
         if (
@@ -335,9 +333,6 @@ async function fetchGuardedMediaResponse(
         attemptErrors.push(err);
       }
     }
-    // Clear only the header timer. The merged parent signal stays attached until
-    // release so shutdown can still interrupt a response body read.
-    responseHeaderDeadline.cleanup();
     return {
       response: result.response,
       finalUrl: result.finalUrl,
@@ -345,8 +340,10 @@ async function fetchGuardedMediaResponse(
       sourceUrl,
     };
   } catch (err) {
-    responseHeaderDeadline.cleanup();
     throw createMediaFetchFailure(sourceUrl, err);
+  } finally {
+    // Clear only the header timer; release owns the parent signal during body reads.
+    responseHeaderDeadline.cleanup();
   }
 }
 

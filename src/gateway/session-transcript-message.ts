@@ -1,16 +1,17 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TranscriptDisplayPosition } from "../chat/transcript-display-position.js";
-import type { SubagentCoordinationDisplayResolver } from "./chat-display-projection.history.js";
 import {
   createCurrentUserProfileMessageProjector,
   projectChatDisplayMessage,
   projectChatDisplayMessagesWithState,
 } from "./chat-display-projection.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
+import { readChatHistoryReplyMessageId } from "./server-methods/chat-history-reply-messages.js";
 import {
   attachOpenClawTranscriptMeta,
   readTranscriptMessageIdempotencyKey,
 } from "./session-transcript-entry-message.js";
+import type { SubagentCoordinationDisplayResolver } from "./session-transcript-read.types.js";
 
 export type SessionMessageProjectionState = {
   assistantErrorPending: boolean;
@@ -106,6 +107,10 @@ export function projectSessionMessagePayload(params: {
   const message = projected.messages[0];
   if (!message) {
     return { projectionState };
+  }
+  if (readChatHistoryReplyMessageId(message)) {
+    // The page owner resolves quoted originals once, with visibility and payload bounds.
+    return { projectionState, requiresHistoryReset: true };
   }
   const projectCurrentUserProfile =
     params.projectCurrentUserProfile ??

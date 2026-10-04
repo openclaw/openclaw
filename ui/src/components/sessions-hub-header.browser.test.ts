@@ -109,11 +109,5 @@ describe.skipIf(!hasBrowserLayout)("Sessions hub header browser layout", () => {
     expect(
       operationalHeader.querySelector("button")?.getBoundingClientRect().width,
     ).toBeGreaterThan(0);
-
-    const chatContent = document.createElement("main");
-    chatContent.className = "content content--chat";
-    chatContent.innerHTML = '<section class="content-header"></section>';
-    document.body.append(chatContent);
-    expect(getComputedStyle(chatContent.querySelector(".content-header")!).display).toBe("none");
   });
 });

@@ -41,11 +41,11 @@ import type {
   ProfileUsageStats,
 } from "./types.js";
 import { resolveUsageWindowUntil } from "./usage-failure-state.js";
+import { runAuthProfileUsage } from "./usage-lifecycle.js";
 import {
   isSameWhamCredential,
   matchesWhamBlockGeneration,
   reconcileWhamBlock,
-  reduceAuthProfileFailure,
   resolveActiveWindowUntil,
   type WhamCooldownProbeResult,
   type PersonalAuthProfileUsageResult,
@@ -57,6 +57,7 @@ import {
   isCooldownScopedToDifferentModel,
   resolveInlineProviderApiKeyUsageId,
 } from "./usage-state.js";
+import { withAuthProfileUsage } from "./usage-write.js";
 
 const authProfileUsageLog = createSubsystemLogger("agent/embedded");
 export {
@@ -68,20 +69,7 @@ export {
   resolveProfileUnusableUntilForDisplay,
 } from "./usage-state.js";
 
-const authProfileUsageDeps = {
-  updateAuthProfileStoreWithLock,
-};
-
-/** Test-only dependency injection for usage persistence hooks. */
 const testing = {
-  setDepsForTest(
-    overrides: Partial<{
-      updateAuthProfileStoreWithLock: typeof updateAuthProfileStoreWithLock;
-    }> | null,
-  ) {
-    authProfileUsageDeps.updateAuthProfileStoreWithLock =
-      overrides?.updateAuthProfileStoreWithLock ?? updateAuthProfileStoreWithLock;
-  },
   resetWhamReprobeStateForTest() {
     whamReprobesInFlight.clear();
   },
@@ -108,7 +96,7 @@ async function updateOwnedAuthProfileUsage(
   // Inherited credentials exist only in the owner's SQLite store. A child lock
   // cannot persist their health state, so resolve the owner before the write.
   let changed = false;
-  const updated = await authProfileUsageDeps.updateAuthProfileStoreWithLock({
+  const updated = await updateAuthProfileStoreWithLock({
     ...update,
     profileId,
     agentDir: resolvePersistedAuthProfileOwnerAgentDir({
@@ -604,61 +592,47 @@ export async function markAuthProfileFailure(params: {
     return;
   }
 
-  const personal = isUserModelAuthProfileId(profileId)
-    ? preparePersonalAuthProfileUsage(store, profileId)
-    : undefined;
-  const observedStore =
-    shouldProbeWham && !personal
-      ? loadAuthProfileStoreWithoutExternalProfiles(agentDir, { profileId })
+  const result = await runAuthProfileUsage(async () => {
+    const personal = isUserModelAuthProfileId(profileId)
+      ? preparePersonalAuthProfileUsage(store, profileId)
       : undefined;
-  const observed = shouldProbeWham && personal ? await personal.read() : undefined;
-  const blockGeneration = structuredClone(
-    observed?.usageStats ?? observedStore?.usageStats?.[profileId],
-  );
-  const whamResult = shouldProbeWham ? await probeWhamForCooldown(profile, profileId) : null;
-  const reduction = {
-    expectedProfile: profile,
-    reason,
-    modelId,
-    whamResult,
-    probeEligible: shouldProbeWham,
-    observedProfile: observed?.credential ?? observedStore?.profiles[profileId],
-    blockGeneration,
-  };
-
-  let result: PersonalAuthProfileUsageResult | null | undefined;
-  if (personal) {
-    result = await personal.record({ kind: "failure", ...reduction });
-  } else {
-    const updated = await updateOwnedAuthProfileUsage(store, profileId, {
-      agentDir,
-      updater: (freshStore) => {
-        const previous = freshStore.usageStats?.[profileId];
-        const now = Date.now();
-        const next = reduceAuthProfileFailure(
-          freshStore.profiles[profileId],
-          previous,
-          {
-            ...reduction,
-            probeEligible:
-              Boolean(whamResult) &&
-              shouldProbeWhamForFailure(freshStore.profiles[profileId], reason),
-          },
-          now,
-        );
-        if (!next) {
-          return false;
-        }
-        result = { previous, next, now };
-        freshStore.usageStats ??= {};
-        freshStore.usageStats[profileId] = next;
-        return true;
-      },
-    });
-    if (updated === null) {
-      result = null;
+    const record = async (
+      observed: { credential?: AuthProfileCredential; usageStats?: ProfileUsageStats } | undefined,
+      persist: (
+        reduction: import("./usage-reduction.js").PersonalAuthProfileUsageReduction,
+      ) => Promise<PersonalAuthProfileUsageResult | null | undefined>,
+    ) => {
+      const blockGeneration = structuredClone(observed?.usageStats);
+      const whamResult = shouldProbeWham ? await probeWhamForCooldown(profile, profileId) : null;
+      return persist({
+        kind: "failure",
+        expectedProfile: profile,
+        reason,
+        modelId,
+        whamResult,
+        probeEligible: shouldProbeWham,
+        observedProfile: observed?.credential,
+        blockGeneration,
+      });
+    };
+    if (personal) {
+      return record(shouldProbeWham ? await personal.read() : undefined, (reduction) =>
+        personal.record(reduction),
+      );
     }
-  }
+    return withAuthProfileUsage(store, profileId, agentDir, (usage) =>
+      record(
+        {
+          credential: usage.observed.profiles[profileId],
+          usageStats: usage.observed.usageStats?.[profileId],
+        },
+        async (reduction) => {
+          const receipt = await usage.record(reduction);
+          return receipt === null ? null : receipt.result;
+        },
+      ),
+    );
+  });
   if (result) {
     logAuthProfileFailureStateChange({
       runId,

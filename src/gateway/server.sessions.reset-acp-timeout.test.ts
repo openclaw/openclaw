@@ -2,11 +2,9 @@
 // the next runtime session or prevent reset from completing.
 import { afterEach, expect, test, vi } from "vitest";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
+import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
-import {
-  readAcpSessionMeta,
-  writeAcpSessionMetaForMigration,
-} from "../acp/runtime/session-meta.js";
+import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { drainSystemEventEntries, peekSystemEvents } from "../infra/system-events.js";
@@ -90,7 +88,7 @@ async function seedAcpSession() {
   const { dir, storePath } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
   await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
-  writeAcpSessionMetaForMigration({
+  seedCanonicalAcpSessionMeta({
     sessionKey: "agent:main:main",
     meta: resolvedAcpMeta(),
   });
@@ -278,7 +276,7 @@ test.each([true, false])(
       entries: existing ? { main: sessionStoreEntry("legacy-main") } : {},
     });
     const { identity: _identity, ...legacyMeta } = resolvedAcpMeta();
-    writeAcpSessionMetaForMigration({ sessionKey: "agent:main:main", meta: legacyMeta });
+    seedCanonicalAcpSessionMeta({ sessionKey: "agent:main:main", meta: legacyMeta });
     const reset = await directSessionReq("sessions.reset", { key: "main" });
     expect(reset.ok).toBe(true);
     const entry = loadSessionEntry({ storePath, sessionKey: "agent:main:main" });
@@ -297,11 +295,11 @@ test.each(["global", "agent:work:main"])(
       const cfg = stores.getRuntimeConfig();
       const mainMeta = { ...resolvedAcpMeta(), runtimeSessionName: "main-owned" };
       const workMeta = { ...resolvedAcpMeta(), runtimeSessionName: "work-owned" };
-      writeAcpSessionMetaForMigration({
+      seedCanonicalAcpSessionMeta({
         sessionKey: buildAcpDatabaseSessionKey("global", "main"),
         meta: mainMeta,
       });
-      writeAcpSessionMetaForMigration({
+      seedCanonicalAcpSessionMeta({
         sessionKey: buildAcpDatabaseSessionKey("global", "work"),
         meta: workMeta,
       });

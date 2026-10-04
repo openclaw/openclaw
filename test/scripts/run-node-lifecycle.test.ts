@@ -154,6 +154,7 @@ it.runIf(process.platform !== "win32")(
         "node-version.mjs",
         "node-runtime-update.mjs",
         "node-runtime-recovery.mjs",
+        "node-runtime-env.mjs",
         "cli-root-options.mjs",
         "gateway-run-argv.mjs",
         "gateway-shutdown-budget.mjs",
@@ -185,22 +186,24 @@ setInterval(() => {
         implementationPath,
         `import fs from "node:fs";
 ${fixtureReceiptClientSource(receipts.endpoint)}
-import { spawn } from "node:child_process";
+import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+const spawn = childProcess.spawn;
 import { registerSourceRunnerServiceFixture } from ${JSON.stringify(sourceRunnerServiceFixtureUrl)};
 registerSourceRunnerServiceFixture(${JSON.stringify(sourceRoot)});
 const { runNodeMain } = await import(${JSON.stringify(runnerUrl)});
 fs.appendFileSync(${JSON.stringify(invocationsPath)}, JSON.stringify(process.argv.slice(2)) + "\\n");
 // Let a regressed watcher finish after recording its doctor or restart invocation.
 if (fs.existsSync(${JSON.stringify(childPidPath)})) process.exit(0);
-const outcome = await runNodeMain({
-  spawn: (command, args, options) => {
+childProcess.spawn = (command, args, options) => {
     if (!args.includes("openclaw.mjs")) throw new Error("prebuilt fixture unexpectedly requested a build");
     const child = spawn(command, [...${JSON.stringify(nodeArgs)}, ...args], options);
     fs.writeFileSync(${JSON.stringify(launcherPidPath)}, String(child.pid));
     sendReceipt(${JSON.stringify(launcherPidPath)}, "ready");
     return child;
-  },
-});
+};
+syncBuiltinESMExports();
+const outcome = await runNodeMain();
 if (typeof outcome === "string") process.kill(process.pid, outcome);
 else process.exit(outcome);
 `,
@@ -210,12 +213,20 @@ else process.exit(outcome);
       const watcherUrl = pathToFileURL(path.resolve("scripts/watch-node.mts")).href;
       writeFileSync(
         path.join(checkoutRoot, "scripts/watch-node.mts"),
-        `import { spawn } from "node:child_process";
-import { runWatchMain } from ${JSON.stringify(watcherUrl)};
-const outcome = await runWatchMain({
-  spawn: (command, args, options) => spawn(command, [...${JSON.stringify(nodeArgs)}, ...args], options),
-  createWatcher: () => ({ on() {}, close() {} }),
+        `import childProcess from "node:child_process";
+import { registerHooks, syncBuiltinESMExports } from "node:module";
+const spawn = childProcess.spawn;
+childProcess.spawn = (command, args, options) => spawn(command, [...${JSON.stringify(nodeArgs)}, ...args], options);
+syncBuiltinESMExports();
+registerHooks({
+  load(url, context, nextLoad) {
+    return url.includes("/watch-node-observation.")
+      ? { format: "module", source: "export function createSourceObserver() { return { async close() {} }; }", shortCircuit: true }
+      : nextLoad(url, context);
+  },
 });
+const { runWatchMain } = await import(${JSON.stringify(watcherUrl)});
+const outcome = await runWatchMain();
 if (typeof outcome === "string") process.kill(process.pid, outcome);
 else process.exit(outcome);
 `,
@@ -429,17 +440,20 @@ setInterval(() => {}, 1000);
       writeFileSync(
         implementationPath,
         `import fs from "node:fs";
-import { spawn } from "node:child_process";
+import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+const spawn = childProcess.spawn;
 import { registerSourceRunnerServiceFixture } from ${JSON.stringify(sourceRunnerServiceFixtureUrl)};
 registerSourceRunnerServiceFixture(${JSON.stringify(sourceRoot)});
 const { runNodeMain } = await import(${JSON.stringify(implementationUrl)});
 fs.writeFileSync(${JSON.stringify(wrapperPidPath)}, String(process.ppid));
+childProcess.spawn = (_command, _args, options) => spawn(process.execPath, [${JSON.stringify(childPath)}], {
+  ...options, stdio: "ignore",
+});
+syncBuiltinESMExports();
 const outcome = await runNodeMain({
   cwd: ${JSON.stringify(checkoutRoot)},
   env: { ...process.env, OPENCLAW_FORCE_BUILD: "1", OPENCLAW_RUNNER_LOG: "0" },
-  spawn: (_command, _args, options) => spawn(process.execPath, [${JSON.stringify(childPath)}], {
-    ...options, stdio: "ignore",
-  }),
 });
 if (typeof outcome === "string") process.kill(process.pid, outcome);
 else process.exit(outcome);

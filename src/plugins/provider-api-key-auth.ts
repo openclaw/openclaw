@@ -4,7 +4,6 @@ import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/strin
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
-import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type {
   ProviderAuthContext,
@@ -45,11 +44,6 @@ type ProviderApiKeyAuthMethodOptions = {
   }) => Promise<string | undefined>;
 };
 
-const loadProviderApiKeyAuthRuntime = createLazyRuntimeSurface(
-  () => import("./provider-api-key-auth.runtime.js"),
-  ({ providerApiKeyAuthRuntime }) => providerApiKeyAuthRuntime,
-);
-
 /** Captures the resolved key and its original storage input without persisting credentials. */
 export async function captureProviderApiKey(
   ctx: Pick<
@@ -69,7 +63,7 @@ export async function captureProviderApiKey(
 ): Promise<{ apiKey: string; input: SecretInput; mode?: ProviderAuthContext["secretInputMode"] }> {
   const { missingInputMessage, ...inputOptions } = params;
   const { ensureApiKeyFromOptionEnvOrPrompt, normalizeApiKeyInput, validateApiKeyInput } =
-    await loadProviderApiKeyAuthRuntime();
+    await import("./provider-api-key-auth.runtime.js");
   let input: SecretInput | undefined;
   let mode: ProviderAuthContext["secretInputMode"];
   let captured = false;
@@ -111,7 +105,7 @@ export async function persistProviderApiKey(
   if (!credential) {
     return false;
   }
-  const { upsertAuthProfileWithLockOrThrow } = await loadProviderApiKeyAuthRuntime();
+  const { upsertAuthProfileWithLockOrThrow } = await import("./provider-api-key-auth.runtime.js");
   await upsertAuthProfileWithLockOrThrow({
     profileId,
     credential,
@@ -173,7 +167,7 @@ export function createProviderApiKeyAuthMethod(
     wizard: params.wizard,
     run: async (ctx) => {
       const flagValue = normalizeOptionalSecretInput(ctx.opts?.[params.optionKey]);
-      const { buildApiKeyCredential } = await loadProviderApiKeyAuthRuntime();
+      const { buildApiKeyCredential } = await import("./provider-api-key-auth.runtime.js");
       const { apiKey, input, mode } = await captureProviderApiKey(ctx, {
         token: flagValue ?? normalizeOptionalSecretInput(ctx.opts?.token),
         tokenProvider: flagValue
@@ -237,7 +231,8 @@ export function createProviderApiKeyAuthMethod(
         apiKey: resolved.key,
         config: ctx.config,
       });
-      const { applyAuthProfileConfig, applyPrimaryModel } = await loadProviderApiKeyAuthRuntime();
+      const { applyAuthProfileConfig, applyPrimaryModel } =
+        await import("./provider-api-key-auth.runtime.js");
       let next = ctx.config;
       for (const profileId of profileIds) {
         next = applyAuthProfileConfig(next, {

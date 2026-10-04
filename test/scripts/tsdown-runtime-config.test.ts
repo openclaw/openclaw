@@ -244,6 +244,8 @@ describe("tsdown config", () => {
       requireStandaloneRuntimeGraph("worker/file-tool-planning.worker"),
       requireStandaloneRuntimeGraph("worker/image-processor.worker"),
       requireStandaloneRuntimeGraph("worker/sqlite-store.worker"),
+      requireStandaloneRuntimeGraph("worker/openclaw-state-read.worker"),
+      requireStandaloneRuntimeGraph("worker/worker-native-lifecycle.worker"),
       expectDefined(handoffGraph, "managed handoff graph"),
       expectDefined(activationGraph, "package activation graph"),
       requireNativeHookRelayGraph(),
@@ -263,7 +265,9 @@ describe("tsdown config", () => {
       const inlinePlugins = (await resolvePluginNames(config.plugins)).filter(
         (name) => name === STATE_SCHEMA_INLINE_PLUGIN_NAME,
       );
-      expect(inlinePlugins).toHaveLength(executableGraphs.has(config) ? 1 : 0);
+      expect(inlinePlugins, entryKeys(config).join(", ")).toHaveLength(
+        executableGraphs.has(config) ? 1 : 0,
+      );
     }
   });
 

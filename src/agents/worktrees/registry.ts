@@ -26,7 +26,6 @@ import {
   worktreeRunLeaseScope,
   WorktreeRemovalContentionError,
   WORKTREE_REMOVING_LEASE_KEY,
-  type RunLeaseOwnerChecks,
 } from "./run-lease-owner.js";
 import { releaseWorktreeRunLeaseInDatabase } from "./run-lease-store.kernel.js";
 import type {
@@ -364,7 +363,7 @@ function assertSnapshotRetirementInDatabase(
   if (provisioned === undefined || provisioned.length !== 0 || chunk) {
     throw new Error("Worktree snapshot retains provisioned data; retain its custody");
   }
-  const leases = collectLiveRunLeases(db, kyselyFor(db), worktreeRunLeaseScope(observed.id), {});
+  const leases = collectLiveRunLeases(db, kyselyFor(db), worktreeRunLeaseScope(observed.id));
   if (leases.liveCount !== 0 || leases.removingToken !== undefined) {
     throw new Error("Worktree snapshot has an active or unresolved run/removal consumer");
   }
@@ -417,7 +416,6 @@ export function claimWorktreeRemovalRow(
     pid: number;
     startTime: number | null;
     now: number;
-    checks?: RunLeaseOwnerChecks;
     retiredExact?: true;
     retiredRemoval?: true;
     assertCurrent?: () => void;
@@ -451,7 +449,7 @@ export function claimWorktreeRemovalRow(
           `managed worktree was removed: ${record?.path ?? params.worktreeId}`,
         );
       }
-      const { livePids, removingToken } = collectLiveRunLeases(db, k, scope, params.checks ?? {});
+      const { livePids, removingToken } = collectLiveRunLeases(db, k, scope);
       if (livePids.length > 0) {
         throw new WorktreeRemovalContentionError(
           "busy",
@@ -568,21 +566,12 @@ export function abortWorktreeRemovalRow(
   );
 }
 
-export function hasLiveWorktreeRunLeaseRow(
-  env: NodeJS.ProcessEnv,
-  worktreeId: string,
-  checks?: RunLeaseOwnerChecks,
-): boolean {
+export function hasLiveWorktreeRunLeaseRow(env: NodeJS.ProcessEnv, worktreeId: string): boolean {
   return (
     withExistingOpenClawStateDatabaseCurrentReadOnly(
       ({ db }) =>
-        collectLiveRunLeases(
-          db,
-          kyselyFor(db),
-          worktreeRunLeaseScope(worktreeId),
-          checks ?? {},
-          false,
-        ).livePids.length > 0,
+        collectLiveRunLeases(db, kyselyFor(db), worktreeRunLeaseScope(worktreeId), false).livePids
+          .length > 0,
       { env },
     ) ?? false
   );

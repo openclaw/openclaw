@@ -12,30 +12,10 @@ type SkillWorkshopConfig = {
   maxSkillBytes: number;
 };
 
-const DEFAULT_CONFIG: SkillWorkshopConfig = {
-  autonomous: {
-    mode: "auto",
-  },
-  approvalPolicy: "auto",
-  maxPending: 50,
-  maxSkillBytes: 40_000,
-};
-
 function readInteger(value: unknown, fallback: number, min: number, max: number): number {
   return typeof value === "number" && Number.isFinite(value)
     ? Math.min(Math.max(Math.trunc(value), min), max)
     : fallback;
-}
-
-function readAutonomousMode(
-  value: unknown,
-  fallback: SkillsWorkshopAutonomousMode,
-): SkillsWorkshopAutonomousMode {
-  return value === "off" || value === "propose" || value === "auto" ? value : fallback;
-}
-
-function readApprovalPolicy(value: unknown, fallback: SkillWorkshopConfig["approvalPolicy"]) {
-  return value === "pending" || value === "auto" ? value : fallback;
 }
 
 export function resolveSkillWorkshopConfig(config?: OpenClawConfig): SkillWorkshopConfig {
@@ -43,10 +23,10 @@ export function resolveSkillWorkshopConfig(config?: OpenClawConfig): SkillWorksh
   const autonomous = asNullableRecord(raw.autonomous) ?? {};
   return {
     autonomous: {
-      mode: readAutonomousMode(autonomous.mode, DEFAULT_CONFIG.autonomous.mode),
+      mode: autonomous.mode === "off" || autonomous.mode === "propose" ? autonomous.mode : "auto",
     },
-    approvalPolicy: readApprovalPolicy(raw.approvalPolicy, DEFAULT_CONFIG.approvalPolicy),
-    maxPending: readInteger(raw.maxPending, DEFAULT_CONFIG.maxPending, 1, 200),
-    maxSkillBytes: readInteger(raw.maxSkillBytes, DEFAULT_CONFIG.maxSkillBytes, 1024, 200_000),
+    approvalPolicy: raw.approvalPolicy === "pending" ? "pending" : "auto",
+    maxPending: readInteger(raw.maxPending, 50, 1, 200),
+    maxSkillBytes: readInteger(raw.maxSkillBytes, 40_000, 1024, 200_000),
   };
 }

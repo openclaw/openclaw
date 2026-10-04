@@ -49,7 +49,10 @@ import {
   exportPreflightHarness,
   runDependencyFreePreflight,
 } from "./ci-preflight-dependencies.test-support.js";
-import { assertControlUiE2eOwnership } from "./ci-ui-e2e-ownership.test-support.js";
+import {
+  assertControlUiE2eOwnership,
+  frozenRealGatewayFiles,
+} from "./ci-ui-e2e-ownership.test-support.js";
 import {
   CACHE_SAVE_V5,
   CACHE_V5,
@@ -531,6 +534,28 @@ describe("release fast lane label", () => {
 });
 
 describe("ci workflow guards", () => {
+  it("keeps Android PR capture on the release script without store authority", () => {
+    const job = readCiWorkflow().jobs["android-screenshots"];
+    expect(job.permissions).toEqual({ contents: "read" });
+    expect(job.environment).toBeUndefined();
+    expect(evaluateWorkflowRunner(job["runs-on"])).toBe("ubuntu-24.04");
+    const toolchain = job.steps.find(
+      (step: WorkflowStep) => step.uses === "./.ci-harness/.github/actions/setup-android-toolchain",
+    );
+    expect(toolchain.with["install-screenshot-emulators"]).toBe("true");
+    const capture = job.steps.find((step: WorkflowStep) => step.run === "pnpm android:screenshots");
+    expect(capture).toBeDefined();
+    expect(capture.env.SIPS).toBe(
+      "${{ runner.temp }}/openclaw-android-tools/android-sips-linux.sh",
+    );
+    expect(JSON.stringify(job)).not.toContain("secrets.");
+    expect(job.steps.filter((step: WorkflowStep) => step["continue-on-error"])).toEqual([]);
+    const evidence = job.steps.find((step: WorkflowStep) => step.uses === UPLOAD_ARTIFACT_V7);
+    expect(evidence.if).toBe("always()");
+    expect(evidence.with.path).toContain("phoneScreenshots/*.jpg");
+    expect(evidence.with.path).toContain("wearScreenshots/*.jpg");
+  });
+
   it("separates release QA lanes without weakening their resource locks", () => {
     const workflowPath = ".github/workflows/qa-live-transports-convex.yml";
     const workflowSource = readFileSync(workflowPath, "utf8");
@@ -5233,7 +5258,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       frozenTarget: false,
       compatibilityTarget: false,
       policy: "bun-compatible",
-      runtimes: ["bun", "node"],
+      runtimes: ["bun"],
       shards: [1, 2, 3],
     },
     {
@@ -5416,31 +5441,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
                 expect(childEnv.OPENCLAW_VITEST_INCLUDE_FILE).toBeUndefined();
               }
               const includeFile = childEnv.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE;
-              if (
-                childEnv.OPENCLAW_VITEST_RUNTIME === "bun" ||
-                scenario.policy === "bun-compatible"
-              ) {
+              if (childEnv.OPENCLAW_VITEST_RUNTIME === "bun") {
                 expect(includeFile).toBeTruthy();
                 const included = JSON.parse(readFileSync(includeFile!, "utf8"));
-                const nodeFiles = [
-                  "ui/src/components/desktop/desktop-mobile-keyboard.test.ts",
-                  "ui/src/pages/chat/chat-pane-retention.test.ts",
-                  "ui/src/pages/chat/chat-thread-retention.test.ts",
-                  "ui/src/pages/chat/session-snapshot-store.test.ts",
-                  "ui/src/pages/usage/usage-page-retention.test.ts",
-                ];
-                if (childEnv.OPENCLAW_VITEST_RUNTIME === "node") {
-                  expect(included.toSorted()).toEqual(nodeFiles);
-                } else {
-                  expect(included.length).toBeGreaterThan(1000);
-                  expect(included.filter((file: string) => nodeFiles.includes(file))).toEqual([]);
-                  if (uiGroups[0]?.includePatterns) {
-                    expect(included.toSorted()).toEqual(
-                      uiGroups[0].includePatterns
-                        .filter((file) => !nodeFiles.includes(file))
-                        .toSorted(),
-                    );
-                  }
+                expect(included.length).toBeGreaterThan(1000);
+                if (uiGroups[0]?.includePatterns) {
+                  expect(included.toSorted()).toEqual(uiGroups[0].includePatterns.toSorted());
                 }
               } else {
                 expect(includeFile).toBeUndefined();
@@ -5593,9 +5599,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
             ];
         expect(args.slice(6, 6 + reporterArgs.length)).toEqual(reporterArgs);
         expect(args.slice(6 + reporterArgs.length).toSorted()).toEqual(
-          prebuilt
-            ? ["--exclude", desktop]
-            : uiE2eRealGatewayTestFiles.filter((file) => file !== desktop).toSorted(),
+          prebuilt ? ["--exclude", desktop] : frozenRealGatewayFiles.toSorted(),
         );
         const selectedConfig = createPrebuiltUiE2eVitestConfig(
           { OPENCLAW_VITEST_INCLUDE_FILE: readFileSync(includePath, "utf8") },
@@ -5613,7 +5617,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       }
       expect(new Set(selectedFiles).size).toBe(selectedFiles.length);
       expect(selectedFiles.toSorted()).toEqual(
-        uiE2eRealGatewayTestFiles
+        (prebuilt ? uiE2eRealGatewayTestFiles : frozenRealGatewayFiles)
           .filter(
             (file) =>
               file !== desktop &&

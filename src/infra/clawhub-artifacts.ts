@@ -111,13 +111,10 @@ export async function downloadClawHubPackageArchive(
     }
     const { bytes, headers } = await fetchClawHubArchive(
       {
-        baseUrl: params.baseUrl,
+        ...params,
         path: `/api/v1/packages/${encodeURIComponent(params.name)}/versions/${encodeURIComponent(
           params.version,
         )}/artifact/download`,
-        token: params.token,
-        timeoutMs: params.timeoutMs,
-        fetchImpl: params.fetchImpl,
       },
       `ClawPack download for ${params.name}@${params.version}`,
     );
@@ -176,12 +173,9 @@ export async function downloadClawHubPackageArchive(
       : undefined;
   const { bytes } = await fetchClawHubArchive(
     {
-      baseUrl: params.baseUrl,
+      ...params,
       path: `/api/v1/packages/${encodeURIComponent(params.name)}/download`,
       search,
-      token: params.token,
-      timeoutMs: params.timeoutMs,
-      fetchImpl: params.fetchImpl,
     },
     `package archive download for ${params.name}`,
   );
@@ -202,11 +196,8 @@ export async function downloadClawHubSkillArchive(
 ): Promise<ClawHubDownloadResult> {
   const { bytes } = await fetchClawHubArchive(
     {
-      baseUrl: params.baseUrl,
+      ...params,
       path: "/api/v1/download",
-      token: params.token,
-      timeoutMs: params.timeoutMs,
-      fetchImpl: params.fetchImpl,
       search: {
         slug: params.slug,
         ownerHandle: params.ownerHandle,
@@ -234,11 +225,8 @@ export async function downloadClawHubSkillArchiveUrl(
   const skipAuth = providedToken == null && requestUrl.origin !== registryOrigin;
   const { bytes } = await fetchClawHubArchive(
     {
-      baseUrl: params.baseUrl,
-      url: params.url,
+      ...params,
       token: providedToken,
-      timeoutMs: params.timeoutMs,
-      fetchImpl: params.fetchImpl,
       skipAuth,
     },
     `skill archive download at ${requestUrl.pathname}`,
@@ -259,10 +247,9 @@ export async function downloadClawHubGitHubSkillArchive(params: {
   const downloadUrl = buildGitHubZipUrl(params.repo, params.commit);
   const { bytes } = await fetchClawHubArchive(
     {
+      ...params,
       url: downloadUrl,
       skipAuth: true,
-      timeoutMs: params.timeoutMs,
-      fetchImpl: params.fetchImpl,
     },
     `GitHub source archive for ${params.repo}@${params.commit}`,
   );

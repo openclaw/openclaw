@@ -60,10 +60,6 @@ import type { EmbeddedAgentCompactResult } from "./types.js";
 
 export type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 
-type CompactEmbeddedAgentSessionParamsWithSessionFile = CompactEmbeddedAgentSessionRuntimeParams & {
-  sessionFile: string;
-};
-
 function lockedHarnessCompactionFailure(runtime: string): EmbeddedAgentCompactResult {
   return {
     ok: false,
@@ -75,7 +71,7 @@ function lockedHarnessCompactionFailure(runtime: string): EmbeddedAgentCompactRe
 
 export async function compactNativeCliSession(params: {
   runtime: string | undefined;
-  compactParams: CompactEmbeddedAgentSessionParamsWithSessionFile;
+  compactParams: CompactEmbeddedAgentSessionParams;
   runControlOperation?: (run: () => Promise<void>) => Promise<void>;
 }): Promise<EmbeddedAgentCompactResult | undefined> {
   const runtime = normalizeOptionalAgentRuntimeId(params.runtime);
@@ -244,7 +240,7 @@ export async function compactEmbeddedAgentSessionDirect(
     lockedHarnessRuntime,
   );
   const transcriptBytePreflightAuthority = transcriptBytePreflightClaim?.authority;
-  const requestedParams: CompactEmbeddedAgentSessionParamsWithSessionFile = {
+  const requestedParams: CompactEmbeddedAgentSessionParams = {
     ...paramsBase,
     config: projectCodexHostTranscriptBytePreflightConfig(
       paramsBase.config,

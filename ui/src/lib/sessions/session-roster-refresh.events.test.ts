@@ -163,6 +163,12 @@ describe("session roster event traffic", () => {
   it.each([
     "snapshot",
     "patch",
+    "subagent-status",
+    "title",
+    "involvement",
+    "swarm-note",
+    "update",
+    "updated",
     "active-message",
     "terminal-message",
     "invalidation",
@@ -213,10 +219,11 @@ describe("session roster event traffic", () => {
             sessionKey: row.key,
             agentId: "main",
             phase: "message",
-            ...(stream === "patch" ? { reason: stream } : {}),
+            ...(stream === "snapshot" ? {} : { reason: stream }),
             ...(stream === "invalidation"
               ? {}
               : {
+                  ancestorSessions: [],
                   session: {
                     ...row,
                     updatedAt: index + 2,
@@ -337,11 +344,14 @@ describe("session roster event traffic", () => {
   );
 
   it.each(["create", "unknown-mutation"])(
-    "refreshes authoritative membership for a %s event even with a row snapshot",
+    "refreshes unheld membership for a %s snapshot",
     async (reason) => {
       vi.useFakeTimers();
       const row = session("main", 1, { sessionId: "tracked" });
-      const request = vi.fn(async () => sessionsResult([row], 1));
+      const added = session("main", 2, { key: "agent:main:new", sessionId: "added" });
+      const request = vi
+        .fn(async () => sessionsResult([added, row], 2))
+        .mockResolvedValueOnce(sessionsResult([row], 1));
       const gatewayHarness = createGatewayHarness(createTestGatewayClient(request));
       const { gateway } = gatewayHarness;
       const sessions = createTestSessionCapability(gateway);
@@ -349,11 +359,14 @@ describe("session roster event traffic", () => {
         await sessions.refresh({ agentId: "main", force: true });
         gatewayHarness.publishEvent("sessions.changed", {
           reason,
-          sessionKey: row.key,
-          session: { ...row, updatedAt: 2 },
+          sessionKey: added.key,
+          session: added,
+          ancestorSessions: [],
         });
+        expect(sessions.listSnapshot({ agentId: "main" }).result?.sessions).toEqual([row]);
         await vi.advanceTimersByTimeAsync(5_000);
         expect(request).toHaveBeenCalledTimes(2);
+        expect(sessions.listSnapshot({ agentId: "main" }).result?.sessions).toEqual([added, row]);
       } finally {
         sessions.dispose();
         vi.useRealTimers();

@@ -44,7 +44,6 @@ import {
   selectCurrentPluginMetadataCache,
 } from "../plugins/current-plugin-metadata-state.js";
 import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
-import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
@@ -197,9 +196,6 @@ export async function prepareGatewayServerBootstrap(input: {
     "config.runtime-imports",
     () => import("./server-startup-config.js"),
   );
-  const loadStartupPluginsModule = createLazyPromise(() => import("./server-startup-plugins.js"), {
-    cacheRejections: true,
-  });
   const { applyGatewayAuthOverridesForStartupPreflight, loadGatewayStartupConfigSnapshot } =
     await startupConfigModulePromise;
 
@@ -472,7 +468,10 @@ export async function prepareGatewayServerBootstrap(input: {
           return await workerModule.loadGatewayWorkerEnvironmentStartupState();
         });
   const { prepareGatewayPluginBootstrap, runGatewayStartupMaintenance } =
-    await startupTrace.measure("plugins.bootstrap-imports", loadStartupPluginsModule);
+    await startupTrace.measure(
+      "plugins.bootstrap-imports",
+      () => import("./server-startup-plugins.js"),
+    );
   const pluginGatewayContext: {
     current: import("./server-methods/types.js").GatewayRequestContext | undefined;
   } = { current: undefined };
@@ -560,7 +559,6 @@ export async function prepareGatewayServerBootstrap(input: {
     minimalTestGateway,
     ambientEnvTriggers,
     startupTrace,
-    loadStartupPluginsModule,
     configSnapshot,
     startupConfigLoad,
     startupActivationSourceConfig,

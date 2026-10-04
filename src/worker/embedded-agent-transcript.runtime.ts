@@ -52,6 +52,7 @@ function toWorkerInferenceMessage(
             ? message.content
             : message.content.map(projectWorkerTextOrImageContent),
         timestamp: message.timestamp,
+        ...(message.operatorMessage ? { operatorMessage: message.operatorMessage } : {}),
       },
     };
   }

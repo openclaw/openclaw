@@ -362,6 +362,20 @@ export function resolveHistoricalHistoryEvent(
   };
 }
 
+export function readHistoricalHistoryPrecedingEvent(
+  projection: CurrentTranscriptProjection,
+  row: NonNullable<ReturnType<typeof readDisplayableActiveEventById>>,
+  event: SessionTranscriptMessageEvent,
+): SessionTranscriptMessageEvent | undefined {
+  const interval = resolveClosedResetIntervalForDisplayable(projection, row);
+  return interval && event.seq > 1
+    ? readHistoricalDisplayEventRange(projection, undefined, interval, event.seq - 2, 1, {
+        activePosition: row.active_position,
+        displayPosition: event.seq - 1,
+      })[0]
+    : undefined;
+}
+
 export function readHistoricalHistoryAnchorPage(
   projection: CurrentTranscriptProjection,
   displaySource: string | undefined,

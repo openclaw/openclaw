@@ -15,14 +15,11 @@ import type { DraftGatewayState } from "./draft-gateway-state.ts";
 export class NewSessionCapabilityController {
   private readonly skillCatalog: ComposerSkillCatalog;
   private toolOverridesValue: SessionToolOverrides | null = null;
-  private onMutation = () => {};
-
-  constructor(private readonly notify: () => void) {
+  constructor(
+    private readonly notify: () => void,
+    private readonly onMutation: () => void,
+  ) {
     this.skillCatalog = new ComposerSkillCatalog(notify);
-  }
-
-  setMutationCallback(onMutation: () => void) {
-    this.onMutation = onMutation;
   }
 
   get toolOverrides(): SessionToolOverrides | null {

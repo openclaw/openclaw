@@ -205,7 +205,44 @@ finishes interrupted finalization, and `update cleanup` retires eligible recover
 originals; neither clears the run ledger. Keep history and backups rather than
 deleting database rows to work around this failure.
 
+## Docker image-layer package updates
+
+Docker OverlayFS can reject moving an npm package installed in an image layer
+with `EXDEV`, even when the package and its backup are on the same mount.
+Updaters with the copy fallback immediately retain and verify an independent
+copy, record its identity for recovery, and remove the original before publishing
+the candidate. A mismatched copy leaves the original package intact. The verified
+copy remains available for rollback until activation is confirmed.
+
+The first update from **2026.9.7 or 2026.9.8** still needs a manual installation
+hop: those installed updaters run their own publication code, so the candidate
+cannot supply this fallback. Prefer rebuilding the Docker image with the desired
+OpenClaw version. For an in-container replacement, follow the
+[manual update precautions](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
+including a verified backup and stopping the managed Gateway, then run
+`npm install -g openclaw@<version>`. Run Doctor and, if needed, `openclaw update repair`
+from the new installation before restarting through the service manager.
+
 ## `update repair`
+
+For a package update stranded by an older updater's launcher ownership checks,
+use the manual installation hop, then repair from the new CLI at the same root:
+
+```bash
+npm install -g openclaw@latest
+openclaw doctor --fix
+openclaw update repair
+```
+
+Follow the [manual update precautions](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
+including a verified backup and stopping the managed Gateway during replacement.
+When the installed package directory matches neither recorded generation, repair
+closes the previous package operation as `superseded-by-manual-install`, warns with
+its operation ID, and preserves its staged files and helper beside the installation.
+The original failed history entry remains intact. The pending package-recovery
+gate then clears, so another update can proceed. Same-identity recovery keeps its
+original sealed-helper checks; missing packages, active update owners, and pending
+database or configuration restoration still require their existing recovery path.
 
 Rerun update finalization after the core package already changed but later
 repair work did not finish cleanly. This is the supported recovery path when
@@ -543,6 +580,21 @@ applies to each artifact's recomputed declared surface during this invocation;
 it does not approve future capability additions.
 
 ### Skipped legacy audit recovery
+
+Doctor can migrate legacy audit logs on filesystems that reject native
+no-replace rename by using an exclusive hard link, then removing the old name.
+This preserves the original inode, including later appends from an older CLI's
+open file descriptor. Existing destinations are never overwritten. Doctor
+recovers interrupted link pairs before importing; backups capture one sanitized
+copy without changing either live name.
+
+If the filesystem also rejects hard links, Doctor preserves the audit files and
+reports a recoverable warning with the affected filename and a command targeting
+that state directory. Other repairs and update finalization continue. Restore
+hard-link support, or stop the Gateway and all CLI writers before moving the
+complete state directory to a compatible filesystem, then run the reported `openclaw doctor --fix`
+command. If the directory moved, update `OPENCLAW_STATE_DIR` in that command.
+Doctor never substitutes a file copy: doing so could lose later audit appends.
 
 When a legacy audit raw archive changed other than by append, Doctor preserves it
 beside itself with a `.quarantined-<date>-<id>` suffix. The warning names the

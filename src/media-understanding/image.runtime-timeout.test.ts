@@ -29,7 +29,8 @@ const {
   resolveModelWithRegistryMock,
 } = imageRuntimeMocks;
 
-const { describeImageWithModelCore } = await import("./image.js");
+const { describeImageWithModelCore, describeImageWithModelPayloadTransformCore } =
+  await import("./image.js");
 const imageModelRuntime = await import("./image-model-runtime.js");
 
 describe("describeImageWithModelCore", () => {
@@ -339,6 +340,64 @@ describe("describeImageWithModelCore", () => {
         retryModel,
       );
       expect(retryPayload).toEqual(expectedRetryPayload);
+    },
+  );
+
+  it.each([
+    { asyncTransform: false, replace: false },
+    { asyncTransform: false, replace: true },
+    { asyncTransform: true, replace: false },
+    { asyncTransform: true, replace: true },
+  ])(
+    "applies caller transforms after retry stripping ($asyncTransform, $replace)",
+    async ({ asyncTransform, replace }) => {
+      mockImageModel({
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4-mini",
+        baseUrl: "https://api.openai.com/v1",
+      });
+      const completion = imageCompletion("openai-responses", "openai", "gpt-5.4-mini", "retry ok");
+      const stripped = { reasoning: { effort: "none" } };
+      const replacement = { custom: "provider option" };
+      const transform = vi.fn((payload: unknown) => {
+        expect(payload).toEqual(stripped);
+        const result = replace ? replacement : undefined;
+        return asyncTransform ? Promise.resolve(result) : result;
+      });
+      completeMock
+        .mockResolvedValueOnce({
+          ...completion,
+          content: [
+            {
+              type: "thinking",
+              thinking: "image reasoning",
+              thinkingSignature: "reasoning_content",
+            },
+          ],
+        })
+        .mockImplementationOnce(async (model, _context, options) => {
+          const onPayload = expectDefined(options.onPayload, "retry payload transform");
+          expect(
+            await onPayload(
+              { reasoning_effort: "high", include: ["reasoning.encrypted_content"] },
+              model,
+            ),
+          ).toEqual(replace ? replacement : stripped);
+          return completion;
+        });
+
+      await expect(
+        describeImageWithModelPayloadTransformCore(
+          {
+            ...imageRequestDefaults(),
+            provider: "openai",
+            model: "gpt-5.4-mini",
+          },
+          transform,
+        ),
+      ).resolves.toEqual({ text: "retry ok", model: "gpt-5.4-mini" });
+      expect(transform).toHaveBeenCalledOnce();
     },
   );
 

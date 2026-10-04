@@ -92,113 +92,140 @@ afterEach(() => {
 });
 
 describe("diagnostic heap profile owner", () => {
-  it("preserves allocation samples and redacts native data before returning memory readings", async () => {
-    const before = [
-      {
-        space_name: "old_space",
-        space_used_size: 100,
-        space_size: 200,
-        space_available_size: 50,
-        physical_space_size: 180,
-      },
-    ];
-    const after = [{ ...before[0], space_used_size: 150 }];
-    native.heapSpaces.mockReturnValueOnce(before).mockReturnValueOnce(after);
-    const outcome = await capture();
-    expect(outcome).toMatchObject({
-      status: "complete",
-      result: {
-        durationMs: expect.any(Number),
-        samplingIntervalBytes: 32768,
+  it.each([false, true])(
+    "preserves samples and memory readings with unattributed V8 samples=%s",
+    async (unattributed) => {
+      const before = [
+        {
+          space_name: "old_space",
+          space_used_size: 100,
+          space_size: 200,
+          space_available_size: 50,
+          physical_space_size: 180,
+        },
+      ];
+      const after = [{ ...before[0], space_used_size: 150 }];
+      native.heapSpaces.mockReturnValueOnce(before).mockReturnValueOnce(after);
+      const value = profile();
+      if (unattributed) {
+        value.samples.push({ nodeId: 999, size: 4096, ordinal: 3 });
+      }
+      native.post.mockImplementation(async (method) =>
+        method === "HeapProfiler.stopSampling" ? { profile: value } : {},
+      );
+      const outcome = await capture();
+      expect(outcome).toMatchObject({
+        status: "complete",
+        result: {
+          durationMs: expect.any(Number),
+          samplingIntervalBytes: 32768,
+          includeObjectsCollectedByMajorGC: false,
+          includeObjectsCollectedByMinorGC: false,
+          heapUsedBefore: expect.any(Number),
+          heapUsedAfter: expect.any(Number),
+          heapSpacesBefore: before,
+          heapSpacesAfter: after,
+          rssBefore: expect.any(Number),
+          rssAfter: expect.any(Number),
+          truncated: unattributed,
+          redactedNodeCount: 1,
+          unattributedSampleCount: unattributed ? 1 : 0,
+          unattributedSampleBytes: unattributed ? 4096 : 0,
+          profile: {
+            samples: profile().samples,
+            head: {
+              children: expect.arrayContaining([
+                expect.objectContaining({ id: 2, selfSize: 8192 }),
+              ]),
+            },
+          },
+        },
+      });
+      expect(JSON.stringify(outcome)).not.toMatch(/fixture|private/);
+      expect(native.disconnect).toHaveBeenCalledOnce();
+      expect(native.post.mock.calls.map(([method]) => method)).toEqual([
+        "HeapProfiler.enable",
+        "HeapProfiler.startSampling",
+        "HeapProfiler.stopSampling",
+        "HeapProfiler.disable",
+      ]);
+      expect(native.wait).toHaveBeenCalledWith(5000, undefined, {
+        signal: expect.any(AbortSignal),
+      });
+      expect(native.post).toHaveBeenCalledWith("HeapProfiler.startSampling", {
+        samplingInterval: 32768,
         includeObjectsCollectedByMajorGC: false,
         includeObjectsCollectedByMinorGC: false,
-        heapUsedBefore: expect.any(Number),
-        heapUsedAfter: expect.any(Number),
-        heapSpacesBefore: before,
-        heapSpacesAfter: after,
-        rssBefore: expect.any(Number),
-        rssAfter: expect.any(Number),
-        truncated: false,
-        redactedNodeCount: 1,
-        unattributedSampleCount: 0,
-        unattributedSampleBytes: 0,
-        profile: { samples: profile().samples },
-      },
-    });
-    expect(JSON.stringify(outcome)).not.toMatch(/fixture|private/);
-    expect(native.disconnect).toHaveBeenCalledOnce();
-    expect(native.post.mock.calls.map(([method]) => method)).toEqual([
-      "HeapProfiler.enable",
-      "HeapProfiler.startSampling",
-      "HeapProfiler.stopSampling",
-      "HeapProfiler.disable",
-    ]);
-    expect(native.wait).toHaveBeenCalledWith(5000, undefined, { signal: expect.any(AbortSignal) });
-    expect(native.post).toHaveBeenCalledWith("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: false,
-      includeObjectsCollectedByMinorGC: false,
-    });
-  });
+      });
+    },
+  );
 
-  it("keeps attributed samples when V8 samples profile construction after translating the tree", async () => {
-    const value = profile();
-    value.samples.push({ nodeId: 999, size: 4096, ordinal: 3 });
-    native.post.mockResolvedValue({ profile: value });
-    expect(await capture()).toMatchObject({
-      status: "complete",
-      result: {
-        truncated: true,
-        unattributedSampleCount: 1,
-        unattributedSampleBytes: 4096,
-        profile: {
-          samples: profile().samples,
-          head: {
-            children: expect.arrayContaining([expect.objectContaining({ id: 2, selfSize: 8192 })]),
+  it("attributes dependency and native frames without exposing private paths or symbols", async () => {
+    const dependencies: [string, string][] = [
+      ["/fixture/node_modules/ws/lib/buffer-util.js", "ws"],
+      ["/fixture/openclaw/node_modules/undici/lib/core/util.js", "undici"],
+      ["/fixture/openclaw/src/node_modules/undici/lib/core/util.js", "undici"],
+      ["file:///fixture/node_modules/.pnpm/ws@8.18.0/node_modules/ws/lib/buffer-util.js", "ws"],
+      ["/fixture/node_modules/@scope/pkg/lib/private.js", "@scope/pkg"],
+      [
+        "/fixture/node_modules/.pnpm/@scope+pkg@1.2.3/node_modules/@scope/pkg/lib/private.js",
+        "@scope/pkg",
+      ],
+      ["/fixture/node_modules/outer/node_modules/inner/lib/private.js", "inner"],
+    ];
+    const locations: [Partial<ReturnType<typeof frame>>, string][] = [
+      [{ scriptId: "0", url: "", lineNumber: -1 }, "[native]"],
+      [{ scriptId: "0", url: "", lineNumber: 0 }, "[redacted]"],
+      [{ scriptId: "2", url: "", lineNumber: -1 }, "[redacted]"],
+      [{ scriptId: "0", url: "/private/user/secret.js", lineNumber: -1 }, "[redacted]"],
+      [{ url: "/private/user/secret.js" }, "[redacted]"],
+      [{ url: "https://private.example/node_modules/ws/secret.js" }, "[redacted]"],
+      [
+        { url: "/private/user/secret.js?next=/../node_modules/suffix-only/secret.js" },
+        "[redacted]",
+      ],
+      [{ url: "/private/user/secret.js#next=/node_modules/suffix-only/secret.js" }, "[redacted]"],
+      [
+        { url: "/fixture/openclaw/src/node_modules/ws/secret.js?next=/../suffix-only/secret.js" },
+        "[redacted]",
+      ],
+      [{ url: "file:///private/node_modules/ws/secret.js?private=query" }, "[redacted]"],
+      [{ url: "/private/node_modules/ws/../../user/secret.js" }, "[redacted]"],
+      [{ url: "/private/node_modules/.pnpm/ws@8.18.0/secret.js" }, "[redacted]"],
+    ];
+    const frames = [
+      ...dependencies.map(([url, dependency]) => ({
+        source: { ...frame("private payload"), url },
+        expected: { ...frame(`[dep:${dependency}]`), url: `node_modules/${dependency}` },
+      })),
+      ...locations.map(([location, functionName]) => ({
+        source: { ...frame("private payload"), ...location },
+        expected: { ...frame(), ...location, functionName, url: "" },
+      })),
+    ];
+    for (const { source, expected } of frames) {
+      const value = profile(source);
+      native.post.mockResolvedValue({ profile: value });
+      const outcome = await capture();
+      expect(outcome, JSON.stringify(source)).toMatchObject({
+        status: "complete",
+        result: {
+          redactedNodeCount: expected.functionName === "[redacted]" ? 2 : 1,
+          profile: {
+            samples: value.samples,
+            head: {
+              children: [{ id: 2, selfSize: 8192, callFrame: expected, children: [] }, { id: 3 }],
+            },
           },
         },
-      },
-    });
-  });
-
-  it.each([
-    ["/fixture/node_modules/ws/lib/buffer-util.js", "ws"],
-    ["/fixture/openclaw/node_modules/undici/lib/core/util.js", "undici"],
-    ["/fixture/openclaw/src/node_modules/undici/lib/core/util.js", "undici"],
-    ["file:///fixture/node_modules/.pnpm/ws@8.18.0/node_modules/ws/lib/buffer-util.js", "ws"],
-    ["/fixture/node_modules/@scope/pkg/lib/private.js", "@scope/pkg"],
-    [
-      "/fixture/node_modules/.pnpm/@scope+pkg@1.2.3/node_modules/@scope/pkg/lib/private.js",
-      "@scope/pkg",
-    ],
-    ["/fixture/node_modules/outer/node_modules/inner/lib/private.js", "inner"],
-  ])("attributes dependency %s by package name only", async (url, dependency) => {
-    const value = profile({ ...frame("private payload"), url });
-    native.post.mockResolvedValue({ profile: value });
-    const outcome = await capture();
-    expect(outcome).toMatchObject({
-      status: "complete",
-      result: {
-        redactedNodeCount: 1,
-        profile: {
-          samples: value.samples,
-          head: {
-            children: [
-              {
-                id: 2,
-                selfSize: 8192,
-                callFrame: { ...frame(`[dep:${dependency}]`), url: `node_modules/${dependency}` },
-                children: [],
-              },
-              { id: 3 },
-            ],
-          },
-        },
-      },
-    });
-    expect(JSON.stringify(outcome)).not.toMatch(
-      /fixture|private|\.pnpm|8\.18\.0|1\.2\.3|buffer-util/,
-    );
+      });
+      expect(JSON.stringify(outcome)).not.toMatch(
+        /fixture|private|secret|\.pnpm|8\.18\.0|1\.2\.3|buffer-util/,
+      );
+      if (!expected.url) {
+        expect(JSON.stringify(outcome)).not.toContain("node_modules");
+      }
+    }
   });
 
   it.each([
@@ -222,44 +249,6 @@ describe("diagnostic heap profile owner", () => {
       },
     });
   });
-
-  it.each([
-    [{ scriptId: "0", url: "", lineNumber: -1 }, "[native]"],
-    [{ scriptId: "0", url: "", lineNumber: 0 }, "[redacted]"],
-    [{ scriptId: "2", url: "", lineNumber: -1 }, "[redacted]"],
-    [{ scriptId: "0", url: "/private/user/secret.js", lineNumber: -1 }, "[redacted]"],
-    [{ url: "/private/user/secret.js" }, "[redacted]"],
-    [{ url: "https://private.example/node_modules/ws/secret.js" }, "[redacted]"],
-    [{ url: "/private/user/secret.js?next=/../node_modules/suffix-only/secret.js" }, "[redacted]"],
-    [{ url: "/private/user/secret.js#next=/node_modules/suffix-only/secret.js" }, "[redacted]"],
-    [
-      { url: "/fixture/openclaw/src/node_modules/ws/secret.js?next=/../suffix-only/secret.js" },
-      "[redacted]",
-    ],
-    [{ url: "file:///private/node_modules/ws/secret.js?private=query" }, "[redacted]"],
-    [{ url: "/private/node_modules/ws/../../user/secret.js" }, "[redacted]"],
-    [{ url: "/private/node_modules/.pnpm/ws@8.18.0/secret.js" }, "[redacted]"],
-  ])(
-    "labels native frames conservatively and preserves redaction for %j",
-    async (location, functionName) => {
-      const sourceFrame = { ...frame("private payload"), ...location };
-      const value = profile(sourceFrame);
-      native.post.mockResolvedValue({ profile: value });
-      const outcome = await capture();
-      expect(outcome).toMatchObject({
-        status: "complete",
-        result: {
-          redactedNodeCount: functionName === "[native]" ? 1 : 2,
-          profile: {
-            head: {
-              children: [{ callFrame: { ...sourceFrame, functionName, url: "" } }, { id: 3 }],
-            },
-          },
-        },
-      });
-      expect(JSON.stringify(outcome)).not.toMatch(/private|secret|node_modules/);
-    },
-  );
 
   it.each([
     { nodeId: -1, size: 4096, ordinal: 3 },
