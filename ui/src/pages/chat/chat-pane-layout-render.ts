@@ -123,20 +123,26 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           : undefined,
       );
     }
-    const recovery = html`<openclaw-chat-outbox-recovery
-      .host=${state}
-      .messages=${state.chatMessages}
-      .identity=${JSON.stringify([
-        state.settings.gatewayUrl,
-        state.connected && state.client?.recoveryScopeReady ? state.client.recoveryScope : null,
-        storedChatOutboxScopeKey(resolveUiConversationIdentity(state, state.sessionKey)),
-        state.currentSessionId,
-      ])}
-      @outbox-restored=${() => {
-        this.chatState.composerPersistence.restore();
-        state.requestUpdate?.();
-      }}
-    ></openclaw-chat-outbox-recovery>`;
+    // Recovery mutates the composer, so do not mount it in a view-only conversation.
+    const recovery =
+      chatProps.disabledBanner?.kind === "composer-replacement"
+        ? nothing
+        : html`<openclaw-chat-outbox-recovery
+            .host=${state}
+            .messages=${state.chatMessages}
+            .identity=${JSON.stringify([
+              state.settings.gatewayUrl,
+              state.connected && state.client?.recoveryScopeReady
+                ? state.client.recoveryScope
+                : null,
+              storedChatOutboxScopeKey(resolveUiConversationIdentity(state, state.sessionKey)),
+              state.currentSessionId,
+            ])}
+            @outbox-restored=${() => {
+              this.chatState.composerPersistence.restore();
+              state.requestUpdate?.();
+            }}
+          ></openclaw-chat-outbox-recovery>`;
     const latestBrowserTabs = latestBrowserTabCards(chatProps.messages, chatProps.toolMessages);
     const panePresentation = { owner: this, isPresented: () => this.presented };
     const slotPresentation = (slot: SidebarSlotId) => ({
