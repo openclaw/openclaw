@@ -2,6 +2,7 @@ import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { GATEWAY_FIELD_LABELS } from "./schema.gateway-labels.js";
 import { AGENT_MODEL_FIELD_LABELS } from "./schema.labels.agent-models.js";
 import { APPROVAL_FIELD_LABELS } from "./schema.labels.approvals.js";
+import { AUTOMATION_FIELD_LABELS } from "./schema.labels.automation.js";
 import { BROWSER_FIELD_LABELS } from "./schema.labels.browser.js";
 import { GITHUB_TOOL_FIELD_LABELS } from "./schema.labels.github.js";
 import { SESSION_FIELD_LABELS } from "./schema.labels.session.js";
@@ -562,20 +563,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.exec.timeoutSeconds": "Exec Timeout (Seconds)",
   "agents.entries.*.tools.exec.timeoutSeconds": "Agent Exec Timeout (Seconds)",
   ...SESSION_FIELD_LABELS,
-  cron: "Automations",
-  "cron.enabled": "Automations Enabled",
-  "cron.skipMissedJobs": "Skip Missed Recurring Automations",
-  "cron.webhookToken": "Automations Webhook Bearer Token",
-  "cron.webhookSsrfPolicy": "Automations Webhook SSRF Policy",
-  "cron.webhookSsrfPolicy.dangerouslyAllowPrivateNetwork":
-    "Automations Webhook Dangerously Allow Private Network",
-  "cron.webhookSsrfPolicy.allowedHostnames": "Automations Webhook Allowed Hostnames",
-  "cron.webhookSsrfPolicy.blockedHostnames": "Automations Webhook Blocked Hostnames",
-  "cron.webhookSsrfPolicy.allowRfc2544BenchmarkRange":
-    "Automations Webhook Allow RFC 2544 Benchmark Range",
-  "cron.webhookSsrfPolicy.allowIpv6UniqueLocalRange":
-    "Automations Webhook Allow IPv6 Unique Local Range",
-  "cron.sessionRetention": "Automations Session Retention",
+  ...AUTOMATION_FIELD_LABELS,
   transcripts: "Transcripts",
   "transcripts.enabled": "Transcripts Enabled",
   "transcripts.autoStart": "Transcripts Auto-start Sources",

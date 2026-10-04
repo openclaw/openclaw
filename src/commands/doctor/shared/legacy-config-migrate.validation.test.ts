@@ -33,10 +33,15 @@ describe("legacy config migrate validation", () => {
     expect(raw.session.typingMode).toBe("thinking");
   });
 
-  it("preserves the restored MCP idle TTL during migration", () => {
-    const raw = { mcp: { sessionIdleTtlMs: 1000.9 }, cron: { maxConcurrentRuns: 2 } };
+  it("preserves supported concurrency and MCP idle TTL during migration", () => {
+    const raw = {
+      mcp: { sessionIdleTtlMs: 1000.9 },
+      cron: { maxConcurrentRuns: 2 },
+      session: { typingMode: "thinking" },
+    };
     const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
     expect(result.config?.mcp?.sessionIdleTtlMs).toBe(1000.9);
+    expect(result.config?.cron?.maxConcurrentRuns).toBe(2);
     expect(result.partiallyValid).toBeUndefined();
   });
 

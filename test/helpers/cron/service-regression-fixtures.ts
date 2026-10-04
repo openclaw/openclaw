@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
-import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../../src/config/cron-limits.js";
 import { clearSessionStoreCacheForTest } from "../../../src/config/sessions/store-writer-state.js";
 import { createRunningCronServiceState } from "../../../src/cron/service.test-harness.js";
 import { createCronServiceState, type CronServiceDeps } from "../../../src/cron/service/state.js";
@@ -57,7 +56,7 @@ export function createCronRegressionState(
     ...stateParams,
   });
   if (testAdmissionLimit !== undefined) {
-    state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - testAdmissionLimit;
+    state.runAdmission.active = 8 - testAdmissionLimit;
   }
   return state;
 }

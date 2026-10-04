@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import * as stateRead from "../../state/openclaw-state-db-readonly.js";
 import {
@@ -613,7 +612,7 @@ describe("cron run receipt settlement", () => {
         delivery: { mode: "none" as const },
         payload: { kind: "command" as const, argv: ["original"], timeoutSeconds: 30 },
       };
-      const blockers = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, (_, index) => ({
+      const blockers = Array.from({ length: 8 }, (_, index) => ({
         ...makeTimedJob(`capacity-${action}-${index}`, Date.now()),
         payload: { kind: "command" as const, argv: ["blocker"], timeoutSeconds: 30 },
       }));

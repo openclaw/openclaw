@@ -24,7 +24,7 @@ const HOOK_DISPATCH_LANE_RESERVATION = 1;
 const CRON_HOOK_LANE_GROUP = "cron-hooks";
 
 export function resolveGatewayLaneConcurrency(cfg: OpenClawConfig): GatewayLaneConcurrency {
-  const cron = resolveCronMaxConcurrentRuns();
+  const cron = resolveCronMaxConcurrentRuns(cfg.cron);
   return {
     cron,
     // The reservation guarantees one slot, but hooks may use every free slot
@@ -65,7 +65,12 @@ export function applyGatewayLaneConcurrency(
               budget: concurrency.cron,
               members: [CommandLane.CronNested, CommandLane.HookDispatch],
               reservations: hooksEnabled
-                ? { [CommandLane.HookDispatch]: HOOK_DISPATCH_LANE_RESERVATION }
+                ? {
+                    [CommandLane.HookDispatch]: Math.min(
+                      HOOK_DISPATCH_LANE_RESERVATION,
+                      concurrency.cron - 1,
+                    ),
+                  }
                 : undefined,
             },
           }

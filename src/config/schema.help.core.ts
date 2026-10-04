@@ -91,6 +91,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Gateway runtime surface for bind mode, auth, control UI, remote transport, and operational safety controls. Keep conservative defaults unless you intentionally expose the gateway beyond trusted local interfaces.",
   "gateway.port":
     "TCP port used by the gateway listener for API, control UI, and channel-facing ingress paths. Use a dedicated port and avoid collisions with reverse proxies or local developer services.",
+  "gateway.stopTimeoutMs":
+    "Optional total native stop budget in milliseconds (integer 15000–325000). Captured at startup; unset preserves the existing policy. Includes discovery, drain, and cleanup, and may be shortened by the supervisor. Does not change restart behavior or force lease release if cleanup hangs.",
   "gateway.mode":
     'Gateway operation mode: "local" runs channels and agent runtime on this host, while "remote" connects through remote transport. Keep "local" unless you intentionally run a split remote gateway topology.',
   "gateway.bind":

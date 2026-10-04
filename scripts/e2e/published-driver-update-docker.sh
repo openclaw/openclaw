@@ -27,6 +27,11 @@ cleanup() {
 trap cleanup EXIT
 ARTIFACT_DIR="${2:-$ROOT_DIR/.artifacts/published-driver-update}"
 DRIVER_TAG="${3:-latest}"
+PROOF_MODE="${4:-}"
+if [[ -n "$PROOF_MODE" && "$PROOF_MODE" != gateway-limits ]]; then
+  echo "Unsupported published-driver proof mode: $PROOF_MODE" >&2
+  exit 2
+fi
 mkdir -p "$ARTIFACT_DIR"
 ARTIFACT_DIR="$(cd "$ARTIFACT_DIR" && pwd)"
 printf 'prepare-container\n' > "$ARTIFACT_DIR/phase.txt"
@@ -56,4 +61,4 @@ docker_e2e_run_with_harness \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \
   node scripts/e2e/lib/upgrade-survivor/published-driver.mjs \
-    /tmp/openclaw-current.tgz /tmp/published-driver-artifacts "$DRIVER_TAG"
+    /tmp/openclaw-current.tgz /tmp/published-driver-artifacts "$DRIVER_TAG" "$PROOF_MODE"

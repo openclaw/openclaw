@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_SHUTDOWN_RESERVE_MS } from "../../infra/gateway-shutdown-budget.js";
 import {
+  resolveGatewayRequestShutdownBudget,
   resolveGatewayShutdownBudget,
   resolveGatewayShutdownDrainBudget,
 } from "./run-loop-shutdown-budget.js";
@@ -62,6 +63,7 @@ describe("Gateway stop deadline independent of restart ownership", () => {
     const warn = vi.fn();
     const budget = await resolveGatewayShutdownBudget("external", { info: vi.fn(), warn });
     expect(budget.timeoutMs).toBe(85_000);
+    expect(budget.observedTimeoutMs).toBeUndefined();
     expect(warn).toHaveBeenCalledExactlyOnceWith(
       expect.stringContaining(
         "system manager openclaw-gateway.service: systemctl show exited 1: permission denied",
@@ -112,6 +114,71 @@ describe("Gateway stop deadline follows the launchd stop that is actually runnin
     expect(execUser).not.toHaveBeenCalled();
     expect(readFile).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { state: "SIGTERMed", seconds: 90 },
+    { state: "SIGTERMed", seconds: 20 },
+    { state: "running", seconds: undefined },
+    { state: "SIGTERMed", seconds: undefined },
+    { state: "SIGTERMed", seconds: "invalid" },
+  ])(
+    "does not mistake launchd fallback policy for an observed deadline ($state/$seconds)",
+    async ({ state, seconds }) => {
+      const logger = { info: vi.fn(), warn: vi.fn() };
+      const startupBudget = await resolveGatewayShutdownBudget("launchd", logger);
+      expect(execLaunchctl).not.toHaveBeenCalled();
+      execLaunchctl.mockResolvedValue(
+        seconds === undefined
+          ? printed(state, "\tpid = 4242\n")
+          : printed(state, `\texit timeout = ${seconds}\n\tpid = 4242\n`),
+      );
+      vi.spyOn(performance, "now").mockReturnValue(1_000);
+      const onDeadline = vi.fn();
+      const budget = await resolveGatewayRequestShutdownBudget({
+        supervisor: "launchd",
+        logger,
+        startupBudget,
+        acceptedAtMs: 1_000,
+        stopTimeoutMs: 60_000,
+        onDeadline,
+      });
+      expect(onDeadline.mock.calls[0]?.[0].timeoutMs).toBe(60_000);
+      expect(budget.timeoutMs).toBe(seconds === 20 ? 15_000 : 60_000);
+    },
+  );
+
+  it.each([undefined, "invalid"])(
+    "retains a known launcher deadline when the job timeout is %s",
+    async (seconds) => {
+      process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+      process.env.OPENCLAW_NODE_UPDATE_RESPAWNED = "1";
+      vi.stubGlobal("process", {
+        ...process,
+        ppid: 4241,
+        argv: ["node", "openclaw", "gateway", "run"],
+      });
+      const logger = { info: vi.fn(), warn: vi.fn() };
+      const startupBudget = await resolveGatewayShutdownBudget("launchd", logger);
+      execLaunchctl.mockResolvedValue(
+        printed(
+          "SIGTERMed",
+          (seconds === undefined ? "" : `\texit timeout = ${seconds}\n`) + "\tpid = 4241\n",
+        ),
+      );
+      vi.spyOn(performance, "now").mockReturnValue(1_000);
+      const budget = await resolveGatewayRequestShutdownBudget({
+        supervisor: "launchd",
+        logger,
+        startupBudget,
+        acceptedAtMs: 1_000,
+        stopTimeoutMs: 60_000,
+        onDeadline: vi.fn(),
+      });
+      expect(budget.timeoutMs).toBe(14_250);
+      const unset = await resolveGatewayShutdownBudget("launchd", logger, stoppingNow);
+      expect(unset.timeoutMs).toBe(15_000);
+    },
+  );
 
   it("keeps the full drain when launchd did not initiate the stop", async () => {
     execLaunchctl.mockResolvedValue(printed("running", "\texit timeout = 5\n\tpid = 4242\n"));

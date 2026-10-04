@@ -6,7 +6,6 @@ import {
   setupCronRegressionFixtures,
 } from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import {
   beginGatewayRestartSignalAdmission,
@@ -131,7 +130,7 @@ describe("cron service cross-tick admission", () => {
       nowMs: () => now,
       runIsolatedAgentJob,
     });
-    state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 2;
+    state.runAdmission.active = 8 - 2;
 
     const firstTick = onTimer(state);
     await Promise.all([blocked.started(jobA), blocked.started(jobB)]);
@@ -209,7 +208,7 @@ describe("cron service cross-tick admission", () => {
       },
       runIsolatedAgentJob,
     });
-    state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1;
+    state.runAdmission.active = 8 - 1;
 
     const unrelated = tryBeginGatewayIndependentRootWorkAdmission("test:concurrent-request");
     expect(unrelated).not.toBeNull();
@@ -222,7 +221,7 @@ describe("cron service cross-tick admission", () => {
       expect(state.stopped).toBe(false);
       expect(state.activeTimerTicks).toBe(0);
       await admissions.expectReleased(1);
-      expect(state.runAdmission.active).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1);
+      expect(state.runAdmission.active).toBe(8 - 1);
       expect(state.queuedRunReservationsByJobId.size).toBe(0);
       expect(state.timer).not.toBeNull();
       expect(runIsolatedAgentJob).not.toHaveBeenCalled();
@@ -297,7 +296,7 @@ describe("cron service cross-tick admission", () => {
       },
       runIsolatedAgentJob,
     });
-    state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1;
+    state.runAdmission.active = 8 - 1;
 
     try {
       await onTimer(state);
@@ -305,7 +304,7 @@ describe("cron service cross-tick admission", () => {
 
       expect(foreignReceipt).toBeDefined();
       expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
-      expect(state.runAdmission.active).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1);
+      expect(state.runAdmission.active).toBe(8 - 1);
       expect(state.runAdmission.capacityListener).toBeNull();
       expect(state.activeTimerTicks).toBe(0);
       expect(
@@ -340,7 +339,7 @@ describe("cron service cross-tick admission", () => {
       nowMs: clock.clock.now,
       runIsolatedAgentJob,
     });
-    state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 2;
+    state.runAdmission.active = 8 - 2;
 
     const tickA = onTimer(state);
     let tickB: ReturnType<typeof clock.advanceTo> = undefined;
@@ -440,7 +439,7 @@ describe("cron service cross-tick admission", () => {
       },
       runIsolatedAgentJob: blocked.run,
     });
-    state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 2;
+    state.runAdmission.active = 8 - 2;
 
     const timerRun = onTimer(state);
     let directRunA: Promise<unknown> | undefined;
@@ -536,7 +535,7 @@ describe("cron service cross-tick admission", () => {
         }
       }),
     });
-    state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 2;
+    state.runAdmission.active = 8 - 2;
 
     const timerRun = onTimer(state);
     let directRun: Promise<unknown> | undefined;
@@ -591,7 +590,7 @@ describe("cron service cross-tick admission", () => {
       nowMs: () => t0,
       runIsolatedAgentJob,
     });
-    state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1;
+    state.runAdmission.active = 8 - 1;
 
     const realLoad = cronStoreModule.loadCronJobsStoreWithConfigJobs;
     let queuedReloads = 0;
@@ -617,7 +616,7 @@ describe("cron service cross-tick admission", () => {
       expect(queuedReloads).toBeGreaterThanOrEqual(2);
       expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
       expect(state.runAdmission.capacityListener).toBeNull();
-      expect(state.runAdmission.active).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1);
+      expect(state.runAdmission.active).toBe(8 - 1);
       expect(state.queuedRunReservationsByJobId.size).toBe(0);
       const persisted = await loadCronStore(store.storePath);
       expect(persisted.jobs.find((job) => job.id === skipped.id)?.enabled).toBe(false);

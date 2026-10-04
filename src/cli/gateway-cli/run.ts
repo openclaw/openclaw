@@ -25,7 +25,6 @@ import { normalizeStateDirEnv, resolveGatewayPort } from "../../config/paths.js"
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
-import { createConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
 import {
   defaultGatewayBindMode,
   isContainerEnvironment,
@@ -78,6 +77,10 @@ import {
 } from "../terminal-interactivity.js";
 import { enforceGatewayRunFutureConfigGuard } from "./future-config-guard.js";
 import { getGatewayStartGuardErrors } from "./pre-bootstrap.js";
+import {
+  createConfiguredGatewayHealthProbe,
+  isGatewayHealthzResponse,
+} from "./run-health-probe.js";
 import { runGatewayLoop } from "./run-loop.js";
 import type { GatewayRunOpts } from "./run-options.js";
 import type { GatewayRunRuntimeHooks } from "./runtime-hooks.js";
@@ -91,7 +94,6 @@ import { triageGatewayStartupFailure } from "./startup-triage.js";
 const gatewayLog = createSubsystemLogger("gateway");
 
 const SUPERVISED_GATEWAY_LOCK_RETRY_MS = 5000;
-const SUPERVISED_GATEWAY_HEALTH_PROBE_TIMEOUT_MS = 1000;
 const GATEWAY_SHELL_ENV_CONVERGENCE_MAX_READS = 4;
 
 type GatewayRunLogger = Pick<ReturnType<typeof createSubsystemLogger>, "info" | "warn">;
@@ -328,30 +330,6 @@ class SupervisedGatewayLockError extends GatewayLockError {
 
 function resolveGatewayLockErrorExitCode(err: unknown): number {
   return err instanceof SupervisedGatewayLockError ? err.exitCode : 1;
-}
-
-function isGatewayHealthzResponse(statusCode: number | undefined, body: string): boolean {
-  if (statusCode !== 200) {
-    return false;
-  }
-  try {
-    const payload = JSON.parse(body) as { ok?: unknown; status?: unknown };
-    return payload.ok === true && payload.status === "live";
-  } catch {
-    return false;
-  }
-}
-
-function createConfiguredGatewayHealthProbe(cfg: OpenClawConfig) {
-  const probe = createConfiguredGatewayLocalProbe(cfg);
-  return async (params: { host: string; port: number }): Promise<boolean> => {
-    const result = await probe.requestHttp({
-      ...params,
-      pathname: "/healthz",
-      timeoutMs: SUPERVISED_GATEWAY_HEALTH_PROBE_TIMEOUT_MS,
-    });
-    return isGatewayHealthzResponse(result?.statusCode, result?.body ?? "");
-  };
 }
 
 async function runGatewayLoopWithSupervisedLockRecovery(params: {
@@ -962,6 +940,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     await runGatewayLoop({
       runtime: defaultRuntime,
       ownsProcessLifecycle: true,
+      stopTimeoutMs: cfg.gateway?.stopTimeoutMs,
       lockPort: port,
       lifecycleLockDeadlineMs,
       healthHost,

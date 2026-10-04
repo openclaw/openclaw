@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "../../daemon/launchd-plist.js";
 import {
   GATEWAY_SERVICE_STOP_TIMEOUT_MS,
@@ -9,6 +10,26 @@ import {
 import { readLaunchdStopTimeout } from "../../infra/launchd-stop-timeout.js";
 import { readSystemdStopTimeout } from "../../infra/systemd-stop-timeout.js";
 import type { GatewayRunSignalAction } from "./run-loop-request.js";
+
+/** Keep discovery time inside the accepted deadline without spending its cleanup reserve. */
+function constrainGatewayStopBudget(
+  budget: Awaited<ReturnType<typeof resolveGatewayShutdownBudget>>,
+  deadlineMs: number,
+  reserveMs: number,
+  logger: { info(message: string): void },
+) {
+  const timeoutMs = Math.max(0, deadlineMs - performance.now());
+  const remainingReserveMs = Math.min(reserveMs, timeoutMs);
+  return {
+    ...budget,
+    timeoutMs,
+    reserveMs: remainingReserveMs,
+    log: (phase: "startup" | "shutdown") =>
+      logger.info(
+        `shutdown budget at ${phase}: drain=${Math.max(0, timeoutMs - remainingReserveMs)}ms shutdown=${timeoutMs}ms reserve=${remainingReserveMs}ms; source=gateway.stopTimeoutMs bounded by supervisor`,
+      ),
+  };
+}
 
 type NativeStopTimeout = { timeoutMs: number; source: string };
 
@@ -27,6 +48,7 @@ async function readNativeStopTimeout(stopping: boolean): Promise<{
   stop: NativeStopTimeout | null;
   warning?: string;
   inconclusive: boolean;
+  observedTimeoutMs?: number;
 }> {
   if (process.platform === "linux") {
     const systemd = await readSystemdStopTimeout();
@@ -58,13 +80,26 @@ export async function resolveGatewayShutdownBudget(
   supervisor: string | null,
   logger: { info(message: string): void; warn(message: string): void },
   refresh?: {
-    previous: { timeoutMs: number; nativeStopBudget: boolean };
+    previous: { timeoutMs: number; nativeStopBudget: boolean; observedTimeoutMs?: number };
     acceptedAtMs: number;
+    discoveryTimeoutMs?: number;
   },
 ) {
   // Restart ownership may be external while the platform supervisor still
   // enforces the stop deadline. That holds on darwin exactly as it does on linux.
-  const native = await readNativeStopTimeout(refresh !== undefined);
+  const discoveryTimeoutMs = refresh?.discoveryTimeoutMs;
+  const unconfirmed = (): Awaited<ReturnType<typeof readNativeStopTimeout>> => ({
+    stop: null,
+    inconclusive: true,
+  });
+  // Native readers have their own subprocess timeouts but no cancellation API.
+  // A timed-out observation has no continuation that can publish a late budget.
+  const native =
+    discoveryTimeoutMs === undefined
+      ? await readNativeStopTimeout(refresh !== undefined)
+      : discoveryTimeoutMs <= 0
+        ? unconfirmed()
+        : await raceWithTimeout(() => readNativeStopTimeout(true), discoveryTimeoutMs, unconfirmed);
   const nativeStop = native.stop;
   const retained =
     refresh?.previous.nativeStopBudget && native.inconclusive ? refresh.previous : undefined;
@@ -101,8 +136,21 @@ export async function resolveGatewayShutdownBudget(
       : 0;
   const timeoutMs = Math.max(0, limitMs - elapsedMs);
   const reserveMs = resolveShutdownReserveMs(timeoutMs);
+  const observedStopMs =
+    native.observedTimeoutMs ??
+    (nativeStop && !native.warning && !native.inconclusive ? nativeStop.timeoutMs : undefined);
+  const observedLimitMs =
+    retained?.observedTimeoutMs ??
+    (observedStopMs !== undefined && Number.isFinite(observedStopMs)
+      ? Math.min(
+          GATEWAY_SHUTDOWN_TIMEOUT_MS,
+          observedStopMs - resolveSupervisorExitMarginMs(observedStopMs),
+        )
+      : undefined);
   return {
     nativeStopBudget,
+    observedTimeoutMs:
+      observedLimitMs === undefined ? undefined : Math.max(0, observedLimitMs - elapsedMs),
     timeoutMs,
     reserveMs,
     // Let cleanup failures reach the run loop before its native exit timer wins.
@@ -124,6 +172,56 @@ export async function resolveGatewayShutdownBudget(
       );
     },
   };
+}
+
+/** Publish deadline changes through the existing run-loop timer before awaiting discovery. */
+export async function resolveGatewayRequestShutdownBudget(params: {
+  supervisor: string | null;
+  logger: { info(message: string): void; warn(message: string): void };
+  startupBudget: Awaited<ReturnType<typeof resolveGatewayShutdownBudget>>;
+  acceptedAtMs: number;
+  stopTimeoutMs?: number;
+  onDeadline: (
+    budget: Awaited<ReturnType<typeof resolveGatewayShutdownBudget>> | undefined,
+  ) => void;
+}) {
+  const { startupBudget, acceptedAtMs, logger, stopTimeoutMs } = params;
+  const nativeDiscovery = process.platform === "linux" || process.platform === "darwin";
+  if (stopTimeoutMs === undefined) {
+    if (!nativeDiscovery) {
+      return startupBudget;
+    }
+    if (startupBudget.nativeStopBudget) {
+      params.onDeadline(startupBudget);
+    }
+    const budget = await resolveGatewayShutdownBudget(params.supervisor, logger, {
+      previous: startupBudget,
+      acceptedAtMs,
+    });
+    params.onDeadline(undefined);
+    return budget;
+  }
+  // launchd startup policy is a fallback, not an observed ExitTimeOut.
+  let deadlineMs =
+    acceptedAtMs + Math.min(stopTimeoutMs, startupBudget.observedTimeoutMs ?? Infinity);
+  let reserveMs = resolveShutdownReserveMs(deadlineMs - acceptedAtMs);
+  let budget = constrainGatewayStopBudget(startupBudget, deadlineMs, reserveMs, logger);
+  params.onDeadline(budget);
+  if (nativeDiscovery) {
+    budget = await resolveGatewayShutdownBudget(params.supervisor, logger, {
+      previous: startupBudget,
+      acceptedAtMs,
+      discoveryTimeoutMs: Math.min(2_000, Math.max(0, deadlineMs - performance.now() - reserveMs)),
+    });
+    const discoveredDeadlineMs = performance.now() + (budget.observedTimeoutMs ?? Infinity);
+    if (discoveredDeadlineMs < deadlineMs) {
+      deadlineMs = discoveredDeadlineMs;
+      reserveMs = Math.min(reserveMs, resolveShutdownReserveMs(deadlineMs - acceptedAtMs));
+      budget = constrainGatewayStopBudget(budget, deadlineMs, reserveMs, logger);
+      params.onDeadline(budget);
+    }
+  }
+  return constrainGatewayStopBudget(budget, deadlineMs, reserveMs, logger);
 }
 
 export function resolveGatewayShutdownDrainBudget(params: {

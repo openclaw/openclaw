@@ -1,5 +1,5 @@
 import pMap, { pMapSkip } from "p-map";
-import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
+import { resolveCronMaxConcurrentRuns } from "../../config/cron-limits.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { GatewaySchedulerScope } from "../../infra/gateway-scheduler.js";
@@ -340,7 +340,10 @@ async function onAdmittedTimer(state: CronServiceState, scheduler: GatewaySchedu
       }
     }
 
-    const concurrency = Math.min(DEFAULT_CRON_MAX_CONCURRENT_RUNS, Math.max(1, dueJobs.length));
+    const concurrency = Math.min(
+      resolveCronMaxConcurrentRuns(state.deps.cronConfig),
+      Math.max(1, dueJobs.length),
+    );
     capacityRechecks.initializeActivations(dueJobs.length, allowEmptyCapacityRecheck);
     const completedOutcomeDrain = createCompletedCronRunOutcomeDrain(state);
     const claimedIndexes = new Set<number>();

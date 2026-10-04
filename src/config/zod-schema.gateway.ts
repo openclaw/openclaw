@@ -128,6 +128,7 @@ export const GatewayConfigSchema = z
   .strictObject({
     /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
     port: z.number().int().min(1).max(65_535).optional(),
+    stopTimeoutMs: z.number().int().min(15_000).max(325_000).optional(),
     /**
      * Explicit gateway mode. When set to "remote", local gateway start is disabled.
      * When set to "local", the CLI may start the gateway locally.

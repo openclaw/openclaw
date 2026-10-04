@@ -1,6 +1,7 @@
 export const GATEWAY_FIELD_LABELS: Record<string, string> = {
   gateway: "Gateway",
   "gateway.port": "Gateway Port",
+  "gateway.stopTimeoutMs": "Gateway Stop Timeout (ms)",
   "gateway.mode": "Gateway Mode",
   "gateway.bind": "Gateway Bind Mode",
   "gateway.customBindHost": "Gateway Custom Bind Host",

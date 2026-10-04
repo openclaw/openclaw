@@ -9,7 +9,6 @@ import {
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import {
   captureGatewayDeviceRevocation,
   closeGatewayDeviceRevocation,
@@ -495,7 +494,7 @@ describe("cron service run admission cleanup", () => {
       nowMs: () => 0,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
-    state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1;
+    state.runAdmission.active = 8 - 1;
 
     const immediate = runWithCronAdmission(state, async () => {
       executionOrder.push("immediate");
@@ -521,7 +520,7 @@ describe("cron service run admission cleanup", () => {
       return "queued";
     });
 
-    expect(state.runAdmission.active).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS);
+    expect(state.runAdmission.active).toBe(8);
     expect(state.runAdmission.waiters).toHaveLength(3);
     cancellation.abort();
     await expect(cancelled).resolves.toEqual({ kind: "stopped" });
@@ -533,7 +532,7 @@ describe("cron service run admission cleanup", () => {
     await failure;
     await expect(queued).resolves.toEqual({ kind: "admitted", value: "queued" });
     expect(executionOrder).toEqual(["immediate", "failed", "queued"]);
-    expect(state.runAdmission.active).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1);
+    expect(state.runAdmission.active).toBe(8 - 1);
     expect(state.runAdmission.waiters).toHaveLength(0);
   });
 

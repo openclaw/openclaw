@@ -3,7 +3,6 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createBackgroundWorkOwner,
@@ -51,7 +50,7 @@ describe("applyGatewayLaneConcurrency", () => {
     const run = async () => {
       activeRuns += 1;
       peakActiveRuns = Math.max(peakActiveRuns, activeRuns);
-      if (peakActiveRuns >= DEFAULT_CRON_MAX_CONCURRENT_RUNS) {
+      if (peakActiveRuns >= 8) {
         allRunsStarted.resolve();
       }
       try {
@@ -61,7 +60,7 @@ describe("applyGatewayLaneConcurrency", () => {
       }
     };
 
-    const runs = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, () =>
+    const runs = Array.from({ length: 8 }, () =>
       enqueueCommandInLane(CommandLane.CronNested, run, { warnAfterMs: 10_000 }),
     );
     const timeout = setTimeout(() => {
@@ -70,7 +69,7 @@ describe("applyGatewayLaneConcurrency", () => {
 
     try {
       await allRunsStarted.promise;
-      expect(peakActiveRuns).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS);
+      expect(peakActiveRuns).toBe(8);
     } finally {
       clearTimeout(timeout);
       releaseRuns.resolve();

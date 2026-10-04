@@ -45,6 +45,9 @@ const shutdownBudgetCases: {
 
 export function registerShutdownBudgetTests({
   runLoopWithStart,
+  acquireGatewayLock,
+  abortEmbeddedAgentRun,
+  abortActiveCronTaskRuns,
   systemctl,
   consumeGatewayRestartIntent,
   createGatewayActiveWorkSnapshot,
@@ -55,7 +58,12 @@ export function registerShutdownBudgetTests({
   runLoopWithStart: (params: {
     start: ReturnType<typeof createSignaledStart>["start"];
     runtime: ReturnType<typeof createRuntimeWithExitSignal>["runtime"];
+    lockPort?: number;
+    stopTimeoutMs?: number;
   }) => Promise<unknown>;
+  acquireGatewayLock: Mock;
+  abortEmbeddedAgentRun: Mock;
+  abortActiveCronTaskRuns: Mock;
   systemctl: Mock<() => Promise<{ code: number; stdout: string; stderr: string }>>;
   consumeGatewayRestartIntent: Mock<() => GatewayRestartIntent | null>;
   createGatewayActiveWorkSnapshot: Mock<() => GatewayActiveWorkSnapshot>;
@@ -65,6 +73,100 @@ export function registerShutdownBudgetTests({
   gatewayLog: { info: Mock; warn: Mock };
   writeDiagnosticStabilityBundleForFailureSync: Mock;
 }) {
+  it.each(["busy", "idle", "hung-close", "tighter-supervisor"] as const)(
+    "bounds configured stop through discovery, abort, close and owner release: %s",
+    async (scenario) => {
+      process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
+      setPlatform("linux");
+      const events: string[] = [];
+      const release = vi.fn(async () => {
+        events.push("release");
+      });
+      acquireGatewayLock.mockResolvedValueOnce({ release });
+      const discovery = createDeferredCore<{ code: number; stdout: string; stderr: string }>();
+      const closing = createDeferredCore();
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const close = vi.fn(async () => {
+          events.push("close");
+          if (scenario === "hung-close") {
+            await closing.promise;
+          }
+        });
+        const { start, started } = createSignaledStart(close);
+        const { runtime } = createRuntimeWithExitSignal();
+        try {
+          await runLoopWithStart({ start, runtime, lockPort: 18789, stopTimeoutMs: 60_000 });
+          await waitForStart(started);
+          systemctl.mockReturnValueOnce(discovery.promise);
+          const busy = scenario !== "idle";
+          const snapshot = createActiveWorkSnapshot(busy ? { embeddedRuns: 1 } : {});
+          createGatewayActiveWorkSnapshot.mockReturnValue(snapshot);
+          waitForGatewayActiveWork.mockImplementationOnce(async (timeoutMs, options) => {
+            options?.onSnapshot?.(snapshot);
+            if (busy) {
+              await new Promise<void>((resolve) => {
+                setTimeout(resolve, timeoutMs);
+              });
+            }
+            return { drained: !busy, snapshot };
+          });
+          vi.useFakeTimers();
+          vi.spyOn(performance, "now").mockImplementation(() => Date.now());
+          captureSignal("SIGTERM")();
+          await vi.advanceTimersByTimeAsync(500);
+          captureSignal("SIGTERM")();
+          if (scenario === "tighter-supervisor") {
+            discovery.resolve({
+              code: 0,
+              stdout: "LoadState=loaded\nTimeoutStopUSec=30s",
+              stderr: "",
+            });
+          }
+          await vi.advanceTimersByTimeAsync(1500);
+          expect(waitForGatewayActiveWork).toHaveBeenCalledWith(
+            scenario === "tighter-supervisor" ? 14_500 : 48_000,
+            expect.any(Object),
+          );
+          // A late answer cannot extend the accepted deadline or begin another stop.
+          discovery.resolve({
+            code: 0,
+            stdout: "LoadState=loaded\nTimeoutStopUSec=330s",
+            stderr: "",
+          });
+          await vi.advanceTimersByTimeAsync(scenario === "tighter-supervisor" ? 13_000 : 48_000);
+          expect(close).toHaveBeenCalledOnce();
+          if (busy) {
+            expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, { mode: "all" });
+            expect(abortActiveCronTaskRuns).toHaveBeenCalledWith("Gateway stopping.");
+            expect(abortActiveCronTaskRuns.mock.invocationCallOrder[0]).toBeLessThan(
+              close.mock.invocationCallOrder[0]!,
+            );
+          }
+          if (scenario === "hung-close") {
+            expect(release).not.toHaveBeenCalled();
+            await vi.advanceTimersByTimeAsync(9_999);
+            expect(runtime.exit).not.toHaveBeenCalled();
+            await vi.advanceTimersByTimeAsync(1);
+            expect(runtime.exit).toHaveBeenCalledOnce();
+            expect(release).not.toHaveBeenCalled();
+          } else {
+            expect(events).toEqual(["close", "release"]);
+            expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
+            expect(release.mock.invocationCallOrder[0]).toBeLessThan(
+              runtime.exit.mock.invocationCallOrder[0]!,
+            );
+          }
+          expect(start).toHaveBeenCalledOnce();
+        } finally {
+          closing.resolve();
+          vi.clearAllTimers();
+          vi.useRealTimers();
+          vi.unstubAllEnvs();
+        }
+      });
+    },
+  );
+
   it.each(shutdownBudgetCases)(
     "bounds $supervisor $signal cleanup when a long provider call honors abort=$honorsAbort (wait=$waitMs, installedStop=$installedStopMs, shutdownStop=$shutdownStopMs)",
     async ({
@@ -116,7 +218,11 @@ export function registerShutdownBudgetTests({
         });
         const { start, started } = createSignaledStart(close);
         const { runtime } = createRuntimeWithExitSignal();
-        await runLoopWithStart({ start, runtime });
+        await runLoopWithStart({
+          start,
+          runtime,
+          stopTimeoutMs: signal === "SIGUSR2" ? 15_000 : undefined,
+        });
         await waitForStart(started);
         const host = start.mock.calls[0]?.[0]?.hostLifecycle;
         const active = createActiveWorkSnapshot({ embeddedRuns: 1 });
@@ -227,6 +333,7 @@ export function registerShutdownBudgetTests({
             );
           }
         } finally {
+          vi.unstubAllEnvs();
           clock.mockRestore();
           vi.clearAllTimers();
           vi.useRealTimers();

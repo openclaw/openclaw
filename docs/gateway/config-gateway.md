@@ -364,3 +364,27 @@ The earlier `"restart"` and `"hot"` values are retired; [`openclaw doctor --fix`
 Reload debounce and in-flight operation deferral are no longer configurable and run behind built-in defaults. [`openclaw doctor --fix`](/cli/doctor) removes the retired `debounceMs` and `deferralTimeoutMs` keys from older config files.
 
 ---
+
+## Gateway stop budget
+
+`gateway.stopTimeoutMs` optionally bounds native Gateway stop processing.
+Set an integer from `15000` through `325000` milliseconds. The Gateway
+validates the configuration at startup and rejects non-integer or out-of-range values.
+The running process captures this setting at startup.
+Unset preserves the existing stop policy; restart behavior is unchanged.
+
+The budget starts when stop is accepted and includes supervisor discovery, active
+work drain, and cleanup. A known or promptly discovered supervisor deadline can
+shorten it. Repeated stop signals and late discovery results cannot extend it.
+Discovery gets at most two seconds and never consumes the reserved cleanup time.
+
+For example, `60000` reserves ten seconds for cleanup and allows up to fifty
+seconds to drain active work. Two seconds spent on discovery leave forty-eight
+seconds for drain. Shorter budgets retain the existing proportional cleanup
+reserve. When drain expires, the Gateway aborts embedded and cron runs, closes
+the server, and releases its owned lease through the normal shutdown path.
+
+If cleanup hangs, the existing forced-exit path remains bounded and does not
+force-delete the lease. A successor may still have to wait for lease expiry.
+This setting does not bound supervisor, launcher, scheduling, or successor
+startup time; measure the complete restart or deployment separately.

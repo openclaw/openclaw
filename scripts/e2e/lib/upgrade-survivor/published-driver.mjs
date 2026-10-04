@@ -24,7 +24,8 @@ import {
 } from "./published-driver-sqlite.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
-const [candidateArg, artifactsArg, driverTag = "latest"] = process.argv.slice(2);
+const [candidateArg, artifactsArg, driverTag = "latest", proofMode = ""] = process.argv.slice(2);
+assert(["", "gateway-limits"].includes(proofMode), "Unsupported proof mode");
 const legacySqlite = process.env.OPENCLAW_PUBLISHED_DRIVER_LEGACY_SQLITE === "1";
 assert.equal(process.platform, "linux", "The managed-service fixture requires Linux");
 assert(fs.existsSync("/.dockerenv"), "Run through the bare Docker E2E runner");
@@ -281,6 +282,9 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     for (const agent of config.agents.list) {
       fs.mkdirSync(agent.workspace, { recursive: true });
     }
+    if (proofMode === "gateway-limits") {
+      config.cron = { maxConcurrentRuns: 12 };
+    }
     fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, `${JSON.stringify(config)}\n`);
     await run("fixture", "bash", [
       "-c",
@@ -294,8 +298,21 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     }
     // PRs start from the serving Gateway's state; main/release proofs also seed
     // Doctor's broader repair state before exercising the same managed update.
-    if (legacySqlite || process.env.GITHUB_EVENT_NAME !== "pull_request") {
+    if (
+      proofMode === "gateway-limits" ||
+      legacySqlite ||
+      process.env.GITHUB_EVENT_NAME !== "pull_request"
+    ) {
       await run("seed-state", "openclaw", ["doctor", "--fix", "--non-interactive"]);
+    }
+    if (proofMode === "gateway-limits") {
+      const baselinePreserved = readJson(env.OPENCLAW_CONFIG_PATH).cron?.maxConcurrentRuns === 12;
+      writeJson("baseline-concurrency", { driverVersion, preserved: baselinePreserved });
+      assert.equal(
+        baselinePreserved,
+        false,
+        "Selected driver already preserves the setting; select the intended regression baseline",
+      );
     }
     if (legacySqlite) {
       writeJson("sqlite-seeded", seedPublishedDriverLegacySqlite(state));
@@ -335,6 +352,12 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE,
       "utf8",
     );
+    if (proofMode === "gateway-limits") {
+      // The shipped updater sees the retained value; do not reinsert it after update.
+      const retained = readJson(env.OPENCLAW_CONFIG_PATH);
+      retained.cron = { ...retained.cron, maxConcurrentRuns: 12 };
+      fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, `${JSON.stringify(retained)}\n`);
+    }
     let update;
     let updateFailure;
     const sqliteBefore = legacySqlite ? inspectPublishedDriverSqlite(state, 0) : undefined;
@@ -442,6 +465,63 @@ process.exitCode = await runCancelableCommand(async (signal) => {
           .includes("Enabling incremental SQLite reclamation once:"),
         "Second maintenance repeated conversion",
       );
+    }
+    if (proofMode === "gateway-limits") {
+      assert.equal(
+        readJson(env.OPENCLAW_CONFIG_PATH).cron?.maxConcurrentRuns,
+        12,
+        "Published update removed retained concurrency",
+      );
+      await run("stop-before-limits", path.join(bin, "systemctl"), [
+        "--user",
+        "stop",
+        "openclaw-gateway.service",
+      ]);
+      await run("candidate-doctor", "openclaw", ["doctor", "--fix", "--non-interactive"]);
+      assert.equal(
+        readJson(env.OPENCLAW_CONFIG_PATH).cron?.maxConcurrentRuns,
+        12,
+        "Candidate Doctor removed retained concurrency",
+      );
+      // Doctor may repair and restart the installed service.
+      await run("stop-after-doctor", path.join(bin, "systemctl"), [
+        "--user",
+        "stop",
+        "openclaw-gateway.service",
+      ]);
+      // The manager snapshots provider-disabled env. Use a separately owned
+      // foreground process for model traffic, leaving the service fixture intact.
+      const scenario = "scripts/e2e/lib/upgrade-survivor/gateway-limits.mjs";
+      await run("upgraded-limits", process.execPath, [
+        scenario,
+        path.join(packageRoot, "openclaw.mjs"),
+        path.join(runtime, "upgraded-proof"),
+        path.join(artifacts, "upgraded-limits"),
+        "configured",
+        env.OPENCLAW_CONFIG_PATH,
+      ]);
+      const freshPrefix = path.join(runtime, "fresh-install");
+      await run("fresh-candidate-install", "npm", [
+        "install",
+        "--prefix",
+        freshPrefix,
+        candidatePackage,
+        "--no-fund",
+        "--no-audit",
+      ]);
+      await run("fresh-limits", process.execPath, [
+        scenario,
+        path.join(freshPrefix, "node_modules/openclaw/openclaw.mjs"),
+        path.join(runtime, "fresh-proof"),
+        path.join(artifacts, "fresh-limits"),
+        "default",
+      ]);
+      // This proves removal on the candidate, not an old-binary rollback.
+      const removedSettings = readJson(env.OPENCLAW_CONFIG_PATH);
+      delete removedSettings.cron.maxConcurrentRuns;
+      delete removedSettings.gateway.stopTimeoutMs;
+      fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, `${JSON.stringify(removedSettings)}\n`);
+      await run("removed-settings-validate", "openclaw", ["config", "validate"]);
     }
     writeJson("summary", {
       driverVersion,

@@ -98,6 +98,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "session.maintenance.highWaterBytes":
     "Target size after disk-budget cleanup (high-water mark). Defaults to 80% of maxDiskBytes; set explicitly for tighter reclaim behavior on constrained disks. A value that resolves to zero falls back to the default; negative values are invalid. Disable the budget with maxDiskBytes instead.",
   cron: "Global scheduler settings for stored automations, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling automation volume or integrating external webhook receivers.",
+  "cron.maxConcurrentRuns":
+    "Positive integer cron-service execution cap and shared cron-agent/hook lane budget (default: 8). Command and script jobs use the service cap without consuming the agent/hook budget. When hooks are enabled and capacity exceeds one, one shared agent slot is reserved for hooks. Higher limits increase resource and provider demand.",
   "cron.enabled":
     "Enables automation execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all automation execution without deleting jobs.",
   "cron.skipMissedJobs":
