@@ -102,6 +102,7 @@ export async function probeDiscordAcpBindingHealth(params: {
       : { status: "uncertain", reason: "status-timeout" };
   }
   if (result.kind === "error") {
+    params.providerSessionRuntime.rethrowIncognitoSessionError(result.error);
     return classifyAcpStatusProbeError({
       error: result.error,
       isStaleRunning,

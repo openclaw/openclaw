@@ -18,10 +18,15 @@ import type {
   SessionReactionWrite,
 } from "./session-reaction-store.types.js";
 import type { SessionMember } from "./session-sharing-store.kernel.js";
-import type { SessionSharingWorkerOperations } from "./session-sharing-store.types.js";
+import type {
+  SessionCollaborationMutation,
+  SessionSharingWorkerOperations,
+  SessionSuggestionListParams,
+  StoredSessionSuggestion,
+} from "./session-sharing-store.types.js";
 
 type SharingOperations = {
-  [Key in "add" | "remove" | "participant"]: {
+  [Key in SessionCollaborationMutation]: {
     input: Omit<SessionSharingWorkerOperations[Key]["input"], "scope"> & { sessionKey: string };
     output: SessionSharingWorkerOperations[Key]["output"];
   };
@@ -49,6 +54,10 @@ export type IncognitoSideDataOperations = {
   };
   "session.category.keys": { input: { name: string }; output: string[] };
   "session.members.read": { input: { sessionKey: string }; output: SessionMember[] };
+  "session.suggestions.read": {
+    input: { sessionKey: string; params: SessionSuggestionListParams };
+    output: StoredSessionSuggestion[];
+  };
   "session.participants.read": {
     input: { sessionKey: string };
     output: SessionParticipantRecord[];

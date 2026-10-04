@@ -14,6 +14,7 @@ import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 
 export type AcpSessionStoreEntry = {
   cfg: OpenClawConfig;
@@ -129,7 +130,8 @@ export function readSessionEntryFromStore(params: {
         })
       : undefined;
     return { cfg, agentId, storePath, storeSessionKey, entry };
-  } catch {
+  } catch (error) {
+    rethrowIncognitoSessionError(error);
     return {
       cfg,
       agentId,

@@ -1,5 +1,9 @@
 // Discord tests cover provider plugin behavior.
 import { EventEmitter } from "node:events";
+import {
+  IncognitoSessionSyncAccessError,
+  rethrowIncognitoSessionError,
+} from "openclaw/plugin-sdk/acp-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -271,6 +275,7 @@ describe("monitorDiscordProvider", () => {
           }),
           isAcpRuntimeError: (error: unknown): error is { code: string } =>
             error instanceof Error && "code" in error,
+          rethrowIncognitoSessionError,
           resolveThreadBindingIdleTimeoutMs: () => 24 * 60 * 60 * 1000,
           resolveThreadBindingMaxAgeMs: () => 7 * 24 * 60 * 60 * 1000,
           resolveThreadBindingsEnabled: () => true,
@@ -651,6 +656,24 @@ describe("monitorDiscordProvider", () => {
       }
     },
   );
+
+  it("propagates a nested incognito refusal instead of marking a running session stale", async () => {
+    const error = new AggregateError(
+      [new IncognitoSessionSyncAccessError("resolveSession", "resolveSessionAsync")],
+      "ACP status failed",
+    );
+    getAcpSessionStatusMock.mockRejectedValue(error);
+    await runProvider();
+    await expect(
+      getHealthProbe()({
+        cfg: baseConfig(),
+        accountId: "default",
+        sessionKey: "agent:test:acp:refused",
+        binding: {},
+        session: { acp: { state: "running", lastActivityAt: 0 } },
+      }),
+    ).rejects.toBe(error);
+  });
 
   it("captures gateway errors emitted before lifecycle wait starts", async () => {
     const emitter = new EventEmitter();

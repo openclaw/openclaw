@@ -439,6 +439,41 @@ schemas, retention, permissions, and update behavior are unchanged; this stage
 retires no T1 sites. Pending-input staging, source, and withdrawal routing remain
 separate activation prerequisites.
 
+### Incognito pending input and collaboration (P7e, inactive)
+
+Pending-input staging, source reads, processing completion, and terminal
+disposition accept an explicitly captured actor. They reuse the durable custody
+kernel on the actor's retained connection. Staging rereads its prepared snapshot
+inside the synchronous transaction; transaction and commit grants recheck live
+host custody. Confirmed commit receipts publish accepted input ownership inside
+the actor FIFO, including when the ordinary reply is lost. Unknown outcomes never
+replay. Synchronous completion refuses an actor binding and names `completeAsync`.
+Admission may carry the enclosing close signal; accepted persistence does not
+inherit that cancellation, and the close prelude joins settlement before transport
+teardown.
+
+Collaboration composes suggestion add, claim, release, finalization and reads,
+owner assignment, membership, participants, and categories on the same actor.
+Existing suggestion tokens and claim rules remain unchanged. Committed changes
+publish through the existing session owner while retaining the FIFO turn;
+unsupported incognito involvement keeps its existing false result without opening
+a host database.
+
+ACP startup binding cleanup can retain a prepared actor read through the existing
+Discord and Telegram binding writers. The original actor snapshot is captured
+inside its FIFO; shared ACP commit receipts invalidate prepared sources before
+later writer grants. Both binding transactions and their pre-commit grants check
+that source, and cleanup releases its retained actor custody. Nested ended-session
+and synchronous-access refusals propagate through store reads and status probes;
+a refusal discovered after an acknowledged deletion preserves its publication
+before rejecting. Default startup routing remains native in this stage.
+
+These bindings remain inactive. Production routing stays host-owned until the
+atomic activation supplies them and removes the native arms together. This stage
+adds no schema, cache, retention, durability, permission, configuration, or update
+change, and retires no T1 sites. Queued-input withdrawal retains its existing
+incognito refusal.
+
 ### Existing worker flows
 
 Shared-state transaction diagnostics inherit the executing worker command name

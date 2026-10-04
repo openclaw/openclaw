@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type {
@@ -76,3 +77,25 @@ export type PendingInputCustodyGrant = {
   candidate?: SessionPendingInputRow;
   receipt: PendingInputMutationReceipt;
 };
+
+/** Only the paired kernel's receipt for this exact accepted input may settle its custody. */
+export function readPendingInputMutationReceipt(
+  facts: unknown,
+  input: PendingInputMutation,
+): PendingInputMutationReceipt | undefined {
+  if (
+    !isRecord(facts) ||
+    facts.kind !== "pending-input-settlement" ||
+    facts.operation !== input.kind ||
+    facts.sessionKey !== input.sessionKey ||
+    facts.sessionId !== input.sessionId ||
+    facts.idempotencyKey !== input.idempotencyKey ||
+    facts.runId !== input.runId ||
+    facts.requestHash !== input.requestHash ||
+    facts.lifecycleGeneration !== input.lifecycleGeneration
+  ) {
+    return undefined;
+  }
+  // SAFETY: The exact paired kernel and admission own this tagged native receipt.
+  return facts as PendingInputMutationReceipt;
+}

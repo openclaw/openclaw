@@ -2,13 +2,13 @@ import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identi
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import {
   prepareSqliteScope,
   resolveSqliteScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import type { PendingInputSourceRead } from "./session-pending-input-operations.types.js";
+import type { PendingInputScope } from "./session-pending-input-store.js";
 import {
   assertSessionStoreReadCandidate,
   captureSessionStoreCandidateIdentities,
@@ -18,7 +18,7 @@ import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-ru
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 export async function readPendingInputSource(
-  scope: SessionAccessScope & { agentId: string; sessionId: string },
+  scope: PendingInputScope,
   idempotencyKey: string,
   pendingOnly: boolean,
 ) {
@@ -34,6 +34,36 @@ export async function readPendingInputSource(
     idempotencyKey,
     pendingOnly,
   };
+  if (captured.incognito) {
+    const { actor, authority } = captured.incognito;
+    actor.assertCurrent();
+    authority.assertCurrent();
+    if (
+      !isIncognitoSessionKey(logical.sessionKey) ||
+      actor.agentId !== logical.agentId ||
+      actor.path !== resolveOpenClawAgentSqlitePath(toDatabaseOptions(logical))
+    ) {
+      throw new Error("Submitted input target differs from its captured incognito actor");
+    }
+    const claim = actor.sessions.captureCurrent(logical.sessionKey);
+    const assertCurrent = () => {
+      actor.assertCurrent();
+      authority.assertCurrent();
+      claim.assertCurrent();
+    };
+    const snapshot = await actor.sessions.readPendingInput(
+      {
+        assertCurrent,
+        authorize: (stage, facts) => authority.authorize?.(stage, facts),
+      },
+      input,
+    );
+    assertCurrent();
+    if (snapshot.kind !== "source") {
+      throw new Error("Submitted input returned a different operation");
+    }
+    return { path: actor.path, snapshot, assertCurrent };
+  }
   if (isIncognitoSessionKey(captured.sessionKey)) {
     // Process-held incognito storage retains its native owner until the actor cutover.
     const options = toDatabaseOptions(resolveSqliteScope(captured));

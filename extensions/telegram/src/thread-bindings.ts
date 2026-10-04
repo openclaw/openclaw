@@ -50,6 +50,7 @@ type TelegramThreadBindingManagerParams = {
   idleTimeoutMs?: number;
   maxAgeMs?: number;
   enableSweeper?: boolean;
+  prepareAcpSession?: Parameters<typeof reconcileTelegramAcpBindingsOnStartup>[0]["prepareSession"];
 };
 
 export async function createTelegramThreadBindingManager(
@@ -102,6 +103,7 @@ async function initializeThreadBindingManager(
   await reconcileTelegramAcpBindingsOnStartup({
     accountId,
     persist,
+    prepareSession: params.prepareAcpSession,
   });
 
   let sweepTimer: NodeJS.Timeout | null = null;

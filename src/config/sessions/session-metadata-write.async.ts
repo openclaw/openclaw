@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { bindSessionEntryPublicationSource } from "./session-accessor.sqlite-entry-cache-publication.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
+import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import { runSessionCollaborationWrite } from "./session-sharing-store.async.js";
 import {
   addSessionSuggestion,
@@ -13,7 +13,7 @@ import {
 } from "./session-suggestion-store.js";
 
 export function assignSessionOwnerInWorker(
-  scope: SessionAccessScope,
+  scope: SessionCollaborationScope,
   params: Omit<Parameters<typeof assignSessionOwner>[1], "assertCurrent" | "expectedSessionId"> & {
     expectedSessionId: string;
   },
@@ -29,7 +29,13 @@ export function assignSessionOwnerInWorker(
     (capturedScope) => assignSessionOwner(capturedScope, capturedParams),
     (result, location, database) => {
       if (result.value) {
-        if (result.facts) {
+        if (!database) {
+          sessionChanges.emit(
+            result.facts
+              ? { ...location, facts: result.facts }
+              : { ...location, factsInvalidated: true },
+          );
+        } else if (result.facts) {
           publishSessionEntryCacheInvalidation(
             { ...database, agentId: location.agentId },
             { sessionKey: location.sessionKey, facts: result.facts },
@@ -47,7 +53,7 @@ export function assignSessionOwnerInWorker(
 }
 
 export function addSessionSuggestionInWorker(
-  scope: SessionAccessScope,
+  scope: SessionCollaborationScope,
   params: Parameters<typeof addSessionSuggestion>[1],
   assertCurrent?: () => void,
 ): Promise<ReturnType<typeof addSessionSuggestion>> {
@@ -66,7 +72,7 @@ export function addSessionSuggestionInWorker(
 }
 
 export function claimSessionSuggestionDispatchInWorker(
-  scope: SessionAccessScope,
+  scope: SessionCollaborationScope,
   params: Parameters<typeof claimSessionSuggestionDispatch>[1],
   assertCurrent?: () => void,
 ): Promise<ReturnType<typeof claimSessionSuggestionDispatch>> {
@@ -81,7 +87,7 @@ export function claimSessionSuggestionDispatchInWorker(
 }
 
 export function releaseSessionSuggestionDispatchInWorker(
-  scope: SessionAccessScope,
+  scope: SessionCollaborationScope,
   params: Parameters<typeof releaseSessionSuggestionDispatch>[1],
   assertCurrent?: () => void,
 ): Promise<ReturnType<typeof releaseSessionSuggestionDispatch>> {
@@ -96,7 +102,7 @@ export function releaseSessionSuggestionDispatchInWorker(
 }
 
 export function finalizeSessionSuggestionClaimInWorker(
-  scope: SessionAccessScope,
+  scope: SessionCollaborationScope,
   params: Parameters<typeof finalizeSessionSuggestionClaim>[1],
   assertCurrent?: () => void,
 ): Promise<ReturnType<typeof finalizeSessionSuggestionClaim>> {

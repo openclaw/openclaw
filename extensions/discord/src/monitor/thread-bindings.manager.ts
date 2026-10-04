@@ -261,7 +261,10 @@ function createLoadedThreadBindingManager(
       previous: existingLocal,
       next: null,
       persist: unbindParams.persist ?? persist,
-      assertCurrent: assertManagerCurrent,
+      assertCurrent: () => {
+        assertManagerCurrent();
+        unbindParams.assertCurrent?.();
+      },
     });
     const removed = existingLocal;
     manager.notifyUnbound(removed, unbindParams);

@@ -7,6 +7,7 @@ import {
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import { updatePreparedSessionProfileInvolvement } from "./session-accessor.sqlite-involvement.js";
+import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import { runSessionCollaborationWrite } from "./session-sharing-store.async.js";
 import type { SessionInvolvementMutation } from "./session-sharing-store.types.js";
 
@@ -25,7 +26,7 @@ export function updateSessionProfileInvolvement(
 }
 
 export async function updateSessionProfileInvolvementAsync(
-  scope: SessionAccessScope,
+  scope: SessionCollaborationScope,
   { assertCurrent, ...params }: InvolvementParams,
 ): Promise<boolean> {
   const captured = structuredClone(params);
@@ -47,7 +48,7 @@ export async function updateSessionProfileInvolvementAsync(
       // Personal involvement never writes process-held incognito stores.
       () => false,
       (result, location, database) => {
-        if (result.changed) {
+        if (result.changed && database) {
           publishSessionEntryCacheInvalidation(database, {
             sessionKey: location.sessionKey,
             facts: { kind: "unchanged" },

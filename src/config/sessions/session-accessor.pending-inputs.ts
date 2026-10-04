@@ -12,6 +12,7 @@ import {
 } from "../../infra/agent-events.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import {
   preparePendingInputRequest,
@@ -20,7 +21,6 @@ import {
   matchesSessionPendingInputRequest,
   type PendingInputRequest,
 } from "./session-accessor.pending-input-request.js";
-import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import {
   prepareCurrentSessionPendingInputDedupeRecovery,
   isFinalInputCompletion,
@@ -45,13 +45,12 @@ import {
 import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import { readPendingInputSource } from "./session-pending-input-source.js";
-import { preparePendingInputStore } from "./session-pending-input-store.js";
+import { preparePendingInputStore, type PendingInputScope } from "./session-pending-input-store.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 export { withSessionPendingInputRelocation };
 export type { SessionPendingInput, SessionPendingInputPage };
-type PendingInputScope = SessionAccessScope & { agentId: string; sessionId: string };
 export type SessionPendingInputReceipt = {
   state: "queued" | "consumed";
   inputId: string;
@@ -190,8 +189,11 @@ export function stageSessionPendingInput(
   scope: PendingInputScope,
   options: PendingInputStageOptions,
 ): Promise<SessionPendingInputReceipt | undefined> {
+  scope.incognito?.admissionSignal?.throwIfAborted();
+  scope.incognito?.actor.assertCurrent();
   const captured = {
     ...scope,
+    incognito: scope.incognito && { ...scope.incognito },
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
   const preparedRequest = preparePendingInputRequest(options);
@@ -356,6 +358,7 @@ async function stagePreparedPendingInput(
       const ending = completion
         ? completion
             .catch((error: unknown) => {
+              rethrowIncognitoSessionError(error);
               if (hasSqliteWorkerOutcomeUnknown(error)) {
                 throw error;
               }
@@ -437,6 +440,7 @@ async function stagePreparedPendingInput(
       throw new Error("Approved pending input exceeds the Gateway payload limit");
     }
     const inputId = existing?.input_id ?? randomUUID();
+    const assertAdmittedCurrent = options.assertAdmittedCurrent ?? options.assertCurrent;
     owner = {
       inputId,
       transcriptInputId: inputId,
@@ -448,7 +452,11 @@ async function stagePreparedPendingInput(
       lifecycleGeneration,
       messageJson,
       config: options.config,
-      assertCurrent: options.assertAdmittedCurrent ?? options.assertCurrent,
+      assertCurrent: () => {
+        scope.incognito?.actor.assertCurrent();
+        scope.incognito?.authority.assertCurrent();
+        assertAdmittedCurrent();
+      },
       ...(existing ? { restartRecovered: true as const } : {}),
       finish,
     };

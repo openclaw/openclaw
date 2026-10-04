@@ -9,6 +9,7 @@ import {
 } from "../../config/sessions/types.js";
 import {
   createSqliteWorkerOperationAdmission,
+  observeSqliteWorkerCommittedFacts,
   type SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
@@ -165,6 +166,7 @@ export async function commitAcpSessionMutation(
             }
           });
           admitted = { admission, retained };
+          observeSqliteWorkerCommittedFacts(admission, publish);
           return {
             nativeLocations: [
               context.admission.databasePath,
@@ -206,25 +208,35 @@ function captureTarget(params: Target) {
 }
 
 /** Inactive join: volatile entry custody spans the existing shared metadata reader. */
-export function readIncognitoAcpSessionEntry(params: Target): Promise<SessionEntry | undefined> {
+export async function readIncognitoAcpSessionEntry(
+  params: Target,
+): Promise<SessionEntry | undefined> {
+  return (await prepareIncognitoAcpSessionEntry(params)).entry;
+}
+
+export function prepareIncognitoAcpSessionEntry(params: Target) {
   const { actor, authority, sessionKey, context, assertCurrent } = captureTarget(params);
   return actor.sessions.withSharedState(async () => {
-    const { entry, claim } = await actor.sessions.read(authority, { sessionKey });
-    const snapshot = actor.sessions.captureSnapshot(sessionKey);
+    const { entry, claim, snapshot } = await actor.sessions.read(authority, { sessionKey });
     const [acp] = await readAcpSessionMetaForEntries({
       entries: [{ sessionKey, agentId: actor.agentId, entry }],
       cfg: params.cfg,
       env: context.environment,
       databasePath: context.admission.databasePath,
     });
-    assertCurrent();
-    snapshot.assertCurrent();
-    claim.authorize(authority, "commit");
-    if (!entry) {
-      return undefined;
+    const assertPreparedCurrent = () => {
+      assertCurrent();
+      snapshot.assertCurrent();
+      claim.authorize(authority, "commit");
+    };
+    assertPreparedCurrent();
+    if (entry) {
+      delete entry.acp;
     }
-    delete entry.acp;
-    return acp ? { ...entry, acp } : entry;
+    return {
+      entry: entry && acp ? { ...entry, acp } : entry,
+      assertCurrent: assertPreparedCurrent,
+    };
   });
 }
 

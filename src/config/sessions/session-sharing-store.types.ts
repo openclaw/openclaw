@@ -5,6 +5,11 @@ import type { SessionParticipantIdentity } from "./session-participant-identity.
 import type { SessionMember } from "./session-sharing-store.kernel.js";
 import type { SessionEntry, SessionProfileInvolvement } from "./types.js";
 
+export type SessionCollaborationMutation = Exclude<
+  keyof SessionSharingWorkerOperations,
+  "category.prepare" | "category.apply" | "involvement"
+>;
+
 export type SessionSharingExpectedEntry = Pick<
   SessionEntry,
   "sessionId" | "createdActor" | "visibility" | "incognito"
