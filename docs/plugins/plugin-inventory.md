@@ -182,7 +182,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[x](/plugins/reference/x)** (`@openclaw/x`) - included in OpenClaw. Allowlisted X mentions and public replies.
 
-- **[xai](/plugins/reference/xai)** (`@openclaw/xai-plugin`) - included in OpenClaw. Adds xAI model provider support to OpenClaw.
+- **[xai](/plugins/reference/xai)** (`@openclaw/xai-plugin`) - included in OpenClaw. xAI provider for Grok models, Grok web and X search, code execution, speech, and media generation.
 
 ## Official external packages
 
