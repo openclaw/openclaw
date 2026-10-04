@@ -711,29 +711,30 @@ describe("handleToolExecutionStart read path checks", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("tool agent event callback failed"));
   });
 
-  it.each([true, false])(
-    "keeps wait telemetry with explicit progress privacy %s",
+  it.each([true, false, undefined])(
+    "keeps wait telemetry with progress privacy %s",
     async (hidden) => {
       const { ctx, onAgentEvent } = createTestContext();
+      const progressPrivacy = hidden === undefined ? {} : { hideFromChannelProgress: hidden };
 
       await startTool(ctx, {
         toolName: "wait",
         toolCallId: "tool-code-wait",
         args: { runId: "cm_1" },
-        hideFromChannelProgress: hidden,
+        ...progressPrivacy,
       });
       updateTool(ctx, {
         toolName: "wait",
         toolCallId: "tool-code-wait",
         args: { runId: "cm_1" },
         partialResult: { status: "waiting" },
-        hideFromChannelProgress: hidden,
+        ...progressPrivacy,
       });
       await endTool(ctx, {
         toolName: "wait",
         toolCallId: "tool-code-wait",
         result: { details: { status: "completed" } },
-        hideFromChannelProgress: hidden,
+        ...progressPrivacy,
       });
 
       const lifecycleEvents = onAgentEvent.mock.calls
@@ -741,7 +742,9 @@ describe("handleToolExecutionStart read path checks", () => {
         .filter((event) => event.data?.name === "wait");
       expect(lifecycleEvents).not.toHaveLength(0);
       expect(
-        lifecycleEvents.every((event) => (event.data?.hideFromChannelProgress === true) === hidden),
+        lifecycleEvents.every(
+          (event) => (event.data?.hideFromChannelProgress === true) === (hidden === true),
+        ),
       ).toBe(true);
     },
   );
