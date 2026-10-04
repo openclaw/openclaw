@@ -36,12 +36,6 @@ type HostPackageManifest = {
   peerDependencies?: Record<string, string>;
 };
 
-type ManagedNpmRootOpenClawMetadata = {
-  managedOverrides?: string[];
-  managedPeerDependencies?: string[];
-  [key: string]: unknown;
-};
-
 /** Installed dependency metadata read from a managed root lockfile. */
 export type ManagedNpmRootInstalledDependency = {
   version?: string;
@@ -94,17 +88,14 @@ function buildManagedNpmRootManifest(params: {
   managedOverrideKeys: string[];
   managedPeerDependencyKeys: string[];
 }): ManagedNpmRootManifest {
-  const metadata: ManagedNpmRootOpenClawMetadata = isRecord(params.manifest.openclaw)
-    ? { ...params.manifest.openclaw }
-    : {};
+  const metadata = isRecord(params.manifest.openclaw) ? { ...params.manifest.openclaw } : {};
   if (params.managedOverrideKeys.length > 0) {
     metadata.managedOverrides = params.managedOverrideKeys;
   } else {
     delete metadata.managedOverrides;
   }
-  const managedPeerDependencyKeys = params.managedPeerDependencyKeys;
-  if (managedPeerDependencyKeys.length > 0) {
-    metadata.managedPeerDependencies = managedPeerDependencyKeys;
+  if (params.managedPeerDependencyKeys.length > 0) {
+    metadata.managedPeerDependencies = params.managedPeerDependencyKeys;
   } else {
     delete metadata.managedPeerDependencies;
   }
@@ -700,8 +691,6 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
     if (dependencySpec) {
       fallbackPeerPins[packageName] = dependencySpec;
     }
-  }
-  for (const packageName of previousManagedPeerDependencies) {
     delete dependencies[packageName];
   }
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-managed-peer-plan-"));
@@ -716,17 +705,12 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
       },
       { trailingNewline: true },
     );
-    await copyPathIfExists(
-      path.join(params.npmRoot, "package-lock.json"),
-      path.join(tempRoot, "package-lock.json"),
-    );
     const tempLockPath = path.join(tempRoot, "package-lock.json");
+    await copyPathIfExists(path.join(params.npmRoot, "package-lock.json"), tempLockPath);
     await scrubHostPeerFromTempPackageLock(tempLockPath);
-    await copyPathIfExists(path.join(params.npmRoot, ".npmrc"), path.join(tempRoot, ".npmrc"));
-    await copyPathIfExists(
-      path.join(params.npmRoot, "_openclaw-pack-archives"),
-      path.join(tempRoot, "_openclaw-pack-archives"),
-    );
+    for (const name of [".npmrc", "_openclaw-pack-archives"]) {
+      await copyPathIfExists(path.join(params.npmRoot, name), path.join(tempRoot, name));
+    }
 
     const command = params.runCommand ?? runCommandWithTimeout;
     const runPeerPlan = (legacyPeerDeps: boolean) =>

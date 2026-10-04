@@ -429,15 +429,7 @@ describe("compaction-safeguard tool failures", () => {
     {
       name: "deduplication and empty output",
       messages: [
-        {
-          role: "toolResult" as const,
-          toolCallId: "call-1",
-          toolName: "exec",
-          isError: true,
-          details: { exitCode: 2 },
-          content: [],
-          timestamp: 1,
-        },
+        { ...failure("call-1", "", { exitCode: 2 }), content: [] },
         failure("call-1", "ignored"),
       ],
       ids: ["call-1"],

@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { isWithinDir } from "@openclaw/fs-safe/path";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
@@ -945,9 +944,7 @@ function resolveStorePathFromTemplate(
   agentId: string,
   env: NodeJS.ProcessEnv,
 ): string {
-  const expand = (s: string) =>
-    s.startsWith("~") ? expandHomePrefix(s, { env, homedir: os.homedir }) : s;
-  return path.resolve(expand(template.replaceAll("{agentId}", agentId)));
+  return path.resolve(expandHomePrefix(template.replaceAll("{agentId}", agentId), { env }));
 }
 
 export function mergeSessionStoreAliasPlans(

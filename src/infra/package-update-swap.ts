@@ -75,13 +75,8 @@ export async function swapStagedPackageInstall(
   const results = createPackageSwapResults(params, targetLayout, targetPackageRoot, startedAt);
   const { warnings, step } = results;
   if (!targetLayout || !targetPackageRoot || !targetSwapRoot) {
-    return {
-      status: "failed",
-      activePackageRoot,
-      step: step(1, null, "cannot resolve npm global prefix layout"),
-      postVerifyStep: null,
-      packageRollbackVerified: false,
-    };
+    const error = "cannot resolve npm global prefix layout";
+    return results.failed(activePackageRoot, error, [error], false);
   }
 
   if (!native) {
@@ -626,7 +621,6 @@ export async function swapStagedPackageInstall(
       });
       activePackageRoot = targetPackageRoot;
       projectActivated = true;
-      activationCompleted = true;
     } else {
       await rootLink?.assertLiveUnchanged();
       if (process.platform === "freebsd") {
@@ -675,8 +669,8 @@ export async function swapStagedPackageInstall(
         rollback.push(restoreShim(shim));
         await copyPathEntry(shim.source, shim.destination);
       }
-      activationCompleted = true;
     }
+    activationCompleted = true;
     const postVerifyStep = params.postVerifyStep
       ? await runPackagePostInstallVerification(targetPackageRoot, params.postVerifyStep)
       : null;

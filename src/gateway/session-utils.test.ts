@@ -1621,24 +1621,19 @@ describe("gateway session utils", () => {
     ).toBeNull();
   });
 
-  test.each([false])(
-    "resolveSessionStoreKey canonicalizes bare keys (explicit sole: %s)",
-    (explicitOwnership) => {
-      const cfg: OpenClawConfig = {
-        session: { mainKey: "main" },
-        agents: explicitOwnership
-          ? { ownership: "explicit", entries: { ops: {} } }
-          : { entries: { ops: {} } },
-      };
-      expect(resolveSessionStoreKey({ cfg, sessionKey: "discord:group:123" })).toBe(
-        "agent:ops:discord:group:123",
-      );
-      expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:alpha:main" })).toBe(
-        "agent:alpha:main",
-      );
-      expect(resolveSessionStoreAgentId(cfg, "global")).toBe("ops");
-    },
-  );
+  test("resolveSessionStoreKey canonicalizes bare keys", () => {
+    const cfg: OpenClawConfig = {
+      session: { mainKey: "main" },
+      agents: { entries: { ops: {} } },
+    };
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "discord:group:123" })).toBe(
+      "agent:ops:discord:group:123",
+    );
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:alpha:main" })).toBe(
+      "agent:alpha:main",
+    );
+    expect(resolveSessionStoreAgentId(cfg, "global")).toBe("ops");
+  });
 
   test("resolveSessionStoreKey uses configured fixed-store ownership for bare keys", () => {
     const cfg = {

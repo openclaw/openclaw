@@ -815,10 +815,7 @@ export class ManagedWorktreeService {
       return;
     }
     const state = await lockState(record);
-    if (state.kind === "live" && state.pid !== process.pid) {
-      return;
-    }
-    if (state.kind === "foreign") {
+    if (state.kind === "foreign" || (state.kind === "live" && state.pid !== process.pid)) {
       return;
     }
     if (state.kind !== "none") {
