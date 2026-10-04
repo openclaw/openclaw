@@ -509,7 +509,7 @@ export type AuditActivityToolActionV1 = AuditActivityRecordBaseV1 &
   SchemaContract<Static<TObject<typeof toolActionProperties>>> &
   AuditActivityToolActionV1Terminal;
 
-export type AuditActivitySkillSelectionV1 = AuditActivityAgentRecordBaseV1 & {
+export type AuditActivitySkillSelectionV1 = AuditActivityRecordBaseV1 & {
   eventType: "skill_selection";
   kind: "skill_selection";
   action: "skill.selection.observed";
