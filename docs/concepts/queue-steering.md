@@ -129,6 +129,12 @@ before its transcript commit.
 A visible message or send acknowledgment does not mean the active runtime has
 consumed it. The Control UI shows specific notices when an accepted message is
 waiting for worker setup or workspace sync.
+For explicit Gateway steering, a follow-up captured while the reply operation is
+preparing waits for that same operation's first running backend. Its send is
+acknowledged without waiting for backend readiness. Readiness does not bypass
+permission, media, or delivery checks: if the backend rejects the input or the
+captured operation ends, the normal followup path applies. The input is never
+retargeted to a replacement operation for another steering attempt.
 Messages waiting for a followup turn appear in the queue above the composer,
 including when the Gateway queues a message that could not be steered. They stay
 there across reconnects until consumed or canceled, without being sent again.

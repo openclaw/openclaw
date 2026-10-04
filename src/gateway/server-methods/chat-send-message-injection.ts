@@ -75,6 +75,7 @@ export function createChatSendMessageInjectionStarter(params: {
         }
       : undefined;
   return (): ReplyMessageInjectionAttempt | undefined => {
+    params.abortSignal.throwIfAborted();
     if (!params.target || isInternalTextSlashCommandTurn) {
       return undefined;
     }

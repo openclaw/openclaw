@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { captureDirectEmbeddedMessageInjectionTarget } from "../../agents/embedded-agent-runner/message-injection-target.js";
 import { chatRunBelongsToAgent } from "../../gateway/chat-run-owner.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
   isAgentEventLifecycleGenerationCurrent,
   registerAgentEventLifecycleRotationHandler,
@@ -16,6 +17,7 @@ import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   replyMessageInjectionTargetOwner,
   replyRunInterruptTargetOperation,
+  type ReplyBackendHandle,
   type ReplyOperation,
   type ReplyRunInterruptTarget,
   type ReplyRunRegistry,
@@ -166,7 +168,7 @@ export const replyRunRegistry: ReplyRunRegistry = {
     }
     return replyRunState.sourceTurnByKey.get(normalizedSessionKey);
   },
-  resolveCurrentMessageInjectionTarget(sessionKey) {
+  resolveCurrentMessageInjectionTarget(sessionKey, captureOptions) {
     const normalizedSessionKey = normalizeOptionalString(sessionKey);
     const operation = this.get(sessionKey);
     const resolved = resolveReplyMessageInjectionRejection({
@@ -176,26 +178,68 @@ export const replyRunRegistry: ReplyRunRegistry = {
     if (!normalizedSessionKey) {
       return undefined;
     }
+    let preparing = false;
     if (!operation || !backend) {
-      return captureDirectEmbeddedMessageInjectionTarget(normalizedSessionKey, () =>
+      const direct = captureDirectEmbeddedMessageInjectionTarget(normalizedSessionKey, () =>
         allowsDirectMessageInjectionOwner(normalizedSessionKey),
       );
+      if (direct) {
+        return direct;
+      }
+      if (
+        !captureOptions?.includePreparing ||
+        !operation ||
+        operation.result ||
+        operation.abortSignal.aborted ||
+        (operation.phase === "running" && getAttachedBackend(operation))
+      ) {
+        return undefined;
+      }
+      preparing = true;
     }
+    const readiness = operation.backendReady;
     const sourceTurnId = replyRunState.sourceTurnByKey.get(normalizedSessionKey);
+    let preparedBackend: ReplyBackendHandle | undefined;
+    const capturedOwnerIsCurrent = () =>
+      replyRunState.activeRunsByKey.get(normalizedSessionKey) === operation &&
+      operation.key === normalizedSessionKey &&
+      !operation.abortSignal.aborted;
     return {
+      ...(preparing
+        ? {
+            waitForReady: async (signal: AbortSignal) => {
+              preparedBackend = await racePromiseWithAbortSignal(readiness, signal);
+              signal.throwIfAborted();
+            },
+          }
+        : {}),
       [replyMessageInjectionTargetOwner]: {
         acceptParticipant: (overlay) => operation.personalToolParticipants?.accept(overlay),
         projectToolAuthorityFingerprint: (overlay) =>
           operation.projectToolAuthorityFingerprint(overlay),
-        resolve: (params) => resolveReplyMessageInjectionRejection({ ...params, operation }),
+        resolve: (params) =>
+          preparing &&
+          (!capturedOwnerIsCurrent() ||
+            !preparedBackend ||
+            getAttachedBackend(operation) !== preparedBackend)
+            ? { reason: "no_active_run" }
+            : resolveReplyMessageInjectionRejection({ ...params, operation }),
         recordAccepted: (options) => {
           operation.recordActivity();
           operation.markSteeredInputAccepted({ inboundAudio: options?.inboundAudio === true });
         },
         abort: () => operation.abortByUser(),
       },
-      ...(backend.runId ? { runId: backend.runId } : {}),
-      ...(sourceTurnId ? { sourceTurnId } : {}),
+      get runId() {
+        return (preparing ? preparedBackend : backend)?.runId;
+      },
+      get sourceTurnId() {
+        return preparing
+          ? capturedOwnerIsCurrent()
+            ? replyRunState.sourceTurnByKey.get(normalizedSessionKey)
+            : undefined
+          : sourceTurnId;
+      },
     };
   },
   resolveCurrentInterruptTarget(sessionKey) {

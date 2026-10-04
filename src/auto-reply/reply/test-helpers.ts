@@ -43,6 +43,7 @@ export function createMockReplyOperation(
       return toolAuthorityRoute;
     },
     phase: "running",
+    backendReady: Promise.resolve(undefined),
     result: null,
     staleExpiryReason: undefined,
     startedAtMs: Date.now(),

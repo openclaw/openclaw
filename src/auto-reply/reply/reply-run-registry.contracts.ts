@@ -243,6 +243,8 @@ type ReplyMessageInjectionOwner = {
 export const replyMessageInjectionTargetOwner = Symbol("replyMessageInjectionTargetOwner");
 export type ReplyMessageInjectionTarget = {
   readonly [replyMessageInjectionTargetOwner]: ReplyMessageInjectionOwner;
+  /** Preparing targets wait after source acknowledgment, never rediscovering a successor. */
+  waitForReady?(signal: AbortSignal): Promise<void>;
   readonly runId?: string;
   /** Original source input retained by the captured execution owner. */
   readonly sourceTurnId?: string;
@@ -352,6 +354,8 @@ export type ReplyOperation = {
   /** Concrete provider/model route currently selected for this operation. */
   readonly toolAuthorityRoute?: ReplyToolAuthorityRoute;
   readonly phase: ReplyOperationPhase;
+  /** First running backend for this key, or undefined when the owner retires before readiness. */
+  readonly backendReady: Promise<ReplyBackendHandle | undefined>;
   readonly result: ReplyOperationResult | null;
   /** Set when a stale-watchdog expiry forced this operation's run_stalled result. */
   readonly staleExpiryReason?: ReplyOperationStaleReason;
@@ -425,7 +429,10 @@ export type ReplyRunRegistry = {
   bindSourceTurnId(operation: ReplyOperation, sourceTurnId: string): void;
   getSourceTurnId(sessionKey: string): string | undefined;
   /** Captures the current direct owner without requiring client-supplied run identity. */
-  resolveCurrentMessageInjectionTarget(sessionKey: string): ReplyMessageInjectionTarget | undefined;
+  resolveCurrentMessageInjectionTarget(
+    sessionKey: string,
+    options?: { includePreparing?: boolean },
+  ): ReplyMessageInjectionTarget | undefined;
   /** Captures the current direct owner for exact-instance interruption. */
   resolveCurrentInterruptTarget(sessionKey: string): ReplyRunInterruptTarget | undefined;
   abort(sessionKey: string): boolean;

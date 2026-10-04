@@ -283,7 +283,9 @@ export async function admitChatSend(
     // later, the opaque target rejects instead of resolving a successor.
     messageInjectionTarget =
       p.queueMode === "steer"
-        ? replyRunRegistry.resolveCurrentMessageInjectionTarget(activeRunScopeKey)
+        ? replyRunRegistry.resolveCurrentMessageInjectionTarget(activeRunScopeKey, {
+            includePreparing: true,
+          })
         : undefined;
     runInterruptTarget =
       p.queueMode === "interrupt"

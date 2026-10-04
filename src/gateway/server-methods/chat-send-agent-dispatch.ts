@@ -288,6 +288,13 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             const replyContextFields = await replyContextFieldsPromise;
             assertWorkspaceRunOwnership?.();
             applyChatSendReplyContextFields(ctx, replyContextFields);
+            if (!messageInjectionTarget?.waitForReady) {
+              messageInjectionAttempt = beginCapturedMessageInjection();
+            }
+          }
+          if (messageInjectionTarget?.waitForReady && !turn.isInternalTextSlashCommandTurn) {
+            await messageInjectionTarget.waitForReady(activeRunAbort.controller.signal);
+            assertWorkspaceRunOwnership?.();
             messageInjectionAttempt = beginCapturedMessageInjection();
           }
           if (messageInjectionAttempt) {

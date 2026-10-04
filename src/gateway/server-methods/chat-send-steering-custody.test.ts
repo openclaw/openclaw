@@ -29,7 +29,6 @@ import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-me
 import { callPersonalToolUiCommand } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
 import { buildReplyPromptEnvelopeBase } from "../../auto-reply/reply/prompt-prelude.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
-import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.operation.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import {
@@ -53,6 +52,7 @@ import { prepareGatewayConnectOperatorAccess } from "../server/ws-connection/con
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
+import { createSteeringCustodyBackend } from "./chat-send-steering-custody.test-support.js";
 import { resolveChatSendCallerContext } from "./gateway-client-identity.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { identifiedClient } from "./sessions-sharing.test-support.js";
@@ -99,6 +99,7 @@ describe("steering input custody", () => {
     "preserves authenticated chat.send steering authority across callers (%s)",
     async (scenario) => {
       const startOwnerTurn = scenario === "same permissions across profiles";
+      const preparingOwner = scenario === "same grant";
       const sharedSecretOwner = scenario === "shared-secret owner";
       const profile = sharedSecretOwner
         ? ensureGatewayOwnerProfile("Gateway Owner")
@@ -110,7 +111,7 @@ describe("steering input custody", () => {
         : profile;
       const fixture = await createBrowserFollowupFixture({
         preserveContent: true,
-        active: !startOwnerTurn,
+        active: !startOwnerTurn && !preparingOwner,
         sandbox: scenario === "different role sandbox across profiles" ? "required" : undefined,
         // Both callers may write here; their caps still differ for other sessions.
         ...(withRoles
@@ -259,6 +260,8 @@ describe("steering input custody", () => {
             startupAction: "new",
           }).currentInboundContext;
           dispatchInboundMessageMock.mockClear();
+        }
+        if (startOwnerTurn || preparingOwner) {
           operation = createReplyOperation({ ...fixture.scope, resetTriggered: false });
         }
         captured = await captureGatewayOperatorRunAuthority({
@@ -365,28 +368,20 @@ describe("steering input custody", () => {
           expect(ownerUserContext).not.toContain(incomingProfile.id);
         }
         fixture.beforeApprove.mockClear();
-        const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
-          async (text, options, assertCurrent) =>
-            steerActiveSessionWithOptionalDeliveryWait(
-              session,
-              text,
-              options,
-              fixture.scope.sessionKey,
-              () => {
-                assertCurrent();
-                return true;
-              },
-            ),
-        );
-        operation.attachBackend({
-          kind: "embedded",
-          runId: "original-backing-run",
+        const {
+          handle,
+          queueMessage,
+          accepted: queueAccepted,
+        } = createSteeringCustodyBackend({
+          session,
+          sessionKey: fixture.scope.sessionKey,
           toolAuthorityFingerprint: fingerprint,
           supportsCrossProfileSteering:
             scenario !== "same grant" && scenario !== "no native admission across profiles",
-          cancel: vi.fn(),
-          messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
         });
+        if (!preparingOwner) {
+          operation.attachBackend(handle);
+        }
         const dispatch = createDispatchTestHarness({
           connId: reconnectedClient.connId,
           buildRequestContext: () => fixture.context,
@@ -408,6 +403,11 @@ describe("steering input custody", () => {
         );
         if (accepted || queued) {
           expect(dispatch.send).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
+        }
+        if (preparingOwner) {
+          expect(queueMessage).not.toHaveBeenCalled();
+          operation.attachBackend(handle);
+          await queueAccepted;
         }
         if (accepted) {
           expect(session.getSteeringMessages()).toEqual([
