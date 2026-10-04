@@ -350,6 +350,61 @@ export function isSourceCheckoutRoot(params) {
   );
 }
 
+export function pruneNonHostNativePayloads(
+  packageRoot,
+  platform = process.platform,
+  arch = process.arch,
+) {
+  const modules = join(realpathSync(packageRoot), "node_modules");
+  if (!existsSync(modules) || lstatSync(modules).isSymbolicLink()) {
+    return [];
+  }
+  const removed = [];
+  for (const [owner, scope] of [
+    ["esbuild", "@esbuild"],
+    ["@trycua/cua-driver", "@trycua"],
+  ]) {
+    const ownerManifest = join(modules, owner, "package.json");
+    if (!existsSync(ownerManifest)) {
+      continue;
+    }
+    const optional = JSON.parse(readFileSync(ownerManifest, "utf8")).optionalDependencies ?? {};
+    for (const name of Object.keys(optional)) {
+      if (!name.startsWith(`${scope}/`) || !/^@[a-z0-9-]+\/[a-z0-9-]+$/.test(name)) {
+        continue;
+      }
+      const target = join(modules, name);
+      if (
+        !existsSync(target) ||
+        realpathSync(target) !== target ||
+        !lstatSync(target).isDirectory()
+      ) {
+        continue;
+      }
+      const manifest = JSON.parse(readFileSync(join(target, "package.json"), "utf8"));
+      if (manifest.name !== name) {
+        continue;
+      }
+      const incompatible = [
+        [manifest.os, platform],
+        [manifest.cpu, arch],
+      ].some(
+        ([values, host]) =>
+          Array.isArray(values) &&
+          values.length > 0 &&
+          values.every((value) => typeof value === "string" && !value.startsWith("!")) &&
+          !values.includes(host) &&
+          !values.includes("any"),
+      );
+      if (incompatible) {
+        rmSync(target, { recursive: true });
+        removed.push(name);
+      }
+    }
+  }
+  return removed;
+}
+
 export function runBundledPluginPostinstall(params = {}) {
   const env = params.env ?? process.env;
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
@@ -371,6 +426,7 @@ export function runBundledPluginPostinstall(params = {}) {
     log,
   });
   restoreFsSafePrebuild(packageRoot, env, log);
+  pruneNonHostNativePayloads(packageRoot);
 }
 
 export function isDirectPostinstallInvocation(params = {}) {
