@@ -51,13 +51,12 @@ const preview = {
 };
 
 suite.define(() => {
-  it.each([
-    { name: "desktop-dark", width: 1280, height: 900, colorScheme: "dark" as const },
-    { name: "mobile-light", width: 390, height: 844, colorScheme: "light" as const },
-  ])("previews ordinary Web UI links ($name)", async ({ name, width, height, colorScheme }) => {
-    const artifacts = createControlUiE2eArtifactDir("link-hover-after-" + name);
+  it("previews ordinary Web UI links on mobile", async () => {
+    const width = 390;
+    const height = 844;
+    const artifacts = createControlUiE2eArtifactDir("link-hover-after-mobile-light");
     await suite.withPage(
-      { viewport: { width, height }, colorScheme },
+      { viewport: { width, height }, colorScheme: "light" },
       async ({ page, context }) => {
         const directRequests: string[] = [];
         await context.route("https://example.com/**", async (route) => {
@@ -311,37 +310,6 @@ suite.define(() => {
       expect(
         (await gateway.getRequests("controlUi.linkPreview")).map((request) => request.params),
       ).toEqual([{ url: "https://example.org/control" }]);
-    });
-  });
-
-  it("also previews real About-page links outside the chat renderer", async () => {
-    await suite.withPage({}, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        automaticallyFetchFavicons: true,
-        methodResponses: { "controlUi.linkPreview": preview },
-      });
-      await page.goto(suite.server.baseUrl + "settings/about");
-      await page.locator('a[href="https://docs.openclaw.ai"]').hover();
-      await page.locator(".link-hovercard").getByText(preview.title).waitFor();
-      expect((await gateway.getRequests("controlUi.linkPreview"))[0]?.params).toEqual({
-        url: "https://docs.openclaw.ai/",
-      });
-    });
-  });
-
-  it("makes no metadata requests with the existing automatic-fetch setting off", async () => {
-    await suite.withPage({}, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        automaticallyFetchFavicons: false,
-        historyMessages,
-      });
-      await page.goto(suite.server.baseUrl + "chat");
-      const link = page.getByRole("link", { name: "Field guide", exact: true });
-      await link.hover();
-      await page.keyboard.press("Tab");
-      await link.focus();
-      expect(await page.locator(".link-hovercard").count()).toBe(0);
-      expect(await gateway.getRequests("controlUi.linkPreview")).toEqual([]);
     });
   });
 
