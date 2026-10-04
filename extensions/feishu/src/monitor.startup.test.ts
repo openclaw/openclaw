@@ -9,6 +9,7 @@ import { resolveStartupProbeTimeoutMs } from "./monitor-startup-timeout.js";
 import { cleanupFeishuMonitorStateForTests } from "./monitor.cleanup.test-helpers.js";
 import { monitorFeishuProvider } from "./monitor.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
+import { botOpenIds } from "./monitor.state.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 const providerIdentity = { ok: true, appId: "cli_alpha", botOpenId: "bot_alpha", botName: "Alpha" };
@@ -107,6 +108,55 @@ afterAll(() => {
 });
 
 describe("Feishu monitor startup preflight", () => {
+  it("preserves the replacement identity when an aborted account probe finishes late", async () => {
+    const oldProbeStarted = createDeferred<void>();
+    const oldProbeResult = createDeferred<{ ok: boolean; error: string }>();
+    const replacementStarted = createDeferred<void>();
+    probeFeishuMock
+      .mockImplementationOnce(() => {
+        oldProbeStarted.resolve();
+        return oldProbeResult.promise;
+      })
+      .mockResolvedValue(providerIdentity);
+    createEventDispatcherMock.mockReturnValue({
+      register: vi.fn(() => replacementStarted.resolve()),
+    });
+    const oldAbort = new AbortController();
+    const replacementAbort = new AbortController();
+    const config = buildMultiAccountWebsocketConfig(["alpha"]);
+    const runtime = createNonExitingRuntimeEnv();
+    const oldMonitor = monitorFeishuProvider({
+      config,
+      accountId: "alpha",
+      runtime,
+      abortSignal: oldAbort.signal,
+    });
+    let replacementMonitor: Promise<void> | undefined;
+    try {
+      await oldProbeStarted.promise;
+      oldAbort.abort();
+      replacementMonitor = monitorFeishuProvider({
+        config,
+        accountId: "alpha",
+        runtime,
+        abortSignal: replacementAbort.signal,
+      });
+      await replacementStarted.promise;
+      expect(botOpenIds.get("alpha")).toBe("bot_alpha");
+
+      oldProbeResult.resolve({ ok: false, error: "probe aborted" });
+      await oldMonitor;
+
+      expect(botOpenIds.get("alpha")).toBe("bot_alpha");
+      expect(createEventDispatcherMock).toHaveBeenCalledTimes(1);
+    } finally {
+      oldProbeResult.resolve({ ok: false, error: "probe aborted" });
+      oldAbort.abort();
+      replacementAbort.abort();
+      await Promise.all([oldMonitor, replacementMonitor]);
+    }
+  });
+
   it("stops durable ingress when ingress start throws", async () => {
     const startError = new Error("durable ingress unavailable");
     const ingressStart = vi.fn(() => {
