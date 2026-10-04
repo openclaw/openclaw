@@ -43,13 +43,6 @@ export type DashboardGalleryHandlers = {
 
 type DashboardRow = SessionsListResult["sessions"][number];
 
-const DEFAULT_FILTERS: DashboardGalleryFilters = { query: "", ownerId: "", sort: "updated" };
-const NOOP_HANDLERS: DashboardGalleryHandlers = {
-  onQueryChange: () => undefined,
-  onOwnerChange: () => undefined,
-  onSortChange: () => undefined,
-};
-
 function dashboardAuthor(row: DashboardRow, fallbackAgentId: string) {
   const actor = row.createdActor ?? row.owner?.actor;
   const id = actor?.id?.trim() || row.agentId?.trim() || fallbackAgentId;
@@ -295,8 +288,8 @@ function renderDashboardGallerySkeleton() {
 
 export function renderDashboards(
   data: DashboardsRouteData | undefined,
-  filters: DashboardGalleryFilters = DEFAULT_FILTERS,
-  handlers: DashboardGalleryHandlers = NOOP_HANDLERS,
+  filters: DashboardGalleryFilters,
+  handlers: DashboardGalleryHandlers,
   gatewaySnapshot?: ApplicationGatewaySnapshot,
   previewError: string | null = null,
 ) {

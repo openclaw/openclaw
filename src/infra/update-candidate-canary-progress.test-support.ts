@@ -11,6 +11,7 @@ import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
 } from "../process/exec-result.js";
+import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -41,6 +42,7 @@ export function registerCanaryProgressWorkerTests(
 ) {
   it.each([
     "recorded",
+    "recorded-text",
     "reopened",
     "source-replaced",
     "revoked-at-commit",
@@ -51,6 +53,15 @@ export function registerCanaryProgressWorkerTests(
     async (outcome) => {
       const root = getRoot();
       stubHealthyGateway();
+      const json = outcome !== "recorded-text";
+      const stdout = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      const stderr = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const announcements: unknown[] = [];
+      const spawn = mocks.spawn.getMockImplementation()!;
+      mocks.spawn.mockImplementation((...args) => {
+        announcements.push((json ? stderr : stdout).mock.calls.at(-1)?.[0]);
+        return spawn(...args);
+      });
       let beforeInventory: Awaited<ReturnType<typeof readSqliteSidecarIdentities>> | undefined;
       let pressurePublished = false;
       const snapshot = mocks.snapshot.getMockImplementation()!;
@@ -171,7 +182,7 @@ export function registerCanaryProgressWorkerTests(
             assertCurrent: guards.assertCurrent,
             writeOptions,
           },
-          { opts: { json: true }, progress: { onStepComplete } },
+          { opts: { json }, progress: { onStepComplete } },
           run,
         ),
       );
@@ -244,6 +255,23 @@ export function registerCanaryProgressWorkerTests(
         expect(checkedCommit).toBe(true);
         const saved = await getUpdateRunAsync(run.runId, { env });
         expect(result.status).toBe("ok");
+        const checks = [
+          "candidate-doctor",
+          "candidate-doctor-lint",
+          "candidate-config",
+          "candidate-plugins",
+          "candidate-recovery",
+          "candidate-gateway-startup",
+        ];
+        expect(announcements).toEqual(
+          checks.map((name) => expect.stringMatching(new RegExp(`^${name}: \\S`))),
+        );
+        expect(json ? stdout : stderr).not.toHaveBeenCalled();
+        for (const step of checks) {
+          expect(saved?.steps).toContainEqual(
+            expect.objectContaining({ step, status: "in_progress" }),
+          );
+        }
         expect(saved?.steps).toContainEqual(
           expect.objectContaining({
             step: "candidate-state-snapshot",
@@ -271,6 +299,8 @@ export function registerCanaryProgressWorkerTests(
         prepare.mockRestore();
         exec.mockRestore();
         worker.mockRestore();
+        stdout.mockRestore();
+        stderr.mockRestore();
         // Effect guards still read recovery on the host; only ledger DML and worker admission are fenced here.
         expect(hostWrites).toEqual([]);
         expect(admissionSql).toEqual([]);

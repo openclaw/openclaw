@@ -205,26 +205,14 @@ export function attachEventBridge(
     });
   });
 
-  listen("system.message", (event) => {
-    if (!isRootSessionEvent(event) || event.ephemeral === true) {
-      return;
-    }
-    // System/developer prompts affect native history but AgentMessage has no
-    // lossless canonical role for them, so keep native replay fail-closed.
-    options.transcriptProjection?.journal.markReplayIncomplete();
-  });
-
-  listen("skill.invoked", (event) => {
-    if (isRootSessionEvent(event) && event.ephemeral !== true) {
-      options.transcriptProjection?.journal.markReplayIncomplete();
-    }
-  });
-
-  listen("system.notification", (event) => {
-    if (isRootSessionEvent(event) && event.ephemeral !== true) {
-      options.transcriptProjection?.journal.markReplayIncomplete();
-    }
-  });
+  // These native history events have no lossless AgentMessage projection.
+  for (const eventType of ["system.message", "skill.invoked", "system.notification"] as const) {
+    listen(eventType, (event) => {
+      if (isRootSessionEvent(event) && event.ephemeral !== true) {
+        options.transcriptProjection?.journal.markReplayIncomplete();
+      }
+    });
+  }
 
   listen("assistant.message_delta", (event) => {
     if (!isRootSessionEvent(event)) {

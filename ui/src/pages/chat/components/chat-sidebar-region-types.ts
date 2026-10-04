@@ -2,8 +2,6 @@ import { nothing, type TemplateResult } from "lit";
 import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
 import type { SidebarSlotId } from "../sidebar-layout.ts";
 
-export type SidebarPanelTemplates = Partial<Record<SidebarSlotId, TemplateResult | typeof nothing>>;
-
 export type SidebarPanelDefinition = {
   slot: SidebarSlotId;
   label: string;

@@ -41,17 +41,16 @@ function sanitizeBaseUrlForStatus(value: unknown): string | undefined {
   if (!raw) {
     return undefined;
   }
-  try {
-    const parsed = new URL(raw);
-    parsed.username = "";
-    parsed.password = "";
-    parsed.search = "";
-    parsed.hash = "";
-    const sanitized = parsed.toString().replace(/\/+$/, "");
-    return normalizeStatusDetail(sanitized, 120);
-  } catch {
+  const parsed = URL.parse(raw);
+  if (!parsed) {
     return "[invalid-url]";
   }
+  parsed.username = "";
+  parsed.password = "";
+  parsed.search = "";
+  parsed.hash = "";
+  const sanitized = parsed.toString().replace(/\/+$/, "");
+  return normalizeStatusDetail(sanitized, 120);
 }
 
 function isCustomOpenAiTtsBaseUrl(baseUrl: string | undefined): boolean {

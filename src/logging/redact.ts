@@ -23,6 +23,7 @@ import {
   type RedactionField,
   type RedactionOrigins,
 } from "./redact-json.js";
+import { LINEAR_MATCHER_SOURCES } from "./redact-linear-matchers.js";
 import {
   getSecretCaptureStart,
   selectSecretCapture,
@@ -31,6 +32,7 @@ import {
   readRedactMatch,
   redactPemBlock,
   replaceRedactPattern,
+  rewriteOpenEndedRepeats,
   type RedactMatch,
   type RedactPattern,
   type ResolvedRedactPattern,
@@ -75,9 +77,19 @@ const DEFAULT_REDACT_MIN_LENGTH = 18;
 const DEFAULT_REDACT_KEEP_START = 6;
 const DEFAULT_REDACT_KEEP_END = 4;
 const shellReferencePreservingPatterns = new WeakSet<ResolvedRedactPattern>();
+// Built-in resolved patterns scan whole text; only operator-configured regexes use the
+// bounded chunked scan, whose cost on operator expressions is the measured safeguard.
+const builtInResolvedPatterns = new WeakSet<ResolvedRedactPattern>();
 // Patterns whose left-context assertions or complete token can cross a chunk boundary must run
 // against the full string; chunking can invent a `^` boundary or split the secret itself.
 const chunkUnsafePatterns = new WeakSet<ResolvedRedactPattern>();
+// Canonical built-in sources are the only expressions the repeat rewriter optimizes; every
+// operator-configured source compiles unmodified so its exact legacy language is preserved.
+const canonicalBuiltInSources = new Set<string>(
+  [...DEFAULT_REDACT_PATTERNS, ...TOOL_PAYLOAD_REDACT_PATTERNS].filter(
+    (entry): entry is string => typeof entry === "string",
+  ),
+);
 const formAwareEqualsAssignmentPatterns = new WeakSet<ResolvedRedactPattern>();
 const sourceAssignmentPatterns = new WeakSet<ResolvedRedactPattern>();
 let defaultResolvedPatterns: ResolvedRedactPattern[] | undefined;
@@ -159,6 +171,29 @@ function parsePattern(raw: RedactPattern): ResolvedRedactPattern | null {
   if (raw === PEM_REDACT_PATTERN_SOURCE) {
     return PEM_REDACT_MATCHER;
   }
+  if (typeof raw === "string") {
+    // Default sources with quadratic regex cost compile to linear matchers with identical
+    // match semantics; the source string stays the rule's identity for config and exports.
+    const linear = LINEAR_MATCHER_SOURCES.get(raw);
+    if (linear) {
+      // Register the returned matcher under the same policies the regex path would apply to
+      // its compiled pattern; otherwise the early return silently drops shell-reference
+      // preservation, form-aware splitting, and chunk-unsafe carve-outs for these rules.
+      if (SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES.has(raw)) {
+        shellReferencePreservingPatterns.add(linear);
+      }
+      if (TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS.has(raw)) {
+        sourceAssignmentPatterns.add(linear);
+      }
+      if (FORM_AWARE_EQUALS_ASSIGNMENT_PATTERN_SOURCES.has(raw)) {
+        formAwareEqualsAssignmentPatterns.add(linear);
+      }
+      if (raw.startsWith(IDENTIFIER_SAFE_TOKEN_BOUNDARY) || CHUNK_UNSAFE_PATTERN_SOURCES.has(raw)) {
+        chunkUnsafePatterns.add(linear);
+      }
+      return linear;
+    }
+  }
   if (typeof raw !== "string" && !(raw instanceof RegExp)) {
     if (AMBIGUOUS_ASSIGNMENT_MATCHERS.has(raw)) {
       sourceAssignmentPatterns.add(raw);
@@ -173,7 +208,16 @@ function parsePattern(raw: RedactPattern): ResolvedRedactPattern | null {
       pattern = new RegExp(raw.source, `${raw.flags}g`);
     }
   } else if (raw.trim()) {
-    pattern = compileConfigRegex(...parseRedactPatternSource(raw))?.regex ?? null;
+    const [source, flags] = parseRedactPatternSource(raw);
+    // Open-ended repeats on canonical built-in flat single-character atoms compile without
+    // one backtrack stack entry per repetition, so multi-megabyte values no longer overflow
+    // the regex stack. Operator-configured sources compile unmodified: legacy escape and
+    // class boundaries parse their atoms in ways the rewriter does not model, so rewriting
+    // them could silently change the configured pattern's language.
+    const optimized = canonicalBuiltInSources.has(raw)
+      ? rewriteOpenEndedRepeats(source, flags)
+      : source;
+    pattern = compileConfigRegex(optimized, flags)?.regex ?? null;
   }
   if (pattern && typeof raw === "string" && SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES.has(raw)) {
     shellReferencePreservingPatterns.add(pattern);
@@ -199,20 +243,48 @@ function resolvePatterns(value?: readonly RedactPattern[]): ResolvedRedactPatter
     toolPayloadResolvedPatterns ??= TOOL_PAYLOAD_REDACT_PATTERNS.map(parsePattern).filter(
       (re): re is ResolvedRedactPattern => Boolean(re),
     );
+    for (const re of toolPayloadResolvedPatterns) {
+      builtInResolvedPatterns.add(re);
+    }
     return toolPayloadResolvedPatterns;
   }
   if (!value?.length || value === DEFAULT_REDACT_PATTERNS) {
     defaultResolvedPatterns ??= DEFAULT_REDACT_PATTERNS.map(parsePattern).filter(
       (re): re is ResolvedRedactPattern => Boolean(re),
     );
+    for (const re of defaultResolvedPatterns) {
+      builtInResolvedPatterns.add(re);
+    }
     return defaultResolvedPatterns;
   }
-  return [
-    ...new Set([
-      ...value.map(parsePattern).filter((re): re is ResolvedRedactPattern => Boolean(re)),
-      AWS_SECRET_ACCESS_KEY_MATCHER,
-    ]),
-  ];
+  // Combined policies: operator patterns composed with the canonical default arrays. Rule
+  // identity decides provenance, not array identity: each raw entry that is itself a canonical
+  // built-in rule keeps whole-text scanning, while actual operator rules keep bounded scanning.
+  // Provenance is marked on the same object instances the combined array holds, so resolve in
+  // one pass and mark at parse time (parsePattern returns a fresh RegExp per call).
+  const builtInRawSet = new Set<RedactPattern>([
+    ...DEFAULT_REDACT_PATTERNS,
+    ...TOOL_PAYLOAD_REDACT_PATTERNS,
+  ]);
+  const seen = new Set<ResolvedRedactPattern>();
+  const combined: ResolvedRedactPattern[] = [];
+  for (const raw of value) {
+    const resolved = parsePattern(raw);
+    if (resolved === null) {
+      continue;
+    }
+    if (builtInRawSet.has(raw)) {
+      builtInResolvedPatterns.add(resolved);
+    }
+    if (!seen.has(resolved)) {
+      seen.add(resolved);
+      combined.push(resolved);
+    }
+  }
+  if (!seen.has(AWS_SECRET_ACCESS_KEY_MATCHER)) {
+    combined.push(AWS_SECRET_ACCESS_KEY_MATCHER);
+  }
+  return combined;
 }
 
 function usesBuiltInRedactPatterns(value?: readonly RedactPattern[]): boolean {
@@ -222,9 +294,6 @@ function usesBuiltInRedactPatterns(value?: readonly RedactPattern[]): boolean {
 }
 
 function maskToken(token: string): string {
-  if (token === "***") {
-    return token;
-  }
   if (token.length < DEFAULT_REDACT_MIN_LENGTH) {
     return "***";
   }
@@ -674,10 +743,15 @@ export function redactText(
     const replace = (match: RedactMatch) =>
       redactMatch(match, pattern, options?.preserveSourceAssignment);
     const replaceRegex = (...args: unknown[]) => replace(readRedactMatch(args));
-    // Each replacement finishes synchronously before this invocation advances its pattern.
+    // Built-in rules (linear matchers and regexes) scan whole text: chunking missed
+    // credentials that straddled a boundary. Operator-configured regexes keep the bounded
+    // chunked scan, whose cost on operator expressions is the measured safeguard.
     for (pattern of patterns) {
       next =
-        pattern instanceof RegExp && !options?.fullContext && !chunkUnsafePatterns.has(pattern)
+        pattern instanceof RegExp &&
+        !options?.fullContext &&
+        !builtInResolvedPatterns.has(pattern) &&
+        !chunkUnsafePatterns.has(pattern)
           ? replacePatternBounded(next, pattern, replaceRegex)
           : replaceRedactPattern(next, pattern, replace, replaceRegex);
     }
@@ -745,7 +819,7 @@ function looksLikeAppSpecificPassword(candidate: string): boolean {
 }
 
 function redactAppSpecificPasswords(text: string): string {
-  return replacePatternBounded(text, APP_SPECIFIC_PASSWORD_RE, (match: string, token: string) =>
+  return text.replace(APP_SPECIFIC_PASSWORD_RE, (match: string, token: string) =>
     looksLikeAppSpecificPassword(token) ? maskToken(token) : match,
   );
 }

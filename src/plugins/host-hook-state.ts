@@ -63,25 +63,6 @@ function isExpired(entry: unknown, now: number) {
   return entry.ttlMs !== undefined && now - entry.createdAt > entry.ttlMs;
 }
 
-function toPluginNextTurnInjectionRecord(params: {
-  pluginId: string;
-  pluginName?: string;
-  injection: PluginNextTurnInjection;
-  now: number;
-}): PluginNextTurnInjectionRecord {
-  return {
-    id: params.injection.idempotencyKey?.trim() || randomUUID(),
-    pluginId: params.pluginId,
-    pluginName: params.pluginName,
-    text: params.injection.text,
-    idempotencyKey: params.injection.idempotencyKey?.trim() || undefined,
-    placement: params.injection.placement ?? "prepend_context",
-    ttlMs: params.injection.ttlMs,
-    createdAt: params.now,
-    metadata: params.injection.metadata,
-  };
-}
-
 export async function enqueuePluginNextTurnInjection(params: {
   cfg: OpenClawConfig;
   pluginId: string;
@@ -111,12 +92,18 @@ export async function enqueuePluginNextTurnInjection(params: {
     return { enqueued: false, id: "", sessionKey };
   }
   const now = params.now ?? Date.now();
-  const record = toPluginNextTurnInjectionRecord({
+  const injection = { ...params.injection };
+  const record: PluginNextTurnInjectionRecord = {
+    id: injection.idempotencyKey?.trim() || randomUUID(),
     pluginId: params.pluginId,
     pluginName: params.pluginName,
-    injection: { ...params.injection, sessionKey, text },
-    now,
-  });
+    text,
+    idempotencyKey: injection.idempotencyKey?.trim() || undefined,
+    placement: injection.placement ?? "prepend_context",
+    ttlMs: injection.ttlMs,
+    createdAt: now,
+    metadata: injection.metadata,
+  };
   const scope = { cfg: params.cfg, sessionKey, agentId: params.injection.agentId };
   const updated = await updateResolvedSessionEntry(scope, (entry) => {
     const injections = { ...entry.pluginNextTurnInjections };

@@ -85,48 +85,54 @@ describe("background work admission", () => {
     expect(reads).toBeLessThanOrEqual(1_000);
   });
 
-  it("registers lazily and checks the current width without replacing matching owners", () => {
-    const owner = createBackgroundWorkOwner({ owner: "  core:current-width  ", maxConcurrent: 1 });
-    const state = getQueueState();
-    expect(state.lanes.size).toBe(0);
-    expect(state.laneGroups.size).toBe(0);
-    const lane = "background:core:current-width";
-    expect(owner.lane).toBe(lane);
-    const registered = state.lanes.get(lane);
-    const group = state.laneGroups.get("background-work");
-    expect(registered?.maxConcurrent).toBe(1);
-    expect([...group!.members]).toEqual([lane]);
-    expect(createBackgroundWorkOwner({ owner: "core:current-width", maxConcurrent: 1 }).lane).toBe(
-      lane,
-    );
-    for (const width of [0, 2, 3]) {
-      publishLaneConfiguration({ lanes: { [lane]: width } });
-      expect(() => owner.lane).toThrow("already registered with different concurrency");
-      expect(state.lanes.get(lane)).toBe(registered);
-      expect(registered?.maxConcurrent).toBe(width);
-      expect(state.laneGroups.get("background-work")).toBe(group);
-    }
-    publishLaneConfiguration({ lanes: { [lane]: 1 } });
-    expect(owner.lane).toBe(lane);
-    expect(state.lanes.get(lane)).toBe(registered);
-    expect(state.laneGroups.get("background-work")).toBe(group);
-  });
-
-  it.each([1, 2, 3])("keeps group-only membership lazy for owner width %s", (maxConcurrent) => {
-    const lane = "background:core:group-only";
-    publishLaneConfiguration({ groups: { "background-work": { budget: 3, members: [lane] } } });
-    const state = getQueueState();
-    const group = state.laneGroups.get("background-work");
-    const owner = createBackgroundWorkOwner({ owner: "core:group-only", maxConcurrent });
-    if (maxConcurrent === 1) {
+  it.each([
+    { groupOnly: false, maxConcurrent: 1 },
+    { groupOnly: true, maxConcurrent: 1 },
+    { groupOnly: true, maxConcurrent: 2 },
+  ])(
+    "registers lazily against current width $maxConcurrent (group-only=$groupOnly)",
+    ({ groupOnly, maxConcurrent }) => {
+      const lane = "background:core:current-width";
+      if (groupOnly) {
+        publishLaneConfiguration({ groups: { "background-work": { budget: 3, members: [lane] } } });
+      }
+      const state = getQueueState();
+      const owner = createBackgroundWorkOwner({ owner: "  core:current-width  ", maxConcurrent });
+      expect(state.lanes.size).toBe(0);
+      if (groupOnly) {
+        const group = state.laneGroups.get("background-work");
+        if (maxConcurrent === 1) {
+          expect(owner.lane).toBe(lane);
+        } else {
+          expect(() => owner.lane).toThrow("already registered with different concurrency");
+        }
+        expect(state.lanes.size).toBe(0);
+        expect(state.laneGroups.get("background-work")).toBe(group);
+        expect([...group!.members]).toEqual([lane]);
+        return;
+      }
+      expect(state.laneGroups.size).toBe(0);
       expect(owner.lane).toBe(lane);
-    } else {
-      expect(() => owner.lane).toThrow("already registered with different concurrency");
-    }
-    expect(state.lanes.size).toBe(0);
-    expect(state.laneGroups.get("background-work")).toBe(group);
-    expect([...group!.members]).toEqual([lane]);
-  });
+      const registered = state.lanes.get(lane);
+      const group = state.laneGroups.get("background-work");
+      expect(registered?.maxConcurrent).toBe(1);
+      expect([...group!.members]).toEqual([lane]);
+      expect(
+        createBackgroundWorkOwner({ owner: "core:current-width", maxConcurrent: 1 }).lane,
+      ).toBe(lane);
+      for (const width of [0, 2]) {
+        publishLaneConfiguration({ lanes: { [lane]: width } });
+        expect(() => owner.lane).toThrow("already registered with different concurrency");
+        expect(state.lanes.get(lane)).toBe(registered);
+        expect(registered?.maxConcurrent).toBe(width);
+        expect(state.laneGroups.get("background-work")).toBe(group);
+      }
+      publishLaneConfiguration({ lanes: { [lane]: 1 } });
+      expect(owner.lane).toBe(lane);
+      expect(state.lanes.get(lane)).toBe(registered);
+      expect(state.laneGroups.get("background-work")).toBe(group);
+    },
+  );
 
   it("reads absent and empty background groups without creating lanes", () => {
     const expected = {
@@ -243,55 +249,46 @@ describe("background work admission", () => {
     }
   });
 
-  it("reports queued work in a paused background lane as lane-blocked", async () => {
-    const lane = "background:paused";
-    publishLaneConfiguration({
-      lanes: { [lane]: 0 },
-      groups: { "background-work": { budget: 3, members: [lane] } },
-    });
-    const queued = enqueueCommandInLane(lane, async () => "resumed");
-    try {
-      expect(getBackgroundWorkSnapshot()).toEqual({
-        lane: CommandLane.Background,
-        activeCount: 0,
-        queuedCount: 1,
-        maxConcurrent: 3,
-        draining: false,
-        generation: 0,
-        blockedBy: "lane",
+  it.each(["paused", "reserved"] as const)(
+    "reports aggregate blocking with a %s lane",
+    async (mode) => {
+      const lane = "background:waiting";
+      const reserved = "background:reserved";
+      const members = [lane, reserved];
+      publishLaneConfiguration({
+        lanes: { [lane]: mode === "paused" ? 0 : 1 },
+        groups: {
+          "background-work": {
+            budget: 3,
+            members,
+            reservations: { [reserved]: mode === "reserved" ? 3 : 0 },
+          },
+        },
       });
-    } finally {
-      publishLaneConfiguration({ lanes: { [lane]: 1 } });
-      await queued;
-    }
-  });
-
-  it("keeps sibling reservations out of the background aggregate block reason", async () => {
-    const waiting = "background:waiting";
-    const reserved = "background:reserved";
-    const members = [waiting, reserved];
-    publishLaneConfiguration({
-      lanes: { [waiting]: 1 },
-      groups: { "background-work": { budget: 3, members, reservations: { [reserved]: 3 } } },
-    });
-    const queued = enqueueCommandInLane(waiting, async () => "unreserved");
-    try {
-      expect(getCommandLaneSnapshot(waiting).blockedBy).toBe("sibling-reservation");
-      expect(getBackgroundWorkSnapshot()).toEqual({
-        lane: CommandLane.Background,
-        activeCount: 0,
-        queuedCount: 1,
-        maxConcurrent: 3,
-        draining: false,
-        generation: 0,
-        blockedBy: null,
-      });
-      expect(getQueueState().lanes.has(reserved)).toBe(false);
-    } finally {
-      publishLaneConfiguration({ groups: { "background-work": { budget: 3, members } } });
-      await queued;
-    }
-  });
+      const queued = enqueueCommandInLane(lane, async () => "resumed");
+      try {
+        expect(getCommandLaneSnapshot(lane).blockedBy).toBe(
+          mode === "paused" ? "lane" : "sibling-reservation",
+        );
+        expect(getBackgroundWorkSnapshot()).toEqual({
+          lane: CommandLane.Background,
+          activeCount: 0,
+          queuedCount: 1,
+          maxConcurrent: 3,
+          draining: false,
+          generation: 0,
+          blockedBy: mode === "paused" ? "lane" : null,
+        });
+        expect(getQueueState().lanes.has(reserved)).toBe(false);
+      } finally {
+        publishLaneConfiguration({
+          lanes: { [lane]: 1 },
+          groups: { "background-work": { budget: 3, members } },
+        });
+        await queued;
+      }
+    },
+  );
 
   it("preserves admission draining and the newest generation across real lane resets", async () => {
     const lane = "background:reset";

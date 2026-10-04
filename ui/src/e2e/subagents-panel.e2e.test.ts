@@ -1,8 +1,13 @@
 import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { CommandPaletteTargetDetail } from "../components/command-palette-contract.ts";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledGatewayUrl,
+  controlUiSessionUrl,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -12,6 +17,35 @@ const previewModel = {
   agentModel: "openai/gpt-4.1",
   models: [{ id: "gpt-4.1", name: "Preview model", provider: "openai" }],
 };
+
+const recoveryDraft = "Summarize the notice review results.";
+
+async function seedRecoverableDraft(page: Page) {
+  await page.addInitScript(
+    ({ gatewayUrl, draft }) => {
+      if (sessionStorage.getItem("subagent-recovery-seeded")) {
+        return;
+      }
+      sessionStorage.setItem("subagent-recovery-seeded", "yes");
+      sessionStorage.setItem(
+        "openclaw.control.chatComposer.v4:" + encodeURIComponent(gatewayUrl),
+        JSON.stringify({
+          version: 4,
+          gatewayOwner: gatewayUrl,
+          sessions: {
+            "global\u0000agent:main": {
+              updatedAt: 1790955600000,
+              draftRevision: 43,
+              draft,
+            },
+          },
+          recovery: {},
+        }),
+      );
+    },
+    { gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl), draft: recoveryDraft },
+  );
+}
 
 function scenario() {
   const now = Date.now();
@@ -158,6 +192,7 @@ suite.define(() => {
             },
           },
         });
+        await seedRecoverableDraft(page);
         await page.addInitScript(() => {
           window.addEventListener("openclaw-command-palette-target", (event) => {
             const { owner, onSlashCommand } = (event as CustomEvent<CommandPaletteTargetDetail>)
@@ -171,6 +206,8 @@ suite.define(() => {
         const parentPane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
         const draft = parentPane.locator(".agent-chat__composer-combobox textarea");
         await draft.fill("Keep this parent draft");
+        const recovery = parentPane.locator(".chat-outbox-recovery-row");
+        await recovery.getByText(recoveryDraft, { exact: true }).waitFor();
         if (capture) {
           await page.screenshot({ path: path.join(suite.artifactDir, "parent-before-panel.png") });
         }
@@ -252,6 +289,10 @@ suite.define(() => {
             path: path.join(suite.artifactDir, "subagent-panel-detail.png"),
           });
         }
+        expect(await detail.locator("openclaw-chat-outbox-recovery").count()).toBe(0);
+        expect(await recovery.count()).toBe(1);
+        await recovery.getByRole("button", { name: "Restore", exact: true }).waitFor();
+        await recovery.getByRole("button", { name: "Delete", exact: true }).waitFor();
         for (const summary of await detail.locator(".chat-activity-group__summary").all()) {
           if ((await summary.getAttribute("aria-expanded")) === "false") {
             await summary.click();
@@ -418,6 +459,7 @@ suite.define(() => {
               },
             },
           });
+          await seedRecoverableDraft(page);
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, child.key));
           const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
           const notice = pane.locator(".agent-chat__disabled-banner--replacement");
@@ -429,6 +471,7 @@ suite.define(() => {
             });
           }
           expect(await pane.locator(".agent-chat__composer-combobox textarea").count()).toBe(0);
+          expect(await pane.locator("openclaw-chat-outbox-recovery").count()).toBe(0);
           await pane.getByRole("button", { name: "Stop generating", exact: true }).waitFor();
           expect(
             await notice.getByRole("button", { name: "Stop generating", exact: true }).count(),
@@ -442,6 +485,10 @@ suite.define(() => {
           await notice.getByRole("button", { name: "Open parent session", exact: true }).click();
           await pane.getByText("Parent conversation.", { exact: true }).waitFor();
           await pane.locator(".agent-chat__composer-combobox textarea").waitFor();
+          await pane
+            .locator(".chat-outbox-recovery-row")
+            .getByText(recoveryDraft, { exact: true })
+            .waitFor();
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         },
       );

@@ -50,10 +50,12 @@ vi.mock("./store.js", async (importOriginal) => ({
   resolvePersistedAuthProfileOwnerAgentDir: (await import("./usage-fixture.test-support.js"))
     .storeMocks.resolvePersistedAuthProfileOwnerAgentDir,
 }));
+// mock-isolation: Exercise quota planning and the real reducer without persistence workers.
 vi.mock("./usage-write.js", async () => ({
   withAuthProfileUsage: (await import("./usage-fixture.test-support.js")).usageMocks
     .withAuthProfileUsage,
 }));
+// mock-isolation: Keep native auth-store I/O outside the in-memory quota fixture.
 vi.mock("./store-runtime.js", async () => {
   const { storeMocks: mocks } = await import("./usage-fixture.test-support.js");
   return {

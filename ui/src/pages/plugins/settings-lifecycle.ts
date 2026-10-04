@@ -3,13 +3,12 @@ import { icons } from "../../components/icons.ts";
 import { renderReasonedDisabledControl } from "../../components/reasoned-disabled-control.ts";
 import { t } from "../../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
-import type { PluginCatalogItem, PluginsInspectResult } from "../../lib/plugins/index.ts";
+import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { renderPluginAskAction } from "./overview.ts";
 import { pluginRowKey } from "./plugin-row-message.ts";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
 
 type PluginLifecycleProps = {
-  inspection: PluginsInspectResult | null;
   mutationBlockedReason: string | null;
   canMutate: boolean;
   busy: Readonly<Record<string, PluginMutationAction>>;

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -24,7 +25,282 @@ import {
   writeAuditRestoreJournal,
 } from "./state-migrations.audit.test-support.js";
 
+async function auditMoveFault(audit: AuditMigrationFixture, code = "EINVAL") {
+  const nativeModule = (await import(
+    new URL("native.js", import.meta.resolve("@openclaw/fs-safe/root")).href
+  )) as {
+    requireNativeBinding(): {
+      renameNoReplace(...args: unknown[]): void;
+      linkBeneath(...args: unknown[]): void;
+    };
+  };
+  const native = nativeModule.requireNativeBinding();
+  const rename = native.renameNoReplace.bind(native);
+  const sources = new Set(
+    [audit.config, audit.system].flatMap(({ source, claim, raw }) =>
+      [source, claim, raw, `${raw}.doctor-scrub-staging`].map((entry) => path.basename(entry)),
+    ),
+  );
+  const renameSpy = vi.spyOn(native, "renameNoReplace").mockImplementation((...args) => {
+    if (typeof args[1] === "string" && sources.has(args[1])) {
+      throw Object.assign(new Error(`rename no-replace unavailable: ${code}`), { code });
+    }
+    return rename(...args);
+  });
+  return { native, renameSpy };
+}
+
 describe("legacy core audit log migration", () => {
+  it.each(["EINVAL", "ENOSYS", "EOPNOTSUPP"])(
+    "preserves open-descriptor appends when native no-replace rename returns %s",
+    async (code) => {
+      await withAuditMigrationFixture(async (audit) => {
+        const { source, claim, raw, sanitized } = audit.config;
+        await audit.writeJsonLines(source, [configAuditRecord("original")]);
+        const predecessor = await fs.open(source, "a");
+        const identity = await predecessor.stat();
+        const { renameSpy } = await auditMoveFault(audit, code);
+        try {
+          const migrated = await audit.migrate();
+          expect(migrated.warnings).toEqual([]);
+          expect(await fs.stat(raw)).toMatchObject({
+            dev: identity.dev,
+            ino: identity.ino,
+            nlink: 1,
+          });
+          await expect(fs.access(source)).rejects.toMatchObject({ code: "ENOENT" });
+          await expect(fs.access(claim)).rejects.toMatchObject({ code: "ENOENT" });
+          const later = configAuditRecord("late-descriptor-row", {
+            ts: "2026-07-04T00:00:00.000Z",
+          });
+          await predecessor.appendFile(`${JSON.stringify(later)}\n`);
+          await predecessor.sync();
+          await expect(fs.readFile(raw, "utf8")).resolves.toContain("late-descriptor-row");
+
+          const recovered = await audit.migrate();
+          expect(recovered.warnings).toEqual([]);
+          expect(audit.configRecords()).toHaveLength(2);
+          const rows = await audit.readJsonLines<{ ts: string }>(sanitized);
+          expect(rows.map((row) => row.ts)).toEqual([
+            "2026-07-01T00:00:00.000Z",
+            "2026-07-04T00:00:00.000Z",
+          ]);
+          expect(audit.detect().hasLegacy).toBe(false);
+          expect((await audit.migrate()).changes).toEqual([]);
+          expect(audit.configRecords()).toHaveLength(2);
+        } finally {
+          renameSpy.mockRestore();
+          await predecessor.close();
+        }
+      });
+    },
+  );
+
+  it.each(["EPERM", "EXDEV", "EMLINK"])(
+    "warns and continues independent audit migration when hard links return %s",
+    async (code) => {
+      await withAuditMigrationFixture(async (audit) => {
+        const { source, claim, raw, sanitized } = audit.config;
+        const original = `${JSON.stringify(configAuditRecord("retained-original"))}\n`;
+        await audit.write(source, original);
+        const identity = await fs.stat(source);
+        await audit.writeJsonLines(audit.system.source, [systemAuditEvent("Independent source")]);
+        const { native, renameSpy } = await auditMoveFault(audit);
+        const link = native.linkBeneath.bind(native);
+        const linkSpy = vi.spyOn(native, "linkBeneath").mockImplementation((...args) => {
+          if (args[1] === path.basename(source)) {
+            throw Object.assign(new Error(`hard links unavailable: ${code}`), { code });
+          }
+          return link(...args);
+        });
+        try {
+          const result = await audit.migrate();
+          expect(result.warningDisposition).toBe("recoverable");
+          expect(result.warnings.join("\n")).toContain(source);
+          expect(result.warnings.join("\n")).toMatch(/filesystem|hard.link/iu);
+          expect(result.warnings.join("\n")).toContain("openclaw doctor --fix");
+          expect(result.warnings.join("\n")).toContain("OPENCLAW_STATE_DIR=");
+          expect(result.warnings.join("\n")).toContain(audit.stateDir);
+          await expect(fs.readFile(source, "utf8")).resolves.toBe(original);
+          expect(await fs.stat(source)).toMatchObject({ dev: identity.dev, ino: identity.ino });
+          for (const absent of [claim, raw, sanitized]) {
+            await expect(fs.access(absent)).rejects.toMatchObject({ code: "ENOENT" });
+          }
+          expect(audit.configRecords()).toEqual([]);
+          expect(audit.systemSummaries()).toEqual(["Independent source"]);
+          await expect(fs.access(audit.system.source)).rejects.toMatchObject({ code: "ENOENT" });
+        } finally {
+          linkSpy.mockRestore();
+          renameSpy.mockRestore();
+        }
+      });
+    },
+  );
+
+  it.each(["archive", "journal"] as const)(
+    "retains audit bytes and continues after the %s hard-link move becomes unavailable",
+    async (phase) => {
+      await withAuditMigrationFixture(async (audit) => {
+        const { source, claim, raw } = audit.config;
+        const original = `${JSON.stringify(configAuditRecord("retained-during-move"))}\n`;
+        await audit.write(source, original);
+        await audit.writeJsonLines(audit.system.source, [systemAuditEvent("Independent source")]);
+        const { native, renameSpy } = await auditMoveFault(audit);
+        const rejectedSource = phase === "archive" ? claim : `${raw}.doctor-scrub-staging`;
+        const link = native.linkBeneath.bind(native);
+        const linkSpy = vi.spyOn(native, "linkBeneath").mockImplementation((...args) => {
+          if (args[1] === path.basename(rejectedSource)) {
+            throw Object.assign(new Error("hard links unavailable: EPERM"), { code: "EPERM" });
+          }
+          return link(...args);
+        });
+        try {
+          const result = await audit.migrate();
+          expect(result.warningDisposition).toBe("recoverable");
+          const warning = result.warnings.join("\n");
+          expect(warning).toContain(rejectedSource);
+          expect(warning).toContain("OPENCLAW_STATE_DIR=");
+          expect(warning).toContain(audit.stateDir);
+          expect(warning).toContain("openclaw doctor --fix");
+          await expect(fs.readFile(phase === "archive" ? claim : raw, "utf8")).resolves.toBe(
+            original,
+          );
+          expect(audit.systemSummaries()).toEqual(["Independent source"]);
+          expect(audit.configRecords()).toHaveLength(1);
+        } finally {
+          linkSpy.mockRestore();
+          renameSpy.mockRestore();
+        }
+
+        const retry = await audit.migrate();
+        expect(retry.warnings).toEqual([]);
+        expect(audit.configRecords()).toHaveLength(1);
+        expect(audit.systemSummaries()).toEqual(["Independent source"]);
+        expect(audit.detect().hasLegacy).toBe(false);
+        await expect(fs.access(source)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.access(claim)).rejects.toMatchObject({ code: "ENOENT" });
+        expect((await audit.migrate()).changes).toEqual([]);
+        expect(audit.configRecords()).toHaveLength(1);
+      });
+    },
+  );
+
+  it.each(["source/claim", "claim/raw", "source/raw", "journal"] as const)(
+    "recovers an interrupted %s hard-link pair exactly once",
+    async (pair) => {
+      await withAuditMigrationFixture(async (audit) => {
+        const { source, claim, raw, sanitized, restore } = audit.system;
+        const record = systemAuditEvent("Interrupted hard-link move");
+        const staging = `${raw}.doctor-scrub-staging`;
+        if (pair === "source/claim") {
+          await audit.writeJsonLines(source, [record]);
+          await fs.link(source, claim);
+        } else {
+          await audit.writeJsonLines(raw, [record]);
+          await audit.writeJsonLines(sanitized, [record]);
+          if (pair === "journal") {
+            await writeAuditRestoreJournal(raw, await fs.readFile(raw));
+            await fs.link(restore, staging);
+          } else {
+            await fs.link(raw, pair === "claim/raw" ? claim : source);
+          }
+        }
+
+        const result = await audit.migrate();
+        expect(result.warnings).toEqual([]);
+        expect(audit.systemSummaries()).toEqual([record.summary]);
+        expect(await fs.stat(raw)).toMatchObject({ nlink: 1 });
+        for (const absent of [source, claim, restore, staging, `${source}.migrated.2.raw`]) {
+          await expect(fs.access(absent)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        expect(audit.detect().hasLegacy).toBe(false);
+        expect((await audit.migrate()).changes).toEqual([]);
+        expect(audit.systemSummaries()).toEqual([record.summary]);
+      });
+    },
+  );
+
+  it("completes an interrupted quarantine link pair without re-importing or renaming it", async () => {
+    await withAuditMigrationFixture(async (audit) => {
+      const { source, raw, sanitized } = audit.config;
+      await audit.writeJsonLines(source, [configAuditRecord("original")]);
+      expect((await audit.migrate()).warnings).toEqual([]);
+      const retainedRecords = audit.configRecords();
+      const sanitizedBytes = await fs.readFile(sanitized);
+      const rewritten = `${JSON.stringify(configAuditRecord("rewritten"))}\n`;
+      await audit.write(raw, rewritten);
+      const quarantine = `${raw}.quarantined-2026-10-03T00-00-00-000Z-00000000-0000-4000-8000-000000000142`;
+      await fs.link(raw, quarantine);
+
+      const recovered = await audit.migrate();
+      expect(recovered.warningDisposition).toBe("recoverable");
+      expect(recovered.warnings).toEqual([expect.stringContaining(quarantine)]);
+      await expect(fs.access(raw)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readFile(quarantine, "utf8")).resolves.toBe(rewritten);
+      expect(await fs.stat(quarantine)).toMatchObject({ nlink: 1 });
+      await expect(fs.readFile(sanitized)).resolves.toEqual(sanitizedBytes);
+      expect(audit.configRecords()).toEqual(retainedRecords);
+      expect((await audit.migrate()).warnings).toEqual([]);
+      expect(
+        (await fs.readdir(path.dirname(raw))).filter((entry) => entry.includes(".quarantined-")),
+      ).toEqual([path.basename(quarantine)]);
+    });
+  });
+
+  it("never overwrites a distinct destination created during the hard-link fallback", async () => {
+    await withAuditMigrationFixture(async (audit) => {
+      const { source, claim } = audit.config;
+      const original = `${JSON.stringify(configAuditRecord("source-owner"))}\n`;
+      const competing = `${JSON.stringify(configAuditRecord("destination-owner"))}\n`;
+      await audit.write(source, original);
+      const { native, renameSpy } = await auditMoveFault(audit);
+      const link = native.linkBeneath.bind(native);
+      const linkSpy = vi.spyOn(native, "linkBeneath").mockImplementation((...args) => {
+        if (args[1] === path.basename(source)) {
+          writeFileSync(claim, competing, { flag: "wx" });
+        }
+        return link(...args);
+      });
+      try {
+        const result = await audit.migrate();
+        expect(result.warnings.length).toBeGreaterThan(0);
+        expect(result.changes).toEqual([]);
+        await expect(fs.readFile(source, "utf8")).resolves.toBe(original);
+        await expect(fs.readFile(claim, "utf8")).resolves.toBe(competing);
+        expect(audit.configRecords()).toEqual([]);
+      } finally {
+        linkSpy.mockRestore();
+        renameSpy.mockRestore();
+      }
+    });
+  });
+
+  it.each(["unrecognized pair", "third link"])(
+    "preserves an audit source with %s instead of accepting arbitrary hard links",
+    async (mode) => {
+      await withAuditMigrationFixture(async (audit) => {
+        const { source, claim } = audit.system;
+        const original = `${JSON.stringify(systemAuditEvent("Unclaimed shared inode"))}\n`;
+        await audit.write(source, original);
+        const unrelated = path.join(audit.stateDir, "unrelated-audit-link");
+        await fs.link(source, unrelated);
+        if (mode === "third link") {
+          await fs.link(source, claim);
+        }
+
+        const result = await audit.migrate();
+        expect(result.warnings.length).toBeGreaterThan(0);
+        expect(result.changes).toEqual([]);
+        await expect(fs.readFile(source, "utf8")).resolves.toBe(original);
+        await expect(fs.readFile(unrelated, "utf8")).resolves.toBe(original);
+        expect(audit.systemEntries()).toEqual([]);
+        if (mode === "third link") {
+          await expect(fs.readFile(claim, "utf8")).resolves.toBe(original);
+        }
+      });
+    },
+  );
+
   it("imports config and system audit JSONL only through explicit doctor repair", async () => {
     await withAuditMigrationFixture(async (audit) => {
       const { source: configPath } = audit.config;

@@ -146,22 +146,20 @@ function isValidMemoryProviderCapabilities(
   );
 }
 
-function ensureMemoryRuntime(params?: {
+function ensureMemoryRuntime(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): MemoryRuntimeOwner | undefined {
   const current = getMemoryRuntime();
   const currentProviderRuntime = getMemoryProviderRuntime();
   assertMemoryProviderRuntime(currentProviderRuntime);
-  if (current || currentProviderRuntime || !params) {
-    return current || currentProviderRuntime
-      ? {
-          runtime: current,
-          providerRuntime: currentProviderRuntime,
-          providerId: getMemoryCapabilityRegistration()?.pluginId,
-          searchRuntimeRegistered: true,
-        }
-      : undefined;
+  if (current || currentProviderRuntime) {
+    return {
+      runtime: current,
+      providerRuntime: currentProviderRuntime,
+      providerId: getMemoryCapabilityRegistration()?.pluginId,
+      searchRuntimeRegistered: true,
+    };
   }
   const onlyPluginIds = resolveMemoryRuntimePluginIds(params.cfg);
   if (onlyPluginIds.length === 0) {

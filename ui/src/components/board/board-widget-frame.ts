@@ -43,14 +43,12 @@ function resolveBoardFrameFailureMessage(
   widget: Pick<BoardWidget, "sandboxOrigin">,
   resolvedSandboxOrigin: string,
 ): string {
-  if (!widget.sandboxOrigin && resolvedSandboxOrigin) {
-    try {
-      if (!isLoopbackHostname(new URL(resolvedSandboxOrigin).hostname)) {
-        return t("board.widget.sandboxOriginRequired");
-      }
-    } catch {
-      // Fall through to the generic message for unparseable origins.
-    }
+  if (
+    !widget.sandboxOrigin &&
+    resolvedSandboxOrigin &&
+    !isLoopbackHostname(new URL(resolvedSandboxOrigin).hostname)
+  ) {
+    return t("board.widget.sandboxOriginRequired");
   }
   return t("board.widget.frameAuthorizationFailed");
 }
@@ -153,8 +151,6 @@ export class BoardWidgetFrameLifecycle {
   private boardHostNonce = "";
   private keyboardHostNonce = "";
   private lastFrameUrl = "";
-  private messageListening = false;
-  private visibilityListening = false;
   private sandboxOrigin = "";
   private sandboxHost: BoardWidgetSandboxHost | null = null;
   private contentVisible = false;
@@ -173,13 +169,9 @@ export class BoardWidgetFrameLifecycle {
   }
 
   connect(): void {
-    if (!this.messageListening) {
-      window.addEventListener("message", this.handleWindowMessage);
-      this.messageListening = true;
-    }
-    if (this.host.active() && !this.visibilityListening) {
+    window.addEventListener("message", this.handleWindowMessage);
+    if (this.host.active()) {
       document.addEventListener("visibilitychange", this.handleVisibilityChange);
-      this.visibilityListening = true;
     }
     installWidgetThemeObserver();
   }
@@ -187,10 +179,7 @@ export class BoardWidgetFrameLifecycle {
   disconnect(): void {
     this.resetPresentation();
     this.stopWork();
-    if (this.messageListening) {
-      window.removeEventListener("message", this.handleWindowMessage);
-      this.messageListening = false;
-    }
+    window.removeEventListener("message", this.handleWindowMessage);
     this.sandboxHost?.dispose();
     this.sandboxHost = null;
   }
@@ -202,10 +191,7 @@ export class BoardWidgetFrameLifecycle {
 
   private stopWork(): void {
     this.confirmation.cancel();
-    if (this.visibilityListening) {
-      document.removeEventListener("visibilitychange", this.handleVisibilityChange);
-      this.visibilityListening = false;
-    }
+    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.ticketRefresh.reset();
   }
 
@@ -230,7 +216,7 @@ export class BoardWidgetFrameLifecycle {
       this.resetFailures(false);
       return;
     }
-    if (!current || !this.error) {
+    if (!this.error) {
       return;
     }
     const nextFrameUrl = this.host.resolveFrameUrl()?.(current.name, current.revision) ?? "";
@@ -668,11 +654,7 @@ export class BoardWidgetFrameLifecycle {
     if (!widget?.viewTicket || event.origin !== this.sandboxOrigin) {
       return;
     }
-    const sandboxHost = this.syncSandboxHost(frame, widget);
-    if (!sandboxHost) {
-      return;
-    }
-    sandboxHost.handleMessage(event);
+    this.syncSandboxHost(frame, widget)?.handleMessage(event);
   };
 
   private syncSandboxHost(

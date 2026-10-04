@@ -31,18 +31,6 @@ vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: rpc,
   readGatewayCallOptions: vi.fn(() => ({})),
 }));
-vi.mock("./tools/nodes-utils.js", () => ({
-  listNodes: async () => [
-    {
-      nodeId: "node-1",
-      connected: true,
-      platform: "darwin",
-      caps: ["system.run.execution-context.v1"],
-      commands: ["system.run", "system.run.prepare"],
-    },
-  ],
-  resolveNodeIdFromList: () => "node-1",
-}));
 
 let state: OpenClawTestState;
 let invokeCount: number;
@@ -87,6 +75,19 @@ beforeEach(async ({ onTestFinished }) => {
   });
   decisionEntered = createDeferred();
   rpc.mockReset().mockImplementation(async (method, _options, params) => {
+    if (method === "node.list") {
+      return {
+        nodes: [
+          {
+            nodeId: "node-1",
+            connected: true,
+            platform: "darwin",
+            caps: ["system.run.execution-context.v1"],
+            commands: ["system.run", "system.run.prepare"],
+          },
+        ],
+      };
+    }
     if (method === "exec.approvals.node.get") {
       return readExecApprovalsSnapshot();
     }

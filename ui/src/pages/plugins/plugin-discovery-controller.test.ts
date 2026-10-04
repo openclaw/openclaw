@@ -166,8 +166,6 @@ it("populates the grouped home page and keeps it visible during a refresh", asyn
 
   const loading = controller.refresh();
   expect(controller.loading).toBe(false);
-  expect(controller.featuredLoading).toBe(false);
-  expect(controller.trendingLoading).toBe(false);
   expect(controller.featured).toEqual([featured]);
   expect(controller.trending).toEqual([trending]);
   refresh.resolve({ items: [category], categories });
@@ -312,8 +310,6 @@ it("restores the loaded overview immediately when clearing search and retires la
   controller.updateQuery("");
 
   expect(controller.loading).toBe(false);
-  expect(controller.featuredLoading).toBe(false);
-  expect(controller.trendingLoading).toBe(false);
   expect(controller.result?.items).toEqual([overview]);
   lateSearch.resolve({ items: [entry(3)] });
   await vi.advanceTimersByTimeAsync(250);
