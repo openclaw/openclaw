@@ -53,12 +53,12 @@ it.each([
       };
       const cfg: OpenClawConfig = {
         agents: {
-          list: rejected
-            ? [{ id: "main" }]
-            : [
-                { id: "main", groupChat: { mentionPatterns: ["wrong-owner"] } },
-                { id: "bound", groupChat: { mentionPatterns: ["helper"] } },
-              ],
+          entries: rejected
+            ? { main: {} }
+            : {
+                main: { groupChat: { mentionPatterns: ["wrong-owner"] } },
+                bound: { groupChat: { mentionPatterns: ["helper"] } },
+              },
         },
         channels: { line: account.config },
         bindings: [],

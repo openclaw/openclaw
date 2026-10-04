@@ -74,7 +74,7 @@ describe("standalone backup database completeness", () => {
           agents: {
             defaults: { workspace: state.home },
             entries: {
-              main: { default: true, workspace: dormantWorkspace },
+              main: { workspace: dormantWorkspace },
               external: { agentDir: externalAgent },
             },
           },

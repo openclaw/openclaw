@@ -1,5 +1,6 @@
 // Runtime registry loader assembles process-root plugin runtimes from config metadata.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentEntries } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../activation-context.js";
 import {
@@ -58,8 +59,7 @@ function resolveSandboxBackendPluginIds(
   const agents = context.activationSourceConfig.agents;
   const configuredBackendIds = [
     agents?.defaults?.sandbox?.backend,
-    ...Object.values(agents?.entries ?? {}).map((agent) => agent.sandbox?.backend),
-    ...(agents?.list ?? []).map((agent) => agent.sandbox?.backend),
+    ...listAgentEntries(context.activationSourceConfig).map((agent) => agent.sandbox?.backend),
     ...persistedBackendIds,
   ];
   const lookup = createInstalledPluginIndexScopeLookup(context.metadataSnapshot.index);

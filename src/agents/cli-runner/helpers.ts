@@ -41,11 +41,6 @@ import { buildSystemPromptParams } from "../system-prompt-params.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 import { cliBackendLog } from "./log.js";
 import { formatTomlConfigOverride } from "./toml-inline.js";
-export {
-  buildCliSupervisorScopeKey,
-  resolveCliNoOutputTimeoutMs,
-  resolveCliRunTimeoutOverrideMs,
-} from "./reliability.js";
 
 const CLI_RUN_QUEUE = new KeyedAsyncQueue();
 const CLI_IMAGE_SWEEP_TTL_MS = 7 * 24 * 60 * 60 * 1_000;

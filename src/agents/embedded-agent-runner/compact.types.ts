@@ -137,11 +137,3 @@ export type CompactEmbeddedAgentSessionRuntimeParams = Omit<
   /** Deprecated file-backed artifact target. Prefer sessionTarget for new callers. */
   sessionFile?: string;
 };
-
-export type CompactionMessageMetrics = {
-  messages: number;
-  historyTextChars: number;
-  toolResultChars: number;
-  estTokens?: number;
-  contributors: Array<{ role: string; chars: number; tool?: string }>;
-};

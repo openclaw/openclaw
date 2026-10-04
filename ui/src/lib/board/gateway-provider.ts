@@ -8,6 +8,7 @@ import type {
   BoardWidget,
   BoardWidgetAppViewResult,
 } from "@openclaw/gateway-protocol";
+import { sleepWithAbort } from "@openclaw/retry";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../format-error.ts";
 import {
@@ -431,23 +432,14 @@ export class GatewayBoardProvider implements BoardProvider {
     }
   }
 
-  private waitForRetry(delayMs: number): Promise<void> {
-    return new Promise((resolve) => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const finish = () => {
-        if (!timer) {
-          return;
-        }
-        clearTimeout(timer);
-        timer = undefined;
-        if (this.wakeRetryDelay === finish) {
-          this.wakeRetryDelay = undefined;
-        }
-        resolve();
-      };
-      timer = setTimeout(finish, delayMs);
-      this.wakeRetryDelay = finish;
-    });
+  private async waitForRetry(delayMs: number): Promise<void> {
+    const controller = new AbortController();
+    const wake = () => controller.abort();
+    this.wakeRetryDelay = wake;
+    await sleepWithAbort(delayMs, controller.signal).catch(() => undefined);
+    if (this.wakeRetryDelay === wake) {
+      this.wakeRetryDelay = undefined;
+    }
   }
 
   private async mutate(

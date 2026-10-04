@@ -383,7 +383,7 @@ describe("startup recovery admission", () => {
           .mockResolvedValueOnce({ runId: "run-resumed" });
       }
       const recovery = scheduleRestartAbortedMainSessionRecovery({
-        getConfig: () => ({ agents: { entries: { [agentId]: { default: true } } } }),
+        getConfig: () => ({ agents: { entries: { [agentId]: {} } } }),
         delayMs: 0,
         maxRetries: 1,
         stateDir: tmpDir,

@@ -16,7 +16,7 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type Client = NonNullable<Parameters<typeof handleGatewayRequest>[0]["client"]>;
 
-const providerConfig: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
+const providerConfig: OpenClawConfig = { agents: { entries: { main: {} } } };
 let config = providerConfig;
 const reference = { providerId: "records", id: "claim:42" };
 
@@ -231,7 +231,7 @@ describe("Memory Core legacy owner", () => {
       "../../../extensions/memory-core/runtime-api.js",
     );
     config = {
-      agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
+      agents: { ownership: "explicit", entries: { main: {}, ops: {} } },
       tools: { sessions: { visibility: "agent" } },
     };
     const registry = createEmptyPluginRegistry();

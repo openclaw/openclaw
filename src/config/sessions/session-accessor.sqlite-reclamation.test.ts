@@ -13,6 +13,9 @@ import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import { runWithDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import * as workerCpu from "../../infra/worker-cpu.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -193,13 +196,23 @@ function createFixture(alias = false) {
 
 function observeWorkers() {
   const workers: Array<{ worker: Worker; id: number; exits: number[] }> = [];
-  const observe = (worker: Worker) => {
-    const observed: (typeof workers)[number] = { worker, id: worker.threadId, exits: [] };
-    workers.push(observed);
-    worker.once("exit", (code) => observed.exits.push(code));
-  };
-  process.on("worker", observe);
-  return { workers, stopObserving: () => process.off("worker", observe) };
+  const heartbeatUrl = String(
+    resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.gatewayStateOwnerHeartbeat),
+  );
+  const createWorker = workerCpu.createCpuTrackedWorker;
+  const observe = vi
+    .spyOn(workerCpu, "createCpuTrackedWorker")
+    .mockImplementation((filename, options) => {
+      const worker = createWorker(filename, options);
+      // Schema admission has its own heartbeat; this suite owns data-worker lifetime checks.
+      if (String(filename) !== heartbeatUrl) {
+        const observed: (typeof workers)[number] = { worker, id: worker.threadId, exits: [] };
+        workers.push(observed);
+        worker.once("exit", (code) => observed.exits.push(code));
+      }
+      return worker;
+    });
+  return { workers, stopObserving: () => observe.mockRestore() };
 }
 
 async function readLogRecords(file: string) {

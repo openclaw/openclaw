@@ -307,7 +307,7 @@ describe("role and team creation through persisted configuration", () => {
         expect(config.agents?.entries?.ambient).toEqual(before.agents?.entries?.ambient);
         for (const id of [coordinatorId, ...specialistIds]) {
           expect(config.agents?.entries?.[id]?.workspace).toBe(path.join(workspaceRoot, id));
-          expect(config.agents?.entries?.[id]?.default).toBeUndefined();
+          expect(config.agents?.entries?.[id]).not.toHaveProperty("default");
         }
       });
     },

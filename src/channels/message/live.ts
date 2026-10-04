@@ -16,7 +16,7 @@ type LivePreviewFinalizerDraft<TId> = {
   clear: () => Promise<void>;
 };
 
-export type LivePreviewDraft<TId> = Omit<LivePreviewFinalizerDraft<TId>, "clear"> & {
+type LivePreviewDraft<TId> = Omit<LivePreviewFinalizerDraft<TId>, "clear"> & {
   clear: () => Promise<boolean | void>;
 };
 

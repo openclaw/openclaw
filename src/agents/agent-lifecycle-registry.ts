@@ -34,6 +34,7 @@ import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js"
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 
 export class AgentDeletionAuthorityRollbackError extends AggregateError {}
@@ -85,6 +86,11 @@ export function withAgentDeletion<T>(
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<T> {
   const id = normalizeAgentId(agentId);
+  if (isReservedSystemAgentId(id)) {
+    throw new Error(
+      `System agent ${id} cannot be deleted; run openclaw doctor --fix to quarantine invalid deletion history.`,
+    );
+  }
   const statePath = path.resolve(
     options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env),
   );

@@ -196,7 +196,7 @@ describe("session transcript title hydration", () => {
       await expect(
         runSessionColdStorageMaintenance({
           config: {
-            agents: { list: [{ id: "main" }] },
+            agents: { entries: { main: {} } },
             session: {
               store: storePath,
               maintenance: { coldStorage: { enabled: true, afterDays: 30 } },

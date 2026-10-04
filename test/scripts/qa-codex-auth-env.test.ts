@@ -3,7 +3,7 @@ import {
   OPENCLAW_QA_CODEX_API_KEY_HANDOFF,
   resolveQaCodexApiKeyEnvPatch,
 } from "../../scripts/lib/qa-codex-auth-env.mts";
-import { runNodeMain } from "../../scripts/run-node.mts";
+import { runNodeMain } from "./run-node-boundary.test-support.js";
 import {
   QA_LAB_PLUGIN_SDK_ENTRY,
   QA_RUNTIME_PLUGIN_SDK_ENTRY,

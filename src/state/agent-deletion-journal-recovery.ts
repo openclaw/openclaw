@@ -55,6 +55,19 @@ export function reconstructAgentDeletionJournal(
   if (!reconstructAgentDeletionJournalSchema(database.db, database.path)) {
     return decodeHolds(database, previous?.held ?? []);
   }
+  return recordAgentDeletionRecoveryHolds(database, held, { now });
+}
+
+/** Quarantine and reconstruction use the same durable maintenance holds. */
+export function recordAgentDeletionRecoveryHolds(
+  database: RecoveryDatabase,
+  held: readonly HeldAgentDatabase[],
+  { now = Date.now(), description = DESCRIPTION }: { now?: number; description?: string } = {},
+): HeldAgentDatabase[] {
+  if (!database.db.isTransaction) {
+    throw new Error("Agent deletion recovery requires a shared-state transaction.");
+  }
+  const previous = readReport(database);
   const entries = new Map<string, HeldAgentDatabase>();
   for (const entry of [
     ...(previous?.held ?? []),
@@ -65,7 +78,7 @@ export function reconstructAgentDeletionJournal(
   ]) {
     entries.set(JSON.stringify([entry.agentId, entry.path]), entry);
   }
-  const report: RecoveryReport = { description: DESCRIPTION, held: [...entries.values()] };
+  const report: RecoveryReport = { description, held: [...entries.values()] };
   recordLegacyMigrationReceipt(database.db, {
     sourceKey: SOURCE_KEY,
     migrationKind: SOURCE_KEY,

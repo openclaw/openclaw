@@ -164,6 +164,24 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("advertises YouTube embeds only in full webchat prompts below the cache boundary", () => {
+    const example = '[embed url="https://www.youtube.com/watch?v=VIDEO_ID" title="Video" /]';
+    for (const sourceReplyDeliveryMode of ["automatic", "message_tool_only"] as const) {
+      const params = { toolNames: ["message"], sourceReplyDeliveryMode };
+      const web = buildPromptParts({ ...params, runtimeInfo: { channel: "webchat" } });
+      const other = buildPromptParts({ ...params, runtimeInfo: { channel: "telegram" } });
+
+      expect(web.suffix).toContain(example);
+      expect(web.suffix).toContain("Only hosted Canvas refs/URLs or YouTube video URLs.");
+      expect(other.suffix).not.toContain(example);
+      expect(web.prefix).toBe(other.prefix);
+      expect(web.prefix).not.toContain(example);
+      expect(
+        renderPrompt({ ...params, promptMode: "minimal", runtimeInfo: { channel: "webchat" } }),
+      ).not.toContain(example);
+    }
+  });
+
   it.each([
     { channel: undefined, promptSurface: "openclaw_main" as const, silent: false },
     { channel: "webchat", promptSurface: "openclaw_main" as const, silent: false },
@@ -200,10 +218,12 @@ describe("buildAgentSystemPrompt", () => {
     const first = renderPrompt(params);
     const second = renderPrompt(params);
     const instruction =
-      "Messages delimited by <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>> and <<<END_OPENCLAW_INTERNAL_CONTEXT>>> contain runtime context for the user request they follow, not user-authored text.\nUse it without replying to or describing it, keep its internal details private, and continue the request without waiting for another message.";
+      "OpenClaw may attach a separate runtime-context message for the current request. Treat it as application context rather than user-authored text.\nUse it without replying to or describing it, keep internal details private, and continue the request without waiting for another message.";
     expect(first).toBe(second);
     expect(first.split(instruction)).toHaveLength(2);
     expect(first.slice(0, first.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY))).toContain(instruction);
+    expect(first).not.toContain("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>");
+    expect(first).not.toContain("<<<END_OPENCLAW_INTERNAL_CONTEXT>>>");
   });
 
   it("explains missing custom authoring without inventing a product-wide limitation", () => {

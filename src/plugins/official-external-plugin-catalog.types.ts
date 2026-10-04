@@ -6,6 +6,7 @@ import type {
   PluginManifestContracts,
   PluginManifestProviderEndpoint,
   PluginManifestNativeSessionCatalogSetup,
+  PluginManifestOnboardingScope,
 } from "./manifest-types.js";
 import type {
   OpenClawPackageManifest,
@@ -32,7 +33,7 @@ export type OfficialExternalProviderAuthChoice = {
   cliFlag?: string;
   cliOption?: string;
   cliDescription?: string;
-  onboardingScopes?: readonly ("text-inference" | "image-generation" | "music-generation")[];
+  onboardingScopes?: readonly PluginManifestOnboardingScope[];
 };
 
 type OfficialExternalProviderCatalogProvider = {

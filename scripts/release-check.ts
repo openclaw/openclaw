@@ -127,15 +127,6 @@ const PACKED_PLUGIN_SDK_PROGRESS_CONSUMER_FIXTURE = new URL(
   "./fixtures/packed-plugin-sdk-progress-consumer.ts",
   import.meta.url,
 );
-const PACKED_PLUGIN_SDK_SETUP_SURFACE_OMISSION_VERSIONS = new Set([
-  "2026.7.33",
-  "2026.7.34",
-  "2026.7.35",
-]);
-
-export function packedPluginSdkMayOmitSetupSurface(packageVersion: string): boolean {
-  return PACKED_PLUGIN_SDK_SETUP_SURFACE_OMISSION_VERSIONS.has(packageVersion);
-}
 const PACKED_BUNDLED_CHANNEL_ENTRY_SMOKE_ENTRYPOINTS = [
   "scripts/test-built-bundled-channel-entry-smoke.mts",
   "scripts/test-built-bundled-channel-entry-smoke.mjs",
@@ -800,27 +791,6 @@ function runPackedPluginSdkTypescriptSmoke(
       stdio: "inherit",
     });
 
-    const installedOpenClawRoot = join(consumerDir, "node_modules", "openclaw");
-    if (!target.setupConsumerOnly) {
-      const installedPackageVersion = (
-        JSON.parse(readFileSync(join(installedOpenClawRoot, "package.json"), "utf8")) as {
-          version?: unknown;
-        }
-      ).version;
-      if (
-        typeof installedPackageVersion === "string" &&
-        packedPluginSdkMayOmitSetupSurface(installedPackageVersion)
-      ) {
-        const indexPath = join(consumerDir, "src", "index.ts");
-        writeFileSync(
-          indexPath,
-          readFileSync(indexPath, "utf8").replace(
-            'import "./packed-plugin-sdk-setup-consumer.js";\n',
-            "",
-          ),
-        );
-      }
-    }
     const tscPath = join(consumerDir, "node_modules", "typescript", "bin", "tsc");
     if (!existsSync(tscPath)) {
       throw new Error("release-check: packed plugin SDK TypeScript smoke could not find tsc.");
@@ -843,23 +813,9 @@ export function writePackedBundledPluginActivationConfig(homeDir: string): void 
     configPath,
     `${JSON.stringify(
       {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.6-luna" },
-          },
-        },
         channels: {
           telegram: {
             enabled: true,
-          },
-        },
-        models: {
-          providers: {
-            openai: {
-              apiKey: "sk-openclaw-release-check",
-              baseUrl: "https://api.openai.com/v1",
-              models: [],
-            },
           },
         },
         plugins: {
@@ -879,12 +835,21 @@ export function writePackedBundledPluginActivationConfig(homeDir: string): void 
   );
 }
 
-function runPackedBundledPluginActivationSmoke(packageRoot: string, tmpRoot: string): void {
+export function createPackedBundledPluginActivationSmokeEnv(
+  env: NodeJS.ProcessEnv,
+  tmpRoot: string,
+): NodeJS.ProcessEnv {
   const homeDir = join(tmpRoot, "activation-home");
-  mkdirSync(homeDir, { recursive: true });
-  const env = createPackedCliSmokeEnv(process.env, {
+  return createPackedCliSmokeEnv(env, {
     HOME: homeDir,
+    OPENCLAW_STATE_DIR: join(homeDir, ".openclaw"),
   });
+}
+
+function runPackedBundledPluginActivationSmoke(packageRoot: string, tmpRoot: string): void {
+  const env = createPackedBundledPluginActivationSmokeEnv(process.env, tmpRoot);
+  const homeDir = expectDefined(env.HOME, "packed activation smoke home");
+  mkdirSync(homeDir, { recursive: true });
 
   writePackedBundledPluginActivationConfig(homeDir);
   runReleaseCheckCommand(

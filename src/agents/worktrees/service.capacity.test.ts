@@ -6,6 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as backoff from "../../infra/backoff.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import * as commandExec from "../../process/exec.js";
@@ -351,6 +352,7 @@ describe("ManagedWorktreeService capacity", () => {
       };
       let sourceHeld = false;
       let cleanupEntered = false;
+      const recoveryRegistryReads: string[] = [];
       let destination: string | undefined;
       vi.spyOn(capacity, "estimateWorktreeGitBytes").mockImplementationOnce(async () => {
         expect(sourceHeld).toBe(true);
@@ -399,10 +401,19 @@ describe("ManagedWorktreeService capacity", () => {
                 `gitdir: ${path.join(repo, ".git")}\n`,
               );
             }
-            return await run(() => {});
+            const sql = observeHostDataSql();
+            try {
+              return await run(() => {});
+            } finally {
+              recoveryRegistryReads.push(
+                ...sql.queries.filter((query) => /\bfrom\s+"?worktrees"?\b/i.test(query)),
+              );
+              sql.restore();
+            }
           },
         }),
       ).rejects.toThrow(/was lost/);
+      expect(recoveryRegistryReads).toEqual([]);
       expect(await service.listRegistryRecords()).toEqual([]);
       if (changed === "files") {
         expect(await fs.readFile(path.join(destination!, "keep.txt"), "utf8")).toBe(

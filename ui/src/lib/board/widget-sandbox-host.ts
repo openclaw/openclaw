@@ -19,7 +19,7 @@ type BoardWidgetSandboxHostOptions = {
   controlUiBaseUrl?: string;
   client?: BoardWidgetBridgeGatewayClient;
   resolveFrameUrl: BoardWidgetFrameUrl;
-  confirmPrompt: (text: string) => boolean;
+  confirmPrompt: (text: string) => boolean | Promise<boolean>;
   onFrameUrl: (url: string) => void;
   onLoadFailed: (widget: BoardWidget) => void;
   onUnauthorized: (widget: BoardWidget) => void;

@@ -200,6 +200,9 @@ describe("stable read-only snapshot copies", () => {
     ).catch((cause: unknown) => cause);
 
     expect(error).toBeInstanceOf(AggregateError);
+    expect(error).toMatchObject({
+      message: expect.stringContaining("SQLite journal state changed while copying"),
+    });
     expect((error as AggregateError).errors).toContain(cleanupError);
     expect(allocations).toHaveBeenCalledTimes(1);
   });
@@ -248,6 +251,9 @@ describe("stable read-only snapshot copies", () => {
     ).catch((cause: unknown) => cause);
 
     expect(error).toBeInstanceOf(AggregateError);
+    expect(error).toMatchObject({
+      message: expect.stringContaining("SQLite destination is read-only"),
+    });
     expect((error as AggregateError).errors).toContain(cleanupError);
     expect(allocations).toHaveBeenCalledTimes(1);
   });

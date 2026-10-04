@@ -3,6 +3,8 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
@@ -15,10 +17,6 @@ import {
 } from "../command-turn-context.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
-import {
-  loadSessionStoreEntry,
-  resolveSessionStorePathCore,
-} from "./dispatch-from-config.runtime.js";
 import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { isSlackDirectRoutedThreadTurn } from "./routed-delivery-thread.js";
@@ -61,7 +59,7 @@ export function resolveSessionStoreLookup(
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   const target = { agentId, sessionKey, storePath };
   try {
-    const entry = loadSessionStoreEntry({
+    const entry = loadSessionEntryReadOnly({
       ...target,
       readConsistency: "latest",
       clone: false,
@@ -184,7 +182,7 @@ export function resolveDispatchResetAdmission(params: {
   ) {
     try {
       hasParentForkSource = Boolean(
-        loadSessionStoreEntry({
+        loadSessionEntryReadOnly({
           agentId: params.agentId,
           storePath: params.storePath,
           sessionKey: parentSessionKey,

@@ -310,6 +310,12 @@ export type HookAgentDispatchPayload = Omit<HookAgentPayload, "sessionKey"> & {
    * cache nothing, and turn each redelivery into the same cold burst forever.
    */
   admissionMode?: "bounded" | "background";
+  /**
+   * Replay identity from the HTTP handler. A failed admission leaves the item
+   * retryable, so each producer redelivery runs again; the failure notice for
+   * one identity announces once per dedupe window instead of once per retry.
+   */
+  replayKey?: string;
 };
 
 const listHookChannelValues = () => ["last", ...listChannelPlugins().map((plugin) => plugin.id)];

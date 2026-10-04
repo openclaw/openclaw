@@ -16,7 +16,7 @@ function devConfig(agentRuntime?: string): OpenClawConfig {
     agents: {
       defaults: { model: "openai/gpt-5.5" },
       entries: {
-        dev: { default: true, workspace: "/tmp/x" },
+        dev: { workspace: "/tmp/x" },
       },
     },
     models: {
@@ -240,7 +240,6 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
         defaults: withoutRoster.agents?.defaults,
         entries: {
           main: {
-            default: true,
             workspace: "/tmp/openclaw-main",
             agentDir: resolveAgentDir(withoutRoster, "main"),
           },

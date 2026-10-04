@@ -253,6 +253,7 @@ describe("tsdown config", () => {
       requireStandaloneRuntimeGraph("agents/harness/native-hook-relay-client.worker"),
       requireStandaloneRuntimeGraph("process/spawn-broker/worker"),
       requireStandaloneRuntimeGraph("state/openclaw-state-lease-heartbeat.worker"),
+      requireStandaloneRuntimeGraph("infra/gateway-state-owner-heartbeat.worker"),
       requireStandaloneRuntimeGraph("process/supervisor/service-child-relay"),
       requireStandaloneRuntimeGraph("process/supervisor/service-child-group-anchor"),
       requireStandaloneRuntimeGraph("tooling/managed-memory-launcher"),
@@ -262,7 +263,9 @@ describe("tsdown config", () => {
       const inlinePlugins = (await resolvePluginNames(config.plugins)).filter(
         (name) => name === STATE_SCHEMA_INLINE_PLUGIN_NAME,
       );
-      expect(inlinePlugins).toHaveLength(executableGraphs.has(config) ? 1 : 0);
+      expect(inlinePlugins, entryKeys(config).join(", ")).toHaveLength(
+        executableGraphs.has(config) ? 1 : 0,
+      );
     }
   });
 

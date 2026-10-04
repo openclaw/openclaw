@@ -115,8 +115,9 @@ describe("getStatusSummary read-only session access", () => {
       const storePath = path.join(tempDir, fileName);
       const config = {
         agents: {
+          ownership: "explicit" as const,
           defaults: { systemAgent: { agentId: "main" } },
-          list: [{ id: "main", default: true }, { id: "ops" }],
+          entries: { main: {}, ops: {} },
         },
         session: { store: storePath },
       };

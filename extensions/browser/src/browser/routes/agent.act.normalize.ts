@@ -98,7 +98,7 @@ function normalizeBatchAction(value: unknown, depth: number): BrowserActRequest 
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("batch actions must be objects");
   }
-  return normalizeActRequest(value as Record<string, unknown>, { source: "batch", depth });
+  return normalizeActRequest(value as Record<string, unknown>, depth);
 }
 
 function readBoundedActionDurationMs(
@@ -133,12 +133,7 @@ function definedAction<T extends BrowserActRequest>(action: T): T {
   return action;
 }
 
-export function normalizeActRequest(
-  body: Record<string, unknown>,
-  options?: { source?: "request" | "batch"; depth?: number },
-): BrowserActRequest {
-  const source = options?.source ?? "request";
-  const depth = options?.depth ?? 0;
+export function normalizeActRequest(body: Record<string, unknown>, depth = 0): BrowserActRequest {
   const kind = toStringOrEmpty(body.kind);
   if (!isActKind(kind)) {
     throw new Error("kind is required");
@@ -346,7 +341,7 @@ export function normalizeActRequest(
         ? body.actions.map((action) => normalizeBatchAction(action, depth + 1))
         : [];
       if (!actions.length) {
-        throw new Error(source === "batch" ? "batch requires actions" : "actions are required");
+        throw new Error(depth > 0 ? "batch requires actions" : "actions are required");
       }
       if (countBatchActions(actions) > ACT_MAX_BATCH_ACTIONS) {
         throw new Error(`batch exceeds maximum of ${ACT_MAX_BATCH_ACTIONS} actions`);

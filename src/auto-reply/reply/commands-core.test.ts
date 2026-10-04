@@ -45,7 +45,7 @@ describe("emitResetCommandHooks", () => {
   async function runBeforeResetContext(
     sessionKey?: string,
     cfg: HandleCommandsParams["cfg"] = {
-      agents: { entries: { main: { default: true } } },
+      agents: { entries: { main: {} } },
     },
   ) {
     const command = {
@@ -98,7 +98,7 @@ describe("emitResetCommandHooks", () => {
 
   it("uses the configured default when the reset hook has no session key", async () => {
     const ctx = await runBeforeResetContext(undefined, {
-      agents: { entries: { ops: { default: true } } },
+      agents: { entries: { ops: {} } },
     });
     expect(ctx?.agentId).toBe("ops");
     expect(ctx?.sessionKey).toBeUndefined();

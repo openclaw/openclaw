@@ -157,7 +157,7 @@ describe("security audit exec surface findings", () => {
         await collectSecurityAuditFindings({
           agents: {
             entries: {
-              ops: { default: true },
+              ops: {},
             },
           },
           tools: {
@@ -187,7 +187,7 @@ describe("security audit exec surface findings", () => {
         await collectSecurityAuditFindings({
           agents: {
             entries: {
-              ops: { default: true, tools: { exec: { strictInlineEval: false } } },
+              ops: { tools: { exec: { strictInlineEval: false } } },
             },
           },
           tools: {
@@ -258,7 +258,6 @@ describe("security audit exec surface findings", () => {
       agents: {
         entries: {
           ops: {
-            default: true,
             tools: {
               allow: ["read", "exec", "process"],
               deny: ["write", "edit", "apply_patch"],

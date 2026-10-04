@@ -33,6 +33,7 @@ export type ExecApprovalRequest = {
   pluginDetail?: string | null;
   pluginSeverity?: string | null;
   pluginId?: string | null;
+  pluginActions?: unknown;
   proposalHash?: string | null;
   /** Canonical raising session when this request is projected into an ancestor session. */
   sourceSessionKey?: string | null;
@@ -204,6 +205,7 @@ function parseApprovalRequested(
       pluginDetail: readStringValue(request.detail) ?? null,
       pluginSeverity: readStringValue(request.severity) ?? null,
       pluginId: readStringValue(request.pluginId) ?? null,
+      pluginActions: request.actions,
     };
   }
   const description = normalizeOptionalString(request.description);

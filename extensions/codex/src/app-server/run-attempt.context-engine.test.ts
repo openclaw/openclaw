@@ -464,11 +464,9 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       "config/read",
       "configRequirements/read",
       "thread/start",
-      "model/list",
       "turn/start",
       "config/read",
       "configRequirements/read",
-      "model/list",
       "turn/start",
     ]);
     const secondInputText = getRequestInputTextAt(firstHarness, 1);
@@ -559,7 +557,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         "config/read",
         "configRequirements/read",
         ...(resumed ? ["thread/read", "thread/resume", "thread/inject_items"] : ["thread/start"]),
-        "model/list",
         "turn/start",
       ]);
       const inputText = getRequestInputText(harness);
@@ -617,7 +614,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       "config/read",
       "configRequirements/read",
       "thread/start",
-      "model/list",
       "turn/start",
     ]);
     const inputText = getRequestInputText(harness);
@@ -682,7 +678,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         "config/read",
         "configRequirements/read",
         "thread/start",
-        "model/list",
         "turn/start",
       ]);
       expectRequestInputTextContains(harness, "OpenClaw assembled context for this turn:");
@@ -780,7 +775,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       expect(harness.requests.map((request) => request.method)).toEqual([
         "config/read",
         "thread/start",
-        "model/list",
         "turn/start",
       ]);
       expectRequestInputTextContains(harness, "OpenClaw assembled context for this turn:");

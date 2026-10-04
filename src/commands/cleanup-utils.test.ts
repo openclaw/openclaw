@@ -212,7 +212,7 @@ describe("buildCleanupPlan", () => {
     const cfg = {
       agents: {
         defaults: { workspace: defaultWorkspace },
-        list: [{ id: "main" }, { id: "ops", workspace: opsWorkspace }],
+        entries: { main: {}, ops: { workspace: opsWorkspace } },
       },
     };
     const plan = buildCleanupPlan({
@@ -235,7 +235,7 @@ describe("buildCleanupPlan", () => {
     const stateDir = path.join(home, ".openclaw");
     const cfg = {
       agents: {
-        list: [{ id: "main" }, { id: "work" }],
+        entries: { main: {}, work: {} },
       },
     };
 

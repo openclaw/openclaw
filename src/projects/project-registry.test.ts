@@ -196,10 +196,10 @@ describe("project registry", () => {
 
     const cfg = {
       agents: {
-        list: [
-          { id: "main", default: true, workspace: "/workspace/zeta" },
-          { id: "work", workspace: "/workspace/alpha" },
-        ],
+        entries: {
+          main: { workspace: "/workspace/zeta" },
+          work: { workspace: "/workspace/alpha" },
+        },
       },
     } as OpenClawConfig;
     expect((await listProjectRegistry(cfg, options)).map((project) => project.displayName)).toEqual(
@@ -207,10 +207,10 @@ describe("project registry", () => {
     );
     const sharedWorkspaceCfg = {
       agents: {
-        list: [
-          { id: "main", default: true, workspace: repo },
-          { id: "work", workspace: repo },
-        ],
+        entries: {
+          main: { workspace: repo },
+          work: { workspace: repo },
+        },
       },
     } as OpenClawConfig;
     expect(
@@ -223,55 +223,48 @@ describe("project registry", () => {
     );
   });
 
-  it.each(["entries", "list"] as const)(
-    "bounds %s roster reads while observing workspace edits on the next listing",
-    async (shape) => {
-      const root = tempDirs.make("openclaw-project-roster-");
-      const options = { path: path.join(root, "state.sqlite") };
-      const agents = Array.from({ length: 64 }, (_, index) => ({
-        id: `agent-${String(index).padStart(2, "0")}`,
-        workspace: path.join(root, `workspace-${String(index).padStart(2, "0")}`),
-      }));
-      const entries = Object.fromEntries(
-        agents.map((agent) => [agent.id, { workspace: agent.workspace }]),
-      );
-      let reads = 0;
-      for (const agent of agents) {
-        const id = agent.id;
-        const entry = entries[id]!;
-        Object.defineProperty(
-          shape === "entries" ? entries : agent,
-          shape === "entries" ? id : "id",
-          {
-            enumerable: true,
-            get: () => {
-              reads += 1;
-              return shape === "entries" ? entry : id;
-            },
-          },
-        );
-      }
-      const cfg: OpenClawConfig = {
-        agents: shape === "entries" ? { entries } : { list: agents },
-      };
+  it("bounds canonical roster reads while observing workspace edits on the next listing", async () => {
+    const root = tempDirs.make("openclaw-project-roster-");
+    const options = { path: path.join(root, "state.sqlite") };
+    const agents = Array.from({ length: 64 }, (_, index) => ({
+      id: `agent-${String(index).padStart(2, "0")}`,
+      workspace: path.join(root, `workspace-${String(index).padStart(2, "0")}`),
+    }));
+    const entries = Object.fromEntries(
+      agents.map((agent) => [agent.id, { workspace: agent.workspace }]),
+    );
+    let reads = 0;
+    for (const agent of agents) {
+      const id = agent.id;
+      const entry = entries[id]!;
+      Object.defineProperty(entries, id, {
+        enumerable: true,
+        get: () => {
+          reads += 1;
+          return entry;
+        },
+      });
+    }
+    const cfg: OpenClawConfig = {
+      agents: { entries },
+    };
 
-      const before = await listProjectRegistry(cfg, options);
-      // Listing every workspace must not re-read each preceding agent for every point lookup.
-      expect(reads).toBeLessThanOrEqual(agents.length * 4);
-      expect(before.map((project) => project.id)).toEqual(
-        agents.map((agent) => `workspace:${agent.id}`),
-      );
-      const editedId = agents[0]!.id;
-      const edited = shape === "entries" ? entries[editedId]! : agents[0]!;
-      const previousWorkspace = edited.workspace;
-      edited.workspace = path.join(root, "changed");
-      const after = await listProjectRegistry(cfg, options);
-      expect(after.find((project) => project.id === `workspace:${editedId}`)?.repoRoot).toBe(
-        edited.workspace,
-      );
-      expect(before[0]?.repoRoot).toBe(previousWorkspace);
-    },
-  );
+    const before = await listProjectRegistry(cfg, options);
+    // Listing every workspace must not re-read each preceding agent for every point lookup.
+    expect(reads).toBeLessThanOrEqual(agents.length * 4);
+    expect(before.map((project) => project.id)).toEqual(
+      agents.map((agent) => `workspace:${agent.id}`),
+    );
+    const editedId = agents[0]!.id;
+    const edited = entries[editedId]!;
+    const previousWorkspace = edited.workspace;
+    edited.workspace = path.join(root, "changed");
+    const after = await listProjectRegistry(cfg, options);
+    expect(after.find((project) => project.id === `workspace:${editedId}`)?.repoRoot).toBe(
+      edited.workspace,
+    );
+    expect(before[0]?.repoRoot).toBe(previousWorkspace);
+  });
 
   it("rejects paths outside a git checkout", async () => {
     const root = tempDirs.make("openclaw-project-non-git-");

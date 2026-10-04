@@ -631,7 +631,7 @@ describe("iMessage monitor last-route updates", () => {
     );
     return {
       ...overrides,
-      agents: { list: [{ id: "main" }, { id: "codex" }] },
+      agents: { entries: { main: {}, codex: {} } },
       bindings: [
         { agentId: "main", match: { channel: "imessage", accountId: "default" } },
         {

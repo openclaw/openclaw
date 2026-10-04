@@ -13,7 +13,9 @@ import type { ReplyPayload as AgentRuntimeReplyPayload } from "../../shared/repl
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import type { ProviderModelAuthSourceClassification } from "../provider-model-auth-source-plan.js";
+import type { EmbeddedRunTrigger } from "../run-trigger.js";
 import type { AgentTool } from "../runtime/index.js";
+import type { ProviderSystemPromptContribution } from "../system-prompt-contribution.js";
 import type { TranscriptPolicy } from "../transcript-policy.types.js";
 
 /** Runtime transport selected for one model attempt. */
@@ -32,9 +34,6 @@ type AgentRuntimeThinkLevel =
 
 /** System prompt rendering mode selected for one attempt. */
 type AgentRuntimePromptMode = "full" | "minimal" | "none";
-/** Trigger source that can alter provider system prompt contributions. */
-type AgentRuntimePromptTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
-
 /** Provider model descriptor consumed by runtime-plan hooks. */
 type AgentRuntimeModel = {
   id?: string;
@@ -83,16 +82,6 @@ type PreparedAgentRuntimeProviderHandle = AgentRuntimeProviderHandle & {
   prepared: true;
 };
 
-/** Stable section IDs for provider system prompt overrides. */
-type AgentRuntimeSystemPromptSectionId = "interaction_style" | "tool_call_style" | "execution_bias";
-
-/** Provider-owned system prompt contribution and section overrides. */
-type AgentRuntimeSystemPromptContribution = {
-  stablePrefix?: string;
-  dynamicSuffix?: string;
-  sectionOverrides?: Partial<Record<AgentRuntimeSystemPromptSectionId, string>>;
-};
-
 /** Context passed when resolving provider system prompt contributions. */
 type AgentRuntimeSystemPromptContributionContext = {
   config?: unknown;
@@ -104,7 +93,7 @@ type AgentRuntimeSystemPromptContributionContext = {
   runtimeChannel?: string;
   runtimeCapabilities?: string[];
   agentId?: string;
-  trigger?: AgentRuntimePromptTrigger;
+  trigger?: EmbeddedRunTrigger;
 };
 
 /** Provider fallback route decision for follow-up delivery. */
@@ -189,7 +178,7 @@ type AgentRuntimePromptPlan = {
   textTransforms?: AgentRuntimeTextTransforms;
   resolveSystemPromptContribution(
     context: AgentRuntimeSystemPromptContributionContext,
-  ): AgentRuntimeSystemPromptContribution | undefined;
+  ): ProviderSystemPromptContribution | undefined;
   transformSystemPrompt(
     context: AgentRuntimeSystemPromptContributionContext & {
       systemPrompt: string;

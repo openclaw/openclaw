@@ -93,6 +93,23 @@ afterEach(async () => {
 });
 
 describe("agent lifecycle registry", () => {
+  it.each(["openclaw", "crestodian"])(
+    "rejects deletion authority for system agent %s",
+    async (agentId) => {
+      const options = createOptions();
+      const original = beginAgentDeletionJournal(
+        { ...createEntry(agentId), operationId: "invalid-system-deletion", deleteFiles: true },
+        options,
+      );
+      const cleanup = vi.fn();
+      await expect(
+        Promise.resolve().then(() => withAgentDeletionRuntime(agentId, cleanup, options)),
+      ).rejects.toThrow(`System agent ${agentId} cannot be deleted`);
+      expect(cleanup).not.toHaveBeenCalled();
+      expect(readAgentDeletionJournal(agentId, options)).toEqual(original);
+    },
+  );
+
   it("revalidates incarnation and deletion through its current transaction and restores authority after rollback", () => {
     const options = createOptions();
     const config = { agents: { entries: { main: {} } } };

@@ -2,6 +2,7 @@ import type {
   SessionCatalog,
   SessionsCatalogListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { capturePluginRegistryLifecycleEpoch } from "../../plugins/registry-lifecycle.js";
 import type { SessionCatalogInstances } from "./session-catalog-entry-snapshot.js";
@@ -240,19 +241,7 @@ export async function listSessionCatalogWithinBudget(
   if (active.progress !== progress) {
     subscribe(active.progress);
   }
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let result: CatalogListEnumeration | undefined;
-  try {
-    result = await Promise.race([
-      active.result,
-      new Promise<undefined>((resolve) => {
-        timer = setTimeout(() => resolve(undefined), 1_000);
-        timer.unref();
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
+  const result = await raceWithTimeout(active.result, 1_000, () => undefined, { ref: false });
   const catalog = result?.catalogs[0];
   const error = catalog?.error ?? catalog?.hosts.find((host) => host.error)?.error;
   if (result && !error) {

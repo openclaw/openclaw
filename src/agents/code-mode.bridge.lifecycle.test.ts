@@ -71,7 +71,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       const manager = SessionManager.open(scope);
       manager.appendMessage({ role: "user", content: "Review this format", timestamp: 1 });
       const harness = createSubscribedCodeModeHarness({ name, sessionManager: manager });
-      const config = { agents: { entries: { main: { default: true } } } };
+      const config = { agents: { entries: { main: {} } } };
       const target = createMessageTool({
         config,
         preparedMessageToolCatalog: { version: 0, channels: [], getChannel: () => undefined },

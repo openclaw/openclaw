@@ -97,7 +97,7 @@ describe("session catalog progress ownership", () => {
       return [host];
     });
     hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("codex", { list }) }];
-    const config = { agents: { list: [{ id: "main" }, { id: "research" }] } };
+    const config = { agents: { entries: { main: {}, research: {} } } };
     const leaderBroadcast = vi.fn();
     const followerBroadcast = vi.fn();
     const sharedClient = { connId: "requester" };

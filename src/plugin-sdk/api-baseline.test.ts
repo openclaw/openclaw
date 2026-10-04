@@ -33,6 +33,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 async function renderSourceFixture(
   files: Readonly<Record<string, string>>,
   entrypoints: readonly string[] = ["fixture"],
+  { symlinked = false } = {},
 ) {
   const repoRoot = tempDirs.make("openclaw-plugin-sdk-api-");
   const sourceDir = path.join(repoRoot, "src", "plugin-sdk");
@@ -52,7 +53,12 @@ async function renderSourceFixture(
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, content);
   }
-  return renderPluginSdkApiBaseline({ repoRoot, entrypoints });
+  if (!symlinked) {
+    return renderPluginSdkApiBaseline({ repoRoot, entrypoints });
+  }
+  const alias = path.join(tempDirs.make("openclaw-plugin-sdk-api-alias-"), "checkout");
+  fs.symlinkSync(repoRoot, alias, "junction");
+  return renderPluginSdkApiBaseline({ repoRoot: alias, entrypoints });
 }
 
 function writePluginSdkInventory(repoRoot: string, entrypoints: readonly string[]): void {
@@ -742,6 +748,27 @@ describe("Plugin SDK API baseline", () => {
       expect(fs.readdirSync(path.join(repoRoot, ".artifacts"))).toEqual([]);
     },
   );
+
+  it("renders a checkout reached through a symlinked alias", async () => {
+    // macOS temporary revision checkouts sit behind the /var -> /private/var alias.
+    const baseline = await renderSourceFixture(
+      { "fixture.ts": "export declare function measure(value: string): number;\n" },
+      ["fixture"],
+      { symlinked: true },
+    );
+
+    expect(baseline.modules).toEqual([
+      expect.objectContaining({
+        source: { path: "src/plugin-sdk/fixture.ts" },
+        exports: [
+          expect.objectContaining({
+            exportName: "measure",
+            declaration: expect.stringContaining("export function measure(value: string): number;"),
+          }),
+        ],
+      }),
+    ]);
+  });
 
   it("fails when a declaration dependency cannot be resolved", async () => {
     await expect(

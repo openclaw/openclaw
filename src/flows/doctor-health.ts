@@ -234,19 +234,6 @@ async function runDoctorHealthFlowWithResult(
           : await measureGatewayBootstrapStep("doctor.database-preflight", () =>
               prepareDoctorDatabasePreflight(),
             );
-      const { inspectDoctorSqliteNoCow } = await import("../commands/doctor-sqlite-nocow.js");
-      const { resolveOpenClawStateSqlitePath } =
-        await import("../state/openclaw-state-db.paths.js");
-      const nocow = inspectDoctorSqliteNoCow([
-        resolveOpenClawStateSqlitePath(),
-        ...(schemas.agentDatabaseMigrationDiscovery?.discovery.targets.map(
-          (target) => target.path,
-        ) ?? []),
-      ]);
-      sqliteNoCowPaths = nocow.paths;
-      for (const message of nocow.notes) {
-        doctorRuntime.log(message);
-      }
       const { recordAgentDatabaseAdmissions } =
         await import("../state/agent-database-admission.js");
       // Repair owns fresh file decisions until its migration graph finishes.
@@ -339,19 +326,23 @@ async function runDoctorHealthFlowWithResult(
       for (const message of deletionJournal.warnings) {
         effectiveRuntime.log(message);
       }
-      if (prompter.shouldRepair && deletionJournal.warnings.length > 0) {
-        const failure = createUpdateFailureFact({
-          check: "agent-deletion-journal",
-          code: "unverified-agent-databases",
-          message: deletionJournal.warnings.join("\n"),
-        });
-        throw new DoctorMaintenanceRefusalError(
-          formatUpdateFailureFact(failure),
-          { kind: "data-at-risk", reason: "incomplete-migration" },
-          { failureFacts: [failure] },
-        );
+      if (deletionJournal.changes.length > 0) {
+        // Quarantine can turn previously active targets into held stores.
+        schemas = await prepareDoctorDatabasePreflight();
       }
-
+      const { inspectDoctorSqliteNoCow } = await import("../commands/doctor-sqlite-nocow.js");
+      const { resolveOpenClawStateSqlitePath } =
+        await import("../state/openclaw-state-db.paths.js");
+      const nocow = inspectDoctorSqliteNoCow([
+        resolveOpenClawStateSqlitePath(),
+        ...(schemas.agentDatabaseMigrationDiscovery?.discovery.targets.map(
+          (target) => target.path,
+        ) ?? []),
+      ]);
+      sqliteNoCowPaths = nocow.paths;
+      for (const message of nocow.notes) {
+        doctorRuntime.log(message);
+      }
       // Keep side-effect-heavy legacy checks before structured contributions until fully migrated.
       const { maybeRepairUiProtocolFreshness } = await import("../commands/doctor-ui.js");
       const { noteSourceInstallIssues } = await import("../commands/doctor-install.js");

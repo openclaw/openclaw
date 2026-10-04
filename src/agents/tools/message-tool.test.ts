@@ -2345,7 +2345,7 @@ describe("message tool schema scoping", () => {
         const tool = createMessageTool({
           config: {
             agents: {
-              list: [{ id: "schema-agent", tools: { message: { actions: { allow: [action] } } } }],
+              entries: { "schema-agent": { tools: { message: { actions: { allow: [action] } } } } },
             },
           },
           agentId: "schema-agent",
@@ -2421,12 +2421,7 @@ describe("message tool schema scoping", () => {
     const channelMoveTool = createMessageTool({
       config: {
         agents: {
-          list: [
-            {
-              id: "mover",
-              tools: { message: { actions: { allow: ["channel-move"] } } },
-            },
-          ],
+          entries: { mover: { tools: { message: { actions: { allow: ["channel-move"] } } } } },
         },
       } as never,
       currentChannelProvider: "discord",
@@ -2440,12 +2435,7 @@ describe("message tool schema scoping", () => {
     const categoryDeleteTool = createMessageTool({
       config: {
         agents: {
-          list: [
-            {
-              id: "purger",
-              tools: { message: { actions: { allow: ["category-delete"] } } },
-            },
-          ],
+          entries: { purger: { tools: { message: { actions: { allow: ["category-delete"] } } } } },
         },
       } as never,
       currentChannelProvider: "discord",
@@ -2791,7 +2781,7 @@ describe("message tool boot-echo guard", () => {
       const { runBootOnce } = await import("../../gateway/boot.js");
       await expect(
         runBootOnce({
-          cfg: { agents: { list: [{ id: "main", default: true }] } },
+          cfg: { agents: { entries: { main: {} } } },
           deps: {} as never,
           workspaceDir,
         }),

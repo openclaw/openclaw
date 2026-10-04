@@ -100,7 +100,7 @@ describe("memory dirty source cleanup", () => {
       },
       agents: {
         defaults: { workspace: workspaceDir },
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
       },
     };
     const result = await MemoryIndexManager.get({ cfg, agentId: "main" });

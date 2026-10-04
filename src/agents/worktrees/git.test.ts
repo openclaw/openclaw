@@ -299,8 +299,9 @@ describe("Git ref mutation ownership", () => {
     expect(
       vi
         .mocked(processExec.runCommandWithTimeout)
-        .mock.calls.find(([argv]) => argv.includes("fetch"))?.[0],
-    ).toContain("--no-auto-maintenance");
+        .mock.calls.map(([argv]) => argv.slice(argv.indexOf("-C") + 2))
+        .filter((args) => args[0] === "fetch"),
+    ).toEqual([["fetch", "--no-auto-maintenance", "origin"]]);
     await expect(
       runGit(root, ["show-ref", "--verify", "--quiet", staleRef]),
     ).resolves.toMatchObject({

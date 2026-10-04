@@ -523,7 +523,9 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
       "utf8",
     );
 
-    const result = spawnSync(process.execPath, ["--import", "tsx", probePath], {
+    // Under Bun, tsx's Node hooks redirect SDK aliases before the native plugin can resolve them.
+    const probeArgs = process.versions.bun ? [probePath] : ["--import", "tsx", probePath];
+    const result = spawnSync(process.execPath, probeArgs, {
       cwd: process.cwd(),
       encoding: "utf8",
     });

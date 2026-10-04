@@ -194,22 +194,20 @@ describe("prepared model runtime snapshots", () => {
     const config = {
       agents: {
         defaults: { model: { primary: "openai/gpt-5.6" } },
-        list: [
-          {
-            id: "selected",
+        entries: {
+          selected: {
             model: { primary: "anthropic/claude-sonnet-5" },
             models: {
               "anthropic/claude-sonnet-5": { agentRuntime: { id: "selected-runtime" } },
             },
             modelPolicy: { allow: ["vllm/*"] },
           },
-          {
-            id: "sibling",
+          sibling: {
             model: { primary: "ollama/sibling" },
             models: { "ollama/sibling": { agentRuntime: { id: "sibling-runtime" } } },
             modelPolicy: { allow: ["sibling-only/*"] },
           },
-        ],
+        },
       },
       models: {
         providers: {
@@ -264,7 +262,7 @@ describe("prepared model runtime snapshots", () => {
           models: { "openai/gpt-5.4": {} },
         },
         entries: {
-          qa: { default: true, model: { primary: "openai/gpt-5.4" } },
+          qa: { model: { primary: "openai/gpt-5.4" } },
         },
       },
     };

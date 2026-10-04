@@ -33,8 +33,10 @@ import {
 import { isChatSendReplyDeliveryAuthorized } from "./chat-send-delivery-authority.js";
 import { buildTranscriptReplyTextFromInputs } from "./chat-send-reply-dispatch.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
-import type { GatewayInjectedTtsSupplementMarker } from "./chat-transcript-inject.js";
-import { appendAssistantTranscriptMessage } from "./chat-transcript-persistence.js";
+import {
+  appendInjectedAssistantMessageToTranscript,
+  type GatewayInjectedTtsSupplementMarker,
+} from "./chat-transcript-inject.js";
 import { buildMediaOnlyTtsSupplementTranscriptMarker } from "./chat-tts-markers.js";
 import type { GatewayChatUserTurnPersist } from "./chat-user-turn-recorder.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -329,19 +331,18 @@ export async function finalizeChatSendDispatchedReplies(params: {
     return;
   }
   if (shouldAppendAssistantTranscript) {
-    const appended = await appendAssistantTranscriptMessage({
+    const appended = await appendInjectedAssistantMessageToTranscript({
       sessionKey: transcriptSessionKey,
       message: transcriptReply,
       ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
       sessionId,
       storePath: latestStorePath,
       agentId: transcriptAgentId,
-      createIfMissing: true,
       idempotencyKey: clientRunId,
       stopReason,
       ttsSupplement: ttsSupplementMarker,
       ...(contextFreeCommand ? { contextFreeCommand: true } : {}),
-      cfg,
+      config: cfg,
       onMessageCommitted: (receipt, acceptCompletion) => {
         const blocks = readAssistantDisplayContent(receipt.message);
         if (hasManagedOutgoingAssistantContent(blocks)) {

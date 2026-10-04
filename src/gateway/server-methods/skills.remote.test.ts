@@ -82,7 +82,7 @@ it("reads remote skill status, cards and binary requirements through the workspa
   await fs.writeFile(path.join(remote, "skills", "available", "skill-card.md"), "# Remote card\n");
   const config = {
     plugins: { enabled: false },
-    agents: { list: [{ id: "main", workspace: gateway }] },
+    agents: { entries: { main: { workspace: gateway } } },
   };
   const loadSkills = vi.fn(async (request: WorkspaceSkillSourceRequest) => ({
     ...readWorkspaceSkillSources({
@@ -141,7 +141,7 @@ it.each(["unchanged", "revoked", "replaced"] as const)(
       const cfg = {
         plugins: { enabled: false },
         skills: { load: { watch: false } },
-        agents: { list: [{ id: "main", workspace: state.workspaceDir }] },
+        agents: { entries: { main: { workspace: state.workspaceDir } } },
       };
       const alice = ensureProfileForEmail("alice@example.test");
       const bob = ensureProfileForEmail("bob@example.test");

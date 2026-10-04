@@ -70,87 +70,58 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
   /** Test hook for deterministic time-dependent behavior */
   nowMs?: number;
 }): Promise<HybridSearchResult<TSource>[]> {
-  const byId = new Map<
-    string,
-    HybridCandidate<TSource> & {
-      vectorScore: number;
-      textScore: number;
-      rankingScore: number;
-      pathScore: number;
-      exactPathSpecificity: ExactPathSpecificity;
-      hasBodyMatch: boolean;
-      hasVector: boolean;
-      hasKeyword: boolean;
-    }
-  >();
+  const createCandidate = (r: HybridCandidate<TSource>) => ({
+    id: r.id,
+    path: r.path,
+    startLine: r.startLine,
+    endLine: r.endLine,
+    source: r.source,
+    snippet: r.snippet,
+    vectorScore: 0,
+    textScore: 0,
+    rankingScore: 0,
+    pathScore: 0,
+    exactPathSpecificity: r.exactPathSpecificity ?? 0,
+    hasBodyMatch: false,
+    hasVector: false,
+    hasKeyword: false,
+    importance: r.importance,
+    triggers: r.triggers,
+    projectKey: r.projectKey,
+    ...(r.provenance ? { provenance: r.provenance } : {}),
+  });
+  const byId = new Map<string, ReturnType<typeof createCandidate>>();
 
   for (const r of params.vector) {
     byId.set(r.id, {
-      id: r.id,
-      path: r.path,
-      startLine: r.startLine,
-      endLine: r.endLine,
-      source: r.source,
-      snippet: r.snippet,
+      ...createCandidate(r),
       vectorScore: r.vectorScore,
-      textScore: 0,
-      rankingScore: 0,
-      pathScore: 0,
-      exactPathSpecificity: r.exactPathSpecificity ?? 0,
-      hasBodyMatch: false,
       hasVector: true,
-      hasKeyword: false,
-      importance: r.importance,
-      triggers: r.triggers,
-      projectKey: r.projectKey,
-      ...(r.provenance ? { provenance: r.provenance } : {}),
     });
   }
 
   for (const r of params.keyword) {
     const exactPathSpecificity = r.exactPathSpecificity ?? 0;
-    const existing = byId.get(r.id);
-    if (existing) {
-      existing.textScore = r.textScore;
-      existing.hasBodyMatch = r.hasBodyMatch ?? r.textScore > 0;
-      existing.rankingScore = r.rankingScore ?? r.textScore;
-      existing.pathScore = r.pathScore ?? 0;
-      existing.exactPathSpecificity = Math.max(
-        existing.exactPathSpecificity,
-        exactPathSpecificity,
-      ) as ExactPathSpecificity;
-      existing.hasKeyword = true;
-      existing.importance ??= r.importance;
-      existing.triggers ??= r.triggers;
-      existing.projectKey ??= r.projectKey;
-      if (!existing.provenance && r.provenance) {
-        existing.provenance = r.provenance;
-      }
-      if (r.snippet && r.snippet.length > 0) {
-        existing.snippet = r.snippet;
-      }
-    } else {
-      byId.set(r.id, {
-        id: r.id,
-        path: r.path,
-        startLine: r.startLine,
-        endLine: r.endLine,
-        source: r.source,
-        snippet: r.snippet,
-        vectorScore: 0,
-        textScore: r.textScore,
-        rankingScore: r.rankingScore ?? r.textScore,
-        pathScore: r.pathScore ?? 0,
-        exactPathSpecificity,
-        hasBodyMatch: r.hasBodyMatch ?? r.textScore > 0,
-        hasVector: false,
-        hasKeyword: true,
-        importance: r.importance,
-        triggers: r.triggers,
-        projectKey: r.projectKey,
-        ...(r.provenance ? { provenance: r.provenance } : {}),
-      });
+    const existing = byId.get(r.id) ?? createCandidate(r);
+    existing.textScore = r.textScore;
+    existing.hasBodyMatch = r.hasBodyMatch ?? r.textScore > 0;
+    existing.rankingScore = r.rankingScore ?? r.textScore;
+    existing.pathScore = r.pathScore ?? 0;
+    existing.exactPathSpecificity = Math.max(
+      existing.exactPathSpecificity,
+      exactPathSpecificity,
+    ) as ExactPathSpecificity;
+    existing.hasKeyword = true;
+    existing.importance ??= r.importance;
+    existing.triggers ??= r.triggers;
+    existing.projectKey ??= r.projectKey;
+    if (!existing.provenance && r.provenance) {
+      existing.provenance = r.provenance;
     }
+    if (r.snippet && r.snippet.length > 0) {
+      existing.snippet = r.snippet;
+    }
+    byId.set(r.id, existing);
   }
 
   const temporalDecayConfig = { ...DEFAULT_TEMPORAL_DECAY_CONFIG, ...params.temporalDecay };

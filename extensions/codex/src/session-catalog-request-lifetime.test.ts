@@ -79,7 +79,12 @@ async function createCatalogHarness(agentDir: string, resources: CatalogResource
     return transport.client;
   });
   let config: OpenClawConfig = {
-    agents: { list: ["main", "other"].map((id) => ({ id, agentDir, workspace: agentDir })) },
+    agents: {
+      entries: {
+        main: { agentDir, workspace: agentDir },
+        other: { agentDir, workspace: agentDir },
+      },
+    },
   };
   const pluginConfig = {
     appServer: {

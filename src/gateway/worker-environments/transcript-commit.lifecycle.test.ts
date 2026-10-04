@@ -44,7 +44,7 @@ beforeAll(() => {
   store = createWorkerTranscriptCommitStore({ database: openOpenClawStateDatabase() });
   committer = createWorkerTranscriptCommitter({
     getConfig: () => ({
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       session: { store: storePath },
     }),
     store,

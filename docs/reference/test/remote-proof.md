@@ -219,8 +219,9 @@ use the labeled `run --keep` flow above. Stop has no `--timing-json`.
 
 - Warm from the task checkout. Claims belong to checkout paths; `--reclaim`
   deliberately transfers that ownership and never changes repository identity.
-  Sparse staging uses the wrapper's ownership path. Do not sync or reclaim
-  while another command owns the lease.
+  After a temporary-source run, the wrapper restores retained Blacksmith and
+  AWS lease claims to the invoking checkout. A claim transferred elsewhere is
+  left untouched. Do not sync or reclaim while another command owns the lease.
 - Wrapper reuse requires the local SSH key created by Crabbox. A missing key
   requires a fresh warmup. Leases created directly by Blacksmith remain usable
   through `blacksmith testbox run --id <tbx_id>`, not Crabbox wrapper reuse.

@@ -43,7 +43,7 @@ it.each(["native", "worker"] as const)(
   "retains assigned owner and participants before observers after a %s metadata write",
   async (writer) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg = { agents: { list: [{ id: "main", default: true }] } };
+      const cfg = { agents: { entries: { main: {} } } };
       const creator = ensureProfileForEmail("creator@example.com");
       const owner = ensureProfileForEmail("owner@example.com");
       const participant = ensureProfileForEmail("participant@example.com");
@@ -206,7 +206,7 @@ it.each([false, true])(
 it("keeps a captured row when another physical store resets the same key and session ID", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       session: { scope: "global" as const },
     };
     const query = {
@@ -293,7 +293,7 @@ it.each([false, true])(
   "retains newer native metadata through reentrant identity publication (cache=%s)",
   async (cache) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg = { agents: { list: [{ id: "main", default: true }] } };
+      const cfg = { agents: { entries: { main: {} } } };
       const scope = { agentId: "main", sessionKey: "agent:main:identity-publication-reentry" };
       const updatedAt = Date.now();
       replaceSessionEntrySync(scope, { sessionId: "original", updatedAt });
@@ -354,7 +354,7 @@ it.each(["maintenance-finalize", "lifecycle-artifacts"] as const)(
   "publishes %s removals before row listeners recreate the key",
   async (kind) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const cfg = { agents: { list: [{ id: "main", default: true }] } };
+      const cfg = { agents: { entries: { main: {} } } };
       const scope = { agentId: "main", sessionKey: "agent:main:publication-reentry" };
       replaceSessionEntrySync(scope, { sessionId: "removed", updatedAt: Date.now() });
       const databaseOptions = { agentId: "main", env: state.env };

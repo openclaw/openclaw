@@ -54,7 +54,6 @@ import {
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
-import type { ReplyPayload } from "../types.js";
 import {
   runMemoryFlushIfNeeded as runMemoryFlushIfNeededRaw,
   runSessionCompactionIfNeeded as runSessionCompactionIfNeededRaw,
@@ -701,7 +700,6 @@ describe("runMemoryFlushIfNeeded", () => {
     const sessionEntry = createFlushSessionEntry();
     const sessionStore = { main: sessionEntry };
     await writeTestSessionStore(storePath, "main", sessionEntry);
-    const visibleErrorPayloads: Array<{ text?: string; isError?: boolean }> = [];
     runEmbeddedAgentMock.mockImplementationOnce(async () => {
       return {
         payloads: [
@@ -720,17 +718,8 @@ describe("runMemoryFlushIfNeeded", () => {
       followupRun,
       sessionStore,
       storePath,
-      onVisibleErrorPayloads: (payloads) => {
-        visibleErrorPayloads.push(...payloads);
-      },
     });
 
-    expect(visibleErrorPayloads).toEqual([
-      {
-        text: "⚠️ write failed: Memory flush writes are restricted to memory/2023-11-14.md; use that path only.",
-        isError: true,
-      },
-    ]);
     expect(requireModelFallbackCall().userLockedAuthProfileId).toBeUndefined();
     expect(result.outcome).toBe("failed");
     expect(registerAgentRunContextMock).toHaveBeenCalledOnce();
@@ -746,35 +735,10 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(persisted.memoryFlush).toEqual({ kind: "failed", failureCount: 1 });
   });
 
-  it("redacts and caps generic visible memory-flush failures before delivery", async () => {
-    const sessionEntry = createFlushSessionEntry();
-    await writeTestSessionStore(sessionScope().storePath, "main", sessionEntry);
-    const visibleErrorPayloads: Array<{ text?: string; isError?: boolean }> = [];
-    const token = ["sk", "abcdefghijklmnopqrstuv"].join("-");
-    runWithModelFallbackMock.mockRejectedValueOnce(
-      new Error(`provider failed with Authorization: Bearer ${token} ${"🚀".repeat(400)}`),
-    );
-
-    await runDefaultMemoryFlush(sessionEntry, {
-      defaultModel: "anthropic/claude-opus-4-7",
-      onVisibleErrorPayloads: (payloads) => {
-        visibleErrorPayloads.push(...payloads);
-      },
-    });
-
-    const [payload] = visibleErrorPayloads;
-    expect(payload?.isError).toBe(true);
-    expect(payload?.text).toMatch(/^⚠️ provider failed with Authorization: Bearer /);
-    expect(payload?.text).not.toContain(token);
-    expect(payload?.text?.length).toBeLessThanOrEqual(600);
-    expect(payload?.text?.endsWith("🚀…")).toBe(true);
-  });
-
-  it("does not surface user-abort errors as visible payloads (regression: #80755)", async () => {
+  it("does not increment memory-flush failures for user aborts (regression: #80755)", async () => {
     const storePath = path.join(rootDir, "sessions.json");
     const sessionEntry = createFlushSessionEntry();
     await writeTestSessionStore(storePath, "main", sessionEntry);
-    const visibleErrorPayloads: Array<{ text?: string; isError?: boolean }> = [];
     const abortErr = new Error("operation aborted by user");
     abortErr.name = "AbortError";
     runWithModelFallbackMock.mockRejectedValueOnce(abortErr);
@@ -782,12 +746,8 @@ describe("runMemoryFlushIfNeeded", () => {
     const result = await runDefaultMemoryFlush(sessionEntry, {
       defaultModel: "anthropic/claude-opus-4-7",
       storePath,
-      onVisibleErrorPayloads: (payloads) => {
-        visibleErrorPayloads.push(...payloads);
-      },
     });
 
-    expect(visibleErrorPayloads).toEqual([]);
     expect(result.outcome).toBe("failed");
     expect(loadMainSessionEntry(storePath).memoryFlush).toBeUndefined();
   });
@@ -833,14 +793,10 @@ describe("runMemoryFlushIfNeeded", () => {
     const message = `${failure.stage} failed`;
     const error = new Error(message);
     const cleanup = failure.setup(error);
-    const visibleErrorPayloads: ReplyPayload[] = [];
     const overrides: Partial<MemoryFlushTestParams> = {
       followupRun: createTestFollowupRun({ workspaceDir: rootDir }),
       sessionStore,
       storePath,
-      onVisibleErrorPayloads: (payloads) => {
-        visibleErrorPayloads.push(...payloads);
-      },
     };
 
     try {
@@ -855,7 +811,6 @@ describe("runMemoryFlushIfNeeded", () => {
       });
       expect(result.sessionEntry).toEqual(persistedFailure);
       expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-      expect(visibleErrorPayloads).toEqual([{ text: `⚠️ ${message}`, isError: true }]);
       expect(registerAgentRunContextMock).not.toHaveBeenCalled();
       expect(clearAgentRunContextMock).not.toHaveBeenCalled();
       const retry = await runDefaultMemoryFlush(persistedFailure, overrides);
@@ -904,24 +859,14 @@ describe("runMemoryFlushIfNeeded", () => {
     await writeTestSessionStore(storePath, "main", sessionEntry);
     runWithModelFallbackMock.mockRejectedValueOnce(new Error("provider crashed during flush"));
 
-    const visibleErrorPayloads: ReplyPayload[] = [];
     const result = await runDefaultMemoryFlush(sessionEntry, {
       defaultModel: "anthropic/claude-opus-4-7",
       storePath,
-      onVisibleErrorPayloads: (payloads) => {
-        visibleErrorPayloads.push(...payloads);
-      },
     });
 
     const persisted = loadMainSessionEntry(storePath);
     expect(result.outcome).toBe("exhausted");
     expect(persisted.memoryFlush).toEqual({ kind: "succeeded", compactionCount: 1 });
-    expect(visibleErrorPayloads[0]).toEqual(
-      expect.objectContaining({
-        text: expect.stringContaining("skipping for this cycle"),
-        isError: true,
-      }),
-    );
   });
 
   it("runs memory flush on the configured maintenance model without active fallbacks", async () => {

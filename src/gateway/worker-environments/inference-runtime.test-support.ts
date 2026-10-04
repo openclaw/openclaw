@@ -70,16 +70,15 @@ export const config = {
       models: { [`${PROVIDER}/${MODEL}`]: {} },
       workspace: WORKSPACE_BASE,
     },
-    list: [
-      { id: "main", default: true },
-      {
-        id: "runtime-agent",
+    entries: {
+      main: {},
+      "runtime-agent": {
         models: {
           [`${PROVIDER}/${MODEL}`]: { alias: ALIAS, agentRuntime: { id: "openclaw" } },
         },
         params: { temperature: 0.1 },
       },
-    ],
+    },
   },
 } satisfies OpenClawConfig;
 export const sessionEntry: SessionEntry = {
@@ -189,6 +188,7 @@ export function providerStream(message = finalMessage(), options: { omitToolEnd?
 export function setup(
   entry: SessionEntry = sessionEntry,
   options: {
+    config?: OpenClawConfig;
     catalogOnlyModel?: boolean;
     accountCatalog?: PreparedAccountCatalogAccess;
     pluginRegistry?: PluginRegistry;
@@ -215,8 +215,8 @@ export function setup(
     activeProjectKeys: [],
     allowGatewaySubagentBinding: true,
     workspaceDir: WORKSPACE,
-    config,
-    observationConfig: config,
+    config: options.config ?? config,
+    observationConfig: options.config ?? config,
     isCurrent: () => true,
     authModes: {},
     metadataSnapshot: createEmptyPluginMetadataSnapshot(WORKSPACE),

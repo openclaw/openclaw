@@ -45,6 +45,7 @@ import {
   resolveGatewayStatusProbeConfig,
   resolveGatewayStatusSummary,
 } from "./status.gateway.js";
+import { projectDaemonRuntimeStatus } from "./status.projection.js";
 import { readDaemonServiceStatus } from "./status.service.js";
 import type { GatewayRpcOpts } from "./types.js";
 
@@ -59,11 +60,6 @@ type DaemonConfigContext = {
   configMismatch: boolean;
 };
 
-type CliStatusSummary = {
-  version: string;
-  entrypoint?: string;
-};
-
 const loadGatewayProbeAuthModule = createLazyPromise(() => import("../../gateway/probe-auth.js"));
 const loadDaemonInspectModule = createLazyPromise(() => import("../../daemon/inspect.js"));
 const loadLaunchdDiagnosticsModule = createLazyPromise(() => import("./status.launchd.js"));
@@ -71,14 +67,6 @@ const loadServiceAuditModule = createLazyPromise(() => import("../../daemon/serv
 const loadGatewayTlsModule = createLazyPromise(() => import("../../infra/tls/gateway.js"));
 const loadDaemonProbeModule = createLazyPromise(() => import("./probe.js"));
 const loadRestartHealthModule = createLazyPromise(() => import("./restart-health.js"));
-
-function resolveCliStatusSummary(argv: string[] = process.argv): CliStatusSummary {
-  const entrypoint = argv[1]?.trim();
-  return {
-    version: VERSION,
-    ...(entrypoint ? { entrypoint } : {}),
-  };
-}
 
 async function loadDaemonConfigContext(
   serviceEnv?: Record<string, string>,
@@ -495,8 +483,14 @@ async function gatherDaemonStatusImpl(
     ? "target"
     : "diagnostic-only";
 
+  const projection = await projectDaemonRuntimeStatus({
+    deep: opts.deep,
+    service,
+    state: serviceState,
+  });
+
   return {
-    cli: resolveCliStatusSummary(),
+    cli: projection.cli,
     logFile: resolveConfiguredLogFilePath(cliCfg),
     service: {
       inspectionReason: serviceState.inspectionReason,
@@ -510,6 +504,7 @@ async function gatherDaemonStatusImpl(
       notLoadedText: service.notLoadedText,
       targetRole,
       command,
+      ...projection.runtimeIntent,
       ...(serviceLayout ? { layout: serviceLayout } : {}),
       runtime: runtime?.inspectionFailure
         ? {

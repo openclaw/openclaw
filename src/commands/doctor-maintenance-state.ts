@@ -197,11 +197,11 @@ export function createDoctorMaintenanceState(options: {
       options.assertCurrent?.();
       owner!.assertCurrent();
       await closeResources();
-      await closeOpenClawAgentDatabasesAsync(stateDir);
-      await closeOpenClawStateDatabaseByPathAsync(databasePath);
       try {
         return await owner!.run(async () => {
-          // Agent admission writes through shared state; retain that owner after drainage.
+          // Agent close releases its shared-state lease under maintenance ownership.
+          await closeOpenClawAgentDatabasesAsync(stateDir);
+          await closeOpenClawStateDatabaseByPathAsync(databasePath);
           await assertDoctorAgentLeaseAdmission(selectedEnv);
           return repairDoctorSqliteNoCow({
             paths,

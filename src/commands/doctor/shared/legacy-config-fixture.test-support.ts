@@ -61,10 +61,6 @@ vi.mock("./channel-legacy-config-migrate.js", () => ({
   }),
 }));
 
-export function legacyConfig(value: unknown): OpenClawConfig {
-  return value as OpenClawConfig;
-}
-
 export function useDoctorLegacyConfigFixture() {
   let previousOauthDir: string | undefined;
   let tempOauthDir = "";

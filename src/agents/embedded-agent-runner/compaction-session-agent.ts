@@ -32,18 +32,6 @@ export async function prepareCompactionSessionAgent(params: {
   effectiveWorkspace: string;
   agentDir: string;
   runtimePlan?: AgentRuntimePlan;
-  sessionKey?: string;
-  sandboxToolPolicy?: { allow?: string[]; deny?: string[] };
-  messageProvider?: string;
-  agentAccountId?: string | null;
-  groupId?: string | null;
-  groupChannel?: string | null;
-  groupSpace?: string | null;
-  spawnedBy?: string | null;
-  senderId?: string | null;
-  senderName?: string | null;
-  senderUsername?: string | null;
-  senderE164?: string | null;
 }) {
   const transportApiKey = params.authStorage
     ? await resolveEmbeddedAgentApiKey({
@@ -111,20 +99,8 @@ export async function prepareCompactionSessionAgent(params: {
       nativeWebSearchPolicyContext: {
         // Summaries have no tool loop; provider-hosted tools must not inherit
         // the originating conversation's broader web-search authority.
-        sessionKey: params.sessionKey,
         webSearchEnabled: false,
         runtimeToolAllowlist: [],
-        sandboxToolPolicy: params.sandboxToolPolicy,
-        messageProvider: params.messageProvider,
-        agentAccountId: params.agentAccountId,
-        groupId: params.groupId,
-        groupChannel: params.groupChannel,
-        groupSpace: params.groupSpace,
-        spawnedBy: params.spawnedBy,
-        senderId: params.senderId,
-        senderName: params.senderName,
-        senderUsername: params.senderUsername,
-        senderE164: params.senderE164,
       },
     },
   );
