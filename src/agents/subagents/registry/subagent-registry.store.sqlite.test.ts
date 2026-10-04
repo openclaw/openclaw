@@ -260,11 +260,12 @@ describe("subagent registry sqlite store", () => {
         writeSubagentRunValuesInDatabase(database, values, []);
       });
       const executed = observed.calls.flatMap((call) =>
-        call.mock.contexts.flatMap((statement, index) =>
-          statement instanceof StatementSync
-            ? [{ query: statement.sourceSQL, bindings: call.mock.calls[index].length }]
-            : [],
-        ),
+        call.mock.calls.flatMap((bindings, index) => {
+          const statement = call.mock.contexts[index];
+          return statement instanceof StatementSync
+            ? [{ query: statement.sourceSQL, bindings: bindings.length }]
+            : [];
+        }),
       );
       expect(
         executed.filter(({ query }) => /^select .*from "subagent_runs"/i.test(query)),
