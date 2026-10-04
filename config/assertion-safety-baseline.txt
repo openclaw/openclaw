@@ -407,7 +407,6 @@ extensions/googlechat/src/monitor-event.ts	2
 extensions/groq/index.ts	2
 extensions/huggingface/index.ts	1
 extensions/huggingface/models.ts	2
-extensions/imessage/src/accounts.ts	4
 extensions/imessage/src/actions-contract.ts	1
 extensions/imessage/src/actions.runtime.ts	2
 extensions/imessage/src/actions.ts	1
@@ -418,7 +417,6 @@ extensions/imessage/src/approval-reactions.ts	2
 extensions/imessage/src/approval-target-keys.ts	1
 extensions/imessage/src/channel.runtime.ts	1
 extensions/imessage/src/channel.ts	2
-extensions/imessage/src/chat.ts	1
 extensions/imessage/src/client.ts	3
 extensions/imessage/src/monitor/catchup-bridge.ts	1
 extensions/imessage/src/monitor/catchup.ts	2
@@ -464,7 +462,6 @@ extensions/matrix/src/approval-handler.runtime.ts	7
 extensions/matrix/src/approval-native.ts	6
 extensions/matrix/src/approval-reactions.ts	1
 extensions/matrix/src/auth-precedence.ts	1
-extensions/matrix/src/channel-account-paths.ts	1
 extensions/matrix/src/channel.ts	4
 extensions/matrix/src/cli-account.ts	1
 extensions/matrix/src/cli-direct.ts	2
@@ -622,7 +619,6 @@ extensions/msteams/src/feedback-invoke.ts	2
 extensions/msteams/src/file-consent.ts	1
 extensions/msteams/src/graph.ts	2
 extensions/msteams/src/inbound.ts	1
-extensions/msteams/src/messenger.ts	1
 extensions/msteams/src/monitor-handler/inbound-dispatch.ts	1
 extensions/msteams/src/monitor-handler/inbound-facts.ts	1
 extensions/msteams/src/monitor.ts	5
@@ -991,7 +987,6 @@ extensions/twitch/src/token.ts	3
 extensions/twitch/src/twitch-ingress.ts	4
 extensions/venice/models.ts	1
 extensions/vllm/stream.ts	1
-extensions/voice-call/doctor-contract-api.ts	1
 extensions/voice-call/index.ts	2
 extensions/voice-call/setup-api.ts	1
 extensions/voice-call/src/config.ts	2
@@ -1850,12 +1845,11 @@ src/commands/doctor-plugin-registry.ts	1
 src/commands/doctor-post-upgrade.ts	1
 src/commands/doctor-prompter.ts	1
 src/commands/doctor-retired-phone-control.ts	1
-src/commands/doctor-sandbox-legacy-registry.ts	7
 src/commands/doctor-sandbox.ts	4
 src/commands/doctor-security.ts	3
 src/commands/doctor-session-canonical-keys.ts	1
 src/commands/doctor-session-incognito-key-repair-state.ts	8
-src/commands/doctor-session-snapshots.ts	4
+src/commands/doctor-session-snapshots.ts	3
 src/commands/doctor-session-sqlite-compact.ts	1
 src/commands/doctor-session-sqlite-recover-report.ts	1
 src/commands/doctor-session-state-providers.ts	3
@@ -1895,7 +1889,6 @@ src/commands/doctor/shared/legacy-config-migrations.runtime.models.codex.ts	4
 src/commands/doctor/shared/legacy-config-migrations.runtime.models.refs.ts	1
 src/commands/doctor/shared/legacy-config-state-migration-input.ts	2
 src/commands/doctor/shared/legacy-talk-config-normalizer.ts	1
-src/commands/doctor/shared/legacy-web-tools-migrate.ts	1
 src/commands/doctor/shared/open-policy-allowfrom.ts	2
 src/commands/doctor/shared/plugin-runtime-symlinks.ts	1
 src/commands/doctor/shared/plugin-tool-allowlist-warnings.ts	1

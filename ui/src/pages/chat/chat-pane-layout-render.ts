@@ -5,7 +5,9 @@ import type { SessionObserverDigest } from "../../../../packages/gateway-protoco
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { availableLinkReaders } from "../../app/link-reader-routing.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
+import { icons } from "../../components/icons.ts";
 import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
+import { t } from "../../i18n/index.ts";
 import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
@@ -26,6 +28,7 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { ChatToolIconController } from "./chat-tool-icon-controller.ts";
 import { renderChat, type ChatProps } from "./chat-view.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
+import { hasTerminalRunStatus } from "./components/chat-composer-state.ts";
 import { renderChatDetailSlot } from "./components/chat-detail-slot.ts";
 import { renderChatImageLightbox } from "./components/chat-image-lightbox.ts";
 import { renderSessionWorkspaceRail } from "./components/chat-session-workspace.ts";
@@ -57,6 +60,12 @@ type ChatPaneLayoutRenderParams = {
 };
 
 export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRender {
+  private readonly refreshProcesses = () => {
+    void this.querySelector("openclaw-chat-processes-panel")?.refresh();
+  };
+  private readonly refreshSubagents = () => {
+    void this.querySelector("openclaw-chat-subagents-panel")?.refresh();
+  };
   private readonly toolIcons = new ChatToolIconController(
     this,
     () => this.context,
@@ -139,13 +148,43 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       ...chatProps,
       composerRecovery: recovery,
       pluginToolIcons: this.toolIcons.icons,
-      presented: { owner: this, isPresented: () => this.active && this.presented },
+      presented: {
+        owner: this,
+        isPresented: () => (this.active || Boolean(this.onBackToSubagents)) && this.presented,
+      },
       progressCardVisibility: panePresentation,
       transcriptVisible: slotPresentation("conversation"),
       latestBrowserTabs: this.active && this.presented ? latestBrowserTabs : undefined,
       historyState: catalog ? undefined : state,
     });
     const primary = html`<div class="chat-pane-primary-column">${chat}</div>`;
+    const subagentStop =
+      chatProps.disabledBanner?.presentation &&
+      chatProps.canAbort &&
+      chatProps.onAbort &&
+      !hasTerminalRunStatus(chatProps.runStatus)
+        ? html`<button
+            class="chat-subagent-detail__stop"
+            type="button"
+            aria-label=${t("chat.runControls.stopGenerating")}
+            @click=${chatProps.onAbort}
+          >
+            ${icons.stop}<span>${t("chat.runControls.stop")}</span>
+          </button>`
+        : nothing;
+    const subagentHeader = this.onBackToSubagents
+      ? html`<header class="chat-subagent-detail__header">
+          <button class="chat-subagent-detail__back" type="button" @click=${this.onBackToSubagents}>
+            ${icons.arrowLeft}${t("chat.subagentsPanel.back")}
+          </button>
+          <div class="chat-subagent-detail__heading">
+            <strong class="chat-subagent-detail__title"
+              >${this.resolveHeaderSessionTitle(selectedSession)}</strong
+            >
+            ${subagentStop}
+          </div>
+        </header>`
+      : nothing;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
     const discussionState = this.sessionDiscussionStates.get(state.sessionKey.trim());
     const discussionAvailable = discussionState === "available" || discussionState === "open";
@@ -198,6 +237,16 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     }
     const desktopFocus = this.desktopFocus;
     const panelDefinitions = sidebarPanelDefinitions({
+      paneId: this.paneId,
+      panePresentationId: this.presentationId,
+      subagentsInputRegion: this.inputRegion,
+      subagentsPresented: slotPresentation("subagents"),
+      processesPresented: slotPresentation("processes"),
+      onRefreshProcesses: this.refreshProcesses,
+      subagentsAvailable: !catalog,
+      onRefreshSubagents: this.refreshSubagents,
+      onSubagentSessionSelect: (sessionKey, options) =>
+        this.onPaneSessionChange?.(this.paneId, sessionKey, options),
       panePresentation,
       state,
       themeMode: this.context.theme.resolvedMode,
@@ -269,32 +318,36 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const connectionGeneration = this.connectionGeneration;
     // Main panel actions share the task toolbar. Content roots stay in the
     // sidebar region so changing their presentation never reconnects them.
-    const header = this.compact
-      ? nothing
-      : html`${this.renderPaneHeader(
-            sessionWorkspace,
-            selectedSession,
-            catalog,
-            agentWorkspace,
-            workspaceGit,
-            chatProps.placementStartup,
-            sidebarLayout,
-            panelDefinitions,
-          )}
-          <div class="chat-session-accessories">
-            <openclaw-plugin-contributions
-              .kind=${"session-header"}
-              .sessionKey=${state.sessionKey}
-              .agentId=${currentAgentId}
-              .session=${selectedSession}
-              .presented=${livePresentation({
-                owner: this,
-                isPresented: () => this.visuallyPresented,
-                preview: () =>
-                  !this.presented && this.connectionGeneration === connectionGeneration,
-              })}
-            ></openclaw-plugin-contributions>
-          </div>`;
+    const header =
+      subagentHeader !== nothing
+        ? subagentHeader
+        : this.compact
+          ? nothing
+          : html`${this.renderPaneHeader(
+                sessionWorkspace,
+                selectedSession,
+                catalog,
+                agentWorkspace,
+                workspaceGit,
+                chatProps.placementStartup,
+                sidebarLayout,
+                panelDefinitions,
+                subagentStop,
+              )}
+              <div class="chat-session-accessories">
+                <openclaw-plugin-contributions
+                  .kind=${"session-header"}
+                  .sessionKey=${state.sessionKey}
+                  .agentId=${currentAgentId}
+                  .session=${selectedSession}
+                  .presented=${livePresentation({
+                    owner: this,
+                    isPresented: () => this.visuallyPresented,
+                    preview: () =>
+                      !this.presented && this.connectionGeneration === connectionGeneration,
+                  })}
+                ></openclaw-plugin-contributions>
+              </div>`;
     const content = renderSidebarRegion({
       presentationId: this.presentationId,
       conversationTab: {
@@ -323,10 +376,12 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       primary,
       requestUpdate: state.requestUpdate!,
     });
-    return html`${content}
-    ${presentedContent(
+    const overlays = presentedContent(
       panePresentation,
       html`${renderChatImageLightbox(state.imageLightbox, state.handleCloseImage)}${this.renderResetConfirmation()}`,
-    )}`;
+    );
+    return this.onBackToSubagents
+      ? html`<section class="chat-subagent-detail">${content}${overlays}</section>`
+      : html`${content}${overlays}`;
   }
 }

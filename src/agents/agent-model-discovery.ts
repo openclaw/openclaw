@@ -25,7 +25,6 @@ type DiscoverModelsOptions = {
   modelsJsonContents?: string | null;
   pluginCatalogs?: readonly PersistedPluginModelCatalog[];
   staticProviderConfigs?: Readonly<Record<string, ModelProviderConfig>>;
-  providerFilter?: string;
   pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
   workspaceDir?: string;
   normalizeModels?: boolean;
@@ -71,9 +70,6 @@ function createOpenClawModelRegistry(
   const getAvailable = registry.getAvailable.bind(registry);
   const find = registry.find.bind(registry);
   const refresh = registry.refresh.bind(registry);
-  const providerFilter = options?.providerFilter ? normalizeProviderId(options.providerFilter) : "";
-  const matchesProviderFilter = (entry: Model) =>
-    !providerFilter || normalizeProviderId(entry.provider) === providerFilter;
   const shouldNormalize = options?.normalizeModels !== false;
   const findCache = new Map<string, Model | undefined>();
   const normalizeEntry = (entry: Model) => {
@@ -91,14 +87,8 @@ function createOpenClawModelRegistry(
     });
   };
 
-  registry.getAll = () => {
-    const entries = getAll().filter(matchesProviderFilter);
-    return shouldNormalize ? entries.map(normalizeEntry) : entries;
-  };
-  registry.getAvailable = () => {
-    const entries = getAvailable().filter(matchesProviderFilter);
-    return shouldNormalize ? entries.map(normalizeEntry) : entries;
-  };
+  registry.getAll = () => getAll().map(normalizeEntry);
+  registry.getAvailable = () => getAvailable().map(normalizeEntry);
   registry.find = (provider: string, modelId: string) => {
     const normalizedProvider = normalizeProviderId(provider);
     const key = `${normalizedProvider}\0${modelId}`;
@@ -134,7 +124,7 @@ export function discoverAuthStorageFacts(
   return { ...facts, authStorage: AuthStorage.inMemory(facts.credentials) };
 }
 
-/** Creates a model registry for one agent directory, optionally filtered and plugin-normalized. */
+/** Creates a model registry for one agent directory with optional plugin normalization. */
 export function discoverModels(
   authStorage: AuthStorage,
   agentDir: string,

@@ -268,7 +268,7 @@ export async function consolidateLiveModelSwitchAfterRun(params: {
       delete next.liveModelSwitchPending;
       return next;
     },
-    { replaceEntry: true },
+    { replaceEntry: true, workerGuard: {} },
   );
 }
 
@@ -316,6 +316,6 @@ export async function clearLiveModelSwitchPending(params: {
       delete next.liveModelSwitchPending;
       return next;
     },
-    { replaceEntry: true },
+    { replaceEntry: true, workerGuard: {} },
   );
 }

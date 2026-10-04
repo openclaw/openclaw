@@ -310,7 +310,7 @@ export function buildReconciledSidebarZone(input: {
   const defaultPluginNavigationKeys = new Set([
     ...pluginTabs.keys(),
     ...navigation
-      .filter((entry) => entry.value.defaultVisible !== false)
+      .filter((entry) => !entry.value.parent && entry.value.defaultVisible !== false)
       .toSorted((a, b) => (a.value.order ?? 0) - (b.value.order ?? 0) || a.key.localeCompare(b.key))
       .map((entry) => entry.key),
   ]);

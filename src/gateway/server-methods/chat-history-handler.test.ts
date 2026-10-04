@@ -341,6 +341,9 @@ describe("chat history delta publication", () => {
         const initial = await call();
         const initialResponse = expectDefined(initial.mock.calls[0], "initial response");
         expect(initialResponse[0]).toBe(true);
+        expect(initialResponse[1]).toMatchObject({
+          sessionInfo: { sessionId: scope.sessionId, lifecycleRevision: "before-reset" },
+        });
         const cursor = asOptionalRecord(initialResponse[1])?.deltaCursor;
         if (typeof cursor !== "string") {
           throw new Error("expected initial delta cursor");
@@ -387,6 +390,18 @@ describe("chat history delta publication", () => {
           expect.objectContaining({ code, ...(code === "UNAVAILABLE" ? { retryable: true } : {}) }),
         );
         expect(JSON.stringify(respond.mock.calls)).not.toContain("private delta content");
+        if (change === "reset") {
+          // A reset can retain the physical transcript ID while invalidating cached full messages.
+          expect(await call()).toHaveBeenCalledExactlyOnceWith(
+            true,
+            expect.objectContaining({
+              sessionInfo: expect.objectContaining({
+                sessionId: scope.sessionId,
+                lifecycleRevision: "after-reset",
+              }),
+            }),
+          );
+        }
       });
     },
   );

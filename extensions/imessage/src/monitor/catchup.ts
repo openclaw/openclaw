@@ -89,14 +89,14 @@ function normalizeIMessageCatchupCursor(value: unknown): IMessageCatchupCursor |
   if (typeof raw.lastSeenRowid !== "number" || !Number.isFinite(raw.lastSeenRowid)) {
     return null;
   }
-  const failureRetries = sanitizeFailureRetriesInput(raw.failureRetries);
-  const hasRetries = Object.keys(failureRetries).length > 0;
-  return {
-    lastSeenMs: raw.lastSeenMs,
-    lastSeenRowid: raw.lastSeenRowid,
-    updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : 0,
-    ...(hasRetries ? { failureRetries } : {}),
-  };
+  return buildIMessageCatchupCursor(
+    {
+      lastSeenMs: raw.lastSeenMs,
+      lastSeenRowid: raw.lastSeenRowid,
+      failureRetries: raw.failureRetries,
+    },
+    typeof raw.updatedAt === "number" ? raw.updatedAt : 0,
+  );
 }
 
 async function loadIMessageCatchupCursor(accountId: string): Promise<IMessageCatchupCursor | null> {
@@ -147,18 +147,6 @@ function decideCatchupCursorSave(
     };
   }
   return { operation: "update", action: "set", value: cursor };
-}
-
-async function saveIMessageCatchupCursor(
-  accountId: string,
-  next: { lastSeenMs: number; lastSeenRowid: number; failureRetries?: Record<string, number> },
-  options: { allowCursorRewindForRetries?: boolean } = {},
-): Promise<void> {
-  const cursor = buildIMessageCatchupCursor(next, Date.now());
-  const allowCursorRewindForRetries = options.allowCursorRewindForRetries === true;
-  await updateIMessageCatchupCursor(accountId, (existing) =>
-    decideCatchupCursorSave(existing, cursor, allowCursorRewindForRetries),
-  );
 }
 
 async function updateIMessageCatchupCursor(
@@ -363,12 +351,13 @@ export async function performIMessageCatchup(
       summary.skippedPreCursor += 1;
       continue;
     }
+    // A held failure clamps the final cursor below this watermark.
+    highWatermarkMs = Math.max(highWatermarkMs, row.date);
+    highWatermarkRowid = Math.max(highWatermarkRowid, row.rowid);
     if (row.date < ageBoundMs) {
       // Row predates the recency ceiling. Skip but advance the cursor so we
       // don't re-fetch it next pass.
       summary.skippedPreCursor += 1;
-      highWatermarkMs = Math.max(highWatermarkMs, row.date);
-      highWatermarkRowid = Math.max(highWatermarkRowid, row.rowid);
       continue;
     }
     if (row.isFromMe) {
@@ -380,15 +369,11 @@ export async function performIMessageCatchup(
         );
       }
       summary.skippedFromMe += 1;
-      highWatermarkMs = Math.max(highWatermarkMs, row.date);
-      highWatermarkRowid = Math.max(highWatermarkRowid, row.rowid);
       continue;
     }
     const priorCount = failureRetries[row.guid] ?? 0;
     if (priorCount >= cfg.maxFailureRetries) {
       summary.skippedGivenUp += 1;
-      highWatermarkMs = Math.max(highWatermarkMs, row.date);
-      highWatermarkRowid = Math.max(highWatermarkRowid, row.rowid);
       continue;
     }
 
@@ -403,8 +388,6 @@ export async function performIMessageCatchup(
     if (dispatched.ok) {
       summary.replayed += 1;
       delete failureRetries[row.guid];
-      highWatermarkMs = Math.max(highWatermarkMs, row.date);
-      highWatermarkRowid = Math.max(highWatermarkRowid, row.rowid);
       continue;
     }
 
@@ -416,8 +399,6 @@ export async function performIMessageCatchup(
       params.warn?.(
         `imessage catchup: giving up on guid=${row.guid} after ${nextCount} failures; advancing cursor past it`,
       );
-      highWatermarkMs = Math.max(highWatermarkMs, row.date);
-      highWatermarkRowid = Math.max(highWatermarkRowid, row.rowid);
       continue;
     }
     // Below the retry ceiling: hold the cursor BEFORE this row so the next
@@ -450,16 +431,12 @@ export async function performIMessageCatchup(
 
   const capped = capFailureRetriesMap(failureRetries);
   summary.cursorAfter = { lastSeenMs, lastSeenRowid };
-  await saveIMessageCatchupCursor(
-    params.accountId,
-    {
-      lastSeenMs,
-      lastSeenRowid,
-      failureRetries: capped,
-    },
-    {
-      allowCursorRewindForRetries: earliestHeldFailureRow !== null,
-    },
+  const next = buildIMessageCatchupCursor(
+    { lastSeenMs, lastSeenRowid, failureRetries: capped },
+    Date.now(),
+  );
+  await updateIMessageCatchupCursor(params.accountId, (existing) =>
+    decideCatchupCursorSave(existing, next, earliestHeldFailureRow !== null),
   );
 
   if (summary.replayed > 0 || summary.failed > 0 || summary.givenUp > 0) {

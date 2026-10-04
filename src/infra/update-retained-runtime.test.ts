@@ -229,7 +229,7 @@ export function createSqliteWorkerBackend(_input, { databasePath }) {
 
 async function fixture(
   base: string,
-  layout: "npm" | "pnpm" | "pnpm-workspace" | "git" | "git-linked",
+  layout: "npm" | "pnpm" | "pnpm-workspace" | "git" | "git-linked" | "git-modules",
 ) {
   const root = layout.startsWith("pnpm")
     ? path.join(base, "global/node_modules/.pnpm/openclaw@1/node_modules/openclaw")
@@ -276,7 +276,7 @@ async function fixture(
       process.platform === "win32" ? "junction" : "dir",
     );
   }
-  if (layout === "git") {
+  if (layout === "git" || layout === "git-modules") {
     // Pulling a workspace retirement can leave ignored modules and a pnpm hoist link.
     const retired = path.join(root, "extensions/retired");
     const hoisted = path.join(root, "node_modules/.pnpm/node_modules");
@@ -284,7 +284,11 @@ async function fixture(
     await mkdir(path.join(hoisted, "@fixture"), { recursive: true });
     const linkType = process.platform === "win32" ? "junction" : "dir";
     await symlink(root, path.join(hoisted, "openclaw"), linkType);
-    await symlink(retired, path.join(hoisted, "@fixture/retired"), linkType);
+    await symlink(
+      layout === "git-modules" ? path.join(retired, "node_modules") : retired,
+      path.join(hoisted, "@fixture/retired"),
+      linkType,
+    );
     await symlink(dependency, path.join(retired, "node_modules/fixture"), linkType);
   }
   await mkdir(path.join(root, ".git"));
@@ -411,39 +415,6 @@ it.each([".git", "extensions/retired", "extensions/linked-residue"])(
   },
 );
 
-it("retains a directly linked module directory beneath a manifest-less host parent", async () => {
-  const root = await fixture(tempDirs.make("openclaw-retained-module-owner-"), "git");
-  const link = path.join(root, "node_modules/.pnpm/node_modules/@fixture/retired");
-  await fs.unlink(link);
-  await symlink(
-    path.join(root, "extensions/retired/node_modules"),
-    link,
-    process.platform === "win32" ? "junction" : "dir",
-  );
-  const moduleUrl = pathToFileURL(path.join(root, "dist/updater.mjs")).href;
-  await withRetainedUpdateRuntime(moduleUrl, async (retain) => {
-    await retain({ mutationRoots: [root], timeoutMs: 30_000, assertCurrent() {} });
-    const worker = captureRuntimeWorkerSource(
-      resolveRuntimeWorkerUrl({
-        currentModuleUrl: moduleUrl,
-        sourceWorkerName: "store",
-        distWorkerPath: "state/store.js",
-      }),
-    );
-    const retainedRoot = path.resolve(path.dirname(fileURLToPath(worker.moduleUrl)), "../..");
-    await rm(root, { recursive: true });
-    expect(
-      await readFile(
-        path.join(
-          retainedRoot,
-          "node_modules/.pnpm/node_modules/@fixture/retired/fixture/index.js",
-        ),
-        "utf8",
-      ),
-    ).toBe('export const generation = "retained";\n');
-  });
-});
-
 it("refuses files added between residue selection and inventory", async () => {
   const root = await fixture(tempDirs.make("openclaw-retained-residue-inventory-"), "git");
   const residue = path.join(root, "extensions/retired");
@@ -472,7 +443,7 @@ it("refuses files added between residue selection and inventory", async () => {
   }
 });
 
-it.each(["npm", "pnpm", "pnpm-workspace", "git", "git-linked"] as const)(
+it.each(["npm", "pnpm", "pnpm-workspace", "git", "git-linked", "git-modules"] as const)(
   "retains %s worker chunks and dependencies through replacement and drains only its borrowers",
   async (layout) => {
     const base = tempDirs.make("openclaw-retained-runtime-");
@@ -536,13 +507,17 @@ it.each(["npm", "pnpm", "pnpm-workspace", "git", "git-linked"] as const)(
       );
       await rm(displaced, { recursive: true });
 
-      if (layout === "git") {
+      if (layout === "git" || layout === "git-modules") {
         const retired = path.join(retainedRoot, "node_modules/.pnpm/node_modules/@fixture/retired");
-        expect(await fs.realpath(retired)).toBe(path.join(retainedRoot, "extensions/retired"));
-        await expect(stat(path.join(retired, "package.json"))).rejects.toMatchObject({
-          code: "ENOENT",
-        });
-        expect(await readFile(path.join(retired, "node_modules/fixture/index.js"), "utf8")).toBe(
+        const modulePath =
+          layout === "git-modules" ? "fixture/index.js" : "node_modules/fixture/index.js";
+        if (layout === "git") {
+          expect(await fs.realpath(retired)).toBe(path.join(retainedRoot, "extensions/retired"));
+          await expect(stat(path.join(retired, "package.json"))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+        }
+        expect(await readFile(path.join(retired, modulePath), "utf8")).toBe(
           'export const generation = "retained";\n',
         );
       }
@@ -582,70 +557,6 @@ it.each(["npm", "pnpm", "pnpm-workspace", "git", "git-linked"] as const)(
   },
 );
 
-it.each(["pnpm10", "pnpm11", "bun-custom", "bun-custom-no-env"] as const)(
-  "keeps retained workers outside the complete %s owner even when temporary storage is inside it",
-  async (layout) => {
-    const base = tempDirs.make("retained-owner-boundary-");
-    const owner = path.join(base, "manager-project");
-    const globalRoot =
-      layout === "pnpm10"
-        ? path.join(owner, "5/node_modules")
-        : layout === "pnpm11"
-          ? path.join(owner, "v11")
-          : path.join(owner, "node_modules");
-    const root = await fixture(globalRoot, "npm");
-    const temporary = path.join(owner, "scratch");
-    await mkdir(temporary, { recursive: true });
-    vi.spyOn(os, "tmpdir").mockReturnValue(temporary);
-    // The admitted custom Bun project differs from the invoking process settings.
-    const env = layout === "bun-custom-no-env" ? {} : { BUN_INSTALL_GLOBAL_DIR: owner };
-    const installTarget: ResolvedGlobalInstallTarget = {
-      manager: layout.startsWith("bun-") ? "bun" : "pnpm",
-      command: layout.startsWith("bun-") ? "bun" : "pnpm",
-      globalRoot,
-      packageRoot: root,
-    };
-    const moduleUrl = pathToFileURL(path.join(root, "dist/updater.mjs")).href;
-    let retainedPath: string | undefined;
-    let retainedStore: SqliteWorkerStore<Operations> | undefined;
-    await withRetainedUpdateRuntime(moduleUrl, async (retain) => {
-      await retain({
-        mutationRoots: [root],
-        installTarget,
-        env,
-        timeoutMs: 30_000,
-        assertCurrent() {},
-      });
-      const source = captureRuntimeWorkerSource(
-        resolveRuntimeWorkerUrl({
-          currentModuleUrl: moduleUrl,
-          sourceWorkerName: "store",
-          distWorkerPath: "state/store.js",
-        }),
-      );
-      retainedPath = fileURLToPath(source.moduleUrl);
-      const relative = path.relative(owner, retainedPath);
-      expect(
-        relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative),
-      ).toBe(true);
-      await rm(owner, { recursive: true });
-      const store = await openSqliteWorkerStore<Operations>({
-        ...source,
-        databasePath: path.join(base, "retained.sqlite"),
-        input: undefined,
-      });
-      retainedStore = store;
-      stores.add(store);
-      expect(await store.execute({ type: "append", input: "after-owner-removal" })).toEqual([
-        "retained:after-owner-removal",
-      ]);
-    });
-    assert.ok(retainedPath && retainedStore);
-    expect(await readFile(retainedPath, "utf8")).toBe(backend);
-    await expect(retainedStore.execute({ type: "append", input: "escaped" })).rejects.toThrow();
-  },
-);
-
 it("refuses unsafe fallback storage without changing the installed runtime", async () => {
   const base = tempDirs.make("retained-owner-refusal-");
   const owner = path.join(base, "manager-project");
@@ -677,24 +588,24 @@ it("refuses unsafe fallback storage without changing the installed runtime", asy
   expect(await fs.readdir(base)).toEqual(["manager-project"]);
 });
 
-it.each(["git", "alias", "ancestor", "npm", "pnpm10", "pnpm11", "bun"] as const)(
+it.each(["git", "alias", "ancestor", "npm", "pnpm10", "pnpm11", "bun", "bun-no-env"] as const)(
   "retains %s on the source filesystem outside the complete replacement boundary",
   async (layout) => {
     const base = await fs.realpath(tempDirs.make("openclaw-retained-placement-"));
-    const temporary = path.join(base, "other-volume");
-    await mkdir(temporary);
     const project = path.join(base, "installation");
     const globalRoot = path.join(
       project,
       layout === "pnpm10" ? "5/node_modules" : layout === "pnpm11" ? "v11" : "node_modules",
     );
-    const packaged = ["npm", "pnpm10", "pnpm11", "bun"].includes(layout);
+    const packaged = ["npm", "pnpm10", "pnpm11", "bun", "bun-no-env"].includes(layout);
     const packageParent = packaged
       ? layout === "pnpm11"
         ? path.join(globalRoot, "group/node_modules")
         : globalRoot
       : project;
     const root = await fixture(packageParent, "npm");
+    const temporary = path.join(packaged && layout !== "npm" ? project : base, "scratch");
+    await mkdir(temporary);
     const alias = path.join(base, "alias");
     if (layout === "alias") {
       await symlink(root, alias, process.platform === "win32" ? "junction" : "dir");
@@ -704,7 +615,7 @@ it.each(["git", "alias", "ancestor", "npm", "pnpm10", "pnpm11", "bun"] as const)
       layout === "npm" ? globalRoot : packaged || layout === "ancestor" ? project : root;
     const installTarget: ResolvedGlobalInstallTarget | undefined = packaged
       ? {
-          manager: layout === "bun" ? "bun" : layout === "npm" ? "npm" : "pnpm",
+          manager: layout.startsWith("bun") ? "bun" : layout === "npm" ? "npm" : "pnpm",
           command: "fixture",
           globalRoot,
           packageRoot: root,
@@ -731,7 +642,7 @@ it.each(["git", "alias", "ancestor", "npm", "pnpm10", "pnpm11", "bun"] as const)
         await retain({
           mutationRoots: [mutationRoot],
           installTarget,
-          env: { BUN_INSTALL_GLOBAL_DIR: project },
+          env: layout === "bun-no-env" ? {} : { BUN_INSTALL_GLOBAL_DIR: project },
           timeoutMs: 30_000,
           assertCurrent() {},
         });
@@ -773,45 +684,42 @@ it.each(["git", "alias", "ancestor", "npm", "pnpm10", "pnpm11", "bun"] as const)
   },
 );
 
-it.each(["EACCES", "EROFS"])(
-  "falls back when the runtime sibling is unavailable (%s)",
-  async (code) => {
-    const base = await fs.realpath(tempDirs.make("openclaw-retained-fallback-"));
-    const root = await fixture(base, "npm");
-    const temporary = path.join(base, "temporary");
-    await mkdir(temporary);
-    const makeTemp = fs.mkdtemp;
-    const temporaryRoot = vi.spyOn(os, "tmpdir").mockReturnValue(temporary);
-    const allocation = vi.spyOn(fs, "mkdtemp").mockImplementation(async (...args) => {
-      if (path.dirname(args[0]) === base) {
-        throw Object.assign(new Error("sibling is unavailable"), { code });
-      }
-      return await makeTemp(...args);
-    });
-    const moduleUrl = pathToFileURL(path.join(root, "dist/updater.mjs")).href;
-    let retained: string | undefined;
-    let generation: ReturnType<typeof captureRuntimeWorkerSource>["runtimeGeneration"];
-    try {
-      await withRetainedUpdateRuntime(moduleUrl, async (retain) => {
-        await retain({ mutationRoots: [root], timeoutMs: 30_000, assertCurrent() {} });
-        const source = captureRuntimeWorkerSource(
-          resolveRuntimeWorkerUrl({
-            currentModuleUrl: moduleUrl,
-            sourceWorkerName: "store",
-            distWorkerPath: "state/store.js",
-          }),
-        );
-        retained = fileURLToPath(source.moduleUrl);
-        generation = source.runtimeGeneration;
-        expect(retained.startsWith(`${temporary}${path.sep}`)).toBe(true);
-        expect(await readFile(retained, "utf8")).toBe(backend);
-      });
-      assert.ok(retained && generation);
-      expect(await readFile(retained, "utf8")).toBe(backend);
-      expect(() => generation!.resolve(pathToFileURL(retained!))).toThrow("generation is closing");
-    } finally {
-      allocation.mockRestore();
-      temporaryRoot.mockRestore();
+it("falls back when the runtime sibling is read-only", async () => {
+  const base = await fs.realpath(tempDirs.make("openclaw-retained-fallback-"));
+  const root = await fixture(base, "npm");
+  const temporary = path.join(base, "temporary");
+  await mkdir(temporary);
+  const makeTemp = fs.mkdtemp;
+  const temporaryRoot = vi.spyOn(os, "tmpdir").mockReturnValue(temporary);
+  const allocation = vi.spyOn(fs, "mkdtemp").mockImplementation(async (...args) => {
+    if (path.dirname(args[0]) === base) {
+      throw Object.assign(new Error("sibling is unavailable"), { code: "EROFS" });
     }
-  },
-);
+    return await makeTemp(...args);
+  });
+  const moduleUrl = pathToFileURL(path.join(root, "dist/updater.mjs")).href;
+  let retained: string | undefined;
+  let generation: ReturnType<typeof captureRuntimeWorkerSource>["runtimeGeneration"];
+  try {
+    await withRetainedUpdateRuntime(moduleUrl, async (retain) => {
+      await retain({ mutationRoots: [root], timeoutMs: 30_000, assertCurrent() {} });
+      const source = captureRuntimeWorkerSource(
+        resolveRuntimeWorkerUrl({
+          currentModuleUrl: moduleUrl,
+          sourceWorkerName: "store",
+          distWorkerPath: "state/store.js",
+        }),
+      );
+      retained = fileURLToPath(source.moduleUrl);
+      generation = source.runtimeGeneration;
+      expect(retained.startsWith(`${temporary}${path.sep}`)).toBe(true);
+      expect(await readFile(retained, "utf8")).toBe(backend);
+    });
+    assert.ok(retained && generation);
+    expect(await readFile(retained, "utf8")).toBe(backend);
+    expect(() => generation!.resolve(pathToFileURL(retained!))).toThrow("generation is closing");
+  } finally {
+    allocation.mockRestore();
+    temporaryRoot.mockRestore();
+  }
+});

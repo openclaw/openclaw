@@ -21,6 +21,8 @@ const repositoryScriptEntries = [
   "apps/linux/scripts/test-runtime-boundary.mjs!",
   "apps/linux/scripts/stage-runtime.mjs!",
   "apps/linux/scripts/test-stage-runtime.mjs!",
+  // The Python onboarding driver installs this synthetic CLI by path.
+  "apps/linux/tests/fixtures/onboarding-cli.mjs!",
   // apps/linux/README.md invokes this live Windows native-browser proof driver by path.
   "apps/linux/scripts/test-inline-browser.mjs!",
   // Linux App CI executes the injected native-auth bridge tests through Node.
@@ -401,6 +403,7 @@ const rootEntries = [
   "src/worker/worker-deploy-file-tool-planning.ts!",
   "src/worker/worker-deploy-image-processor.ts!",
   "src/worker/worker-deploy-sqlite-store.ts!",
+  "src/worker/worker-deploy-state-read.ts!",
   "src/worker/workspace-rsync-receiver.ts!",
   // v2026.9.1 Gateways lazy-import this stable dist entry after an in-place update.
   "src/gateway/plugin-channel-reload-targets.ts!",

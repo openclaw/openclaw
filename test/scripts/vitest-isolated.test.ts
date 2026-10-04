@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   copyIsolatedVitestSource,
   prepareIsolatedVitestDependencies,
+  prepareIsolatedVitestScratch,
 } from "../../scripts/lib/vitest-isolated-source.mts";
 import * as isolatedVitest from "../../scripts/lib/vitest-isolated.mts";
 import {
@@ -133,6 +134,9 @@ describe("isolated Vitest admission", () => {
         "--memory=8g",
         "--pids-limit=512",
         "--shm-size=512m",
+        "/tmp:rw,nosuid,nodev,size=2g,mode=1777",
+        "TMPDIR=/workspace/.openclaw/tmp",
+        "HOME=/tmp/home",
         "--unsetenv-all",
         "RAYON_NUM_THREADS=4",
         "TOKIO_WORKER_THREADS=4",
@@ -209,6 +213,26 @@ describe("isolated Vitest admission", () => {
 });
 
 describe("isolated working-tree source", () => {
+  it("creates private disk-backed scratch only inside a fresh snapshot", () => {
+    const snapshot = temp.make("isolated-scratch-");
+    prepareIsolatedVitestScratch(snapshot);
+    for (const relative of [".openclaw", ".openclaw/tmp"]) {
+      const directory = path.join(snapshot, relative);
+      expect(fs.realpathSync(directory)).toBe(directory);
+      if (process.platform !== "win32") {
+        expect(fs.statSync(directory).mode & 0o777).toBe(0o700);
+      }
+    }
+    expect(() => prepareIsolatedVitestScratch(snapshot)).toThrow(/EEXIST/u);
+  });
+
+  it("refuses preexisting scratch owners instead of following their links", () => {
+    const snapshot = temp.make("isolated-scratch-link-");
+    const outside = temp.make("isolated-scratch-outside-");
+    fs.symlinkSync(outside, path.join(snapshot, ".openclaw"), "dir");
+    expect(() => prepareIsolatedVitestScratch(snapshot)).toThrow(/EEXIST/u);
+    expect(fs.readdirSync(outside)).toEqual([]);
+  });
   it("copies current staged-path bytes, preserves deletions, excludes private state and does not copy untracked files", () => {
     const root = temp.make("isolated-source-");
     const snapshot = temp.make("isolated-copy-");

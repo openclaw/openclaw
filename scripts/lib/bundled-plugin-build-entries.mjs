@@ -405,8 +405,8 @@ export function collectSourceCheckoutPluginBuildEntries(params = {}) {
     });
 }
 
-/** Retain channel config migrations with core schemas, independently of plugin installation. */
-export function collectChannelConfigDoctorBuildEntries(params = {}) {
+/** Retain plugin-owned Doctor checks independently of runtime installation. */
+export function collectRetainedDoctorBuildEntries(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const entries = {};
   const candidates =
@@ -418,18 +418,32 @@ export function collectChannelConfigDoctorBuildEntries(params = {}) {
       continue;
     }
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    if (manifest.doctorContract?.configRepair !== true || !manifest.channels?.length) {
+    const stateRetention = params.surface === "state-retention";
+    const ids = stateRetention
+      ? Array.isArray(manifest.doctorContract?.stateMigrations)
+        ? [manifest.id]
+        : []
+      : manifest.doctorContract?.configRepair === true
+        ? (manifest.channels ?? [])
+        : [];
+    if (!ids.length) {
       continue;
     }
-    const source = path.join(pluginDir, "config-doctor-api.ts");
+    const source = path.join(
+      pluginDir,
+      `${stateRetention ? "state-retention" : "config-doctor"}-api.ts`,
+    );
     if (!fs.existsSync(source)) {
+      if (stateRetention) {
+        continue;
+      }
       throw new Error(`Missing config-only doctor entrypoint: ${source}`);
     }
-    for (const channelId of manifest.channels) {
-      if (!PLUGIN_ID_RE.test(channelId) || entries[channelId]) {
-        throw new Error(`Invalid or duplicate config doctor channel: ${channelId}`);
+    for (const id of ids) {
+      if (!PLUGIN_ID_RE.test(id) || entries[id]) {
+        throw new Error(`Invalid or duplicate retained Doctor owner: ${id}`);
       }
-      entries[channelId] = toPosixPath(path.relative(cwd, source));
+      entries[id] = toPosixPath(path.relative(cwd, source));
     }
   }
   return entries;

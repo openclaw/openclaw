@@ -110,72 +110,53 @@ it("services shared production and final cleanup without a host microtask turn",
   expect(cleanup.read()).toEqual({ status: "fulfilled", value: true });
 });
 
-it("withdraws all cancelled waiters before admitting snapshot work", async () => {
-  let copies = 0;
-  const controllers = [new AbortController(), new AbortController()];
-  const operations = controllers.map((controller) =>
-    prepareSingleFlightSqliteSnapshot(
-      "cancelled-demand.sqlite",
-      "test",
-      async (signal) => {
-        signal.throwIfAborted();
-        copies += 1;
-        return {
-          location: "cancelled-snapshot.sqlite",
-          cleanup: () => true,
-          cleanupAsync: async () => true,
-        };
-      },
-      controller.signal,
-    ),
-  );
-  for (const controller of controllers) {
-    controller.abort(new Error("cancelled before admission"));
-  }
-  const results = await Promise.allSettled(operations);
-  expect(results).toEqual(
-    controllers.map((controller) => ({
-      status: "rejected",
-      reason: controller.signal.reason,
-    })),
-  );
-  expect(copies).toBe(0);
-});
-
-it.each([0, 1])("keeps shared snapshot demand when waiter %i cancels", async (cancelled) => {
-  let copies = 0;
-  let removed = false;
-  const controllers = [new AbortController(), new AbortController()];
-  const operations = controllers.map((controller) =>
-    prepareSingleFlightSqliteSnapshot(
-      `surviving-demand-${cancelled}.sqlite`,
-      "test",
-      async (signal) => {
-        signal.throwIfAborted();
-        copies += 1;
-        return {
-          location: "surviving-snapshot.sqlite",
-          cleanup: () => {
-            removed = true;
-            return true;
-          },
-          cleanupAsync: async () => {
-            removed = true;
-            return true;
-          },
-        };
-      },
-      controller.signal,
-    ),
-  );
-  controllers[cancelled]!.abort(new Error("one waiter cancelled"));
-  await expect(operations[cancelled]).rejects.toBe(controllers[cancelled]!.signal.reason);
-  const snapshot = await operations[1 - cancelled]!;
-  expect(copies).toBe(1);
-  expect(removed).toBe(false);
-  expect(await snapshot.cleanupAsync()).toBe(true);
-  expect(removed).toBe(true);
-});
+it.each(["all", 0, 1] as const)(
+  "withdraws only cancelled snapshot demand: %s",
+  async (cancelled) => {
+    let copies = 0;
+    let removed = false;
+    const controllers = [new AbortController(), new AbortController()];
+    const operations = controllers.map((controller) =>
+      prepareSingleFlightSqliteSnapshot(
+        `surviving-demand-${cancelled}.sqlite`,
+        "test",
+        async (signal) => {
+          signal.throwIfAborted();
+          copies += 1;
+          return {
+            location: "surviving-snapshot.sqlite",
+            cleanup: () => {
+              removed = true;
+              return true;
+            },
+            cleanupAsync: async () => {
+              removed = true;
+              return true;
+            },
+          };
+        },
+        controller.signal,
+      ),
+    );
+    if (cancelled === "all") {
+      for (const controller of controllers) {
+        controller.abort(new Error("cancelled before admission"));
+      }
+      expect(await Promise.allSettled(operations)).toEqual(
+        controllers.map((controller) => ({ status: "rejected", reason: controller.signal.reason })),
+      );
+      expect(copies).toBe(0);
+      return;
+    }
+    controllers[cancelled]!.abort(new Error("one waiter cancelled"));
+    await expect(operations[cancelled]).rejects.toBe(controllers[cancelled]!.signal.reason);
+    const snapshot = await operations[1 - cancelled]!;
+    expect(copies).toBe(1);
+    expect(removed).toBe(false);
+    expect(await snapshot.cleanupAsync()).toBe(true);
+    expect(removed).toBe(true);
+  },
+);
 
 it("joins orphan cleanup before the tracked producer settles", async () => {
   const admitted = createDeferred();

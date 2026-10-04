@@ -156,8 +156,6 @@ jobs:
           GOOGLE_PLAY_TRACK: internal
           GOOGLE_PLAY_VALIDATE_ONLY: "0"
           SIPS: ${{ runner.temp }}/openclaw-android-tools/android-sips-linux.sh
-          SUPPLY_CHANGES_NOT_SENT_FOR_REVIEW: "true"
-          SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW: "false"
         run: |
           set -euo pipefail
           gh auth setup-git

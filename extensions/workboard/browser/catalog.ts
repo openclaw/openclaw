@@ -5,7 +5,7 @@ import { getWorkboardState, invalidateWorkboardLoads } from "./lib/workboard/run
 import { WORKBOARD_CHANGED_EVENT, type WorkboardBoardSummary } from "./lib/workboard/types.ts";
 
 type WorkboardCatalogSnapshot = {
-  boards: readonly Pick<WorkboardBoardSummary, "id" | "name" | "icon" | "color">[];
+  boards: readonly Pick<WorkboardBoardSummary, "id" | "name" | "kind" | "icon" | "color">[];
   ready: boolean;
 };
 
@@ -168,9 +168,10 @@ export class WorkboardCatalog {
     this.host.setBoardsReady(ready);
     this.host.notify();
     const snapshot: WorkboardCatalogSnapshot = {
-      boards: boards.map(({ id, name, icon, color }) => ({
+      boards: boards.map(({ id, name, kind, icon, color }) => ({
         id,
         ...(name ? { name } : {}),
+        ...(kind ? { kind } : {}),
         ...(icon ? { icon } : {}),
         ...(color ? { color } : {}),
       })),

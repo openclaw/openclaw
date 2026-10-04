@@ -68,12 +68,6 @@ export type TelegramDebounceEntry = {
   channelIngressResolvers: readonly TelegramChannelIngressResolver[];
 };
 
-interface TelegramInboundBuffers {
-  cancelPending: (target: TelegramPendingInboundTarget) => void;
-  inboundDebouncer: ReturnType<typeof createInboundDebouncer<TelegramDebounceEntry>>;
-  resolveTelegramDebounceLane: (msg: Message) => TelegramDebounceLane;
-}
-
 const spooledReplayParticipants = (entries: readonly TelegramDebounceEntry[]) =>
   entries.flatMap((entry) =>
     entry.spooledReplayParticipant ? [entry.spooledReplayParticipant] : [],
@@ -85,7 +79,7 @@ export function createTelegramInboundBuffers({
 }: {
   params: Pick<RegisterTelegramHandlerParams, "cfg" | "accountId" | "bot" | "runtime" | "opts">;
   message: TelegramMessagePipeline;
-}): TelegramInboundBuffers {
+}) {
   const {
     mergeDispatchDedupeClaims,
     releaseDispatchDedupeClaims,

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
+import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
-import { createRetainedOperation } from "../infra/retained-operation.js";
-import { readChannelAllowFromStore } from "../pairing/pairing-store.read.js";
+import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import * as stateReader from "../state/openclaw-state-read-worker.js";
