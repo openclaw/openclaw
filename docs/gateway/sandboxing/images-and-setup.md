@@ -11,23 +11,28 @@ Building the sandbox images from a source checkout or an npm install, and the ne
 Default Docker image: `openclaw-sandbox:bookworm-slim`
 
 <Note>
-**Source checkout vs npm install**
+**Recommended build path**
 
-The `scripts/sandbox-setup.sh`, `scripts/sandbox-common-setup.sh`, and `scripts/sandbox-browser-setup.sh` helper scripts are only available when running from a [source checkout](https://github.com/openclaw/openclaw). They are not included in the npm package.
+After enabling sandboxing, run `openclaw doctor`. For Docker, Doctor can build a missing default sandbox image and the default Docker browser image; from a source checkout it can also build the common image. It does not build custom images or Podman images.
 
-If you installed the global OpenClaw npm package, use the inline `docker build`
-commands shown below instead.
+The default and browser builder scripts, their Dockerfiles, the browser entrypoint, and the shared build helpers ship in the npm package. Older releases that do not contain those assets can use the inline base-image recipe below or a source checkout.
 </Note>
 
 <Steps>
   <Step title="Build the default image">
-    From a source checkout:
+    With sandboxing configured, use Doctor from either an npm installation or a source checkout:
+
+    ```bash
+    openclaw doctor
+    ```
+
+    Accept the prompt to build the missing configured image. From a source checkout, you can also build it directly:
 
     ```bash
     scripts/sandbox-setup.sh
     ```
 
-    From an npm install (no source checkout needed):
+    For an older npm release that does not include the builder assets, use this base-image fallback:
 
     ```bash
     docker build -t openclaw-sandbox:bookworm-slim - <<'DOCKERFILE'
@@ -69,13 +74,11 @@ commands shown below instead.
 
   </Step>
   <Step title="Optional: build the sandbox browser image">
-    From a source checkout:
+    With Docker browser sandboxing enabled and the default browser image configured, run `openclaw doctor` and accept the build prompt. From a source checkout, you can also run:
 
     ```bash
     scripts/sandbox-browser-setup.sh
     ```
-
-    The npm package does not include the browser Dockerfile or entrypoint. Use a source checkout to build this image.
 
   </Step>
 </Steps>
