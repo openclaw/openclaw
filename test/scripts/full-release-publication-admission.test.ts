@@ -868,7 +868,7 @@ if (${Boolean(options.qualification)}) {
   fs.appendFileSync(${JSON.stringify(requests)}, JSON.stringify(args) + "\\n");
   if (endpoint === "repos/openclaw/openclaw/actions/artifacts/70/zip") {
     if (${Boolean(options.legacyGhArchive)} && args.includes("--allow-escape-sequences")) {
-      process.stderr.write("unknown flag: --allow-escape-sequences\\n\\nUsage: gh api <endpoint> [flags]\\n");
+      fs.writeSync(2, "unknown flag: --allow-escape-sequences\\n\\nUsage: gh api <endpoint> [flags]\\n");
       process.exit(1);
     }
     process.stdout.write(fs.readFileSync(${JSON.stringify(join(temporary, "qualification.zip"))}));
