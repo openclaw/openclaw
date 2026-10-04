@@ -17,6 +17,7 @@ import type {
 import { manifestOwnsConfiguredModelProvider } from "./gateway-startup-plugin-providers.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { manifestOwnsStorageProvider } from "./storage-provider-manifest.js";
 import { manifestOwnsWorkerProvider } from "./worker-provider-manifest.js";
 
@@ -147,6 +148,7 @@ function passesPluginStartupPolicy(
   policy: StartupActivationPolicy,
 ): boolean {
   const { activationSource, plugin, pluginsConfig } = params;
+  const policyId = normalizePluginPolicyId(plugin.pluginId);
   // Bundled speech contracts remain available even when global plugin activation is disabled.
   if (
     (policy !== "speech" && (!pluginsConfig.enabled || !activationSource.plugins.enabled)) ||
@@ -161,7 +163,7 @@ function passesPluginStartupPolicy(
   if (
     policy === "harness" &&
     [pluginsConfig, activationSource.plugins].some(
-      (config) => config.allow.length > 0 && !config.allow.includes(plugin.pluginId),
+      (config) => config.allow.length > 0 && !config.allow.includes(policyId),
     )
   ) {
     return false;
@@ -175,7 +177,7 @@ function passesPluginStartupPolicy(
   if (
     policy === "root" &&
     activationSource.plugins.allow.length > 0 &&
-    !activationSource.plugins.allow.includes(plugin.pluginId)
+    !activationSource.plugins.allow.includes(policyId)
   ) {
     return false;
   }
@@ -204,7 +206,7 @@ function passesPluginStartupPolicy(
   if (policy === "hook") {
     return (
       activationState.explicitlyEnabled ||
-      hasExplicitHookPolicyConfig(activationSource.plugins.entries[plugin.pluginId])
+      hasExplicitHookPolicyConfig(activationSource.plugins.entries[policyId])
     );
   }
   return bundled || activationState.explicitlyEnabled;
@@ -281,7 +283,9 @@ export function canStartGatewayStartupPlugin(params: GatewayStartupActivationPar
     ) &&
       passesPluginStartupPolicy(params, "implicit-external")) ||
     ((manifest?.activation?.onCapabilities?.includes("hook") === true ||
-      hasExplicitHookPolicyConfig(activationSource.plugins.entries[plugin.pluginId])) &&
+      hasExplicitHookPolicyConfig(
+        activationSource.plugins.entries[normalizePluginPolicyId(plugin.pluginId)],
+      )) &&
       passesPluginStartupPolicy(params, "hook")) ||
     // Tool factories execute synchronously while an agent surface is built. Load enabled owners
     // at the Gateway lifecycle boundary so a first concurrent turn cannot block control traffic.

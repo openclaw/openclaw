@@ -112,134 +112,115 @@ it.each([false, true])(
   },
 );
 
-it.each(["retired", "different-source"] as const)(
-  "maps %s captured authority before dispatching a read",
+it.each(["retired", "different-source", "capture", "schema"] as const)(
+  "maps %s authority failure once before dispatching a read",
   async (kind) => {
     const options = source();
-    const context = captureOpenClawStateReadWorkerContext(options);
+    const original = new Error("original read admission refusal");
+    const context =
+      kind === "schema"
+        ? withExistingOpenClawStateSchema({ path: options.path }, () =>
+            captureOpenClawStateReadWorkerContext(options),
+          )
+        : kind === "capture"
+          ? undefined
+          : captureOpenClawStateReadWorkerContext(options);
     if (kind === "retired") {
       await closeOpenClawStateDatabaseByPathAsync(options.path);
     }
+    if (kind === "capture") {
+      vi.mocked(captureOpenClawStateReadWorkerContext).mockImplementationOnce(() => {
+        throw original;
+      });
+    }
     const { mapped, mapError } = mapper();
-    let failure: unknown;
-    try {
-      await executeExistingOpenClawStateRead(
+    const read = () =>
+      executeExistingOpenClawStateRead(
         kind === "different-source" ? source() : options,
         { type: "fleet.list" },
         { context, mapError },
       );
-    } catch (error) {
-      failure = error;
+    if (kind === "capture" || kind === "schema") {
+      expect(read).toThrow(mapped);
+    } else {
+      await expect(Promise.resolve().then(read)).rejects.toBe(mapped);
     }
-    expect(failure).toBe(mapped);
-    expect(mapError).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining(
-        kind === "retired"
-          ? { code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED" }
-          : { message: "Shared-state read context does not match its selected source" },
-      ),
-      "before-read",
-    );
+    expect(mapError).toHaveBeenCalledOnce();
+    expect(mapError.mock.calls[0]?.[1]).toBe("before-read");
+    if (kind !== "schema") {
+      expect(mapError).toHaveBeenCalledExactlyOnceWith(
+        kind === "capture"
+          ? original
+          : expect.objectContaining(
+              kind === "retired"
+                ? { code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED" }
+                : { message: "Shared-state read context does not match its selected source" },
+            ),
+        "before-read",
+      );
+    }
     expect(mock.run).not.toHaveBeenCalled();
     expect(mock.close).not.toHaveBeenCalled();
   },
 );
 
-it("maps synchronous read admission refusal once before read work", () => {
-  const options = source();
-  const original = new Error("original read admission refusal");
-  vi.mocked(captureOpenClawStateReadWorkerContext).mockImplementationOnce(() => {
-    throw original;
-  });
-  const { mapped, mapError } = mapper();
-  expect(() =>
-    executeExistingOpenClawStateRead(options, { type: "fleet.list" }, { mapError }),
-  ).toThrow(mapped);
-  expect(mapError).toHaveBeenCalledExactlyOnceWith(original, "before-read");
-  expect(mock.run).not.toHaveBeenCalled();
-  expect(mock.close).not.toHaveBeenCalled();
-});
-
-it("maps captured schema scope retirement once before read work", () => {
-  const options = source();
-  const context = withExistingOpenClawStateSchema({ path: options.path }, () =>
-    captureOpenClawStateReadWorkerContext(options),
-  );
-  const { mapped, mapError } = mapper();
-  expect(() =>
-    executeExistingOpenClawStateRead(options, { type: "fleet.list" }, { context, mapError }),
-  ).toThrow(mapped);
-  expect(mapError).toHaveBeenCalledOnce();
-  expect(mapError.mock.calls[0]?.[1]).toBe("before-read");
-  expect(mock.run).not.toHaveBeenCalled();
-  expect(mock.close).not.toHaveBeenCalled();
-});
-
-it("maps an authoritative pre-read error after cleanup", async () => {
-  const original = new Error("source admission failed");
-  mock.run.mockResolvedValue({
-    ok: false,
-    message: original.message,
-    error: encodeOpenClawStateWorkerError(original, { includeOrdinary: true }),
-  });
-  const { mapped, mapError } = mapper();
-  await expect(
-    executeExistingOpenClawStateRead(source(), { type: "fleet.list" }, { mapError }),
-  ).rejects.toBe(mapped);
-  expect(mapError).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ message: original.message }),
-    "before-read",
-  );
-  expect(mock.close).toHaveBeenCalledOnce();
-  expect(mock.close.mock.invocationCallOrder[0]).toBeLessThan(
-    mapError.mock.invocationCallOrder[0]!,
-  );
-});
-
-it("maps the full Blob query and cleanup error graph after observing its receipt", async () => {
-  const original = new PluginBlobStoreError("query failed", {
-    code: "PLUGIN_BLOB_CORRUPT",
-    operation: "lookup",
-    path: "/fixture/blob.sqlite",
-  });
-  mock.run.mockResolvedValue({
-    ok: false,
-    sourceAdmitted: true,
-    message: original.message,
-    error: encodeOpenClawStateWorkerError(original),
-  });
-  const cleanup = new Error("cleanup failed");
-  mock.close.mockRejectedValueOnce(cleanup);
-  const { mapped, mapError } = mapper();
-  await expect(
-    executeExistingOpenClawStateRead(source(), { type: "fleet.list" }, { mapError }),
-  ).rejects.toBe(mapped);
-  expect(mapError).toHaveBeenCalledOnce();
-  const [error, phase] = mapError.mock.calls[0]!;
-  expect(phase).toBe("read");
-  expect(error).toBeInstanceOf(AggregateError);
-  if (!(error instanceof AggregateError)) {
-    throw new Error("Expected aggregate");
-  }
-  expect(error.errors[0]).toBeInstanceOf(PluginBlobStoreError);
-  expect(error.errors[0]).toMatchObject({
-    code: original.code,
-    operation: original.operation,
-    path: original.path,
-  });
-  expect(error.errors[1]).toBe(cleanup);
-  expect(error.cause).toBe(error.errors[0]);
-});
-
-it("does not infer pre-read admission from an unobserved transport failure", async () => {
-  const original = new Error("no authoritative reply");
-  mock.run.mockRejectedValue(original);
-  const { mapped, mapError } = mapper();
-  await expect(
-    executeExistingOpenClawStateRead(source(), { type: "fleet.list" }, { mapError }),
-  ).rejects.toBe(mapped);
-  expect(mapError).toHaveBeenCalledExactlyOnceWith(original, "unobserved");
-});
+it.each(["before-read", "read", "unobserved"] as const)(
+  "maps the complete %s failure after transport cleanup",
+  async (phase) => {
+    const original =
+      phase === "read"
+        ? new PluginBlobStoreError("query failed", {
+            code: "PLUGIN_BLOB_CORRUPT",
+            operation: "lookup",
+            path: "/fixture/blob.sqlite",
+          })
+        : new Error("source admission or transport failed");
+    const cleanup = new Error("cleanup failed");
+    if (phase === "unobserved") {
+      mock.run.mockRejectedValue(original);
+    } else {
+      mock.run.mockResolvedValue({
+        ok: false,
+        ...(phase === "read" ? { sourceAdmitted: true } : {}),
+        message: original.message,
+        error: encodeOpenClawStateWorkerError(original, { includeOrdinary: true }),
+      });
+      if (phase === "read") {
+        mock.close.mockRejectedValueOnce(cleanup);
+      }
+    }
+    const { mapped, mapError } = mapper();
+    await expect(
+      executeExistingOpenClawStateRead(source(), { type: "fleet.list" }, { mapError }),
+    ).rejects.toBe(mapped);
+    expect(mapError).toHaveBeenCalledOnce();
+    expect(mock.close).toHaveBeenCalledOnce();
+    expect(mock.close.mock.invocationCallOrder[0]).toBeLessThan(
+      mapError.mock.invocationCallOrder[0]!,
+    );
+    const [error, observedPhase] = mapError.mock.calls[0]!;
+    expect(observedPhase).toBe(phase);
+    if (phase === "read") {
+      expect(error).toBeInstanceOf(AggregateError);
+      if (!(error instanceof AggregateError)) {
+        throw new Error("Expected aggregate");
+      }
+      expect(error.errors[0]).toBeInstanceOf(PluginBlobStoreError);
+      expect(error.errors[0]).toMatchObject({
+        code: "PLUGIN_BLOB_CORRUPT",
+        operation: "lookup",
+        path: "/fixture/blob.sqlite",
+      });
+      expect(error.errors[1]).toBe(cleanup);
+      expect(error.cause).toBe(error.errors[0]);
+    } else {
+      expect(mapError).toHaveBeenCalledExactlyOnceWith(
+        phase === "unobserved" ? original : expect.objectContaining({ message: original.message }),
+        phase,
+      );
+    }
+  },
+);
 
 it("retains a successful receipt through failed task cleanup and canonical retry", async () => {
   const options = source();

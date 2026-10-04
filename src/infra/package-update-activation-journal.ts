@@ -79,13 +79,13 @@ export function openPackageActivationJournal(anchor: string) {
   assertPackageActivationLayout(anchor);
   const journalPath = resolvePackageActivationJournalPath(anchor);
   const parent = path.dirname(anchor);
-  const parentIdentity = packageActivationIdentity(parent, true);
+  const parentIdentity = packageActivationIdentity(parent, "parent");
   const control = resolvePackageActivationControl(anchor);
   const journalParentIdentity = assertPrivate(control, true);
   const journalIdentity = assertPrivate(journalPath, false);
   const assertFiles = () => {
     if (
-      packageActivationIdentity(parent, true) !== parentIdentity ||
+      packageActivationIdentity(parent, "parent") !== parentIdentity ||
       assertPrivate(control, true) !== journalParentIdentity ||
       assertPrivate(journalPath, false) !== journalIdentity ||
       fs.realpathSync(control) !== control
@@ -134,7 +134,7 @@ export function openPackageActivationJournal(anchor: string) {
       descriptor.journalParentIdentity !== journalParentIdentity ||
       descriptor.journalIdentity !== journalIdentity ||
       resolvePackageActivationAnchor(descriptor.authority.installKey) !== anchor ||
-      descriptor.parentIdentity !== packageActivationIdentity(path.dirname(anchor), true) ||
+      descriptor.parentIdentity !== packageActivationIdentity(path.dirname(anchor), "parent") ||
       new Set(descriptor.launchers.map((entry) => entry.name)).size !== descriptor.launchers.length
     ) {
       throw new Error("Package publication journal does not match its installation");
@@ -362,7 +362,7 @@ export function createPackageActivationJournal(
     assertPackageActivationLayout(anchor);
     if (
       assertPrivate(preparationSource(descriptor, "anchor"), true) !== descriptor.anchorIdentity ||
-      packageActivationIdentity(path.dirname(anchor), true) !== descriptor.parentIdentity ||
+      packageActivationIdentity(path.dirname(anchor), "parent") !== descriptor.parentIdentity ||
       fs.realpathSync(path.dirname(anchor)) !== path.dirname(anchor) ||
       assertPrivate(stagedControl, true) !== descriptor.journalParentIdentity ||
       fs.realpathSync(stagedControl) !== stagedControl ||
