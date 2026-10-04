@@ -22,6 +22,7 @@ import {
   monotonicClock,
   callGateway,
   gatewayResponseError,
+  requestReadinessProbe,
   resetRestartHealthMocks,
   restoreRestartHealthMocks,
   sleep,
@@ -108,7 +109,7 @@ describe("restart health", () => {
         waitForGatewayHttpReadiness({
           attempts: 1,
           onObservation,
-          deadlineAt: Date.now() + 1_000,
+          deadlineAt: performance.now() + 1_000,
           delayMs: 0,
           port: address.port,
         }),
@@ -163,39 +164,48 @@ describe("restart health", () => {
     );
   });
 
-  it("does not exceed the start deadline when a listener never responds", async () => {
-    const server = createServer(() => {});
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected loopback server address");
-    }
+  it("stops readiness attempts when the deadline expires", async () => {
+    requestReadinessProbe.mockImplementation(async () => {
+      monotonicClock.nowMs += 20;
+      return null;
+    });
+    const deadlineBudgetMs = 50;
+    const deadlineAt = performance.now() + deadlineBudgetMs;
+    const { waitForGatewayHttpReadiness } = await import("./restart-health-probe.js");
+    await expect(
+      waitForGatewayHttpReadiness({
+        attempts: 10,
+        deadlineAt,
+        delayMs: 0,
+        port: 18789,
+      }),
+    ).resolves.toEqual({ healthz: null, readyz: null });
+    expect(monotonicClock.nowMs).toBeGreaterThanOrEqual(deadlineBudgetMs);
+    expect(requestReadinessProbe.mock.calls.length).toBeLessThan(20);
+  });
 
-    try {
-      const { waitForGatewayHttpReadiness } = await import("./restart-health-probe.js");
-      const startedAt = Date.now();
-      await expect(
-        waitForGatewayHttpReadiness({
-          attempts: 10,
-          deadlineAt: startedAt + 50,
-          delayMs: 0,
-          port: address.port,
-        }),
-      ).resolves.toEqual({ healthz: null, readyz: null });
-      expect(Date.now() - startedAt).toBeLessThan(1_500);
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-          } else {
-            resolve();
-          }
-        });
-      });
-    }
+  it("keeps the readiness deadline monotonic when the wall clock rewinds", async () => {
+    requestReadinessProbe.mockImplementation(async () => {
+      monotonicClock.nowMs += 20;
+      return null;
+    });
+    const wallClockRewindMs = 300_000;
+    const wallClockSpy = vi.spyOn(Date, "now").mockReturnValue(Date.now() - wallClockRewindMs);
+    const deadlineBudgetMs = 50;
+    const deadlineAt = performance.now() + deadlineBudgetMs;
+    const { waitForGatewayHttpReadiness } = await import("./restart-health-probe.js");
+    await expect(
+      waitForGatewayHttpReadiness({
+        attempts: 100,
+        deadlineAt,
+        delayMs: 0,
+        port: 18789,
+      }),
+    ).resolves.toEqual({ healthz: null, readyz: null });
+    wallClockSpy.mockRestore();
+    expect(monotonicClock.nowMs).toBeLessThan(wallClockRewindMs);
+    expect(monotonicClock.nowMs).toBeGreaterThanOrEqual(deadlineBudgetMs);
+    expect(requestReadinessProbe.mock.calls.length).toBeLessThan(200);
   });
 
   it.each(["timeout", "read ECONNRESET", "auth required"])(

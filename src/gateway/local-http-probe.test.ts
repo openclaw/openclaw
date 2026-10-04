@@ -5,7 +5,7 @@ import { createServer as createHttpServer, type ServerResponse } from "node:http
 import { createServer } from "node:https";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { waitForGatewayHttpReadiness } from "../cli/daemon-cli/restart-health-probe.js";
 import { startProxy } from "../infra/net/proxy/proxy-lifecycle.js";
@@ -50,7 +50,7 @@ test("probes local TLS directly under a managed proxy while enforcing its certif
         waitForGatewayHttpReadiness({
           attempts: 1,
           config,
-          deadlineAt: Date.now() + 1_000,
+          deadlineAt: performance.now() + 1_000,
           delayMs: 0,
           port: address.port,
         }),
@@ -83,36 +83,59 @@ test("probes local TLS directly under a managed proxy while enforcing its certif
   });
 });
 
-test("cancels pending readiness requests when the repair budget expires", async () => {
-  const server = createHttpServer();
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Expected an ephemeral TCP listener");
-  }
-  const controller = new AbortController();
-  const aborted = new Error("repair-budget");
-  try {
-    const received = once(server, "request");
-    const pending = waitForGatewayHttpReadiness({
-      attempts: 3,
-      deadlineAt: Date.now() + 60_000,
-      delayMs: 500,
-      port: address.port,
-      signal: controller.signal,
-    });
-    const rejected = expect(pending).rejects.toBe(aborted);
-    await received;
-    controller.abort(aborted);
-    await rejected;
-  } finally {
-    server.closeAllConnections();
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
-  }
-});
+test.each(["abort", "deadline"] as const)(
+  "settles pending readiness requests on %s",
+  async (mode) => {
+    const server = createHttpServer();
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Expected an ephemeral TCP listener");
+    }
+    const controller = new AbortController();
+    const aborted = new Error("repair-budget");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const received = once(server, "request");
+      const pending = waitForGatewayHttpReadiness({
+        attempts: 1,
+        deadlineAt: performance.now() + 60_000,
+        probeTimeoutMs: 120_000,
+        delayMs: 0,
+        port: address.port,
+        signal: controller.signal,
+      });
+      let settled = false;
+      const result = pending.then(
+        (value) => {
+          settled = true;
+          return value;
+        },
+        (error: unknown) => {
+          settled = true;
+          return error;
+        },
+      );
+      await received;
+      if (mode === "abort") {
+        controller.abort(aborted);
+        expect(await result).toBe(aborted);
+      } else {
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(settled).toBe(true);
+        expect(await result).toEqual({ healthz: null, readyz: null });
+      }
+    } finally {
+      controller.abort(aborted);
+      vi.useRealTimers();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  },
+);
 
 test("keeps a WebSocket-first verified pin scoped to its endpoint", async () => {
   await withTestDir({ prefix: "openclaw-probe-pin-owner-" }, async (directory) => {
