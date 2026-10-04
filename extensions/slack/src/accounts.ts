@@ -78,7 +78,7 @@ const {
   resolveDefaultAccountId,
   resolveAccountConfig: resolveMergedSlackAccountConfig,
 } = createAccountListHelpers<SlackAccountConfig>("slack", {
-  nestedObjectKeys: ["botLoopProtection", "presenceEvents", "relay"],
+  nestedObjectKeys: ["actions", "botLoopProtection", "presenceEvents", "relay"],
   hasImplicitDefaultAccount: hasImplicitDefaultSlackAccount,
 });
 export const listSlackAccountIds = listAccountIds;
