@@ -113,7 +113,7 @@ function buildUnownedProviderTransportReplayFallback(params: {
       ? { validateAnthropicTurns: true }
       : {}),
     ...(isGoogle || isOpenAiResponses ? { allowSyntheticToolResults: true } : {}),
-    ...(!isGoogle && requiresStablePromptPrefix(params.model)
+    ...(isOpenAiResponses && requiresStablePromptPrefix(params.model)
       ? { appendOnlyRuntimeContext: true }
       : {}),
   };
@@ -200,6 +200,10 @@ export function resolveTranscriptPolicy(params: {
             : "",
         dropsThinkingForReasoningCompat: modelDisablesReasoningEffort(params.model),
         preservesReasoningContentReplay: params.model?.reasoning === true,
+        // The policy now depends on these capability flags, so the memoized key has to carry them:
+        // otherwise an unflagged model and an opted-in model that share config/provider/model
+        // identity would reuse each other's policy depending on resolution order.
+        requiresStablePromptPrefix: requiresStablePromptPrefix(params.model),
         workspaceDir: params.workspaceDir ?? "",
         pluginControlPlane: resolvePluginControlPlaneFingerprint({
           config: cacheConfig,
