@@ -52,13 +52,12 @@ function parseGenericGitUrl(url: string): GitSource | null {
     host = scpLikeMatch[1] ?? "";
     path = scpLikeMatch[2] ?? "";
   } else if (/^(?:https?|ssh|git):\/\//.test(url)) {
-    try {
-      const parsed = new URL(url);
-      host = parsed.hostname;
-      path = parsed.pathname.replace(/^\/+/, "");
-    } catch {
+    const parsed = URL.parse(url);
+    if (!parsed) {
       return null;
     }
+    host = parsed.hostname;
+    path = parsed.pathname.replace(/^\/+/, "");
   } else {
     const slashIndex = url.indexOf("/");
     if (slashIndex < 0) {

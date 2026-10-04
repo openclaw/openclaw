@@ -1,10 +1,8 @@
 import { expect, test, vi } from "vitest";
+import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
 import * as acpSessionMeta from "../acp/runtime/session-meta-readonly.js";
-import {
-  readAcpSessionMetaBatch,
-  writeAcpSessionMetaForMigration,
-} from "../acp/runtime/session-meta.js";
+import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -17,7 +15,7 @@ import { listProjectedSessions } from "./session-utils-list.js";
 import * as rowProjection from "./session-utils-row.js";
 import { writeResidentEntries } from "./session-utils.perf.test-support.js";
 
-test("retains ACP batch bounds while clean lists and inline dirty metadata reuse resident facts", async () => {
+test("retains ACP batch bounds while clean lists and canonical metadata updates reuse resident facts", async () => {
   await withStateDirEnv("openclaw-perf-acp-", async () => {
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
@@ -67,7 +65,6 @@ test("retains ACP batch bounds while clean lists and inline dirty metadata reuse
       updatedAt: 1,
       modelProvider: "openai",
       model: "gpt-5",
-      acp: markerMeta,
     };
     const stateMeta = {
       backend: "acpx",
@@ -77,12 +74,17 @@ test("retains ACP batch bounds while clean lists and inline dirty metadata reuse
       state: "idle" as const,
       lastActivityAt: 2,
     };
-    writeAcpSessionMetaForMigration({
+    seedCanonicalAcpSessionMeta({
       sessionKey: stateKey,
       sessionId: stateEntry.sessionId,
       meta: stateMeta,
     });
 
+    seedCanonicalAcpSessionMeta({
+      sessionKey: markerKey,
+      sessionId: markerEntry.sessionId,
+      meta: markerMeta,
+    });
     const perRowState = readAcpSessionMetaForEntry({ sessionKey: stateKey, entry: stateEntry });
     const perRowMissing = readAcpSessionMetaForEntry({
       sessionKey: missingKey,
@@ -117,8 +119,8 @@ test("retains ACP batch bounds while clean lists and inline dirty metadata reuse
       return originalPrepare(sql);
     });
     try {
-      // Composite and legacy identities share the production 500-key chunks.
-      // Cross two boundaries without materializing tens of thousands of rows.
+      // Canonical identities share the production 500-key chunks.
+      // Cross a boundary without materializing tens of thousands of rows.
       const aboveBatchChunkSize = Array.from({ length: 501 }, (_, index) => ({
         sessionKey: `agent:default:webchat:dm:missing-${index}`,
         entry: {
@@ -130,7 +132,7 @@ test("retains ACP batch bounds while clean lists and inline dirty metadata reuse
       expect(chunkedBatch.size).toBe(aboveBatchChunkSize.length);
       expect(chunkedBatch.get(aboveBatchChunkSize[0]!.entry)).toBeUndefined();
       expect(chunkedBatch.get(aboveBatchChunkSize.at(-1)!.entry)).toBeUndefined();
-      expect(acpSelects).toBe(3);
+      expect(acpSelects).toBe(2);
 
       const runtimeEntries = Object.fromEntries(
         aboveBatchChunkSize
@@ -170,12 +172,14 @@ test("retains ACP batch bounds while clean lists and inline dirty metadata reuse
         expect(
           projection.snapshot({ agentId: "default", key: missingKey }).row?.runtimeSelectionLocked,
         ).toBe(false);
+        seedCanonicalAcpSessionMeta({
+          sessionKey: missingKey,
+          sessionId: missingEntry.sessionId,
+          meta: { ...markerMeta, runtimeSessionName: missingKey },
+        });
         writeResidentEntries(
           {
-            [missingKey]: {
-              ...missingEntry,
-              acp: { ...markerMeta, runtimeSessionName: missingKey },
-            },
+            [missingKey]: missingEntry,
           },
           1,
         );

@@ -10,17 +10,15 @@ export function parseGitHubRemoteUrl(
   if (scpMatch) {
     path = scpMatch[1];
   } else {
-    try {
-      const url = new URL(trimmed);
-      const protocolOk =
-        url.protocol === "https:" || url.protocol === "http:" || url.protocol === "ssh:";
-      if (!protocolOk || url.hostname.toLowerCase() !== githubHost.toLowerCase()) {
-        return null;
-      }
-      path = url.pathname;
-    } catch {
+    const url = URL.parse(trimmed);
+    if (
+      !url ||
+      !["https:", "http:", "ssh:"].includes(url.protocol) ||
+      url.hostname.toLowerCase() !== githubHost.toLowerCase()
+    ) {
       return null;
     }
+    path = url.pathname;
   }
   const segments = (path ?? "").split("/").filter(Boolean);
   const owner = segments[0];

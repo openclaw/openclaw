@@ -9,11 +9,7 @@ function tabLabel(tab: BrowserPanelTab): string {
   if (tab.title.trim()) {
     return tab.title.trim();
   }
-  try {
-    return new URL(tab.url).host || t("browser.untitledTab");
-  } catch {
-    return tab.url || t("browser.untitledTab");
-  }
+  return (URL.parse(tab.url)?.host ?? tab.url) || t("browser.untitledTab");
 }
 
 export function browserPanelHostedTabs(tabs: BrowserPanelTab[]): PanelHostedTab[] {

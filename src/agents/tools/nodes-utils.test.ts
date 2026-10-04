@@ -1,9 +1,11 @@
 // Node selection defaults and Gateway inventory requests.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
+import type { CallGatewayOptions } from "../../gateway/call.js";
 
 const gatewayMocks = vi.hoisted(() => ({
   callGatewayTool: vi.fn(),
+  inProcess: false,
 }));
 vi.mock("./gateway.js", () => ({
   callGatewayTool: (...args: unknown[]) => gatewayMocks.callGatewayTool(...args),
@@ -23,6 +25,7 @@ function node({ nodeId, ...overrides }: Partial<NodeListNode> & { nodeId: string
 
 beforeEach(() => {
   gatewayMocks.callGatewayTool.mockReset();
+  gatewayMocks.inProcess = false;
 });
 
 describe("resolveNodeIdFromList defaults", () => {
@@ -173,6 +176,47 @@ describe("resolveNodeIdFromList defaults", () => {
 });
 
 describe("listNodes", () => {
+  it.each([
+    { inProcess: false, gatewayCaps: [], expected: [] },
+    {
+      inProcess: false,
+      gatewayCaps: ["system.run.execution-context.v1"],
+      expected: ["system.run.execution-context.v1"],
+    },
+    { inProcess: true, gatewayCaps: [], expected: ["system.run.execution-context.v1"] },
+  ])(
+    "negotiates node context through the active Gateway %j",
+    async ({ inProcess, gatewayCaps, expected }) => {
+      gatewayMocks.inProcess = inProcess;
+      gatewayMocks.callGatewayTool.mockImplementation(
+        async (_method, _opts, _params, extra: Pick<CallGatewayOptions, "onHelloOk">) => {
+          if (!inProcess) {
+            extra.onHelloOk?.({
+              type: "hello-ok",
+              protocol: 1,
+              server: { version: "test", connId: "test" },
+              features: { methods: ["node.list"], events: [], capabilities: gatewayCaps },
+              snapshot: {
+                presence: [],
+                health: {},
+                stateVersion: { presence: 0, health: 0 },
+                uptimeMs: 0,
+              },
+              auth: { role: "operator", scopes: [] },
+              policy: { maxPayload: 1, maxBufferedBytes: 1, tickIntervalMs: 1 },
+            });
+          }
+          return {
+            nodes: [
+              node({ nodeId: "updated-node", caps: ["system", "system.run.execution-context.v1"] }),
+            ],
+          };
+        },
+      );
+      expect((await listNodes({}))[0]?.caps).toEqual(["system", ...expected]);
+    },
+  );
+
   it("returns live node inventory and forwards cancellation", async () => {
     const nodes = [node({ nodeId: "node-1", displayName: "Node 1", platform: "ios" })];
     gatewayMocks.callGatewayTool.mockResolvedValueOnce({ nodes });
@@ -182,7 +226,7 @@ describe("listNodes", () => {
       "node.list",
       {},
       {},
-      { signal },
+      expect.objectContaining({ signal }),
     );
   });
 
@@ -207,6 +251,11 @@ describe("listNodes", () => {
     const signal = new AbortController().signal;
     await expect(listNodes({}, signal)).rejects.toBe(error);
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(1);
-    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith("node.list", {}, {}, { signal });
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.list",
+      {},
+      {},
+      expect.objectContaining({ signal }),
+    );
   });
 });

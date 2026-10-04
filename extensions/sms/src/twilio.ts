@@ -137,11 +137,7 @@ function parseTwilioSuccessPayload(text: string): TwilioMessagePayload {
 }
 
 function requestSearch(req: IncomingMessage): string {
-  try {
-    return new URL(req.url ?? "/", "http://localhost").search;
-  } catch {
-    return "";
-  }
+  return URL.parse(req.url ?? "/", "http://localhost")?.search ?? "";
 }
 
 function stripUrlFragment(url: string): string {

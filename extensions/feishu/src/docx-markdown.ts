@@ -20,15 +20,8 @@ const MAX_BREAK_PROBES = 32;
 const STABLE_LINE_CONTAINER_TYPES = new Set(["list", "blockquote", "code"]);
 
 function resolveRemoteImageUrl(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:" ? value : undefined;
-  } catch {
-    return undefined;
-  }
+  const url = URL.parse(value ?? "");
+  return url?.protocol === "http:" || url?.protocol === "https:" ? value : undefined;
 }
 
 function collectMarkdownImages(root: FeishuMarkdownNode): DocxMarkdownImage[] {

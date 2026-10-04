@@ -3,6 +3,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
 import { hasErrnoCode } from "./errors.js";
 import {
@@ -17,6 +18,7 @@ import {
   type PackageActivationJournal,
   type PackageActivationPhase,
   type PackageActivationRecord,
+  type PackageActivationDescriptor,
   isPackageActivationComplete,
 } from "./package-update-activation-journal.js";
 import { decodePackageActivationLauncher } from "./package-update-activation-launcher.js";
@@ -29,18 +31,17 @@ import {
 } from "./package-update-filesystem.js";
 import {
   createPackageIntegrityReader,
+  isPackageIntegrityResourceError,
   packageIntegrityDifferences,
   PackageIntegrityMismatchError,
-  type PackageIntegrityFingerprint,
   type PackageLauncherFingerprint,
   packageLauncherDifferences,
 } from "./package-update-integrity.js";
 import { assertManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-database.js";
 
-function matchesPackageActivationLauncher(
-  actual: PackageLauncherFingerprint | null,
-  encoded: string | null,
-) {
+const log = createSubsystemLogger("update/package-integrity");
+
+function matchesLauncher(actual: PackageLauncherFingerprint | null, encoded: string | null) {
   return actual === null || encoded === null
     ? actual === null && encoded === null
     : packageLauncherDifferences(decodePackageActivationLauncher(encoded), actual, {
@@ -56,9 +57,11 @@ export function createPublicationOwner(
   assertJournalCurrent: (expected: PackageActivationRecord) => void = journal.assertCurrent.bind(
     journal,
   ),
+  onWarning: (message: string) => void = (message) => log.warn(message),
 ) {
   let record = initial;
   const descriptor = record.descriptor;
+  let candidateWarningRecorded = false;
   let retirementSelected: "previous" | "candidate" | undefined;
   const live = descriptor.authority.installKey;
   const root = (name: string) => path.join(anchor, name);
@@ -121,7 +124,7 @@ export function createPublicationOwner(
       const fingerprint = (await reader.exists(destination))
         ? await reader.launcher(destination)
         : null;
-      if (!matchesPackageActivationLauncher(fingerprint, entry[selected])) {
+      if (!matchesLauncher(fingerprint, entry[selected])) {
         throw new Error("Selected package launcher fingerprint changed.");
       }
     }
@@ -163,7 +166,7 @@ export function createPublicationOwner(
   };
   const matches = async (
     file: string,
-    expected: PackageIntegrityFingerprint,
+    expected: PackageActivationDescriptor["candidate"],
     logical: string,
     contents = true,
   ) => {
@@ -179,12 +182,31 @@ export function createPublicationOwner(
     }
     // A prepared descriptor carries its in-process observation, so settled unchanged
     // files are not re-read. A recovery process parses one without and re-reads all.
-    const observed = await createPackageIntegrityReader().tree(file, logical, expected);
-    if (!isDeepStrictEqual(observed, expected)) {
-      throw new PackageIntegrityMismatchError(
-        `Package publication object changed: ${file}`,
-        packageIntegrityDifferences(expected, observed),
+    if ("digest" in expected) {
+      try {
+        const observed = await createPackageIntegrityReader().tree(file, logical, expected);
+        if (!isDeepStrictEqual(observed, expected)) {
+          throw new PackageIntegrityMismatchError(
+            `Package publication object changed: ${file}`,
+            packageIntegrityDifferences(expected, observed),
+          );
+        }
+        return true;
+      } catch (error) {
+        if (expected !== descriptor.candidate || !isPackageIntegrityResourceError(error)) {
+          throw error;
+        }
+      }
+    }
+    const observed = await createPackageIntegrityReader().directoryIdentity(file);
+    if (observed?.identity !== expected.identity || observed.version !== expected.version) {
+      throw new Error(`Package publication object changed: ${file}`);
+    }
+    if (!candidateWarningRecorded) {
+      onWarning(
+        "candidate package fingerprint incomplete; activation requires the directory identity, package version and launchers; full package contents are unverified",
       );
+      candidateWarningRecorded = true;
     }
     return true;
   };
@@ -231,7 +253,7 @@ export function createPublicationOwner(
       const source = root(`launchers/${entry.name}`);
       if (
         packageActivationIdentity(source, "launcher") !== entry.candidateIdentity ||
-        !matchesPackageActivationLauncher(await reader.launcher(source), entry.candidate)
+        !matchesLauncher(await reader.launcher(source), entry.candidate)
       ) {
         throw new Error("Candidate launcher assets changed.");
       }
@@ -239,14 +261,11 @@ export function createPublicationOwner(
       const present = await reader.exists(destination);
       const id = present ? packageActivationIdentity(destination, "launcher") : null;
       const fingerprint = present ? await reader.launcher(destination) : null;
-      if (
-        id === entry.previousIdentity &&
-        matchesPackageActivationLauncher(fingerprint, entry.previous)
-      ) {
+      if (id === entry.previousIdentity && matchesLauncher(fingerprint, entry.previous)) {
         launcherStates.set(entry.name, "previous");
       } else if (
         id === published.get(entry.name) &&
-        matchesPackageActivationLauncher(fingerprint, entry.candidate)
+        matchesLauncher(fingerprint, entry.candidate)
       ) {
         launcherStates.set(entry.name, "candidate");
       } else {

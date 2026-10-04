@@ -266,6 +266,7 @@ test.each([
         cfg,
         canonicalKey: key,
         entry,
+        preparedAcpMeta: null,
         targetAgentId: "main",
         storePath: stateDir,
       }).resolved,
