@@ -76,6 +76,27 @@ export function releasedManagedCommandAction(action: ManagedHandoffLease["action
   };
 }
 
+export function managedCommandBinding(leases: readonly ManagedHandoffLease[], pid: number) {
+  const custody = managedCommandCustody(leases[0]!);
+  return leases.some((lease) => managedCommandCustody(lease) !== custody) ||
+    (custody !== undefined && pid === process.pid)
+    ? null
+    : { custody };
+}
+
+export function serializeManagedCommandBinding(
+  lease: ManagedHandoffLease,
+  executor: HandoffProcessIdentity,
+  custody: ReturnType<typeof managedCommandCustody>,
+) {
+  return JSON.stringify({
+    version: 2,
+    helper: lease.helper,
+    executor,
+    action: custody ? releasedManagedCommandAction(lease.action) : lease.action,
+  });
+}
+
 export function createManagedHandoffChildReader(deps: {
   withDatabase: ReturnType<typeof createManagedHandoffLeaseDatabase>;
   handle: ReturnType<typeof createManagedHandoffLeaseRows>["handle"];

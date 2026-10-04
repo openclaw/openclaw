@@ -13,9 +13,10 @@ import { createManagedHandoffCancellation } from "./update-managed-service-hando
 import {
   createManagedHandoffChildReader,
   managedCommandAllowsBinding,
+  managedCommandBinding,
   managedCommandCustody,
   managedCommandUnsettled,
-  releasedManagedCommandAction,
+  serializeManagedCommandBinding,
 } from "./update-managed-service-handoff-children.js";
 import {
   createManagedHandoffLeaseDatabase,
@@ -417,13 +418,11 @@ export function createManagedHandoffLeaseStore(
     ) {
       return null;
     }
-    const custody = managedCommandCustody(leases[0]!);
-    if (
-      leases.some((lease) => managedCommandCustody(lease) !== custody) ||
-      (custody && pid === process.pid)
-    ) {
+    const binding = managedCommandBinding(leases, pid);
+    if (!binding) {
       return null;
     }
+    const { custody } = binding;
     const executor = processIdentity(pid, argv);
     return withDatabase(true, (db) =>
       transact(db, () => {
@@ -433,12 +432,7 @@ export function createManagedHandoffLeaseStore(
           return null;
         }
         return leases.map((lease) => {
-          const payload = JSON.stringify({
-            version: 2,
-            helper: lease.helper,
-            executor,
-            action: custody ? releasedManagedCommandAction(lease.action) : lease.action,
-          });
+          const payload = serializeManagedCommandBinding(lease, executor, custody);
           const updatedAt = Math.max(Date.now(), lease.updatedAt + 1);
           if (!updateRow(db, lease, { payload_json: payload, updated_at: updatedAt })) {
             throw new Error("Candidate process binding changed.");
