@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
+import { execFileSync, type ExecFileSyncOptionsWithBufferEncoding } from "node:child_process";
 import * as fs from "node:fs";
 import { isBuiltin } from "node:module";
 import { delimiter, join, posix, resolve } from "node:path";
@@ -163,10 +163,10 @@ function defaultDownloadArchive(args: string[]) {
   const options = {
     encoding: null,
     timeout: 60_000,
-    killSignal: "SIGKILL" as const,
+    killSignal: "SIGKILL",
     maxBuffer: 512 * 1024,
-    stdio: ["ignore", "pipe", "pipe"] as const,
-  };
+    stdio: ["ignore", "pipe", "pipe"],
+  } satisfies ExecFileSyncOptionsWithBufferEncoding;
   try {
     return execFileSync("gh", [...args, "--allow-escape-sequences"], options);
   } catch (error) {
