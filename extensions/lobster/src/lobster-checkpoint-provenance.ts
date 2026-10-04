@@ -36,10 +36,47 @@ export type LobsterCheckpointHandle = { token?: string; approvalId?: string };
 
 type Env = Record<string, string | undefined>;
 
-const RECORD_DIR = "openclaw-llm-checkpoints";
+/** Namespace of the plugin SQLite keyed store that owns checkpoint provenance. */
+export const CHECKPOINT_PROVENANCE_NAMESPACE = "lobster-checkpoint-provenance";
 
-// Mirrors Lobster's own state directory resolution, so a record lives beside
-// the checkpoint it describes and is backed up, moved or cleared with it.
+/**
+ * A bounded namespace whose live rows track outstanding checkpoints, so its bound
+ * is generous: reaching it means records are leaking, and "reject-new" then fails
+ * the write rather than evicting a record a pending checkpoint still needs.
+ */
+export const CHECKPOINT_PROVENANCE_MAX_ENTRIES = 10_000;
+
+/** The provenance sidecar directory that pre-dates the plugin state store. */
+const LEGACY_RECORD_DIR = "openclaw-llm-checkpoints";
+
+/**
+ * The subset of the plugin SQLite keyed store provenance uses. A store from
+ * api.runtime.state.openKeyedStore satisfies it structurally, so callers pass the
+ * real store without an adapter.
+ */
+export type CheckpointProvenanceKeyedStore = {
+  register(key: string, value: LobsterCheckpointProvenance): Promise<void>;
+  lookup(key: string): Promise<LobsterCheckpointProvenance | undefined>;
+  delete(key: string): Promise<boolean>;
+};
+
+let configuredStore: CheckpointProvenanceKeyedStore | undefined;
+
+/**
+ * Binds the plugin's SQLite-backed provenance store, opened once from
+ * api.runtime.state.openKeyedStore by the plugin entry. Left unbound, records fall
+ * back to the legacy sidecar directory: that keeps pre-upgrade records readable
+ * and lets tests run without a host state store. Production always binds it, so no
+ * new sidecar is written there.
+ */
+export function configureCheckpointProvenanceStore(
+  store: CheckpointProvenanceKeyedStore | undefined,
+): void {
+  configuredStore = store;
+}
+
+// Mirrors Lobster's own state directory resolution, so a legacy record lives
+// beside the checkpoint it describes and is backed up, moved or cleared with it.
 function lobsterStateDir(env: Env): string {
   const configured = env.LOBSTER_STATE_DIR?.trim();
   return configured || path.join(os.homedir(), ".lobster", "state");
@@ -49,21 +86,39 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
-/** Lobster's two state-key spellings for one workflow checkpoint, collapsed to one. */
+/**
+ * Lobster's storage identity for a state key. At @clawdbot/lobster state/store.js
+ * keyToPath lowercases the key, replaces unsupported characters with "_", collapses
+ * runs of "_" and trims boundary "_" before selecting `<stateDir>/<safe>.json`;
+ * alternateWorkflowResumeStateKey additionally probes the "workflow-resume_" and
+ * "workflow_resume_" spellings, which resolve to one stored state file. Two
+ * encodings that select the same file must hash to one record, or a differently
+ * normalized token resumes the checkpoint while missing its provenance and falls
+ * through to the generic saved-answer check.
+ */
 function canonicalStateKey(stateKey: string): string {
-  return stateKey.includes("workflow-resume_")
-    ? stateKey.replace("workflow-resume_", "workflow_resume_")
-    : stateKey;
+  let safe = stateKey
+    .toLowerCase()
+    .replace("workflow-resume_", "workflow_resume_")
+    .replace(/[^a-z0-9._-]+/g, "_")
+    .replace(/_+/g, "_");
+  if (safe.startsWith("_")) {
+    safe = safe.slice(1);
+  }
+  if (safe.endsWith("_")) {
+    safe = safe.slice(0, -1);
+  }
+  return safe;
 }
 
 /**
  * The state key a Lobster resume token decodes to, mirroring @clawdbot/lobster
  * token.js: base64url JSON whose protocolVersion and v are both 1 and which
  * carries a stateKey. Lobster resumes by this key, so two encodings of the same
- * payload select the same checkpoint; provenance must key on it, not on the
- * token bytes, or a re-encoded token would hash to a different filename and hide
- * the record. An undecodable token returns undefined, which fails closed because
- * Lobster cannot resume it either.
+ * payload select the same checkpoint; provenance must key on the storage identity
+ * of that key, not on the token bytes, or a re-encoded token would hash to a
+ * different record and hide it. An undecodable token returns undefined, which
+ * fails closed because Lobster cannot resume it either.
  */
 function resumeTokenStateKey(token: string): string | undefined {
   let payload: unknown;
@@ -76,12 +131,16 @@ function resumeTokenStateKey(token: string): string | undefined {
     return undefined;
   }
   const stateKey = payload.stateKey;
-  return typeof stateKey === "string" && stateKey ? canonicalStateKey(stateKey) : undefined;
+  if (typeof stateKey !== "string" || !stateKey) {
+    return undefined;
+  }
+  const canonical = canonicalStateKey(stateKey);
+  return canonical || undefined;
 }
 
 /**
- * The canonical keys a checkpoint is recorded under: the decoded state key from a
- * resume token, and Lobster's approval-ID index key. Lobster strips every
+ * The canonical identities a checkpoint is recorded under: the decoded state key
+ * from a resume token, and Lobster's approval-ID index key. Lobster strips every
  * non-hex character from an approval ID, so two spellings that sanitize alike
  * select the same checkpoint and must share one provenance record.
  */
@@ -104,22 +163,18 @@ function recordIdentityKeys(handle: LobsterCheckpointHandle): string[] {
   return keys;
 }
 
-function recordPaths(env: Env, handle: LobsterCheckpointHandle): string[] {
-  const dir = path.join(lobsterStateDir(env), RECORD_DIR);
-  return recordIdentityKeys(handle).map((key) =>
-    path.join(dir, `${createHash("sha256").update(key).digest("hex")}.json`),
-  );
+/** The bounded store/sidecar keys for a handle, hashed so any identity fits the store key limit. */
+function recordKeys(handle: LobsterCheckpointHandle): string[] {
+  return recordIdentityKeys(handle).map((key) => createHash("sha256").update(key).digest("hex"));
 }
 
-function parseRecord(text: string, file: string): LobsterCheckpointProvenance {
+function legacyRecordPath(env: Env, key: string): string {
+  return path.join(lobsterStateDir(env), LEGACY_RECORD_DIR, `${key}.json`);
+}
+
+function parseProvenance(value: unknown, label: string): LobsterCheckpointProvenance {
   function fail(kind: "unreadable" | "malformed"): never {
-    throw new Error(`lobster checkpoint provenance is ${kind}: ${path.basename(file)}`);
-  }
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    fail("unreadable");
+    throw new Error(`lobster checkpoint provenance is ${kind}: ${label}`);
   }
   if (!isRecord(value) || value.version !== 1) {
     fail("malformed");
@@ -158,22 +213,57 @@ function parseRecord(text: string, file: string): LobsterCheckpointProvenance {
   return record;
 }
 
-/** Returns the record for a checkpoint, or undefined when this plugin never recorded one. */
+function parseRecord(text: string, label: string): LobsterCheckpointProvenance {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw new Error(`lobster checkpoint provenance is unreadable: ${label}`);
+  }
+  return parseProvenance(value, label);
+}
+
+async function readLegacyRecord(
+  env: Env,
+  key: string,
+): Promise<LobsterCheckpointProvenance | undefined> {
+  let text: string;
+  try {
+    text = await fs.readFile(legacyRecordPath(env, key), "utf8");
+  } catch (error) {
+    if (extractErrorCode(error) === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+  return parseRecord(text, key);
+}
+
+/**
+ * Returns the record for a checkpoint, or undefined when this plugin never recorded
+ * one. The plugin state store is authoritative; a legacy sidecar is read only for a
+ * checkpoint recorded before the store existed, so an in-flight upgrade still honors
+ * the producer's authority.
+ */
 export async function readCheckpointProvenance(
   env: Env,
   handle: LobsterCheckpointHandle,
 ): Promise<LobsterCheckpointProvenance | undefined> {
-  for (const file of recordPaths(env, handle)) {
-    let text: string;
-    try {
-      text = await fs.readFile(file, "utf8");
-    } catch (error) {
-      if (extractErrorCode(error) === "ENOENT") {
-        continue;
-      }
-      throw error;
+  const keys = recordKeys(handle);
+  for (const key of keys) {
+    if (!configuredStore) {
+      break;
     }
-    return parseRecord(text, file);
+    const stored = await configuredStore.lookup(key);
+    if (stored !== undefined) {
+      return parseProvenance(stored, key);
+    }
+  }
+  for (const key of keys) {
+    const legacy = await readLegacyRecord(env, key);
+    if (legacy) {
+      return legacy;
+    }
   }
   return undefined;
 }
@@ -183,14 +273,21 @@ export async function writeCheckpointProvenance(
   handle: LobsterCheckpointHandle,
   record: LobsterCheckpointProvenance,
 ): Promise<void> {
-  const files = recordPaths(env, handle);
-  const primary = files[0];
-  if (primary === undefined) {
+  const keys = recordKeys(handle);
+  if (keys.length === 0) {
     return;
   }
-  await fs.mkdir(path.dirname(primary), { recursive: true, mode: 0o700 });
+  if (configuredStore) {
+    for (const key of keys) {
+      await configuredStore.register(key, record);
+    }
+    return;
+  }
+  const dir = path.join(lobsterStateDir(env), LEGACY_RECORD_DIR);
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const text = JSON.stringify(record);
-  for (const file of files) {
+  for (const key of keys) {
+    const file = legacyRecordPath(env, key);
     const temp = `${file}.${randomUUID()}.tmp`;
     await fs.writeFile(temp, text, { mode: 0o600 });
     await fs.rename(temp, file);
@@ -202,5 +299,11 @@ export async function deleteCheckpointProvenance(
   env: Env,
   handle: LobsterCheckpointHandle,
 ): Promise<void> {
-  await Promise.all(recordPaths(env, handle).map((file) => fs.rm(file, { force: true })));
+  const keys = recordKeys(handle);
+  if (configuredStore) {
+    for (const key of keys) {
+      await configuredStore.delete(key);
+    }
+  }
+  await Promise.all(keys.map((key) => fs.rm(legacyRecordPath(env, key), { force: true })));
 }
