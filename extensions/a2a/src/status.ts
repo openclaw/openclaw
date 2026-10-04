@@ -15,6 +15,10 @@ export const a2aChannelStatus = createComputedAccountStatusAdapter<ResolvedA2aCh
     accountId: account.accountId,
     enabled: account.enabled,
     configured: account.configured,
-    extra: { peerCount: Object.keys(account.config.peers ?? {}).length },
+    extra: {
+      peerCount: Object.keys(account.config.peers ?? {}).length,
+      // Names only: these peers stay unavailable until their token variable is set.
+      ...(account.unresolvedPeers.length > 0 ? { unresolvedPeers: account.unresolvedPeers } : {}),
+    },
   }),
 });

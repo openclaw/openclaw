@@ -18,14 +18,16 @@ export function resolveDefaultA2aChannelAccountId(): string {
  * sees them as unconfigured.
  */
 function withoutUnresolvedCredentials(cfg: OpenClawConfig, config: A2aChannelConfig) {
+  const unresolvedPeers: string[] = [];
   const peers = config.peers;
   if (!peers) {
-    return config;
+    return { config, unresolvedPeers };
   }
   const available: NonNullable<A2aChannelConfig["peers"]> = {};
   for (const [peerName, peer] of Object.entries(peers)) {
     const base = ["channels", "a2a", "peers", peerName] as const;
     if (hasUnresolvedConfigValue(cfg, [...base, "token"])) {
+      unresolvedPeers.push(peerName);
       continue;
     }
     if (peer.outboundToken && hasUnresolvedConfigValue(cfg, [...base, "outboundToken"])) {
@@ -35,19 +37,23 @@ function withoutUnresolvedCredentials(cfg: OpenClawConfig, config: A2aChannelCon
     }
     available[peerName] = peer;
   }
-  return { ...config, peers: available };
+  return { config: { ...config, peers: available }, unresolvedPeers };
 }
 
 export function resolveA2aChannelAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedA2aChannelAccount {
-  const config = withoutUnresolvedCredentials(params.cfg, params.cfg.channels?.a2a ?? {});
+  const { config, unresolvedPeers } = withoutUnresolvedCredentials(
+    params.cfg,
+    params.cfg.channels?.a2a ?? {},
+  );
   return {
     accountId: normalizeAccountId(params.accountId),
     enabled: config.enabled !== false,
     configured: Object.keys(config.peers ?? {}).length > 0,
     config,
+    unresolvedPeers,
   };
 }
 

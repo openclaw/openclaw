@@ -28,6 +28,7 @@ function createA2aGatewayFixture() {
     enabled: true,
     configured: true,
     config: { peers: { hermes: { token: "test-token" } } },
+    unresolvedPeers: [],
   };
   const statusPatchSink = vi.fn();
   const ctx = createStartAccountContext({
