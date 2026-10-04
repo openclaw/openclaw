@@ -76,7 +76,7 @@ it("answers through a timed-out compaction summary and does not re-run it next t
     const scope = { agentId: "main", sessionKey, sessionId, storePath };
     const cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "main", default: true, workspace: state.workspaceDir }],
+        entries: { main: { workspace: state.workspaceDir } },
         defaults: {
           workspace: state.workspaceDir,
           model: { primary: "test-provider/test-model" },

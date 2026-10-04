@@ -28,7 +28,7 @@ type Fixture = { state: OpenClawTestState; config: OpenClawConfig; target: Sessi
 
 let summaryMode: SummaryMode = "stall";
 let summaryRequests: string[] = [];
-let summaryArrived = createDeferred<void>();
+let summaryArrived = createDeferred();
 let server: http.Server;
 let baseUrl: string;
 
@@ -81,7 +81,7 @@ beforeAll(async () => {
         })}\n\n`;
       res.writeHead(200, { "content-type": "text/event-stream" });
       res.end(
-        `${chunk({ role: "assistant", content: "## Goal\nModel summary after recovery." }, null)}` +
+        chunk({ role: "assistant", content: "## Goal\nModel summary after recovery." }, null) +
           `${chunk({}, "stop")}data: [DONE]\n\n`,
       );
     });
@@ -99,7 +99,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   summaryRequests = [];
-  summaryArrived = createDeferred<void>();
+  summaryArrived = createDeferred();
 });
 
 const FILLER = "older context ".repeat(200);
@@ -266,8 +266,7 @@ describe("automatic compaction summary failure", () => {
       expect(
         openSession(fixture)
           .getBranch()
-          .filter((entry) => entry.type === "compaction")
-          .at(-1)?.summary,
+          .findLast((entry) => entry.type === "compaction")?.summary,
       ).toContain("Model summary after recovery.");
     });
   });

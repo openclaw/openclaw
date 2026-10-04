@@ -2,7 +2,6 @@ import {
   preserveCompactionReplayWindow,
   resolveCompactionReplayEligibility,
 } from "@openclaw/ai/transports";
-import { isSummaryProviderError } from "../../../packages/agent-core/src/harness/types.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
@@ -16,7 +15,6 @@ import {
 } from "../../logging/diagnostic-run-activity.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { extractErrorHttpStatus } from "../../shared/assistant-error-format.js";
 import {
   consumeCompactionSafeguardCancellation,
   getCompactionSafeguardRuntime,
@@ -44,7 +42,7 @@ import { DefaultResourceLoader } from "../sessions/resource-loader.js";
 import { createAgentSession } from "../sessions/sdk.js";
 import { setSessionModelUsageSink } from "../sessions/session-model-usage.js";
 import { normalizeUsage, type UsageLike } from "../usage.js";
-import { resolveCompactionFailure } from "./compact-reasons.js";
+import { isSummaryTimeoutFailure, resolveCompactionFailure } from "./compact-reasons.js";
 import {
   containsRealConversationMessages,
   summarizeCompactionMessages,
@@ -526,26 +524,18 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             ).catch(async (error: unknown) => {
               // Caller Stop, run timeout, and the outer host deadline abort params.abortSignal
               // (#133260, #159105, #130993); manual /compact reports its own failure.
-              if (trigger === "manual" || params.abortSignal?.aborted || summaryReady) {
-                throw error;
-              }
-              const failure = resolveCompactionFailure({
-                error,
-                safeguardCancellation: getCompactionSafeguardRuntime(sessionManager)?.cancellation,
-                abortSignal: params.abortSignal,
-              });
-              // Only an actual summary timeout qualifies: the summary watchdog fired (the
-              // caller is still live, so its composed signal aborted on the deadline), or the
-              // provider answered 408/504. Failover's broader "timeout" class also covers
-              // fast 5xx, 410, and DNS failures, which keep their owners' outcomes.
-              let providerFailure: unknown = failure.error;
-              while (providerFailure instanceof Error && !isSummaryProviderError(providerFailure)) {
-                providerFailure = providerFailure.cause;
-              }
-              const providerStatus = isSummaryProviderError(providerFailure)
-                ? extractErrorHttpStatus(providerFailure.response.errorMessage?.trim() ?? "")?.code
-                : undefined;
-              if (!summarySignal?.aborted && providerStatus !== 408 && providerStatus !== 504) {
+              if (
+                trigger === "manual" ||
+                params.abortSignal?.aborted ||
+                summaryReady ||
+                !isSummaryTimeoutFailure({
+                  error,
+                  summarySignal,
+                  abortSignal: params.abortSignal,
+                  safeguardCancellation:
+                    getCompactionSafeguardRuntime(sessionManager)?.cancellation,
+                })
+              ) {
                 throw error;
               }
               // The timed-out request consumed the delegated window too. Rearm it
