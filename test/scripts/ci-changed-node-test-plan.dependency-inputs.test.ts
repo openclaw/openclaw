@@ -13,7 +13,15 @@ import {
   selectedFiles,
 } from "./ci-changed-node-test-plan.test-support.js";
 
-const globalInputs = ["tsconfig.json", "test/setup.ts", "patches/runtime.patch"];
+const globalInputs = [
+  "tsconfig.json",
+  "pnpm-workspace.yaml",
+  ".npmrc",
+  "node-version.mjs",
+  "test/setup.ts",
+  "vitest.config.ts",
+  "patches/runtime.patch",
+];
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 let cwd: string;
 

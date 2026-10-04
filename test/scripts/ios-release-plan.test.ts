@@ -123,14 +123,14 @@ describe("resolveIosReleasePlan", () => {
         decision: "retry-upload",
       },
     ],
-    [
-      "uploaded revision after removing its version record",
+    ...["FAILED", "AWAITING_UPLOAD"].map<PlanCase>((state) => [
+      `uploaded revision after removing its version record (${state})`,
       {
         appStoreVersions: [legacy],
-        buildUploads: [upload("1", "2026.7.21", "FAILED")],
+        buildUploads: [upload("1", "2026.7.21", state)],
       },
       { appStoreRevision: 1, buildNumber: 2, decision: "retry-upload" },
-    ],
+    ]),
     [
       "next build after a failed upload",
       {

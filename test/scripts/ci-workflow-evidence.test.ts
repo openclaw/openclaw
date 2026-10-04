@@ -896,6 +896,7 @@ describe("ci workflow guards", () => {
       expect(identity.run).toContain(guard);
     }
 
+    const fetchCalls: string[] = [];
     for (const job of [qa.jobs.validate_selected_ref, ...selectedJobs]) {
       const ownerIndex = job.steps.findIndex(
         (entry: WorkflowStep) => entry.name === "Prepare Git owner",
@@ -917,7 +918,27 @@ describe("ci workflow guards", () => {
           ? "Checkout selected ref"
           : "Checkout trusted QA harness",
       );
+      for (const entry of job.steps as WorkflowStep[]) {
+        const run = (entry.run ?? "").replace(/[ \t]*\\\n[ \t]*/gu, " ");
+        const fetches = run
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((line) => /\bfetch\b/u.test(line));
+        if (fetches.length === 0) {
+          continue;
+        }
+        expect(run.startsWith("set -euo pipefail\n")).toBe(true);
+        for (const fetch of fetches) {
+          expect(fetch).toMatch(/^python3 -I -S "\$CI_GIT_OWNER" --checkout-git (?:0|120) fetch /u);
+          expect(fetch).not.toMatch(/\|\||&&|;|\$\?/u);
+        }
+        expect(run).not.toMatch(/^\s*(?:timeout|for|while|until)\b|\$\?/mu);
+        fetchCalls.push(...fetches);
+      }
     }
+    expect(fetchCalls).toHaveLength(10);
+    expect(fetchCalls.filter((call) => call.includes("--checkout-git 120 fetch"))).toHaveLength(4);
+    expect(fetchCalls.filter((call) => call.includes("--checkout-git 0 fetch"))).toHaveLength(6);
     for (const job of selectedJobs) {
       expect(job.environment).toBe("qa-live-shared");
       expect(job.steps.slice(0, 7).map((entry: WorkflowStep) => entry.name)).toEqual([

@@ -227,6 +227,7 @@ describe("Gateway matrix transcript evidence", () => {
 
   it.each([
     { surface: "direct", isError: true },
+    { surface: "direct", isError: false },
     { surface: "tool-search", isError: false },
     { surface: "code-mode", isError: true },
   ] as const)(
@@ -1518,7 +1519,7 @@ it("includes the exact process-helper bytes in the fixed workload fingerprint", 
 });
 
 describe("fixed Gateway matrix comparisons", () => {
-  it.each(["prompt", "fixture", "executor"] as const)(
+  it.each(["prompt", "fixture", "thinking", "timeout", "executor"] as const)(
     "rejects a changed %s instead of comparing different workloads",
     (field) => {
       const baseline = comparisonRow();
@@ -1527,6 +1528,10 @@ describe("fixed Gateway matrix comparisons", () => {
         candidate.workload.promptSha256 = "changed";
       } else if (field === "fixture") {
         candidate.workload.fixtureSha256 = "changed";
+      } else if (field === "thinking") {
+        candidate.workload.settings.thinking = "high";
+      } else if (field === "timeout") {
+        candidate.workload.settings.timeoutSeconds = 121;
       } else {
         candidate.workload.settings.executor = "quickjs";
       }

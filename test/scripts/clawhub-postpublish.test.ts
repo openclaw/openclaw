@@ -488,10 +488,12 @@ describe("ClawHub prepared publication", () => {
     }
   });
 
-  it.each(["mixed attempt", "failed producer", "reused producer"])(
+  it.each(["prior attempt", "mixed attempt", "failed producer", "reused producer"])(
     "refuses to relabel %s packages as the current preparation attempt",
     (change) => {
-      const options = preparedSealingFixture(change === "mixed attempt" ? [1, 2] : [2, 2]);
+      const options = preparedSealingFixture(
+        change === "prior attempt" ? [1, 1] : change === "mixed attempt" ? [1, 2] : [2, 2],
+      );
       if (change === "failed producer") {
         options.workflowJobs.jobs[0].conclusion = "failure";
       }
