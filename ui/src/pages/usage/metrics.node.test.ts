@@ -1,12 +1,7 @@
 // @vitest-environment node
 import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import {
-  buildUsageCostWindows,
-  buildUsageCostWindowSummary,
-  formatDayLabel,
-  formatFullDate,
-} from "./metrics.ts";
+import { buildUsageCostWindows, formatDayLabel, formatFullDate } from "./metrics.ts";
 
 function runZonedMetrics(source: string, timeZone: string) {
   // TZ must be set before V8 starts; changing it inside a Vitest worker is insufficient.
@@ -287,7 +282,7 @@ describe("usage cost windows", () => {
   ];
 
   it("uses calendar windows instead of the last non-empty rows", () => {
-    const windows = buildUsageCostWindows(daily, "2026-06-01", "2026-07-01");
+    const [, ...windows] = buildUsageCostWindows(daily, "2026-06-01", "2026-07-01");
 
     expect(windows.map(({ days, endDate }) => ({ days, endDate }))).toEqual([
       { days: 1, endDate: "2026-07-01" },
@@ -299,7 +294,7 @@ describe("usage cost windows", () => {
   });
 
   it("keeps the selected-range total separate from shorter comparisons", () => {
-    const range = buildUsageCostWindowSummary(daily, "2026-06-01", "2026-07-01");
+    const [range] = buildUsageCostWindows(daily, "2026-06-01", "2026-07-01");
 
     expect(range?.days).toBe(31);
     expect(range?.totals.totalCost).toBe(15);
@@ -308,6 +303,6 @@ describe("usage cost windows", () => {
 
   it("rejects malformed and reversed ranges", () => {
     expect(buildUsageCostWindows(daily, "bad", "2026-07-01")).toEqual([]);
-    expect(buildUsageCostWindowSummary(daily, "2026-07-02", "2026-07-01")).toBeNull();
+    expect(buildUsageCostWindows(daily, "2026-07-02", "2026-07-01")).toEqual([]);
   });
 });

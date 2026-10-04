@@ -52,7 +52,10 @@ export class AcpTranslatorAgentEvents {
     }
 
     if (stream === "approval") {
-      await this.handleApprovalEvent({ sessionKey, runId, data });
+      const approvalEvent = parseGatewayExecApprovalEventData(data);
+      if (approvalEvent) {
+        this.startApprovalRelay({ sessionKey, runId, approvalEvent });
+      }
       return;
     }
 
@@ -141,39 +144,16 @@ export class AcpTranslatorAgentEvents {
     this.startApprovalRelay({ sessionKey, approvalEvent });
   }
 
-  clearApprovalRelaysForPrompt(
-    sessionId: string,
-    runId?: string,
-    opts: { denyActive?: boolean } = {},
-  ): void {
+  clearApprovalRelaysForPrompt(sessionId: string, runId: string): void {
     for (const [approvalId, relay] of this.approvalRelays) {
-      if (relay.sessionId !== sessionId) {
-        continue;
-      }
-      if (runId && relay.runId !== runId) {
+      if (relay.sessionId !== sessionId || relay.runId !== runId) {
         continue;
       }
       this.approvalRelays.delete(approvalId);
-      if (opts.denyActive && relay.state === "active") {
+      if (relay.state === "active") {
         void this.resolveGatewayApproval(approvalId, "deny");
       }
     }
-  }
-
-  private async handleApprovalEvent(params: {
-    sessionKey: string;
-    runId?: string;
-    data: Record<string, unknown>;
-  }): Promise<void> {
-    const approvalEvent = parseGatewayExecApprovalEventData(params.data);
-    if (!approvalEvent) {
-      return;
-    }
-    this.startApprovalRelay({
-      sessionKey: params.sessionKey,
-      runId: params.runId,
-      approvalEvent,
-    });
   }
 
   private startApprovalRelay(params: {

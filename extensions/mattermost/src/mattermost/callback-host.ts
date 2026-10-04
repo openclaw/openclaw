@@ -19,13 +19,9 @@ export function collectMattermostCallbackPaths(config: unknown): string[] {
     paths.add(normalizeCallbackPath(commands?.callbackPath));
     const callbackUrl = normalizeOptionalString(commands?.callbackUrl);
     if (callbackUrl) {
-      try {
-        const path = new URL(callbackUrl).pathname;
-        if (path) {
-          paths.add(path);
-        }
-      } catch {
-        // Keep the configured path; registration diagnoses malformed URLs.
+      const path = URL.parse(callbackUrl)?.pathname;
+      if (path) {
+        paths.add(path);
       }
     }
   }

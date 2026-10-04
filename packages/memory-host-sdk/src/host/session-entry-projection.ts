@@ -74,15 +74,12 @@ export function projectSessionEntryRecord(value: unknown): unknown {
 // This limit applies to content only; the role label adds up to 11 chars.
 const SESSION_EXPORT_CONTENT_WRAP_CHARS = 800;
 
-function splitLongSessionLine(
-  text: string,
-  maxChars: number = SESSION_EXPORT_CONTENT_WRAP_CHARS,
-): string[] {
+function splitLongSessionLine(text: string): string[] {
   const normalized = text.trim();
   if (!normalized) {
     return [];
   }
-  if (normalized.length <= maxChars) {
+  if (normalized.length <= SESSION_EXPORT_CONTENT_WRAP_CHARS) {
     return [normalized];
   }
 
@@ -90,12 +87,12 @@ function splitLongSessionLine(
   let cursor = 0;
   while (cursor < normalized.length) {
     const remaining = normalized.length - cursor;
-    if (remaining <= maxChars) {
+    if (remaining <= SESSION_EXPORT_CONTENT_WRAP_CHARS) {
       segments.push(normalized.slice(cursor).trim());
       break;
     }
 
-    const limit = cursor + maxChars;
+    const limit = cursor + SESSION_EXPORT_CONTENT_WRAP_CHARS;
     let splitAt = limit;
     for (let index = limit; index > cursor; index -= 1) {
       if (normalized[index] === " ") {

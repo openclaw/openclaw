@@ -861,7 +861,7 @@ private fun testProxyClient(
   nodeResolver: suspend () -> String?,
   transport: suspend (String, String, ByteArray) -> Unit,
 ): WearProxyClient =
-  WearProxyClient.createForTests(
+  WearProxyClient(
     nodeResolver = WearNodeResolver(nodeResolver),
     transport = WearMessageTransport(transport),
   )

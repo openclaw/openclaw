@@ -13,7 +13,7 @@ import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 
-export type ConfigurablePlugin = {
+type ConfigurablePlugin = {
   id: string;
   name: string;
   uiHints: Record<string, PluginConfigUiHint>;
@@ -112,7 +112,7 @@ function parseJsonNumberInput(value: string): number | undefined {
   }
 }
 
-export function discoverConfigurablePlugins(params: {
+function discoverConfigurablePlugins(params: {
   manifestPlugins: ReadonlyArray<{
     id: string;
     name?: string;
@@ -145,7 +145,7 @@ export function discoverConfigurablePlugins(params: {
   return result.toSorted((a, b) => a.name.localeCompare(b.name));
 }
 
-export function discoverUnconfiguredPlugins(
+function discoverUnconfiguredPlugins(
   params: Parameters<typeof discoverConfigurablePlugins>[0] & { config: OpenClawConfig },
 ): ConfigurablePlugin[] {
   const all = discoverConfigurablePlugins(params);

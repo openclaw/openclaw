@@ -82,8 +82,5 @@ export type ChatSendTimingEntry = {
   sendAttempts: number;
   sendState?: ChatQueueItem["sendState"];
   submittedAtMs: number;
-  requestStartedAtMs?: number;
-  ackAtMs?: number;
   ackStatus?: ChatSendAckStatus;
-  firstAssistantVisibleRecorded?: boolean;
 };

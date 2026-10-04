@@ -85,52 +85,69 @@ describe("fixed icon-grid fit", () => {
     expect(scan(css + ".icon {padding:0}").findings).toEqual([]);
   });
 
-  it.each([
-    ["flex centering", original.replace("inline-grid", "inline-flex")],
-    ["content-box sizing", original + ".icon {box-sizing:content-box}"],
-    [
-      "minimum sizes",
-      original + ".icon {min-width:32px;min-height:32px;max-width:20px;max-height:20px}",
-    ],
-    ["centered tracks", original + ".icon {justify-content:center;align-content:center}"],
-    [
-      "bounded tracks",
-      original + ".icon {grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}",
-    ],
-  ])("does not treat %s as the implicit-grid defect", (_label, css) => {
-    expect(scan(css).findings).toEqual([]);
+  it("excludes controls without the implicit-grid defect", () => {
+    for (const css of [
+      original.replace("inline-grid", "inline-flex"),
+      ...[
+        ".icon {box-sizing:content-box}",
+        ".icon {min-width:32px;min-height:32px;max-width:20px;max-height:20px}",
+        ".icon {justify-content:center;align-content:center}",
+        ".icon {grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}",
+        ".icon svg {max-width:8px;max-height:8px}",
+      ].map((correction) => original + correction),
+    ]) {
+      expect(scan(css).findings, css).toEqual([]);
+    }
   });
 
-  it("does not treat unresolved padding as a known zero", () => {
-    const result = scan(original.replace("padding:6px;", "padding:var(--control-padding);"));
-    expect(result.findings).toEqual([]);
-    expect(result.unresolved).toBeGreaterThan(0);
-  });
-
-  it.each([
-    ["font-relative dimensions", ".icon {width:2em;font-size:20px}"],
-    ["logical dimensions", ".icon {inline-size:40px}"],
-    ["logical borders", ".icon {border-inline-width:2px}"],
-    ["all reset", ".icon {all:unset}"],
-    [
-      "competing important widths",
-      ".toolbar .icon {width:40px!important}.icon {width:24px!important}",
-    ],
-    ["always-applicable media correction", "@media all {.icon {padding:0}}"],
-    ["nested-only padding", ".icon {&:hover {padding:0}}"],
-  ])("defers %s rather than inventing a resolved geometry", (_name, correction) => {
-    const result = scan(original + correction);
-    expect(result.findings).toEqual([]);
-    expect(result.unresolved).toBeGreaterThan(0);
-  });
-
-  it("defers top-level hover geometry", () => {
-    const result = scan(
-      original + ".toolbar > button {padding:0}.toolbar > button:hover {padding:8px}",
-    );
-    expect(result.findings).toHaveLength(0);
-    expect(result.checked).toBe(0);
-    expect(result.unresolved).toBeGreaterThan(0);
+  it("defers unresolved geometry instead of inventing a fit", () => {
+    const dom = new JSDOM();
+    try {
+      const defer = (css: string, fixtures = [fixture]) => {
+        const result = scanIconGridFit(css, fixtures, base);
+        expect(result.findings, css).toEqual([]);
+        expect(result.unresolved, css).toBeGreaterThan(0);
+        return result;
+      };
+      for (const correction of [
+        ".icon {width:2em;font-size:20px}",
+        ".icon {inline-size:40px}",
+        ".icon {border-inline-width:2px}",
+        ".icon {all:unset}",
+        ".toolbar .icon {width:40px!important}.icon {width:24px!important}",
+        "@media all {.icon {padding:0}}",
+        ".icon {&:hover {padding:0}}",
+        ...[
+          "display:none",
+          "position:absolute",
+          "transform:translateX(-2px)",
+          "justify-self:start",
+        ].map((declaration) => ".icon svg {" + declaration + "}"),
+      ]) {
+        defer(original + correction);
+      }
+      defer(original.replace("padding:6px;", "padding:var(--control-padding);"));
+      expect(
+        defer(original + ".toolbar > button {padding:0}.toolbar > button:hover {padding:8px}")
+          .checked,
+      ).toBe(0);
+      defer(original, [
+        {
+          ...fixture,
+          html: fixture.html.replace('class="icon"', 'class="icon" style="padding:0"'),
+        },
+      ]);
+      defer(
+        original + '.icon:not([aria-pressed="true"]) {padding:8px}',
+        collect(
+          'html`<button class="icon" aria-pressed=${pressed}>${icons.refresh}</button>`',
+          "ui/src/state.ts",
+          dom.window.document,
+        ),
+      );
+    } finally {
+      dom.window.close();
+    }
   });
 
   it("defers cross-sheet ancestor, tag, ID, attribute, and SVG overrides", () => {
@@ -152,66 +169,7 @@ describe("fixed icon-grid fit", () => {
     }
   });
 
-  it("respects fixed SVG max bounds and excludes nonparticipating or offset SVGs", () => {
-    expect(scan(original + ".icon svg {max-width:8px;max-height:8px}").findings).toEqual([]);
-    for (const declaration of [
-      "display:none",
-      "position:absolute",
-      "transform:translateX(-2px)",
-      "justify-self:start",
-    ]) {
-      const result = scan(original + ".icon svg {" + declaration + "}");
-      expect(result.findings).toEqual([]);
-      expect(result.unresolved).toBeGreaterThan(0);
-    }
-  });
-
-  it("does not misclassify an inline padding reset as native padding", () => {
-    const inline = {
-      ...fixture,
-      html: fixture.html.replace('class="icon"', 'class="icon" style="padding:0"'),
-    };
-    const result = scanIconGridFit(original, [inline], base);
-    expect(result.findings).toEqual([]);
-    expect(result.unresolved).toBeGreaterThan(0);
-  });
-
-  it("excludes empty extra grid items and unresolved selector-state bindings", () => {
-    const dom = new JSDOM();
-    try {
-      const extra = 'html`<button class="icon"><span></span>${icons.refresh}</button>`';
-      expect(collect(extra, "ui/src/extra.ts", dom.window.document)).toEqual([]);
-      const source = 'html`<button class="icon" aria-pressed=${pressed}>${icons.refresh}</button>`';
-      const fixtures = collect(source, "ui/src/state.ts", dom.window.document);
-      const result = scanIconGridFit(
-        original + '.icon:not([aria-pressed="true"]) {padding:8px}',
-        fixtures,
-        base,
-      );
-      expect(result.findings).toEqual([]);
-      expect(result.unresolved).toBeGreaterThan(0);
-    } finally {
-      dom.window.close();
-    }
-  });
-
-  it("collects literal ancestry and conditional icons, not dynamic class or text guesses", () => {
-    const dom = new JSDOM();
-    try {
-      const source =
-        'html`<header class="toolbar"><button class="icon">${busy ? icons.loader : icons.refresh}</button><button class="icon">Save ${icons.check}</button><button class="icon ${variant}">${icons.x}</button></header>`';
-      const fixtures = collect(source, "ui/src/control.ts", dom.window.document);
-      expect(fixtures).toHaveLength(1);
-      const template = dom.window.document.createElement("template");
-      template.innerHTML = fixtures[0]!.html;
-      expect(template.content.querySelectorAll("[data-icon-grid-control]")).toHaveLength(1);
-      expect(scanIconGridFit(original, fixtures, base).findings).toHaveLength(2);
-    } finally {
-      dom.window.close();
-    }
-  });
-
-  it("preserves template locations and excludes custom render roots with the native AST", () => {
+  it("collects only static icon witnesses and preserves their native AST locations", () => {
     const dom = new JSDOM();
     try {
       const source = [
@@ -221,23 +179,34 @@ describe("fixed icon-grid fit", () => {
         "  }",
         "}",
       ].join("\n");
-      expect(collect(source, "ui/src/control.ts", dom.window.document)).toEqual([
-        expect.objectContaining({ file: "ui/src/control.ts", line: 3 }),
-      ]);
-      expect(
-        collect(
-          source.replace("OpenClawLightDomElement", "LitElement"),
-          "ui/src/shadow.ts",
-          dom.window.document,
-        ),
-      ).toEqual([]);
-      expect(
-        collect(
-          source.replace("render()", "createRenderRoot()"),
-          "ui/src/custom-root.ts",
-          dom.window.document,
-        ),
-      ).toEqual([]);
+      const cases: [string, string, number | null, number][] = [
+        ["control", source, 3, 0],
+        ["shadow", source.replace("OpenClawLightDomElement", "LitElement"), null, 0],
+        ["custom-root", source.replace("render()", "createRenderRoot()"), null, 0],
+        ["extra", 'html`<button class="icon"><span></span>${icons.refresh}</button>`', null, 0],
+        [
+          "literal",
+          'html`<header class="toolbar"><button class="icon">${busy ? icons.loader : icons.refresh}</button><button class="icon">Save ${icons.check}</button><button class="icon ${variant}">${icons.x}</button></header>`',
+          1,
+          2,
+        ],
+      ];
+      for (const [name, markup, line, findings] of cases) {
+        const file = `ui/src/${name}.ts`;
+        const fixtures = collect(markup, file, dom.window.document);
+        expect(fixtures, name).toEqual(
+          line === null ? [] : [expect.objectContaining({ file, line })],
+        );
+        if (line !== null) {
+          expect(fixtures, name).toHaveLength(1);
+          const template = dom.window.document.createElement("template");
+          template.innerHTML = fixtures[0]!.html;
+          expect(template.content.querySelectorAll("[data-icon-grid-control]"), name).toHaveLength(
+            1,
+          );
+          expect(scanIconGridFit(original, fixtures, base).findings, name).toHaveLength(findings);
+        }
+      }
     } finally {
       dom.window.close();
     }

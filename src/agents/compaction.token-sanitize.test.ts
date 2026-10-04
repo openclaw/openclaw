@@ -28,6 +28,7 @@ describe("compaction token accounting sanitization", () => {
         role: "custom",
         customType: "openclaw.runtime-context",
         content: "internal",
+        details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
         timestamp: 2,
       } as AgentMessage,
       {

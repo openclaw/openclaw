@@ -6,6 +6,7 @@ import { readLegacyCompactionMetrics } from "../../config/sessions/legacy-compac
 import type {
   ChatHistoryPage,
   ChatHistoryPageParams,
+  ChatHistoryMessageParams,
 } from "../../config/sessions/session-history-types.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import {
@@ -15,6 +16,49 @@ import {
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import * as sessionTranscriptReaders from "../session-transcript-readers.js";
 import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
+import { projectChatHistoryWithReplies } from "./chat-history-reply-messages.js";
+
+function prepareChatHistoryParams<Params extends ChatHistoryPageParams>(input: Params): Params {
+  return getCliSessionBinding(input.entry, "claude-cli")?.sessionId
+    ? {
+        ...input,
+        cliHistoryHomeDir: process.env.HOME || os.homedir(),
+        cliHistoryRedaction: captureTranscriptRedactionSnapshot(),
+      }
+    : input;
+}
+
+export async function readChatHistoryMessageById(input: ChatHistoryMessageParams) {
+  const binding = getCliSessionBinding(input.entry, "claude-cli");
+  if (!binding?.sessionId || !input.storePath) {
+    return sessionTranscriptReaders.readSessionMessageByIdAsync(
+      {
+        agentId: input.sessionAgentId,
+        sessionId: input.sessionId,
+        sessionKey: input.canonicalKey,
+        storePath: input.storePath,
+        sessionEntry: input.entry,
+      },
+      input.messageId,
+      {
+        allowResetArchiveFallback: true,
+        historyVisibility: { sessionStartedAt: input.entry?.sessionStartedAt },
+      },
+    );
+  }
+  const params = prepareChatHistoryParams(input);
+  if (params.entry?.incognito || isIncognitoSessionKey(params.canonicalKey)) {
+    const { readProcessHeldCliHistoryMessage } =
+      await import("../cli-session-history.process-held.js");
+    return readProcessHeldCliHistoryMessage(params);
+  }
+  const { readSessionHistoryPageInWorker } =
+    await import("../../config/sessions/session-history-worker-runtime.js");
+  return readSessionHistoryPageInWorker({
+    kind: "rpc-message",
+    params: { ...params, storePath: input.storePath },
+  });
+}
 
 export async function readChatHistoryPage(
   input: ChatHistoryPageParams,
@@ -22,13 +66,7 @@ export async function readChatHistoryPage(
 ): Promise<ChatHistoryPage> {
   signal?.throwIfAborted();
   const binding = getCliSessionBinding(input.entry, "claude-cli");
-  const params = binding?.sessionId
-    ? {
-        ...input,
-        cliHistoryHomeDir: process.env.HOME || os.homedir(),
-        cliHistoryRedaction: captureTranscriptRedactionSnapshot(),
-      }
-    : input;
+  const params = prepareChatHistoryParams(input);
   if (
     params.sessionId &&
     params.storePath &&
@@ -70,11 +108,14 @@ export async function readChatHistoryPage(
 }
 
 async function refreshForwardedLabels(messages: unknown[]): Promise<unknown[]> {
-  const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(messages);
-  return projectForwardedMessages(
+  return projectChatHistoryWithReplies(
     messages.filter(
       (message): message is Record<string, unknown> => asOptionalRecord(message) !== undefined,
     ),
-    resolveCronJobName,
+    async (displayMessages) =>
+      projectForwardedMessages(
+        displayMessages,
+        await prepareForwardedMessageCronJobNameResolver(displayMessages),
+      ),
   );
 }

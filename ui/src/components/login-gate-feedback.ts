@@ -29,6 +29,8 @@ type LoginFailureKind =
   | "verified-user-required"
   | "access-denied"
   | "pairing-required"
+  | "pairing-rejected"
+  | "pairing-expired"
   | "insecure-context"
   | "origin-not-allowed"
   | "build-mismatch"
@@ -214,6 +216,25 @@ export function resolveLoginFailureFeedback(
       refreshAction: { label: t("login.failure.protocol.refresh") },
       stepKeys: [],
       docsHref: "https://docs.openclaw.ai/web/control-ui",
+    });
+  }
+
+  if (
+    lastErrorCode === ConnectErrorDetailCodes.PAIRING_REJECTED ||
+    lastErrorCode === ConnectErrorDetailCodes.PAIRING_EXPIRED
+  ) {
+    const declined = lastErrorCode === ConnectErrorDetailCodes.PAIRING_REJECTED;
+    return buildFeedback(rawError, {
+      kind: declined ? "pairing-rejected" : "pairing-expired",
+      tone: "warn",
+      titleKey: declined
+        ? "login.failure.pairing.declinedTitle"
+        : "login.failure.pairing.expiredTitle",
+      summaryKey: declined
+        ? "login.failure.pairing.declinedSummary"
+        : "login.failure.pairing.expiredSummary",
+      stepKeys: [],
+      docsHref: "https://docs.openclaw.ai/web/control-ui/connect-and-pair",
     });
   }
 

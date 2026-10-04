@@ -98,12 +98,13 @@ function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
   if (params.record.origin === "bundled" || params.record.format === "bundle") {
     return;
   }
-  const configuredEntry = params.normalized?.entries[params.record.id];
+  const policyId = normalizePluginPolicyId(params.record.id);
+  const configuredEntry = params.normalized?.entries[policyId];
   if (
     params.normalized?.enabled === false ||
     configuredEntry?.enabled === false ||
-    params.normalized?.deny.includes(params.record.id) ||
-    (params.normalized?.allow.length && !params.normalized.allow.includes(params.record.id))
+    params.normalized?.deny.includes(policyId) ||
+    (params.normalized?.allow.length && !params.normalized.allow.includes(policyId))
   ) {
     return;
   }
@@ -214,29 +215,23 @@ function isIntentionalInstalledBundledDuplicate(params: {
   env: NodeJS.ProcessEnv;
   installRecords: Record<string, PluginInstallRecord>;
 }): boolean {
-  const leftIsInstalled = matchesInstalledPluginRecord({
-    pluginId: params.pluginId,
-    candidate: params.left,
-    config: params.config,
-    env: params.env,
-    installRecords: params.installRecords,
-  });
-  const rightIsInstalled = matchesInstalledPluginRecord({
-    pluginId: params.pluginId,
-    candidate: params.right,
-    config: params.config,
-    env: params.env,
-    installRecords: params.installRecords,
-  });
   return (
-    (leftIsInstalled &&
-      !isStaleForeignBundledPin({ candidate: params.left, env: params.env }) &&
-      params.right.origin === "bundled" &&
-      !isBundledPluginInsideDevSourceRoot({ rootDir: params.right.rootDir, env: params.env })) ||
-    (rightIsInstalled &&
-      !isStaleForeignBundledPin({ candidate: params.right, env: params.env }) &&
-      params.left.origin === "bundled" &&
-      !isBundledPluginInsideDevSourceRoot({ rootDir: params.left.rootDir, env: params.env }))
+    [
+      [params.left, params.right],
+      [params.right, params.left],
+    ] as const
+  ).some(
+    ([installed, bundled]) =>
+      matchesInstalledPluginRecord({
+        pluginId: params.pluginId,
+        candidate: installed,
+        config: params.config,
+        env: params.env,
+        installRecords: params.installRecords,
+      }) &&
+      !isStaleForeignBundledPin({ candidate: installed, env: params.env }) &&
+      bundled.origin === "bundled" &&
+      !isBundledPluginInsideDevSourceRoot({ rootDir: bundled.rootDir, env: params.env }),
   );
 }
 

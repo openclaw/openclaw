@@ -1,3 +1,4 @@
+import type { Result } from "@openclaw/normalization-core/result";
 import type { ProgressCard } from "../../../packages/gateway-protocol/src/index.js";
 import type {
   BuildSessionEntryOptions,
@@ -56,6 +57,7 @@ import type {
   readSessionTranscriptModelContext,
   SessionModelContextLimits,
 } from "./session-accessor.sqlite-model-context.js";
+import type { SessionParticipantRecord } from "./session-accessor.sqlite-participant-projection.js";
 import type { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
 import type { SessionTranscriptMessageEvent } from "./session-accessor.sqlite-projection-read.js";
 import type {
@@ -86,8 +88,8 @@ import type {
 } from "./session-entry-read.types.js";
 import type { PublishedSessionTranscriptArchive } from "./session-history-archive-pruning.types.js";
 import type {
-  ChatHistoryPage,
-  ChatHistoryPageParams,
+  ChatHistoryDisplayRequest,
+  ChatHistoryDisplayResult,
   SessionHistoryWorkerRequest,
   SessionHistoryWorkerResult,
   SessionHistoryDelta,
@@ -338,7 +340,7 @@ export type SessionExactEntriesWorkerSelection =
   | {
       sessionKeys: readonly string[];
       selection?: never;
-      projection?: "full" | "sharing" | "replacement" | "creation" | "list" | "lifecycle";
+      projection?: "full" | "sharing" | "replacement" | "creation" | "list" | "lifecycle" | "exact";
     }
   | {
       sessionKeys?: never;
@@ -371,10 +373,7 @@ export type SessionExactEntriesWorkerResult = {
     birthtime?: string;
   };
   members?: Record<string, SessionMember[]>;
-  participantRecords?: Record<
-    string,
-    import("./session-accessor.sqlite-participant-projection.js").SessionParticipantRecord[]
-  >;
+  participantRecords?: Record<string, SessionParticipantRecord[]>;
   replacement?: SessionEntryReplacementState & { databaseIdentity: string };
   creation?: import("./session-accessor.sqlite-creation-read.js").SessionCreationSnapshot & {
     databaseIdentity: string;
@@ -445,7 +444,7 @@ type SessionArchivedEvictionCandidatesWorkerInput = Omit<
 > & { archived: ArchivedSessionEvictionQuery };
 
 export type SessionHistoryWorkerInput =
-  | { kind: "cli-process-history"; params: ChatHistoryPageParams }
+  | { kind: "cli-process-history"; request: ChatHistoryDisplayRequest }
   | LifecycleArtifactCleanupRequest
   | { kind: "prewarm"; database: { agentId: string; path: string }; env: NodeJS.ProcessEnv }
   | SessionHistoricalEvictionCandidatesWorkerInput
@@ -508,7 +507,7 @@ export type SessionHistoryWorkerPreparedInput =
   PreparedHistoryInput<SessionHistoryDatabaseWorkerInput>;
 
 export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValues & {
-  "cli-process-history": { kind: "rpc"; page: ChatHistoryPage };
+  "cli-process-history": ChatHistoryDisplayResult;
   "conversation-rows": { kind: "conversation-rows"; rows: ConversationRecord[] };
   "conversation-delivery": { kind: "conversation-delivery"; record?: ConversationDeliveryRecord };
   prewarm: { kind: "prewarm" };
@@ -718,10 +717,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
   >;
   readEntryResult: SessionHistoryReader<
     SessionEntryReadWorkerInput,
-    import("@openclaw/normalization-core/result").Result<
-      SessionEntryReadWorkerResult["entry"],
-      unknown
-    >
+    Result<SessionEntryReadWorkerResult["entry"], unknown>
   >;
   readEntryCurrent: SessionHistoryReader<
     SessionEntryCurrentWorkerInput,

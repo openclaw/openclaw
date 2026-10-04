@@ -141,24 +141,28 @@ function processParameters() {
   memory.set(0x2000n, parameters);
 }
 
-it.each([false, true])(
-  "reads native/WOW64 argv, cwd and the canonical start identity (WOW64=%s)",
-  (wow64) => {
-    narrow = wow64;
-    processParameters();
-    expect(peers()).toEqual([
-      {
-        pid,
-        parentPid: 100,
-        startIdentity: "1725526400000",
-        commandLine: 'node "C:\\retained runtime\\worker.js" --run=run-123',
-        cwd: "C:\\retained runtime\\工作",
-      },
-    ]);
-    expect(native.CloseHandle).toHaveBeenCalledWith(handle);
-    expect(native.WTSFreeMemory).toHaveBeenCalledExactlyOnceWith(snapshotAddress);
-  },
-);
+it.each(["native", "WOW64", "foreign argv"])("preserves readable process identity (%s)", (mode) => {
+  const wow64 = mode === "WOW64";
+  const foreign = mode === "foreign argv";
+  narrow = wow64;
+  processParameters();
+  if (foreign) {
+    owners.set(pid, systemSid);
+    memory.delete(0x3000n);
+  }
+  expect(peers()).toEqual([
+    {
+      pid,
+      parentPid: 100,
+      startIdentity: "1725526400000",
+      commandLine: 'node "C:\\retained runtime\\worker.js" --run=run-123',
+      cwd: foreign ? undefined : "C:\\retained runtime\\工作",
+      ...(foreign ? { foreignOwner: true } : {}),
+    },
+  ]);
+  expect(native.CloseHandle).toHaveBeenCalledWith(handle);
+  expect(native.WTSFreeMemory).toHaveBeenCalledExactlyOnceWith(snapshotAddress);
+});
 
 it.each([
   "denied handle",
@@ -167,7 +171,9 @@ it.each([
   "incomplete string",
   "unknown exit status",
   "identity changed",
-])("keeps %s observations unknown", (failure) => {
+  "absent",
+  "exited",
+])("distinguishes unknown observations from kernel-confirmed absence (%s)", (failure) => {
   processParameters();
   if (failure === "denied handle") {
     native.OpenProcess.mockReturnValue(null);
@@ -179,6 +185,14 @@ it.each([
     memory.get(0x2000n)!.writeUInt16LE(1, 56);
   } else if (failure === "unknown exit status") {
     native.GetExitCodeProcess.mockReturnValue(0);
+  } else if (failure === "absent") {
+    native.OpenProcess.mockReturnValue(null);
+    native.GetLastError.mockReturnValue(87);
+  } else if (failure === "exited") {
+    native.GetExitCodeProcess.mockImplementation((_handle, output: Buffer) => {
+      output.writeUInt32LE(0);
+      return 1;
+    });
   } else {
     native.NtQueryInformationProcess.mockImplementation(
       (_handle, _kind, bytes: Buffer, _size, returned: Buffer) => {
@@ -188,72 +202,41 @@ it.each([
       },
     );
   }
-  const [observed] = peers();
-  expect(observed).toMatchObject({ pid });
-  expect(observed?.cwd).toBeUndefined();
-  expect(observed?.foreignOwner).toBeUndefined();
-});
-
-it.each(["SYSTEM", "same user", "missing SID", "WTS failure"])(
-  "retains only verified foreign ownership when all process handles are denied (%s)",
-  (owner) => {
-    owners.set(pid, owner === "same user" ? selfSid : systemSid);
-    if (owner === "missing SID") {
-      owners.set(pid, 0n);
-    } else if (owner === "WTS failure") {
-      native.WTSEnumerateProcessesW.mockReturnValue(0);
-    }
-    native.OpenProcess.mockReturnValue(null);
-    const [observed] = peers();
-    expect(observed).toMatchObject({ pid });
-    expect(observed?.commandLine).toBeUndefined();
-    expect(observed?.cwd).toBeUndefined();
-    expect(observed?.foreignOwner).toBe(owner === "SYSTEM" ? true : undefined);
-  },
-);
-
-it("retains an unreadable PID omitted from the owner snapshot", () => {
-  owners.delete(pid);
-  native.OpenProcess.mockReturnValue(null);
-  expect(peers()).toEqual([{ pid }]);
-});
-
-it("releases an unreadable owner snapshot and retains unknown ownership", () => {
-  native.decode.mockImplementation(() => {
-    throw new Error("Snapshot is unreadable.");
-  });
-  native.OpenProcess.mockReturnValue(null);
-  expect(peers()).toEqual([{ pid }]);
-  expect(native.WTSFreeMemory).toHaveBeenCalledExactlyOnceWith(snapshotAddress);
-});
-
-it("preserves readable foreign argv when cwd inspection is denied", () => {
-  owners.set(pid, systemSid);
-  processParameters();
-  memory.delete(0x3000n);
-  expect(peers()).toEqual([
-    {
-      pid,
-      parentPid: 100,
-      startIdentity: "1725526400000",
-      commandLine: 'node "C:\\retained runtime\\worker.js" --run=run-123',
-      cwd: undefined,
-      foreignOwner: true,
-    },
-  ]);
-});
-
-it.each(["absent", "exited"])("excludes a kernel-confirmed %s process", (state) => {
-  if (state === "absent") {
-    native.OpenProcess.mockReturnValue(null);
-    native.GetLastError.mockReturnValue(87);
+  const observations = peers();
+  if (failure === "absent" || failure === "exited") {
+    expect(observations).toEqual([]);
   } else {
-    native.GetExitCodeProcess.mockImplementation((_handle, output: Buffer) => {
-      output.writeUInt32LE(0);
-      return 1;
+    expect(observations[0]).toMatchObject({ pid });
+    expect(observations[0]?.cwd).toBeUndefined();
+    expect(observations[0]?.foreignOwner).toBeUndefined();
+  }
+});
+
+it.each([
+  "SYSTEM",
+  "same user",
+  "missing SID",
+  "WTS failure",
+  "omitted PID",
+  "unreadable snapshot",
+])("retains only verified foreign ownership when all process handles are denied (%s)", (owner) => {
+  owners.set(pid, owner === "same user" ? selfSid : systemSid);
+  if (owner === "missing SID") {
+    owners.set(pid, 0n);
+  } else if (owner === "WTS failure") {
+    native.WTSEnumerateProcessesW.mockReturnValue(0);
+  } else if (owner === "omitted PID") {
+    owners.delete(pid);
+  } else if (owner === "unreadable snapshot") {
+    native.decode.mockImplementation(() => {
+      throw new Error("Snapshot is unreadable.");
     });
   }
-  expect(peers()).toEqual([]);
+  native.OpenProcess.mockReturnValue(null);
+  expect(peers()).toEqual([{ pid, ...(owner === "SYSTEM" ? { foreignOwner: true } : {}) }]);
+  if (owner === "unreadable snapshot") {
+    expect(native.WTSFreeMemory).toHaveBeenCalledExactlyOnceWith(snapshotAddress);
+  }
 });
 
 it("rejects a truncated PID census instead of claiming the host is empty", () => {

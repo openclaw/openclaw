@@ -24,6 +24,7 @@ import {
 } from "../state/openclaw-agent-db.paths.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
+import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import * as records from "./session-row-projection-record.js";
@@ -203,9 +204,11 @@ export function createSessionRowModelFactsReader(params: {
     if (!row?.entry) {
       throw new Error("Session changed while preparing search facts; retry the request");
     }
+    const state = params.state();
     return readSessionRowModelFacts({
-      ...params.state(),
+      ...state,
       ...row,
+      preparedModelMetadata: readPreparedGatewayModelMetadata(state.cfg),
       source: {
         entry: row.storedEntry,
         readSourceEntry: (key) => params.readSourceEntry(row, key, metadataPrepared),
@@ -427,6 +430,7 @@ export function readResidentSessionRow(
     ...row,
     cfg,
     preparedAcpMeta: databaseFacts ? databaseFacts.acpMeta : row.preparedAcpMeta,
+    preparedModelMetadata: readPreparedGatewayModelMetadata(cfg),
     preparedRepositoryWorkspace: databaseFacts
       ? databaseFacts.repositoryWorkspace
       : params.repositoryWorkspace,

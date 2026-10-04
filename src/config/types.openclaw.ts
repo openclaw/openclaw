@@ -98,6 +98,8 @@ export type OpenClawConfig = {
   worktreeRoot?: string;
   /** Use filesystem acceleration for new worktrees when supported (default: true). */
   worktreeAcceleration?: boolean;
+  /** Global live managed-worktree cap; oldest idle checkouts may lose unsaved data (default: 4096). */
+  worktreeMaxCount?: number;
   /** Tool exposure, policy, web/media tools, exec, and code-mode settings. */
   tools?: ToolsConfig;
   /** Legacy/direct agent bindings used by runtime resolution. */

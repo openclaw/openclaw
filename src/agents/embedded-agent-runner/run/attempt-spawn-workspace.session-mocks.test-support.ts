@@ -15,9 +15,9 @@ vi.mock("../../../config/sessions/session-entry-read-runtime.js", async (importO
     assertCurrent,
   ) => {
     // These attempt fixtures have no quota-recovery entry; retain the async admission boundary.
-    assertCurrent();
+    assertCurrent?.();
     await Promise.resolve();
-    assertCurrent();
+    assertCurrent?.();
     return undefined;
   };
   return { ...actual, readSessionEntryInWorker };

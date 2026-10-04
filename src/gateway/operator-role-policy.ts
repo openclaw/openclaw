@@ -123,6 +123,7 @@ export function resolveOperatorRoleSelection(
 export function resolveOperatorRolePolicyForProfile(
   profileId: string | undefined,
   cfg: OpenClawConfig,
+  assignment?: { role: string | null },
 ): GatewayOperatorRoleDefinition | undefined {
   // The owner attributes the shared-secret system actor; roles govern identified people only.
   if (!cfg.gateway?.roles || profileId === GATEWAY_OWNER_PROFILE_ID) {
@@ -130,7 +131,7 @@ export function resolveOperatorRolePolicyForProfile(
   }
   return resolveOperatorRolePolicyForAssignment(
     profileId,
-    profileId ? readOperatorRoleAssignment(profileId) : null,
+    assignment ? assignment.role : profileId ? readOperatorRoleAssignment(profileId) : null,
     cfg,
     profileId && cfg.gateway.roles.assignments?.byGithubLogin
       ? (readResidentUserProfileRevision(profileId, profileCatalogPath({}))?.githubLogin ?? null)

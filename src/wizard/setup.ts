@@ -16,7 +16,6 @@ import {
 } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { t } from "./i18n/index.js";
 import { runWizardWithPromptNavigation } from "./navigation-prompter.js";
@@ -49,12 +48,6 @@ import type { QuickstartGatewayDefaults, WizardFlow } from "./setup.types.js";
 import { resolveSetupWorkspaceSelection, validateSetupWorkspacePath } from "./setup.workspace.js";
 
 type SetupFlowChoice = WizardFlow | "import" | "keep-model" | `import:${string}`;
-
-const loadConfigLoggingModule = createLazyRuntimeModule(() => import("../config/logging.js"));
-
-const loadOnboardConfigModule = createLazyRuntimeModule(
-  () => import("../commands/onboard-config.js"),
-);
 
 export async function runSetupWizard(
   opts: OnboardOptions,
@@ -456,8 +449,8 @@ async function runSetupWizardOnce(
   if (mode === "remote") {
     const { promptRemoteGatewayConfig } =
       remoteOnboard ?? (await import("../commands/onboard-remote.js"));
-    const { applySkipBootstrapConfig } = await loadOnboardConfigModule();
-    const { logConfigUpdated } = await loadConfigLoggingModule();
+    const { applySkipBootstrapConfig } = await import("../commands/onboard-config.js");
+    const { logConfigUpdated } = await import("../config/logging.js");
     let nextConfig = await promptRemoteGatewayConfig(remoteSeedConfig, prompter, {
       secretInputMode: opts.secretInputMode,
       ...(opts.remoteUrl !== undefined ? { remoteOriginUrl: storedRemoteUrl } : {}),
@@ -489,7 +482,7 @@ async function runSetupWizardOnce(
   );
 
   const { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } =
-    await loadOnboardConfigModule();
+    await import("../commands/onboard-config.js");
   const { workspaceDir, allowWorkspaceChange } = await resolveSetupWorkspaceSelection({
     baseConfig,
     requestedWorkspaceDir,
@@ -616,7 +609,7 @@ async function runSetupWizardOnce(
     nextConfig = committed.nextConfig;
   }
   let onboardingTarget = resolveOnboardingSetupTarget(nextConfig);
-  const { logConfigUpdated } = await loadConfigLoggingModule();
+  const { logConfigUpdated } = await import("../config/logging.js");
   logConfigUpdated(runtime);
   await onboardHelpers.ensureWorkspaceAndSessions(onboardingTarget.workspaceDir, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),

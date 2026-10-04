@@ -226,11 +226,6 @@ function compareEntries(left: DeviceInventoryEntry, right: DeviceInventoryEntry)
   return order !== 0 ? order : left.id.localeCompare(right.id);
 }
 
-function compareGroups(left: DeviceInventoryGroup, right: DeviceInventoryGroup): number {
-  const order = compareEntries(left.primary, right.primary);
-  return order !== 0 ? order : left.name.localeCompare(right.name);
-}
-
 /** Joins paired devices with node catalog rows and groups duplicate pairings. */
 export function buildDeviceInventory(params: {
   paired: PairedDevice[];
@@ -294,7 +289,10 @@ export function buildDeviceInventory(params: {
       duplicates: sorted.slice(1),
     });
   }
-  return groups.toSorted(compareGroups);
+  return groups.toSorted((left, right) => {
+    const order = compareEntries(left.primary, right.primary);
+    return order !== 0 ? order : left.name.localeCompare(right.name);
+  });
 }
 
 /**

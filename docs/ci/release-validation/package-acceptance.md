@@ -32,12 +32,21 @@ files, because published updaters charge those bytes too. Hardlinked paths count
 separately. The report lists the largest contributors by entry count and adds the
 totals to the GitHub step summary.
 
-Published updaters freeze caps of **50,000 entries / 1 GiB**. The release budgets
+Published 2026.9.3–2026.9.8 updaters freeze caps of **50,000 entries / 1 GiB**. The release budgets
 are **47,500 entries / 900 MiB**: the 2,500-entry reserve (5%) covers npm-version,
 hoisting, and per-platform optional-dependency variance and is larger than routine
 dependency bumps, so the check fails while every shipped updater can still install
 the candidate. Bytes are far from the cap but vary more with platform native
 prebuilds, so the byte budget keeps roughly 12% in reserve.
+
+Newer updaters allow **500,000 entries / 8 GiB** and continue candidate activation
+and publication with directory identity, version, and launcher checks if a scan
+reaches those resource limits, warning that full package contents are unverified.
+This does not change the release budgets or the already-installed drivers.
+Candidate admission under a supervisor version of 2026.9.8 or earlier refuses
+trees with more than 50,000 entries and gives a manual `npm i -g openclaw@latest`
+command (preserving the requested version or tag when specified); it cannot
+bypass the old driver's walk.
 
 To reproduce locally with a candidate tarball:
 

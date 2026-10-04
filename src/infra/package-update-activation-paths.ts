@@ -52,18 +52,35 @@ export function resolvePackageActivationHelper(anchor: string): string {
   return path.join(resolvePackageActivationControl(anchor), "recovery.mjs");
 }
 
-export function packageActivationIdentity(file: string, directory: boolean | "launcher"): string {
+export function packageActivationIdentity(
+  file: string,
+  directory: boolean | "launcher" | "parent" | "symlink",
+): string {
   const stat = fs.lstatSync(file, { bigint: true });
-  if (
-    stat.ino === 0n ||
-    !(directory === "launcher"
+  const expectedUid = process.getuid?.();
+  const validType =
+    directory === "launcher"
       ? stat.isSymbolicLink() || stat.isFile()
-      : directory
-        ? stat.isDirectory() && !stat.isSymbolicLink()
-        : stat.isFile()) ||
-    (process.getuid && stat.uid !== BigInt(process.getuid()))
-  ) {
-    throw new Error("Package publication object has an unsafe identity");
+      : directory === "symlink"
+        ? stat.isSymbolicLink()
+        : directory
+          ? stat.isDirectory() && !stat.isSymbolicLink()
+          : stat.isFile();
+  // Prefix parents are observed for replacement, not published as owned objects.
+  const foreignOwner =
+    directory !== "parent" && expectedUid !== undefined && stat.uid !== BigInt(expectedUid);
+  const reason =
+    stat.ino === 0n
+      ? "missing inode"
+      : !validType
+        ? "unexpected type"
+        : foreignOwner
+          ? "owner mismatch"
+          : null;
+  if (reason) {
+    throw new Error(
+      `Package publication object ${JSON.stringify(file)} has an unsafe identity (${reason}; owner UID ${stat.uid}, expected UID ${expectedUid ?? "unavailable"}). Verify this object's ownership and type before retrying openclaw update.`,
+    );
   }
   return `${stat.dev}:${stat.ino}`;
 }
@@ -95,7 +112,10 @@ export function isPackageActivationComplete(
   record: PackageActivationRecord,
 ): boolean {
   if (record.phase === "superseded") {
-    if (record.intent?.kind !== "superseded-by-manual-install") {
+    if (
+      record.intent?.kind !== "superseded-by-manual-install" &&
+      record.intent?.kind !== "recovery-lease-identity-changed"
+    ) {
       throw new Error("Package supersession fact is missing.");
     }
     if (

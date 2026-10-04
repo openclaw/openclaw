@@ -25,12 +25,13 @@ import {
   type WebSearchProviderSetupContext,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { XAI_DEFAULT_MODEL_ID } from "../model-definitions.js";
+import { resolveXaiResponsesEndpoint } from "./responses-tool-shared.js";
+import { resolveNormalizedXaiToolModel } from "./tool-config-shared.js";
 import {
   buildXaiWebSearchPayload,
   requestXaiWebSearch,
-  resolveXaiInlineCitations,
-  resolveXaiWebSearchEndpoint,
-  resolveXaiWebSearchModel,
   wrapXaiWebSearchError,
 } from "./web-search-shared.js";
 import { resolveEffectiveXSearchConfig, setPluginXSearchConfigValue } from "./x-search-config.js";
@@ -387,12 +388,13 @@ export async function executeXaiWebSearchProviderTool(
       message: "count must be an integer from 1 to 10.",
     });
 
+    const grok = asNonArrayRecord(searchConfig?.grok);
     const request = {
       query,
-      model: resolveXaiWebSearchModel(searchConfig),
-      endpoint: resolveXaiWebSearchEndpoint(searchConfig),
+      model: resolveNormalizedXaiToolModel({ config: grok, defaultModel: XAI_DEFAULT_MODEL_ID }),
+      endpoint: resolveXaiResponsesEndpoint(grok.baseUrl),
       timeoutSeconds,
-      inlineCitations: resolveXaiInlineCitations(searchConfig),
+      inlineCitations: grok.inlineCitations === true,
       cacheTtlMs: resolveCacheTtlMs(searchConfig?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
       signal,
     };

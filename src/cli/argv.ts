@@ -430,8 +430,8 @@ export function getFlagValue(argv: string[], name: string): string | null | unde
   return value;
 }
 
-export function getVerboseFlag(argv: string[], options?: { includeDebug?: boolean }): boolean {
-  return hasFlag(argv, "--verbose") || Boolean(options?.includeDebug && hasFlag(argv, "--debug"));
+export function getVerboseFlag(argv: string[]): boolean {
+  return hasFlag(argv, "--verbose") || hasFlag(argv, "--debug");
 }
 
 export function getPositiveIntFlagValue(argv: string[], name: string): number | null | undefined {

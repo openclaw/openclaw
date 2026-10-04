@@ -1182,7 +1182,6 @@ class NodeRuntime private constructor(
         LocationHandler(
           appContext = appContext,
           location = location,
-          json = json,
           isForeground = { _isForeground.value },
           locationMode = { locationMode.value },
           backgroundLocationEnabled = { SensitiveFeatureConfig.backgroundLocationEnabled },
@@ -8399,11 +8398,15 @@ class NodeRuntime private constructor(
   ): GatewayExecApprovalSnapshot =
     when (methodsSnapshot.approvalRpcFamily) {
       GatewayApprovalRpcFamily.Canonical -> {
-        fetchUnifiedExecApprovalDetail(
-          gatewayScope = gatewayScope,
-          methodsSnapshot = methodsSnapshot,
-          id = id,
-        )
+        val response =
+          requestGatewayApprovalData(
+            gatewayScope = gatewayScope,
+            methodsSnapshot = methodsSnapshot,
+            method = "approval.get",
+            paramsJson = buildGatewayExecApprovalGetParams(id).toString(),
+          )
+        parseGatewayExecApprovalGetPayload(response, json, expectedId = id)
+          ?: error("Malformed approval.get response")
       }
 
       GatewayApprovalRpcFamily.Legacy -> {
@@ -8733,23 +8736,6 @@ class NodeRuntime private constructor(
         pendingWrite.requestInFlight = false
       }
     }
-  }
-
-  private suspend fun fetchUnifiedExecApprovalDetail(
-    gatewayScope: GatewayDataScope,
-    methodsSnapshot: GatewayMethodsSnapshot,
-    id: String,
-  ): GatewayExecApprovalSnapshot {
-    val params = buildGatewayExecApprovalGetParams(id).toString()
-    val response =
-      requestGatewayApprovalData(
-        gatewayScope = gatewayScope,
-        methodsSnapshot = methodsSnapshot,
-        method = "approval.get",
-        paramsJson = params,
-      )
-    return parseGatewayExecApprovalGetPayload(response, json, expectedId = id)
-      ?: error("Malformed approval.get response")
   }
 
   private fun replaceGatewayMethods(
@@ -9354,29 +9340,16 @@ class NodeRuntime private constructor(
   ): GatewayDreamingSummary {
     val diaryContent = diary?.get("content").asStringOrNull()
     val entries = if (diary.boolean("found")) parseDreamDiaryEntries(diaryContent) else emptyList()
-    val timezone = dreaming.nonBlankString("timezone")
-    val storeHealthy =
-      dreaming
-        ?.get("storeError")
-        .asStringOrNull()
-        ?.trim()
-        .isNullOrEmpty()
-    val phaseSignalHealthy =
-      dreaming
-        ?.get("phaseSignalError")
-        .asStringOrNull()
-        ?.trim()
-        .isNullOrEmpty()
     return GatewayDreamingSummary(
       enabled = dreaming.boolean("enabled"),
-      timezone = timezone,
+      timezone = dreaming.nonBlankString("timezone"),
       shortTermCount = dreaming.long("shortTermCount")?.toInt() ?: 0,
       totalSignalCount = dreaming.long("totalSignalCount")?.toInt() ?: 0,
       promotedToday = dreaming.long("promotedToday")?.toInt() ?: 0,
       promotedTotal = dreaming.long("promotedTotal")?.toInt() ?: 0,
       nextRunAtMs = dreamingNextRunAtMs(dreaming),
-      storeHealthy = storeHealthy,
-      phaseSignalHealthy = phaseSignalHealthy,
+      storeHealthy = dreaming.nonBlankString("storeError") == null,
+      phaseSignalHealthy = dreaming.nonBlankString("phaseSignalError") == null,
       diaryFound = diary.boolean("found"),
       diaryEntries = entries,
     )
@@ -9423,54 +9396,21 @@ internal fun resolveOperatorSessionConnectAuth(
   storedOperatorToken: String?,
 ): NodeRuntime.GatewayConnectAuth? {
   val explicitToken = auth.token?.trim()?.takeIf { it.isNotEmpty() }
-  if (explicitToken != null) {
-    return NodeRuntime.GatewayConnectAuth(
-      token = explicitToken,
-      bootstrapToken = null,
-      password = null,
-    )
-  }
-
-  val explicitPassword = auth.password?.trim()?.takeIf { it.isNotEmpty() }
-  if (explicitPassword != null) {
-    return NodeRuntime.GatewayConnectAuth(
-      token = null,
-      bootstrapToken = null,
-      password = explicitPassword,
-    )
-  }
-
-  val storedToken = storedOperatorToken?.trim()?.takeIf { it.isNotEmpty() }
-  if (storedToken != null) {
-    return NodeRuntime.GatewayConnectAuth(
-      token = null,
-      bootstrapToken = null,
-      password = null,
-    )
-  }
-
-  val explicitBootstrapToken = auth.bootstrapToken?.trim()?.takeIf { it.isNotEmpty() }
-  if (explicitBootstrapToken != null) {
+  val explicitPassword = auth.password?.trim()?.takeIf { explicitToken == null && it.isNotEmpty() }
+  if (explicitToken == null && explicitPassword == null && storedOperatorToken.isNullOrBlank() && !auth.bootstrapToken.isNullOrBlank()) {
     return null
   }
-
   return NodeRuntime.GatewayConnectAuth(
-    token = null,
+    token = explicitToken,
     bootstrapToken = null,
-    password = null,
+    password = explicitPassword,
   )
 }
 
 internal fun operatorSessionUsesStoredDeviceToken(
   auth: NodeRuntime.GatewayConnectAuth,
   storedOperatorToken: String?,
-): Boolean {
-  val storedToken = storedOperatorToken?.trim()?.takeIf { it.isNotEmpty() }
-  if (storedToken == null) return false
-  val explicitToken = auth.token?.trim()?.takeIf { it.isNotEmpty() }
-  val explicitPassword = auth.password?.trim()?.takeIf { it.isNotEmpty() }
-  return explicitToken == null && explicitPassword == null
-}
+): Boolean = !storedOperatorToken.isNullOrBlank() && auth.token.isNullOrBlank() && auth.password.isNullOrBlank()
 
 internal fun operatorConnectScopesForAuth(
   usesStoredDeviceToken: Boolean,

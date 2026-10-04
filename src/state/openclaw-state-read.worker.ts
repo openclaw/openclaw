@@ -4,13 +4,6 @@ import {
   selectAcpSessionRows,
 } from "../acp/runtime/session-meta-keys.js";
 import {
-  countMcpOAuthPrincipalsInDatabase,
-  listMcpOAuthStoreKeysInDatabase,
-  readMcpOAuthPendingInDatabase,
-  readMcpOAuthStoreIfPresentInDatabase,
-  readMcpOAuthStatusesInDatabase,
-} from "../agents/mcp-oauth-store.kernel.js";
-import {
   loadSubagentMaintenanceRunsInDatabase,
   loadVersionedSubagentRunsInDatabase,
   loadSubagentRunsForSessionsInDatabase,
@@ -58,11 +51,10 @@ import { listPendingWorkerWorkspaceResultsInDatabase } from "../gateway/worker-e
 import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import { executeDevicePairingRead } from "../infra/device-pairing-read.kernel.js";
 import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
-import { readGatewayOwnerLeaseFromDatabase } from "../infra/gateway-owner-lease.read.js";
+import { inspectGatewayOwnerLeaseForMaintenance } from "../infra/gateway-owner-lease.worker.js";
 import { bunSqliteNativeCleanupPending } from "../infra/node-sqlite.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
 import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
-import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import {
@@ -89,12 +81,14 @@ import { isTuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js
 import { readTuiLastSessionCommand } from "../tui/tui-last-session.kernel.js";
 import { readAgentDatabaseDeletionSnapshotInDatabase } from "./agent-deletion-journal.read.js";
 import { readBackupRunsInDatabase } from "./backup-run-records.kernel.js";
-import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
+import {
+  isConfigMachineStateReadCommand,
+  readConfigMachineStateCommandInDatabase,
+} from "./config-machine-state.js";
 import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.js";
 import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
 import { readRegisteredAgentDatabaseRows } from "./openclaw-agent-db-registry.read.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
-import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-schema.js";
 import {
   closeRetainedOpenClawStateReadConnections,
   readOpenClawStateReadOnlyLocation,
@@ -106,6 +100,7 @@ import {
   isStateDiagnosticCommand,
   readStateDiagnosticCommand,
 } from "./openclaw-state-read-diagnostics.js";
+import { readMcpOAuthStateCommand } from "./openclaw-state-read-mcp-oauth.js";
 import { stateReadRegistry } from "./openclaw-state-read-operation-registry.js";
 import { readStateRegistryCommand } from "./openclaw-state-read-registry.js";
 import type {
@@ -161,12 +156,16 @@ serveOwnedWorkerTasks(
         if (command.type === "admit") {
           return { ok: true, type: "admit" };
         }
+        if (command.type === "doctor.gatewayOwnerLease.read") {
+          const lease = inspectGatewayOwnerLeaseForMaintenance(input, () => {
+            sourceAdmitted = true;
+          });
+          return { ok: true, type: command.type, sourceAdmitted: true, lease };
+        }
         const locationArgs = [
           input.databasePath,
           input.location,
-          command.type === "doctor.gatewayOwnerLease.read"
-            ? openDoctorStateSchemaReadAdmission
-            : undefined,
+          undefined,
           input.expectedIdentity,
           input.snapshotRoot,
           true,
@@ -232,9 +231,6 @@ serveOwnedWorkerTasks(
                     ? readClawOrphanWorkspaceInDatabase(db, command.agentId)
                     : undefined,
               };
-            }
-            if (command.type === "doctor.gatewayOwnerLease.read") {
-              return { type: command.type, lease: readGatewayOwnerLeaseFromDatabase(db) };
             }
             if (command.type === "agentDatabaseDeletion.snapshot") {
               return {
@@ -317,35 +313,14 @@ serveOwnedWorkerTasks(
                 runs: new Map(rows.map((entry) => [entry.runId, entry])),
               };
             }
-            if (command.type === "mcpOAuth.statuses") {
-              return {
-                type: command.type,
-                value: readMcpOAuthStatusesInDatabase(db, command.input),
-              };
-            }
-            if (command.type === "mcpOAuth.readOnly") {
-              return {
-                type: command.type,
-                value: readMcpOAuthStoreIfPresentInDatabase(db, command.input),
-              };
-            }
-            if (command.type === "mcpOAuth.keys") {
-              return {
-                type: command.type,
-                value: listMcpOAuthStoreKeysInDatabase(db, command.input),
-              };
-            }
-            if (command.type === "mcpOAuth.pending") {
-              return {
-                type: command.type,
-                value: readMcpOAuthPendingInDatabase(db, command.input),
-              };
-            }
-            if (command.type === "mcpOAuth.countPrincipals") {
-              return {
-                type: command.type,
-                value: countMcpOAuthPrincipalsInDatabase(db, command.input),
-              };
+            if (
+              command.type === "mcpOAuth.statuses" ||
+              command.type === "mcpOAuth.readOnly" ||
+              command.type === "mcpOAuth.keys" ||
+              command.type === "mcpOAuth.pending" ||
+              command.type === "mcpOAuth.countPrincipals"
+            ) {
+              return readMcpOAuthStateCommand(db, command);
             }
             if (command.type === "sessionGroups.snapshot") {
               return {
@@ -501,16 +476,8 @@ serveOwnedWorkerTasks(
                 record: readOnboardingRecommendationsInDatabase(db, command.configKey),
               };
             }
-            if (command.type === "nodeHost.config" || command.type === "operator.channelPolicy") {
-              return {
-                type: command.type,
-                // Activation may precede deferred publication; never issue authority before v19.
-                row:
-                  command.type === "operator.channelPolicy" &&
-                  (getAdmittedSqliteSchemaFacts(db)?.userVersion ?? 0) < 19
-                    ? undefined
-                    : readConfigMachineStateRowInDatabase(db, command.type),
-              };
+            if (isConfigMachineStateReadCommand(command)) {
+              return readConfigMachineStateCommandInDatabase(db, command);
             }
             if (command.type === "workspace.snapshot") {
               return {

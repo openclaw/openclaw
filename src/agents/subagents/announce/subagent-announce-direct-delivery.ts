@@ -103,6 +103,7 @@ export type SubagentAnnounceDirectParams = {
   createUserTurnTranscriptRecorder?: (sessionId: string) => UserTurnTranscriptRecorder;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
   signal?: AbortSignal;
+  onExecutionStarted?: () => void;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 };
 
@@ -506,8 +507,9 @@ export async function sendSubagentAnnounceDirectly(
                     : undefined,
                 expectFinal: true,
                 signal: params.signal,
-                // Individual private delivery retains its cleanup owner until the
-                // lifecycle deadline; settle batches can observe and replay admission.
+                onExecutionStarted: params.onExecutionStarted,
+                // Individual private delivery uses the lifecycle window for admission;
+                // settle batches can observe and replay admission.
                 timeoutMs: parentOnly && isSubagentCompletion ? undefined : announceTimeoutMs,
                 isExecutionAllowed: isCompletionDeliveryAllowed,
                 isSourceSessionAdmissionAllowed:

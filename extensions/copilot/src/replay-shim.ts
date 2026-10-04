@@ -50,12 +50,9 @@ export function decideReplayAction(input?: ReplayShimInput): ReplayDecision {
   };
 }
 
-type ResumeFailureKind = "missing" | "unknown";
-
-interface ResumeFailureClassification {
-  readonly recoverable: boolean;
-  readonly kind: ResumeFailureKind;
-}
+type ResumeFailureClassification =
+  | { readonly recoverable: true; readonly kind: "missing" }
+  | { readonly recoverable: false; readonly kind: "unknown" };
 
 const MISSING_SESSION_CODES = new Set([
   "SESSION_NOT_FOUND",
@@ -76,24 +73,15 @@ const MISSING_SESSION_MESSAGE_PATTERNS: readonly RegExp[] = [
 // Only missing sessions permit recovery; auth and transport failures must surface.
 export function classifyResumeFailure(error: unknown): ResumeFailureClassification {
   const record = asOptionalObjectRecord(error);
-  const status = record?.status;
-  if (status === 404) {
+  if (record?.status === 404 || record?.statusCode === 404) {
     return { recoverable: true, kind: "missing" };
   }
-  const statusCode = record?.statusCode;
-  if (statusCode === 404) {
-    return { recoverable: true, kind: "missing" };
-  }
-
   const code = record?.code;
-  if (typeof code === "string" && MISSING_SESSION_CODES.has(code)) {
-    return { recoverable: true, kind: "missing" };
-  }
-
   const message = record?.message;
   if (
-    typeof message === "string" &&
-    MISSING_SESSION_MESSAGE_PATTERNS.some((pattern) => pattern.test(message))
+    (typeof code === "string" && MISSING_SESSION_CODES.has(code)) ||
+    (typeof message === "string" &&
+      MISSING_SESSION_MESSAGE_PATTERNS.some((pattern) => pattern.test(message)))
   ) {
     return { recoverable: true, kind: "missing" };
   }

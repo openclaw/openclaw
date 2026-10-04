@@ -170,7 +170,7 @@ export function createDoctorMaintenanceState(options: {
       // This runs before the long-lived Doctor callback. Include CLI/bootstrap
       // resources predating this scope before moving the owned state root.
       await closeResources(sourceDir);
-      await closeOpenClawStateDatabaseByPathAsync(sourceDatabase);
+      await owner!.run(() => closeOpenClawStateDatabaseByPathAsync(sourceDatabase));
       await settleCapture();
       const migration = owner!.run(() => {
         options.assertCurrent?.();

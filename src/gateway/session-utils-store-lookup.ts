@@ -307,7 +307,7 @@ export async function prepareGatewaySessionStoreTargetReadOnly(
     key: normalizeOptionalString(params.key) ?? "",
     exactRead: true,
     readOnly: true,
-    projection: "list" as const,
+    projection: params.projection ?? ("list" as const),
   };
   const resolve = async <T>(plan: GatewaySessionStorePlan<T>) => {
     return await prepareReads(plan.reads, () => {

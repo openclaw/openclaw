@@ -2,6 +2,7 @@ import type {
   WorkerOperationHandlers,
   WorkerOperations,
 } from "../../state/worker-operation-registry.js";
+import { writeProvisionedSnapshotInWorker } from "./provisioned-snapshot.worker.js";
 import {
   getRegistryWorktreeInDatabase,
   getRegistryWorktreeProvisionedChunkInDatabase,
@@ -21,16 +22,6 @@ import {
   releaseWorktreeRunLeaseInDatabase,
 } from "./run-lease-store.kernel.js";
 import { worktreeRunLeaseOperation } from "./run-lease-store.worker.js";
-import {
-  deleteTemplate,
-  hasTemplates,
-  listTemplates,
-  markTemplateReady,
-  readTemplate,
-  reserveTemplate,
-  touchTemplate,
-} from "./template-registry.js";
-import { worktreeTemplateMutation } from "./template-registry.worker.js";
 
 export const worktreeOperations = {
   "worktrees.get": ({ id }: { id: string }, { open }) =>
@@ -47,6 +38,10 @@ export const worktreeOperations = {
     input: Parameters<typeof getRegistryWorktreeProvisionedChunkInDatabase>[1],
     { open },
   ) => getRegistryWorktreeProvisionedChunkInDatabase(open().db, input),
+  "worktrees.writeProvisionedSnapshot": (
+    input: Parameters<typeof writeProvisionedSnapshotInWorker>[0],
+    { open, stateOptions },
+  ) => writeProvisionedSnapshotInWorker(input, { ...stateOptions(), database: open() }),
   "worktrees.retireMissing": (
     input: Parameters<typeof retireMissingWorktreeInWorker>[0],
     { open, stateOptions },
@@ -67,30 +62,6 @@ export const worktreeOperations = {
   "worktrees.reapRunLeases": worktreeRunLeaseOperation(
     "worktrees.reapRunLeases",
     (db, { scopes }: { scopes: string[] }) => reapWorktreeRunLeasesInDatabase(db, scopes),
-  ),
-  "worktrees.templates.read": ({ cacheKey }: { cacheKey: string }, { stateOptions }) =>
-    readTemplate(stateOptions().env, cacheKey),
-  "worktrees.templates.has": (_input: undefined, { stateOptions }) =>
-    hasTemplates(stateOptions().env),
-  "worktrees.templates.list": (_input: undefined, { stateOptions }) =>
-    listTemplates(stateOptions().env),
-  "worktrees.templates.reserve": worktreeTemplateMutation(
-    "worktrees.templates.reserve",
-    reserveTemplate,
-  ),
-  "worktrees.templates.ready": worktreeTemplateMutation(
-    "worktrees.templates.ready",
-    (env, { id, now }: { id: string; now: number }, commitGuard) =>
-      markTemplateReady(env, id, now, commitGuard),
-  ),
-  "worktrees.templates.touch": worktreeTemplateMutation(
-    "worktrees.templates.touch",
-    (env, { id, now }: { id: string; now: number }, commitGuard) =>
-      touchTemplate(env, id, now, commitGuard),
-  ),
-  "worktrees.templates.delete": worktreeTemplateMutation(
-    "worktrees.templates.delete",
-    (env, { id }: { id: string }, commitGuard) => deleteTemplate(env, id, commitGuard),
   ),
 } satisfies WorkerOperationHandlers;
 

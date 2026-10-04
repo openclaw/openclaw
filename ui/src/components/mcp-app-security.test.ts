@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { t } from "../i18n/index.ts";
 import {
   buildMcpAppHostCapabilities,
   dispatchWidgetPrompt,
   negotiateMcpAppDisplayModes,
-  resolveMcpAppSandboxUrl,
   WIDGET_PROMPT_EVENT,
 } from "./mcp-app-security.ts";
+import { resolveSandboxHostUrl } from "./sandbox-host.ts";
 
 describe("MCP App sandbox security", () => {
   it("negotiates resource hints before initialization and App capabilities afterward", () => {
@@ -40,35 +41,37 @@ describe("MCP App sandbox security", () => {
   });
 
   it("advertises update-model-context text support only when the handler path exists", () => {
-    expect(buildMcpAppHostCapabilities(undefined, true, true, true)).toMatchObject({
+    expect(buildMcpAppHostCapabilities(undefined, true, true)).toMatchObject({
       message: { text: {} },
       serverResources: {},
       updateModelContext: { text: {} },
     });
-    const readOnly = buildMcpAppHostCapabilities(undefined, false, false, false);
+    const readOnly = buildMcpAppHostCapabilities(undefined, false, false);
     expect(readOnly).not.toHaveProperty("serverResources");
-    expect(buildMcpAppHostCapabilities(undefined, true, false, true)).not.toHaveProperty(
+    expect(buildMcpAppHostCapabilities(undefined, true, false)).not.toHaveProperty(
       "updateModelContext",
     );
   });
 
   it("accepts only the dedicated-origin sandbox endpoint", () => {
     expect(
-      resolveMcpAppSandboxUrl(
+      resolveSandboxHostUrl(
         "/mcp-app-sandbox?csp=abc",
         8444,
         undefined,
         "wss://gateway.example:8443/openclaw",
         "https://gateway.example:8443",
+        t("mcpApp.errors.invalidSandboxUrl"),
       ),
     ).toBe("https://gateway.example:8444/mcp-app-sandbox?csp=abc");
     expect(
-      resolveMcpAppSandboxUrl(
+      resolveSandboxHostUrl(
         "/mcp-app-sandbox",
         18790,
         "https://apps.example.com",
         "wss://gateway.example",
         "https://gateway.example",
+        t("mcpApp.errors.invalidSandboxUrl"),
       ),
     ).toBe("https://apps.example.com/mcp-app-sandbox");
 
@@ -103,9 +106,16 @@ describe("MCP App sandbox security", () => {
       ],
     ] as const;
     for (const args of invalid) {
-      expect(() => resolveMcpAppSandboxUrl(args[0], args[1], args[2], args[3], args[4])).toThrow(
-        "MCP App sandbox URL is invalid",
-      );
+      expect(() =>
+        resolveSandboxHostUrl(
+          args[0],
+          args[1],
+          args[2],
+          args[3],
+          args[4],
+          t("mcpApp.errors.invalidSandboxUrl"),
+        ),
+      ).toThrow("MCP App sandbox URL is invalid");
     }
   });
 

@@ -137,24 +137,6 @@ function resolveRequiredSnowflake(
   return resolved;
 }
 
-function assertMantisDiscordChannelInGuild(params: {
-  channel: DiscordChannel;
-  guildChannels: readonly DiscordChannel[];
-  guildId: string;
-  channelId: string;
-}) {
-  if (!params.guildChannels.some((channel) => channel.id === params.channelId)) {
-    throw new Error(
-      `OPENCLAW_QA_DISCORD_CHANNEL_ID ${params.channelId} is not in guild ${params.guildId}.`,
-    );
-  }
-  if (params.channel.guild_id && params.channel.guild_id !== params.guildId) {
-    throw new Error(
-      `OPENCLAW_QA_DISCORD_CHANNEL_ID ${params.channelId} belongs to guild ${params.channel.guild_id}, not ${params.guildId}.`,
-    );
-  }
-}
-
 function defaultMantisDiscordSmokeOutputDir(repoRoot: string, startedAt: Date) {
   const stamp = startedAt.toISOString().replace(/[:.]/gu, "-");
   return path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", `discord-smoke-${stamp}`);
@@ -310,18 +292,6 @@ function buildPublishedMantisDiscordSmokeSummary(
   };
 }
 
-async function writeMantisDiscordSmokeArtifacts(
-  summary: MantisDiscordSmokeSummary,
-  sensitiveValues: ReadonlySet<string>,
-) {
-  await fs.mkdir(summary.outputDir, { recursive: true });
-  const publishedSummary = buildPublishedMantisDiscordSmokeSummary(summary, sensitiveValues);
-  const report = renderMantisDiscordSmokeReport(publishedSummary);
-  const summaryJson = `${JSON.stringify(publishedSummary, null, 2)}\n`;
-  await fs.writeFile(summary.reportPath, report, "utf8");
-  await fs.writeFile(summary.summaryPath, summaryJson, "utf8");
-}
-
 export async function runMantisDiscordSmoke(
   opts: MantisDiscordSmokeOptions = {},
 ): Promise<MantisDiscordSmokeResult> {
@@ -398,12 +368,14 @@ export async function runMantisDiscordSmoke(
       token,
     });
     addSensitiveValues(sensitiveValues, channel.id, channel.guild_id, channel.name);
-    assertMantisDiscordChannelInGuild({
-      channel,
-      guildChannels,
-      guildId,
-      channelId,
-    });
+    if (!guildChannels.some((entry) => entry.id === channelId)) {
+      throw new Error(`OPENCLAW_QA_DISCORD_CHANNEL_ID ${channelId} is not in guild ${guildId}.`);
+    }
+    if (channel.guild_id && channel.guild_id !== guildId) {
+      throw new Error(
+        `OPENCLAW_QA_DISCORD_CHANNEL_ID ${channelId} belongs to guild ${channel.guild_id}, not ${guildId}.`,
+      );
+    }
     summary.bot = { id: bot.id, username: bot.username };
     summary.guild = { id: guild.id, name: guild.name };
     summary.channel = { id: channel.id, name: channel.name, type: channel.type };
@@ -452,7 +424,10 @@ export async function runMantisDiscordSmoke(
     );
   } finally {
     summary.finishedAt = new Date().toISOString();
-    await writeMantisDiscordSmokeArtifacts(summary, sensitiveValues);
+    await fs.mkdir(outputDir, { recursive: true });
+    const published = buildPublishedMantisDiscordSmokeSummary(summary, sensitiveValues);
+    await fs.writeFile(reportPath, renderMantisDiscordSmokeReport(published), "utf8");
+    await fs.writeFile(summaryPath, `${JSON.stringify(published, null, 2)}\n`, "utf8");
   }
 
   return {

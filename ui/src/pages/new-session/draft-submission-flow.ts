@@ -100,8 +100,10 @@ export class DraftSubmissionFlow {
     private readonly read: () => DraftSubmissionSnapshot,
     private readonly callbacks: DraftSubmissionCallbacks,
   ) {
-    this.capabilities = new NewSessionCapabilityController(callbacks.requestUpdate);
-    this.capabilities.setMutationCallback(() => (this.startedSession.current = null));
+    this.capabilities = new NewSessionCapabilityController(
+      callbacks.requestUpdate,
+      () => (this.startedSession.current = null),
+    );
     this.sessionStartup = new DraftSessionStartup(gateway);
     this.draftPersistence = new NewSessionDraftPersistence(
       () => ({

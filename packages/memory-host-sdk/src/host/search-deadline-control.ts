@@ -13,7 +13,7 @@ export const MEMORY_SEARCH_DEADLINE_CONTROL: unique symbol = Symbol(
   "openclaw.memory-search-deadline-control",
 );
 
-export type MemorySearchDeadlineControlAction = "pause" | "resume";
+type MemorySearchDeadlineControlAction = "pause" | "resume";
 
 /**
  * Owned phases call `report`; deadline owners `subscribe`.

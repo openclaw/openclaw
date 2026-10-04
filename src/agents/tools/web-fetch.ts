@@ -8,6 +8,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type, type Static } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -246,12 +247,11 @@ function formatWebFetchErrorDetail(params: {
 }
 
 function redactUrlForDebugLog(rawUrl: string): string {
-  try {
-    const parsed = new URL(rawUrl);
-    return parsed.pathname && parsed.pathname !== "/" ? `${parsed.origin}/...` : parsed.origin;
-  } catch {
+  const parsed = URL.parse(rawUrl);
+  if (!parsed) {
     return "[invalid-url]";
   }
+  return parsed.pathname && parsed.pathname !== "/" ? `${parsed.origin}/...` : parsed.origin;
 }
 
 const WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD = wrapWebContent("", "web_fetch").length;
@@ -264,12 +264,7 @@ function formatTerminalWebFetchOrigin(value: unknown): string | undefined {
   if (typeof value !== "string" || !value.trim()) {
     return undefined;
   }
-  try {
-    const url = new URL(value);
-    return url.origin;
-  } catch {
-    return undefined;
-  }
+  return URL.parse(value)?.origin;
 }
 
 function formatWebFetchTerminalPresentation(result: unknown): { text: string } | undefined {
@@ -410,21 +405,13 @@ function normalizeProviderFinalUrl(value: unknown): string | undefined {
   if (!trimmed) {
     return undefined;
   }
-  for (const char of trimmed) {
-    const code = char.charCodeAt(0);
-    if (code <= 0x20 || code === 0x7f) {
-      return undefined;
-    }
-  }
-  try {
-    const url = new URL(trimmed);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return undefined;
-    }
-    return url.toString();
-  } catch {
+  if (containsAsciiControlCharacter(trimmed) || trimmed.includes(" ")) {
     return undefined;
   }
+  const url = URL.parse(trimmed);
+  return url && (url.protocol === "http:" || url.protocol === "https:")
+    ? url.toString()
+    : undefined;
 }
 
 function throwIfFetchAborted(signal: AbortSignal | undefined): void {
@@ -555,13 +542,8 @@ async function buildWebFetchPayload(params: {
 
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
   throwIfFetchAborted(params.signal);
-  let parsedUrl: URL;
-  try {
-    parsedUrl = new URL(params.url);
-  } catch {
-    throw new Error("Invalid URL: must be http or https");
-  }
-  if (!["http:", "https:"].includes(parsedUrl.protocol)) {
+  const parsedUrl = URL.parse(params.url);
+  if (!parsedUrl || !["http:", "https:"].includes(parsedUrl.protocol)) {
     throw new Error("Invalid URL: must be http or https");
   }
   // Routing headers partition the process-wide cache without retaining their secrets.

@@ -184,7 +184,6 @@ export function resolveDiscordGatewayIntents(params?: ResolveDiscordGatewayInten
 
 function createGatewayPlugin(params: {
   options: {
-    reconnect: { maxAttempts: number };
     intents: number;
   };
   gatewayInfoTimeoutMs: number;
@@ -441,7 +440,6 @@ export function createDiscordGatewayPlugin(params: {
 
   return createGatewayPlugin({
     options: {
-      reconnect: { maxAttempts: 50 },
       intents,
     },
     gatewayInfoTimeoutMs,

@@ -376,6 +376,16 @@ Notes:
 
 ## Troubleshooting
 
+### The Gateway Scheduled Task is disabled
+
+`openclaw gateway status` and Doctor name a registered but **DISABLED** task and
+show the recovery command. Run `openclaw gateway start` or `openclaw doctor --fix`
+to re-enable and start the managed Gateway. Use the same profile and state/config
+overrides as the installation. Recovery verifies the registered launcher and
+task ownership before enabling it; a foreign or unverifiable task is left
+unchanged with an explanation. A disabled task cannot start automatically after
+login or reboot until it is re-enabled.
+
 ### The Scheduled Task stops before the Gateway is ready
 
 Run `openclaw gateway status --json`, then inspect the local [Gateway log](/gateway/logging).

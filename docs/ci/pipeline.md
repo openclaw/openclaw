@@ -358,6 +358,10 @@ It retains the upstream Bun sync through `4b02e1031d` and fixes for thread-safe
 function ownership, shared-environment deletion, and a module-key crash.
 The shared provider-catalog retention test is qualified on this build and runs
 on Bun; tests that assert V8 heap behavior continue to run on Node.
+UI retention tests use the local inspector's `HeapProfiler.collectGarbage` on
+both runtimes. Only an unavailable inspector method permits the older Bun GC
+fallback. The qualified UI inventory has no Node-only subset, so each native
+UI shard runs once under `bun-compatible`; `dual` still runs both runtimes.
 The fork keeps the lifecycle-script `node` shim in a per-user directory, with a
 private fallback when that directory is unusable. `NODE` and `npm_node_execpath`
 point to the executable in either location. This lets several accounts on one

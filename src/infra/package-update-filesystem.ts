@@ -456,6 +456,16 @@ export type PackageLauncherBackup = {
   }>;
 };
 
+export function resolvePackageUpdateLauncherNames(
+  packageName: string,
+  entries?: readonly string[],
+) {
+  const names = new Set([packageName, "openclaw"]);
+  return (
+    entries?.filter((entry) => names.has(entry) || names.has(path.parse(entry).name)) ?? [...names]
+  ).toSorted();
+}
+
 /** Publish partial backup state so the swap owner can recover after any failed copy. */
 export async function capturePackageLaunchers(
   snapshot: PackageLauncherBackup,
@@ -465,11 +475,11 @@ export async function capturePackageLaunchers(
 ): Promise<void> {
   const native = params.stage.native;
   await fs.mkdir(targetLayout.globalRoot, { recursive: true });
-  const shimNames = new Set([params.packageName, "openclaw"]);
   const shimEntries =
     params.installTarget.directNodeModulesRoot === true
       ? []
-      : (
+      : resolvePackageUpdateLauncherNames(
+          params.packageName,
           await (
             native
               ? fs.readdir(params.stage.layout.binDir)
@@ -479,10 +489,8 @@ export async function capturePackageLaunchers(
               return [];
             }
             throw error;
-          })
-        )
-          .filter((entry) => shimNames.has(entry) || shimNames.has(path.parse(entry).name))
-          .toSorted();
+          }),
+        );
   if (shimEntries.length > 0) {
     snapshot.backupDir = await fs.mkdtemp(
       path.join(targetLayout.globalRoot, ".openclaw.shim-backup-"),

@@ -1,10 +1,8 @@
 import type { ContentBlock } from "@modelcontextprotocol/client";
 import type { AppBridge } from "@modelcontextprotocol/ext-apps/app-bridge";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { t } from "../i18n/index.ts";
 import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
 import { mcpAppMessageText } from "../lib/mcp-app-message-content.ts";
-import { resolveSandboxHostUrl } from "./sandbox-host.ts";
 
 type McpAppHostCapabilities = ConstructorParameters<typeof AppBridge>[2];
 registerMcpAppEnglish();
@@ -106,10 +104,8 @@ export function buildMcpAppHostCapabilities(
   csp?: McpAppHostSandboxCsp,
   supportsMessage = false,
   supportsUpdateModelContext = false,
-  supportsServerResources = false,
   extensions: {
     richModelContext?: boolean;
-    richMessage?: boolean;
     fileResources?: boolean;
     openFiles?: boolean;
   } = {},
@@ -118,13 +114,10 @@ export function buildMcpAppHostCapabilities(
     openLinks: {},
     serverTools: {},
     sandbox: { csp: csp ?? {} },
-    ...(supportsServerResources ? { serverResources: {} } : {}),
     ...(supportsMessage
       ? {
-          message: {
-            text: {},
-            ...(extensions.richMessage ? { image: {}, resource: {}, resourceLink: {} } : {}),
-          },
+          serverResources: {},
+          message: { text: {}, image: {}, resource: {}, resourceLink: {} },
         }
       : {}),
     ...(supportsUpdateModelContext
@@ -139,28 +132,11 @@ export function buildMcpAppHostCapabilities(
       : {}),
     experimental: {
       ...(extensions.richModelContext ? { "openai/modelContext": {} } : {}),
-      ...(extensions.richMessage ? { "openai/message": {} } : {}),
+      ...(supportsMessage ? { "openai/message": {} } : {}),
       ...(extensions.fileResources ? { "openai/resource": {} } : {}),
       ...(extensions.openFiles ? { "openai/files": {} } : {}),
     },
   };
-}
-
-export function resolveMcpAppSandboxUrl(
-  value: string,
-  sandboxPort: number,
-  sandboxOrigin: string | undefined,
-  gatewayUrl: string,
-  hostOrigin: string,
-): string {
-  return resolveSandboxHostUrl(
-    value,
-    sandboxPort,
-    sandboxOrigin,
-    gatewayUrl,
-    hostOrigin,
-    t("mcpApp.errors.invalidSandboxUrl"),
-  );
 }
 
 /** The normal conversation/file owner must acknowledge custody; dispatch alone is not acceptance. */

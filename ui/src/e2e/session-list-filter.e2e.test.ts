@@ -77,6 +77,8 @@ suite.define(() => {
       includeGlobal: true,
       includeUnknown: false,
       limit: 50,
+      rowMode: "compact",
+      source: "sessions-page",
     };
     await expect
       .poll(async () =>
@@ -127,6 +129,8 @@ suite.define(() => {
       includeGlobal: true,
       includeUnknown: false,
       limit: 50,
+      rowMode: "compact",
+      source: "sessions-page",
     };
     const visibleResponse = {
       count: 1,
@@ -211,6 +215,8 @@ suite.define(() => {
       includeLastMessage: true,
       includeUnknown: true,
       limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+      rowMode: "compact",
+      source: "sidebar",
     });
     expect
       .soft((await exactPageQueries()).map((request) => request.params))

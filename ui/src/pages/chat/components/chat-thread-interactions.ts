@@ -103,7 +103,6 @@ type ReplyMessageAccess = {
   read: (messageId: string) => unknown;
   /** How the Gateway answered a lookup without a message. */
   status?: (messageId: string) => ReplyMessageStatus | undefined;
-  request: (messageId: string) => void;
   open: (messageId: string) => void;
 };
 

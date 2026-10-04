@@ -493,9 +493,9 @@ async function gitOutForBaseline(cwd: string, args: string[]): Promise<string | 
   return result.stdout.toString("utf8");
 }
 
-async function collectBaselineCandidates(params: {
+export async function collectCheckoutDiffBaseline(params: {
   cwd: string;
-}): Promise<{ candidates: BaselineCandidate[]; root: string; truncated: boolean } | undefined> {
+}): Promise<GitReadOperations["checkout.baseline"]["output"]> {
   const checkout = await loadCheckoutRevision(params.cwd);
   if (!checkout) {
     return undefined;
@@ -520,7 +520,7 @@ async function collectBaselineCandidates(params: {
   const trackedText = trackedResult.value;
   const untrackedText = untrackedResult.value;
   if (trackedText === null || untrackedText === null) {
-    return { root, candidates: [], truncated: true };
+    return { version: 1, root, files: [], truncated: true };
   }
   const tracked = parseNameStatusZ(trackedText);
   const untrackedPaths = untrackedText.split("\0").filter(Boolean);
@@ -532,10 +532,16 @@ async function collectBaselineCandidates(params: {
       untracked: true,
     })),
   ].toSorted((left, right) => left.path.localeCompare(right.path));
+  const fingerprinted = await fingerprintBaselineCandidates({ candidates, root });
   return {
+    version: 1,
     root,
-    candidates,
-    truncated: tracked.length > MAX_FILES || untrackedPaths.length > MAX_UNTRACKED_FILES,
+    files: fingerprinted.files,
+    ...(tracked.length > MAX_FILES ||
+    untrackedPaths.length > MAX_UNTRACKED_FILES ||
+    fingerprinted.truncated
+      ? { truncated: true }
+      : {}),
   };
 }
 
@@ -561,25 +567,6 @@ async function fingerprintBaselineCandidates(params: {
     }
   }
   return { files, truncated: files.length !== params.candidates.length };
-}
-
-export async function collectCheckoutDiffBaseline(params: {
-  cwd: string;
-}): Promise<GitReadOperations["checkout.baseline"]["output"]> {
-  const collected = await collectBaselineCandidates({ cwd: params.cwd });
-  if (!collected) {
-    return undefined;
-  }
-  const fingerprinted = await fingerprintBaselineCandidates({
-    candidates: collected.candidates,
-    root: collected.root,
-  });
-  return {
-    version: 1,
-    root: collected.root,
-    files: fingerprinted.files,
-    ...(collected.truncated || fingerprinted.truncated ? { truncated: true } : {}),
-  };
 }
 
 async function applySessionDiffBaseline(params: {

@@ -74,7 +74,23 @@ export async function withCliCommandCleanup<T>(
     registries: new Set(),
     pluginResources,
   };
-  return sdkResourceHost.run(() => scope.run(cleanup, () => run(cleanup)));
+  return sdkResourceHost.run(() =>
+    scope.run(cleanup, async () => {
+      try {
+        return await run(cleanup);
+      } finally {
+        const { waitForPendingCliDisposers } = await import("./runtime-cleanup.js");
+        await waitForPendingCliDisposers();
+        const { closeOpenClawStateDatabaseAsync } =
+          await import("../state/openclaw-state-db-cache.js");
+        await closeOpenClawStateDatabaseAsync();
+        const { closeDefaultRetainedNativeWorkerSource } =
+          await import("../infra/worker-native-lifecycle.js");
+        // Plugin disposal may read state; join its workers only after the whole command unwinds.
+        await closeDefaultRetainedNativeWorkerSource();
+      }
+    }),
+  );
 }
 
 export function retainCliRegistryHarnesses(

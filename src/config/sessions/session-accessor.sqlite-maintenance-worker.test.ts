@@ -27,7 +27,9 @@ import {
 import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
+import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import * as maintenanceKick from "./session-accessor.sqlite-maintenance-kick.js";
+import { registerSessionMaintenanceProtectionTests } from "./session-accessor.sqlite-maintenance-protection.test-support.js";
 import * as maintenance from "./session-accessor.sqlite-maintenance.js";
 import {
   observeSessionMaintenancePlanningWorker,
@@ -631,8 +633,10 @@ it("publishes exact archived keys without worktrees after Worker planning", asyn
       const result = await reclamationRun.runSqliteSessionReclamation({
         diagnostics,
         forceInProcess: false,
-        plan: reclamation.createSessionMaintenancePlanningOperation({
-          databaseOptions,
+        plan: {
+          kind: "maintenance-plan",
+          databaseOptions: reclamation.resolveSessionReclamationDatabaseOptions(databaseOptions),
+          materializedPlans: [],
           input: {
             activeSessionKey: active.sessionKey,
             archiveDirectory: state.sessionsDir(),
@@ -644,7 +648,7 @@ it("publishes exact archived keys without worktrees after Worker planning", asyn
             preservation: { providerKeys: [], workIdentities: [], lifecycleIdentities: [] },
             storePath,
           },
-        }),
+        },
       });
       expect(diagnostics).toMatchObject({ workerThreadId: expect.any(Number) });
       expect(result).toMatchObject({
@@ -728,7 +732,7 @@ it.each(["no-op", "preservation", "statistics", "empty-finalization"] as const)(
       const databaseOptions = { agentId: "main", env: state.env };
       const database = openOpenClawAgentDatabase(databaseOptions);
       const originalFile = fs.statSync(database.path, { bigint: true });
-      const plan =
+      const plan: SqliteSessionReclamationPlan =
         operation === "statistics"
           ? reclamation.createSessionMaintenanceStatisticsOperation(databaseOptions)
           : operation === "empty-finalization"
@@ -738,8 +742,11 @@ it.each(["no-op", "preservation", "statistics", "empty-finalization"] as const)(
                 entries: [],
                 materializedPlans: [],
               })
-            : reclamation.createSessionMaintenancePlanningOperation({
-                databaseOptions,
+            : {
+                kind: "maintenance-plan",
+                databaseOptions:
+                  reclamation.resolveSessionReclamationDatabaseOptions(databaseOptions),
+                materializedPlans: [],
                 input: {
                   activeSessionKey: active.sessionKey,
                   archiveDirectory: state.sessionsDir(),
@@ -751,7 +758,7 @@ it.each(["no-op", "preservation", "statistics", "empty-finalization"] as const)(
                   preservation: null,
                   storePath,
                 },
-              });
+              };
       const published: unknown[] = [];
       const unsubscribe = sessionChanges.subscribe((change) => {
         const scope = "all" in change ? change.scope : change;
@@ -964,4 +971,5 @@ it("retains worker cadence for foreign writes until a committed worker backdate 
   });
 });
 
+registerSessionMaintenanceProtectionTests();
 registerSessionMaintenancePreparationTests();

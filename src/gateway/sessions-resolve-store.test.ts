@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
+import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessions.js";
@@ -14,7 +15,10 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withStateDirEnv as withRawStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
-import { resolveSessionKeyFromResolveParams as resolveSessionKeyFromResolveParamsWithClient } from "./sessions-resolve.js";
+import {
+  resolveSessionKeyFromResolveParams as resolveSessionKeyFromResolveParamsWithClient,
+  withPreparedSessionResolve,
+} from "./sessions-resolve.js";
 
 type ResolveParams = Parameters<typeof resolveSessionKeyFromResolveParamsWithClient>[0];
 
@@ -30,11 +34,14 @@ const resolveSessionKeyFromResolveParams = async (
     pending = createSessionRowProjection({ cfg: params.cfg });
     projections.set(params.cfg, pending);
   }
-  return resolveSessionKeyFromResolveParamsWithClient({
-    client: params.client ?? null,
-    p: params.p,
-    projection: await pending,
-  });
+  return withPreparedSessionResolve(
+    {
+      client: params.client ?? null,
+      p: params.p,
+      projection: await pending,
+    },
+    (result) => result,
+  );
 };
 
 describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
@@ -352,7 +359,7 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
           updatedAt: freshUpdatedAt(),
         },
       });
-      writeAcpSessionMetaForMigration({
+      seedCanonicalAcpSessionMeta({
         sessionKey: acpKey,
         lifecycleRevision: undefined,
         meta: {
@@ -389,9 +396,13 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
   });
 
   it.each([
-    { name: "ordinary reads preserve an unbound legacy ACP row", bound: false, repair: false },
     {
-      name: "ordinary reads preserve a lifecycle-bound legacy ACP row",
+      name: "ordinary reads leave an unbound legacy ACP row unavailable",
+      bound: false,
+      repair: false,
+    },
+    {
+      name: "ordinary reads leave lifecycle-bound legacy ACP metadata unavailable",
       bound: true,
       repair: false,
     },
@@ -458,7 +469,6 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
               expect(repaired[0]).toEqual({
                 ...before[0],
                 session_key: buildAcpDatabaseSessionKey(acpKey, "claude"),
-                updated_at: expect.any(Number),
               });
               await noteSessionTranscriptHealth({ cfg, env: process.env, shouldRepair: true });
               expect(readRows()).toEqual(repaired);
@@ -472,11 +482,17 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
           { label: "claude-delegate-partial" },
           { key: acpKey },
         ]) {
-          await expect(resolveSessionKeyFromResolveParams({ cfg, p: selector })).resolves.toEqual({
-            ok: true,
-            key: acpKey,
-            agentId: "claude",
-          });
+          await expect(resolveSessionKeyFromResolveParams({ cfg, p: selector })).resolves.toEqual(
+            repair
+              ? { ok: true, key: acpKey, agentId: "claude" }
+              : {
+                  ok: false,
+                  error: {
+                    code: ErrorCodes.INVALID_REQUEST,
+                    message: 'Agent "claude" no longer exists in configuration',
+                  },
+                },
+          );
           if (!repair) {
             expect(readRows()).toEqual(before);
           }
