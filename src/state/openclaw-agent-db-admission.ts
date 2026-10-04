@@ -41,6 +41,7 @@ import {
   type PendingAgentDatabaseOpen,
 } from "./openclaw-agent-db-lifecycle.js";
 import { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
+import { assertAgentDatabaseResourceAdmission } from "./openclaw-agent-db-resources.js";
 import {
   assertExistingAgentSchemaOwner,
   assertSupportedAgentSchemaVersion,
@@ -218,19 +219,14 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     return scope ? scope.run(run) : run();
   }
 
-  function runAgentDatabaseAsync<T>(
+  async function runAgentDatabaseAsync<T>(
     inputOptions: OpenClawAgentDatabaseOptions,
     operation: (database: OpenClawAgentDatabase) => T | Promise<T>,
     assertCurrent?: () => void,
     signal?: AbortSignal,
   ): Promise<T> {
-    try {
-      signal?.throwIfAborted();
-      assertCurrent?.();
-    } catch (error) {
-      // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Caller assertions retain their original thrown value.
-      return Promise.reject(error);
-    }
+    signal?.throwIfAborted();
+    assertCurrent?.();
     // Admission retains its original path, registration, and permission inputs across awaits.
     const options = {
       ...inputOptions,
@@ -240,9 +236,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
     const existing = cache.pending.get(pathname);
     if (existing?.agentId !== undefined && existing.agentId !== agentId) {
-      return Promise.reject(
-        new Error(`Agent database ${pathname} is opening for ${existing.agentId}`),
-      );
+      throw new Error(`Agent database ${pathname} is opening for ${existing.agentId}`);
     }
     if (existing?.controller.signal.aborted) {
       return existing.promise.then(
@@ -392,6 +386,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
   }
 
   function createOpenClawAgentDatabaseAdmission(agentId: string, pathname: string) {
+    assertAgentDatabaseResourceAdmission({ agentId, path: pathname });
     const completion = createDeferredCore<OpenClawAgentDatabase>();
     const pending: PendingAgentDatabaseOpen = {
       agentId,

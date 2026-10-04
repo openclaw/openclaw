@@ -130,6 +130,87 @@ it.each(["known-directory", "unresolved-directory", "unresolved-member"] as cons
   },
 );
 
+it.each([false, true])(
+  "keeps a draining root fenced through every settlement (failure: %s)",
+  async (fail) => {
+    let failClose = fail;
+    const gate = createDeferredCore();
+    const resource = {
+      agentId: "worker",
+      path: path.join(root, "selected", "worker.sqlite"),
+      revoke: vi.fn(() => {
+        expect(() =>
+          registerOpenClawAgentDatabaseAsyncResource({
+            agentId: "reentrant",
+            path: path.join(root, "selected", "reentrant.sqlite"),
+            revoke() {},
+            close: async () => {},
+          }),
+        ).toThrow("are closing");
+      }),
+      close: () => gate.promise,
+    };
+    const sibling = {
+      agentId: "kept",
+      path: path.join(root, "sibling", "kept.sqlite"),
+      revoke: vi.fn(),
+      close: async () => {},
+    };
+    registerOpenClawAgentDatabaseAsyncResource(resource);
+    registerOpenClawAgentDatabaseAsyncResource(sibling);
+    const failure = new Error("independent resource close failed");
+    const failureObserved = createDeferredCore();
+    const failedPath = path.join(root, "selected", "failed.sqlite");
+    if (fail) {
+      registerOpenClawAgentDatabaseAsyncResource({
+        agentId: "failed",
+        path: failedPath,
+        revoke() {},
+        async close() {
+          failureObserved.resolve();
+          if (failClose) {
+            throw failure;
+          }
+        },
+      });
+    }
+    let settled = false;
+    const closing = closeOpenClawAgentDatabasesAsync(path.join(root, "selected")).then(
+      () => {
+        settled = true;
+      },
+      (error: unknown) => {
+        settled = true;
+        throw error;
+      },
+    );
+    void closing.catch(() => {});
+    try {
+      if (fail) {
+        await failureObserved.promise;
+      }
+      expect(settled).toBe(false);
+      expect(resource.revoke).toHaveBeenCalledOnce();
+      expect(sibling.revoke).not.toHaveBeenCalled();
+      expect(() =>
+        registerOpenClawAgentDatabaseAsyncResource({
+          ...resource,
+          path: path.join(root, "selected", "new.sqlite"),
+        }),
+      ).toThrow("are closing");
+    } finally {
+      gate.resolve();
+      if (fail) {
+        await expect(closing).rejects.toThrow("Agent database");
+        failClose = false;
+        await closeOpenClawAgentDatabaseByPathAsync(failedPath);
+      } else {
+        await closing;
+      }
+    }
+  },
+);
+
 it.each(["known", "unresolved", "maintenance"] as const)(
   "retains failed %s custody after unregistering until retry succeeds",
   async (owner) => {

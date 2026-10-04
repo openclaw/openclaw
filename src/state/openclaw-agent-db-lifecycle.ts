@@ -1,3 +1,4 @@
+import { addAbortListener } from "node:events";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
@@ -21,6 +22,7 @@ import {
   runInSqliteMaintenanceContext,
 } from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getGatewayShutdownCleanupSignal } from "../process/gateway-work-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { VERSION } from "../version.js";
@@ -46,6 +48,7 @@ import {
   drainAgentDatabaseResources,
   matchesAgentDatabaseClose,
   revokeAgentDatabaseResources,
+  withAgentDatabaseCloseFence,
   type AgentDatabaseCloseSelection,
 } from "./openclaw-agent-db-resources.js";
 import {
@@ -80,7 +83,7 @@ const OPENCLAW_AGENT_DB_SLOW_OPEN_MS = 1_000;
 type AgentDatabaseLifecycle = {
   databases: Map<string, OpenClawAgentDatabase>;
   borrowers: WeakMap<DatabaseSync, Set<object>>;
-  idleTimers: WeakMap<DatabaseSync, NodeJS.Timeout>;
+  idleTimers: WeakMap<DatabaseSync, Disposable & { refresh(): void }>;
   incognito: WeakSet<OpenClawAgentDatabase>;
   generation: number;
   failures: Map<string, unknown>;
@@ -287,7 +290,7 @@ export function retainIncognitoSharedState(db: DatabaseSync, env?: NodeJS.Proces
   });
 }
 
-/** Activity and final borrower release start the same idle window. */
+/** Activity and final borrower release use the same idle or post-grace eviction. */
 export function refreshAgentDatabaseIdleTimer(database: OpenClawAgentDatabase): void {
   // Incognito's connection is its only durable owner; idle close would erase it.
   if (cache.incognito.has(database)) {
@@ -298,35 +301,53 @@ export function refreshAgentDatabaseIdleTimer(database: OpenClawAgentDatabase): 
     existing.refresh();
     return;
   }
+  const cleanupSignal = getGatewayShutdownCleanupSignal();
+  const closeIdle = () => {
+    if (cache.databases.get(database.path) !== database) {
+      cache.idleTimers.get(database.db)?.[Symbol.dispose]();
+      cache.idleTimers.delete(database.db);
+      return;
+    }
+    // Awaiting operations own the exact connection; final release rearms eviction.
+    if (database.db.isOpen && cache.borrowers.get(database.db)?.size) {
+      return;
+    }
+    if (database.db.isOpen && database.db.isTransaction) {
+      timer.refresh();
+      return;
+    }
+    try {
+      // Registry discovery metadata survives eviction; only explicit disposal removes it.
+      closeCachedOpenClawAgentDatabase(database, { eviction: true });
+      cache.databases.delete(database.path);
+      cache.failures.delete(database.path);
+      unregisterUnusedAgentDatabaseExitClose();
+    } catch (error) {
+      // Keep native/lease custody on the original entry until cleanup succeeds.
+      logResourceCloseFailure(database.path, error);
+      timer.refresh();
+    }
+  };
+  const refresh = () => {
+    if (cleanupSignal.aborted) {
+      // A synchronous opener can still borrow the exact handle before cleanup runs.
+      runInSqliteMaintenanceContext(() => queueMicrotask(closeIdle));
+    } else {
+      timer.refresh();
+    }
+  };
   const timer = runInSqliteMaintenanceContext(() =>
-    setTimeout(() => {
-      if (cache.databases.get(database.path) !== database) {
-        cache.idleTimers.delete(database.db);
-        return;
-      }
-      // Awaiting operations own the exact connection; final release rearms eviction.
-      if (database.db.isOpen && cache.borrowers.get(database.db)?.size) {
-        return;
-      }
-      if (database.db.isOpen && database.db.isTransaction) {
-        timer.refresh();
-        return;
-      }
-      try {
-        // Registry discovery metadata survives eviction; only explicit disposal removes it.
-        closeCachedOpenClawAgentDatabase(database, { eviction: true });
-        cache.databases.delete(database.path);
-        cache.failures.delete(database.path);
-        unregisterUnusedAgentDatabaseExitClose();
-      } catch (error) {
-        // Keep native/lease custody on the original entry until cleanup succeeds.
-        logResourceCloseFailure(database.path, error);
-        timer.refresh();
-      }
-    }, SQLITE_IDLE_HANDLE_TTL_MS),
+    setTimeout(closeIdle, SQLITE_IDLE_HANDLE_TTL_MS),
   );
+  const cleanupListener = addAbortListener(cleanupSignal, refresh);
   timer.unref();
-  cache.idleTimers.set(database.db, timer);
+  cache.idleTimers.set(database.db, {
+    refresh,
+    [Symbol.dispose]() {
+      clearTimeout(timer);
+      cleanupListener[Symbol.dispose]();
+    },
+  });
 }
 
 /** Dispose only this publication; a later admission at the same path is independent. */
@@ -397,7 +418,7 @@ export function closeCachedOpenClawAgentDatabase(
   }
   releaseAgentDeletionDatabaseCleanup(database);
   releaseAgentCreationClaimHandle(database);
-  clearTimeout(cache.idleTimers.get(database.db));
+  cache.idleTimers.get(database.db)?.[Symbol.dispose]();
   cache.idleTimers.delete(database.db);
 }
 
@@ -530,7 +551,7 @@ export function settleOpenClawAgentDatabaseWorkerClose(
       }
     }
     if (!database.db.isOpen) {
-      clearTimeout(cache.idleTimers.get(database.db));
+      cache.idleTimers.get(database.db)?.[Symbol.dispose]();
       cache.idleTimers.delete(database.db);
       const incognito = cache.incognito.has(database);
       cache.databases.delete(resolvedPath);
@@ -614,20 +635,27 @@ async function drainPendingAgentDatabaseOpens(
 
 /** Drain native opens before a lifecycle owner releases shared state or removes its root. */
 export async function closeOpenClawAgentDatabasesAsync(rootPath?: string): Promise<void> {
-  // Retained resources may drain slowly; revoke native admission before yielding to them.
-  for (const owner of cache.activePending) {
-    if (rootPath === undefined || isPathInside(rootPath, owner.path)) {
-      revokePendingAgentDatabaseOpen(owner.path);
-    }
-  }
-  await drainAgentDatabaseResources({ rootPath }, async () => {
-    await drainPendingAgentDatabaseOpens({ rootPath });
-    await Promise.all(
-      [...cache.databases.values()]
-        .filter((database) => rootPath === undefined || isPathInside(rootPath, database.path))
-        .map((database) => database.walMaintenance.stop()),
+  const selection = { rootPath };
+  await withAgentDatabaseCloseFence(selection, async (resourcePaths) => {
+    const nativePaths = new Set(
+      [...cache.databases.values(), ...cache.activePending, ...cache.retainedCloses]
+        .filter((owner) => matchesAgentDatabaseClose(selection, owner))
+        .map((owner) => owner.path),
     );
-    closeOpenClawAgentDatabases(rootPath);
+    const paths = new Set([...nativePaths, ...resourcePaths]);
+    const results = await Promise.allSettled(
+      [...paths].map((pathname) =>
+        nativePaths.has(pathname)
+          ? closeOpenClawAgentDatabaseByPathAsync(pathname)
+          : drainAgentDatabaseResources({ ...selection, path: pathname }, async () => {}),
+      ),
+    );
+    const errors = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (errors.length > 0) {
+      throw new AggregateError(errors, "Agent database close failed");
+    }
   });
 }
 
