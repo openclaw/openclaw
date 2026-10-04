@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  captureAgentRunLifecycleGeneration,
+  withAgentRunLifecycleGeneration,
+} from "../infra/agent-events.js";
 import { captureGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import {
   buildHandledBeforeAgentReplyPayloads,
@@ -127,5 +131,31 @@ describe("before_agent_reply runner boundary", () => {
     expect(hookRunner.runBeforeAgentReply).toHaveBeenCalledTimes(2);
     expect(beforeDispatch).toHaveBeenCalledOnce();
     expect(afterDispatch).toHaveBeenCalledOnce();
+  });
+
+  it("defers its own hook until normal execution resumes without consuming the claim", async () => {
+    let privatePreparation = true;
+    const handled: string[] = [];
+    hookRunner.runBeforeAgentReply.mockImplementation(async (_event, context) => {
+      handled.push(context.runId);
+      return { handled: true, reply: { text: `handled ${context.runId}` } };
+    });
+    await withAgentRunLifecycleGeneration(
+      captureAgentRunLifecycleGeneration("deferred-parent"),
+      () =>
+        withBeforeAgentReplyObserver({ shouldDispatch: () => !privatePreparation }, async () => {
+          expect(await runHook("deferred-parent")).toBeUndefined();
+          expect(handled).toEqual([]);
+          // A child has independent hook authority even while the parent's hook is deferred.
+          expect(await runHook("independent-child")).toMatchObject({ handled: true });
+          privatePreparation = false;
+          expect(await runHook("deferred-parent")).toMatchObject({
+            handled: true,
+            reply: { text: "handled deferred-parent" },
+          });
+          await runHook("deferred-parent");
+        }),
+    );
+    expect(handled).toEqual(["independent-child", "deferred-parent"]);
   });
 });

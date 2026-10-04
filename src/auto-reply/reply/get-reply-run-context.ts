@@ -1,6 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
+import { isDecisionAssistanceEligible } from "../../agents/decision-assistance.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runner/sandbox-info.js";
+import { resolveAgentIdentity } from "../../agents/identity.js";
 import {
   isSyntheticSourceReplyTurn,
   resolveReplyCompletion,
@@ -25,6 +27,7 @@ import {
   isTextSlashCommandTurn,
   resolveCommandTurnContext,
 } from "../command-turn-context.js";
+import { isExplicitCommandTurnContext } from "../command-turn-detection.js";
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
 import { normalizeThinkLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -180,6 +183,19 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const isGroupChat =
     promptSessionCtx.ChatType === "group" || promptSessionCtx.ChatType === "channel";
   const isDirectChat = promptSessionCtx.ChatType === "direct" || promptSessionCtx.ChatType === "dm";
+  const groupParticipation =
+    isGroupChat &&
+    !isHeartbeat &&
+    inboundEventKind !== "room_event" &&
+    promptSessionCtx.WasMentioned !== true &&
+    !isExplicitCommandTurnContext(promptSessionCtx, cfg) &&
+    (conversation.activation ?? defaultActivation) === "always" &&
+    isDecisionAssistanceEligible(cfg, agentId)
+      ? {
+          agentName: normalizeOptionalString(resolveAgentIdentity(cfg, agentId)?.name),
+          replyToText: sessionCtx.ReplyToBody,
+        }
+      : undefined;
   const { typingPolicy, suppressTyping } = resolveRunTypingPolicy({
     requestedPolicy: opts?.typingPolicy,
     suppressTyping: opts?.suppressTyping === true,
@@ -487,6 +503,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     getInboundContext: () => ({ activeGoalContext, inboundUserContext }),
     refreshInboundContextAfterAdmissionWait,
     terminalReplyExpectation,
+    groupParticipation,
   } as const;
 }
 

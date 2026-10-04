@@ -11,6 +11,7 @@ import {
   scheduleFollowupDrainAfterReplyOperationClear,
   type RunReplyAgentParams,
 } from "./agent-runner-core.js";
+import { recordGroupParticipationInput } from "./group-participation-inputs.js";
 import {
   admitFollowupRunLifecycle,
   parkSteerCandidate,
@@ -107,6 +108,7 @@ export async function runActiveReplySteer(
     typing.cleanup();
     return "handled";
   }
+  recordGroupParticipationInput(activeReplyOperation, followupRun);
   const scheduleParkedFallback = () => {
     const owner = replyRunRegistry.get(queueKey);
     if (owner) {
@@ -277,6 +279,7 @@ export async function runActiveReplySteer(
         `queue: active session ${steerSessionId} adoption finalizer failed: ${formatErrorMessage(finalization.adoptionError)}`,
       );
     }
+    recordGroupParticipationInput(activeReplyOperation, followupRun, "steer");
     if (activeReplyOperation) {
       await refreshReplyOperationTyping(activeReplyOperation, {
         startIfIdle: typingSignals.shouldStartImmediately,

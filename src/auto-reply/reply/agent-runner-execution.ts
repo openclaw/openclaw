@@ -76,6 +76,8 @@ import { resolveQueuedReplyRuntimeConfig } from "./agent-runner-utils.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { shouldNotifyUserAboutCompaction } from "./compaction-notice.js";
 import { type CurrentTurnImages, resolveCurrentTurnImages } from "./current-turn-images.js";
+import { prepareGroupParticipationObservation } from "./group-participation-observe.js";
+import { readGroupParticipationRun } from "./group-participation-run.js";
 import type { FollowupRun } from "./queue.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { resolveReplyFailureVisibility, type DirectBlockDelivery } from "./reply-delivery.js";
@@ -251,7 +253,9 @@ async function executeAgentTurnInternalLoop(
     if (params.replyOperation) {
       markReplyOperationExecutionStarted(params.replyOperation);
     }
-    params.opts?.onAgentRunStart?.(runId, admittedRunContext.current?.executionIdentityToken);
+    if (!readGroupParticipationRun(params.replyOperation)?.isObserving) {
+      params.opts?.onAgentRunStart?.(runId, admittedRunContext.current?.executionIdentityToken);
+    }
   };
   const signalExecutionPhaseForTyping = (
     info: Parameters<NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>>[0],
@@ -265,7 +269,9 @@ async function executeAgentTurnInternalLoop(
     const startupPhase = resolveRunStartupPhase(info.phase);
     if (startupPhase && startupPhase !== lastRunStartupPhase) {
       lastRunStartupPhase = startupPhase;
-      emitAgentRunStatusEvent({ runId, phase: startupPhase });
+      if (!readGroupParticipationRun(params.replyOperation)?.isObserving) {
+        emitAgentRunStatusEvent({ runId, phase: startupPhase });
+      }
     }
     if (
       info.phase === "turn_accepted" ||
@@ -284,6 +290,9 @@ async function executeAgentTurnInternalLoop(
       return;
     }
     notifyAgentRunStart();
+    if (readGroupParticipationRun(params.replyOperation)?.isObserving) {
+      return;
+    }
     void (
       params.typingSignals.signalExecutionActivity?.() ?? params.typingSignals.signalRunStart()
     ).catch((err: unknown) => {
@@ -652,6 +661,17 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
   const executionParams =
     params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
   try {
+    const participation = await prepareGroupParticipationObservation(params);
+    const revision = participation?.snapshot?.revision;
+    if (
+      participation?.mode === "observe" &&
+      revision !== undefined &&
+      participation.isCurrent(revision)
+    ) {
+      const result: AgentTurnExecutionResult = { runId, outcome: { kind: "observed" } };
+      recordAgentTurnExecutionOutcome(executionParams, result);
+      return result;
+    }
     const result = await executeAgentTurnOutcome(executionParams, runId);
     await recordAgentTurnExecutionOutcome(executionParams, result);
     return result;

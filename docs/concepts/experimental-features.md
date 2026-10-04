@@ -60,12 +60,11 @@ that default.
 
 ## Decision assistance
 
-This opt-in enables experimental conversational tool filtering in the built-in
-OpenClaw runtime. Before an eligible user turn, the configured Decision provider
-judges whether the request needs tools. A conversational result can omit optional
-tools for that turn. Other harnesses keep their normal tools and perform no
-automatic prefilter inference. The switch does not select a provider, provision
-credentials, download models, or enable unrelated consumer modes.
+This Labs entry opts into current and future automatic Decision consumers. No
+separate feature opt-ins are required. With a configured Decision model, supported
+consumers include [group participation](/concepts/decision-models#group-participation)
+and conversational tool filtering in the built-in OpenClaw runtime. The switch
+does not select a provider, provision credentials, or download models.
 
 The switch and manually authored config use the same global Boolean:
 
@@ -121,12 +120,14 @@ if (!isDecisionAssistanceEligible(preparedConfig, owningAgentId)) {
 ```
 
 Use the existing config publication/refresh lifecycle, not file polling.
-Consumers check opt-in again at Decision provider dispatch, after awaited
-preparation. Disabling assistance stops subsequent evaluations from starting;
-already-dispatched evaluations may finish, including provider preparation and
-network I/O, and their results may still be used. Model selection, live authority,
-cancellation, deadlines, and provider/credential validity remain independently
-checked. This helper is not an authority token or a cancellation owner.
+Consumers check opt-in again before Decision provider dispatch, after awaited
+preparation. Model selection, live authority, cancellation, deadlines, and
+provider/credential validity remain independently checked. This helper is not an
+authority token or a cancellation owner.
+
+Each consumer documents its evidence transfer, costs, latency, and opt-out
+behavior. Group participation discards pending judgments after opt-out; the
+conversational tool filter below preserves already-dispatched evaluations.
 
 ### Conversational tool filtering
 

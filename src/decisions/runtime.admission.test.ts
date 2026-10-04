@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { captureGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { evaluateDecisionInRegistry } from "./runtime.js";
 import { answer, batch, config, options, registered } from "./runtime.test-support.js";
@@ -11,6 +12,40 @@ afterEach(() => {
 });
 
 describe("registered decision consumer admission", () => {
+  it.each(["consumer", "runtime"] as const)(
+    "composes %s admission with the guarded request boundary",
+    async (withdraw) => {
+      let consumerAllowed = true;
+      let runtimeAllowed = true;
+      const host = registered(async (_batch, context) => {
+        expect(context.isAdmissible?.()).toBe(true);
+        consumerAllowed = withdraw !== "consumer";
+        runtimeAllowed = withdraw !== "runtime";
+        expect(() => captureGuardedFetchRequestAuthority()?.()).toThrow(
+          "Decision dispatch is no longer admitted",
+        );
+        consumerAllowed = true;
+        runtimeAllowed = true;
+        expect(context.isAdmissible?.()).toBe(false);
+        return { status: "unavailable", reason: "transport" };
+      });
+      expect(
+        await evaluateDecisionInRegistry(
+          batch,
+          { ...options(), admit: () => consumerAllowed },
+          host.registry,
+          config,
+          undefined,
+          () => runtimeAllowed,
+        ),
+      ).toEqual({ status: "unavailable", reason: "disabled" });
+      expect(host.registry.decisionProviders[0]?.host.inspect(config)).toMatchObject({
+        activeRequests: 0,
+        callable: true,
+      });
+    },
+  );
+
   it("keeps revoked admission closed across provider cleanup without poisoning health", async () => {
     let current = true;
     const call = vi.fn<DecisionProviderV1["evaluate"]>(async (_batch, context) => {

@@ -1,7 +1,6 @@
 import { markAutoFallbackPrimaryProbe } from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
-import { resolveRunEntryCliRuntime } from "../../agents/embedded-agent-runner/run-entry-runtime.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
@@ -12,9 +11,7 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { clearAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal-writes.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { CommandLane } from "../../process/lanes.js";
-import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
-import { resolveFallbackCandidateRun, resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import { runCliFallbackCandidate } from "./agent-runner-cli-candidate.js";
 import {
   invalidateTurnCompactionContext,
@@ -28,6 +25,7 @@ import type {
   AgentFallbackCandidateCommonParams,
   AgentFallbackCycleParams,
 } from "./agent-runner-fallback-cycle.types.js";
+import { resolveReplyCandidateRuntime } from "./agent-runner-runtime.js";
 import {
   mintReplyMessageActionTurnCapability,
   resolveModelFallbackOptions,
@@ -35,6 +33,7 @@ import {
   resolveRunThinkingLevelForFallbackCandidate,
 } from "./agent-runner-utils.js";
 import { hasBlockReplyDeliveryCustody } from "./block-reply-delivery.js";
+import { readGroupParticipationRun } from "./group-participation-run.js";
 import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
 import {
   bindSourceReplyDeliveryRuntime,
@@ -94,26 +93,15 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
     provider: string,
     model: string,
     sessionRuntimeOverride: string | undefined,
-  ) => {
-    const candidateRun = resolveFallbackCandidateRun(params.effectiveRun, provider, model);
-    const activeEntry = params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry();
-    const selectedAuthProfile = resolveRunAuthProfile(candidateRun, provider, {
+  ) =>
+    resolveReplyCandidateRuntime({
+      run: params.effectiveRun,
       config: params.runtimeConfig,
-    });
-    return {
-      candidateRun,
+      provider,
+      model,
+      sessionEntry: params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry(),
       sessionRuntimeOverride,
-      ...resolveRunEntryCliRuntime({
-        config: params.runtimeConfig,
-        provider,
-        model,
-        agentId: turn.followupRun.run.agentId,
-        authProfileId: selectedAuthProfile.authProfileId,
-        sessionRuntimeOverride,
-        pinnedHarnessId: resolveSessionPinnedHarnessId(activeEntry),
-      }),
-    };
-  };
+    });
   return params.timing.measure("model_fallback", () =>
     runEmbeddedAgentEntry<EmbeddedAgentRunResult>({
       preparedRunAdmission: params.preparedRunAdmission,
@@ -219,6 +207,9 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         );
         const candidateRun = runtime.candidateRun;
         bindSourceReplyDeliveryRuntime(candidateRun, sourceReplyDeliveryRuntime);
+        if (runtime.useCliExecution) {
+          await readGroupParticipationRun(turn.replyOperation)?.useOrdinaryBehavior();
+        }
         // CLI prompts are fixed to their session binding, so dispatch must publish that
         // same stable mode or a valid assistant reply can be silently suppressed.
         const candidateSourceReplyDeliveryMode =

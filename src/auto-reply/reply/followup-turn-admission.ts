@@ -26,6 +26,7 @@ import {
 } from "./compaction-notice.js";
 import { settleQueuedFollowupPresentation } from "./followup-presentation.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import { prepareGroupParticipationRun } from "./group-participation-run.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
 import {
   admitFollowupRunLifecycle,
@@ -329,6 +330,16 @@ export async function admitFollowupTurn(params: {
       }
       return generationRotated;
     };
+    const participation = await prepareGroupParticipationRun({
+      run: () => turn.queued,
+      operation,
+      sessionKey: replySessionKey,
+      storePath: params.defaults.storePath,
+      sessionEntry: activeEntry,
+    });
+    if (participation?.mode === "observe") {
+      return { kind: "admitted", turn };
+    }
     const previousCompactionCount = activeEntry?.compactionCount ?? 0;
     let pendingTerminalCompactionNotice:
       | { phase: Exclude<CompactionNoticePhase, "start">; text?: string }
@@ -336,6 +347,7 @@ export async function admitFollowupTurn(params: {
     let compactionNoticeGenerationInvalidated = false;
     const notifyPreflightCompaction =
       turn.sendPolicy === "allow" &&
+      !participation?.isObserving &&
       queued.currentInboundEventKind !== "room_event" &&
       shouldNotifyUserAboutCompaction(config)
         ? async (phase: CompactionNoticePhase, text?: string) => {

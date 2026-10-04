@@ -3,6 +3,7 @@ import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor
 import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
 import { isFastModeAutoProgressPayload } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -14,6 +15,7 @@ import { resolveTurnCommentaryProgressOwner } from "./commentary-progress-owner.
 import { requiresDurableToolResultDelivery } from "./dispatch-from-config.payloads.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import { readGroupParticipationRun } from "./group-participation-run.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import { hasReplyOperationExecutionStarted, replyRunRegistry } from "./reply-run-registry.js";
@@ -93,7 +95,10 @@ export async function executeFollowupTurn(params: {
   // Heartbeats can refresh a drain callback but never enter its queue.
   const isHeartbeat = false;
   const roomEvent = turn.queued.currentInboundEventKind === "room_event";
-  const progressAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
+  const progressAllowed = () =>
+    turn.sendPolicy === "allow" &&
+    !roomEvent &&
+    !readGroupParticipationRun(turn.operation)?.isObserving;
   const currentVerboseLevel = (): VerboseLevel => {
     if (turn.queued.run.verboseLevelOverride !== undefined) {
       return turn.queued.run.verboseLevelOverride;
@@ -199,7 +204,7 @@ export async function executeFollowupTurn(params: {
       : undefined;
   const baseTypingSignals = createTypingSignaler({
     typing: defaults.typing,
-    mode: progressAllowed() ? defaults.typingMode : "never",
+    mode: turn.sendPolicy === "allow" && !roomEvent ? defaults.typingMode : "never",
     isHeartbeat,
   });
   const typingSignals: TypingSignaler = {
@@ -412,9 +417,10 @@ export async function executeFollowupTurn(params: {
         replyRunRegistry.bindSourceTurnId(turn.operation, sourceTurnId);
         setChannelSourceTurnId(sessionCtx, sourceTurnId);
       }
-      execution = await (recorder?.withPendingInput
-        ? recorder.withPendingInput(execute)
-        : execute());
+      execution = await withBeforeAgentReplyObserver(
+        { shouldDispatch: () => !readGroupParticipationRun(turn.operation)?.isObserving },
+        () => (recorder?.withPendingInput ? recorder.withPendingInput(execute) : execute()),
+      );
     } catch (error) {
       await drainPendingWork();
       if (!hasReplyOperationExecutionStarted(turn.operation)) {
@@ -427,7 +433,7 @@ export async function executeFollowupTurn(params: {
           kind: "rejected",
           payload: buildTerminalAgentRunFailureReplyPayload({
             isHeartbeat,
-            replyExpectation: terminalReplyExpectation,
+            replyExpectation: turn.queued.run.terminalReplyExpectation ?? terminalReplyExpectation,
             visibleReplyDelivered,
           }),
         },

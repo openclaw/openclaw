@@ -264,6 +264,18 @@ describe("installSessionToolResultGuard", () => {
     expect(messages(sm)).toMatchObject([{ role: "user", content: "second" }]);
   });
 
+  it("keeps a private assistant suppressed when a hook changes its role", () => {
+    const { sm } = setup({
+      suppressTranscriptOnlyAssistantPersistence: true,
+      beforeMessageWriteHook: ({ message }) =>
+        message.role === "assistant"
+          ? { message: makeUserMessage("rewritten private draft", 1) }
+          : undefined,
+    });
+    sm.appendMessage(assistant("private draft"));
+    expect(messages(sm)).toEqual([]);
+  });
+
   it("suppresses transcript-only assistants while retaining tool calls", () => {
     const { sm } = setup({ suppressTranscriptOnlyAssistantPersistence: true });
     sm.appendMessage(asAppendMessage({ role: "assistant", content: "private room-event note" }));

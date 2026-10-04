@@ -93,6 +93,9 @@ export async function resolveFollowupDeliveryDecision(params: {
   ) {
     return { kind: "suppress", reason: "room-event" };
   }
+  if (execution.outcome.kind === "observed") {
+    return { kind: "suppress", reason: "silent" };
+  }
   const sourcePolicy = resolveSourceReplyVisibilityPolicy({
     cfg: turn.config,
     ctx: {

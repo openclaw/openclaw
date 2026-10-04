@@ -296,6 +296,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/agent-runner-execution-cli-commentary.test.ts",
   "src/auto-reply/reply/agent-runner-source-identity.test.ts",
   "src/auto-reply/reply/agent-runner.private-final.runreplyagent.test.ts",
+  "src/auto-reply/reply/group-participation.reply.test.ts",
+  "src/auto-reply/reply/group-participation.cli.test.ts",
   "src/auto-reply/reply/body.test.ts",
   "src/auto-reply/reply/get-reply.binding-route-owner.test.ts",
   "src/auto-reply/reply/get-reply.dashboard.test.ts",

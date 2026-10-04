@@ -70,6 +70,7 @@ export async function mirror(params: {
   prepareAssistantTranscriptMessage?: EmbeddedRunAttemptParams["prepareAssistantTranscriptMessage"];
   config?: SessionTranscriptWriteLockParams["config"];
   skipBeforeMessageWriteHooks?: boolean;
+  suppressTranscriptOnlyAssistantPersistence?: boolean;
 }): Promise<CodexAppServerTranscriptMirrorResult> {
   const messages = params.messages.filter(isMirroredAgentMessage);
   if (messages.length === 0) {
@@ -207,6 +208,17 @@ export async function mirror(params: {
             // does not bypass the hook with a fallback mirror.
             nextAssistantMirrorIdentitiesOwned.add(dedupeIdentity);
           }
+          continue;
+        }
+        // Suppressed room-event assistant text does not belong in the transcript
+        // or its update stream. Tool-call pairs retain their ordinary history.
+        // Source roles, not hook replacements, determine this persistence restriction.
+        if (
+          ownsRun &&
+          params.suppressTranscriptOnlyAssistantPersistence &&
+          message.role === "assistant" &&
+          !message.content.some((part) => part.type === "toolCall")
+        ) {
           continue;
         }
         const restoredMessage = restorePreparedUserTurnOperationalMetaForRuntime({

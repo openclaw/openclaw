@@ -135,7 +135,22 @@ If the message tool is unavailable under the active tool policy, OpenClaw falls 
 
 For direct chats and any other source event, `messages.visibleReplies: "message_tool"` applies the same tool-only behavior globally; `messages.groupChat.visibleReplies` remains the more specific override for group/channel rooms. Internal WebChat direct turns default to automatic final-reply delivery so Pi and Codex receive the same visible-reply contract.
 
-Accepted group/channel requests require a reply by default. To permit selective silence for unaddressed requests, explicitly set `agents.defaults.silentReply.group: "allow"` or the appropriate `surfaces.<id>.silentReply.group` override; see [Silent replies](/concepts/messages#silent-replies). In `"automatic"` mode, that opt-in enables `NO_REPLY` guidance. In tool-only mode, optional turns stay quiet by not calling the message tool; merely selecting tool-only delivery does not waive a required answer.
+Accepted group/channel requests require a reply by default. With
+[Decision assistance](/concepts/experimental-features#decision-assistance) enabled,
+a configured [Decision Model](/concepts/decision-models#group-participation), and
+mention gating disabled, embedded harnesses decide whether to reply before
+starting generation. Invitations and useful opportunities use ordinary tools,
+streaming, and delivery; chatter can be recorded without starting an agent run.
+Generated replies are not sent through a separate Decision Model review. Generic
+CLI backends and turns whose Decision Model is unavailable keep ordinary behavior.
+
+For ordinary behavior, selective silence for unaddressed requests requires
+`agents.defaults.silentReply.group: "allow"` or the appropriate
+`surfaces.<id>.silentReply.group` override; see
+[Silent replies](/concepts/messages#silent-replies). In `"automatic"` mode, that
+opt-in enables `NO_REPLY` guidance. In tool-only mode, optional turns stay quiet
+by not calling the message tool; selecting tool-only delivery does not waive a
+required answer.
 
 Plugin-owned conversation bindings are the exception. Once a plugin binds a thread and claims the inbound turn, the plugin's returned reply is the visible binding response; it does not need `message(action=send)`. That reply is plugin runtime output, not private model final text.
 
