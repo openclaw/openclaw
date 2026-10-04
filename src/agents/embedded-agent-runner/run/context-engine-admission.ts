@@ -1,17 +1,16 @@
 import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import {
   createContextEngineLogicalTurnLease,
-  selectContextEngineForTranscriptHost,
+  beginContextEngineLogicalTurn,
 } from "../../harness/context-engine-logical-turn.js";
-import { drainPendingContextEngineTurnsBeforeRun } from "../../harness/context-engine-turn-attempt.js";
 import type { AgentHarness } from "../../harness/types.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import { measureEmbeddedAgentPreparation } from "./preparation-timing.js";
 
 /** Selects the admitted harness host and settles prior context work before beginning its turn. */
 export async function admitEmbeddedContextEngine(
-  input: PreparedEmbeddedRunInput,
-  harness: AgentHarness,
+  input: Pick<PreparedEmbeddedRunInput, "runParams" | "agentDir" | "workspaceDir">,
+  harness: Pick<AgentHarness, "id" | "contextEngineHostCapabilities">,
 ) {
   const params = input.runParams;
   const ownsContextEngineLogicalTurnLease = params.contextEngineLogicalTurnLease === undefined;
@@ -28,26 +27,31 @@ export async function admitEmbeddedContextEngine(
         }),
       { config: params.config },
     ));
-  selectContextEngineForTranscriptHost({
-    lease: contextEngineLogicalTurnLease,
-    host: {
-      id: `agent-harness:${harness.id}`,
-      label: `agent harness "${harness.id}"`,
-      capabilities: harness.contextEngineHostCapabilities ?? [],
-    },
-    operation: "agent-run",
-    recorder: params.userTurnTranscriptRecorder,
-  });
-  await drainPendingContextEngineTurnsBeforeRun({
-    admission: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
-    isHeartbeat: isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind),
-    lease: contextEngineLogicalTurnLease,
-    recorder: params.userTurnTranscriptRecorder,
-    sessionTarget: params.sessionTarget,
-  });
-  return {
-    contextEngine: contextEngineLogicalTurnLease.begin().engine,
-    contextEngineLogicalTurnLease,
-    ownsContextEngineLogicalTurnLease,
-  };
+  try {
+    const effective = await beginContextEngineLogicalTurn({
+      lease: contextEngineLogicalTurnLease,
+      host: {
+        id: `agent-harness:${harness.id}`,
+        label: `agent harness "${harness.id}"`,
+        capabilities: harness.contextEngineHostCapabilities ?? [],
+      },
+      recorder: params.userTurnTranscriptRecorder,
+      isHeartbeat: isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind),
+      sessionTarget: params.sessionTarget,
+    });
+    return {
+      contextEngine: effective.engine,
+      contextEngineLogicalTurnLease,
+      ownsContextEngineLogicalTurnLease,
+      [Symbol.asyncDispose]: () =>
+        ownsContextEngineLogicalTurnLease
+          ? contextEngineLogicalTurnLease.dispose()
+          : Promise.resolve(),
+    };
+  } catch (error) {
+    if (ownsContextEngineLogicalTurnLease) {
+      await contextEngineLogicalTurnLease.dispose();
+    }
+    throw error;
+  }
 }

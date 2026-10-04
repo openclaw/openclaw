@@ -6,6 +6,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import { buildRuntimeContextCustomMessage } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import {
@@ -192,6 +193,24 @@ describe("assertSupportedTurn", () => {
 });
 
 describe("windowInitialMessages", () => {
+  it.each([false, true])(
+    "retains hidden runtime context before the provider replay anchor (structured: %s)",
+    (structured) => {
+      const context = buildRuntimeContextCustomMessage(
+        "Active exec sessions: none",
+        structured
+          ? [{ kind: "conversation-data", text: "Active exec sessions: none" }]
+          : undefined,
+      );
+      expect(context).toBeDefined();
+      if (!context) {
+        throw new Error("Expected runtime context");
+      }
+      const history = [userMessage("previous turn", 1), context, assistantMessage(3, true)];
+      expect(windowInitialMessages(history)).toEqual({ kind: "complete", messages: history });
+    },
+  );
+
   it("reports oversized replay through the typed unavailable result", () => {
     const message = assistantMessage(1, true);
     if (message.role !== "assistant" || !message.providerReplay) {
@@ -444,8 +463,10 @@ describe("fitLaunchDescriptor", () => {
       text: "[image data removed - already processed by model]",
     };
     const operationalRunInstance = createTestAdmittedRunContext("run").operationalRunInstance;
-    const build = (token: string, initialMessages: typeof messages) =>
-      parseWorkerLaunchPlan(buildDescriptor(initialMessages, token, operationalRunInstance));
+    const build = (
+      token: string,
+      initialMessages: WorkerLaunchPlan["assignment"]["initialMessages"],
+    ) => parseWorkerLaunchPlan(buildDescriptor(initialMessages, token, operationalRunInstance));
     const padding =
       WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES -
       measureLaunch(build(runtimeIdentityToken.value, expected));

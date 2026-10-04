@@ -12,8 +12,8 @@ import {
 } from "../../context-engine/registry.js";
 import { disposeContextEngineSources } from "../../context-engine/registry.resources.js";
 import type { ContextEngine, ContextEngineOperation } from "../../context-engine/types.js";
-import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { recordAgentCleanupFailure, runAgentCleanupStep } from "../run-cleanup-timeout.js";
+import { drainPendingContextEngineTurnsBeforeRun } from "./context-engine-turn-attempt.js";
 
 type LogicalTurnSelectionState = "unselected" | "selected" | "started" | "disposed";
 
@@ -44,27 +44,28 @@ export type ContextEngineLogicalTurnLease = {
   dispose: () => Promise<void>;
 };
 
-export function selectContextEngineForTranscriptHost(params: {
-  lease: ContextEngineLogicalTurnLease;
-  host: ContextEngineHostSupport;
-  operation: ContextEngineOperation;
-  recorder: Pick<UserTurnTranscriptRecorder, "getAdmissionReceipt" | "hasPersisted"> | undefined;
-}): EffectiveContextEngineRef {
-  const admission = params.recorder?.getAdmissionReceipt();
-  // Selection runs during turn preparation, before the user turn is written, so an admitted
-  // receipt does not exist yet on the paths that persist during the run. A receipt is only
-  // owed once the turn has actually been persisted: until then there is no admitted entry for
-  // the fence to anchor to, so there is nothing to degrade over.
-  if (params.recorder && !admission && params.recorder.hasPersisted()) {
-    return params.lease.degradeBeforeStart(
-      "current-turn transcript admission receipt is unavailable",
-    );
+export async function beginContextEngineLogicalTurn(
+  params: Omit<Parameters<typeof drainPendingContextEngineTurnsBeforeRun>[0], "admission"> & {
+    host: ContextEngineHostSupport;
+  },
+) {
+  const { host, ...turn } = params;
+  const admission = turn.recorder?.getAdmissionReceipt();
+  // An unpersisted recorder has no admission to fence yet; a committed turn must supply its receipt.
+  if (turn.recorder && !admission && turn.recorder.hasPersisted()) {
+    turn.lease.degradeBeforeStart("current-turn transcript admission receipt is unavailable");
+  } else {
+    turn.lease.selectForHost({
+      host,
+      operation: "agent-run",
+      requiresDurableCommit: turn.recorder !== undefined,
+    });
   }
-  return params.lease.selectForHost({
-    host: params.host,
-    operation: params.operation,
-    requiresDurableCommit: params.recorder !== undefined,
+  await drainPendingContextEngineTurnsBeforeRun({
+    ...turn,
+    admission: turn.recorder?.getAdmissionReceipt(),
   });
+  return turn.lease.begin();
 }
 
 export async function createContextEngineLogicalTurnLease(params: {

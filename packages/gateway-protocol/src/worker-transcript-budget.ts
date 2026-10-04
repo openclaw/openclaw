@@ -6,7 +6,9 @@ export function isWorkerTranscriptFrameWithinBudget(
 ): boolean {
   return isWorkerFrameWithinBudget(frame, () =>
     frame.params.messages.flatMap(({ content }) =>
-      content.flatMap((part) => (part.type === "image" ? [part.data] : [])),
+      typeof content === "string"
+        ? []
+        : content.flatMap((part) => (part.type === "image" ? [part.data] : [])),
     ),
   );
 }

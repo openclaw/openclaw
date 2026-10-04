@@ -9,6 +9,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { getAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
+import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../../agents/harness/tool-surface-bridge.js";
 import { projectAgentToolDefinition } from "../../agents/prepared-tool-surface.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
@@ -42,8 +43,9 @@ export function createWorkerGatewayToolRuntime(params: {
     callSignal?.throwIfAborted();
   };
   let prepared: Promise<WorkerToolSurface> | undefined;
-  let modelTools: Awaited<ReturnType<WorkerGatewayToolRuntime["getModelTools"]>> | undefined;
+  let modelTools: Awaited<ReturnType<WorkerGatewayToolRuntime["getPromptProjection"]>> | undefined;
   let issuedTools: Map<string, AnyAgentTool> | undefined;
+  let preparedSurface: WorkerToolSurface | undefined;
   const calls = new Map<
     string,
     {
@@ -56,6 +58,27 @@ export function createWorkerGatewayToolRuntime(params: {
   >();
   let sequential: Promise<unknown> = Promise.resolve();
   return {
+    applyPromptToolsAllow(toolsAllow) {
+      assertCurrent();
+      const handles = issuedTools;
+      if (!handles || !preparedSurface) {
+        throw new Error("Worker tools have not been prepared");
+      }
+      if (toolsAllow === undefined) {
+        return [...handles.values()].map((tool) => tool.name);
+      }
+      const allowed = new Set(
+        applyEmbeddedAttemptToolsAllow([...handles.values()], toolsAllow).map((tool) => tool.name),
+      );
+      for (const [id, tool] of handles) {
+        if (!allowed.has(tool.name)) {
+          handles.delete(id);
+        }
+      }
+      preparedSurface.tools = preparedSurface.tools.filter((tool) => handles.has(tool.id));
+      modelTools = undefined;
+      return [...allowed];
+    },
     async getSurface(identity) {
       assertCurrent();
       const surface = await (prepared ??= params
@@ -99,12 +122,13 @@ export function createWorkerGatewayToolRuntime(params: {
             throw new Error("Worker tool surface is invalid");
           }
           issuedTools = handles;
+          preparedSurface = catalog;
           return catalog;
         }));
       assertCurrent();
       return surface;
     },
-    async getModelTools(identity) {
+    async getPromptProjection(identity) {
       const surface = await this.getSurface(identity);
       assertCurrent();
       if (!modelTools) {
@@ -124,9 +148,17 @@ export function createWorkerGatewayToolRuntime(params: {
             }
             return tool;
           });
-          modelTools = runtime
+          const projected = runtime
             .compactTools(tools, { prepared: { preserveToolNames: [] } })
-            .tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
+            .promptToolPolicy.apply();
+          modelTools = {
+            tools: projected.tools.map(({ name, description, parameters }) => ({
+              name,
+              description,
+              parameters,
+            })),
+            toolSchemaDirectoryPrompt: projected.toolSchemaDirectoryPrompt,
+          };
         } finally {
           runtime.cleanup();
         }

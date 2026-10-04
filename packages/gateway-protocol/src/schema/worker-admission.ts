@@ -201,10 +201,45 @@ export const WorkerTranscriptUserMessageSchema = closedObject({
   role: Type.Literal("user"),
   content: transcriptSchemas.userContent,
   timestamp: Type.Integer({ minimum: 0 }),
+  operatorMessage: Type.Optional(transcriptSchemas.operatorMessage),
 });
+
+export const WorkerRuntimeContextFragmentsSchema = Type.Array(
+  closedObject({
+    kind: Type.Enum(["runtime-instruction", "conversation-data", "heartbeat-outcome"]),
+    text: Type.String(),
+  }),
+);
+
+const workerRuntimeContextFields = {
+  role: Type.Literal("custom"),
+  content: Type.String(),
+  display: Type.Literal(false),
+  timestamp: Type.Integer({ minimum: 0 }),
+};
+export const WorkerRuntimeContextMessageSchema = Type.Union([
+  closedObject({
+    ...workerRuntimeContextFields,
+    customType: Type.Literal("openclaw.runtime-context"),
+    details: closedObject({
+      source: Type.Literal("openclaw-runtime-context"),
+      runtimeContextCarrier: Type.Literal(true),
+      fragments: Type.Optional(WorkerRuntimeContextFragmentsSchema),
+    }),
+  }),
+  closedObject({
+    ...workerRuntimeContextFields,
+    customType: Type.Literal("openclaw.system-update"),
+    details: closedObject({
+      kind: Type.Enum(["prompt-update", "runtime-context"]),
+      turnScoped: Type.Boolean(),
+    }),
+  }),
+]);
 
 export const WorkerTranscriptMessageSchema = Type.Union([
   WorkerTranscriptUserMessageSchema,
+  WorkerRuntimeContextMessageSchema,
   transcriptSchemas.contextAssistant,
   transcriptSchemas.toolResult,
 ]);

@@ -2767,7 +2767,6 @@
 ["src/agents/embedded-agent-runner/run/attempt-session-runtime-prepare.test.ts","./attempt-trajectory.js","1b4e150f5b1d1964ca79c523461d74d49998554145046b653521f7e6f6df459a",1]
 ["src/agents/embedded-agent-runner/run/attempt-session.test.ts","../../../plugins/hook-runner-global.js","45be957b8f2aa7cf4f1dd46e38d13cf71b47b72441ef4f12fd45b59050ad075f",1]
 ["src/agents/embedded-agent-runner/run/attempt-session.test.ts","../../agent-project-settings.js","d61832146a9ddd1d2adba69c9550853383f483968667e2f7b26e24b19921bcb6",1]
-["src/agents/embedded-agent-runner/run/attempt-session.test.ts","../../agent-settings.js","4549ae8903520dad1a263d23f8bfd994265316c2f645d5d538a60fc01ce3c9c5",1]
 ["src/agents/embedded-agent-runner/run/attempt-session.test.ts","../../agent-tool-definition-adapter.js","f29783b678f12c28e184b0bc890e4966b068a4ff68b213c7ce1bf85a107595af",1]
 ["src/agents/embedded-agent-runner/run/attempt-session.test.ts","../../sessions/resource-loader.js","a8d96319f0c6f0444c893516e8cabc3b812d1e60402d76fe0ce69943d0221ab9",1]
 ["src/agents/embedded-agent-runner/run/attempt-session.test.ts","../../sessions/tools/tool-definition-wrapper.js","5a97d0d9dae2acf5471d5420c99264869ebc48bdf77dfd05953c74182ead2039",1]

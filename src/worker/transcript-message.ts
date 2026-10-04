@@ -1,13 +1,15 @@
 import { asOptionalRecord } from "@openclaw/normalization-core";
+import { Value } from "typebox/value";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
-import type {
-  WorkerTranscriptCommitRequestFrame,
-  WorkerTranscriptMessage,
-} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
+  WorkerRuntimeContextMessageSchema,
   WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES,
   WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type {
+  WorkerTranscriptCommitRequestFrame,
+  WorkerTranscriptMessage,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { isWorkerTranscriptFrameWithinBudget } from "../../packages/gateway-protocol/src/worker-transcript-budget.js";
 import { redactAgentDiagnosticPayload } from "../agents/diagnostic-redaction.js";
@@ -32,7 +34,7 @@ type WorkerProviderReplayUnavailableProjection = {
 export type WorkerMessageProjection<T> =
   | { kind: "complete"; message: T }
   | WorkerProviderReplayUnavailableProjection;
-type WorkerMessageProjectionPurpose = "inference" | "transcript";
+type WorkerMessageProjectionPurpose = "inference" | "launch" | "transcript";
 export const WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE =
   "Cloud worker could not preserve authoritative provider replay. " +
   "Stop or reclaim the cloud worker, then retry locally.";
@@ -130,7 +132,7 @@ export function projectWorkerProviderReplay<
     ...params.message,
     providerReplay: cloneProviderReplay(params.providerReplay),
   };
-  if (params.purpose === "inference") {
+  if (params.purpose !== "transcript") {
     return { kind: "complete", message: candidate };
   }
   const frameBytes = workerTranscriptMessageFrameBytes(candidate);
@@ -175,14 +177,49 @@ function toWorkerAssistantMessage(message: AssistantMessage): WorkerTranscriptAs
 
 export function toWorkerTranscriptMessage(
   message: AgentMessage,
+  purpose: "inference",
+): WorkerMessageProjection<Exclude<WorkerTranscriptMessage, { role: "custom" }>> | undefined;
+export function toWorkerTranscriptMessage(
+  message: AgentMessage,
+  purpose: "transcript" | "launch",
+): WorkerMessageProjection<WorkerTranscriptMessage> | undefined;
+export function toWorkerTranscriptMessage(
+  message: AgentMessage,
   purpose: WorkerMessageProjectionPurpose,
 ): WorkerMessageProjection<WorkerTranscriptMessage> | undefined {
+  if (
+    message.role === "custom" &&
+    (message.customType === "openclaw.runtime-context" ||
+      message.customType === "openclaw.system-update") &&
+    purpose !== "inference"
+  ) {
+    const candidate = {
+      role: message.role,
+      customType: message.customType,
+      content: message.content,
+      display: message.display,
+      details: message.details,
+      timestamp: message.timestamp,
+    };
+    if (!Value.Check(WorkerRuntimeContextMessageSchema, candidate)) {
+      throw new Error("Invalid worker runtime context");
+    }
+    return { kind: "complete", message: candidate };
+  }
   if (message.role === "user") {
     const content =
       typeof message.content === "string"
         ? [{ type: "text" as const, text: message.content }]
         : message.content.map(projectWorkerTextOrImageContent);
-    return { kind: "complete", message: { role: "user", content, timestamp: message.timestamp } };
+    return {
+      kind: "complete",
+      message: {
+        role: "user",
+        content,
+        timestamp: message.timestamp,
+        ...(message.operatorMessage ? { operatorMessage: message.operatorMessage } : {}),
+      },
+    };
   }
   if (message.role === "assistant") {
     return projectWorkerProviderReplay({

@@ -566,7 +566,7 @@ describe("worker turn launcher local placement", () => {
               agents: {
                 defaults: {
                   models: {
-                    "openai/gpt-test": { agentRuntime: { id: runtimeId } },
+                    "openai/gpt-5.6-luna": { agentRuntime: { id: runtimeId } },
                   },
                 },
               },

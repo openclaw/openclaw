@@ -29,7 +29,6 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
   applyAgentAutoCompactionGuard: vi.fn(),
-  applyAgentCompactionSettingsFromConfig: vi.fn(),
   buildEmbeddedExtensionFactories: vi.fn(),
   createAgentSession: vi.fn(),
   DefaultResourceLoader: vi.fn<new () => { reload: () => Promise<void> }>(),
@@ -50,9 +49,9 @@ vi.mock("../../../plugins/hook-runner-global.js", () => ({
 vi.mock("../../agent-project-settings.js", () => ({
   createPreparedEmbeddedAgentSettingsManager: hoisted.createPreparedEmbeddedAgentSettingsManager,
 }));
+// mock-isolation: Keep configuration policy outside the session assembly fixture.
 vi.mock("../../agent-settings.js", () => ({
   applyAgentAutoCompactionGuard: hoisted.applyAgentAutoCompactionGuard,
-  applyAgentCompactionSettingsFromConfig: hoisted.applyAgentCompactionSettingsFromConfig,
   isSilentOverflowProneModel: hoisted.isSilentOverflowProneModel,
   resolveEffectiveCompactionMode: hoisted.resolveEffectiveCompactionMode,
 }));
@@ -647,14 +646,10 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       "install-terminal-hook",
       "stage:agent-session",
     ]);
-    expect(hoisted.applyAgentAutoCompactionGuard).toHaveBeenCalledTimes(2);
-    expect(hoisted.applyAgentCompactionSettingsFromConfig).toHaveBeenCalledOnce();
-    expect(hoisted.applyAgentCompactionSettingsFromConfig.mock.invocationCallOrder[0]).toBeLessThan(
-      hoisted.applyAgentAutoCompactionGuard.mock.invocationCallOrder[1] ?? 0,
-    );
+    expect(hoisted.applyAgentAutoCompactionGuard).toHaveBeenCalledOnce();
     const sessionCall = hoisted.createAgentSession.mock.calls[0];
+    expect(sessionCall?.[0]).toMatchObject({ resourceLoader: fixture.resourceLoader });
     expect(sessionCall?.[0]).toMatchObject({
-      resourceLoader: fixture.resourceLoader,
       beforeToolBatch: undefined,
       contextOverflowRecoveryOwner: "caller",
       cleanupProviderSessionResourcesOnDispose: false,
