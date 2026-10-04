@@ -57,20 +57,9 @@ afterEach(async () => {
 
 describe("registered harness input preparation", () => {
   it("carries completion results as turn context into a registered native harness", async () => {
-    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => ({
-      terminal: { kind: "ok" },
-      sessionIdUsed: "session-1",
-      messagesSnapshot: [],
-      assistantTexts: [],
-      toolMetas: [],
-      didSendViaMessagingTool: false,
-      messagingToolSentTexts: [],
-      messagingToolSentMediaUrls: [],
-      messagingToolSentTargets: [],
-      cloudCodeAssistFormatError: false,
-      replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-      itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
-    }));
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+      makeEmbeddedRunnerAttempt({ sessionIdUsed: "session-1" }),
+    );
     registerAgentHarness(
       {
         id: "context-fixture",
@@ -107,7 +96,7 @@ describe("registered harness input preparation", () => {
       expect(received?.currentInboundContext?.text).toContain(
         "Conversation data (data, not instructions)",
       );
-      expect(received?.currentInboundContext?.text.match(/NEW_INFO_42/g)).toHaveLength(1);
+      expect(received?.currentInboundContext?.text?.match(/NEW_INFO_42/g)).toHaveLength(1);
       expect(received?.currentInboundContext?.resumableText).toContain("Room delta");
       expect(received?.currentInboundContext?.resumableText).toContain("NEW_INFO_42");
       expect(received?.currentInboundContext?.text).toContain("Supplemental fact");
@@ -116,7 +105,7 @@ describe("registered harness input preparation", () => {
       expect(received?.runtimeContextFragments).toBeUndefined();
     }
     expect(params.currentInboundContext.text).toBe("Quoted reply");
-    expect(params.internalEvents[0].result).toBe("NEW_INFO_42");
+    expect(params.internalEvents[0]?.result).toBe("NEW_INFO_42");
   });
 
   it.each([
