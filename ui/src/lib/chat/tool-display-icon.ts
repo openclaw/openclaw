@@ -12,11 +12,15 @@ const TOOL_NAME_ALIASES = new Map([
   ["glob", "web_search"],
 ]);
 
+function isIconName(name: string): name is IconName {
+  return Object.hasOwn(icons, name);
+}
+
 export function resolveToolDisplayIcon(name: string): IconName {
   const key = name.trim().toLowerCase();
   const spec =
     tools.get(key) ??
     tools.get(TOOL_NAME_ALIASES.get(key) ?? "") ??
     SHARED_TOOL_DISPLAY_JSON.fallback;
-  return Object.hasOwn(icons, spec.icon) ? (spec.icon as IconName) : "puzzle";
+  return isIconName(spec.icon) ? spec.icon : "puzzle";
 }
