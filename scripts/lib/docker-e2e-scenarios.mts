@@ -749,7 +749,11 @@ const betaReleasePathChunks = new Set([
 ]);
 
 const legacyReleasePathChunks: Record<string, DockerE2eLane[]> = {
-  "package-update": [...releasePathPackageUpdateOpenAiLanes, ...releasePathPackageUpdateCoreLanes],
+  "package-update": [
+    ...releasePathPackageUpdateOpenAiLanes,
+    ...releasePathPackageUpdateRestartAuthLanes,
+    ...releasePathPackageUpdateCoreLanes,
+  ],
   "package-update-core": releasePathPackageUpdateCoreLanes,
   "plugins-runtime-core": releasePathPluginRuntimeCoreLanes,
   "plugins-runtime": releasePathPluginRuntimeLanes,
