@@ -135,8 +135,8 @@ async function runAgentSpawnBridge(params: {
   const preparedBoundedLaunch = prepareBoundedLaunch({
     task: prompt.trim(),
     boundedLaunch: options.boundedLaunch,
-    sourceReplicaId: groupId,
-    targetReplicaId: `${params.codeModeRunId}:${params.request.id}`,
+    sourceRunId: groupId,
+    targetLaunchId: `${params.codeModeRunId}:${params.request.id}`,
   });
   const spawnInput: Record<PropertyKey, unknown> = {
     collect: true,
