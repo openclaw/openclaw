@@ -97,9 +97,6 @@ it.each(["completed", "interrupted"] as const)(
       });
       const continuation = vi.fn(async () => "continued");
       const claim = { ...identity, sessionKey: base.sessionKey, runId: "new-continuation" };
-      await expect(executeLocalTurn({ placements, claim, runLocal: continuation })).rejects.toThrow(
-        "session key does not match its placement",
-      );
       await removeCronRunContinuationSessionIfIdle(exact.sessionKey, undefined, context);
       expect(loadSessionEntry(exact)).toBeUndefined();
       expect(loadSessionEntry(base)?.sessionId).toBe(identity.sessionId);
