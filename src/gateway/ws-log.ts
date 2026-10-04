@@ -5,6 +5,7 @@ import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import chalk from "chalk";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { SESSION_LIST_SOURCES } from "../../packages/gateway-protocol/src/schema/sessions-list.js";
 import { isVerbose } from "../globals.js";
 import { stringifyNonErrorCause } from "../infra/errors.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
@@ -28,6 +29,51 @@ const MAX_WS_INFLIGHT_TIMINGS = 2000;
 const wsLog = createSubsystemLogger("gateway/ws");
 
 const WS_META_SKIP_KEYS = new Set(["connId", "id", "method", "ok", "event"]);
+const SESSION_LIST_FILTERS = [
+  "activeMinutes",
+  "activeOnly",
+  "requireLastInteraction",
+  "includeGlobal",
+  "includeUnknown",
+  "excludeSubagents",
+  "excludeCron",
+  "excludeSystem",
+  "configuredAgentsOnly",
+  "label",
+  "projectId",
+  "workspaceDir",
+  "group",
+  "pinned",
+  "boardFace",
+  "hasBoard",
+  "creatorId",
+  "ownerId",
+  "involvingMe",
+  "profileRelation",
+  "involvingProfileId",
+  "spawnedBy",
+  "agentId",
+  "search",
+  "archived",
+] as const;
+
+/** Request shape only: never log search text, identities, paths, or arbitrary caller tags. */
+export function summarizeSessionListForWsLog(input: unknown): Record<string, unknown> {
+  const params = isRecord(input) ? input : {};
+  return {
+    source: SESSION_LIST_SOURCES.find((source) => source === params.source) ?? "unspecified",
+    rowMode: params.rowMode === "compact" ? "compact" : "full",
+    limit:
+      typeof params.limit === "number" && Number.isSafeInteger(params.limit) && params.limit > 0
+        ? params.limit
+        : "default",
+    offset:
+      typeof params.offset === "number" && Number.isSafeInteger(params.offset) && params.offset >= 0
+        ? params.offset
+        : 0,
+    filterKind: SESSION_LIST_FILTERS.filter((key) => params[key] !== undefined).join("+") || "none",
+  };
+}
 
 function collectWsRestMeta(meta?: Record<string, unknown>): string[] {
   const restMeta: string[] = [];
@@ -297,7 +343,13 @@ export function logWs(
     if (
       direction !== "out" ||
       kind !== "res" ||
-      !(ok === false || (typeof durationMs === "number" && durationMs >= DEFAULT_WS_SLOW_MS))
+      !(
+        ok === false ||
+        (typeof durationMs === "number" && durationMs >= DEFAULT_WS_SLOW_MS) ||
+        (meta?.method === "sessions.list" &&
+          typeof meta.bytes === "number" &&
+          meta.bytes >= 200 * 1024)
+      )
     ) {
       return;
     }

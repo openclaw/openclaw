@@ -13,6 +13,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { InvalidWorktreeBaseRefError } from "./base-ref.js";
+import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
 import * as worktreeGit from "./git.js";
 import * as worktreeRegistry from "./registry.js";
 import {
@@ -618,13 +619,14 @@ describe("ManagedWorktreeService", () => {
     await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("refuses to overwrite a branch recreated before restore", async () => {
+  it("refuses to overwrite a branch advanced after removal", async () => {
     const created = await materializeDownstreamFixture("restore-collision");
     await service.remove({ id: created.id, reason: "test" });
+    await git(repo, "commit", "--allow-empty", "-m", "new branch state");
     await git(repo, "branch", created.branch, "HEAD");
     const branchTip = await git(repo, "rev-parse", created.branch);
 
-    await expect(service.restore({ id: created.id })).rejects.toThrow("already exists");
+    await expect(service.restore({ id: created.id })).rejects.toThrow("Recorded branch moved");
 
     expect(await git(repo, "rev-parse", created.branch)).toBe(branchTip);
     await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
@@ -707,7 +709,7 @@ describe("ManagedWorktreeService", () => {
 
       let contention: unknown;
       try {
-        claimWorktreeRemoval(env, {
+        await claimWorktreeRemoval(env, {
           worktreeId: staleRecord.id,
           token: "late-remover",
         });
@@ -1005,6 +1007,7 @@ describe("ManagedWorktreeService", () => {
       expect(await git(repo, "config", "--bool", "submodule.module.active")).toBe("true");
       expect(await git(path.join(repo, "module"), "rev-parse", "HEAD")).toBe(moduleHead);
 
+      useInProcessWorktreeCapacityTransport();
       const disk = fsSync.statfsSync(root);
       vi.spyOn(fsSync, "statfsSync").mockReturnValue({
         type: disk.type,

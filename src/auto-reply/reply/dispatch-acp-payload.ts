@@ -9,6 +9,7 @@ import type { TtsAutoMode } from "../../config/types.tts.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
+import type { PreparedTtsPreferences } from "../../tts/tts-preferences.js";
 import { copyReplyPayloadMetadata, isReplyPayloadStatusNotice } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { hasBlockReplyDeliveryCustody } from "./block-reply-delivery.js";
@@ -44,6 +45,7 @@ export function prepareAcpDeliveryPayload(params: {
 }
 
 export async function maybeApplyAcpTts(params: {
+  preparedTtsPreferences: PreparedTtsPreferences;
   payload: ReplyPayload;
   cfg: OpenClawConfig;
   agentId?: string;
@@ -59,6 +61,7 @@ export async function maybeApplyAcpTts(params: {
   }
   const ttsStatus = resolveStatusTtsSnapshot({
     cfg: params.cfg,
+    preparedTtsPreferences: params.preparedTtsPreferences,
     sessionAuto: params.ttsAuto,
     agentId: params.agentId,
     channelId: params.channel,
@@ -80,6 +83,7 @@ export async function maybeApplyAcpTts(params: {
   const { maybeApplyTtsToPayload } = await dispatchAcpTtsRuntimeLoader.load();
   const applied = await maybeApplyTtsToPayload({
     payload: params.payload,
+    preparedTtsPreferences: params.preparedTtsPreferences,
     cfg: params.cfg,
     channel: params.channel,
     kind: params.kind,

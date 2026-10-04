@@ -54,7 +54,6 @@ async function mount(state: PluginCredentialInspection = { kind: "literal" }, wi
           : undefined,
     disabled: false,
     descriptionId: "credential-help",
-    onPatch: vi.fn(),
   };
   const host = document.createElement("div");
   host.style.cssText = "padding:16px;box-sizing:border-box;width:100%";

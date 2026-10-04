@@ -52,9 +52,9 @@ export function createSqliteTrajectoryRuntimeSink(params: {
   sessionTarget?: SessionTranscriptRuntimeTarget;
   assertCommitAllowed?: () => void;
 }): {
-  describeFlushState(): string | undefined;
-  flush(): Promise<void>;
-  write(event: TrajectoryEvent, line: string): void;
+  describeFlushState: () => string | undefined;
+  flush: () => Promise<void>;
+  write: (event: TrajectoryEvent, line: string) => void;
 } | null {
   const target = params.sessionTarget
     ? {

@@ -1,3 +1,4 @@
+import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import type {
   SessionExactEntriesWorkerResult,
   SessionExactEntriesWorkerSelection,
@@ -12,7 +13,7 @@ export type SessionStoreWorkerReadScope = {
 export type SessionEntryWorkerRead = SessionStoreWorkerReadScope &
   SessionExactEntriesWorkerSelection & {
     lifecycleSessionKey?: string;
-    projection?: "full" | "sharing" | "list";
+    projection?: "full" | "sharing" | "list" | "exact";
     includeMembers?: boolean;
     includeParticipantRecords?: boolean;
     includeAuthorization?: boolean;
@@ -23,3 +24,8 @@ export type PreparedSessionEntryWorkerRead = {
   database: { agentId: string; path: string; env: NodeJS.ProcessEnv };
   assertCurrent: () => void;
 };
+
+export type SessionEntryReadSourcePreparation = (
+  database: PreparedSessionEntryWorkerRead["database"],
+  identity: DatabasePathIdentity,
+) => void;

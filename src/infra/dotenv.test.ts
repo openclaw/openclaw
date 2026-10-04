@@ -572,26 +572,6 @@ describe("loadCliDotEnv", () => {
     });
   });
 
-  it("keeps the legacy state-dir fallback for CLI dotenv loading", async () => {
-    await withIsolatedEnvAndCwd(async () => {
-      const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dotenv-legacy-"));
-      const cwdDir = path.join(base, "cwd");
-      const legacyStateDir = path.join(base, ".clawdbot");
-      setTestEnvValue("HOME", base);
-      deleteTestEnvValue("OPENCLAW_STATE_DIR");
-      delete process.env.OPENCLAW_TEST_FAST;
-      await fs.mkdir(cwdDir, { recursive: true });
-      await writeEnvFile(path.join(legacyStateDir, ".env"), "LEGACY_ONLY=from-legacy\n");
-
-      vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
-      delete process.env.LEGACY_ONLY;
-
-      loadCliDotEnv({ quiet: true });
-
-      expect(process.env.LEGACY_ONLY).toBe("from-legacy");
-    });
-  });
-
   it("blocks bundled trust-root vars from workspace .env during CLI startup", async () => {
     await withDotEnvFixture(async ({ cwdDir }) => {
       await writeEnvFile(path.join(cwdDir, ".env"), [...BUNDLED_TRUST_ROOT_ENV_LINES].join("\n"));

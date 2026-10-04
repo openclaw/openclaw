@@ -8,6 +8,7 @@ import { gitNullConfigPath } from "../infra/git-exec.js";
 import type { GitHubPublicationExecutionRow } from "../state/github-publication-read.types.js";
 import {
   currentGitHubPublicationConfig,
+  readLocalGitHubPublicationWorktreeOwner,
   resolveLocalGitHubPublicationWorktreeOwner,
 } from "./github-publication-availability.js";
 import { githubPublicationBaseLineageArgs } from "./github-publication-base.js";
@@ -111,7 +112,8 @@ export async function reconcileGitHubPublication<Row extends PublicationRow>(par
   let url: string | undefined;
   try {
     assertCurrent();
-    const { worktree } = resolveLocalGitHubPublicationWorktreeOwner(row);
+    const { worktree } = await readLocalGitHubPublicationWorktreeOwner(row);
+    assertCurrent();
     const target = await prepareGitHubPublicationTarget({
       worktree,
       identity: await refreshIdentity(),
@@ -224,7 +226,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     });
   const { step, run, require: command } = createGitHubPublicationCommandRunner(assertAuthority);
   try {
-    const { loaded, worktree } = currentWorktree();
+    const { loaded, worktree } = await readLocalGitHubPublicationWorktreeOwner(initial);
     await custodyCommands.step(() => assertSafeGitPublicationWorkspace(worktree.path, runCommand));
     await recoverGitHubPublicationWorkspace(initial, custodyCommands.require, assertCustody);
     // Accepted workspace recovery retains custody even when the requester can no longer publish.

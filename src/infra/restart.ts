@@ -799,9 +799,6 @@ export function deferGatewayRestartUntilIdle(
     }
   };
   const pending = readPendingCount();
-  if (pending !== undefined && pending > 0) {
-    opts.hooks?.onDeferring?.(pending);
-  }
   poll = setInterval(inspectPending, pollMs);
   activeDeferralPolls.add(poll);
   if (pending !== undefined && pending <= 0) {

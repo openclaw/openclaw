@@ -232,19 +232,40 @@ describe("session active resource discovery", () => {
     expect(f.commit).toHaveBeenCalledOnce();
   });
 
-  it.each(["conversation-only", "after-resource-swap"])(
-    "discovers resources in a saved %s layout",
+  it.each(["conversation-only", "after-resource-swap", "focused-workspace", "bottom-workspace"])(
+    "discovers resources while preserving the %s layout",
     async (kind) => {
       const f = fixture();
-      let layout = ensureSidebarConversation(f.owner.layout());
+      const workspace = kind.endsWith("workspace");
+      let layout = workspace
+        ? openSlot(f.owner.layout(), "workspace")
+        : ensureSidebarConversation(f.owner.layout());
       if (kind === "after-resource-swap") {
         layout = closeSlot(promoteSidebarPanel(openSlot(layout, "desktop"), "desktop"), "desktop");
       }
-      f.setLayout(normalizeSidebarLayout({ ...layout, open: false }));
+      f.setLayout(
+        workspace
+          ? kind === "focused-workspace"
+            ? { ...layout, expanded: true, expandedSide: true }
+            : { ...layout, dock: "bottom" }
+          : normalizeSidebarLayout({ ...layout, open: false }),
+      );
       f.controller.sync(f.owner);
       await settle();
-      expect(f.slots().toSorted()).toEqual(["browser", "conversation", "desktop"]);
-      expect(f.owner.layout().open).toBe(true);
+      expect(f.slots().toSorted()).toEqual([
+        "browser",
+        ...(workspace ? ["desktop", "workspace"] : ["conversation", "desktop"]),
+      ]);
+      if (kind === "focused-workspace") {
+        expect(isSidebarSlotVisible(f.owner.layout(), "workspace")).toBe(true);
+        expect(isSidebarSlotVisible(f.owner.layout(), "conversation")).toBe(false);
+      } else if (kind === "bottom-workspace") {
+        expect(f.slots()[0]).toBe("workspace");
+        expect(sidebarActivePanel(f.owner.layout())?.slot).toBe("workspace");
+        expect(f.owner.layout().dock).toBe("bottom");
+      } else {
+        expect(f.owner.layout().open).toBe(true);
+      }
     },
   );
 
@@ -280,16 +301,6 @@ describe("session active resource discovery", () => {
       expect(source()).toBeNull();
     },
   );
-
-  it("preserves focused side-tool presentation when another resource becomes active", async () => {
-    const f = fixture();
-    f.setLayout({ ...openSlot(f.owner.layout(), "workspace"), expanded: true, expandedSide: true });
-    f.controller.sync(f.owner);
-    await settle();
-    expect(f.slots().toSorted()).toEqual(["browser", "desktop", "workspace"]);
-    expect(isSidebarSlotVisible(f.owner.layout(), "workspace")).toBe(true);
-    expect(isSidebarSlotVisible(f.owner.layout(), "conversation")).toBe(false);
-  });
 
   it.each([false, true])(
     "retains a probe when the superseded reconciliation fails (latest completes first: %s)",
@@ -419,7 +430,10 @@ describe("session active resource discovery", () => {
     },
   );
 
-  it.each([
+  it.each<
+    | { name: string; placement: NonNullable<GatewaySessionRow["placement"]> }
+    | { name: string; field: "sessionId" | "execNode" | "archived" }
+  >([
     { name: "lifecycle state", placement: { ...activePlacement, state: "reclaimed" as const } },
     { name: "generation", placement: { ...activePlacement, generation: 2 } },
     { name: "environment", placement: { ...activePlacement, environmentId: "worker-2" } },
@@ -438,35 +452,19 @@ describe("session active resource discovery", () => {
         runner: { kind: "device" as const, deviceId: "node-1", status: "offline" as const },
       },
     },
-  ])("re-probes and fences the pending old owner when $name changes", async ({ placement }) => {
+    ...(["sessionId", "execNode", "archived"] as const).map((field) => ({ name: field, field })),
+  ])("re-probes and fences the pending old owner when $name changes", async (change) => {
     const f = fixture();
     f.owner.browserAvailable = false;
-    f.owner.placement =
-      "runner" in placement
-        ? {
-            ...activePlacement,
-            runner: { kind: "device", deviceId: "node-1", status: "available" },
-          }
-        : activePlacement;
-    const pending = createDeferred<unknown>();
-    f.request.mockImplementationOnce(async () => pending.promise);
-    f.controller.sync(f.owner);
-    f.request.mockResolvedValue({ session: undefined });
-    f.owner.placement = placement;
-    f.controller.sync(f.owner);
-    await settle();
-    expect(f.request).toHaveBeenCalledTimes(2);
-    pending.resolve({ session });
-    await settle();
-    expect(f.request).toHaveBeenCalledTimes(2);
-    expect(f.commit).not.toHaveBeenCalled();
-  });
-
-  it.each(["sessionId", "execNode", "archived"] as const)(
-    "re-probes and fences a changed %s",
-    async (field) => {
-      const f = fixture();
-      f.owner.browserAvailable = false;
+    if ("placement" in change) {
+      f.owner.placement =
+        "runner" in change.placement
+          ? {
+              ...activePlacement,
+              runner: { kind: "device", deviceId: "node-1", status: "available" },
+            }
+          : activePlacement;
+    } else {
       f.owner.sessionId = "session-id";
       f.owner.execNode = "node-1";
       f.owner.placement = {
@@ -476,23 +474,26 @@ describe("session active resource discovery", () => {
         updatedAtMs: 1,
         stateChangedAtMs: 1,
       };
-      const pending = createDeferred<unknown>();
-      f.request.mockImplementationOnce(async () => pending.promise);
-      f.controller.sync(f.owner);
-      f.request.mockResolvedValue({ session: undefined });
-      if (field === "archived") {
-        f.owner.archived = true;
-      } else {
-        f.owner[field] = "replacement";
-      }
-      f.controller.sync(f.owner);
-      await settle();
-      pending.resolve({ session });
-      await settle();
-      expect(f.request).toHaveBeenCalledTimes(2);
-      expect(f.commit).not.toHaveBeenCalled();
-    },
-  );
+    }
+    const pending = createDeferred<unknown>();
+    f.request.mockImplementationOnce(async () => pending.promise);
+    f.controller.sync(f.owner);
+    f.request.mockResolvedValue({ session: undefined });
+    if ("placement" in change) {
+      f.owner.placement = change.placement;
+    } else if (change.field === "archived") {
+      f.owner.archived = true;
+    } else {
+      f.owner[change.field] = "replacement";
+    }
+    f.controller.sync(f.owner);
+    await settle();
+    expect(f.request).toHaveBeenCalledTimes(2);
+    pending.resolve({ session });
+    await settle();
+    expect(f.request).toHaveBeenCalledTimes(2);
+    expect(f.commit).not.toHaveBeenCalled();
+  });
 
   it("reveals existing desktop and exact browser targets once without provisioning or focusing", async () => {
     const f = fixture();
@@ -523,17 +524,6 @@ describe("session active resource discovery", () => {
     });
   });
 
-  it("adds tabs without replacing an existing tool selection or layout geometry", async () => {
-    const f = fixture();
-    f.setLayout({ ...openSlot(f.owner.layout(), "workspace"), dock: "bottom" });
-    f.controller.sync(f.owner);
-    await settle();
-    expect(f.slots()[0]).toBe("workspace");
-    expect(f.slots().toSorted()).toEqual(["browser", "desktop", "workspace"]);
-    expect(sidebarActivePanel(f.owner.layout())?.slot).toBe("workspace");
-    expect(f.owner.layout().dock).toBe("bottom");
-  });
-
   it("respects an older minimized dock even when the newly discovered resource has no tab", async () => {
     const f = fixture();
     f.setLayout({ ...openSlot(f.owner.layout(), "terminal"), open: false });
@@ -558,40 +548,31 @@ describe("session active resource discovery", () => {
     expect(f.owner.requestUpdate).toHaveBeenCalledTimes(2);
   });
 
-  it("leaves an existing manual desktop's reads to its presentation owner", async () => {
-    const f = fixture();
-    f.owner.browserAvailable = false;
-    f.setLayout(openSlot(openSlot(f.owner.layout(), "desktop"), "workspace"));
-    f.controller.sync(f.owner);
-    await settle();
-    f.controller.reconcileObservation({ requestUpdate: () => {}, updated: async () => {} });
-    await settle();
-    expect(f.request).not.toHaveBeenCalled();
-    expect(sidebarActivePanel(f.owner.layout())?.slot).toBe("workspace");
-  });
-
-  it("does not read a worker target when its session attachment identity is missing", async () => {
-    const f = fixture();
-    f.owner.browserAvailable = false;
-    f.request.mockResolvedValue({ session: { ...session, sessionId: undefined } });
-    f.controller.sync(f.owner);
-    await settle();
-    expect(f.request.mock.calls.map(([method]) => method)).toEqual(["sessions.describe"]);
-    expect(f.commit).not.toHaveBeenCalled();
-  });
-
-  it("does not override a manual desktop open while discovery is pending", async () => {
-    const f = fixture();
-    f.owner.browserAvailable = false;
-    const pending = createDeferred<unknown>();
-    f.request.mockImplementationOnce(async () => pending.promise);
-    f.controller.sync(f.owner);
-    f.setLayout(openSlot(f.owner.layout(), "desktop"));
-    pending.resolve({ session });
-    await settle();
-    expect(f.commit).not.toHaveBeenCalled();
-    expect(f.desktopSource()).toBeUndefined();
-  });
+  it.each(["before discovery", "during discovery"])(
+    "leaves a manual desktop opened %s with its presentation owner",
+    async (when) => {
+      const f = fixture();
+      f.owner.browserAvailable = false;
+      if (when === "before discovery") {
+        f.setLayout(openSlot(openSlot(f.owner.layout(), "desktop"), "workspace"));
+        f.controller.sync(f.owner);
+        await settle();
+        f.controller.reconcileObservation({ requestUpdate: () => {}, updated: async () => {} });
+        await settle();
+        expect(f.request).not.toHaveBeenCalled();
+        expect(sidebarActivePanel(f.owner.layout())?.slot).toBe("workspace");
+      } else {
+        const pending = createDeferred<unknown>();
+        f.request.mockImplementationOnce(async () => pending.promise);
+        f.controller.sync(f.owner);
+        f.setLayout(openSlot(f.owner.layout(), "desktop"));
+        pending.resolve({ session });
+        await settle();
+        expect(f.commit).not.toHaveBeenCalled();
+        expect(f.desktopSource()).toBeUndefined();
+      }
+    },
+  );
 
   it("respects persisted dismissal on reentry and during a pending target-status read", async () => {
     const f = fixture();
@@ -632,6 +613,7 @@ describe("session active resource discovery", () => {
 
   it.each([
     { name: "no session", row: undefined },
+    { name: "missing attachment identity", row: { ...session, sessionId: undefined } },
     { name: "another session", row: { ...session, key: "agent:main:other" } },
     { name: "global gateway capability", row: { ...session, placement: { state: "local" } } },
     {
@@ -647,14 +629,20 @@ describe("session active resource discovery", () => {
         worker: { ...environment.worker, attachedSessionIds: ["someone-else"] },
       },
     },
-  ])("ignores $name", async ({ row, env }) => {
+  ])("ignores $name", async ({ name, row, env }) => {
     const f = fixture();
     f.owner.browserTab = undefined;
+    if (name === "missing attachment identity") {
+      f.owner.browserAvailable = false;
+    }
     f.request.mockImplementation(async (method) =>
       method === "sessions.describe" ? { session: row } : (env ?? environment),
     );
     f.controller.sync(f.owner);
     await settle();
+    if (name === "missing attachment identity") {
+      expect(f.request.mock.calls.map(([method]) => method)).toEqual(["sessions.describe"]);
+    }
     expect(f.commit).not.toHaveBeenCalled();
   });
 

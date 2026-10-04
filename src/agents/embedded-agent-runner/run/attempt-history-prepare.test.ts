@@ -2,6 +2,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { SettingsManager } from "../../sessions/settings-manager.js";
 import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
 
 const mocks = vi.hoisted(() => ({
@@ -62,7 +63,15 @@ function createFixture() {
     },
     prepared: {
       sessionRuntime: {
-        agentSession: { activeSession: { agent, messages } },
+        agentSession: {
+          activeSession: {
+            agent,
+            get messages() {
+              return agent.state.messages;
+            },
+          },
+          settingsManager: SettingsManager.inMemory(),
+        },
         boundary: {},
         sessionManager: {},
         transcriptPolicy: {},

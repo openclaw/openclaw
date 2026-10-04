@@ -527,6 +527,7 @@ export async function withParkedNativeTask(
                   hasDeliveredSourceReply: () => false,
                   markSourceReplyDelivered: () => {},
                   builtinToolNames: new Set(),
+                  sourceReplyCapableToolNames: new Set(),
                   coreBuiltinToolNames: new Set(),
                   replaySafeToolNames: new Set(),
                   codeModeExecToolNames: new Set(),

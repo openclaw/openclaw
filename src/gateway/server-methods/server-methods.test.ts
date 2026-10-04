@@ -26,7 +26,7 @@ import { buildSystemRunApprovalBinding } from "../../infra/system-run-approval-b
 import { resetLogger, setLoggerOverride } from "../../logging.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { waitForAgentJob } from "../agent-turn/agent-job.js";
+import { setGatewayDedupeEntry, waitForAgentJob } from "../agent-turn/agent-job.js";
 import { dropPreSessionStartAnnouncePairs } from "../chat-display-projection.history.js";
 import {
   augmentChatHistoryWithCanvasBlocks,
@@ -76,16 +76,6 @@ const AGENT_RUN_CACHE_ENTRY_LIMIT = 5_000;
 vi.mock("../../status/summary.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
-
-function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
-  let count = 0;
-  for (const item of items) {
-    if (predicate(item)) {
-      count += 1;
-    }
-  }
-  return count;
-}
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
   if (!record || typeof record !== "object") {
@@ -371,7 +361,7 @@ describe("waitForAgentJob", () => {
     }
   });
 
-  it("retains a cached snapshot while a fresh waiter is active", async () => {
+  it("retains a lifecycle snapshot while an RPC publication waiter is active", async () => {
     const prefix = `cache-waiter-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const waitedRunId = `${prefix}-waited`;
     emitAgentEvent({
@@ -382,7 +372,7 @@ describe("waitForAgentJob", () => {
     const freshWait = waitForAgentJob({
       runId: waitedRunId,
       timeoutMs: 5_000,
-      ignoreCachedSnapshot: true,
+      source: "agent",
     });
 
     for (let index = 0; index < AGENT_RUN_CACHE_ENTRY_LIMIT + 25; index += 1) {
@@ -398,10 +388,14 @@ describe("waitForAgentJob", () => {
       endedAt: 1_100,
     });
 
-    emitAgentEvent({
-      runId: waitedRunId,
-      stream: "lifecycle",
-      data: { phase: "end", startedAt: 10_000, endedAt: 10_100 },
+    setGatewayDedupeEntry({
+      dedupe: new Map(),
+      key: `agent:${waitedRunId}`,
+      entry: {
+        ts: Date.now(),
+        ok: true,
+        payload: { status: "ok", startedAt: 10_000, endedAt: 10_100 },
+      },
     });
     await expect(freshWait).resolves.toMatchObject({
       status: "ok",
@@ -1944,7 +1938,7 @@ describe("exec approval handlers", () => {
 
         expect(firstResolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
         expect(repeatResolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-        expect(countMatching(broadcasts, (entry) => entry.event === "exec.approval.resolved")).toBe(
+        expect(broadcasts.filter((entry) => entry.event === "exec.approval.resolved")).toHaveLength(
           resolvedBroadcastCount,
         );
         expect(mockCallArg(conflictingResolveRespond)).toBe(false);

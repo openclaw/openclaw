@@ -11,6 +11,7 @@ import {
   type HealthCheckContext,
   type HealthFinding,
 } from "openclaw/plugin-sdk/health";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { defaultRuntime as cliRuntime } from "openclaw/plugin-sdk/runtime";
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
@@ -410,7 +411,7 @@ function normalizeWatchIntervalMs(value: string | number | undefined): number {
   if (!Number.isSafeInteger(raw) || raw < 250) {
     throw new Error("--interval-ms must be an integer >= 250.");
   }
-  return raw;
+  return Math.min(raw, MAX_TIMER_TIMEOUT_MS);
 }
 
 function toAttestedJsonFinding(finding: HealthFinding): Record<string, unknown> {

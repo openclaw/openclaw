@@ -561,6 +561,9 @@ describe("cold transcript storage workers", () => {
       expect(prepared).toBe(true);
       expect(revoked).toBe(true);
       expect(closeElapsedMs).toBeLessThan(2_000);
+      if (revocation === "database owner") {
+        await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
+      }
       expect(fixture.snapshot()).toEqual(fixture.original);
       expect(
         fixture.database().prepare("SELECT * FROM session_transcript_cold_archives").all(),

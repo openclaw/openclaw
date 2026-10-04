@@ -10,6 +10,7 @@ import {
   handleSlashMenuKeydown,
   type SlashMenuHost,
 } from "./chat-composer-slash-menu.ts";
+import { commitComposerDraft } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
 type ComposerKeyDownDeps = {
@@ -21,7 +22,6 @@ type ComposerKeyDownDeps = {
   requestUpdate: () => void;
   sendShortcut: ChatSendShortcut;
   canSubmitDraft: (draft: string) => boolean;
-  commitDraft: (draft: string) => void;
   syncDraftAfterSend: (target: HTMLTextAreaElement | null) => void;
   showAbortableUi: boolean;
   alternateFollowUpMode?: ChatFollowUpMode;
@@ -37,7 +37,6 @@ export function createComposerKeyDownHandler({
   requestUpdate,
   sendShortcut,
   canSubmitDraft,
-  commitDraft,
   syncDraftAfterSend,
   showAbortableUi,
   alternateFollowUpMode,
@@ -73,7 +72,7 @@ export function createComposerKeyDownHandler({
         canSubmitDraft(target.value)
       ) {
         event.preventDefault();
-        commitDraft(target.value);
+        commitComposerDraft(props, target.value);
         void goalComposer.submit(event);
       }
       return;
@@ -95,7 +94,7 @@ export function createComposerKeyDownHandler({
     }
 
     if ((event.key === "ArrowUp" || event.key === "ArrowDown") && props.onHistoryKeydown) {
-      commitDraft(target.value);
+      commitComposerDraft(props, target.value);
       const result = props.onHistoryKeydown({
         key: event.key,
         selectionStart: target.selectionStart,
@@ -172,7 +171,7 @@ export function createComposerKeyDownHandler({
         return;
       }
       event.preventDefault();
-      commitDraft(target.value);
+      commitComposerDraft(props, target.value);
       if (goalComposer.activateDraft(target.value, true)) {
         return;
       }

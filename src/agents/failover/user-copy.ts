@@ -42,8 +42,6 @@ const MODEL_CAPACITY_ERROR_USER_MESSAGE =
   "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
-const RATE_LIMIT_RETRY_MESSAGE =
-  "⚠️ The AI service needs a short break. Please try again in a few minutes.";
 const MODEL_CAPACITY_ERROR_RE = /\b(?:selected\s+)?model\s+(?:is\s+)?at capacity\b/i;
 const RATE_LIMIT_SPECIFIC_HINT_RE =
   /\bmin(ute)?s?\b|\bhours?\b|\bseconds?\b|\btry again in\b|\bresets?\b|\bplan\b|\bquota\b/i;
@@ -410,7 +408,7 @@ export function renderRateLimitReplyCopy(params: {
       );
       return providerMessage.startsWith("⚠️") ? providerMessage : `⚠️ ${providerMessage}`;
     }
-    return RATE_LIMIT_RETRY_MESSAGE;
+    return RATE_LIMIT_ERROR_USER_MESSAGE;
   }
   for (const attempt of attempts) {
     if (attempt.reason !== "rate_limit" || !attempt.error) {
@@ -435,7 +433,7 @@ export function renderRateLimitReplyCopy(params: {
   return attemptedModels.size > 1 &&
     attempts.every((attempt) => attempt.reason === "rate_limit" || attempt.reason === "overloaded")
     ? "⚠️ The AI services are busy. Please try again in a few minutes."
-    : RATE_LIMIT_RETRY_MESSAGE;
+    : RATE_LIMIT_ERROR_USER_MESSAGE;
 }
 
 export function renderBillingReplyCopy(params: {

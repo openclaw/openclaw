@@ -6,6 +6,7 @@ import {
   tryResolveSoleAgentId,
 } from "../agents/agent-scope.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
+import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -25,6 +26,17 @@ import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
 type RequestedSessionAgentIdResolution =
   | { ok: true; agentId: string }
   | { ok: false; error: ErrorShape };
+
+/** The shipped chat-send global alias selects main outside configured global scope. */
+export function resolveChatSendSessionKey(
+  cfg: OpenClawConfig,
+  sessionKey: string,
+  agentId: string,
+): string {
+  return cfg.session?.scope !== "global" && sessionKey.trim().toLowerCase() === "global"
+    ? resolveAgentMainSessionKey({ cfg, agentId })
+    : sessionKey;
+}
 
 function admitRequestedAgent(agentId: string): RequestedSessionAgentIdResolution {
   const refusal = readAgentDatabaseAdmissionRefusal(agentId);

@@ -30,8 +30,7 @@ import { isDeliveredCurrentSourceReplyAsync } from "../../infra/outbound/source-
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
-import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
-import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import { withPreparedChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import * as embeddedMessageDelivery from "../embedded-agent-message-delivery.js";
 import { createSandboxBridgeReadFile } from "../sandbox-media-paths.js";
@@ -67,6 +66,7 @@ import {
   enforceSourceReplyOnlyMessageAction,
   enforceSourceReplyOnlyTextDirectives,
   enforceTrustedTurnExplicitAccount,
+  resolveSourceReplySinkDeliveryMode,
   SOURCE_REPLY_ONLY_MESSAGE_SCHEMA,
 } from "./message-tool-source-policy.js";
 import { createMessageToolTurnAuthority } from "./message-tool-turn-authority.js";
@@ -150,14 +150,10 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const replyToMode = options?.replyToMode ?? (currentThreadTs ? "all" : undefined);
   const agentAccountId =
     resolveAgentAccountId(options?.agentAccountId) ?? inferredCurrentChannel.accountId;
-  const currentChannelIsInternal =
-    normalizeMessageChannel(inferredCurrentChannel.currentChannelProvider) ===
-    INTERNAL_MESSAGE_CHANNEL;
-  // WebChat tool sends use the private sink without changing the run-level
-  // contract: ordinary final answers must remain automatic and visible.
-  const sourceReplySinkDeliveryMode = currentChannelIsInternal
-    ? "message_tool_only"
-    : options?.sourceReplyDeliveryMode;
+  const sourceReplySinkDeliveryMode = resolveSourceReplySinkDeliveryMode(
+    inferredCurrentChannel.currentChannelProvider,
+    options?.sourceReplyDeliveryMode,
+  );
   const resolvedAgentId =
     options?.agentId ??
     (options?.agentSessionKey
@@ -546,7 +542,11 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         action === "send" &&
         sourceReplySinkDeliveryMode === "message_tool_only" &&
         normalizeOptionalString(trustedTurnContext?.toolContext?.currentSourceTurnId) !== undefined;
-      return await withChannelReadAuthority(
+      const prepareUse = messageActionAuthorization.scheduled?.prepareUse;
+      return await withPreparedChannelReadAuthority(
+        prepareUse
+          ? () => prepareUse(Boolean(scheduledRead || scheduledWrite), assertActionCurrent)
+          : undefined,
         action === "download-file" || scheduledRead || assertDashboardReadCurrent
           ? assertActionCurrent
           : undefined,

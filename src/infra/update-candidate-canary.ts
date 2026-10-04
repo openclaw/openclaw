@@ -109,6 +109,18 @@ export async function validateUpdateCandidateCanary(
   let activeLintStep: UpdateStepResult | undefined;
   const steps: UpdateStepResult[] = [];
   const receipts = createCanaryReceiptObserver(params);
+  // Each check is announced before it runs; the awaited receipt admits the progress writer first.
+  const beginStep = async (step: typeof activeStep) => {
+    activeStep = step;
+    stepStartedAt = Date.now();
+    stepLogTail.length = 0;
+    await receipts.onProgress?.({
+      step: step.name,
+      status: "in_progress",
+      startedAtMs: stepStartedAt,
+      detail: step.command,
+    });
+  };
   const recordStep = async (step: UpdateStepResult) => {
     steps.push(step);
     await receipts.onStep?.(step);
@@ -216,16 +228,9 @@ export async function validateUpdateCandidateCanary(
       }
     }
     progress.phase = "snapshot";
-    activeStep = { name: "candidate-state-snapshot", command: "Preparing update checks" };
-    stepStartedAt = Date.now();
     // Admit the progress writer before the child chooses its snapshot source.
     // This receipt precedes work; streamed progress below keeps its stage owner.
-    await receipts.onInitialProgress?.({
-      step: "candidate-state-snapshot",
-      status: "in_progress",
-      startedAtMs: stepStartedAt,
-      detail: "Preparing update checks",
-    });
+    await beginStep({ name: "candidate-state-snapshot", command: "Preparing update checks" });
     rehearsal = await prepareUpdateCandidateRehearsal({
       candidateRoot: params.root,
       config: params.config,
@@ -289,9 +294,7 @@ export async function validateUpdateCandidateCanary(
       progress.phase = phase;
       activeLintStep = undefined;
       env.OPENCLAW_UPDATE_IN_PROGRESS = phase === "doctor" ? "1" : "0";
-      activeStep = { name: command.name, command: command.args.join(" ") };
-      stepStartedAt = Date.now();
-      stepLogTail.length = 0;
+      await beginStep({ name: command.name, command: command.args.join(" ") });
       startBudget();
       remaining();
       const doctorResultPath =
@@ -486,6 +489,10 @@ export async function validateUpdateCandidateCanary(
         cwd: params.root,
         durationMs: Date.now() - stepStartedAt,
         exitCode: timedOut ? null : code,
+        // Keep the check verdict when a later native crash evicts the rolling log tail.
+        ...(phase === "doctor" && checksCompletedAt !== undefined
+          ? { stdoutTail: "Doctor complete." }
+          : {}),
         ...(timedOut
           ? { termination: "timeout" as const }
           : signal
@@ -539,9 +546,7 @@ export async function validateUpdateCandidateCanary(
       throw new Error("The update did not report its supported database versions");
     }
     progress.phase = "startup";
-    activeStep = { name: "candidate-gateway-startup", command: "gateway run" };
-    stepStartedAt = Date.now();
-    stepLogTail.length = 0;
+    await beginStep({ name: "candidate-gateway-startup", command: "gateway run" });
     startBudget();
     remaining();
     const args = ["gateway", "run", ...UPDATE_CANARY_PROGRESS_ARGS, "--bind", "loopback"];

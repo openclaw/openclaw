@@ -13,6 +13,9 @@ import type {
   SessionTranscriptWriteScope,
   TranscriptAppendRefusal,
   TranscriptEvent,
+  TranscriptEventAppendResult,
+  TranscriptMessageWriteSnapshot,
+  TranscriptWriteSnapshot,
   TranscriptEventAppendOptions,
   TranscriptMessageAppendOptions,
   TranscriptMessageAppendResult,
@@ -65,7 +68,6 @@ import {
 import {
   runTranscriptWriteSnapshotSync,
   SqliteTranscriptMutationConflictError,
-  type TranscriptWriteSnapshot,
   type TranscriptWriteViewGuard,
 } from "./session-accessor.sqlite-transcript-write-snapshot.js";
 import type {
@@ -81,18 +83,6 @@ import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
 } from "./transcript-write-context.js";
-
-export type { TranscriptWriteSnapshot } from "./session-accessor.sqlite-transcript-write-snapshot.js";
-
-export type TranscriptMessageWriteSnapshot<TMessage> = TranscriptWriteSnapshot<
-  TranscriptMessageAppendResult<TMessage> | undefined
-> & {
-  visibleTail: { entryId: string | null; generation: string | null };
-};
-
-export type TranscriptEventAppendResult =
-  | { appended: false }
-  | { appended: true; effectiveParentId?: string | null };
 
 type SqliteTranscriptSnapshotState =
   | { kind: "current"; rows: SqliteTranscriptSnapshotRow[] }

@@ -4,7 +4,7 @@ import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcri
 import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import { appendChatCanvasBlocksToMessage } from "../chat-display-projection.canvas.js";
 import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { formatForLog } from "../ws-log.js";
 import {
   combineNonStreamingReplyParts,
@@ -219,13 +219,22 @@ export async function finalizeChatSendDispatchedReplies(params: {
       }
     },
   });
-  const sourceSession = loadSessionEntry(sessionKey, sessionLoadOptions);
+  const sourceSession = await loadGatewaySessionEntryReadOnlyInWorker({
+    cfg: context.getRuntimeConfig(),
+    key: sessionKey,
+    ...sessionLoadOptions,
+  });
   const requestedTranscriptSession = transcriptMirrorOwner
-    ? loadSessionEntry(transcriptMirrorOwner.sessionKey, {
+    ? await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg: context.getRuntimeConfig(),
+        key: transcriptMirrorOwner.sessionKey,
         ...sessionLoadOptions,
         ...(transcriptMirrorOwner.agentId ? { agentId: transcriptMirrorOwner.agentId } : {}),
       })
     : undefined;
+  if (!authorizeDelivery("session preparation")) {
+    return;
+  }
   // Binding-owned payloads already retargeted the user turn. Keep the assistant
   // beside it only when that durable target still exists. Never fall back to the
   // source transcript after ownership metadata appears on any final payload.

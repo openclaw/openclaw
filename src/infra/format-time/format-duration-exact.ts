@@ -1,5 +1,5 @@
 import { durationUnitMs } from "./duration-units.ts";
-import { formatDurationParts, type DurationPart } from "./format-duration-internal.js";
+import { formatDurationParts, type DurationPart } from "./format-duration-internal.ts";
 
 // Exact display stays outside startup formatting; health uses weeks, cron uses days.
 export function resolveExactDurationParts(ms?: number | null, showWeeks = false) {

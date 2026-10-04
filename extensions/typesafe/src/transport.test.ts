@@ -74,6 +74,7 @@ it("preserves bounded multi-chunk JSON responses", async () => {
   await expect(requestEvaluation(request)).resolves.toEqual({ value: 0.37 });
 });
 it.each<{ status: number; reason: string; headers: HeadersInit; retryAfterMs?: number }>([
+  { status: 400, reason: "unsupported-input", headers: {}, retryAfterMs: undefined },
   { status: 401, reason: "authentication", headers: {}, retryAfterMs: undefined },
   { status: 413, reason: "unsupported-input", headers: {}, retryAfterMs: undefined },
   { status: 422, reason: "unsupported-input", headers: {}, retryAfterMs: undefined },

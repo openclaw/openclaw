@@ -25,7 +25,6 @@ import {
   assertCurrentSessionTranscriptHeader,
   findSessionTranscriptHeader,
 } from "../../config/sessions/session-entry-codec.js";
-import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import {
   resolveSessionTranscriptReadFence,
   withSessionContextAdmission,
@@ -50,6 +49,8 @@ import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-d
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { SessionManagerBranching } from "./session-manager-branching.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
+import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
+import { receiveSessionManagerCommit } from "./session-manager-persistence-error.js";
 import type {
   SessionLeafControl,
   AppendPersistenceOptions,
@@ -201,11 +202,16 @@ export class SessionManager extends SessionManagerBranching {
 
   /** Preparation returns a detached branch; only its awaited commit publishes changes. */
   async prepareTranscriptRewriteAsync() {
-    return withSessionManagerWrite(this, async () => {
+    return withSessionManagerWrite(this, async (writeAdmission) => {
       this.assertTranscriptWriteActive();
       const assertNavigation = this.captureTranscriptNavigationAssertion();
       const target = this.persistenceTarget;
-      if (!target || isIncognitoSessionKey(target.sessionKey)) {
+      if (
+        !target ||
+        (isIncognitoSessionKey(target.sessionKey) &&
+          writeAdmission &&
+          "db" in writeAdmission.database)
+      ) {
         const detachedView = target ? undefined : structuredClone(this.captureTranscriptView());
         const assertPrepared = () => {
           assertNavigation();
@@ -246,6 +252,7 @@ export class SessionManager extends SessionManagerBranching {
       const appendParentId = this.appendParentId;
       const assertOwned = captureOwnedTranscriptWriteAssertion(identity);
       const assertCurrent = () => {
+        writeAdmission?.assertCurrent();
         this.assertTranscriptWriteActive();
         assertOwned();
         assertNavigation();
@@ -256,7 +263,7 @@ export class SessionManager extends SessionManagerBranching {
           throw new Error("Session transcript changed before rewrite publication");
         }
       };
-      const reader = prepareSessionTranscriptHydration(target);
+      const reader = prepareSessionManagerHydration(target);
       const facts = await reader.readMaintenance({ operation: "version" });
       reader.assertCurrent();
       assertCurrent();
@@ -278,6 +285,10 @@ export class SessionManager extends SessionManagerBranching {
             if (!admission) {
               throw new Error("Transcript rewrite lost its persistent owner");
             }
+            const assertCommitCurrent = () => {
+              admission.assertCurrent();
+              assertCurrent();
+            };
             for (const entry of entries) {
               if (entry.type === "message") {
                 entry.message = redactTranscriptMessageForStorage(entry.message, {});
@@ -285,32 +296,38 @@ export class SessionManager extends SessionManagerBranching {
             }
             const { withSessionMetadataWorker } =
               await import("./session-manager-metadata-runtime.js");
-            assertCurrent();
+            assertCommitCurrent();
             const { env: _env, ...scope } = withOwnedSessionTranscriptWriterFence(target);
-            const committed = await withSessionMetadataWorker(
-              admission.options,
-              admission.database,
-              assertCurrent,
-              (worker) =>
-                worker.execute({
-                  type: "session.transcript.rewrite",
-                  input: {
-                    scope: { ...scope, storePath: admission.database.path },
-                    appendParentId,
-                    version,
-                    entries,
-                    sources: [...sources],
-                  },
-                }),
+            const receipt = await receiveSessionManagerCommit("session.transcript.rewrite", () =>
+              withSessionMetadataWorker(
+                admission.options,
+                admission.database,
+                assertCommitCurrent,
+                (worker) =>
+                  worker.execute({
+                    type: "session.transcript.rewrite",
+                    input: {
+                      scope: { ...scope, storePath: admission.database.path },
+                      appendParentId,
+                      version,
+                      entries,
+                      sources: [...sources],
+                    },
+                  }),
+              ),
             );
-            if (committed.projectionNeedsReconcile) {
+            const committed = receipt.value;
+            if (committed.projectionNeedsReconcile && !receipt.failure) {
               startSessionTranscriptIndexReconcile({
                 ...admission.options,
                 preferredSessionId: identity.sessionId,
               });
             }
             try {
-              assertCurrent();
+              if (receipt.failure) {
+                throw receipt.failure;
+              }
+              assertCommitCurrent();
               for (const [index, entry] of committed.entries.entries()) {
                 Object.assign(entries[index]!, entry);
               }
@@ -436,7 +453,7 @@ export class SessionManager extends SessionManagerBranching {
         signal,
       });
     }
-    const hydration = prepareSessionTranscriptHydration(target, undefined, signal);
+    const hydration = prepareSessionManagerHydration(target, undefined, signal);
     const cwd = cwdOverride ?? process.cwd();
     const assertOwned = captureOwnedTranscriptWriteAssertion(hydration.target);
     assertOwned();
@@ -525,7 +542,7 @@ export class SessionManager extends SessionManagerBranching {
   ): Promise<SessionManager> {
     const { cwd, onTruncated, signal, ...limits } = options;
     const fallbackCwd = cwd ?? process.cwd();
-    const hydration = prepareSessionTranscriptHydration(target, limits, signal);
+    const hydration = prepareSessionManagerHydration(target, limits, signal);
     const assertOwned = captureOwnedTranscriptWriteAssertion(hydration.target);
     assertOwned();
     const prepared = await hydration.read().catch((error: unknown) => {

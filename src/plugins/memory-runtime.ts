@@ -24,6 +24,7 @@ import {
 } from "./memory-state.js";
 import { getPluginValueInstance, runPluginCleanup } from "./plugin-instance-scope.js";
 import { runPluginCleanupScope } from "./plugin-invocation-scope.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import type {
   MemoryPluginRuntime,
   MemoryProviderRuntime,
@@ -101,7 +102,8 @@ function resolveMemoryRuntimePluginIds(config: OpenClawConfig): string[] {
   if (!plugins.enabled || !pluginId) {
     return [];
   }
-  if (plugins.deny.includes(pluginId) || plugins.entries[pluginId]?.enabled === false) {
+  const policyId = normalizePluginPolicyId(pluginId);
+  if (plugins.deny.includes(policyId) || plugins.entries[policyId]?.enabled === false) {
     return [];
   }
   return [pluginId];
@@ -146,22 +148,20 @@ function isValidMemoryProviderCapabilities(
   );
 }
 
-function ensureMemoryRuntime(params?: {
+function ensureMemoryRuntime(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): MemoryRuntimeOwner | undefined {
   const current = getMemoryRuntime();
   const currentProviderRuntime = getMemoryProviderRuntime();
   assertMemoryProviderRuntime(currentProviderRuntime);
-  if (current || currentProviderRuntime || !params) {
-    return current || currentProviderRuntime
-      ? {
-          runtime: current,
-          providerRuntime: currentProviderRuntime,
-          providerId: getMemoryCapabilityRegistration()?.pluginId,
-          searchRuntimeRegistered: true,
-        }
-      : undefined;
+  if (current || currentProviderRuntime) {
+    return {
+      runtime: current,
+      providerRuntime: currentProviderRuntime,
+      providerId: getMemoryCapabilityRegistration()?.pluginId,
+      searchRuntimeRegistered: true,
+    };
   }
   const onlyPluginIds = resolveMemoryRuntimePluginIds(params.cfg);
   if (onlyPluginIds.length === 0) {

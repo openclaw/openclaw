@@ -25,7 +25,7 @@ afterEach(async () => {
 });
 
 describe("Doctor plugin index persistence built CLI proof", () => {
-  it("preserves an empty legacy state dir until Doctor links it to the canonical root", async () => {
+  it("keeps an empty legacy state dir separate when the canonical root exists", async () => {
     const instance = await createOpenClawTestInstance({
       name: "doctor-empty-legacy-state-dir",
       env: {
@@ -49,9 +49,17 @@ describe("Doctor plugin index persistence built CLI proof", () => {
     const repaired = await instance.cli(["doctor", "--repair", "--yes", "--non-interactive"]);
     expect(repaired.code, repaired.stderr).toBe(0);
     expect(repaired.signal).toBeNull();
-    expect(fs.realpathSync(legacyDir), repaired.stdout).toBe(fs.realpathSync(instance.stateDir));
+    expect(fs.lstatSync(legacyDir).isDirectory(), repaired.stdout).toBe(true);
+    expect(fs.readdirSync(legacyDir)).toEqual([]);
+    expect(fs.realpathSync(legacyDir), repaired.stdout).not.toBe(
+      fs.realpathSync(instance.stateDir),
+    );
     await instance.startGateway();
-    expect(fs.realpathSync(legacyDir), instance.logs()).toBe(fs.realpathSync(instance.stateDir));
+    expect(fs.lstatSync(legacyDir).isDirectory(), instance.logs()).toBe(true);
+    expect(fs.readdirSync(legacyDir)).toEqual([]);
+    expect(fs.realpathSync(legacyDir), instance.logs()).not.toBe(
+      fs.realpathSync(instance.stateDir),
+    );
   }, 120_000);
 
   it("starts after replacing and verifying a stale persisted Doctor index", async () => {

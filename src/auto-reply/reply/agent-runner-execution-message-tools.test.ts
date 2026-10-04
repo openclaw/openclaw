@@ -202,35 +202,54 @@ describe("executeAgentTurn: message tool progress", () => {
     },
   );
 
-  it("clears run ownership when image preflight fails", async () => {
-    const onAgentRunTerminalOutcome = vi.fn();
-    const followupRun = createFollowupRun();
-    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-    const agentRunRegistry = await import("../../infra/agent-run-registry.js");
-    const clearAgentRunContext = vi.mocked(agentRunRegistry.clearAgentRunContext);
-    state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(new Error("invalid image metadata"));
+  it.each(["image", "model"] as const)(
+    "clears run ownership when %s preflight fails",
+    async (stage) => {
+      const onAgentRunTerminalOutcome = vi.fn();
+      const followupRun = createFollowupRun();
+      followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+      const agentRunRegistry = await import("../../infra/agent-run-registry.js");
+      const clearAgentRunContext = vi.mocked(agentRunRegistry.clearAgentRunContext);
+      const failure = new Error(`${stage} preflight failed`);
+      const modelRead =
+        stage === "model"
+          ? vi
+              .spyOn(
+                await import("../../agents/session-model-auto-revert.js"),
+                "createAgentPatchedSessionModelRunGuard",
+              )
+              .mockRejectedValueOnce(failure)
+          : undefined;
+      if (stage === "image") {
+        state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(failure);
+      }
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await expect(
-      executeAgentTurn(
-        createMinimalRunAgentTurnParams({
-          followupRun,
-          opts: { runId: "preflight-failure", onAgentRunTerminalOutcome },
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      try {
+        await expect(
+          executeAgentTurn(
+            createMinimalRunAgentTurnParams({
+              followupRun,
+              opts: { runId: "preflight-failure", onAgentRunTerminalOutcome },
+            }),
+          ),
+        ).rejects.toBe(failure);
+      } finally {
+        modelRead?.mockRestore();
+      }
+
+      expect(clearAgentRunContext).toHaveBeenCalledWith("preflight-failure", expect.any(String));
+      expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("failed");
+      expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          runId: "preflight-failure",
+          outcome: "mute",
+          runStatus: "errored",
         }),
-      ),
-    ).rejects.toThrow("invalid image metadata");
-
-    expect(clearAgentRunContext).toHaveBeenCalledWith("preflight-failure", expect.any(String));
-    expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("failed");
-    expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        runId: "preflight-failure",
-        outcome: "mute",
-        runStatus: "errored",
-      }),
-    );
-    expect(state.runWithModelFallbackMock).not.toHaveBeenCalled();
-  });
+      );
+      expect(state.runWithModelFallbackMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("preserves message-tool-only suppression across fallback candidates", async () => {
     const onItemEvent = vi.fn();

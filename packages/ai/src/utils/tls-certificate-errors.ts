@@ -109,9 +109,6 @@ function inspectTlsCertificateErrorInternal(
 
   const nestedErrors = Array.isArray(candidate.errors) ? candidate.errors : [];
   for (const nested of [candidate.cause, candidate.error, ...nestedErrors]) {
-    if (nested === undefined || nested === error) {
-      continue;
-    }
     const details = inspectTlsCertificateErrorInternal(nested, seen, depth + 1);
     if (details) {
       return details;

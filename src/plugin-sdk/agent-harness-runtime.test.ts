@@ -24,6 +24,9 @@ import {
   type AgentHarnessV2,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptParamsV2,
+  type runAgentEndSideEffects,
+  type runAgentEndSideEffectsAsync,
+  type awaitAgentEndSideEffects,
 } from "./agent-harness-runtime.js";
 import type {
   ProviderModelRouteRuntimePolicy,
@@ -87,6 +90,15 @@ describe("classifyAgentHarnessTerminalOutcome", () => {
 });
 
 describe("agent harness runtime SDK facade", () => {
+  it("retains synchronous agent-end completion alongside the awaited helpers", () => {
+    expectTypeOf<typeof runAgentEndSideEffects>().returns.toEqualTypeOf<void>();
+    expectTypeOf<typeof runAgentEndSideEffectsAsync>().returns.toEqualTypeOf<Promise<void>>();
+    expectTypeOf<typeof awaitAgentEndSideEffects>().returns.toEqualTypeOf<Promise<void>>();
+    expectTypeOf<Parameters<typeof runAgentEndSideEffectsAsync>>().toEqualTypeOf<
+      Parameters<typeof runAgentEndSideEffects>
+    >();
+  });
+
   it("exposes structured input through one frozen named runtime surface", () => {
     expect(Object.isFrozen(agentHarnessStructuredInput)).toBe(true);
     expect(Object.keys(agentHarnessStructuredInput).toSorted()).toEqual([

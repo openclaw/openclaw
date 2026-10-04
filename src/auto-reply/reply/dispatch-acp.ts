@@ -41,7 +41,6 @@ import { logVerbose } from "../../globals.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
-import { prefixSystemMessage } from "../../infra/system-message.js";
 import { markDiagnosticSessionProgress } from "../../logging/diagnostic.js";
 import {
   stripExtractedFileImageMetadata,
@@ -53,6 +52,7 @@ import { prepareChannelParticipantObservation } from "../../sessions/session-par
 import { classifySessionStateActor } from "../../sessions/session-state-events.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { shouldDeferFinalTtsText } from "../../tts/captioned-final.js";
+import { prepareTtsPreferences, type PreparedTtsPreferences } from "../../tts/tts-preferences.js";
 import type {
   GetReplyOptions,
   ReplyDispatchRun,
@@ -72,6 +72,7 @@ import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import type { AcpDispatchDeliveryParams } from "./dispatch-acp-delivery.types.js";
 import { finalizeAcpTurnOutput } from "./dispatch-acp-finalize.js";
+import { resolveAcpTurnText } from "./dispatch-acp-prompt.js";
 import type { InboundMessageAuditTerminalRecorder } from "./dispatch-from-config.audit.js";
 import { appendRecentHistoryImageContext } from "./history-media.js";
 import { hasInboundMediaForUnderstanding } from "./inbound-media.js";
@@ -101,23 +102,6 @@ function resolveAcpRequestId(ctx: FinalizedRuntimeMsgContext): string {
     return String(id);
   }
   return generateSecureUuid();
-}
-
-function resolveAcpTurnText(params: {
-  promptText: string;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-}): string {
-  if (params.sourceReplyDeliveryMode !== "message_tool_only") {
-    return params.promptText;
-  }
-  const guidance = prefixSystemMessage(
-    [
-      "Source channel delivery is private by default for this turn.",
-      "Normal ACP final output will not be automatically posted to the source channel.",
-      "To send visible output, use message(action=send). The target defaults to the current source channel.",
-    ].join(" "),
-  );
-  return params.promptText ? `${guidance}\n\n${params.promptText}` : guidance;
 }
 
 function isRestrictiveRuntimeToolsAllow(toolsAllow: string[] | undefined): boolean {
@@ -162,7 +146,11 @@ export type AcpDispatchAttemptResult = {
 };
 
 export async function tryDispatchAcpReplyCore(
-  params: Omit<AcpDispatchDeliveryParams, "agentId" | "ctx" | "suppressBlockUserDelivery"> & {
+  params: Omit<
+    AcpDispatchDeliveryParams,
+    "agentId" | "ctx" | "suppressBlockUserDelivery" | "preparedTtsPreferences"
+  > & {
+    preparedTtsPreferences?: PreparedTtsPreferences;
     ctx: FinalizedRuntimeMsgContext;
     toolsAllow?: string[];
     images?: Array<{ data: string; mimeType: string }>;
@@ -266,7 +254,10 @@ export async function tryDispatchAcpReplyCore(
       : dispatchChannels?.[normalizedDispatchChannel]?.defaultAccount;
   const effectiveDispatchAccountId =
     explicitDispatchAccountId ?? normalizeOptionalString(defaultDispatchAccount);
+  const preparedTtsPreferences = params.preparedTtsPreferences ?? (await prepareTtsPreferences());
+  assertInputCurrent();
   const shouldDeferVisibleTextForTts = shouldDeferFinalTtsText({
+    preparedTtsPreferences,
     cfg: params.cfg,
     ttsAuto: params.sessionTtsAuto,
     agentId: acpAgentId,
@@ -276,6 +267,7 @@ export async function tryDispatchAcpReplyCore(
   });
   let queuedFinal = false;
   const delivery = createAcpDispatchDeliveryCoordinator({
+    preparedTtsPreferences,
     cfg: params.cfg,
     agentId: acpAgentId,
     ctx: params.ctx,
@@ -739,6 +731,7 @@ export async function tryDispatchAcpReplyCore(
     if (!runtimeTurnWasCancelled && !params.abortSignal?.aborted) {
       queuedFinal =
         (await finalizeAcpTurnOutput({
+          preparedTtsPreferences,
           cfg: params.cfg,
           sessionKey: canonicalSessionKey,
           agentId: acpAgentId,

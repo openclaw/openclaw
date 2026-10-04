@@ -45,6 +45,8 @@ export const ConnectErrorDetailCodes = {
   DEVICE_AUTH_SIGNATURE_INVALID: "DEVICE_AUTH_SIGNATURE_INVALID",
   DEVICE_AUTH_PUBLIC_KEY_INVALID: "DEVICE_AUTH_PUBLIC_KEY_INVALID",
   PAIRING_REQUIRED: "PAIRING_REQUIRED",
+  PAIRING_REJECTED: "PAIRING_REJECTED",
+  PAIRING_EXPIRED: "PAIRING_EXPIRED",
   CLIENT_VERSION_MISMATCH: "CLIENT_VERSION_MISMATCH",
 } as const;
 
@@ -79,6 +81,7 @@ type PairingConnectErrorDetails = {
   recommendedNextStep?: ConnectRecoveryNextStep;
   retryable?: boolean;
   pauseReconnect?: boolean;
+  waitForResolution?: boolean;
   deviceId?: string;
   requestedRole?: string;
   requestedScopes?: string[];
@@ -234,6 +237,9 @@ function createPairingConnectErrorDetails(
     ...(params.recommendedNextStep ? { recommendedNextStep: params.recommendedNextStep } : {}),
     ...(params.retryable !== undefined ? { retryable: params.retryable } : {}),
     ...(params.pauseReconnect !== undefined ? { pauseReconnect: params.pauseReconnect } : {}),
+    ...(params.waitForResolution !== undefined
+      ? { waitForResolution: params.waitForResolution }
+      : {}),
     ...(params.deviceId ? { deviceId: params.deviceId } : {}),
     ...(params.requestedRole ? { requestedRole: params.requestedRole } : {}),
     ...(params.requestedScopes ? { requestedScopes: params.requestedScopes } : {}),
@@ -281,6 +287,7 @@ export function buildPairingConnectErrorDetails(
     recommendedNextStep: params.recommendedNextStep,
     retryable: params.retryable,
     pauseReconnect: params.pauseReconnect,
+    waitForResolution: params.waitForResolution,
   });
 }
 
@@ -331,6 +338,8 @@ export function readPairingConnectErrorDetails(
     retryable: typeof details.retryable === "boolean" ? details.retryable : undefined,
     pauseReconnect:
       typeof details.pauseReconnect === "boolean" ? details.pauseReconnect : undefined,
+    waitForResolution:
+      typeof details.waitForResolution === "boolean" ? details.waitForResolution : undefined,
   });
 }
 

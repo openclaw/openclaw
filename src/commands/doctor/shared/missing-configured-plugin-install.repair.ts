@@ -72,10 +72,7 @@ import {
   resolveConfiguredPluginCandidateRepair,
   resolveConfiguredPluginRepairVersions,
 } from "./missing-configured-plugin-install.targets.js";
-import {
-  isLegacyPackageUpdateDoctorPass,
-  shouldDeferConfiguredPluginInstallRepair,
-} from "./update-phase.js";
+import { shouldDeferConfiguredPluginInstallRepair } from "./update-phase.js";
 
 type PluginInstallRepairWarning = {
   message: string;
@@ -271,7 +268,6 @@ async function repairMissingPluginInstallsWithLease(
       onWarning: warn,
     });
   const deferredPluginIds = new Set<string>();
-  const preferNpmInstalls = isLegacyPackageUpdateDoctorPass(env);
   let nextRecords = records;
   const normalizedPluginConfig = normalizePluginsConfig(params.cfg.plugins);
   const recordFailure = (pluginId: string, messages: string[], code?: string) => {
@@ -577,7 +573,6 @@ async function repairMissingPluginInstallsWithLease(
         env,
         updateChannel,
         mode: shouldReplaceBrokenOfficialInstall ? "update" : "install",
-        preferNpm: preferNpmInstalls,
         repairReason,
         ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
         beforePersistentEffect: params.beforePersistentEffect,

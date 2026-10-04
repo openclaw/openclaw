@@ -7,7 +7,7 @@ import {
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 
 describe("normalizePluginsConfigWithResolver", () => {
-  it("uses the provided plugin id resolver for allow deny and entry keys", () => {
+  it("uses case-normalized resolved identities for allow deny and entry keys", () => {
     const normalized = normalizePluginsConfigWithResolver(
       {
         allow: [" alpha "],
@@ -21,9 +21,9 @@ describe("normalizePluginsConfigWithResolver", () => {
       (id) => id.trim().toUpperCase(),
     );
 
-    expect(normalized.allow).toEqual(["ALPHA"]);
-    expect(normalized.deny).toEqual(["BETA"]);
-    expect(normalized.entries).toHaveProperty("GAMMA");
+    expect(normalized.allow).toEqual(["alpha"]);
+    expect(normalized.deny).toEqual(["beta"]);
+    expect(normalized.entries).toHaveProperty("gamma");
   });
 });
 

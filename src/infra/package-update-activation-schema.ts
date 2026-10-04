@@ -85,7 +85,7 @@ export type PackageActivationPhase = z.infer<typeof PackageActivationPhaseSchema
 export const intentSchema = z
   .union([
     z.strictObject({
-      kind: z.literal("superseded-by-manual-install"),
+      kind: z.enum(["superseded-by-manual-install", "recovery-lease-identity-changed"]),
       replacementIdentity: packageActivationIdentitySchema,
       settled: z.boolean(),
     }),
@@ -100,6 +100,12 @@ export const intentSchema = z
       selected: z.enum(["previous", "candidate"]),
     }),
     z.strictObject({ kind: z.enum(["displace", "publish"]) }),
+    z.strictObject({ kind: z.literal("copy-previous"), identity: packageActivationIdentitySchema }),
+    z.strictObject({
+      kind: z.literal("displace-copy"),
+      source: fingerprint,
+      removing: z.boolean(),
+    }),
     z.strictObject({
       kind: z.literal("launcher"),
       name: basename,

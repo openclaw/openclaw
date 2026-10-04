@@ -169,6 +169,8 @@ class RosterActivityStore {
       // mutation receipts, event reconciliation, and refresh pacing.
       binding.observation = this.context.sessions.observeList(
         {
+          source: "agent-roster",
+          rowMode: "compact",
           includeDerivedTitles: true,
           includeLastMessage: true,
           archivedFilter: "all",

@@ -337,4 +337,14 @@ The host publishes only `supportsFastMode`, preserving unknown behavior
 and clearing saved preferences. This describes local applicability, not
 upstream entitlement or fulfillment, and does not reject `/fast` commands.
 
+`resolveServiceTiers(ctx)` can publish known model/route tier restrictions through
+the same lightweight artifact and provider registration. It receives
+`ProviderFastModePolicyContext`; return `undefined` when the provider has no
+restriction to add. The API-key OpenAI Responses catalog intersects a returned
+list with account observations or its route defaults, preserving `"default"`
+as Standard processing. A `false` Fast capability together with `["default"]`
+keeps the Control UI on disabled Standard controls without confusing an explicit
+configured tier with a model limitation. Share this capability decision with the
+provider request builder; it does not itself alter configuration or grant access.
+
 </Accordion>
