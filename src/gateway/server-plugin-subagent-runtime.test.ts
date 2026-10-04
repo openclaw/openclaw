@@ -144,6 +144,7 @@ describe("plugin background completions", () => {
     });
     expect(isolated).toHaveBeenCalledWith(
       expect.objectContaining({
+        purpose: "plugin-completion",
         agentId: "research",
         provider: "test-provider",
         model: "research-model",
