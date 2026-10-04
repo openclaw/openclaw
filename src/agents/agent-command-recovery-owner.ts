@@ -190,9 +190,10 @@ export async function runWithAgentCommandRecoveryOwner<
       throw error;
     }
     const target = prepared;
+    const sourceTool = params.opts.inputProvenance?.sourceTool;
     const mayWaitForRecovery =
       params.mode === "claim" &&
-      params.opts.inputProvenance?.sourceTool === "subagent_settle" &&
+      (sourceTool === "subagent_settle" || sourceTool === "subagent_announce") &&
       params.opts.sessionEffects !== "internal" &&
       !params.opts.mainRestartRecoveryAdmitted &&
       !params.opts.mainRestartRecoveryOwnerLease;
@@ -208,7 +209,7 @@ export async function runWithAgentCommandRecoveryOwner<
     let acquired: AcquiredRecoveryOwner | undefined;
     for (;;) {
       if (pendingOwner) {
-        // Keep the accepted settle turn (and its idempotency key) alive rather
+        // Keep the accepted settle/announce turn (and its idempotency key) alive rather
         // than returning a cached no-turn rejection to the durable delivery owner.
         await racePromiseWithAbortSignal(pendingOwner, params.opts.abortSignal);
         params.opts.abortSignal?.throwIfAborted();
