@@ -253,6 +253,17 @@ describe("dashboard default activation and personal layout persistence", () => {
     },
   );
 
+  it("opens a dashboard route in split only once and preserves a later panel choice", () => {
+    const h = createDashboardHarness();
+    h.state.updateSidebarLayout(openSlot(h.state.sidebarLayout, "terminal"));
+    h.sync();
+    expectPresentation(h.state.sidebarLayout, false);
+    h.state.updateSidebarLayout(openSlot(h.state.sidebarLayout, "terminal"));
+    h.sync();
+    expect(isSidebarSlotVisible(h.state.sidebarLayout, "terminal")).toBe(true);
+    expect(isSidebarSlotVisible(h.state.sidebarLayout, "dashboard")).toBe(false);
+  });
+
   it("waits for the selected authoritative row, then inherits without creating an override", () => {
     const h = createDashboardHarness({ metadataPending: true });
     h.sync();
@@ -278,6 +289,19 @@ describe("dashboard default activation and personal layout persistence", () => {
     h.revisit();
     expectPresentation(h.state.sidebarLayout, false);
     expect(h.state.sidebarLayout.columns[0]?.width).toBe(620);
+  });
+
+  it("keeps a personal choice when the shared default is still unknown", () => {
+    const h = createDashboardHarness({ metadataPending: true, expandedLink: true });
+    h.sync();
+    h.state.updateSidebarLayout(openDashboardPresentation(h.state.sidebarLayout, "split"), {
+      dashboardPresentation: "personal",
+    });
+    expect(h.saved()?.dashboardPresentationOverride).toBe("split");
+    h.publishRow(session({ boardPresentation: "expanded" }));
+    h.pane.dashboardExpanded = false;
+    h.revisit();
+    expectPresentation(h.state.sidebarLayout, false);
   });
 
   it("updates the session cache without rearranging its active viewer", async () => {

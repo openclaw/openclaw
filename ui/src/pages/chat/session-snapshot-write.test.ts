@@ -55,65 +55,129 @@ describe("snapshot write serialization and scheduling", () => {
     vi.useRealTimers();
   });
 
-  it("serializes nested non-JSON content once and preserves the stored record and metadata weight", async () => {
-    const value: ChatSessionSnapshot = {
-      ...snapshot(),
-      deltaCursor: 'cursor-"\\🦞',
-      displayedLeafEntryId: null,
-      messages: [
-        {
-          content: [{ type: "text", text: "line\n🦞", omitted: undefined }],
-          callback: () => true,
-          symbol: Symbol("omitted"),
-          date: new Date(0),
-          nested: { values: [undefined, Number.NaN, Infinity, -0, () => true, Symbol("null")] },
-        },
-        undefined,
-        null,
-      ],
-      pagination: { hasMore: true, nextOffset: 2.5, totalMessages: 10 },
-    };
-    // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON omission/conversion is the persisted storage contract.
-    const sanitized: ChatSessionSnapshot = JSON.parse(JSON.stringify(value));
-    const envelope = {
-      projectionVersion: 1,
-      savedAt: Date.now(),
-      sessionId: value.sessionId,
-      sessionKey,
-    };
-    // Previous persistence measured each sanitized array item, then both envelopes.
-    const messageWeight = sanitized.messages.reduce<number>(
-      (sum, message) => sum + JSON.stringify([message]).length - 2,
-      0,
-    );
-    const expectedWeight =
-      messageWeight +
-      Math.max(0, sanitized.messages.length - 1) +
-      JSON.stringify({ ...sanitized, messages: [] }).length +
-      JSON.stringify(envelope).length;
-    store.write(sessionKey, value);
-    const stringify = vi.spyOn(JSON, "stringify");
-    await store.flush();
-    // One transcript serialization plus its small record envelope; no per-message remeasurement.
-    expect(
-      stringify.mock.calls.filter(([input]) => input !== null && typeof input === "object"),
-    ).toHaveLength(2);
-    expect(stringify.mock.calls[0]?.[0]).toBe(value);
-    stringify.mockRestore();
-    expect(await readStoredChatSnapshotRecord(sessionKey)).toEqual({
-      ...envelope,
-      snapshot: sanitized,
-    });
-    expect(await readMetadata()).toEqual({
-      savedAt: envelope.savedAt,
-      sessionKey,
-      weight: expectedWeight,
-    });
-  });
+  it.each([
+    {
+      name: "nested non-JSON values",
+      value: {
+        ...snapshot(),
+        deltaCursor: 'cursor-"\\🦞',
+        displayedLeafEntryId: null,
+        messages: [
+          {
+            content: [{ type: "text", text: "line\n🦞", omitted: undefined }],
+            callback: () => true,
+            symbol: Symbol("omitted"),
+            date: new Date(0),
+            nested: { values: [undefined, Number.NaN, Infinity, -0, () => true, Symbol("null")] },
+          },
+          undefined,
+          null,
+        ],
+        pagination: { hasMore: true, nextOffset: 2.5, totalMessages: 10 },
+      },
+    },
+    {
+      name: "empty complete snapshot",
+      value: {
+        messages: [],
+        pagination: { hasMore: false, completeSnapshot: true, totalMessages: 0 },
+        sessionId: null,
+      },
+    },
+    {
+      name: "undefined optional fields",
+      value: {
+        ...snapshot(),
+        deltaCursor: undefined,
+        displayedLeafEntryId: undefined,
+        pagination: { hasMore: false, totalMessages: undefined },
+      },
+    },
+    {
+      name: "custom JSON content",
+      value: {
+        ...snapshot(),
+        messages: [{ toJSON: () => ({ text: "converted", nested: [1, null] }) }],
+      },
+    },
+  ] satisfies Array<{ name: string; value: ChatSessionSnapshot }>)(
+    "preserves the stored record and previous metadata weight for $name",
+    async ({ value }) => {
+      // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON omission/conversion is the persisted storage contract.
+      const sanitized: ChatSessionSnapshot = JSON.parse(JSON.stringify(value));
+      const envelope = {
+        projectionVersion: 1,
+        savedAt: Date.now(),
+        sessionId: value.sessionId,
+        sessionKey,
+      };
+      // Previous persistence measured each sanitized array item, then both envelopes.
+      const messageWeight = sanitized.messages.reduce<number>(
+        (sum, message) => sum + JSON.stringify([message]).length - 2,
+        0,
+      );
+      const expectedWeight =
+        messageWeight +
+        Math.max(0, sanitized.messages.length - 1) +
+        JSON.stringify({ ...sanitized, messages: [] }).length +
+        JSON.stringify(envelope).length;
+      store.write(sessionKey, value);
+      const stringify = vi.spyOn(JSON, "stringify");
+      await store.flush();
+      // One transcript serialization plus its small record envelope; no per-message remeasurement.
+      expect(
+        stringify.mock.calls.filter(([input]) => input !== null && typeof input === "object"),
+      ).toHaveLength(2);
+      expect(stringify.mock.calls[0]?.[0]).toBe(value);
+      stringify.mockRestore();
+      expect(await readStoredChatSnapshotRecord(sessionKey)).toEqual({
+        ...envelope,
+        snapshot: sanitized,
+      });
+      expect(await readMetadata()).toEqual({
+        savedAt: envelope.savedAt,
+        sessionKey,
+        weight: expectedWeight,
+      });
+    },
+  );
 
   it.each([
     { name: "non-array messages", patch: { snapshot: { ...snapshot(), messages: {} } } },
+    {
+      name: "missing messages",
+      patch: { snapshot: { pagination: { hasMore: false }, sessionId: "session-1" } },
+    },
+    { name: "extra snapshot key", patch: { snapshot: { ...snapshot(), extra: true } } },
+    { name: "extra record key", patch: { extra: true } },
     { name: "mismatched session IDs", patch: { sessionId: "other" } },
+    { name: "invalid session ID", patch: { sessionId: 42 } },
+    { name: "negative timestamp", patch: { savedAt: -1 } },
+    { name: "infinite timestamp", patch: { savedAt: Infinity } },
+    {
+      name: "missing next offset",
+      patch: { snapshot: { ...snapshot(), pagination: { hasMore: true } } },
+    },
+    {
+      name: "negative next offset",
+      patch: { snapshot: { ...snapshot(), pagination: { hasMore: true, nextOffset: -1 } } },
+    },
+    {
+      name: "infinite total",
+      patch: {
+        snapshot: { ...snapshot(), pagination: { hasMore: false, totalMessages: Infinity } },
+      },
+    },
+    {
+      name: "extra pagination key",
+      patch: { snapshot: { ...snapshot(), pagination: { hasMore: false, nextOffset: 0 } } },
+    },
+    {
+      name: "invalid complete flag",
+      patch: {
+        snapshot: { ...snapshot(), pagination: { hasMore: false, completeSnapshot: false } },
+      },
+    },
   ])("rejects stored records with $name", async ({ patch }) => {
     const database = await openSessionSnapshotDatabase();
     if (!database) {
@@ -151,41 +215,46 @@ describe("snapshot write serialization and scheduling", () => {
     return { request, cancel };
   }
 
-  it.each(["idle timeout", "rescheduled idle", "debounce fallback"] as const)(
-    "persists the latest snapshot after %s",
-    async (mode) => {
-      const idle = mode === "debounce fallback" ? null : idleScheduler();
-      if (!idle) {
-        vi.stubGlobal("requestIdleCallback", undefined);
-      }
-      let value = snapshot();
-      const stringify = vi.spyOn(JSON, "stringify");
-      store.write(sessionKey, value);
-      vi.advanceTimersByTime(500);
-      if (idle) {
-        expect(stringify).not.toHaveBeenCalled();
-        expect(idle.request).toHaveBeenCalledOnce();
-        expect(idle.request.mock.calls[0]?.[1]?.timeout).toBe(1000);
-        if (mode === "rescheduled idle") {
-          value = { ...snapshot(), messages: ["latest"] };
-          store.write(sessionKey, value);
-          expect(idle.cancel).toHaveBeenCalledOnce();
-          vi.advanceTimersByTime(500);
-          idle.request.mock.calls[1]?.[0]({ didTimeout: false, timeRemaining: () => 50 });
-        } else {
-          vi.advanceTimersByTime(999);
-          expect(stringify).not.toHaveBeenCalled();
-          vi.advanceTimersByTime(1);
-        }
-      }
-      expect(stringify.mock.calls[0]?.[0]).toBe(value);
-      await store.whenIdle();
-      expect(await store.read(sessionKey)).toEqual(value);
-    },
-  );
+  it("waits for idle time after debounce but bounds the idle wait", async () => {
+    const idle = idleScheduler();
+    const value = snapshot();
+    const stringify = vi.spyOn(JSON, "stringify");
+    store.write(sessionKey, value);
+    vi.advanceTimersByTime(500);
+    expect(stringify).not.toHaveBeenCalled();
+    expect(idle.request).toHaveBeenCalledOnce();
+    expect(idle.request.mock.calls[0]?.[1]?.timeout).toBe(1000);
+    vi.advanceTimersByTime(999);
+    expect(stringify).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(stringify.mock.calls[0]?.[0]).toBe(value);
+    await store.whenIdle();
+    expect(await store.read(sessionKey)).toEqual(value);
+  });
 
-  it.each(["pagehide", "visibilitychange", "disconnect", "clear"])(
-    "%s cancels pending idle work and settles the snapshot",
+  it("uses idle time before the timeout and cancels stale work on reschedule", async () => {
+    const idle = idleScheduler();
+    store.write(sessionKey, snapshot());
+    vi.advanceTimersByTime(500);
+    const latest = { ...snapshot(), messages: ["latest"] };
+    store.write(sessionKey, latest);
+    expect(idle.cancel).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(500);
+    idle.request.mock.calls[1]?.[0]({ didTimeout: false, timeRemaining: () => 50 });
+    await store.whenIdle();
+    expect(await store.read(sessionKey)).toEqual(latest);
+  });
+
+  it("uses the debounce timer when idle callbacks are unavailable", async () => {
+    vi.stubGlobal("requestIdleCallback", undefined);
+    store.write(sessionKey, snapshot());
+    vi.advanceTimersByTime(500);
+    await store.whenIdle();
+    expect(await store.read(sessionKey)).toEqual(snapshot());
+  });
+
+  it.each(["pagehide", "visibilitychange", "disconnect"])(
+    "%s starts flushing synchronously and cancels the pending idle callback",
     async (event) => {
       const idle = idleScheduler();
       const value = snapshot();
@@ -197,22 +266,25 @@ describe("snapshot write serialization and scheduling", () => {
         document.dispatchEvent(new Event(event));
       } else if (event === "disconnect") {
         store.disconnect();
-      } else if (event === "clear") {
-        store.clearMemory();
       } else {
         window.dispatchEvent(new Event(event));
       }
+      expect(stringify.mock.calls[0]?.[0]).toBe(value);
       expect(idle.cancel).toHaveBeenCalledOnce();
-      if (event === "clear") {
-        vi.runAllTimers();
-        await store.whenIdle();
-        expect(await store.read(sessionKey)).toBeNull();
-      } else {
-        expect(stringify.mock.calls[0]?.[0]).toBe(value);
-        await store.whenIdle();
-        expect(await store.read(sessionKey)).toEqual(value);
-      }
+      await store.whenIdle();
+      expect(await store.read(sessionKey)).toEqual(value);
       expect(vi.getTimerCount()).toBe(0);
     },
   );
+
+  it("cancels idle work when the cache is cleared", async () => {
+    const idle = idleScheduler();
+    store.write(sessionKey, snapshot());
+    vi.advanceTimersByTime(500);
+    store.clearMemory();
+    expect(idle.cancel).toHaveBeenCalledOnce();
+    vi.runAllTimers();
+    await store.whenIdle();
+    expect(await store.read(sessionKey)).toBeNull();
+  });
 });

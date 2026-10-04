@@ -93,6 +93,7 @@ it.each([
     "Pasted notes 🦞\n  preserve indentation\n<script>not executable</script>\n",
   ],
   ["settings.json", "application/json", '{"ready":true}\n'],
+  ["config.xml", "application/xml", "<ready>true</ready>"],
   ["notes.txt", "application/octet-stream", "Text with generic metadata"],
   ["empty.txt", "", ""],
 ])("previews %s as literal text", async (title, mimeType, text) => {

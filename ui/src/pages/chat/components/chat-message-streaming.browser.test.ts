@@ -75,6 +75,12 @@ describe("streaming Markdown DOM", () => {
       selector: "ul",
     },
     {
+      label: "long list",
+      initial: Array.from({ length: 200 }, (_, index) => `- Item ${index}`).join("\n"),
+      suffix: " with more text",
+      selector: "ul",
+    },
+    {
       label: "code fence",
       initial: "```text\nA growing block",
       suffix: " with more text",

@@ -101,6 +101,7 @@ describe("tool output inspection", () => {
   it.each([
     { name: "lookup", args: { query: "input_text" } },
     { name: "exec", args: { command: "print-result" } },
+    { name: "exec", args: { code: "return result" } },
     { name: "exec", args: undefined },
   ])(
     "keeps content-shaped data literal without native Code Mode input: %o",

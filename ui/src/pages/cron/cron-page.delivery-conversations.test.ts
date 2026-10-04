@@ -363,6 +363,45 @@ describe("CronPage lifecycle", () => {
     expect(page.deliveryDirectory.error).toBeNull();
   });
 
+  it("rejects model suggestions from an earlier connection epoch", async () => {
+    const staleModels = createDeferred<{ models: Array<{ id: string }> }>();
+    let modelRequestCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "models.list") {
+        modelRequestCount += 1;
+        return modelRequestCount === 1 ? staleModels.promise : { models: [{ id: "fresh/model" }] };
+      }
+      if (method === "cron.list") {
+        return cronListResponse([]);
+      }
+      if (method === "cron.runs") {
+        return { entries: [], total: 0, offset: 0, hasMore: false };
+      }
+      return {};
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const gateway = createGateway(client, false);
+    const page = createPage(createContext(gateway));
+    await page.updateComplete;
+
+    gateway.emitSnapshot({ phase: "connected" });
+    await waitForCronPage(() => expect(modelRequestCount).toBe(1));
+    gateway.emitSnapshot({ phase: "stopped" });
+    // A real reconnect arrives with a new Gateway client; the model catalog cache is
+    // scoped per client, so reusing the first client would replay its pending read.
+    gateway.emitSnapshot({
+      phase: "connected",
+      client: { request } as unknown as GatewayBrowserClient,
+    });
+    await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["fresh/model"]));
+
+    staleModels.resolve({ models: [{ id: "stale/model" }] });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(page.cronModelSuggestions).toEqual(["fresh/model"]);
+  });
+
   it("keeps recipient discovery when the deletion is rejected", async () => {
     // A rejected remove reports cronError without throwing; its editor still owns discovery.
     const pending = createDeferred<{ conversations: ConversationListItem[] }>();

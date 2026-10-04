@@ -522,7 +522,7 @@ describe("Blob-preserving metadata migration", () => {
         end: 26,
       };
       const host = hostFor();
-      const selection = origin === "paste" ? annotation : undefined;
+      const selection = origin === undefined ? annotation : undefined;
       const item = await prepare(host, `origin-${origin}`, "agent:main:review", selection, origin);
       seed([item], "agent:main:review", 4);
       const store = readStoredOutboxStore(sessionStorage, target);
