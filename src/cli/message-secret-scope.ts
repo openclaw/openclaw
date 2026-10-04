@@ -8,7 +8,7 @@ function resolveScopedChannelCandidate(value: unknown): string | undefined {
     return undefined;
   }
   const normalized = normalizeMessageChannel(value);
-  if (!normalized || !isDeliverableMessageChannel(normalized)) {
+  if (!normalized || normalized === "all") {
     return undefined;
   }
   return normalized;
@@ -23,7 +23,11 @@ function resolveChannelFromTargetValue(target: unknown): string | undefined {
   if (separator <= 0) {
     return undefined;
   }
-  return resolveScopedChannelCandidate(trimmed.slice(0, separator));
+  const candidate = resolveScopedChannelCandidate(trimmed.slice(0, separator));
+  if (!candidate || !isDeliverableMessageChannel(candidate)) {
+    return undefined;
+  }
+  return candidate;
 }
 
 function resolveChannelFromTargets(targets: unknown): string | undefined {
