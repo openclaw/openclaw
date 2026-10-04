@@ -53,4 +53,5 @@ export {
   registerMemoryCapability,
 } from "../plugins/memory-state.js";
 
+export { runOutsidePluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 export { parseAgentSessionKey } from "../routing/session-key.js";

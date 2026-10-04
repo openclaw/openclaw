@@ -104,6 +104,7 @@ export {
   listImportedBundledPluginFacadeIds,
   resetFacadeRuntimeStateForTest,
 } from "./facade-runtime.js";
+export { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 export { capturePluginRegistration } from "../plugins/captured-registration.js";
 export { clearHealthChecksForTest } from "../flows/health-check-registry.js";
 export { runProviderCatalog } from "../plugins/provider-discovery.js";
