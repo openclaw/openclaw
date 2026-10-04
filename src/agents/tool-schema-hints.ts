@@ -445,12 +445,15 @@ function compactSchemaType(
 /** Full bounded declaration from the same schema as the compact hints.
  * Unsupported shapes remain unknown; runtime validation still owns constraints.
  */
-export function toolSchemaDeclaration(schema: unknown): string {
+export function toolSchemaDeclaration(
+  schema: unknown,
+  direction: "input" | "output" = "input",
+): string {
   const limits: CompactSchemaLimits = {
     maxChars: MAX_TOOL_SCHEMA_DECLARATION_CHARS,
     maxDepth: 12,
     maxProperties: 256,
-    numericInputConstraints: true,
+    numericInputConstraints: direction === "input",
     declaration: true,
     remainingNodes: { value: 4096 },
   };

@@ -8,7 +8,7 @@ export async function flushDispatchDeferredFinalText(
   state: PrepareDispatchExecutionReadyState,
 ): Promise<boolean> {
   try {
-    if (!state.deferFinalTtsText || state.params.replyOptions?.isHeartbeat === true) {
+    if (!state.deferFinalTtsText) {
       return false;
     }
     const deferredVisibleText = state.cleanBlockTtsDirectiveText

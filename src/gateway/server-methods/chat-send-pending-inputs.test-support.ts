@@ -4,7 +4,7 @@ import { afterEach, vi } from "vitest";
 import type { ChatSendParamsSchema } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import type { dispatchInboundMessageInternal } from "../../auto-reply/dispatch.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
@@ -114,7 +114,9 @@ export function useBrowserFollowupFixture() {
     // Admission, approval, and SQLite remain real; pause only execution after ACK.
     let dispatchAttempts = 0;
     dispatchInboundMessageMock.mockImplementation(async (dispatchParams: unknown) => {
-      const { replyOptions } = dispatchParams as Parameters<typeof dispatchInboundMessage>[0];
+      const { replyOptions } = dispatchParams as Parameters<
+        typeof dispatchInboundMessageInternal
+      >[0];
       if (replyOptions?.userTurnTranscriptRecorder) {
         dispatchedRecorder.resolve(replyOptions.userTurnTranscriptRecorder);
       }

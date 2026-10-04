@@ -65,7 +65,6 @@ async function createFixture(selected = diagnostic) {
         model: selected.model,
       },
     }),
-    isHeartbeat: false,
     pendingToolTasks: new Set(),
     preflightCompactionApplied: false,
     resolvedVerboseLevel: "off",

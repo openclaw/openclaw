@@ -8,6 +8,7 @@ export type GatewayCronServiceContract = CronServiceContract & {
   quiesceJobs(
     jobs: readonly { id: string; revision: string }[],
     commitGuard: () => void,
+    withCurrent?: (cancel: () => void) => Promise<void>,
   ): Promise<void>;
   /** Remove an owned declarative job family from obsolete SQLite store partitions. */
   removeStaleJobFamily(

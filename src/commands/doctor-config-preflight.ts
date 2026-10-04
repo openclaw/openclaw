@@ -59,7 +59,10 @@ export async function runDoctorConfigPreflight(
   options: DoctorConfigPreflightOptions = {},
 ): Promise<DoctorConfigPreflightResult> {
   // Reuse child imports for this state operation; every read still acquires fresh admission.
-  if (options.migrateState !== false && options.doctorOnlyStateMigrations === true) {
+  if (
+    options.migrateState !== false &&
+    (options.doctorOnlyStateMigrations === true || options.automaticHeartbeatRepair)
+  ) {
     const { withSqliteReadOnlyWorkerScope } = await import("../infra/sqlite-readonly-worker.js");
     return await withSqliteReadOnlyWorkerScope(() => runDoctorConfigPreflightOperation(options));
   }
@@ -346,12 +349,40 @@ async function runDoctorConfigPreflightOperation(
     baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
     automaticConfigRepair = planAdmittedConfigRepair(snapshot);
   }
+  const automaticHeartbeatRepair = options.automaticHeartbeatRepair;
+  if (automaticHeartbeatRepair) {
+    const { commitAutomaticHeartbeatRepair } =
+      await import("./doctor-automatic-heartbeat-repair.js");
+    const changes = await measurePreflightStep("automatic-heartbeat-config-repair", () =>
+      pluginMetadata.run({ config: snapshot.sourceConfig }, () =>
+        commitAutomaticHeartbeatRepair(automaticHeartbeatRepair, snapshot),
+      ),
+    );
+    note(changes.join("\n"), "Doctor changes");
+    configSnapshotRead = await readConfigSnapshotForPreflight(false);
+    snapshot = configSnapshotRead.snapshot;
+    baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
+    automaticConfigRepair = planAdmittedConfigRepair(snapshot);
+  }
   if (automaticConfigRepair && !skipLegacyParentConfigWrite) {
     modelBillingRouteMigrationSource ??=
       snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig;
+    const repair = automaticConfigRepair;
     await measurePreflightStep("automatic-config-repair", () =>
-      pluginMetadata.run({ config: automaticConfigRepair.config }, () =>
-        commitAutomaticConfigRepair(automaticConfigRepair, snapshot),
+      pluginMetadata.run({ config: repair.config }, () =>
+        commitAutomaticConfigRepair(
+          repair,
+          snapshot,
+          options.doctorOnlyStateMigrations === true
+            ? async () => {
+                // Roster promotion must see canonical jobs, including implicit monitors
+                // written by a published Gateway without authored heartbeat settings.
+                const { retireHeartbeatWithDoctor } =
+                  await import("./doctor-heartbeat-retirement.js");
+                await retireHeartbeatWithDoctor(repair.config);
+              }
+            : undefined,
+        ),
       ),
     );
     note(

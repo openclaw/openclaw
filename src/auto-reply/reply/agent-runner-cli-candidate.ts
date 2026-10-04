@@ -29,7 +29,10 @@ import {
 import { buildCommandOutputFromToolResultEvent } from "./agent-runner-command-output.js";
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
 import { deliverPreparedBlockReply } from "./agent-runner-presentation.js";
-import { resolveRunModelHasVision } from "./agent-runner-run-params.js";
+import {
+  resolveRunModelHasVision,
+  resolveReplyScheduledToolPolicy,
+} from "./agent-runner-run-params.js";
 import { buildReplyRouteThreadingToolContext } from "./agent-runner-utils.js";
 import { prepareCliReplyPayload } from "./cli-reply-payload.js";
 import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
@@ -161,7 +164,11 @@ export async function runCliFallbackCandidate(
           lifecycleGeneration: params.lifecycleGeneration,
           isFinalFallbackAttempt: params.isFinalFallbackAttempt,
           abortSignal: params.runAbortSignal,
-          trigger: turn.isHeartbeat ? "heartbeat" : "user",
+          trigger: turn.followupRun.run.scheduledAutomation
+            ? "cron"
+            : turn.followupRun.run.internalEventExecution
+              ? "event"
+              : "user",
           inputProvenance: turn.followupRun.run.inputProvenance,
         },
         provider: params.cliExecutionProvider,
@@ -369,7 +376,15 @@ export async function runCliFallbackCandidate(
             runtimePolicySessionKey:
               turn.followupRun.run.runtimePolicySessionKey ?? turn.runtimePolicySessionKey,
             agentId: turn.followupRun.run.agentId,
-            trigger: turn.isHeartbeat ? "heartbeat" : "user",
+            trigger: turn.followupRun.run.scheduledAutomation
+              ? "cron"
+              : turn.followupRun.run.internalEventExecution
+                ? "event"
+                : "user",
+            jobId: turn.followupRun.run.scheduledAutomation?.job.id,
+            onExecutionStarted:
+              turn.followupRun.run.scheduledAutomation?.executionIdentity?.onExecutionStarted,
+            scheduledToolPolicy: resolveReplyScheduledToolPolicy(turn.followupRun.run),
             sessionFile: turn.followupRun.run.sessionFile,
             workspaceDir: turn.followupRun.run.workspaceDir,
             cwd: turn.followupRun.run.cwd,
@@ -425,8 +440,10 @@ export async function runCliFallbackCandidate(
             extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
             sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,
             taskSuggestionDeliveryMode: turn.followupRun.run.taskSuggestionDeliveryMode,
-            // Heartbeat ambient routes are never implicit message recipients.
-            ...(turn.isHeartbeat ? { requireExplicitMessageTarget: true } : {}),
+            // Scheduled ambient routes are never implicit message recipients.
+            ...(turn.followupRun.run.scheduledAutomation
+              ? { requireExplicitMessageTarget: true }
+              : {}),
             cleanupBundleMcpOnRunEnd: turn.opts?.cleanupBundleMcpOnRunEnd,
             silentReplyPromptMode: turn.followupRun.run.silentReplyPromptMode,
             terminalReplyExpectation: turn.followupRun.run.terminalReplyExpectation,

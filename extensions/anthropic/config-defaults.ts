@@ -228,14 +228,6 @@ export function applyAnthropicConfigDefaults(params: {
     mutated = true;
   }
 
-  if (defaults.heartbeat?.every === undefined) {
-    nextDefaults.heartbeat = {
-      ...defaults.heartbeat,
-      every: authMode === "oauth" ? "1h" : "30m",
-    };
-    mutated = true;
-  }
-
   const nextModels = { ...defaults.models };
   let modelsMutated = false;
   if (authMode === "api_key") {
@@ -311,4 +303,13 @@ export function applyAnthropicConfigDefaults(params: {
       defaults: nextDefaults,
     },
   };
+}
+
+/** Subscription defaults avoid the API-key cadence; existing jobs remain operator-owned. */
+export function resolveAnthropicProactiveCadenceMs(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): number | undefined {
+  const authMode = resolveAnthropicDefaultAuthMode(params.config, params.env);
+  return authMode === "oauth" ? 3_600_000 : authMode === "api_key" ? 1_800_000 : undefined;
 }

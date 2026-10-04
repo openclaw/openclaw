@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
-import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
@@ -453,22 +452,22 @@ describe("executeAgentTurn: primary probe routing", () => {
       label: "exhausted",
       outcome: "exhausted" as const,
       attempts: [{ error: "missing tool result" }],
-      isHeartbeat: false,
+      event: false,
       expectedText: GENERIC_RUN_FAILURE_TEXT,
     },
     {
       label: "completed",
       outcome: "completed" as const,
       attempts: [],
-      isHeartbeat: false,
+      event: false,
       expectedText: GENERIC_RUN_FAILURE_TEXT,
     },
     {
-      label: "heartbeat",
+      label: "event",
       outcome: "completed" as const,
       attempts: [],
-      isHeartbeat: true,
-      expectedText: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+      event: true,
+      expectedText: GENERIC_RUN_FAILURE_TEXT,
     },
   ])("surfaces an empty $label terminal result through the normal reply path", async (testCase) => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -490,10 +489,13 @@ describe("executeAgentTurn: primary probe routing", () => {
     const { replyOperation, failMock } = createMockReplyOperation();
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({ replyOperation }),
-      isHeartbeat: testCase.isHeartbeat,
-    });
+    const params = createMinimalRunAgentTurnParams({ replyOperation });
+    if (testCase.event) {
+      const internalEventExecution = { onStarted: vi.fn(), onTerminal: vi.fn() };
+      params.followupRun.run.internalEventExecution = internalEventExecution;
+      params.opts = { ...params.opts, internalEventExecution };
+    }
+    const result = await executeAgentTurn(params);
 
     expect(result).toMatchObject({
       kind: "success",

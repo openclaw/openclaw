@@ -378,6 +378,9 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   ) {
     migrations.push({ kind: "github-publication-requester-authority-v18", path: pathname });
   }
+  if (userVersion < 21 && tableExists(db, "cron_jobs")) {
+    migrations.push({ kind: "automation-policy-fence-v21", path: pathname });
+  }
   if (!hasCanonicalAuditEventsSchema(db)) {
     migrations.push({ kind: "audit-events-v2", path: pathname });
   }

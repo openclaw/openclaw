@@ -1,18 +1,18 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveHeartbeatMonitorPlan } from "../cron/heartbeat-monitor.js";
-import { heartbeatTaskDeclarationKey, isHeartbeatTaskCronJob } from "../cron/heartbeat-task.js";
 import { readCronJobScratchState } from "../cron/scratch-store.js";
-import { writeCronJobScratchForMaintenance } from "../cron/scratch-write.kernel.js";
-import { CronService } from "../cron/service.js";
-import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
-import { resolveHeartbeatSession } from "../infra/heartbeat-runner-session.js";
+import { writeCronScratchFixture } from "../cron/scratch-store.test-support.js";
+import {
+  loadCronJobsStore,
+  saveCronJobsStore,
+  resolveCronJobsStorePathFromConfig,
+} from "../cron/store.js";
+import type { CronStoredJob as CronJob } from "../cron/types.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
@@ -20,58 +20,42 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { ensureHeartbeatMonitorJobs } from "./doctor-heartbeat-cadence-migration.js";
+import { resolveHeartbeatSession } from "./doctor-heartbeat-session.js";
+import { heartbeatTaskDeclarationKey } from "./doctor-heartbeat-task-identity.js";
 import {
   collectHeartbeatTaskMigrationFindings,
   maybeMigrateHeartbeatTasksToCron,
+  migrateStoredHeartbeatTaskJobs,
 } from "./doctor-heartbeat-task-migration.js";
 
-const tempDirs: string[] = [];
 let originalHome: string | undefined;
 let originalStateDir: string | undefined;
-
-function createTestCronService(storePath: string, cfg: OpenClawConfig, nowMs: number): CronService {
-  const noop = () => {};
-  const log = { debug: noop, info: noop, warn: noop, error: noop };
-  return new CronService({
-    scheduler: createTestGatewayScheduler(),
-    storePath,
-    nowMs: () => nowMs,
-    cronEnabled: false,
-    cronConfig: cfg.cron,
-    defaultAgentId: resolveDefaultAgentId(cfg),
-    log,
-    enqueueSystemEvent: () => false,
-    requestHeartbeat: noop,
-    runIsolatedAgentJob: async () => ({
-      status: "skipped",
-      error: "tests do not execute cron jobs",
-    }),
-  });
-}
 
 beforeEach(() => {
   originalHome = process.env.HOME;
   originalStateDir = process.env.OPENCLAW_STATE_DIR;
 });
 
-afterEach(async () => {
-  vi.restoreAllMocks();
-  closeOpenClawAgentDatabasesForTest();
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
-  if (originalHome === undefined) {
-    delete process.env.HOME;
-  } else {
-    process.env.HOME = originalHome;
-  }
-  if (originalStateDir === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = originalStateDir;
-  }
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    if (originalHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
+    }
+    if (originalStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = originalStateDir;
+    }
+    cleanup();
+  }),
+);
 
 async function createFixture(
   nowMs: number,
@@ -88,23 +72,21 @@ tasks:
 # Keep alerts concise
 `,
 ) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-heartbeat-task-migration-"));
-  tempDirs.push(root);
+  const root = tempDirs.make("openclaw-heartbeat-task-migration-");
   const env = { ...process.env, HOME: path.join(root, "home"), OPENCLAW_STATE_DIR: root };
   process.env.HOME = env.HOME;
   process.env.OPENCLAW_STATE_DIR = env.OPENCLAW_STATE_DIR;
   const cfg = {
-    agents: { defaults: { heartbeat: { every: "30m" } }, entries: { main: {} } },
+    agents: {
+      defaults: {
+        heartbeat: { every: "30m", model: "openai/gpt-5", lightContext: true, timeoutSeconds: 75 },
+      },
+      entries: { main: {} },
+    },
   } as OpenClawConfig;
   const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
-  const cron = createTestCronService(storePath, cfg, nowMs);
-  const spec = resolveHeartbeatMonitorPlan(cfg, []).specs[0];
-  if (!spec) {
-    throw new Error("expected heartbeat monitor spec");
-  }
-  const added = await cron.add(spec.input, { enabledExplicit: true, systemOwned: true });
-  const monitor = "job" in added ? added.job : added;
-  writeCronJobScratchForMaintenance({
+  const monitor = (await ensureHeartbeatMonitorJobs(cfg, storePath, env)).get("main")!;
+  writeCronScratchFixture({
     storePath,
     jobId: monitor.id,
     content: scratchContent,
@@ -130,28 +112,31 @@ tasks:
 }
 
 async function createExistingInboxJob(fixture: Awaited<ReturnType<typeof createFixture>>) {
-  const cron = createTestCronService(fixture.storePath, fixture.cfg, fixture.nowMs - 60_000);
-  const result = await cron.add(
-    {
-      declarationKey: heartbeatTaskDeclarationKey("main", "inbox"),
-      displayName: "Previous inbox task",
-      name: "inbox",
-      description: "Existing operator-owned state",
-      agentId: "main",
-      enabled: true,
-      schedule: {
-        kind: "every",
-        everyMs: 5 * 60 * 60_000,
-        anchorMs: fixture.nowMs - 60_000,
-      },
-      payload: { kind: "systemEvent", text: "Previous inbox prompt" },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      state: { lastRunAtMs: fixture.nowMs - 10_000 },
-    },
-    { enabledExplicit: true, systemOwned: true, matchesExisting: isHeartbeatTaskCronJob },
-  );
-  return structuredClone("job" in result ? result.job : result);
+  const job: CronJob = {
+    id: "legacy-inbox",
+    createdAtMs: fixture.nowMs - 60_000,
+    updatedAtMs: fixture.nowMs - 60_000,
+    declarationKey: heartbeatTaskDeclarationKey("main", "inbox"),
+    displayName: "Previous inbox task",
+    name: "inbox",
+    description: "Existing operator-owned state",
+    agentId: "main",
+    enabled: false,
+    schedule: { kind: "every", everyMs: 5 * 60 * 60_000, anchorMs: fixture.nowMs - 60_000 },
+    payload: { kind: "systemEvent", text: "Previous inbox prompt", toolsAllow: ["read"] },
+    sessionTarget: "main",
+    wakeMode: "next-heartbeat",
+    state: { lastRunAtMs: fixture.nowMs - 10_000 },
+  };
+  const store = await loadCronJobsStore(fixture.storePath);
+  await saveCronJobsStore(fixture.storePath, { ...store, jobs: [...store.jobs, job] });
+  return job;
+}
+function taskMessage(job: CronJob) {
+  if (job.payload.kind !== "agentTurn") {
+    throw new Error(`Task ${job.id} was not converted`);
+  }
+  return job.payload.message;
 }
 
 type Fixture = Awaited<ReturnType<typeof createFixture>>;
@@ -174,32 +159,69 @@ function readScratch(fixture: Fixture) {
 }
 
 describe("heartbeat scratch task cron migration", () => {
-  it("preserves persisted tasks for a disabled owner until it is re-enabled", async () => {
+  it("converts disabled owners without enabling their monitor or task jobs", async () => {
     const fixture = await createFixture(2_000_000_000_000);
-    fixture.cfg.agents!.defaults!.heartbeat!.every = "0m";
-
-    await expect(collectHeartbeatTaskMigrationFindings(fixture.cfg, fixture.env)).resolves.toEqual(
-      [],
-    );
-    await expect(migrate(fixture)).resolves.toEqual({ changes: [], warnings: [] });
-    expect(
-      (await loadCronJobsStore(fixture.storePath)).jobs.filter(isHeartbeatTaskCronJob),
-    ).toEqual([]);
-    expect(readScratch(fixture).scratch?.content).toContain("tasks:");
-
-    fixture.cfg.agents!.defaults!.heartbeat!.every = "30m";
-    await expect(migrate(fixture)).resolves.toMatchObject({
-      warnings: [],
-      changes: [expect.stringContaining("2 heartbeat tasks")],
+    const store = await loadCronJobsStore(fixture.storePath);
+    store.jobs[0]!.enabled = false;
+    await saveCronJobsStore(fixture.storePath, store);
+    const result = await maybeMigrateHeartbeatTasksToCron({
+      cfg: fixture.cfg,
+      env: fixture.env,
+      shouldRepair: true,
+      nowMs: fixture.nowMs,
     });
+    expect(result.warnings).toEqual([]);
+    const jobs = (await loadCronJobsStore(fixture.storePath)).jobs;
+    expect(jobs).toHaveLength(3);
+    expect(jobs.every((job) => !job.enabled)).toBe(true);
     expect(
-      (await loadCronJobsStore(fixture.storePath)).jobs.filter(isHeartbeatTaskCronJob),
-    ).toHaveLength(2);
+      readCronJobScratchState(fixture.storePath, fixture.monitor.id).scratch?.content,
+    ).not.toContain("tasks:");
+  });
+
+  it("converts stored tasks for owners without heartbeat enrollment without enabling ambient checks", async () => {
+    const root = tempDirs.make("openclaw-task-only-owner-");
+    process.env.HOME = root;
+    process.env.OPENCLAW_STATE_DIR = root;
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { main: {}, ops: {} } },
+    };
+    const storePath = resolveCronJobsStorePathFromConfig(cfg);
+    const legacy: CronJob = {
+      id: "task-only",
+      agentId: "ops",
+      name: "inbox",
+      enabled: false,
+      createdAtMs: 10,
+      updatedAtMs: 20,
+      declarationKey: heartbeatTaskDeclarationKey("ops", "inbox"),
+      payload: { kind: "systemEvent", text: "Keep the existing task prompt", toolsAllow: ["read"] },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      schedule: { kind: "every", everyMs: 50000, anchorMs: 12 },
+      state: { nextRunAtMs: 12345, queuedAtMs: 12345, lastRunAtMs: 9999 },
+    };
+    await saveCronJobsStore(storePath, { version: 1, jobs: [legacy] });
+    expect(await migrateStoredHeartbeatTaskJobs(cfg)).toBe(1);
+    const jobs = (await loadCronJobsStore(storePath)).jobs;
+    expect(jobs.find((job) => job.id === legacy.id)).toMatchObject({
+      id: legacy.id,
+      enabled: false,
+      schedule: legacy.schedule,
+      state: legacy.state,
+      payload: {
+        kind: "agentTurn",
+        message: "Keep the existing task prompt",
+        toolsAllow: ["read"],
+      },
+    });
+    expect(jobs.every((job) => !job.enabled)).toBe(true);
+    expect(await migrateStoredHeartbeatTaskJobs(cfg)).toBe(0);
+    expect((await loadCronJobsStore(storePath)).jobs).toEqual(jobs);
   });
 
   it("does not create shared state while detecting heartbeat tasks", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-heartbeat-task-detect-"));
-    tempDirs.push(root);
+    const root = tempDirs.make("openclaw-heartbeat-task-detect-");
     const env = { ...process.env, HOME: path.join(root, "home"), OPENCLAW_STATE_DIR: root };
     const cfg = {
       agents: { defaults: { heartbeat: { every: "30m" } }, entries: { main: {} } },
@@ -249,7 +271,9 @@ describe("heartbeat scratch task cron migration", () => {
     const preview = await migrate(fixture, { shouldRepair: false });
     expect(preview).toEqual({ changes: [], warnings: [] });
     expect(
-      (await loadCronJobsStore(fixture.storePath)).jobs.filter(isHeartbeatTaskCronJob),
+      (await loadCronJobsStore(fixture.storePath)).jobs.filter(
+        (job) => job.id !== fixture.monitor.id,
+      ),
     ).toEqual([]);
 
     const migrated = await migrate(fixture);
@@ -257,7 +281,7 @@ describe("heartbeat scratch task cron migration", () => {
     expect(migrated.changes).toHaveLength(1);
 
     const jobs = (await loadCronJobsStore(fixture.storePath)).jobs
-      .filter(isHeartbeatTaskCronJob)
+      .filter((job) => job.id !== fixture.monitor.id)
       .toSorted((a, b) => a.name.localeCompare(b.name));
     expect(
       jobs.map((job) => ({ name: job.name, schedule: job.schedule, payload: job.payload })),
@@ -265,7 +289,13 @@ describe("heartbeat scratch task cron migration", () => {
       {
         name: "calendar",
         schedule: { kind: "every", everyMs: 2 * 60 * 60_000, anchorMs: fixture.nowMs + 1 },
-        payload: { kind: "systemEvent", text: "Check the next meetings" },
+        payload: expect.objectContaining({
+          kind: "agentTurn",
+          message: "Check the next meetings",
+          model: "openai/gpt-5",
+          lightContext: true,
+          timeoutSeconds: 75,
+        }),
       },
       {
         name: "inbox",
@@ -274,9 +304,20 @@ describe("heartbeat scratch task cron migration", () => {
           everyMs: 60 * 60_000,
           anchorMs: fixture.nowMs + 30 * 60_000,
         },
-        payload: { kind: "systemEvent", text: "Check urgent inbox items" },
+        payload: expect.objectContaining({
+          kind: "agentTurn",
+          message: "Check urgent inbox items",
+          model: "openai/gpt-5",
+          lightContext: true,
+          timeoutSeconds: 75,
+        }),
       },
     ]);
+    expect(
+      jobs.every(
+        (job) => job.payload.kind === "agentTurn" && job.payload.skipIfScratchEmpty === undefined,
+      ),
+    ).toBe(true);
     expect(jobs.find((job) => job.name === "calendar")?.state.nextRunAtMs).toBe(fixture.nowMs + 1);
     expect(jobs.find((job) => job.name === "inbox")?.state.nextRunAtMs).toBe(
       fixture.nowMs + 30 * 60_000,
@@ -294,8 +335,42 @@ describe("heartbeat scratch task cron migration", () => {
     const rerun = await migrate(fixture, { nowMs: fixture.nowMs + 10_000 });
     expect(rerun).toEqual({ changes: [], warnings: [] });
     expect(
-      (await loadCronJobsStore(fixture.storePath)).jobs.filter(isHeartbeatTaskCronJob),
+      (await loadCronJobsStore(fixture.storePath)).jobs.filter(
+        (job) => job.id !== fixture.monitor.id,
+      ),
     ).toHaveLength(2);
+  });
+
+  it("preserves stored task edits while adopting its monitor execution policy", async () => {
+    const fixture = await createFixture(2_000_000_000_000);
+    const previous = await createExistingInboxJob(fixture);
+
+    expect((await migrate(fixture)).warnings).toEqual([]);
+    const job = (await loadCronJobsStore(fixture.storePath)).jobs.find(
+      (candidate) => candidate.id === previous.id,
+    );
+    expect(job).toMatchObject({
+      id: previous.id,
+      name: previous.name,
+      description: previous.description,
+      displayName: previous.displayName,
+      enabled: false,
+      createdAtMs: previous.createdAtMs,
+      schedule: previous.schedule,
+      state: previous.state,
+      payload: {
+        kind: "agentTurn",
+        message: "Previous inbox prompt",
+        toolsAllow: ["read"],
+        model: "openai/gpt-5",
+        lightContext: true,
+        timeoutSeconds: 75,
+      },
+      sessionTarget: fixture.monitor.sessionTarget,
+      delivery: fixture.monitor.delivery,
+    });
+    expect(job?.declarationKey).toBeUndefined();
+    expect(readScratch(fixture).scratch?.content).not.toContain("tasks:");
   });
 
   it("leaves cron jobs and legacy timestamps untouched when the scratch revision changes", async () => {
@@ -310,7 +385,7 @@ tasks:
 `;
     const migration = migrate(fixture);
     const current = readScratch(fixture);
-    writeCronJobScratchForMaintenance({
+    writeCronScratchFixture({
       storePath: fixture.storePath,
       jobId: fixture.monitor.id,
       content: concurrentScratch,
@@ -322,7 +397,9 @@ tasks:
     expect(result.changes).toEqual([]);
     expect(result.warnings.join("\n")).toContain("scratch changed during task migration");
     expect(readScratch(fixture).scratch?.content).toBe(concurrentScratch);
-    const jobs = (await loadCronJobsStore(fixture.storePath)).jobs.filter(isHeartbeatTaskCronJob);
+    const jobs = (await loadCronJobsStore(fixture.storePath)).jobs.filter(
+      (job) => job.id !== fixture.monitor.id,
+    );
     expect(jobs).toEqual([existingSnapshot]);
     expect(
       resolveHeartbeatSession(fixture.cfg, "main", undefined, undefined, fixture.env).entry
@@ -343,16 +420,18 @@ tasks:
       ),
     ).toHaveLength(1);
     const committedJobs = (await loadCronJobsStore(fixture.storePath)).jobs.filter(
-      isHeartbeatTaskCronJob,
+      (job) => job.id !== fixture.monitor.id,
     );
     expect(committedJobs).toHaveLength(2);
-    expect(new Set(committedJobs.map((job) => job.declarationKey)).size).toBe(2);
+    expect(new Set(committedJobs.map((job) => job.id)).size).toBe(2);
     expect(readScratch(fixture).scratch?.content).not.toContain("tasks:");
 
     const rerun = await migrate(fixture, { nowMs: fixture.nowMs + 10_000 });
     expect(rerun).toEqual({ changes: [], warnings: [] });
     expect(
-      (await loadCronJobsStore(fixture.storePath)).jobs.filter(isHeartbeatTaskCronJob),
+      (await loadCronJobsStore(fixture.storePath)).jobs.filter(
+        (job) => job.id !== fixture.monitor.id,
+      ),
     ).toEqual(committedJobs);
   });
 
@@ -366,7 +445,7 @@ tasks:
     expect(result.changes).toHaveLength(1);
     expect(result.warnings.join("\n")).toContain("simulated post-commit crash");
     const committedJobs = (await loadCronJobsStore(fixture.storePath)).jobs.filter(
-      isHeartbeatTaskCronJob,
+      (job) => job.id !== fixture.monitor.id,
     );
     expect(committedJobs).toHaveLength(2);
     expect(readScratch(fixture).scratch?.content).not.toContain("tasks:");
@@ -381,7 +460,9 @@ tasks:
       warnings: [],
     });
     expect(
-      (await loadCronJobsStore(fixture.storePath)).jobs.filter(isHeartbeatTaskCronJob),
+      (await loadCronJobsStore(fixture.storePath)).jobs.filter(
+        (job) => job.id !== fixture.monitor.id,
+      ),
     ).toEqual(committedJobs);
   });
 
@@ -399,7 +480,7 @@ tasks:
     interval: 1h
     prompt: Second
 `;
-    writeCronJobScratchForMaintenance({
+    writeCronScratchFixture({
       storePath: fixture.storePath,
       jobId: fixture.monitor.id,
       content: duplicate,
@@ -413,15 +494,11 @@ tasks:
     expect(result.changes).toHaveLength(1);
     expect(readScratch(fixture).scratch?.content).toBe("");
     const jobs = (await loadCronJobsStore(fixture.storePath)).jobs
-      .filter(isHeartbeatTaskCronJob)
-      .toSorted((left, right) => left.payload.text.localeCompare(right.payload.text));
-    expect(jobs.map((job) => job.declarationKey)).toEqual([
-      heartbeatTaskDeclarationKey("main", "calendar", 0),
-      heartbeatTaskDeclarationKey("main", "inbox", 0),
-      heartbeatTaskDeclarationKey("main", "inbox", 1),
-    ]);
-    expect(new Set(jobs.map((job) => job.declarationKey)).size).toBe(3);
-    expect(jobs.map((job) => job.payload.text)).toEqual(["Calendar", "First", "Second"]);
+      .filter((job) => job.id !== fixture.monitor.id)
+      .toSorted((left, right) => taskMessage(left).localeCompare(taskMessage(right)));
+    expect(jobs.every((job) => job.declarationKey === undefined)).toBe(true);
+    expect(new Set(jobs.map((job) => job.id)).size).toBe(3);
+    expect(jobs.map(taskMessage)).toEqual(["Calendar", "First", "Second"]);
     expect(jobs.map((job) => job.schedule)).toEqual([
       { kind: "every", everyMs: 2 * 60 * 60_000, anchorMs: fixture.nowMs + 1 },
       {
@@ -442,8 +519,8 @@ tasks:
       warnings: [],
     });
     const rerunJobs = (await loadCronJobsStore(fixture.storePath)).jobs
-      .filter(isHeartbeatTaskCronJob)
-      .toSorted((left, right) => left.payload.text.localeCompare(right.payload.text));
+      .filter((job) => job.id !== fixture.monitor.id)
+      .toSorted((left, right) => taskMessage(left).localeCompare(taskMessage(right)));
     expect(rerunJobs.map((job) => ({ id: job.id, key: job.declarationKey }))).toEqual(
       initialIdentities,
     );
@@ -474,7 +551,9 @@ tasks:
     expect(result.warnings.join("\n")).toContain("incomplete name/interval/prompt entry");
     expect(readScratch(fixture).scratch?.content).toBe(content);
     expect(
-      (await loadCronJobsStore(fixture.storePath)).jobs.filter(isHeartbeatTaskCronJob),
+      (await loadCronJobsStore(fixture.storePath)).jobs.filter(
+        (job) => job.id !== fixture.monitor.id,
+      ),
     ).toEqual([]);
   });
 
@@ -495,7 +574,9 @@ tasks:
     await expect(migrate(fixture)).resolves.toEqual({ changes: [], warnings: [] });
 
     expect(
-      (await loadCronJobsStore(fixture.storePath)).jobs.filter(isHeartbeatTaskCronJob),
+      (await loadCronJobsStore(fixture.storePath)).jobs.filter(
+        (job) => job.id !== fixture.monitor.id,
+      ),
     ).toEqual([]);
     expect(readScratch(fixture).scratch?.content).toBe(content);
   });
@@ -517,7 +598,9 @@ tasks:
     const migrated = await migrate(fixture);
 
     expect(migrated.warnings).toEqual([]);
-    const jobs = (await loadCronJobsStore(fixture.storePath)).jobs.filter(isHeartbeatTaskCronJob);
+    const jobs = (await loadCronJobsStore(fixture.storePath)).jobs.filter(
+      (job) => job.id !== fixture.monitor.id,
+    );
     expect(jobs.map((job) => job.name)).toEqual(["active"]);
     const scratch = readScratch(fixture).scratch?.content;
     expect(scratch).toContain(`<!--
@@ -553,10 +636,7 @@ tasks:
 
   it("uses the supplied environment for legacy session timing and cleanup", async () => {
     const fixture = await createFixture(2_000_000_000_000);
-    const suppliedHome = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-heartbeat-task-migration-supplied-home-"),
-    );
-    tempDirs.push(suppliedHome);
+    const suppliedHome = tempDirs.make("openclaw-heartbeat-task-migration-supplied-home-");
     fixture.cfg.session = {
       store: "~/.openclaw/agents/{agentId}/sessions/sessions.json",
     };
@@ -604,7 +684,7 @@ tasks:
 
     expect(result.warnings).toEqual([]);
     const inbox = (await loadCronJobsStore(fixture.storePath)).jobs.find(
-      (job) => isHeartbeatTaskCronJob(job) && job.name === "inbox",
+      (job) => job.id !== fixture.monitor.id && job.name === "inbox",
     );
     expect(inbox?.schedule).toEqual({
       kind: "every",
@@ -640,7 +720,9 @@ tasks:
     expect(migrated.warnings).toEqual([]);
     expect(readScratch(fixture).scratch?.content).toBe("# Operations\n# Keep alerts concise\n");
     expect(
-      (await loadCronJobsStore(fixture.storePath)).jobs.filter(isHeartbeatTaskCronJob),
+      (await loadCronJobsStore(fixture.storePath)).jobs.filter(
+        (job) => job.id !== fixture.monitor.id,
+      ),
     ).toHaveLength(2);
 
     await expect(migrate(fixture, { nowMs: fixture.nowMs + 10_000 })).resolves.toEqual({
@@ -648,7 +730,9 @@ tasks:
       warnings: [],
     });
     expect(
-      (await loadCronJobsStore(fixture.storePath)).jobs.filter(isHeartbeatTaskCronJob),
+      (await loadCronJobsStore(fixture.storePath)).jobs.filter(
+        (job) => job.id !== fixture.monitor.id,
+      ),
     ).toHaveLength(2);
   });
 });

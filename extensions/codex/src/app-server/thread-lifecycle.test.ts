@@ -1562,12 +1562,12 @@ describe("Codex plugin binding recovery", () => {
 describe("Codex thread-effective app attestation", () => {
   installLifecycleHooks();
 
-  it.each([{ source: "heartbeat", state: "not-callable" }])(
+  it.each([{ source: "scheduled", state: "not-callable" }])(
     "keeps the $source binding when its optional app is $state",
     async ({ source, state }) => {
       const params = createThreadLifecycleParams();
       params.sessionKey =
-        source === "heartbeat"
+        source === "scheduled"
           ? "agent:main:main"
           : source === "incognito"
             ? "agent:main:internal-session-effects:incognito-app-unavailable"

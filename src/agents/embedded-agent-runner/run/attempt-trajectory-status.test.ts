@@ -184,18 +184,6 @@ describe("attempt trajectory status", () => {
     },
   );
 
-  it("keeps heartbeat responses as success", () => {
-    expect(
-      resolveAttemptTrajectoryTerminal(
-        baseParams({
-          heartbeatToolResponse: { notify: false, summary: "ok" },
-        }),
-      ),
-    ).toEqual({
-      status: "success",
-    });
-  });
-
   it("does not treat expected silent turns as non-deliverable failures", () => {
     expect(resolveAttemptTrajectoryTerminal(baseParams({ silentExpected: true }))).toEqual({
       status: "success",

@@ -46,15 +46,8 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     prompt: params.prompt,
   });
   const hookRunner = getGlobalHookRunner();
-  // heartbeat_prompt_contribution fires only on heartbeat turns. Harness runtimes
-  // (e.g. the Codex app-server) build the prompt through this helper rather than
-  // the embedded runner's resolvePromptBuildHookResult, so the hook must run from
-  // here too — otherwise it never fires on those runtimes.
-  const isHeartbeatTurn = params.ctx.trigger === "heartbeat";
-  const hasHeartbeatContribution =
-    isHeartbeatTurn && Boolean(hookRunner?.hasHooks("heartbeat_prompt_contribution"));
   const hasPromptBuildHooks = Boolean(hookRunner?.hasHooks("before_prompt_build"));
-  if (!hasHeartbeatContribution && !hasPromptBuildHooks) {
+  if (!hasPromptBuildHooks) {
     const developerInstructions = resolveDeveloperInstructions(params.developerInstructions);
     return {
       prompt: inputPrompt,
@@ -90,25 +83,6 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
       : [],
   };
 
-  // Match the embedded runner's lifecycle order: heartbeat contributions are
-  // collected before prompt-build hooks so hook side effects stay deterministic.
-  const heartbeatResult =
-    hasHeartbeatContribution && hookRunner
-      ? await hookRunner
-          .runHeartbeatPromptContribution(
-            {
-              sessionKey: params.ctx.sessionKey,
-              agentId: params.ctx.agentId,
-              heartbeatName: "heartbeat",
-            },
-            hookCtx,
-          )
-          .catch((error: unknown) => {
-            log.warn(`heartbeat_prompt_contribution hook failed: ${String(error)}`);
-            return undefined;
-          })
-      : undefined;
-
   const promptBuildResult =
     hookRunner && hasPromptBuildHooks
       ? await hookRunner.runBeforePromptBuild(promptEvent, hookCtx).catch((error: unknown) => {
@@ -140,12 +114,10 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
       ? promptBuildResult.systemPrompt
       : developerInstructions;
   const promptPrefix = joinPresentTextSegments([
-    heartbeatResult?.prependContext,
     promptBuildResult?.prependContext,
     authorizedPromptBuildResult?.prependContext,
   ]);
   const promptSuffix = joinPresentTextSegments([
-    heartbeatResult?.appendContext,
     promptBuildResult?.appendContext,
     authorizedPromptBuildResult?.appendContext,
   ]);

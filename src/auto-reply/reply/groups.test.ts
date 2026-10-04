@@ -297,7 +297,7 @@ describe("group runtime loading", () => {
             },
           },
         } as unknown as OpenClawConfig,
-        ctx: { InternalTurnSource: "heartbeat" },
+        ctx: { InternalTurnSource: "event" },
         sessionEntry: persistedSessionEntry,
       }),
     ).resolves.toBe(false);
@@ -314,7 +314,7 @@ describe("group runtime loading", () => {
           },
         } as unknown as OpenClawConfig,
         ctx: {
-          InternalTurnSource: "heartbeat",
+          InternalTurnSource: "event",
           OriginatingChannel: "slack",
           OriginatingTo: "C456",
         },
@@ -333,7 +333,7 @@ describe("group runtime loading", () => {
             },
           },
         } as unknown as OpenClawConfig,
-        ctx: { InternalTurnSource: "heartbeat" },
+        ctx: { InternalTurnSource: "event" },
         sessionEntry: persistedSessionEntry,
       }),
     ).resolves.toBe(false);
@@ -402,8 +402,8 @@ describe("group runtime loading", () => {
         cfg: {} as OpenClawConfig,
         ctx: {
           Provider: "telegram",
-          From: "heartbeat",
-          InternalTurnSource: "heartbeat",
+          From: "event",
+          InternalTurnSource: "event",
           OriginatingChannel: "telegram",
           OriginatingTo: "-1001",
           MessageThreadId: messageThreadId,
@@ -447,9 +447,9 @@ describe("group runtime loading", () => {
         cfg: {} as OpenClawConfig,
         ctx: {
           Provider: "zalouser",
-          From: "heartbeat",
+          From: "event",
           AccountId: "account-b",
-          InternalTurnSource: "heartbeat",
+          InternalTurnSource: "event",
           OriginatingChannel: "zalouser",
           OriginatingTo: "shared",
         },

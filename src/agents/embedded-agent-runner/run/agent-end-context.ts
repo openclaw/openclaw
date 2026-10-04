@@ -79,8 +79,6 @@ export function buildEmbeddedForegroundPromptContext(
     contextWindow: run.contextWindow,
     promptMode: run.promptMode,
     forceMessageTool: run.forceMessageTool,
-    enableHeartbeatTool: run.enableHeartbeatTool,
-    forceHeartbeatTool: run.forceHeartbeatTool,
     allowGatewaySubagentBinding: run.allowGatewaySubagentBinding,
     extraSystemPrompt: run.extraSystemPrompt,
     gitCoauthorPrompt: run.gitCoauthorPrompt,

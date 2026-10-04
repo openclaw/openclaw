@@ -259,7 +259,6 @@ export async function resolveFollowupDeliveryDecision(params: {
           sourceReplyDeliveryMode: sourcePolicy.sourceReplyDeliveryMode,
           sendPolicyDenied: sourcePolicy.sendPolicyDenied,
           successfulSourceReplyDelivery: completedSourceDelivery,
-          isHeartbeat: false,
           isRoomEvent: false,
         });
   if (recovery.kind === "retry") {
@@ -384,6 +383,21 @@ async function sendFollowupPayloads(params: {
     return [];
   }
   const deliverQueuedBatch = sourceDisposition?.deliver;
+  if (turn.queued.run.internalEventExecution) {
+    if (!deliverQueuedBatch) {
+      throw new Error("Internal event lost its originating delivery owner");
+    }
+    if (params.kind !== "final") {
+      await deliverQueuedBatch({
+        kind: "queued-followup",
+        runId: params.runId,
+        originatingChannel,
+        payloads,
+        completion: { kind: "progress" },
+      });
+    }
+    return payloads;
+  }
   const fallbackDispatcher = sourceDisposition ? undefined : defaults.opts?.onBlockReply;
   const dispatcherAvailable = Boolean(deliverQueuedBatch || fallbackDispatcher);
   if (!originRoutable && !dispatcherAvailable) {
@@ -395,7 +409,6 @@ async function sendFollowupPayloads(params: {
   const typing = createTypingSignaler({
     typing: defaults.typing,
     mode: defaults.typingMode,
-    isHeartbeat: false,
   });
   const crossChannelFailures: ReplyPayload[] = [];
   const queuedPayloads: ReplyPayload[] = [];
@@ -533,6 +546,7 @@ export async function deliverFollowupDecision(params: {
 }): Promise<FollowupDeliveryResult> {
   const { decision, turn, defaults } = params;
   if (decision.kind === "suppress") {
+    turn.queued.run.internalEventExecution?.onSuppressed?.(decision.reason);
     logVerbose(`followup queue: delivery suppressed (${decision.reason})`);
     return { kind: "completed", payloads: [] };
   }

@@ -34,7 +34,6 @@ import {
 } from "../../infra/outbound/session-binding-service.js";
 import {
   enqueueSystemEvent,
-  enqueueSystemEventEntry,
   peekSystemEvents,
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
@@ -71,6 +70,7 @@ import { clearFollowupQueueForTest, createQueueTestRun } from "./queue.test-help
 import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { admitReplyTurn, runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
+import { registerSessionSystemEventTests } from "./session-system-events.test-support.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { resolveReplySessionPreprocessingState } from "./session.js";
 import { expectSessionParticipantInputs } from "./session.participant.test-support.js";
@@ -3373,81 +3373,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
   });
 });
 
-describe("drainFormattedSystemEvents", () => {
-  it("keeps channel summary lines prefixed as trusted system output on new main sessions", async () => {
-    channelSummaryMocks.buildChannelSummary.mockResolvedValue([
-      "WhatsApp: linked\n  - default (line one\nline two)",
-    ]);
-
-    const result = await drainFormattedSystemEvents({
-      cfg: { channels: {} } as OpenClawConfig,
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      isMainSession: true,
-      isNewSession: true,
-    });
-
-    expect(result).toContain("System: WhatsApp: linked");
-    for (const line of result!.split("\n")) {
-      expect(line).toMatch(/^System:/);
-    }
-  });
-
-  it("leaves tagged cron events queued during heartbeat runs instead of re-rendering them (#44922)", async () => {
-    try {
-      // A `sessionTarget: "main"` cron systemEvent is enqueued tagged `cron:<jobId>`
-      // and is surfaced by the heartbeat's dedicated reminder prompt. The generic
-      // render must not also emit it as a raw `System:` line during that heartbeat
-      // run, or the model sees the same text twice.
-      enqueueSystemEvent("Reminder: rotate API keys", {
-        sessionKey: "agent:main:main",
-        contextKey: "cron:rotate-keys",
-      });
-      const generic = expectDefined(
-        enqueueSystemEventEntry("Model switched.", { sessionKey: "agent:main:main" }),
-        "queued generic event",
-      );
-
-      const result = await drainFormattedSystemEvents({
-        cfg: {} as OpenClawConfig,
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        isMainSession: true,
-        isNewSession: false,
-        events: [generic],
-      });
-
-      expect(result).toContain("Model switched.");
-      expect(result).not.toContain("rotate API keys");
-      // The cron event stays queued so the heartbeat path remains its single owner.
-      expect(peekSystemEvents("agent:main:main")).toEqual(["Reminder: rotate API keys"]);
-    } finally {
-      resetSystemEventsForTest();
-    }
-  });
-
-  it("renders tagged cron events on normal turns so skipped heartbeats still have a fallback", async () => {
-    try {
-      enqueueSystemEvent("Reminder: rotate API keys", {
-        sessionKey: "agent:main:main",
-        contextKey: "cron:rotate-keys",
-      });
-
-      const result = await drainFormattedSystemEvents({
-        cfg: {} as OpenClawConfig,
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        isMainSession: true,
-        isNewSession: false,
-      });
-
-      expect(result).toContain("Reminder: rotate API keys");
-      expect(peekSystemEvents("agent:main:main")).toEqual([]);
-    } finally {
-      resetSystemEventsForTest();
-    }
-  });
-});
+registerSessionSystemEventTests(channelSummaryMocks.buildChannelSummary);
 
 describe("persistSessionUsageUpdate", () => {
   type UsageUpdate = Omit<
@@ -3536,10 +3462,10 @@ describe("persistSessionUsageUpdate", () => {
       absent: ["agentHarnessId"],
     },
     {
-      name: "preserves the displayed session model when heartbeat usage uses a heartbeat model",
+      name: "preserves the displayed session model when a turn-local model is used",
       seed: { modelProvider: "openai", model: "gpt-5.4" },
       update: {
-        isHeartbeat: true,
+        preserveRuntimeModel: true,
         usage: { input: 1_200, output: 100, cacheRead: 300, cacheWrite: 10 },
         lastCallUsage: { input: 900, output: 80, cacheRead: 200, cacheWrite: 5 },
         providerUsed: "openai",
@@ -4084,11 +4010,13 @@ describe("initSessionState internal channel routing preservation", () => {
 
     const result = await initSessionState({
       ctx: {
-        Body: "heartbeat tick",
+        Body: "session event",
         SessionKey: sessionKey,
-        Provider: "heartbeat",
-        From: "heartbeat",
-        To: "heartbeat",
+        Provider: "internal",
+        InternalTurnSource: "event",
+        InputProvenance: { kind: "internal_system", sourceTool: "session-event" },
+        From: "internal",
+        To: "internal",
       },
       cfg,
     });
@@ -4131,7 +4059,7 @@ describe("initSessionState internal channel routing preservation", () => {
     });
   });
 
-  it("preserves the existing user route when a heartbeat targets a different chat on the shared session", async () => {
+  it("preserves the existing user route when an internal event targets a different chat on the shared session", async () => {
     const storePath = await makeStorePath("system-event-preserve-user-route-");
     const sessionKey = "agent:main:main";
     await writeSessionStoreFast(storePath, {
@@ -4157,9 +4085,11 @@ describe("initSessionState internal channel routing preservation", () => {
 
     const result = await initSessionState({
       ctx: {
-        Body: "heartbeat tick",
+        Body: "session event",
         SessionKey: sessionKey,
-        Provider: "heartbeat",
+        Provider: "internal",
+        InternalTurnSource: "event",
+        InputProvenance: { kind: "internal_system", sourceTool: "session-event" },
         From: "chat:oc_group_chat",
         To: "chat:oc_group_chat",
         OriginatingChannel: "feishu",

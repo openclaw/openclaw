@@ -141,7 +141,6 @@ async function withIngressFixture(
               models: { [provider.modelRef]: { agentRuntime: { id: "openclaw" } } },
               skills: [],
               skipBootstrap: true,
-              heartbeat: { every: "0m" },
             },
           },
           tools: {

@@ -212,7 +212,6 @@ async function prepareCliAuthFixture(
           workspace: workspaceDir,
           skipBootstrap: true,
           utilityModel: "",
-          heartbeat: { every: "0m" },
           model: { primary: modelRef },
           models: { [modelRef]: { agentRuntime: { id: "claude-cli" } } },
         },

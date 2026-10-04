@@ -11,7 +11,6 @@ import { findCliTimeoutError, isFailoverError } from "../../agents/failover-erro
 import { resolveReplyFailoverFacts } from "../../agents/failover/request-error-facts.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
   renderControlUiAgentFailureCopy,
   renderFailoverCodeUserCopy,
 } from "../../agents/failover/user-copy.js";
@@ -63,7 +62,6 @@ export async function handleAgentExecutionError(params: {
 }): Promise<ErrorAction> {
   const turn = params.turn;
   const err = params.error;
-  const useHeartbeatFailureCopy = turn.opts?.useHeartbeatFailureCopy;
   // A failed candidate leaves its backstop pending; settlement takes it before later work.
   // This keeps session-override failures from being mislabeled as model failures.
   const postCompactionModelFailure =
@@ -173,8 +171,6 @@ export async function handleAgentExecutionError(params: {
       { message, error: err },
       {
         includeDetails: isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
-        isHeartbeat: turn.isHeartbeat,
-        useHeartbeatFailureCopy,
       },
     );
     const text =
@@ -231,15 +227,7 @@ export async function handleAgentExecutionError(params: {
     return {
       kind: "final",
       payload: markAgentRunFailureReplyPayload({
-        text: buildContextOverflowRecoveryText({
-          cfg: params.runtimeConfig,
-          agentId: turn.followupRun.run.agentId,
-          primaryProvider: turn.followupRun.run.provider,
-          primaryModel: turn.followupRun.run.model,
-          runtimeProvider: params.state.attemptedRuntimeProvider,
-          runtimeModel: params.state.attemptedRuntimeModel,
-          activeSessionEntry: turn.getActiveSessionEntry(),
-        }),
+        text: buildContextOverflowRecoveryText(),
       }),
     };
   }
@@ -259,8 +247,6 @@ export async function handleAgentExecutionError(params: {
           {
             includeAuthProfileId: !isNonDirectConversationContext(turn.sessionCtx),
             includeDetails: isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
-            isHeartbeat: turn.isHeartbeat,
-            useHeartbeatFailureCopy,
             replayPrevented,
             failoverFacts,
           },
@@ -280,9 +266,7 @@ export async function handleAgentExecutionError(params: {
       : (externalRunFailureReply?.text ??
         (params.shouldSurfaceToControlUi
           ? renderControlUiAgentFailureCopy()
-          : (useHeartbeatFailureCopy ?? turn.isHeartbeat)
-            ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
-            : GENERIC_EXTERNAL_RUN_FAILURE_TEXT)));
+          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT)));
   return await settleFailure(
     {
       text: fallbackText,
@@ -292,6 +276,6 @@ export async function handleAgentExecutionError(params: {
     },
     !failureSummary &&
       !isContextOverflow &&
-      (externalRunFailureCandidate?.isGenericRunnerFailure ?? !turn.isHeartbeat),
+      (externalRunFailureCandidate?.isGenericRunnerFailure ?? true),
   );
 }

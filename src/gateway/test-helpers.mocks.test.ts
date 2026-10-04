@@ -2,7 +2,7 @@
 import "./test-helpers.mocks.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
+import type { dispatchInboundMessageInternal } from "../auto-reply/dispatch.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { dispatchInboundMessageMock } from "./test-helpers.runtime-state.js";
 
@@ -52,7 +52,7 @@ describe("Gateway projected-dispatch mock ownership", () => {
       const result = { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
       const error = new Error("mocked dispatch failed after enqueue");
       dispatchInboundMessageMock.mockImplementationOnce(async (params: unknown) => {
-        const { dispatcher } = params as Parameters<typeof dispatchInboundMessage>[0];
+        const { dispatcher } = params as Parameters<typeof dispatchInboundMessageInternal>[0];
         dispatcher.sendFinalReply({ text: "queued reply" });
         if (outcome === "reject") {
           throw error;

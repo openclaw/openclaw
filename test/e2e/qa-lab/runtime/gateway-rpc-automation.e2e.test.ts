@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { withFastReplyConfig } from "../../../../src/auto-reply/reply/get-reply-fast-path.test-support.js";
 import {
@@ -89,7 +90,7 @@ describe("Gateway run cancellation and automation RPCs", () => {
   afterEach(resetGatewayState);
 
   it(
-    "persists cron CRUD, wakes the heartbeat, and cancels an agent run through chat.abort",
+    "persists cron CRUD, routes legacy wake to an ordinary session, and cancels an agent run",
     { timeout: 90_000 },
     async () => {
       const envSnapshot = captureEnv([...ISOLATED_GATEWAY_ENV_KEYS]);
@@ -103,11 +104,6 @@ describe("Gateway run cancellation and automation RPCs", () => {
         fs.mkdir(bundledPluginsDir, { recursive: true }),
         fs.mkdir(path.dirname(configPath), { recursive: true }),
       ]);
-      await fs.writeFile(
-        path.join(workspaceDir, "HEARTBEAT.md"),
-        "Handle pending system events, then reply with a concise acknowledgement.\n",
-      );
-
       const token = nextId("gateway-automation-token");
       for (const [key, value] of Object.entries({
         HOME: tempHome,
@@ -129,7 +125,7 @@ describe("Gateway run cancellation and automation RPCs", () => {
       deleteTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY");
 
       const taskPrompt = nextId("create-tracked-task");
-      const wakeText = nextId("wake-heartbeat");
+      const wakeText = nextId("wake-session-event");
       const providerRequests: Array<Record<string, unknown>> = [];
       let releaseTaskResponse: (() => void) | undefined;
       const taskResponseGate = new Promise<void>((resolve) => {
@@ -156,7 +152,7 @@ describe("Gateway run cancellation and automation RPCs", () => {
             writeAssistantResponse(response, "Tracked task completed.");
             return;
           }
-          writeAssistantResponse(response, `Heartbeat handled: ${wakeText}`);
+          writeAssistantResponse(response, `Event handled: ${wakeText}`);
         })().catch((error: unknown) => {
           response.writeHead(500).end(error instanceof Error ? error.message : String(error));
         });
@@ -181,7 +177,6 @@ describe("Gateway run cancellation and automation RPCs", () => {
             defaults: {
               workspace: workspaceDir,
               skipBootstrap: true,
-              heartbeat: { every: "5m", target: "none" },
               model: { primary: provider.modelRef },
               models: {
                 [provider.modelRef]: {
@@ -311,7 +306,7 @@ describe("Gateway run cancellation and automation RPCs", () => {
         );
         expect(agentWait).toMatchObject({ status: "error", stopReason: "rpc" });
         const requestsBeforeWake = providerRequests.length;
-        const wakeRequestedAt = Date.now();
+        const priorLegacyReport = await client.request<unknown>("last-heartbeat", {});
         await expect(
           client.request<{ ok: boolean }>("wake", {
             mode: "now",
@@ -323,41 +318,35 @@ describe("Gateway run cancellation and automation RPCs", () => {
         await expect
           .poll(() => providerRequests.length, { timeout: 15_000, interval: 50 })
           .toBeGreaterThan(requestsBeforeWake);
-        let observedHeartbeat: {
-          ts: number;
-          status: string;
-          reason?: string;
-          message?: string;
-          preview?: string;
-        } | null = null;
-        try {
-          await expect
-            .poll(
-              async () => {
-                observedHeartbeat = await client.request<{
-                  ts: number;
-                  status: string;
-                  reason?: string;
-                  message?: string;
-                  preview?: string;
-                }>("last-heartbeat", {});
-                return (
-                  observedHeartbeat.ts >= wakeRequestedAt &&
-                  observedHeartbeat.status === "skipped" &&
-                  observedHeartbeat.reason === "target-none" &&
-                  observedHeartbeat.message ===
-                    "Heartbeat delivery is disabled by configuration (target: none)." &&
-                  observedHeartbeat.preview === `Heartbeat handled: ${wakeText}`
-                );
-              },
-              { timeout: 15_000, interval: 50 },
-            )
-            .toBe(true);
-        } catch (error) {
-          throw new Error(`Unexpected last-heartbeat state: ${JSON.stringify(observedHeartbeat)}`, {
-            cause: error,
-          });
-        }
+        expect(
+          providerRequests
+            .slice(requestsBeforeWake)
+            .some((body) => JSON.stringify(body).includes(wakeText)),
+        ).toBe(true);
+        await expect
+          .poll(
+            async () => {
+              const history = await client.request<{ messages: unknown[] }>("chat.history", {
+                sessionKey,
+                limit: 100,
+              });
+              return history.messages.some(
+                (message) =>
+                  isRecord(message) &&
+                  message.role === "assistant" &&
+                  Array.isArray(message.content) &&
+                  message.content.some(
+                    (part) =>
+                      isRecord(part) &&
+                      part.type === "text" &&
+                      part.text === `Event handled: ${wakeText}`,
+                  ),
+              );
+            },
+            { timeout: 15_000, interval: 50 },
+          )
+          .toBe(true);
+        expect(await client.request<unknown>("last-heartbeat", {})).toEqual(priorLegacyReport);
       } finally {
         if (gateway) {
           await disconnectGatewayClient(gateway.client);

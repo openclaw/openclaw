@@ -212,7 +212,7 @@ describe("Gateway heartbeat session routing", () => {
   });
 
   it(
-    "routes monitor wakes through heartbeat.session while preserving explicit wake sessions",
+    "routes a persisted ordinary automation and explicit legacy wakes to their own sessions",
     { timeout: 90_000 },
     async ({ signal }) => {
       const envSnapshot = captureEnv([...ISOLATED_GATEWAY_ENV_KEYS]);
@@ -231,13 +231,7 @@ describe("Gateway heartbeat session routing", () => {
         fs.mkdir(bundledPluginsDir, { recursive: true }),
         fs.mkdir(path.dirname(configPath), { recursive: true }),
       ]);
-      await Promise.all([
-        fs.writeFile(
-          path.join(workspaceDir, "HEARTBEAT.md"),
-          "Process all pending system events and report what was handled.\n",
-        ),
-        writeRouteCapturePlugin({ pluginDir, tracePath: deliveryTracePath, cronReadyEvent }),
-      ]);
+      await writeRouteCapturePlugin({ pluginDir, tracePath: deliveryTracePath, cronReadyEvent });
 
       const token = nextId("heartbeat-routing-token");
       for (const [key, value] of Object.entries({
@@ -321,7 +315,6 @@ describe("Gateway heartbeat session routing", () => {
             defaults: {
               workspace: workspaceDir,
               skipBootstrap: true,
-              heartbeat: { every: "24h", session: "ops-heartbeat", target: "last" },
               model: { primary: provider.modelRef },
               models: {
                 [provider.modelRef]: {
@@ -343,7 +336,7 @@ describe("Gateway heartbeat session routing", () => {
               },
             },
           },
-          // Full configs may contain nested nulls; heartbeat admission must not reinterpret them as patches.
+          // Full configs may contain nested nulls; automation admission must not reinterpret them as patches.
           tts: { providers: { fixture: { disabledVoice: null } } },
           gateway: { auth: { mode: "token", token } },
           plugins: {
@@ -362,6 +355,26 @@ describe("Gateway heartbeat session routing", () => {
           clientDisplayName: "vitest-gateway-heartbeat-session-routing",
         });
         await gateway.server.startupSettled;
+        const createdAutomation = await gateway.client.request<{ id: string }>("cron.add", {
+          agentId: "main",
+          name: "Configured session routing proof",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 86_400_000 },
+          sessionTarget: `session:${configuredSessionKey}`,
+          sessionKey: configuredSessionKey,
+          wakeMode: "now",
+          payload: {
+            kind: "agentTurn",
+            message: "Process pending system events and report what was handled.",
+          },
+          delivery: {
+            mode: "announce",
+            channel: PROOF_CHANNEL_ID,
+            to: "configured-destination",
+            accountId: "default",
+          },
+        });
+        expect(createdAutomation.id).toBeTypeOf("string");
         await disconnectGatewayClient(gateway.client);
         await gateway.server.close({ reason: "heartbeat catalog-owner restart proof" });
         gateway = await startGatewayWithClient({
@@ -437,16 +450,16 @@ describe("Gateway heartbeat session routing", () => {
             sessionTarget: string;
           }>;
         }>("cron.list", { includeDisabled: true });
-        const monitor = listed.jobs.find((job) => job.declarationKey === "heartbeat:main");
+        const monitor = listed.jobs.find((job) => job.id === createdAutomation.id);
         expect(monitor).toMatchObject({
           agentId: "main",
-          declarationKey: "heartbeat:main",
+          id: createdAutomation.id,
           enabled: true,
-          payload: { kind: "heartbeat" },
-          sessionTarget: "main",
+          payload: { kind: "agentTurn" },
+          sessionTarget: `session:${configuredSessionKey}`,
         });
         if (!monitor) {
-          throw new Error("system-owned main-agent heartbeat monitor was not listed");
+          throw new Error("persisted ordinary automation was not listed after restart");
         }
 
         const configuredRequestBaseline = providerRequests.length;

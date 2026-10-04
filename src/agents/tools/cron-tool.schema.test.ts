@@ -30,7 +30,6 @@ describe("cron model schema regressions", () => {
       "get",
       "remove",
       "runs",
-      "next_check",
     ]);
     for (const field of ["job", "text", "mode", "runMode", "sessionKey", "contextMessages"]) {
       expect(restricted.parameters).not.toHaveProperty(`properties.${field}`);

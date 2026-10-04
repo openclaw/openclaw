@@ -791,7 +791,6 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
       agents: {
         ownership: "explicit",
         defaults: {
-          heartbeat: { agentId: "research" },
           systemAgent: { agentId: "research" },
           authInheritance: { agentId: "research" },
           model: { primary: "anthropic/claude-opus-4-6" },

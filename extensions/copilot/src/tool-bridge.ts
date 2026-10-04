@@ -355,8 +355,6 @@ function buildOpenClawCodingToolsOptions(
       a.requireExplicitMessageTarget ?? isSubagentSessionKey(liveSessionKey),
     disableMessageTool: a.disableMessageTool,
     forceMessageTool: a.forceMessageTool,
-    enableHeartbeatTool: a.enableHeartbeatTool,
-    forceHeartbeatTool: a.forceHeartbeatTool,
     authProfileStore: a.toolAuthProfileStore ?? a.authProfileStore,
     computerContextEpoch: input.computerContextEpoch,
     onToolOutcome: a.onToolOutcome,

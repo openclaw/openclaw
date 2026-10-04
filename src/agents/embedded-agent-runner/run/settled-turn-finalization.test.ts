@@ -542,7 +542,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       const attempt = failedTool ? settledFailedAttempt() : createSettledProviderFailureAttempt();
       const input = finalizationInput(attempt);
       Object.assign(input.terminalBase.runParams, {
-        trigger: "heartbeat",
+        trigger: "cron",
         terminalReplyExpectation: optional ? "optional" : "required",
         allowEmptyAssistantReplyAsSilent: allowed,
         sourceReplyDeliveryMode: "automatic",
@@ -576,7 +576,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     attempt.terminal = { kind: "timeout", phase: "prompt", source: "idle" };
     const input = finalizationInput(attempt);
     Object.assign(input.terminalBase.runParams, {
-      trigger: "heartbeat",
+      trigger: "cron",
       terminalReplyExpectation: "optional",
       allowEmptyAssistantReplyAsSilent: true,
       sourceReplyDeliveryMode: "automatic",
@@ -776,7 +776,6 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
           sourceReplyDeliveryMode: "message_tool_only",
           sendPolicyDenied: false,
           successfulSourceReplyDelivery: false,
-          isHeartbeat: false,
           isRoomEvent: false,
         }),
       ).toEqual({ kind: "none" });

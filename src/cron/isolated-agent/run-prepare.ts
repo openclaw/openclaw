@@ -8,7 +8,9 @@ import {
   loadPublishedGatewayReplyDispatchRuntime,
   type PreparedModelRuntimeLease,
 } from "../../agents/prepared-model-runtime.js";
+import { captureSessionEventTargetForHost } from "../../auto-reply/reply/session-event-handoff.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
+import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
 import { isCronSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
@@ -19,9 +21,13 @@ import {
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { resolveCronOwnerDeliverySkip } from "../delivery-plan.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
+import { appendCronJobScratchPrompt, appendCronUnattendedRunPreamble } from "../run-prompt.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
-import { isDetachedCronSessionTarget } from "../session-target.js";
+import { readCronScratchSnapshot } from "../scratch-read.js";
+import { isDetachedCronSessionTarget, resolveCronDeliverySessionKey } from "../session-target.js";
+import { resolveCronJobsStorePathFromConfig } from "../store/paths.js";
 import { resolveCronRunToolsAllow } from "../tools-allow.js";
 import {
   resolveCronModelSelection,
@@ -37,7 +43,6 @@ import {
 } from "./run-delivery-trace.js";
 import { resolveCronPreflight } from "./run-fallback-policy.js";
 import {
-  appendCronUnattendedRunPreamble,
   resolveCronAuthSelection,
   loadCronExternalContentRuntime,
   loadSessionAccessorRuntime,
@@ -85,6 +90,7 @@ export async function prepareCronRunContext(params: {
   onLifecycleInterrupt: () => void;
 }) {
   const { input } = params;
+  input.assertCurrent?.();
   const commandPromptPreflight = resolveCronCommandPromptPreflight(input.job);
   if (commandPromptPreflight) {
     return { ok: false as const, result: commandPromptPreflight };
@@ -98,6 +104,24 @@ export async function prepareCronRunContext(params: {
     { agentId: requiredAgentId },
     tryResolveAmbientOwnerAgentId(requestedRuntimeCfg),
   );
+  if (input.job.delivery?.mode === "announce" && input.job.delivery.target === "owner") {
+    const preflightDelivery = await resolveCronDeliveryContext({
+      cfg: requestedRuntimeCfg,
+      job: input.job,
+      agentId: initialAgentId,
+    });
+    input.assertCurrent?.();
+    (input.abortSignal ?? input.signal)?.throwIfAborted();
+    const skipped = resolveCronOwnerDeliverySkip(preflightDelivery);
+    if (skipped) {
+      return { ok: false as const, result: skipped };
+    }
+  }
+  const resultSessionKey =
+    resolveCronDeliverySessionKey(input.job) ??
+    resolveAgentMainSessionKey({ cfg: requestedRuntimeCfg, agentId: initialAgentId });
+  const resultTarget = await captureSessionEventTargetForHost(initialAgentId, resultSessionKey);
+  input.assertCurrent?.();
   const publishedRuntime = await loadPublishedGatewayReplyDispatchRuntime({
     agentId: initialAgentId,
     abortSignal: input.abortSignal ?? input.signal,
@@ -225,6 +249,10 @@ export async function prepareCronRunContext(params: {
       update,
       assertCommitAllowed,
     }) => {
+      const assertCurrent = () => {
+        input.assertCurrent?.();
+        assertCommitAllowed?.();
+      };
       const { applySessionEntryLifecycleMutation, patchSessionEntryCore } =
         await loadSessionAccessorRuntime();
       if (resetBoundary) {
@@ -236,7 +264,10 @@ export async function prepareCronRunContext(params: {
             {
               sessionKey,
               resetBoundary,
-              buildEntry: ({ currentEntry }) => update(currentEntry),
+              buildEntry: ({ currentEntry }) => {
+                assertCurrent();
+                return update(currentEntry);
+              },
             },
           ],
           skipMaintenance: true,
@@ -247,7 +278,7 @@ export async function prepareCronRunContext(params: {
       await patchSessionEntryCore(
         { storePath, sessionKey, agentId },
         (_entry, context) => update(context.existingEntry),
-        { fallbackEntry, replaceEntry: true, assertCommitAllowed },
+        { fallbackEntry, replaceEntry: true, assertCommitAllowed: assertCurrent },
       );
     };
     const persistSessionEntry = createPersistCronSessionEntry({
@@ -442,6 +473,17 @@ export async function prepareCronRunContext(params: {
       job: input.job,
       agentId,
     });
+    const skipped = resolveCronOwnerDeliverySkip({
+      deliveryPlan,
+      deliveryRequested,
+      resolvedDelivery,
+    });
+    if (skipped) {
+      sessionWorkAdmission.release();
+      await preparedModelRuntimeLease[Symbol.asyncDispose]();
+      preparedModelRuntimeLease = undefined;
+      return { ok: false as const, result: withRunSession(skipped) };
+    }
 
     const { formattedTime, timeLine } = resolveCronStyleNow(runtimeCfg, now);
     // Current jobs stay detached; a bounded tail preserves context without transcript continuation.
@@ -495,6 +537,13 @@ export async function prepareCronRunContext(params: {
       commandBody = `${base}\n${timeLine}`.trim();
     }
     commandBody = appendCronUnattendedRunPreamble(commandBody, { externalHook: isExternalHook });
+    const scratchSnapshot = await readCronScratchSnapshot(
+      resolveCronJobsStorePathFromConfig(runtimeCfg),
+      { kind: "job", jobId: input.job.id, createdAtMsFallback: input.job.createdAtMs },
+      {},
+      { assertCurrent: input.assertCurrent, signal: input.abortSignal ?? input.signal },
+    );
+    commandBody = appendCronJobScratchPrompt(commandBody, scratchSnapshot?.state.scratch);
 
     const skillsSnapshot =
       input.skillsSnapshot ??
@@ -594,6 +643,7 @@ export async function prepareCronRunContext(params: {
         agentCfg,
         agentDir,
         agentSessionKey,
+        resultTarget,
         sourceSessionKey,
         sourceSessionGeneration,
         runSessionId,

@@ -367,7 +367,6 @@ describe("runReplyAgent media path normalization", () => {
       shouldEmitToolResult: () => false,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      isHeartbeat: false,
       sessionKey: "main",
       getActiveSessionEntry: () => undefined,
       resolvedVerboseLevel: "off",

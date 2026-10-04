@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import nodePath from "node:path";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { drainSystemEvents } from "../infra/system-events.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -9,7 +11,6 @@ import {
   installGatewayTestHooks,
   testState,
   withGatewayServer,
-  waitForSystemEvent,
 } from "./test-helpers.js";
 import { setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 
@@ -18,6 +19,36 @@ installGatewayTestHooks({ scope: "suite" });
 await import("./server.js");
 
 const HOOK_TOKEN = "hook-secret";
+const enqueueSessionEvent = vi.fn<typeof sessionEvents.enqueueSessionEventForHost>();
+let handoffObserved = createDeferred();
+
+beforeEach(() => {
+  handoffObserved = createDeferred();
+  enqueueSessionEvent.mockReset().mockImplementation(() => {
+    handoffObserved.resolve();
+    handoffObserved = createDeferred();
+    return {
+      id: "hook-event",
+      cancel: () => false,
+      settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
+    };
+  });
+  vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockImplementation(enqueueSessionEvent);
+});
+
+async function waitForTerminalHandoff(count = 1) {
+  while (enqueueSessionEvent.mock.calls.length < count) {
+    await handoffObserved.promise;
+  }
+  expect(enqueueSessionEvent.mock.calls[count - 1]).toEqual([
+    "Hook Hook: done",
+    expect.objectContaining({
+      agentId: "main",
+      sessionKey: resolveMainSessionKeyFromConfig(),
+      source: "hook",
+    }),
+  ]);
+}
 
 afterEach(() => {
   drainSystemEvents(resolveMainSessionKeyFromConfig());
@@ -140,7 +171,7 @@ describe("gateway hook session mode", () => {
       expect(isolated.status).toBe(200);
       await waitForCronRuns(1);
       expect(cronRunCall().job?.sessionTarget).toBe("isolated");
-      await waitForSystemEvent();
+      await waitForTerminalHandoff();
 
       const missingKey = await postHook(port, "/hooks/agent", {
         message: "Remember this",
@@ -200,7 +231,7 @@ describe("gateway hook session mode", () => {
       await waitForCronRuns(1);
       expect(cronRunCall().sessionKey).toBe("hook:direct:42");
       expect(cronRunCall().job?.sessionTarget).toBe("session:hook:direct:42");
-      await waitForSystemEvent();
+      await waitForTerminalHandoff(2);
     });
   });
 
@@ -231,13 +262,13 @@ describe("gateway hook session mode", () => {
       expect(staticResponse.status).toBe(200);
       await waitForCronRuns(1);
       expect(cronRunCall(0).job?.sessionTarget).toBe("session:hook:mapped:static");
-      await waitForSystemEvent();
+      await waitForTerminalHandoff();
 
       const defaultResponse = await postHook(port, "/hooks/mapped-default", {});
       expect(defaultResponse.status).toBe(200);
       await waitForCronRuns(2);
       expect(cronRunCall(1).job?.sessionTarget).toBe("session:hook:mapped:default");
-      await waitForSystemEvent();
+      await waitForTerminalHandoff(2);
     });
 
     cronIsolatedRun.mockClear();

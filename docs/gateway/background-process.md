@@ -64,15 +64,15 @@ Behavior:
 | `tools.exec.backgroundMs`             | 10000   | Same as `OPENCLAW_BASH_YIELD_MS`.                                               |
 | `tools.exec.timeoutSeconds`           | 1800    | Default per-call timeout.                                                       |
 | `tools.exec.cleanupMs`                | 1800000 | Same as `OPENCLAW_BASH_JOB_TTL_MS`.                                             |
-| `tools.exec.notifyOnExit`             | true    | Enqueue a system event + request heartbeat when a backgrounded exec exits.      |
+| `tools.exec.notifyOnExit`             | true    | Submit an ordinary session follow-up when a backgrounded exec exits.            |
 | `tools.exec.notifyOnExitEmptySuccess` | false   | Also enqueue completion events for successful backgrounded runs with no output. |
 
 ### Disable automatic completion turns
 
 Background exec completion notifications are enabled by default. They can run a
-model turn marked `[OpenClaw exec completion]` even when
-`agents.defaults.heartbeat.every` is `"0m"`: that setting disables recurring polls,
-not completion follow-ups.
+model turn marked `[OpenClaw exec completion]` independently of scheduled
+automations. Disabling or deleting a periodic check, or disabling the scheduler,
+does not disable completion follow-ups.
 
 To keep background commands running without automatic completion turns, set:
 

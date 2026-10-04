@@ -32,6 +32,8 @@ it("persists the real relay's ordered batch with zero caller-thread SQL", async 
     throw new Error("ACP diagnostics ran SQL on the caller");
   });
   const relay = startAcpSpawnParentStreamRelay({
+    requesterAgentId: "main",
+    expectedTarget: { sessionId: "parent", generation: "parent-generation" },
     runId: "boundary-run",
     parentSessionKey: "agent:main:parent",
     childSessionKey: "agent:main:acp:child",

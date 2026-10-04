@@ -189,6 +189,11 @@ export function createSubagentRegistryMockState() {
       return Promise.resolve({
         assertCurrent,
         prepareRead: () => undefined,
+        readSessionSettings: () => {
+          assertCurrent();
+          const entry = mocks.entries[input.sessionKey];
+          return { permissionMode: entry?.permissionMode, toolOverrides: entry?.toolOverrides };
+        },
         release: () => {
           active = false;
         },

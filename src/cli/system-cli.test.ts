@@ -177,11 +177,11 @@ describe("system-cli", () => {
   it("writes JSON when an implicit machine-output command fails", async () => {
     callGatewayFromCli.mockRejectedValueOnce(new Error("Gateway unavailable"));
 
-    await runCli(["system", "heartbeat", "last"]);
+    await runCli(["system", "presence"]);
 
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
     const [method, gatewayOptions, params, requestOptions] = gatewayCall();
-    expect(method).toBe("last-heartbeat");
+    expect(method).toBe("system-presence");
     expect(typeof gatewayOptions).toBe("object");
     expect(params).toBeUndefined();
     expect(requestOptions).toEqual({ expectFinal: false });
@@ -192,29 +192,17 @@ describe("system-cli", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
-  it.each([
-    { args: ["system", "heartbeat", "last"], method: "last-heartbeat", params: undefined },
-    {
-      args: ["system", "heartbeat", "enable"],
-      method: "set-heartbeats",
-      params: { enabled: true },
-    },
-    {
-      args: ["system", "heartbeat", "disable"],
-      method: "set-heartbeats",
-      params: { enabled: false },
-    },
-    { args: ["system", "presence"], method: "system-presence", params: undefined },
-  ])("routes $args to gateway", async ({ args, method, params }) => {
+  it("routes presence to the Gateway", async () => {
+    const method = "system-presence";
     callGatewayFromCli.mockResolvedValueOnce({ method });
 
-    await runCli(args);
+    await runCli(["system", "presence"]);
 
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
     const [calledMethod, gatewayOptions, calledParams, requestOptions] = gatewayCall();
     expect(calledMethod).toBe(method);
     expect(typeof gatewayOptions).toBe("object");
-    expect(calledParams).toEqual(params);
+    expect(calledParams).toBeUndefined();
     expect(requestOptions).toEqual({ expectFinal: false });
     expect(runtimeLogs).toEqual([JSON.stringify({ method }, null, 2)]);
   });

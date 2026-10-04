@@ -1,7 +1,7 @@
 import { assert, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
-import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import type { dispatchInboundMessageInternal } from "../../auto-reply/dispatch.js";
 import {
   createQueueSettings,
   createQueueTestRun,
@@ -85,7 +85,7 @@ it.each([true, false])(
       );
       await fixture.dispatchedRecorder;
       const dispatch = dispatchInboundMessageMock.mock.calls.at(-1)?.[0] as Parameters<
-        typeof dispatchInboundMessage
+        typeof dispatchInboundMessageInternal
       >[0];
       const authority = dispatch.replyOptions?.operatorAuthority;
       assert(authority);

@@ -28,7 +28,6 @@ import type { StopReason } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import type { CliOutput, CliUsage } from "../cli-output-contracts.js";
 import {
   awaitAgentEndSideEffects,
@@ -451,7 +450,6 @@ export async function finalizeCliContextEngineTurn(params: {
           params.output.terminalInterruption !== undefined ||
           runParams.abortSignal?.aborted === true,
         yieldAborted: false,
-        isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
         runtimeContext: {
           provider: runParams.modelProvider ?? runParams.provider,
           modelId: context.modelId,
@@ -491,7 +489,6 @@ export async function finalizeCliContextEngineTurn(params: {
       sessionKey: runParams.sessionKey,
       sessionTarget: runParams.sessionTarget,
       sessionFile: runParams.sessionFile,
-      isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
       messagesSnapshot: [...prePromptMessages, ...turnMessages],
       prePromptMessageCount: prePromptMessages.length,
       sessionManager: runParams.sessionManager,

@@ -3,7 +3,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
-import { parseDurationMs } from "../cli/parse-duration.js";
 import {
   resolveExactExecModeFromPolicy,
   type ExecAsk,
@@ -36,70 +35,6 @@ import { sensitive } from "./zod-schema.sensitive.js";
 const AgentTtsConfigSchema = TtsConfigSchema.unwrap()
   .extend({ prefsPath: z.string().optional() })
   .strict()
-  .optional();
-
-export const HeartbeatSchema = z
-  .strictObject({
-    every: z.string().optional(),
-    activeHours: z
-      .strictObject({
-        start: z.string().optional(),
-        end: z.string().optional(),
-        timezone: z.string().optional(),
-      })
-      .optional(),
-    model: z.string().optional(),
-    session: z.string().optional(),
-    target: z.string().optional(),
-    directPolicy: z.union([z.literal("allow"), z.literal("block")]).optional(),
-    to: z.string().optional(),
-    accountId: z.string().optional(),
-    prompt: z.string().optional(),
-    timeoutSeconds: z.number().int().positive().optional(),
-    lightContext: z.boolean().optional(),
-    isolatedSession: z.boolean().optional(),
-  })
-  .superRefine((val, ctx) => {
-    if (val.every) {
-      try {
-        parseDurationMs(val.every, { defaultUnit: "m" });
-      } catch {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["every"],
-          message: "invalid duration (use ms, s, m, h)",
-        });
-      }
-    }
-
-    const active = val.activeHours;
-    if (!active) {
-      return;
-    }
-    const timePattern = /^([01]\d|2[0-3]|24):([0-5]\d)$/;
-    for (const path of ["start", "end"] as const) {
-      const raw = active[path];
-      if (!raw) {
-        continue;
-      }
-      const match = timePattern.exec(raw);
-      let message: string | undefined;
-      if (!match) {
-        message = 'invalid time (use "HH:MM" 24h format)';
-      } else if (match[1] === "24" && match[2] !== "00") {
-        message = "invalid time (24:00 is the only allowed 24:xx value)";
-      } else if (match[1] === "24" && path === "start") {
-        message = "invalid time (start cannot be 24:00)";
-      }
-      if (message) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["activeHours", path],
-          message,
-        });
-      }
-    }
-  })
   .optional();
 
 export const AgentContextLimitsSchema = z
@@ -392,7 +327,7 @@ const ToolExecBaseShape = {
   timeoutSeconds: z.number().int().positive().optional(),
   /** How long to keep finished sessions in memory (ms). */
   cleanupMs: z.number().int().positive().optional(),
-  /** Emit a system event and heartbeat when a backgrounded exec exits. */
+  /** Queue a session follow-up when a backgrounded exec exits. */
   notifyOnExit: z.boolean().optional(),
   /**
    * Also emit success exit notifications when a backgrounded exec has no output.
@@ -682,7 +617,6 @@ export const AgentEntrySchema = AgentEntryBaseSchema.extend({
   tts: AgentTtsConfigSchema,
   skillsLimits: AgentSkillsLimitsSchema,
   contextLimits: AgentContextLimitsSchema,
-  heartbeat: HeartbeatSchema,
   identity: IdentitySchema,
   groupChat: GroupChatSchema.unwrap().omit({ visibleReplies: true }).optional(),
   sandbox: AgentSandboxSchema,

@@ -28,9 +28,9 @@ import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import {
   REPLY_OPERATION_RUN_STATE,
-  resolveReplyOperationAgentTurn,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
+import { resolveReplyOperationAgentTurn } from "./reply-operation-run-state.test-support.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { createMockReplyOperation, createMockTypingController } from "./test-helpers.js";
 

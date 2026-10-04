@@ -1,41 +1,36 @@
-// Heartbeat active-hours evidence runs the real wake-lane guards and reload path.
-// Interval cadence itself is covered by the system cron monitor integration tests.
+// The ordinary scheduler naturally executes each persisted active-hours phase.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import { CronService } from "../../../../src/cron/service.js";
+import type { CronEvent } from "../../../../src/cron/service/state.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
-import { isWithinActiveHours } from "../../../../src/infra/heartbeat-active-hours.js";
-import { startHeartbeatRunner } from "../../../../src/infra/heartbeat-runner.js";
-import { requestHeartbeat } from "../../../../src/infra/heartbeat-wake.js";
+import {
+  GatewayScheduler,
+  type GatewaySchedulerClock,
+} from "../../../../src/infra/gateway-scheduler.js";
+import { withOpenClawTestState } from "../../../../src/test-utils/openclaw-test-state.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
-
-const DEFAULT_TIMEOUT_MS = 5_000;
-const HEARTBEAT_INTERVAL_MS = 100;
-const HEARTBEAT_INTERVAL = `${HEARTBEAT_INTERVAL_MS}ms`;
 
 type HeartbeatRuntimeOptions = {
   artifactBase: string;
   repoRoot: string;
-  timeoutMs: number;
+  clock?: GatewaySchedulerClock;
 };
 
 type SchedulerObservation = {
   at: string;
   outcome: "active-fire" | "quiet-hours-skip";
+  scheduledAtMs: number;
+  runAtMs: number;
 };
 
 function parseOptions(argv: string[], repoRoot = process.cwd()): HeartbeatRuntimeOptions {
   let artifactBase = path.join(repoRoot, ".artifacts", "qa-e2e", "heartbeat-active-hours");
-  let timeoutMs = DEFAULT_TIMEOUT_MS;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--output-dir") {
       artifactBase = path.resolve(repoRoot, argv[++index] ?? "");
-      continue;
-    }
-    if (arg === "--timeout-ms") {
-      timeoutMs = Number(argv[++index]);
       continue;
     }
     if (arg === "--") {
@@ -43,152 +38,124 @@ function parseOptions(argv: string[], repoRoot = process.cwd()): HeartbeatRuntim
     }
     throw new Error(`Unknown argument: ${arg}`);
   }
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    throw new Error("--timeout-ms must be a positive number");
-  }
-  return { artifactBase, repoRoot, timeoutMs };
-}
-
-function heartbeatConfig(quietHours: boolean): OpenClawConfig {
-  return {
-    agents: {
-      entries: { main: {} },
-      defaults: {
-        heartbeat: {
-          activeHours: quietHours
-            ? { start: "00:00", end: "00:00", timezone: "UTC" }
-            : { start: "00:00", end: "24:00", timezone: "UTC" },
-          every: HEARTBEAT_INTERVAL,
-          target: "none",
-        },
-      },
-    },
-  };
-}
-
-async function waitForObservation(
-  observations: SchedulerObservation[],
-  outcome: SchedulerObservation["outcome"],
-  afterCount: number,
-  timeoutMs: number,
-) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const observation = observations.slice(afterCount).find((entry) => entry.outcome === outcome);
-    if (observation) {
-      return observation;
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 20);
-    });
-  }
-  throw new Error(`heartbeat wake lane did not observe ${outcome} within ${timeoutMs}ms`);
-}
-
-async function pokeScheduledHeartbeat(params: {
-  observations: SchedulerObservation[];
-  outcome: SchedulerObservation["outcome"];
-  afterCount: number;
-  timeoutMs: number;
-}) {
-  // The cron monitor fires at or after the configured due slot. Wait past one
-  // interval so the runner's cooldown gate admits the equivalent scheduled poke.
-  await new Promise((resolve) => {
-    setTimeout(resolve, HEARTBEAT_INTERVAL_MS + 50);
-  });
-  requestHeartbeat({
-    source: "interval",
-    intent: "scheduled",
-    reason: "interval",
-    coalesceMs: 0,
-  });
-  return await waitForObservation(
-    params.observations,
-    params.outcome,
-    params.afterCount,
-    params.timeoutMs,
-  );
+  return { artifactBase, repoRoot };
 }
 
 function createWriter(options: HeartbeatRuntimeOptions) {
   return createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
     logFileName: "heartbeat-active-hours.log",
-    primaryModel: "heartbeat/scheduler",
+    primaryModel: "cron/scheduler",
     providerMode: "mock-openai",
     repoRoot: options.repoRoot,
     target: {
       id: "heartbeat-active-hours",
-      title: "Heartbeat active-hours scheduler",
+      title: "Ordinary automation active-hours policy",
       sourcePath: "test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.ts",
-      docsRefs: ["docs/gateway/heartbeat.md"],
+      docsRefs: ["docs/automation/cron-jobs.md"],
       codeRefs: [
         "test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.ts",
-        "src/infra/heartbeat-runner.ts",
-        "src/infra/heartbeat-active-hours.ts",
+        "src/cron/service/timer-execution.ts",
+        "src/cron/active-hours.ts",
       ],
     },
   });
 }
 
 export async function runHeartbeatActiveHoursRuntime(options: HeartbeatRuntimeOptions) {
+  return await withOpenClawTestState(
+    { layout: "state-only", prefix: "automation-active-hours-" },
+    async (state) => await runActiveHoursPhases(options, state.statePath("cron", "jobs.json")),
+  );
+}
+
+async function runActiveHoursPhases(options: HeartbeatRuntimeOptions, storePath: string) {
   await fs.mkdir(options.artifactBase, { recursive: true });
   const writer = createWriter(options);
   const startedAt = Date.now();
   const observations: SchedulerObservation[] = [];
-  const phaseObservations: SchedulerObservation[] = [];
-  let currentConfig = heartbeatConfig(false);
-  const runner = startHeartbeatRunner({
-    cfg: currentConfig,
-    readCurrentConfig: () => currentConfig,
-    runOnce: async ({ cfg, heartbeat }) => {
-      const active = isWithinActiveHours(cfg!, heartbeat);
-      const outcome = active ? "active-fire" : "quiet-hours-skip";
-      observations.push({ at: new Date().toISOString(), outcome });
-      writer.appendLog(`heartbeat-active-hours: ${outcome}\n`);
-      return active
-        ? { status: "ran", durationMs: 1 }
-        : { status: "skipped", reason: "quiet-hours" };
+  const scheduler = new GatewayScheduler({ clock: options.clock });
+  let executionCount = 0;
+  let expectedJobId: string | undefined;
+  let onFinished: ((event: CronEvent) => void) | undefined;
+  const log = (entry: unknown, message?: string) => {
+    writer.appendLog(`${message ?? JSON.stringify(entry)}\n`);
+  };
+  const cron = new CronService({
+    storePath,
+    scheduler,
+    cronEnabled: true,
+    log: { debug: log, info: log, warn: log, error: log },
+    enqueueSystemEvent: () => {
+      throw new Error("Active-hours evidence must use ordinary session execution");
+    },
+    runIsolatedAgentJob: async () => {
+      throw new Error("Active-hours evidence must use its original session");
+    },
+    runSessionEvent: async () => {
+      executionCount += 1;
+      return { status: "ok", executionStarted: true };
+    },
+    onEvent: (event) => {
+      if (event.jobId === expectedJobId && event.action === "finished") {
+        onFinished?.(event);
+      }
     },
   });
   try {
-    phaseObservations.push(
-      await pokeScheduledHeartbeat({
-        observations,
-        outcome: "active-fire",
-        afterCount: 0,
-        timeoutMs: options.timeoutMs,
-      }),
-    );
-    const beforeQuiet = observations.length;
-    currentConfig = heartbeatConfig(true);
-    runner.updateConfig(currentConfig);
-    phaseObservations.push(
-      await pokeScheduledHeartbeat({
-        observations,
-        outcome: "quiet-hours-skip",
-        afterCount: beforeQuiet,
-        timeoutMs: options.timeoutMs,
-      }),
-    );
-    const beforeReload = observations.length;
-    currentConfig = heartbeatConfig(false);
-    runner.updateConfig(currentConfig);
-    phaseObservations.push(
-      await pokeScheduledHeartbeat({
-        observations,
-        outcome: "active-fire",
-        afterCount: beforeReload,
-        timeoutMs: options.timeoutMs,
-      }),
-    );
+    const job = await cron.add({
+      name: "Active-hours evidence",
+      enabled: false,
+      schedule: { kind: "every", everyMs: 60_000 },
+      activeHours: { start: "00:00", end: "24:00", timezone: "UTC" },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "Check the active-hours policy" },
+    });
+    expectedJobId = job.id;
+    await cron.start();
+    for (const quiet of [false, true, false]) {
+      const scheduledAtMs = scheduler.now() + 1000;
+      const before = executionCount;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const settled = new Promise<CronEvent>((resolve, reject) => {
+        onFinished = resolve;
+        timer = setTimeout(() => reject(new Error("Scheduled automation did not settle")), 30_000);
+      });
+      try {
+        await cron.update(job.id, {
+          enabled: true,
+          deleteAfterRun: false,
+          schedule: { kind: "at", at: new Date(scheduledAtMs).toISOString() },
+          activeHours: { start: "00:00", end: quiet ? "00:00" : "24:00", timezone: "UTC" },
+        });
+        const event = await settled;
+        if (
+          event.status !== (quiet ? "skipped" : "ok") ||
+          !event.runAtMs ||
+          event.runAtMs < scheduledAtMs
+        ) {
+          throw new Error(`Unexpected scheduled active-hours outcome: ${JSON.stringify(event)}`);
+        }
+        if (executionCount !== before + (quiet ? 0 : 1)) {
+          throw new Error("Active-hours admission started the wrong number of session turns");
+        }
+        const outcome = quiet ? "quiet-hours-skip" : "active-fire";
+        observations.push({
+          at: new Date().toISOString(),
+          outcome,
+          scheduledAtMs,
+          runAtMs: event.runAtMs,
+        });
+        writer.appendLog(`${outcome}: scheduled=${scheduledAtMs}, started=${event.runAtMs}\n`);
+      } finally {
+        clearTimeout(timer);
+        onFinished = undefined;
+      }
+    }
 
     const summaryPath = path.join(options.artifactBase, "heartbeat-active-hours-summary.json");
-    await fs.writeFile(
-      summaryPath,
-      `${JSON.stringify({ observations: phaseObservations }, null, 2)}\n`,
-      "utf8",
-    );
+    await fs.writeFile(summaryPath, `${JSON.stringify({ observations }, null, 2)}\n`, "utf8");
     return await writer.write({
       artifacts: [{ kind: "summary", filePath: summaryPath }],
       details: "Observed active fire, quiet-hours skip, and active-hours reload fire",
@@ -204,7 +171,9 @@ export async function runHeartbeatActiveHoursRuntime(options: HeartbeatRuntimeOp
       status: "fail",
     });
   } finally {
-    runner.stop();
+    cron.stop();
+    await cron.waitForIdle();
+    await scheduler.stop();
   }
 }
 

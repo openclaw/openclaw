@@ -96,6 +96,8 @@ type AgentFallbackModelPatch = {
 
 export type AgentFallbackCycleParams = {
   preparedRunAdmission: PreparedAgentRunAdmission;
+  /** The scheduler retains its source grant through every fallback candidate. */
+  scheduledMessageActionTurnCapability?: string;
   turn: AgentTurnParams;
   effectiveRun: FollowupRun["run"];
   runtimeConfig: OpenClawConfig;

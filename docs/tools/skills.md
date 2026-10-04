@@ -233,7 +233,6 @@ regardless of where they are loaded from.
     ownership: "explicit",
     defaults: {
       skills: ["github", "weather"], // shared baseline
-      heartbeat: { agentId: "writer" },
       systemAgent: { agentId: "writer" },
       authInheritance: { agentId: "writer" },
     },

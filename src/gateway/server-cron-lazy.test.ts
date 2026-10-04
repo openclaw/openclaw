@@ -235,9 +235,9 @@ describe("createLazyGatewayCronState", () => {
     hoisted.setState(createCronState(cron));
 
     const lazy = createLazyGatewayCronState(createParams());
-    await lazy.cron.remove("heartbeat-monitor", { systemOwned: true });
+    await lazy.cron.remove("skill-review-monitor", { systemOwned: true });
 
-    expect(cron["remove"]).toHaveBeenCalledExactlyOnceWith("heartbeat-monitor", {
+    expect(cron["remove"]).toHaveBeenCalledExactlyOnceWith("skill-review-monitor", {
       systemOwned: true,
     });
   });
@@ -437,7 +437,7 @@ describe("createLazyGatewayCronState", () => {
     expect(cron["start"]).toHaveBeenCalledTimes(2);
   });
 
-  it("forwards heartbeat reconciliation to the loaded cron service", async () => {
+  it("forwards system-job reconciliation to the loaded cron service", async () => {
     const cron = createCronService();
     const state = createCronState(cron);
     hoisted.setState(state);

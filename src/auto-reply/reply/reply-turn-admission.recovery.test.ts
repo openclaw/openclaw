@@ -439,7 +439,7 @@ it.each(["delivery-residue", "live-owner"] as const)(
     void owner?.released.then(() => {
       released = true;
     });
-    const result = await f.admit({ kind: "heartbeat" });
+    const result = await f.admit({ kind: "background" });
     if (owner) {
       expect(result).toMatchObject({ status: "skipped", reason: "active-run" });
       expect(released).toBe(false);

@@ -109,7 +109,6 @@ const TAGLINES: string[] = [
   "Home is wherever port 18789 is.",
   "When my context fills up, I summarize you. Don't worry—you come across great.",
   "I hold 200k tokens of context and exactly one grudge.",
-  "My heartbeat is a config option. Romance isn't dead, it's just scheduled.",
   "I schedule my existential crises with cron so they never block your messages.",
   "Rate-limited again—even my dreams return 429.",
   "Primary model down, fallback engaged: the show must crab on.",

@@ -379,20 +379,20 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(hoisted.reconcileToolResultPromptProjectionState).not.toHaveBeenCalled();
   });
 
-  it("injects the latest heartbeat outcome only as hidden runtime context", async () => {
+  it("keeps supplied conversation context out of the persisted request", async () => {
     const fixture = createInput();
     const result = await prepareEmbeddedAttemptPromptContext({
       ...fixture.input,
       attempt: {
         ...fixture.input.attempt,
-        currentInboundContext: { text: "Latest silent heartbeat outcome: deployment finished" },
+        currentInboundContext: { text: "Prior task result: deployment finished" },
       },
     });
 
     expect(result.promptForSession).toBe("Visible request");
     expect(result.promptForModel).toBe("Visible request");
     expect(result.runtimeContextMessageForCurrentTurn?.content).toContain(
-      "Latest silent heartbeat outcome: deployment finished",
+      "Prior task result: deployment finished",
     );
     expect(result.llmBoundaryPromptForPrecheck).not.toContain("deployment finished");
   });

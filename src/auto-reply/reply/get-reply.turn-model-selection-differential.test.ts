@@ -15,7 +15,6 @@ import {
   TURN_MODEL_DEFAULT_REF,
   TURN_MODEL_DIFFERENTIAL_FIXTURES,
   TURN_MODEL_LIVE_CHANNEL_REF,
-  TURN_MODEL_OVERRIDE_REF,
   TURN_MODEL_PERSISTED_CHANNEL_REF,
   TURN_MODEL_PERSISTED_PEER_REF,
   TURN_MODEL_SESSION_REF,
@@ -48,7 +47,7 @@ registerGetReplyRuntimeOverrides(mocks);
 
 let state: OpenClawTestState;
 
-let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
+let getReplyFromConfigInternal: typeof import("./get-reply.js").getReplyFromConfigInternal;
 let resolveAgentWorkspaceDirMock: typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir;
 let resolveDefaultModelMock: typeof import("./directive-handling.defaults.js").resolveDefaultModel;
 let resolveChannelModelOverrideMock: typeof import("../../channels/model-overrides.js").resolveChannelModelOverride;
@@ -116,12 +115,11 @@ async function observeReplySelection(params: {
   vi.mocked(runPreparedReplyMock).mockClear();
   // Use the same module as getReply so a shared resolver override cannot escape this fixture.
   expect(isPathInside(state.root, resolveAgentWorkspaceDirMock(cfg, "main"))).toBe(true);
-  await getReplyFromConfig(
+  await getReplyFromConfigInternal(
     buildGetReplyCtx({ SessionKey: sessionKey, ...fixture.ctx }),
-    fixture.heartbeat
+    fixture.modelOverride
       ? {
-          isHeartbeat: true,
-          heartbeatModelOverride: turnModelRefLabel(TURN_MODEL_OVERRIDE_REF),
+          modelOverride: turnModelRefLabel(fixture.modelOverride),
         }
       : undefined,
     cfg,
@@ -137,7 +135,7 @@ async function observeReplySelection(params: {
 }
 
 beforeAll(async () => {
-  ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
+  ({ getReplyFromConfigInternal } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
   ({ resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock } =
     await import("../../agents/agent-scope.js"));
   ({ resolveDefaultModel: resolveDefaultModelMock } =
@@ -210,7 +208,7 @@ afterEach(async () => {
   await state.cleanup();
 });
 
-describe("getReplyFromConfig channel model input boundary", () => {
+describe("getReplyFromConfigInternal channel model input boundary", () => {
   const matrix: Array<{
     name: string;
     childOverride?: ModelRef;

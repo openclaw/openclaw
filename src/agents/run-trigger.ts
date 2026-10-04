@@ -1,1 +1,8 @@
-export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
+export type EmbeddedRunTrigger =
+  | "cron"
+  | "event"
+  | "heartbeat"
+  | "manual"
+  | "memory"
+  | "overflow"
+  | "user";

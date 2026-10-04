@@ -183,7 +183,6 @@ actor GatewayConnection: Observable {
 
     enum Method: String {
         case agent
-        case setHeartbeats = "set-heartbeats"
         case health
         case configGet = "config.get"
         case configSet = "config.set"
@@ -1528,16 +1527,6 @@ extension GatewayConnection {
             return try Self.mainSessionKey(fromConfigGetData: data)
         } catch {
             return "main"
-        }
-    }
-
-    func setHeartbeatsEnabled(_ enabled: Bool) async -> Bool {
-        do {
-            try await self.requestVoid(method: .setHeartbeats, params: ["enabled": AnyCodable(enabled)])
-            return true
-        } catch {
-            gatewayConnectionLogger.error("setHeartbeatsEnabled failed \(error.localizedDescription, privacy: .public)")
-            return false
         }
     }
 

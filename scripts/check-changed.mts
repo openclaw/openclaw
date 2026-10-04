@@ -117,9 +117,9 @@ type TargetedLintCommand = NonNullable<ReturnType<typeof createTargetedOxlintCom
 const NPM_LOCK_POLICY_PATH_RE =
   /^(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|scripts\/generate-npm-package-lock\.mts|(?:extensions|packages)\/[^/]+(?:\/.*)?\/package\.json)$/u;
 const PROMPT_SNAPSHOT_CHECK_PATH_RE =
-  /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts|sync-codex-model-prompt-fixture\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/.+)$/u;
+  /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts|sync-codex-model-prompt-fixture\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|happy-path-automation-fixture|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/.+)$/u;
 const PROMPT_SNAPSHOT_OWNER_TEST_PATH_RE =
-  /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts|sync-codex-model-prompt-fixture\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/codex-model-catalog\/.+)$/u;
+  /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts|sync-codex-model-prompt-fixture\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|happy-path-automation-fixture|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/codex-model-catalog\/.+)$/u;
 const RUNTIME_SIDECAR_BASELINE_PATH_RE =
   /^(?:scripts\/generate-runtime-sidecar-paths-baseline\.ts|scripts\/lib\/bundled-runtime-sidecar-paths\.json|src\/plugins\/runtime-sidecar-paths(?:-baseline)?\.ts)$/u;
 // Doctor-contract declaration truth depends on arbitrary plugin source (artifacts

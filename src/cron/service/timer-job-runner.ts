@@ -30,11 +30,7 @@ import {
 } from "./run-receipts.js";
 import type { CronServiceState } from "./state.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
-import {
-  type CronJobRunResult,
-  type ExecuteJobCoreOptions,
-  runsDetachedFromMainSession,
-} from "./timer-execution-timeout.js";
+import type { CronJobRunResult, ExecuteJobCoreOptions } from "./timer-execution-timeout.js";
 import { executeJobCore } from "./timer-execution.js";
 import {
   type CronCoreRunOutcome,
@@ -279,24 +275,20 @@ async function executeJobCoreWithTimeoutUnfinalized(
     runAbortController.abort("Gateway restarting.");
     return await createInterruptionOutcome("cancelled");
   }
-  const detachedPayload = runsDetachedFromMainSession(job);
-  const releaseCronTaskRun =
-    detachedPayload || job.trigger
-      ? registerActiveCronTaskRun({
-          runId: opts?.runId ?? `cron-active:${job.id}`,
-          controller: runAbortController,
-          activeJobMarker: opts?.activeJobMarker,
-          onCancel: () => operatorCancellation.resolve(operatorCancellationMarker),
-        })
-      : undefined;
+  const releaseCronTaskRun = registerActiveCronTaskRun({
+    runId: opts?.runId ?? `cron-active:${job.id}`,
+    controller: runAbortController,
+    activeJobMarker: opts?.activeJobMarker,
+    onCancel: () => operatorCancellation.resolve(operatorCancellationMarker),
+  });
   const jobTimeoutMs = resolveCronJobTimeoutMs(job);
   try {
     const timeout = createDeferredCore<CronRunTimeout>();
 
-    // Detached agent runs report setup phases separately; defer the wall-clock
+    // Agent runs report setup phases separately; defer the wall-clock
     // timeout until the runner starts so cold setup gets a clearer failure reason.
     const deferTimeoutUntilExecutionStart =
-      job.sessionTarget !== "main" && job.payload.kind === "agentTurn";
+      job.payload.kind === "agentTurn" || job.payload.kind === "systemEvent";
     const watchdog =
       jobTimeoutMs === undefined
         ? undefined
@@ -334,7 +326,6 @@ async function executeJobCoreWithTimeoutUnfinalized(
       }
     };
     const trackExecution = !watchdog || deferTimeoutUntilExecutionStart;
-    const resolveHeartbeatTimeoutMs = state.deps.resolveHeartbeatTimeoutMs;
     const executionIdentity = opts?.executionIdentity;
     const coreOptions: ExecuteJobCoreOptions = {
       deliveryAttemptFence,
@@ -343,24 +334,9 @@ async function executeJobCoreWithTimeoutUnfinalized(
       streamBatch: opts?.streamBatch,
       streamScheduleKey: opts?.streamScheduleKey,
       streamSourceIdentity: opts?.streamSourceIdentity,
-      // Conditions own their pending tools; main payloads hand work to a shared
-      // heartbeat. Release cancellation before that handoff can produce effects.
-      onPayloadExecutionStarted: detachedPayload ? undefined : releaseCronTaskRun,
       onExecutionStarted: trackExecution ? noteRunnerStarted : undefined,
       onExecutionPhase: trackExecution ? (watchdog?.notePhase ?? accumulateExecution) : undefined,
       onLaneWait: watchdog && deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
-      // Trigger and preflight keep the cron deadline; the heartbeat gets its own.
-      onHeartbeatExecutionStarted:
-        watchdog && resolveHeartbeatTimeoutMs
-          ? (heartbeat) => {
-              const heartbeatTimeoutMs = resolveHeartbeatTimeoutMs(heartbeat);
-              // The queue owns admission and retries; only attempts spend the deadline.
-              return {
-                onAttemptStarted: () => watchdog.replaceTimeout(heartbeatTimeoutMs),
-                onQueued: () => watchdog.replaceTimeout(undefined),
-              };
-            }
-          : undefined,
       assertRunCurrent,
       executionIdentity: executionIdentity && {
         ...executionIdentity,

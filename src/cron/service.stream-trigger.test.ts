@@ -21,7 +21,7 @@ async function withStream(
     cronConfig: { triggers: { enabled: true } },
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSessionEvent: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     ...deps,
   });
@@ -106,7 +106,7 @@ describe("cron stream trigger composition", () => {
   });
 
   it("appends the gate message and batch to a main-session system event", async () => {
-    const enqueueSystemEvent = vi.fn();
+    const runSessionEvent = vi.fn(async () => ({ status: "ok" as const }));
     await withStream(
       {
         sessionTarget: "main",
@@ -115,7 +115,7 @@ describe("cron stream trigger composition", () => {
         trigger: { script: "return { fire: true }" },
       },
       {
-        enqueueSystemEvent,
+        runSessionEvent,
         evaluateCronTrigger: vi.fn(async () => ({
           kind: "evaluated" as const,
           fire: true,
@@ -124,9 +124,8 @@ describe("cron stream trigger composition", () => {
       },
       async (cron, job) => {
         await runBatch(cron, job, "firing batch");
-        expect(enqueueSystemEvent).toHaveBeenCalledWith(
-          "base\n\ngate message\n\nfiring batch",
-          expect.any(Object),
+        expect(runSessionEvent).toHaveBeenCalledWith(
+          expect.objectContaining({ text: "base\n\ngate message\n\nfiring batch" }),
         );
       },
     );

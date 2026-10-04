@@ -176,7 +176,6 @@ it.each(["commit", "rollback"] as const)(
         cronEnabled: false,
         log: mocks.log,
         enqueueSystemEvent: () => {},
-        requestHeartbeat: () => {},
         runIsolatedAgentJob: async () => ({ status: "ok" as const }),
       });
       const list = vi.spyOn(cron, "list").mockResolvedValue([]);

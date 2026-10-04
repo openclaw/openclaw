@@ -123,7 +123,6 @@ it(
           agents: {
             defaults: {
               skipBootstrap: true,
-              heartbeat: { every: "0m" },
               maxConcurrent: 2,
               model: { primary: `${PROVIDER}/${MODEL}` },
               utilityModel: "",

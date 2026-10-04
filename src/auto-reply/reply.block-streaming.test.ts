@@ -80,11 +80,11 @@ vi.mock("./reply/get-reply-run.js", () => ({
   runPreparedReply: (...args: unknown[]) => mocks.runPreparedReply(...args),
 }));
 
-let getReplyFromConfig: typeof import("./reply/get-reply.js").getReplyFromConfig;
+let getReplyFromConfigInternal: typeof import("./reply/get-reply.js").getReplyFromConfigInternal;
 let resolveAgentWorkspaceDirMock: typeof import("../agents/agent-scope.js").resolveAgentWorkspaceDir;
 
 async function loadFreshGetReplyModuleForTest() {
-  ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
+  ({ getReplyFromConfigInternal } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
   ({ resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock } =
     await import("../agents/agent-scope.js"));
 }
@@ -152,7 +152,7 @@ describe("block streaming", () => {
           return undefined;
         });
 
-        const res = await getReplyFromConfig(
+        const res = await getReplyFromConfigInternal(
           createTelegramMessage("msg-123"),
           {
             onReplyStart,
@@ -170,7 +170,7 @@ describe("block streaming", () => {
         const onBlockReplyStreamMode = vi.fn().mockResolvedValue(undefined);
         mocks.runPreparedReply.mockImplementationOnce(async () => [{ text: "final" }]);
 
-        const resStreamMode = await getReplyFromConfig(
+        const resStreamMode = await getReplyFromConfigInternal(
           createTelegramMessage("msg-127"),
           {
             onBlockReply: onBlockReplyStreamMode,

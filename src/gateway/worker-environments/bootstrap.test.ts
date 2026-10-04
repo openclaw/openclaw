@@ -14,7 +14,7 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../../shared/worker-bundle-hash.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { bootstrapWorker as bootstrapWorkerCore } from "./bootstrap.js";
-import { fakeRunner, result } from "./bootstrap.test-support.js";
+import { commandPort, fakeRunner, result } from "./bootstrap.test-support.js";
 import { createWorkerBundleProducer, type WorkerInstallationArtifact } from "./bundle.js";
 
 type WorkerBootstrapRequest = Parameters<typeof bootstrapWorkerCore>[0];
@@ -69,11 +69,6 @@ const BUNDLE: WorkerInstallationArtifact = {
 
 function tagged(action: "current" | "install" | "receipt", payload: string): string {
   return `${OUTPUT_TAG}\t${action}\t${payload}\n`;
-}
-
-function commandPort(argv: string[]): number {
-  const portFlag = argv[0] === "scp" ? "-P" : "-p";
-  return Number(argv[argv.indexOf(portFlag) + 1]);
 }
 
 const resolveIdentity = async () => ({ kind: "path", path: "/keys/worker" }) as const;

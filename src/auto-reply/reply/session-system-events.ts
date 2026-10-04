@@ -10,37 +10,22 @@ import {
   formatZonedTimestamp,
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
-import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
 import {
   isSystemEventStoreCurrent,
   resolveSystemEventQueueKey,
 } from "../../infra/system-event-ownership.js";
 import {
   consumeSelectedSystemEventEntries,
+  isSystemEventTurnOwned,
   peekSystemEventEntries,
   type SystemEvent,
 } from "../../infra/system-events.js";
-import { SESSION_CREATED_NOTICE_CONTEXT_PREFIX } from "../../sessions/session-state-event-kinds.js";
 import { acknowledgeSessionStateNotices } from "../../sessions/session-state-events.js";
 import { decodeSessionStateNoticeContextKey } from "../../sessions/session-state-notices.js";
 
 function compactSystemEvent(event: SystemEvent): string | null {
   const trimmed = event.text.trim();
   if (!trimmed) {
-    return null;
-  }
-  // Creation metadata may mention heartbeat work; it is not a retired wake prompt.
-  if (event.contextKey?.startsWith(SESSION_CREATED_NOTICE_CONTEXT_PREFIX)) {
-    return trimmed;
-  }
-  const lower = normalizeLowercaseStringOrEmpty(trimmed);
-  // Keep retired heartbeat prompts out of replayed legacy system events.
-  if (
-    lower.includes("reason periodic") ||
-    lower.startsWith("read heartbeat.md") ||
-    lower.includes("heartbeat poll") ||
-    lower.includes("heartbeat wake")
-  ) {
     return null;
   }
   if (trimmed.startsWith("Node:")) {
@@ -100,12 +85,12 @@ export async function drainFormattedSystemEvents(params: {
 }): Promise<string | undefined> {
   const systemLines: string[] = [];
   const queueKey = resolveSystemEventQueueKey(params.sessionKey, params.agentId);
-  // Exec completions have a dedicated heartbeat prompt; leave those entries queued
-  // so the heartbeat path can consume and deliver them.
+  // Producer-owned occurrences retain their own admission; ordinary notices
+  // join the next context build regardless of their text.
   const queued = consumeSelectedSystemEventEntries(
     queueKey,
     (params.events ?? peekSystemEventEntries(queueKey)).filter(
-      (event) => !isExecCompletionEvent(event.text),
+      (event) => !isSystemEventTurnOwned(queueKey, event),
     ),
     { deferredEventIds: params.deferredEventIds },
   );

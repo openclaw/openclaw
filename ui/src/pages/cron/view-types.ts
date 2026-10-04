@@ -43,7 +43,6 @@ export type CronProps = {
   error: string | null;
   busy: boolean;
   form: CronFormState;
-  heartbeatScratch: string;
   fieldErrors: CronFieldErrors;
   canSubmit: boolean;
   editingJob: CronJob | null;

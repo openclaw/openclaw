@@ -39,6 +39,7 @@ import {
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { isCommandStyleCronMessage } from "../agent-turn-command-prompt.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { assertCronExecutionRootRuntime } from "../execution-root-runtime.js";
 import { prepareCronRunAdmission } from "../run-admission.js";
@@ -92,14 +93,6 @@ const cronSubagentRegistryRuntimeLoader = createLazyImportLoader<CronSubagentReg
 
 function hasCliSessionReuseMetadata(binding: CliSessionBinding): boolean {
   return Object.entries(binding).some(([key, value]) => key !== "sessionId" && value !== undefined);
-}
-
-const COMMAND_STYLE_CRON_PREFIX =
-  /^(?:(?:[A-Z_][A-Z0-9_]*=\S+\s+)+)?(?:cd\s+\S+|(?:\.{1,2}|~)?\/\S+|[A-Za-z]:[\\/]\S+|(?:bash|bun|cargo|deno|docker|gh|git|go|make|node|npm|npx|pnpm|python|python3|ruby|sh|tsx|uv|zsh)\b)/u;
-
-/** Detects single-line cron prompts that look like shell commands or command invocations. */
-function isCommandStyleCronMessage(message: string): boolean {
-  return !message.trim().includes("\n") && COMMAND_STYLE_CRON_PREFIX.test(message.trim());
 }
 
 /** Creates the model-fallback executor for one isolated cron prompt run. */
@@ -428,6 +421,7 @@ function createCronPromptExecutor(
             finalizePromptForResolvedTools,
             model: modelOverride,
             thinkLevel: candidateThinkLevel,
+            reasoningLevel: params.agentPayload?.includeReasoning ? "on" : undefined,
             timeoutMs: params.timeoutMs,
             runId,
             lane: resolveCronAgentLane(params.lane),

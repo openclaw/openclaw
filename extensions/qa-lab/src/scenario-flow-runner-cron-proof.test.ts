@@ -11,6 +11,8 @@ import { waitForAgentHistory } from "./suite-runtime-agent-process.js";
 
 const now = Date.parse("2026-09-28T12:00:00.000Z");
 const suffix = "00000000";
+const authoritySessionKey = "agent:qa:qa-channel:group:group:qa-cron-authority";
+const recurringSessionKey = `agent:qa:qa-channel:direct:dm:cron-model-author-${suffix}`;
 type HistoryShape = "direct" | "nested";
 type Job = {
   id: string;
@@ -18,6 +20,7 @@ type Job = {
   schedule: { kind: string; at?: string; everyMs?: number };
   payload: { kind: string; message: string; toolsAllow?: string[] };
   sessionTarget: string;
+  owner: { sessionKey: string };
   delivery: { mode: string };
   enabled: boolean;
   deleteAfterRun?: boolean;
@@ -61,13 +64,14 @@ function historyMessages(
   return messages;
 }
 
-function job(name: string, index: number): Job {
+function job(name: string, index: number, ownerSessionKey: string): Job {
   return {
     id: `job-${index}`,
     name,
     schedule: { kind: "every", everyMs: 3_600_000 },
     payload: { kind: "agentTurn", message: "", toolsAllow: ["*"] },
     sessionTarget: "isolated",
+    owner: { sessionKey: ownerSessionKey },
     delivery: { mode: "none" },
     enabled: false,
     state: { nextRunAtMs: now + 20_000 },
@@ -93,7 +97,7 @@ async function runSchedulingFixture(
   const jobs =
     kind === "authority"
       ? ["omitted", "wildcard", "overbroad", "empty"].map((policy, index) => {
-          const entry = job(`qa-authority-${policy}-${suffix}`, index);
+          const entry = job(`qa-authority-${policy}-${suffix}`, index, authoritySessionKey);
           entry.payload.message = `${policy} authority`;
           if (index < 2) {
             entry.schedule = { kind: "at", at: new Date(now + 86_400_000).toISOString() };
@@ -103,7 +107,7 @@ async function runSchedulingFixture(
           return entry;
         })
       : ["at", "every"].map((schedule, index) => {
-          const entry = job(`qa-model-${schedule}-${suffix}`, index);
+          const entry = job(`qa-model-${schedule}-${suffix}`, index, recurringSessionKey);
           entry.enabled = true;
           entry.schedule =
             index === 0
@@ -136,9 +140,7 @@ async function runSchedulingFixture(
         throw options.historyError;
       }
       expect(params.sessionKey).toBe(
-        kind === "authority"
-          ? "agent:qa:qa-channel:group:group:qa-cron-authority"
-          : `agent:qa:qa-channel:direct:dm:cron-model-author-${suffix}`,
+        kind === "authority" ? authoritySessionKey : recurringSessionKey,
       );
       return {
         messages:
@@ -149,9 +151,7 @@ async function runSchedulingFixture(
     }
     if (method === "sessions.list") {
       return {
-        sessions: [
-          { key: "agent:qa:qa-channel:group:group:qa-cron-authority", hasActiveRun: false },
-        ],
+        sessions: [{ key: authoritySessionKey, hasActiveRun: false }],
       };
     }
     if (method === "cron.list") {
@@ -164,7 +164,9 @@ async function runSchedulingFixture(
       if (restarted) {
         options.mutateRestartedJobs?.(visible);
       }
-      return { jobs: [...visible, job("background-maintenance", 99)] };
+      return {
+        jobs: [...visible, job("background-maintenance", 99, "agent:qa:maintenance")],
+      };
     }
     if (method === "cron.runs") {
       if (params.id === "job-0") {
@@ -475,7 +477,7 @@ describe("scheduling YAML canonical tool proof", () => {
     await expect(
       runSchedulingFixture("recurring", "nested", {
         mutateRestartedJobs: (jobs) => {
-          jobs.push(job(`qa-model-at-${suffix}`, 98));
+          jobs.push(job(`qa-model-at-${suffix}`, 98, recurringSessionKey));
         },
       }),
     ).rejects.toThrow(/unexpected scenario cron jobs/);

@@ -49,7 +49,7 @@ function createCron(params: {
     cronEnabled: true,
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSessionEvent: vi.fn(),
     ...params,
   });
 }
@@ -506,8 +506,7 @@ describe("cron one-shot schedule ownership", () => {
         state: { nextRunAtMs: replacementAt, runningAtMs: interruptedAt },
       };
       await saveCronStore(storePath, { version: 1, jobs: [job] });
-      const enqueueSystemEvent = vi.fn();
-      const requestHeartbeat = vi.fn();
+      const runSessionEvent = vi.fn(async () => ({ status: "ok" as const }));
       const onEvent = vi.fn((event: CronEvent) => event);
       const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
       const cron = new CronService({
@@ -515,19 +514,29 @@ describe("cron one-shot schedule ownership", () => {
         storePath,
         cronEnabled: true,
         log: logger,
-        enqueueSystemEvent,
-        requestHeartbeat,
+        enqueueSystemEvent: vi.fn(),
+        runSessionEvent,
         runIsolatedAgentJob,
         onEvent,
       });
       try {
         await cron.start();
         const overdue = offsetMs < 0;
-        expect(enqueueSystemEvent).toHaveBeenCalledTimes(overdue ? 1 : 0);
-        expect(requestHeartbeat).toHaveBeenCalledTimes(overdue ? 1 : 0);
+        expect(runSessionEvent).not.toHaveBeenCalled();
+        const replacementRunAt = now + DEFAULT_STARTUP_DEFERRED_MISSED_AGENT_JOB_DELAY_MS;
+        if (overdue) {
+          expect(cron.getJob(job.id)?.state.nextRunAtMs).toBe(replacementRunAt);
+          await clock.advanceTo(replacementRunAt);
+        }
+        expect(runSessionEvent).toHaveBeenCalledTimes(overdue ? 1 : 0);
         expect(runIsolatedAgentJob).not.toHaveBeenCalled();
         if (overdue) {
-          expect(enqueueSystemEvent.mock.calls[0]?.[0]).toBe("run the replacement once");
+          expect(runSessionEvent).toHaveBeenCalledWith(
+            expect.objectContaining({
+              job: expect.objectContaining({ id: job.id }),
+              text: "run the replacement once",
+            }),
+          );
         }
         for (const jobs of [
           await cron.list({ includeDisabled: true }),
@@ -541,7 +550,7 @@ describe("cron one-shot schedule ownership", () => {
               id: job.id,
               enabled: !overdue,
               state: {
-                lastRunAtMs: overdue ? now : interruptedAt,
+                lastRunAtMs: overdue ? replacementRunAt : interruptedAt,
                 lastRunStatus: overdue ? "ok" : "error",
               },
             });
@@ -562,7 +571,13 @@ describe("cron one-shot schedule ownership", () => {
               runAtMs: interruptedAt,
             }),
             ...(overdue
-              ? [expect.objectContaining({ jobId: job.id, status: "ok", runAtMs: now })]
+              ? [
+                  expect.objectContaining({
+                    jobId: job.id,
+                    status: "ok",
+                    runAtMs: replacementRunAt,
+                  }),
+                ]
               : []),
           ]),
         );

@@ -916,25 +916,6 @@ export function abortEmbeddedAgentRun(
   return replyAborted || aborted;
 }
 
-type EmbeddedHeartbeatPreemptionResult = "not-heartbeat" | "drained" | "timed-out";
-
-export async function preemptAndDrainEmbeddedHeartbeatRun(
-  sessionId: string,
-  timeoutMs: number,
-): Promise<EmbeddedHeartbeatPreemptionResult> {
-  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
-  if (!handle?.preemptByVisibleTurn) {
-    return "not-heartbeat";
-  }
-  const drainPromise = waitForCurrentEmbeddedAgentRunEnd(sessionId, timeoutMs, handle);
-  try {
-    handle.preemptByVisibleTurn();
-  } catch (err) {
-    diag.warn(`heartbeat preemption failed: sessionId=${sessionId} err=${String(err)}`);
-  }
-  return (await drainPromise) ? "drained" : "timed-out";
-}
-
 export function isEmbeddedAgentRunActive(sessionId: string): boolean {
   const active = ACTIVE_EMBEDDED_RUNS.has(sessionId) || isReplyRunActiveForSessionId(sessionId);
   if (active) {
@@ -1123,13 +1104,14 @@ export function resolveEmbeddedReplyActivity(sessionId: string): EmbeddedReplyAc
     : undefined;
 }
 
-/**
- * True when work other than `runId` now holds the session. `runId` must name a
- * run admitted outside reply dispatch (cron), so an active reply run is other work.
- */
+/** Checks both owners independently; an ordinary CLI reply has no embedded handle. */
 export function isEmbeddedAgentSessionHeldByOtherRun(sessionId: string, runId: string): boolean {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
-  return handle ? handle.runId !== runId : isReplyRunActiveForSessionId(sessionId);
+  const reply = resolveActiveReplyOperationForSessionId(sessionId);
+  return (
+    Boolean(handle && handle.runId !== runId) ||
+    Boolean(reply && getAttachedBackend(reply)?.runId !== runId)
+  );
 }
 
 export function isEmbeddedAgentRunHandleActive(sessionId: string): boolean {

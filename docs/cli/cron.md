@@ -111,6 +111,34 @@ the default working directory. An explicitly empty or whitespace-only path is
 an error. When editing a stream job, `--stream-cwd ""` still clears its configured
 working directory.
 
+### Monitoring policies
+
+Use these flags with `automations add|create` or `automations edit` for ordinary
+monitoring jobs:
+
+- `--active-hours-start <HH:MM>` and `--active-hours-end <HH:MM>` define an
+  execution window. Start is inclusive; end is exclusive and also accepts
+  `24:00`. Overnight windows work; equal endpoints define an empty window.
+- `--active-hours-timezone <zone>` chooses an IANA timezone, `user` (the default,
+  using the configured user timezone), or `local` (Gateway host). This is
+  independent of the schedule's `--tz`.
+- `--idle-only` gives foreground work priority. `--no-idle-only` turns that
+  policy off.
+- `--skip-if-scratch-empty` skips an agent turn with explicitly empty scratch.
+  Missing scratch still runs. `--no-skip-if-scratch-empty` turns this off.
+- `--include-reasoning` includes reasoning returned by an agent in delivery;
+  `--no-include-reasoning` keeps it out. This does not set the thinking level.
+
+A new window requires both endpoints. An edit can update just one field of an
+existing window. `automations edit --clear-active-hours` removes the window;
+`--clear-idle-only` removes the stored idle policy. Do not combine a clear flag
+with its corresponding set flag. The scratch and reasoning flags require an
+agent-turn payload (`--message` on creation).
+
+Manual force-runs bypass cadence but still respect the execution window and
+the job's authority and delivery policies. See
+[Monitoring policies](/automation/cron-jobs/schedules#monitoring-policies).
+
 ## Sessions
 
 `--session` accepts `main`, `isolated`, `current`, or `session:<id>`.
@@ -162,6 +190,19 @@ Use `automations add|create --webhook <url>` or `automations edit <job-id> --web
 `--announce` is runner fallback delivery for the final reply. `--no-deliver` disables that fallback but does not remove the agent's `message` tool when a chat route is available.
 
 Reminders created from an active chat preserve the live chat delivery target for fallback announce delivery. Internal session keys may be lowercase. Do not use them as a source of truth for case-sensitive provider IDs such as Matrix room IDs.
+
+### Owner targets and direct-message policy
+
+`--delivery-target owner` resolves a positively identified owner DM dynamically
+instead of following the last group conversation. It cannot be combined with
+`--to`, `--thread-id`, or `--webhook`. On edit, it clears a previous explicit
+recipient and thread; setting an explicit recipient replaces owner targeting.
+Use `--clear-delivery-target` to remove it.
+
+`--direct-policy allow|block` controls direct/DM delivery for the job. The
+default is `allow`; `block` prohibits DMs. Use `--clear-direct-policy` to remove
+the stored policy. These policies require a non-main job with chat delivery,
+and cannot be set and cleared in the same command.
 
 ### Failure delivery
 
@@ -304,6 +345,18 @@ Retention behavior:
 
 ## Migrating older jobs
 
+Run `openclaw doctor --fix` to convert supported July 2026 and later heartbeat
+configuration and monitor jobs to ordinary editable agent-turn automations.
+After migration, edit or disable the job itself. Config reloads, restarts, and
+later Doctor runs do not overwrite edits or recreate a deleted migrated job.
+The `openclaw system heartbeat` commands are retired; use `automations show`,
+`runs`, `enable`, and `disable`. See [Heartbeat migration](/gateway/heartbeat).
+
+The `cron.*` Gateway methods and protocol v4 remain compatible. The deprecated
+`--wake now|next-heartbeat` field remains accepted, but scheduled jobs execute
+their payload through ordinary session execution when the job is due. It does
+not add another wake or deferral step. Use the job's schedule to control timing.
+
 <Note>
 If you have automation jobs from before the current delivery and store format, run `openclaw doctor --fix`. Doctor normalizes legacy job fields: `jobId`, `schedule.cron`, top-level delivery fields including legacy `threadId`, and payload `provider` delivery aliases. It also migrates `notify: true` webhook fallback jobs from the retired raw `cron.webhook` value to explicit webhook delivery. It removes that config key afterwards. Jobs that already announce to a chat keep that delivery and get a completion webhook destination. Without a legacy webhook, Doctor removes the inert top-level `notify` marker for jobs with no migration target. The existing delivery is preserved unchanged. `doctor --fix` therefore stops re-warning about them.
 </Note>
@@ -434,7 +487,7 @@ Event schedules appear as `on-exit` or `stream` without their command text.
 
 `automations runs` entries include delivery diagnostics with the intended automation target, the resolved target, message-tool sends, fallback use, and delivered state.
 
-Private per-job scratch (heartbeat checklists and similar monitor context):
+Private per-job scratch for checklists and other run context:
 
 ```bash
 openclaw automations scratch <job-id>                  # print current scratch content
@@ -444,7 +497,12 @@ openclaw automations scratch <job-id> --file notes.md  # replace scratch from a 
 openclaw automations scratch <job-id> --unset          # remove the scratch row
 ```
 
-Scratch is stored in the shared state database, capped at 256 KiB, and never included in `automations list`/`automations get`/`automations runs` output. Writes are compare-and-swap guarded against the revision read at command start. Pass `--expected-revision <n>` to pin an explicit revision instead. See [Heartbeat](/gateway/heartbeat#monitor-scratch-optional) for how heartbeat monitors use scratch.
+Scratch is stored in the shared state database, capped at 256 KiB, and never included in `automations list`/`automations get`/`automations runs` output. Writes are compare-and-swap guarded against the revision read at command start. Pass `--expected-revision <n>` to pin an explicit revision instead. Present scratch becomes bounded model prompt context, so do not store secrets in it. See [Job scratch and quiet results](/automation/cron-jobs/payloads#job-scratch-and-quiet-results) for the run-scoped `scratch_get`, `scratch_set`, and `record_result` tool actions.
+
+For a job with `--skip-if-scratch-empty`, blank text, comments, headings, fence
+markers, and empty checklist stubs skip the run. `--unset` removes scratch;
+missing scratch still runs. Use `automations disable <job-id>` to stop the job
+regardless of scratch content.
 
 Agent and session retargeting:
 

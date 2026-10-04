@@ -30,7 +30,6 @@ type ResolveAttemptTrajectoryTerminalParams = {
   successfulCronAdds: number;
   synthesizedPayloadCount: number;
   acceptedSessionSpawns?: readonly AcceptedSessionSpawn[];
-  heartbeatToolResponse?: unknown;
   clientToolCalls?: Array<unknown>;
   yieldDetected?: boolean;
   lastToolError?: unknown;
@@ -85,7 +84,6 @@ export function resolveAttemptTrajectoryTerminal(
     params.didSendDeterministicApprovalPrompt ||
     hasCommittedMessagingToolDeliveryEvidence(params) ||
     hasAcceptedSessionSpawn(params.acceptedSessionSpawns) ||
-    params.heartbeatToolResponse !== undefined ||
     (params.clientToolCalls?.length ?? 0) > 0 ||
     params.yieldDetected === true ||
     params.lastToolError !== undefined ||

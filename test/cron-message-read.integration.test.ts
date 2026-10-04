@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { refreshPreparedModelRuntimeSnapshots } from "../src/agents/prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../src/agents/prepared-model-runtime.test-support.js";
 import { AUTOMATIONS_TOOL_NAME } from "../src/agents/tools/automations-tool-name.js";
-import { getReplyFromConfig } from "../src/auto-reply/reply/get-reply.js";
+import { getReplyFromConfigInternal } from "../src/auto-reply/reply/get-reply.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfig,
@@ -703,9 +703,9 @@ describe("scheduled message actions", () => {
         let created: { id: string };
         if (nativeCreator) {
           vi.stubEnv("OPENCLAW_SCHEDULED_CREATE_JOB", JSON.stringify(params));
-          let producerReply: Awaited<ReturnType<typeof getReplyFromConfig>>;
+          let producerReply: Awaited<ReturnType<typeof getReplyFromConfigInternal>>;
           try {
-            producerReply = await getReplyFromConfig(
+            producerReply = await getReplyFromConfigInternal(
               {
                 Body: "Schedule these Discord channel topic changes for later.",
                 From: `discord:channel:${channelId}`,

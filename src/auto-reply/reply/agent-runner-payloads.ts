@@ -10,7 +10,6 @@ import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { stripLegacyBracketToolCallBlocks } from "../../shared/text/assistant-visible-text.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   copyReplyPayloadMetadata,
@@ -86,25 +85,6 @@ function sanitizeFinalReplyText(
     : sanitizeUserFacingText(text, { conversationContext });
 }
 
-function sanitizeHeartbeatPayload(
-  payload: ReplyPayload,
-  conversationContext?: string,
-): ReplyPayload {
-  const text = payload.text;
-  if (!text) {
-    return payload;
-  }
-  const withoutLegacyBlocks = stripLegacyBracketToolCallBlocks(text);
-  const cleaned = sanitizeFinalReplyText(payload, withoutLegacyBlocks, conversationContext);
-  if (cleaned === text) {
-    return payload;
-  }
-  if (withoutLegacyBlocks !== text) {
-    logVerbose("Stripped legacy tool-call block from heartbeat reply");
-  }
-  return copyPayloadWithSanitizedText(payload, cleaned, conversationContext);
-}
-
 function copyPayloadWithSanitizedText(
   payload: ReplyPayload,
   text: string | undefined,
@@ -134,7 +114,7 @@ export async function buildReplyPayloads(params: {
   payloads: ReplyPayload[];
   /** Exact prompt bytes from this turn's finalized inbound owner. */
   conversationContext?: string;
-  isHeartbeat: boolean;
+
   didLogHeartbeatStrip: boolean;
   silentExpected?: boolean;
   blockStreamingEnabled: boolean;
@@ -161,33 +141,25 @@ export async function buildReplyPayloads(params: {
 }): Promise<{ replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean }> {
   let didLogHeartbeatStrip = params.didLogHeartbeatStrip;
   const sanitizedPayloads: ReplyPayload[] = [];
-  if (params.isHeartbeat) {
-    for (const payload of params.payloads) {
-      sanitizedPayloads.push(sanitizeHeartbeatPayload(payload, params.conversationContext));
-    }
-  } else {
-    for (const payload of params.payloads) {
-      let text = payload.text;
+  for (const payload of params.payloads) {
+    let text = payload.text;
 
-      if (payload.isError && text && isBunFetchSocketError(text)) {
-        text = formatBunFetchSocketError();
-      }
-
-      if (text?.includes("HEARTBEAT_OK")) {
-        const stripped = stripHeartbeatToken(text, { mode: "message" });
-        if (stripped.didStrip && !didLogHeartbeatStrip) {
-          didLogHeartbeatStrip = true;
-          logVerbose("Stripped stray HEARTBEAT_OK token from reply");
-        }
-        if (stripped.shouldSkip && !resolveSendableOutboundReplyParts(payload).hasMedia) {
-          continue;
-        }
-        text = stripped.text;
-      }
-      sanitizedPayloads.push(
-        copyPayloadWithSanitizedText(payload, text, params.conversationContext),
-      );
+    if (payload.isError && text && isBunFetchSocketError(text)) {
+      text = formatBunFetchSocketError();
     }
+
+    if (text?.includes("HEARTBEAT_OK")) {
+      const stripped = stripHeartbeatToken(text, { mode: "message" });
+      if (stripped.didStrip && !didLogHeartbeatStrip) {
+        didLogHeartbeatStrip = true;
+        logVerbose("Stripped stray HEARTBEAT_OK token from reply");
+      }
+      if (stripped.shouldSkip && !resolveSendableOutboundReplyParts(payload).hasMedia) {
+        continue;
+      }
+      text = stripped.text;
+    }
+    sanitizedPayloads.push(copyPayloadWithSanitizedText(payload, text, params.conversationContext));
   }
 
   const messageProvider = resolveOriginMessageProvider({

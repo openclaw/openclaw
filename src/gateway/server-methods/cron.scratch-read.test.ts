@@ -1,6 +1,8 @@
 import { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { writeCronJobScratchInDatabase } from "../../cron/scratch-write.kernel.js";
 import { CronService } from "../../cron/service.js";
 import { createCronStoreHarness, createNoopLogger } from "../../cron/service.test-harness.js";
@@ -8,9 +10,16 @@ import { loadCronStore } from "../../cron/store.js";
 import { cronStoreKey } from "../../cron/store/key.js";
 import { upsertCronJobRow } from "../../cron/store/row-codec.js";
 import type { CronJob } from "../../cron/types.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { cronHandlers } from "./cron.js";
 import {
   createCronCallerClient as callerClient,
@@ -37,7 +46,7 @@ describe("cron scratch read authority", () => {
         defaultAgentId: "main",
         log: cronLogger,
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
+        enqueueSessionEvent: vi.fn(),
         runIsolatedAgentJob: async () => ({ status: "skipped" }),
       });
       const entered = createDeferred();
@@ -170,6 +179,263 @@ describe("cron scratch read authority", () => {
         await invocation;
         cron.stop();
       }
+    },
+  );
+});
+
+async function withScheduledScratch(
+  run: (fixture: {
+    cron: CronService;
+    job: CronJob;
+    foreign: CronJob;
+    context: ReturnType<typeof createDirectChatContext>;
+    client: ReturnType<typeof callerClient>;
+    retireInvocation: () => void;
+    releaseClaim: () => void;
+  }) => Promise<void>,
+) {
+  const { storePath } = await makeStorePath();
+  const cron = new CronService({
+    scheduler: createTestGatewayScheduler(),
+    storePath,
+    cronEnabled: false,
+    defaultAgentId: "worker",
+    log: cronLogger,
+    enqueueSystemEvent: vi.fn(),
+    enqueueSessionEvent: vi.fn(),
+    runIsolatedAgentJob: async () => ({ status: "skipped" }),
+  });
+  const operationalRunInstance = createOperationalRunInstanceRef("scratch-scheduled-run");
+  let invocationCurrent = true;
+  const authority = claimAgentRunDelegatedAuthority(operationalRunInstance, () => {
+    if (!invocationCurrent) {
+      throw new Error("Scheduled invocation closed");
+    }
+  });
+  try {
+    const addJob = (id: string) =>
+      cron.add(
+        {
+          id,
+          name: id,
+          agentId: "worker",
+          owner: { agentId: "operator", sessionKey: "agent:operator:main" },
+          enabled: false,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "Check the synthetic queue" },
+          delivery: { mode: "none" },
+        },
+        { scheduledToolPolicy: { version: 1, mode: "trusted" } },
+      );
+    const job = await addJob("scheduled-scratch");
+    const foreign = await addJob("foreign-scratch");
+    await cron.writeScratch(job.id, { content: "retained checklist", expectedRevision: 0 });
+    await cron.writeScratch(foreign.id, {
+      content: "foreign private checklist",
+      expectedRevision: 0,
+    });
+    const context = createDirectChatContext({
+      cron,
+      cronStorePath: storePath,
+      getRuntimeConfig,
+      validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
+    });
+    const client = callerClient("worker", undefined, `agent:worker:cron:${job.id}`, job.id);
+    const identity = client.internal?.agentRuntimeIdentity;
+    if (!identity) {
+      throw new Error("Scheduled scratch fixture has no caller identity");
+    }
+    identity.operationalRunInstance = operationalRunInstance;
+    identity.delegatedAuthority = { ...authority, kind: "local" };
+    await run({
+      cron,
+      job,
+      foreign,
+      context,
+      client,
+      retireInvocation: () => {
+        invocationCurrent = false;
+      },
+      releaseClaim: () => releaseAgentRunDelegatedAuthority(authority),
+    });
+  } finally {
+    releaseAgentRunDelegatedAuthority(authority);
+    cron.stop();
+  }
+}
+
+async function invokeScheduledScratch(
+  method: "cron.scratch.get" | "cron.scratch.set",
+  params: Record<string, unknown>,
+  caller: {
+    context: ReturnType<typeof createDirectChatContext>;
+    client: ReturnType<typeof callerClient>;
+  },
+) {
+  const respond = vi.fn();
+  await cronHandlers[method]!({
+    req: { type: "req", id: "scheduled-scratch", method },
+    params,
+    respond,
+    ...caller,
+    isWebchatConnect: () => false,
+  });
+  return { respond };
+}
+
+describe("scheduled automation scratch RPC", () => {
+  it("reads and CAS-writes its own checklist across owner scope without exposing another job", async () => {
+    await withScheduledScratch(async ({ cron, job, foreign, context, client }) => {
+      const read = await invokeScheduledScratch(
+        "cron.scratch.get",
+        { id: job.id },
+        { context, client },
+      );
+      expect(read.respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          currentRevision: 1,
+          scratch: expect.objectContaining({ content: "retained checklist" }),
+        }),
+        undefined,
+      );
+      const write = await invokeScheduledScratch(
+        "cron.scratch.set",
+        {
+          id: job.id,
+          content: "checked queue",
+          expectedRevision: 1,
+        },
+        { context, client },
+      );
+      expect(write.respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          ok: true,
+          currentRevision: 2,
+        }),
+        undefined,
+      );
+      const stale = await invokeScheduledScratch(
+        "cron.scratch.set",
+        {
+          id: job.id,
+          content: "stale replacement",
+          expectedRevision: 1,
+        },
+        { context, client },
+      );
+      expect(stale.respond).toHaveBeenCalledWith(
+        true,
+        {
+          ok: false,
+          reason: "revision-conflict",
+          currentRevision: 2,
+        },
+        undefined,
+      );
+      for (const method of ["cron.scratch.get", "cron.scratch.set"] as const) {
+        const denied = await invokeScheduledScratch(
+          method,
+          {
+            id: foreign.id,
+            ...(method === "cron.scratch.set"
+              ? { content: "must not write", expectedRevision: 1 }
+              : {}),
+          },
+          { context, client },
+        );
+        expect(denied.respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "INVALID_REQUEST",
+          }),
+        );
+        expect(JSON.stringify(denied.respond.mock.calls)).not.toContain(
+          "foreign private checklist",
+        );
+      }
+      expect(await cron.readScratch(job.id)).toMatchObject({
+        currentRevision: 2,
+        scratch: { content: "checked queue" },
+      });
+      expect(await cron.readScratch(foreign.id)).toMatchObject({
+        currentRevision: 1,
+        scratch: { content: "foreign private checklist" },
+      });
+    });
+  });
+
+  it.each(["invocation closes", "claim is released"] as const)(
+    "rolls back a scratch write when the %s at native commit admission",
+    async (transition) => {
+      await withScheduledScratch(
+        async ({ cron, job, context, client, retireInvocation, releaseClaim }) => {
+          const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+          let commitObserved = false;
+          const admission = vi
+            .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+            .mockImplementation((admit, attachment) => {
+              let nonce: string | undefined;
+              return createAdmission((request, grant) => {
+                const facts = request.facts;
+                if (
+                  request.stage === "transaction" &&
+                  isRecord(facts) &&
+                  typeof facts.nonce === "string"
+                ) {
+                  nonce = facts.nonce;
+                }
+                if (
+                  request.stage === "commit" &&
+                  nonce &&
+                  isRecord(facts) &&
+                  facts.nonce === nonce &&
+                  facts.bytes instanceof Uint8Array
+                ) {
+                  commitObserved = true;
+                  if (transition === "invocation closes") {
+                    retireInvocation();
+                  } else {
+                    releaseClaim();
+                  }
+                }
+                admit(request, grant);
+              }, attachment);
+            });
+          try {
+            const write = await invokeScheduledScratch(
+              "cron.scratch.set",
+              {
+                id: job.id,
+                content: "must not commit",
+                expectedRevision: 1,
+              },
+              { context, client },
+            );
+            expect(commitObserved).toBe(true);
+            expect(
+              client.internal?.agentRuntimeIdentity?.cronSelfManagementContext?.expiresAtMs,
+            ).toBeGreaterThan(Date.now());
+            expect(write.respond).toHaveBeenCalledWith(
+              false,
+              undefined,
+              expect.objectContaining({
+                message: expect.stringContaining("authority is no longer active"),
+              }),
+            );
+          } finally {
+            admission.mockRestore();
+          }
+          expect(await cron.readScratch(job.id)).toMatchObject({
+            currentRevision: 1,
+            scratch: { content: "retained checklist" },
+          });
+        },
+      );
     },
   );
 });

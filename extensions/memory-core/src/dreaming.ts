@@ -11,7 +11,6 @@ import {
   normalizeOptionalString,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
 import {
   type CronServiceLike,
   reconcileShortTermDreamingCronJob,
@@ -28,7 +27,6 @@ import { resolveMemoryPromotionFileMaxChars } from "./memory-budget.js";
 import type { PromotionRejectionCategory } from "./short-term-promotion-types.js";
 
 const RUNTIME_CRON_RECONCILE_INTERVAL_MS = 60_000;
-const HEARTBEAT_ISOLATED_SESSION_SUFFIX = ":heartbeat";
 
 type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
 
@@ -52,38 +50,8 @@ function formatRepairSummary(repair: {
   return actions.join(", ");
 }
 
-function resolveDreamingTriggerSessionKeys(sessionKey?: string): string[] {
-  const normalized = normalizeOptionalString(sessionKey);
-  if (!normalized) {
-    return [];
-  }
-
-  const keys = [normalized];
-  // Isolated heartbeat runs execute in a sibling `:heartbeat` session while cron
-  // system events stay queued on the base main session.
-  if (normalized.endsWith(HEARTBEAT_ISOLATED_SESSION_SUFFIX)) {
-    const baseSessionKey = normalized.slice(0, -HEARTBEAT_ISOLATED_SESSION_SUFFIX.length).trim();
-    if (baseSessionKey) {
-      keys.push(baseSessionKey);
-    }
-  }
-
-  return uniqueStrings(keys);
-}
-
-function hasPendingManagedDreamingCronEvent(sessionKey?: string, agentId?: string): boolean {
-  return resolveDreamingTriggerSessionKeys(sessionKey).some((candidateSessionKey) =>
-    peekSystemEventEntries(candidateSessionKey, agentId).some(
-      (event) =>
-        event.contextKey?.startsWith("cron:") === true &&
-        normalizeOptionalString(event.text) === DREAMING_SYSTEM_EVENT_TEXT,
-    ),
-  );
-}
-
 async function runShortTermDreamingPromotion(params: {
-  trigger: "heartbeat" | "cron";
-  /** Agent whose heartbeat/cron turn triggered the sweep. */
+  /** Agent whose scheduled turn triggered the sweep. */
   agentId?: string;
   workspaceDir?: string;
   cfg?: OpenClawConfig;
@@ -162,7 +130,6 @@ async function runShortTermDreamingPromotion(params: {
   let degradedNarratives = 0;
   let pendingNarratives = 0;
   const pluginConfig = params.cfg ? resolveMemoryDreamingPluginConfig(params.cfg) : undefined;
-  const detachNarratives = params.trigger === "cron";
   const [
     { writeDeepDreamingReport },
     { appendFallbackNarrativeEntry, runDreamNarrative },
@@ -188,7 +155,7 @@ async function runShortTermDreamingPromotion(params: {
         cfg: params.cfg,
         logger: params.logger,
         subagent: params.subagent,
-        detachNarratives,
+        detachNarratives: true,
         nowMs: sweepNowMs,
       });
       degradedNarratives += phaseResult.degradedPhases;
@@ -330,7 +297,7 @@ async function runShortTermDreamingPromotion(params: {
             timezone: params.config.timezone,
             model: params.config.execution?.model,
             logger: params.logger,
-            detached: detachNarratives,
+            detached: true,
           });
           if (narrativeOutcome.status === "degraded") {
             degradedNarratives += 1;
@@ -596,7 +563,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     "before_agent_reply",
     async (event, ctx) => {
       try {
-        if (ctx.trigger !== "heartbeat" && ctx.trigger !== "cron") {
+        if (ctx.trigger !== "cron") {
           return undefined;
         }
         const currentConfig = resolveCurrentConfig();
@@ -604,9 +571,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
           event.cleanedBody,
           DREAMING_SYSTEM_EVENT_TEXT,
         );
-        const isManagedTrigger =
-          ctx.trigger === "cron" || hasPendingManagedDreamingCronEvent(ctx.sessionKey, ctx.agentId);
-        if (!hasManagedDreamingToken || !isManagedTrigger) {
+        if (!hasManagedDreamingToken) {
           return undefined;
         }
         const config = resolveMemoryDeepDreamingConfig({
@@ -614,7 +579,6 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
           cfg: currentConfig,
         });
         return await runShortTermDreamingPromotion({
-          trigger: ctx.trigger,
           agentId: ctx.agentId,
           workspaceDir: ctx.workspaceDir,
           cfg: currentConfig,
@@ -627,6 +591,6 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         return undefined;
       }
     },
-    { eligibleTriggers: ["heartbeat", "cron"] },
+    { eligibleTriggers: ["cron"] },
   );
 }

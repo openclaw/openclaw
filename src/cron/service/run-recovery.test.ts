@@ -697,9 +697,12 @@ describe("atomic cron run recovery", () => {
     job.failureAlert = { after: 10, cooldownMs: 0 };
     job.state.consecutiveErrors = 9;
     await writeCronStoreSnapshot({ storePath, jobs: [job] });
-    const enqueueSystemEvent = vi.fn();
+    const enqueueSessionEvent = vi.fn();
     const sendCronFailureAlert = vi.fn(async () => undefined);
-    const state = makeState(logger, storePath, nowMs, { enqueueSystemEvent, sendCronFailureAlert });
+    const state = makeState(logger, storePath, nowMs, {
+      enqueueSessionEvent,
+      sendCronFailureAlert,
+    });
 
     const result = await recoverCronRunForTest(state, {
       jobId: job.id,
@@ -721,7 +724,7 @@ describe("atomic cron run recovery", () => {
     });
 
     runPostPersistCronNotifications(state, result.notifications);
-    expect(enqueueSystemEvent).toHaveBeenCalledOnce();
+    expect(enqueueSessionEvent).toHaveBeenCalledOnce();
     expect(sendCronFailureAlert).not.toHaveBeenCalled();
   });
 

@@ -44,7 +44,7 @@ async function seedInterruptedBatch() {
     nowMs: () => nowMs,
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSessionEvent: vi.fn(),
     runIsolatedAgentJob: runner,
     runCommandJob: runner,
     onEvent,

@@ -2,7 +2,6 @@
  * @deprecated Compatibility shim for openclaw/skills' openclaw-zulip plugin and
  * tloncorp/tlon-apps. Removal is targeted for the next Plugin SDK major.
  */
-import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.types.js";
 import { mapReplyDispatchCounts } from "../auto-reply/reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
@@ -18,6 +17,7 @@ import {
   type OutboundReplyPayload,
 } from "../infra/outbound/reply-payload-normalize.js";
 import { dispatchChannelInboundReply } from "./channel-inbound.js";
+import { publicReplyOptions, type GetReplyOptions } from "./reply-options.js";
 
 type ReplyOptionsWithoutModelSelected = Omit<
   Omit<GetReplyOptions, "onBlockReply">,
@@ -134,7 +134,7 @@ export async function dispatchInboundReplyWithBase(
       onError: onDispatchError,
     },
     replyPipeline: {},
-    replyOptions,
+    replyOptions: publicReplyOptions(replyOptions),
     record: { onRecordError },
   });
 }

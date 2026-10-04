@@ -9,10 +9,8 @@ import {
   getFollowupTurnTestState,
   resetFollowupTurnTestState,
 } from "./followup-turn-execution.test-support.js";
-import {
-  resolveReplyOperationAgentTurn,
-  type ReplyOperationRunState,
-} from "./reply-operation-run-state.js";
+import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
+import { resolveReplyOperationAgentTurn } from "./reply-operation-run-state.test-support.js";
 import { markReplyOperationExecutionStarted } from "./reply-run-registry.state.js";
 import { createMockReplyOperation } from "./test-helpers.js";
 

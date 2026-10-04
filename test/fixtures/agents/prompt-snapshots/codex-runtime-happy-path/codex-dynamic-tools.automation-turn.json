@@ -1,0 +1,720 @@
+{
+  "base": "codex-dynamic-tools.telegram-direct.json",
+  "replace": {
+    "openclaw": {
+      "description": "",
+      "name": "openclaw",
+      "tools": [
+        {
+          "deferLoading": true,
+          "description": "Inspect or remove only the current automation. Actions: status; list [includeDisabled]; get/runs/remove jobId. Use the current job ID. To stop a finished job, remove it; creating/updating/running jobs and waking sessions are unavailable. Return the task result; the scheduler owns delivery. scratch_get reads this job's checklist and revision; scratch_set replaces or clears content using expectedRevision from the read (reread after a revision conflict). record_result accepts one outcome (no_change, progress, done, blocked, needs_attention) and concise summary for this run. no_change or NO_REPLY keeps the response silent.",
+          "inputSchema": {
+            "properties": {
+              "action": {
+                "enum": [
+                  "status",
+                  "list",
+                  "get",
+                  "remove",
+                  "runs",
+                  "scratch_get",
+                  "scratch_set",
+                  "record_result"
+                ],
+                "type": "string"
+              },
+              "content": {
+                "anyOf": [
+                  {
+                    "maxLength": 262144,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "expectedRevision": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "gatewayToken": {
+                "type": "string"
+              },
+              "gatewayUrl": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "includeDisabled": {
+                "type": "boolean"
+              },
+              "jobId": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": ["no_change", "progress", "done", "blocked", "needs_attention"],
+                "type": "string"
+              },
+              "runId": {
+                "description": "Run id from action=\"run\" to read with action=\"runs\"",
+                "type": "string"
+              },
+              "summary": {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "timeoutMs": {
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": ["action"],
+            "type": "object"
+          },
+          "name": "automations",
+          "type": "function"
+        },
+        {
+          "deferLoading": true,
+          "description": "Read gateway config/schema. update.run: owner request or operator schedule; automatic restart + completion notice. Never via shell. Other system changes: use openclaw tool.",
+          "inputSchema": {
+            "properties": {
+              "action": {
+                "enum": ["config.get", "config.schema.lookup", "update.run"],
+                "type": "string"
+              },
+              "gatewayToken": {
+                "type": "string"
+              },
+              "gatewayUrl": {
+                "type": "string"
+              },
+              "note": {
+                "description": "Short human note for the post-update restart notice.",
+                "type": "string"
+              },
+              "path": {
+                "description": "Required for config.schema.lookup; optional for config.get.",
+                "type": "string"
+              },
+              "timeoutMs": {
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": ["action"],
+            "type": "object"
+          },
+          "name": "gateway",
+          "type": "function"
+        },
+        {
+          "deferLoading": true,
+          "description": "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), camera_ptz for physical camera pan/tilt/zoom, photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke. File transfer is a separate capability.",
+          "inputSchema": {
+            "properties": {
+              "action": {
+                "enum": [
+                  "status",
+                  "describe",
+                  "pending",
+                  "approve",
+                  "reject",
+                  "notify",
+                  "camera_snap",
+                  "camera_list",
+                  "camera_clip",
+                  "camera_ptz",
+                  "photos_latest",
+                  "screen_record",
+                  "screen_snapshot",
+                  "location_get",
+                  "notifications_list",
+                  "notifications_action",
+                  "device_status",
+                  "device_info",
+                  "device_permissions",
+                  "device_health",
+                  "which",
+                  "invoke"
+                ],
+                "type": "string"
+              },
+              "bins": {
+                "description": "which: executable names to resolve on the selected node.",
+                "items": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 64,
+                "minItems": 1,
+                "type": "array"
+              },
+              "body": {
+                "type": "string"
+              },
+              "delayMs": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "delivery": {
+                "enum": ["system", "overlay", "auto"],
+                "type": "string"
+              },
+              "desiredAccuracy": {
+                "enum": ["coarse", "balanced", "precise"],
+                "type": "string"
+              },
+              "deviceId": {
+                "description": "For camera_ptz, use a camera_list devices[].id value as deviceId; it is required and must not be guessed.",
+                "type": "string"
+              },
+              "duration": {
+                "type": "string"
+              },
+              "durationMs": {
+                "maximum": 300000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "facing": {
+                "description": "camera_snap: front/back/both; camera_clip: front/back only.",
+                "enum": ["front", "back", "both"],
+                "type": "string"
+              },
+              "fps": {
+                "exclusiveMinimum": 0,
+                "type": "number"
+              },
+              "gatewayToken": {
+                "type": "string"
+              },
+              "gatewayUrl": {
+                "type": "string"
+              },
+              "includeAudio": {
+                "type": "boolean"
+              },
+              "invokeCommand": {
+                "type": "string"
+              },
+              "invokeParamsJson": {
+                "type": "string"
+              },
+              "invokeTimeoutMs": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "limit": {
+                "maximum": 20,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "locationTimeoutMs": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "maxAgeMs": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxWidth": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "node": {
+                "description": "Node ID, name, or IP. Required for describe and node-targeted actions; use status to discover nodes.",
+                "type": "string"
+              },
+              "notificationAction": {
+                "enum": ["open", "dismiss", "reply"],
+                "type": "string"
+              },
+              "notificationKey": {
+                "type": "string"
+              },
+              "notificationReplyText": {
+                "type": "string"
+              },
+              "outPath": {
+                "type": "string"
+              },
+              "panDegrees": {
+                "description": "camera_ptz pan: set uses absolute degrees; move uses a degree delta. Omit when unsupported.",
+                "type": "number"
+              },
+              "priority": {
+                "enum": ["passive", "active", "timeSensitive"],
+                "type": "string"
+              },
+              "ptzOperation": {
+                "description": "camera_ptz operation. Call status before any control operation. status and home accept no axes; set uses absolute axes; move uses axis deltas. Never guess unsupported axes.",
+                "enum": ["status", "set", "move", "home"],
+                "type": "string"
+              },
+              "quality": {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              },
+              "requestId": {
+                "type": "string"
+              },
+              "screenIndex": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "sound": {
+                "type": "string"
+              },
+              "tiltDegrees": {
+                "description": "camera_ptz tilt: set uses absolute degrees; move uses a degree delta. Omit when unsupported.",
+                "type": "number"
+              },
+              "timeoutMs": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "title": {
+                "type": "string"
+              },
+              "zoomPercent": {
+                "description": "camera_ptz zoom: set uses absolute percent; move uses a percentage-point delta. Omit when unsupported.",
+                "type": "number"
+              }
+            },
+            "required": ["action"],
+            "type": "object"
+          },
+          "name": "nodes",
+          "type": "function"
+        },
+        {
+          "deferLoading": true,
+          "description": "Show visible-session model/usage/time/cost/tasks. `sessionKey=\"current\"` for current; UI labels are not keys. `model` overrides; `model=default` resets. Use for active model/session questions.",
+          "inputSchema": {
+            "properties": {
+              "changesSince": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "model": {
+                "type": "string"
+              },
+              "sessionKey": {
+                "type": "string"
+              },
+              "user": {
+                "description": "The person's requester_profile.id, required when several people have steered this turn.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "name": "session_status",
+          "type": "function"
+        },
+        {
+          "deferLoading": true,
+          "description": "Read sanitized visible-session history. Before reply/debug/resume. Use messageId for anchored history; sessionId selects its transcript and requires messageId. Omit both for the latest tail. offset pages unanchored history and is ignored with messageId. limit bounds either mode. Include tool messages with includeTools. pendingInputs are accepted inputs outside model history; page with pendingBefore=nextBefore. Cancelled/interrupted inputs never replay automatically. Lower limit for richer pending previews.",
+          "inputSchema": {
+            "properties": {
+              "includeTools": {
+                "type": "boolean"
+              },
+              "limit": {
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "messageId": {
+                "description": "Return history around this message id. Ignores offset; limit bounds the window.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "offset": {
+                "description": "Plain-pagination offset. Ignored when messageId is set; limit still bounds anchored history.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "pendingBefore": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "sessionId": {
+                "description": "Transcript session id that owns messageId. Requires messageId; omit for the latest tail.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "sessionKey": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "user": {
+                "description": "The person's requester_profile.id, required when several people have steered this turn.",
+                "type": "string"
+              }
+            },
+            "required": ["sessionKey"],
+            "type": "object"
+          },
+          "name": "sessions_history",
+          "type": "function"
+        },
+        {
+          "deferLoading": true,
+          "description": "List visible session metadata and groups; filter ownerId/creatorId, projectId/workspaceDir, group/pinned, kind/agent/activity/archive. relationship=owned|created|involving selects the authenticated requesting user's sessions, not the agent's owner. Metadata-only by default. limit defaults to 100; larger requests stay valid but limitApplied never exceeds 200. count is this page, not an inventory total. Continue with nextOffset and identical filters while hasMore; truncationReason names a scan/byte budget. Pages are live: deduplicate by agentId/key/sessionId or restart for a fresh inventory. archived=all includes active and archived rows. Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles. enrichmentOmitted means previews exceeded the byte budget; read history separately. Use before history/send target selection.",
+          "inputSchema": {
+            "properties": {
+              "activeMinutes": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "activeOnly": {
+                "type": "boolean"
+              },
+              "agentId": {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "archived": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "const": "all",
+                    "type": "string"
+                  }
+                ]
+              },
+              "creatorId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "excludeSubagents": {
+                "type": "boolean"
+              },
+              "group": {
+                "type": "string"
+              },
+              "includeDerivedTitles": {
+                "type": "boolean"
+              },
+              "includeLastMessage": {
+                "type": "boolean"
+              },
+              "kinds": {
+                "items": {
+                  "enum": ["main", "group", "cron", "hook", "node", "other"],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "label": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "limit": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "messageLimit": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "offset": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "ownerId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "pinned": {
+                "type": "boolean"
+              },
+              "projectId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "relationship": {
+                "description": "Relation to the authenticated requesting user; unavailable without a trusted user identity.",
+                "enum": ["owned", "created", "involving"],
+                "type": "string"
+              },
+              "search": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "user": {
+                "description": "The person's requester_profile.id, required when several people have steered this turn.",
+                "type": "string"
+              },
+              "workspaceDir": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "name": "sessions_list",
+          "type": "function"
+        },
+        {
+          "deferLoading": true,
+          "description": "Search visible past sessions for matching user and assistant text. Follow up with sessions_history using a returned sessionKey, sessionId, and messageId for neighboring context.",
+          "inputSchema": {
+            "properties": {
+              "limit": {
+                "description": "Maximum search results: 25. Defaults to 10.",
+                "maximum": 25,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "query": {
+                "description": "Required non-empty keywords to match in past user and assistant text.",
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              "sessionKey": {
+                "type": "string"
+              },
+              "user": {
+                "description": "The person's requester_profile.id, required when several people have steered this turn.",
+                "type": "string"
+              }
+            },
+            "required": ["query"],
+            "type": "object"
+          },
+          "name": "sessions_search",
+          "type": "function"
+        },
+        {
+          "deferLoading": true,
+          "description": "Run a visible session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label. A session identifies model context, not an external address. A peer reply reaches you once: inline when available, otherwise as a later inter-session input. Continue with another sessions_send; post to channels with message. Accepted results report target admission as `targetDisposition: \"queued\"` or `\"steered\"`; `delivery.status` is only later reply delivery state, and neither proves target completion. Omit mode to automatically continue your paused native child task; returns runId/taskRunId with task-owned completion instead of an inline wait or watch. With timeoutSeconds:0, your own running child is steered into its active run (admission only, no separate completion turn; use mode:followup for one); other sessions use ordinary message delivery. mode:notify queues ephemeral context for the next turn without waking or starting work (bounded process memory, not a durable inbox). mode:steer injects guidance into an active supported run and never starts idle work. mode:followup starts a separate turn without steering or resuming a paused task. mode:resume requires a paused native child task and rejects watch:true and positive timeoutSeconds. For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`. Thread chats rejected: target parent channel. Missing configured-agent main created. status \"no_reply\" is terminal, so do not wait for another reply. A timeoutSeconds:0 followup to your existing native child gives this turn a completion to await with sessions_yield, even while queued. watch:true additionally reports later target-session changes; on a steer it can claim the child's existing pending completion.",
+          "inputSchema": {
+            "properties": {
+              "agentId": {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "label": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "mode": {
+                "anyOf": [
+                  {
+                    "const": "notify",
+                    "type": "string"
+                  },
+                  {
+                    "const": "steer",
+                    "type": "string"
+                  },
+                  {
+                    "const": "followup",
+                    "type": "string"
+                  },
+                  {
+                    "const": "resume",
+                    "type": "string"
+                  }
+                ]
+              },
+              "sessionKey": {
+                "type": "string"
+              },
+              "timeoutSeconds": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "user": {
+                "description": "The person's requester_profile.id, required when several people have steered this turn.",
+                "type": "string"
+              },
+              "watch": {
+                "type": "boolean"
+              }
+            },
+            "required": ["message"],
+            "type": "object"
+          },
+          "name": "sessions_send",
+          "type": "function"
+        },
+        {
+          "deferLoading": true,
+          "description": "List native subagents, wait for selected runIds, or cancel a runId and its descendants. A wait timeout never cancels execution or consumes completion delivery.",
+          "inputSchema": {
+            "properties": {
+              "action": {
+                "enum": ["list", "wait", "cancel"],
+                "type": "string"
+              },
+              "recentMinutes": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "runId": {
+                "type": "string"
+              },
+              "runIds": {
+                "items": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "minItems": 1,
+                "type": "array"
+              },
+              "timeoutSeconds": {
+                "description": "Wait duration in integer seconds, 0–60 (default: 30). Use 0 for a snapshot.",
+                "maximum": 60,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "name": "subagents",
+          "type": "function"
+        },
+        {
+          "deferLoading": true,
+          "description": "Convert text to spoken audio (TTS) with the configured voice provider. Only explicit voice/speech/TTS intent or active TTS config; never ordinary text reply. Audio auto-delivered. After success follow reply instructions; no duplicate text/audio.",
+          "inputSchema": {
+            "properties": {
+              "channel": {
+                "description": "Channel id; output-format hint.",
+                "type": "string"
+              },
+              "text": {
+                "description": "Text to speak.",
+                "type": "string"
+              },
+              "timeoutMs": {
+                "description": "Provider timeout ms.",
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": ["text"],
+            "type": "object"
+          },
+          "name": "tts",
+          "type": "function"
+        },
+        {
+          "deferLoading": true,
+          "description": "Fetch URL; extract readable markdown/text. Lightweight; no browser automation.",
+          "inputSchema": {
+            "properties": {
+              "extractMode": {
+                "default": "markdown",
+                "description": "Extract as markdown/text.",
+                "enum": ["markdown", "text"],
+                "type": "string"
+              },
+              "maxChars": {
+                "description": "Max chars returned; truncates.",
+                "minimum": 100,
+                "type": "integer"
+              },
+              "url": {
+                "description": "HTTP(S) URL.",
+                "type": "string"
+              }
+            },
+            "required": ["url"],
+            "type": "object"
+          },
+          "name": "web_fetch",
+          "type": "function"
+        },
+        {
+          "deferLoading": true,
+          "description": "Search current web; normalized provider results. Supports freshness and date-range filters (freshness, date_after/date_before) and domain filtering (domain_filter).",
+          "inputSchema": {
+            "properties": {
+              "count": {
+                "description": "Result count.",
+                "maximum": 10,
+                "minimum": 1,
+                "type": "number"
+              },
+              "country": {
+                "description": "2-letter country code.",
+                "type": "string"
+              },
+              "date_after": {
+                "description": "Published after YYYY-MM-DD.",
+                "type": "string"
+              },
+              "date_before": {
+                "description": "Published before YYYY-MM-DD.",
+                "type": "string"
+              },
+              "domain_filter": {
+                "description": "Perplexity domain filter.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "freshness": {
+                "description": "Time filter: day/week/month/year.",
+                "type": "string"
+              },
+              "language": {
+                "description": "ISO 639-1 language.",
+                "type": "string"
+              },
+              "max_tokens": {
+                "description": "Perplexity total token budget.",
+                "maximum": 1000000,
+                "minimum": 1,
+                "type": "number"
+              },
+              "max_tokens_per_page": {
+                "description": "Perplexity tokens per page.",
+                "minimum": 1,
+                "type": "number"
+              },
+              "query": {
+                "description": "Search query.",
+                "type": "string"
+              },
+              "search_lang": {
+                "description": "Brave result language.",
+                "type": "string"
+              },
+              "ui_lang": {
+                "description": "Brave UI locale.",
+                "type": "string"
+              }
+            },
+            "required": ["query"],
+            "type": "object"
+          },
+          "name": "web_search",
+          "type": "function"
+        }
+      ],
+      "type": "namespace"
+    }
+  }
+}

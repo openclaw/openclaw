@@ -823,9 +823,9 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
 
   it.each([
     {
-      name: "Gateway-routed heartbeat",
+      name: "Gateway-routed automation",
       trigger: "user",
-      bootstrapContextRunKind: "heartbeat",
+      bootstrapContextRunKind: "cron",
     },
   ] as const)(
     "returns an exact terminal anchor for $name turns without finalizing inside Codex",
@@ -839,7 +839,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       const harness = createStartedThreadHarness();
       const params = await createSqliteParams(
         workspaceDir,
-        `heartbeat-${testCase.bootstrapContextRunKind}`,
+        `automation-${testCase.bootstrapContextRunKind}`,
       );
       params.contextEngine = contextEngine;
       params.trigger = testCase.trigger;

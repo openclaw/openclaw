@@ -25,9 +25,15 @@ import {
 } from "../utils/delivery-context.shared.js";
 import { isInternalMessageChannel } from "../utils/message-channel.js";
 import { resolveGatewayLifecycleNoticeRoute } from "./server-restart-sentinel-notice.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 
-type NoticeSession = ReturnType<typeof loadSessionEntry>;
+type NoticeSession = {
+  agentId: string;
+  storePath: string;
+  canonicalKey: string;
+  entry: SessionEntry | undefined;
+};
 const log = createSubsystemLogger("gateway/update-run");
 type NoticeDestination =
   | { kind: "route"; route: SessionDeliveryRoute }
@@ -164,16 +170,33 @@ export async function resolveUpdateRunNoticeTarget(params: {
   threadId?: string;
   session?: NoticeSession;
   env?: NodeJS.ProcessEnv;
+  assertActive?: () => void;
 }): Promise<NoticeTarget> {
-  const session =
-    params.session ??
-    (params.sessionKey ? loadSessionEntry(params.sessionKey, { env: params.env }) : undefined);
+  params.assertActive?.();
+  let session = params.session;
+  if (!session && params.sessionKey) {
+    const target = await resolveGatewaySessionStoreTargetInWorker({
+      cfg: params.cfg,
+      key: params.sessionKey,
+      env: params.env,
+      assertActive: params.assertActive,
+    });
+    params.assertActive?.();
+    session = { ...target, entry: findCanonicalStoreMatch(target.store, target.storeKeys)?.entry };
+  }
   const routingKey = params.sessionKey ?? session?.canonicalKey;
   const { baseSessionKey, threadId } = resolveSessionThreadInfo(routingKey);
   let context = deliveryContextFromSession(session?.entry);
   let chatType = sessionDeliveryOrigin(session?.entry)?.chatType ?? "direct";
   if (!hasDeliveryTargetFields(context) && baseSessionKey && baseSessionKey !== routingKey) {
-    const { entry } = loadSessionEntry(baseSessionKey, { env: params.env });
+    const baseTarget = await resolveGatewaySessionStoreTargetInWorker({
+      cfg: params.cfg,
+      key: baseSessionKey,
+      env: params.env,
+      assertActive: params.assertActive,
+    });
+    params.assertActive?.();
+    const entry = findCanonicalStoreMatch(baseTarget.store, baseTarget.storeKeys)?.entry;
     chatType =
       sessionDeliveryOrigin(session?.entry)?.chatType ??
       sessionDeliveryOrigin(entry)?.chatType ??
@@ -195,11 +218,13 @@ export async function resolveUpdateRunNoticeTarget(params: {
     // Ambient recovery keeps the persisted system route thread; origin keys can supply hints.
     threadId: params.threadId ?? (params.sessionKey ? threadId : undefined),
   });
-  return await prepareUpdateRunNoticeTarget(
+  const target = await prepareUpdateRunNoticeTarget(
     params.cfg,
     route
       ? { kind: "route", route: { ...route, chatType } }
       : { kind: "none", reason: "no delivery target" },
     params.env,
   );
+  params.assertActive?.();
+  return target;
 }

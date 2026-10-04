@@ -282,9 +282,9 @@ it("keeps queued diagnostic supplements behind source send policy", async () => 
   expect(await fixture.deliverQueued()).toEqual([]);
 });
 
-it("accounts a completed compaction before an empty heartbeat skips reply preparation", async () => {
+it("accounts a completed compaction before an empty internal event skips reply preparation", async () => {
   const fixture = await createFixture();
-  fixture.context.isHeartbeat = true;
+  fixture.context.followupRun.run.inputProvenance = { kind: "internal_system", sourceTool: "cron" };
   fixture.context.followupRun.run.terminalReplyExpectation = "optional";
   fixture.recordCompaction({ currentContextTokens: 40 });
   fixture.context.execution.result.payloads = [];
@@ -563,16 +563,19 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
   );
 
   it.each([
-    { mode: "heartbeat", withUsage: true },
-    { mode: "heartbeat", withUsage: false },
+    { mode: "internal event", withUsage: true },
+    { mode: "internal event", withUsage: false },
     { mode: "exhausted fallback", withUsage: true },
     { mode: "exhausted fallback", withUsage: false },
     { mode: "inter-session completion", withUsage: true },
     { mode: "inter-session completion", withUsage: false },
   ])("preserves diagnostics for $mode with usage=$withUsage", async ({ mode, withUsage }) => {
     const fixture = await createFixture();
-    fixture.context.isHeartbeat = mode === "heartbeat";
-    if (mode === "heartbeat") {
+    if (mode === "internal event") {
+      fixture.context.followupRun.run.inputProvenance = {
+        kind: "internal_system",
+        sourceTool: "cron",
+      };
       fixture.context.followupRun.run.terminalReplyExpectation = "optional";
     }
     fixture.context.execution.fallback.exhausted = mode === "exhausted fallback";

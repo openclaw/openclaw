@@ -44,7 +44,6 @@ describe("cron completion after a delivered report", () => {
     },
     { name: "an aborted run", runAborted: true },
     { name: "a run without a final answer", assistantTexts: [] },
-    { name: "a heartbeat", isHeartbeatTrigger: true },
   ])("still reports failure for $name", ({ name: _name, ...overrides }) => {
     expect(buildPayloads({ ...completedRun, ...overrides })).toEqual([
       expect.objectContaining({ isError: true }),

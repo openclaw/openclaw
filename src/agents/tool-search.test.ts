@@ -510,11 +510,9 @@ describe("Tool Search", () => {
   it("keeps run-contract tools direct-only so search never hides them", async () => {
     const { createStructuredOutputTool } = await import("./tools/structured-output-tool.js");
     const { createSessionsYieldTool } = await import("./tools/sessions-yield-tool.js");
-    const { createHeartbeatResponseTool } = await import("./tools/heartbeat-response-tool.js");
     const contractTools = [
       createStructuredOutputTool({ runId: "run-contract-tools", schema: { type: "object" } }),
       createSessionsYieldTool({ sessionId: "session-contract-tools" }),
-      createHeartbeatResponseTool(),
     ];
 
     const { catalogRef, compacted } = catalogFixture(
@@ -528,7 +526,6 @@ describe("Tool Search", () => {
       TOOL_CALL_RAW_TOOL_NAME,
       "structured_output",
       "sessions_yield",
-      "heartbeat_respond",
     ]);
     // Direct-only contract tools never enter the search catalog.
     expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_lookup"]);

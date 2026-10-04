@@ -2,7 +2,7 @@ import { once } from "node:events";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
-import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
+import type { dispatchInboundMessageInternal } from "../auto-reply/dispatch.js";
 import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
@@ -95,7 +95,7 @@ it("retains committed initial turns through fencing and denies their final write
   initializeGlobalHookRunner(registry);
   dispatchInboundMessageMock.mockClear();
   dispatchInboundMessageMock.mockImplementation(
-    async (params: Parameters<typeof dispatchInboundMessage>[0]) => {
+    async (params: Parameters<typeof dispatchInboundMessageInternal>[0]) => {
       const scenario = cases.find(({ key }) => key === params.ctx.SessionKey);
       assert(scenario);
       const recorder = params.replyOptions?.userTurnTranscriptRecorder;

@@ -356,7 +356,7 @@ export async function runSessionCompactionIfNeeded(params: {
   sessionKey?: string;
   runtimePolicySessionKey?: string;
   storePath?: string;
-  isHeartbeat: boolean;
+
   /** Completed commands carry the actual harness, not the originally requested runtime. */
   agentHarnessId?: string;
   abortSignal?: AbortSignal;
@@ -447,9 +447,7 @@ export async function runSessionCompactionIfNeeded(params: {
   const maxActiveTranscriptBytes = resolveMaxActiveTranscriptBytes(params.cfg);
   const shouldCheckActiveTranscriptBytes = typeof maxActiveTranscriptBytes === "number";
   const transcriptUsageTokens =
-    params.isHeartbeat ||
-    isCodexRuntime ||
-    (typeof freshPersistedTokens === "number" && !freshNeedsOutputRead)
+    isCodexRuntime || (typeof freshPersistedTokens === "number" && !freshNeedsOutputRead)
       ? undefined
       : await estimatePromptTokensFromSessionTranscript({
           ...compactionTarget,
@@ -560,7 +558,7 @@ export async function runSessionCompactionIfNeeded(params: {
       `tokenCount=${tokenCountForCompaction ?? freshPersistedTokens ?? "undefined"} ` +
       `contextWindow=${contextWindowTokens} threshold=${threshold} ` +
       `responsesServerCompactionThreshold=${responsesServerCompactionThreshold ?? "undefined"} ` +
-      `isHeartbeat=${params.isHeartbeat} isCli=${isCli} ` +
+      `isCli=${isCli} ` +
       `persistedFresh=${entry?.totalTokensFresh === true} ` +
       `transcriptPromptTokens=${transcriptPromptTokens ?? "undefined"} ` +
       `transcriptPromptSource=${transcriptUsageTokens?.promptTokenSource ?? "undefined"} ` +
@@ -571,13 +569,11 @@ export async function runSessionCompactionIfNeeded(params: {
       `sizeTriggerLatched=${transcriptByteCompactionLatched}`,
   );
 
-  const shouldCompactByTokens =
-    !params.isHeartbeat &&
-    shouldRunPreflightCompaction({
-      entry,
-      tokenCount: tokenCountForCompaction,
-      threshold,
-    });
+  const shouldCompactByTokens = shouldRunPreflightCompaction({
+    entry,
+    tokenCount: tokenCountForCompaction,
+    threshold,
+  });
   const shouldCompact = shouldCompactByTokens || shouldCompactByTranscriptBytes;
   if (!shouldCompact) {
     return entry;
@@ -888,7 +884,6 @@ export async function runMemoryFlushIfNeeded(params: {
   sessionKey?: string;
   runtimePolicySessionKey?: string;
   storePath?: string;
-  isHeartbeat: boolean;
   replyOperation?: ReplyOperation;
   abortSignal?: AbortSignal;
 }): Promise<MemoryFlushResult> {
@@ -928,10 +923,7 @@ export async function runMemoryFlushIfNeeded(params: {
     followupOwnsNativeCompaction(runtimeParams, runtimeId);
   // Only a native provider's flush can persist without a writable workspace, so other
   // resolvers are never called for a session whose workspace cannot be written.
-  const canAttemptFlush =
-    (memoryFlushWritable || isMemoryFlushPlanNativeProviderOwned()) &&
-    !params.isHeartbeat &&
-    !isCli;
+  const canAttemptFlush = (memoryFlushWritable || isMemoryFlushPlanNativeProviderOwned()) && !isCli;
   if (!canAttemptFlush) {
     return { sessionEntry: entry, outcome: "skipped" };
   }
@@ -1080,7 +1072,7 @@ export async function runMemoryFlushIfNeeded(params: {
     `memoryFlush check: sessionKey=${params.sessionKey} ` +
       `tokenCount=${tokenCountForFlush ?? "undefined"} ` +
       `contextWindow=${contextWindowTokens} threshold=${flushThreshold} ` +
-      `isHeartbeat=${params.isHeartbeat} isCli=${isCli} memoryFlushWritable=${memoryFlushWritable} ` +
+      `isCli=${isCli} memoryFlushWritable=${memoryFlushWritable} ` +
       `compactionCount=${entry?.compactionCount ?? 0} memoryFlushCompactionCount=${entry?.memoryFlush?.compactionCount ?? "undefined"} ` +
       `persistedPromptTokens=${persistedPromptTokens ?? "undefined"} persistedFresh=${entry?.totalTokensFresh === true} ` +
       `promptTokensEst=${promptTokenEstimate ?? "undefined"} transcriptPromptTokens=${transcriptPromptTokens ?? "undefined"} transcriptOutputTokens=${transcriptOutputTokens ?? "undefined"} ` +

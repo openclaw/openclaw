@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
@@ -306,57 +305,41 @@ describe("delivery failures", () => {
     expect(h.subscription.hasToolMediaBlockReply()).toBe(true);
   });
 
-  it.each(["progress", "presentation", "heartbeat"] as const)(
-    "contains rejected %s callbacks",
-    async (kind) => {
-      const rejected = vi.fn().mockRejectedValue(new Error("callback failed"));
-      const h = setup(
-        kind === "progress"
-          ? {
-              onAgentEvent: rejected,
-              onPartialReply: rejected,
-              onAssistantMessageStart: rejected,
-              onReasoningStream: rejected,
-              onReasoningEnd: rejected,
-              reasoningMode: "stream",
-            }
-          : {
-              onToolResult: kind === "presentation" ? rejected : undefined,
-              onHeartbeatToolResponse: kind === "heartbeat" ? rejected : undefined,
-              verboseLevel: "full",
-            },
-      );
-      if (kind === "progress") {
-        h.message(answer("Hello"), false);
-        emitAssistantTextDelta({ emit: h.emit, delta: "Hello" });
-        for (const assistantMessageEvent of [
-          { type: "thinking_delta", delta: "Because" },
-          { type: "thinking_end" },
-        ]) {
-          h.emit({ type: "message_update", message: { role: "assistant" }, assistantMessageEvent });
-        }
-      } else {
-        h.tool(
-          kind === "heartbeat" ? HEARTBEAT_RESPONSE_TOOL_NAME : "read",
-          kind === "heartbeat"
-            ? {
-                details: {
-                  status: "accepted",
-                  outcome: "no_change",
-                  notify: false,
-                  summary: "Nothing needs attention.",
-                },
-              }
-            : { content: [{ type: "text", text: "file contents" }] },
-        );
+  it.each(["progress", "presentation"] as const)("contains rejected %s callbacks", async (kind) => {
+    const rejected = vi.fn().mockRejectedValue(new Error("callback failed"));
+    const h = setup(
+      kind === "progress"
+        ? {
+            onAgentEvent: rejected,
+            onPartialReply: rejected,
+            onAssistantMessageStart: rejected,
+            onReasoningStream: rejected,
+            onReasoningEnd: rejected,
+            reasoningMode: "stream",
+          }
+        : {
+            onToolResult: rejected,
+            verboseLevel: "full",
+          },
+    );
+    if (kind === "progress") {
+      h.message(answer("Hello"), false);
+      emitAssistantTextDelta({ emit: h.emit, delta: "Hello" });
+      for (const assistantMessageEvent of [
+        { type: "thinking_delta", delta: "Because" },
+        { type: "thinking_end" },
+      ]) {
+        h.emit({ type: "message_update", message: { role: "assistant" }, assistantMessageEvent });
       }
-      await h.drain();
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(rejected).toHaveBeenCalled();
-    },
-  );
+    } else {
+      h.tool("read", { content: [{ type: "text", text: "file contents" }] });
+    }
+    await h.drain();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(rejected).toHaveBeenCalled();
+  });
 });
 
 describe("deferred reply supersession", () => {

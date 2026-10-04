@@ -254,9 +254,9 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.deliveryPayloadHasStructuredContent).toBe(true);
   });
 
-  it("removes an earlier heartbeat acknowledgement from a substantive final result", () => {
+  it("removes an earlier silent acknowledgement from a substantive final result", () => {
     const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "HEARTBEAT_OK" }, { text: "Critical deployment failure" }],
+      payloads: [{ text: "NO_REPLY" }, { text: "Critical deployment failure" }],
       finalAssistantVisibleText: "Critical deployment failure",
     });
 
@@ -264,34 +264,34 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.deliveryDisposition).toEqual({ kind: "visible" });
   });
 
-  it("keeps a terminal heartbeat acknowledgement intentionally quiet", () => {
-    const payloads = [{ text: "Checked inbox and calendar." }, { text: "HEARTBEAT_OK" }];
+  it("keeps a terminal silent acknowledgement intentionally quiet", () => {
+    const payloads = [{ text: "Checked inbox and calendar." }, { text: "NO_REPLY" }];
     const result = resolveCronPayloadOutcome({
       payloads,
-      finalAssistantVisibleText: "HEARTBEAT_OK",
+      finalAssistantVisibleText: "NO_REPLY",
     });
 
     expect(result.deliveryPayloads).toEqual(payloads);
-    expect(result.deliveryDisposition).toEqual({ kind: "heartbeat", controlOnly: false });
+    expect(result.deliveryDisposition).toEqual({ kind: "silent", controlOnly: false });
   });
 
-  it("records a pure heartbeat acknowledgement as a control-only terminal", () => {
+  it("records a pure silent acknowledgement as a control-only terminal", () => {
     const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "HEARTBEAT_OK" }],
-      finalAssistantVisibleText: "HEARTBEAT_OK",
+      payloads: [{ text: "NO_REPLY" }],
+      finalAssistantVisibleText: "NO_REPLY",
     });
 
-    expect(result.deliveryDisposition).toEqual({ kind: "heartbeat", controlOnly: true });
+    expect(result.deliveryDisposition).toEqual({ kind: "silent", controlOnly: true });
   });
 
-  it("preserves structured output while removing a sibling heartbeat acknowledgement", () => {
+  it("preserves structured output while removing a sibling silent acknowledgement", () => {
     const mediaPayload = {
-      text: "HEARTBEAT_OK",
+      text: "NO_REPLY",
       mediaUrl: "https://example.com/report.png",
     };
     const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "HEARTBEAT_OK" }, mediaPayload],
-      finalAssistantVisibleText: "HEARTBEAT_OK",
+      payloads: [{ text: "NO_REPLY" }, mediaPayload],
+      finalAssistantVisibleText: "NO_REPLY",
     });
 
     expect(result.deliveryPayloads).toEqual([mediaPayload]);

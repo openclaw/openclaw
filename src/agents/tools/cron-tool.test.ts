@@ -394,7 +394,7 @@ describe("cron tool", () => {
       const tool = createTestCronTool({
         agentSessionKey: "agent:agent-123:telegram:direct:channing",
       });
-      await tool.execute("call-wake-default", { action: "wake", text: "ping", mode: "now" });
+      await tool.execute("call-wake-default", { action: "wake", text: "ping" });
       const params = expectSingleGatewayCallMethod("wake");
       expect(params).toEqual({
         mode: "now",
@@ -413,7 +413,7 @@ describe("cron tool", () => {
         agentId: "ops",
       });
       expect(expectSingleGatewayCallMethod("wake")).toEqual({
-        mode: "next-heartbeat",
+        mode: "now",
         text: "manual",
         sessionKey: "agent:agent-456:discord:thread-xyz",
         agentId: "ops",
@@ -431,7 +431,7 @@ describe("cron tool", () => {
       });
       const params = expectSingleGatewayCallMethod("wake");
       expect(params).toEqual({
-        mode: "next-heartbeat",
+        mode: "now",
         text: "x",
         sessionKey: "subagent:weird:format",
       });

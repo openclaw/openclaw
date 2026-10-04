@@ -5,16 +5,6 @@ import OpenClawKit
 import OpenClawProtocol
 import SwiftUI
 
-struct ControlHeartbeatEvent: Codable {
-    let ts: Double
-    let status: String
-    let to: String?
-    let preview: String?
-    let durationMs: Double?
-    let hasMedia: Bool?
-    let reason: String?
-}
-
 struct ControlAgentEvent: Codable, Identifiable {
     var id: String {
         "\(self.runId)-\(self.seq)"
@@ -165,11 +155,6 @@ final class ControlChannel {
     private(set) var lastPingMs: Double?
     private(set) var authSourceLabel: String?
 
-    var lastHeartbeatEvent: ControlHeartbeatEvent? {
-        guard let heartbeat, self.gateway.serverLeaseMatchesCurrentRoute(heartbeat.lease) else { return nil }
-        return heartbeat.event
-    }
-
     private let logger = Logger(subsystem: "ai.openclaw", category: "control")
     let gateway: GatewayConnection
     private let endpointRevision: @Sendable () -> UInt64
@@ -179,8 +164,6 @@ final class ControlChannel {
     private var lastRecoveryAt: Date?
     private var compatibilityAlerts = ControlChannelCompatibilityAlerts()
     private var eventServerLease: GatewayConnection.ServerLease?
-    private var heartbeat: (event: ControlHeartbeatEvent, lease: GatewayConnection.ServerLease)?
-    private var heartbeatReadTask: Task<Void, Never>?
 
     private func synchronizeRouteGeneration() -> UInt64 {
         // Endpoint stream delivery can lag source adoption; fence UI publication directly.
@@ -257,7 +240,6 @@ final class ControlChannel {
         self.eventTask?.cancel()
         self.recoveryTask?.cancel()
         self.pendingStateTask?.cancel()
-        self.heartbeatReadTask?.cancel()
     }
 
     func configure() async {
@@ -639,7 +621,6 @@ final class ControlChannel {
 
     private func retireEventState() {
         self.eventServerLease = nil
-        self.heartbeatReadTask?.cancel()
         // Keep the last known main key until a current hello replaces it.
         // Retired deliveries cannot use that metadata to recreate old work.
         WorkActivityStore.shared.reset()
@@ -662,7 +643,6 @@ final class ControlChannel {
                 WorkActivityStore.shared.setMainSessionKey(mainSessionKey)
             }
             self.eventServerLease = delivery.serverLease
-            self.refreshHeartbeat(delivery: delivery)
         }
         switch push {
         case let .event(evt) where evt.event == "agent":
@@ -671,13 +651,6 @@ final class ControlChannel {
             {
                 AgentEventStore.shared.append(agent)
                 self.routeWorkActivity(from: agent)
-            }
-        case let .event(evt) where evt.event == "heartbeat":
-            if let payload = evt.payload,
-               let heartbeat = try? GatewayPayloadDecoding.decode(payload, as: ControlHeartbeatEvent.self)
-            {
-                self.heartbeatReadTask?.cancel()
-                self.heartbeat = (heartbeat, delivery.serverLease)
             }
         case let .event(evt) where evt.event == "shutdown":
             self.setStateThrottled(.degraded("gateway shutdown"))
@@ -691,24 +664,6 @@ final class ControlChannel {
             self.refreshProfileAccent(delivery: delivery)
         default:
             break
-        }
-    }
-
-    private func refreshHeartbeat(delivery: GatewayConnection.PushDelivery) {
-        self.heartbeatReadTask?.cancel()
-        self.heartbeatReadTask = Task { [weak self] in
-            guard let self else { return }
-            do {
-                let data = try await self.request(
-                    method: "last-heartbeat", ifCurrentServerLease: delivery.serverLease)
-                // A newer push wins over this initial read, even on the same socket.
-                guard !Task.isCancelled, delivery.isCurrent else { return }
-                // GatewayChannel represents a successful null payload as empty data.
-                self.heartbeat = data.isEmpty ? nil : try JSONDecoder()
-                    .decode(ControlHeartbeatEvent?.self, from: data).map { ($0, delivery.serverLease) }
-            } catch {
-                // Keep the last good event across same-Gateway reconnects; the getter fences replaced routes.
-            }
         }
     }
 

@@ -25,7 +25,6 @@ it.each([false, true])(
     try {
       const reply = await handleReplyAgentRunError(new Error("restart"), {
         resolveVisibleReplyDelivery: async () => false,
-        isHeartbeat: false,
         replyExpectation: "required",
         isRestartRecoveryArmed: async () => armed,
         replyOperation,

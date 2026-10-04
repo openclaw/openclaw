@@ -45,7 +45,7 @@ export function setupFailureAlertSuite() {
     run: (context: {
       cron: CronService;
       enqueueSystemEvent: ReturnType<typeof vi.fn>;
-      requestHeartbeat: ReturnType<typeof vi.fn>;
+      enqueueSessionEvent: ReturnType<typeof vi.fn>;
       sendCronFailureAlert: ReturnType<typeof vi.fn<SendCronFailureAlert>>;
       runCronFailureRepair: Mock<RunCronFailureRepair>;
       runIsolatedAgentJob: ReturnType<typeof vi.fn<RunIsolatedAgentJob>>;
@@ -55,7 +55,7 @@ export function setupFailureAlertSuite() {
     const store = await makeStorePath();
     const sendCronFailureAlert = vi.fn<SendCronFailureAlert>(async () => undefined);
     const enqueueSystemEvent = vi.fn();
-    const requestHeartbeat = vi.fn();
+    const enqueueSessionEvent = vi.fn();
     const runCronFailureRepair = vi.fn<RunCronFailureRepair>(async () => undefined);
     const runResult = params.runResult ?? {
       status: "error",
@@ -72,7 +72,7 @@ export function setupFailureAlertSuite() {
         : { cronConfig: { failureAlert: params.failureAlert } }),
       log: noopLogger,
       enqueueSystemEvent,
-      requestHeartbeat,
+      enqueueSessionEvent,
       runIsolatedAgentJob,
       runCronFailureRepair,
       ...(params.useFallback ? {} : { sendCronFailureAlert }),
@@ -83,7 +83,7 @@ export function setupFailureAlertSuite() {
       await run({
         cron,
         enqueueSystemEvent,
-        requestHeartbeat,
+        enqueueSessionEvent,
         sendCronFailureAlert,
         runCronFailureRepair,
         runIsolatedAgentJob,

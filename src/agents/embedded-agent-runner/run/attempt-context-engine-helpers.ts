@@ -1,10 +1,6 @@
 import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { AssistantMessage } from "../../../llm/types.js";
-import {
-  isHeartbeatLifecycleRunKind,
-  type BootstrapContextRunKind,
-  type BootstrapMode,
-} from "../../bootstrap-mode.js";
+import type { BootstrapContextRunKind, BootstrapMode } from "../../bootstrap-mode.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { hasNonzeroUsage, normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import type { PromptCacheChange } from "../prompt-cache-observability.js";
@@ -36,11 +32,9 @@ export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFil
     shouldRecordCompletedBootstrapTurn: boolean;
   }
 > {
-  const isHeartbeatLifecycleRun = isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind);
   const isContinuationTurn =
     params.bootstrapMode !== "full" &&
     params.contextInjectionMode === "continuation-skip" &&
-    !isHeartbeatLifecycleRun &&
     (await params.hasCompletedBootstrapTurn());
   // Continuation-skip and explicit never both produce an empty injection set,
   // but only a clean full bootstrap later records a durable completion marker.
@@ -49,7 +43,6 @@ export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFil
   const shouldRecordCompletedBootstrapTurn =
     !shouldSkipBootstrapInjection &&
     params.bootstrapContextMode !== "lightweight" &&
-    !isHeartbeatLifecycleRun &&
     params.bootstrapMode === "full";
 
   const context = shouldSkipBootstrapInjection

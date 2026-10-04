@@ -2,17 +2,16 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { DuplicateAgentError } from "../agents/agent-create-error.js";
 import { readLegacyMigrationReceiptFromDatabase } from "../infra/state-migrations.receipts.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import type { HeldAgentDatabase } from "./agent-deletion-journal.types.js";
+import type {
+  AgentDeletionRecoveryHoldPredicate,
+  HeldAgentDatabase,
+} from "./agent-deletion-journal.types.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { resolveOpenClawRegisteredAgentDatabasePath } from "./openclaw-state-db.paths.js";
 
 export type RecoveryDatabase = Pick<OpenClawStateDatabase, "db" | "path">;
 export type RecoveryReport = { description: string; held: HeldAgentDatabase[] };
-export type AgentDeletionRecoveryHoldPredicate = {
-  agentId: string;
-  held: readonly HeldAgentDatabase[];
-  applies: boolean;
-};
+export type { AgentDeletionRecoveryHoldPredicate } from "./agent-deletion-journal.types.js";
 
 export const AGENT_DELETION_RECOVERY_SOURCE_KEY = "agent-deletion-journal-reconstruction";
 

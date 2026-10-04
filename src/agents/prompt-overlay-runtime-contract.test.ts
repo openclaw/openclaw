@@ -43,18 +43,6 @@ describe("GPT-5 prompt overlay runtime contract", () => {
     );
   });
 
-  it("preserves explicit heartbeat guidance for existing plugin SDK consumers", () => {
-    const contribution = resolveGpt5SystemPromptContribution({
-      providerId: OPENAI_CONTRACT_PROVIDER_ID,
-      modelId: GPT5_CONTRACT_MODEL_ID,
-      includeHeartbeatGuidance: true,
-    });
-
-    expect(contribution?.sectionOverrides?.interaction_style).toContain(
-      "Heartbeat = useful proactive progress",
-    );
-  });
-
   it("ignores the retired shared overlay switch and keeps friendly style", () => {
     const contribution = resolveGpt5SystemPromptContribution({
       providerId: NON_OPENAI_CONTRACT_PROVIDER_ID,

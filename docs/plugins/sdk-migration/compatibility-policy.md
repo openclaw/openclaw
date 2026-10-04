@@ -21,6 +21,21 @@ External-plugin compatibility work follows this order:
 6. Remove only after the announced migration window, usually in a major
    release.
 
+### Heartbeat execution replacement
+
+Heartbeat schedules migrate through Doctor to ordinary automations. The heartbeat
+SDK execution aliases and reply options were removed with explicit maintainer
+approval on October 3, 2026. This is a breaking plugin-SDK change; update affected
+plugins before upgrading the host. See the [removed surfaces and replacements](/plugins/sdk-migration/removed-surfaces#heartbeat-execution-and-reply-helpers).
+Plugins use `api.runtime.system.enqueueSessionEvent` for immediate follow-ups and
+ordinary automations for scheduled work. See [system utilities](/plugins/sdk-runtime/state-and-system#state-config-and-system-namespaces)
+for captured session targets and settlement receipts.
+
+The historical `heartbeat_prompt_contribution` hook applies only to migrated
+or default proactive jobs recorded by the migration/provisioning owner. Other
+ordinary automations do not invoke it. Hooks can select `event` for immediate
+internal session turns; scheduled automation turns use `cron`.
+
 ### Retained helper contracts
 
 Discord and llama.cpp retain their declared OpenClaw 2026.9.2 host support.

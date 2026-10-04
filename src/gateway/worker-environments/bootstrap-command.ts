@@ -13,6 +13,23 @@ export type WorkerBootstrapCommandRunner = (
   options: CommandOptions,
 ) => Promise<SpawnResult>;
 
+export const BOOTSTRAP_OUTPUT_TAG = "OPENCLAW_WORKER_BOOTSTRAP_V1";
+
+export function parseTaggedOutput(stdout: string): { action: string; payload: string } | undefined {
+  const prefix = `${BOOTSTRAP_OUTPUT_TAG}\t`;
+  const record = stdout.split(/\r?\n/u).findLast((line) => line.startsWith(prefix));
+  if (!record) {
+    return undefined;
+  }
+  const actionEnd = record.indexOf("\t", prefix.length);
+  if (actionEnd === -1) {
+    return undefined;
+  }
+  const action = record.slice(prefix.length, actionEnd);
+  const payload = record.slice(actionEnd + 1).trim();
+  return action && payload ? { action, payload } : undefined;
+}
+
 export function commandFailure(phase: string, result: SpawnResult): Error {
   const output = truncateUtf16Safe(
     redactSensitiveText(result.stderr.trim() || result.stdout.trim(), {

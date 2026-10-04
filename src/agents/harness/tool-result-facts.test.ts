@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import type { AgentToolResult } from "../../../packages/agent-core/src/types.js";
-import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../../auto-reply/heartbeat-tool-response.js";
 import { extractMessagingToolSourceReplyPayload } from "../embedded-agent-messaging-extraction.js";
 import {
   collectMessagingMediaUrlsFromRecord,
@@ -103,30 +102,6 @@ describe("recordAgentHarnessToolResultTelemetry", () => {
         mediaUrls: ["/tmp/reply.png"],
       },
     ]);
-  });
-
-  it("accepts heartbeat response tool outcomes", () => {
-    const telemetry = createTelemetry();
-    recordTelemetry({
-      toolName: HEARTBEAT_RESPONSE_TOOL_NAME,
-      result: textToolResult("Accepted.", {
-        status: "accepted",
-        outcome: "needs_attention",
-        notify: true,
-        summary: "Build is blocked.",
-        notificationText: "Build is blocked on missing credentials.",
-        priority: "high",
-      }),
-      telemetry,
-    });
-
-    expect(telemetry.heartbeatToolResponse).toEqual({
-      outcome: "needs_attention",
-      notify: true,
-      summary: "Build is blocked.",
-      notificationText: "Build is blocked on missing credentials.",
-      priority: "high",
-    });
   });
 });
 

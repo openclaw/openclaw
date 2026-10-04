@@ -5,6 +5,7 @@ import { readBackupRunFreshness } from "../state/backup-run-records.js";
 import { buildStatusJsonPayload } from "./status-json-payload.ts";
 import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts";
 import {
+  resolveStatusLastHeartbeat,
   resolveStatusRuntimeSnapshot,
   resolveStatusUsageSummary,
 } from "./status-runtime-shared.ts";
@@ -24,7 +25,7 @@ export async function resolveStatusJsonOutput(params: {
 }) {
   const { scan, opts } = params;
   const inspectionReason = "Local plugin inspection is not collected in online status.";
-  const { securityAudit, usage, health, lastHeartbeat, gatewayService, nodeService } =
+  const { securityAudit, usage, health, gatewayService, nodeService } =
     await resolveStatusRuntimeSnapshot({
       config: scan.cfg,
       sourceConfig: scan.sourceConfig,
@@ -53,6 +54,17 @@ export async function resolveStatusJsonOutput(params: {
           }
         : {}),
     });
+
+  // The deprecated v4 receipt belongs only to deep JSON, never human status.
+  const lastHeartbeat =
+    opts.deep && !scan.gatewayProbe?.startupPhase
+      ? await resolveStatusLastHeartbeat({
+          config: scan.cfg,
+          timeoutMs: opts.timeoutMs,
+          gatewayProbeDeadlineMs: opts.gatewayProbeDeadlineMs,
+          gatewayReachable: scan.gatewayReachable,
+        })
+      : null;
 
   const payload = buildStatusJsonPayload({
     summary: scan.summary,

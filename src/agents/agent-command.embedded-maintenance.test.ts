@@ -540,7 +540,6 @@ describe("agentCommand embedded maintenance", () => {
     { name: "native harness ownership", agentHarnessId: "codex" },
     { name: "an unavailable auth selection", observeAuth: false },
     { name: "disabled proactive compaction", enabled: false },
-    { name: "a heartbeat", opts: { bootstrapContextRunKind: "heartbeat" } },
   ];
   it.each(excludedEmbeddedRuns)("does not add command compaction for $name", async (testCase) => {
     const sessionId = "excluded-embedded-compaction";

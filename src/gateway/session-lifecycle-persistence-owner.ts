@@ -88,9 +88,6 @@ export function createSessionLifecyclePersistenceOwner(scheduler: GatewaySchedul
           ...(params.event.controlUiVisible !== undefined
             ? { controlUiVisible: params.event.controlUiVisible }
             : {}),
-          ...(params.event.isHeartbeat !== undefined
-            ? { isHeartbeat: params.event.isHeartbeat }
-            : {}),
           ...(params.event.lifecycleGeneration
             ? { lifecycleGeneration: params.event.lifecycleGeneration }
             : {}),

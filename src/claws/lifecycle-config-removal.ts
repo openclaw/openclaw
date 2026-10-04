@@ -152,6 +152,7 @@ export async function withClawAgentConfigRemoval<T>(
   apply: (
     commitRemoval: () => Promise<CommittedClawAgentRemoval>,
     assertCurrent: () => void,
+    captureWorkerWriteAuthority: AgentDeletionOperation["captureWorkerWriteAuthority"],
   ) => Promise<T>,
 ): Promise<T> {
   const expectedInstall = structuredClone(params.expectedInstall);
@@ -220,32 +221,36 @@ export async function withClawAgentConfigRemoval<T>(
         assertCurrent();
         await prepareAgentDeleteDatabases(config, params.agentId, effects.agentDir, stateOptions);
         assertCurrent();
-        return await apply(async () => {
-          assertCurrent();
-          const result = await withAgentExecApprovalsRemoved(
-            params.agentId,
-            async () =>
-              commitClawAgentConfigRemoval(
-                { ...params, config, stateDatabase: stateOptions },
-                assertCurrent,
-              ),
-            stateOptions,
-          );
-          committed = true;
-          assertCurrent();
-          return {
-            ...result,
-            operationId: deletion.entry.operationId,
-            assertCurrent,
-            drainMonitors: async () => {
-              assertCurrent();
-              await params.drainMonitors?.(deletion.entry.operationId);
-              assertCurrent();
-            },
-            runDatabaseCleanup: deletion.runDatabaseCleanup,
-            completeDeletion: deletion.completeInTransaction,
-          };
-        }, assertCurrent);
+        return await apply(
+          async () => {
+            assertCurrent();
+            const result = await withAgentExecApprovalsRemoved(
+              params.agentId,
+              async () =>
+                commitClawAgentConfigRemoval(
+                  { ...params, config, stateDatabase: stateOptions },
+                  assertCurrent,
+                ),
+              stateOptions,
+            );
+            committed = true;
+            assertCurrent();
+            return {
+              ...result,
+              operationId: deletion.entry.operationId,
+              assertCurrent,
+              drainMonitors: async () => {
+                assertCurrent();
+                await params.drainMonitors?.(deletion.entry.operationId);
+                assertCurrent();
+              },
+              runDatabaseCleanup: deletion.runDatabaseCleanup,
+              completeDeletion: deletion.completeInTransaction,
+            };
+          },
+          assertCurrent,
+          deletion.captureWorkerWriteAuthority,
+        );
       } finally {
         // Pre-config partial results release only this attempt's fence; committed cleanup retains it.
         if (!committed && !monitorEffectsStarted && !existingJournal) {

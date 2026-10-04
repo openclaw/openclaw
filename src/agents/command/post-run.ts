@@ -26,7 +26,6 @@ import {
 import { normalizeAgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
 import { normalizeAgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import { OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
-import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import type { AcceptedCompactionSuccessor } from "../embedded-agent-runner/compaction-successor.js";
 import { buildMainSessionRecoveryClearPatch } from "../main-session-recovery/main-session-recovery-clear.js";
 import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
@@ -201,7 +200,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
   } = params.attempt;
   const { skillsSnapshot, runContext } = params.embeddedSessionState;
   const effectiveCwd = cwd ?? workspaceDir;
-  const isHeartbeatLifecycleRun = isHeartbeatLifecycleRunKind(params.opts.bootstrapContextRunKind);
   let sessionEntry = params.sessionEntry;
   // Return the same producer-owned facts published to agent.wait. Payloads and
   // display history cannot reconstruct a yielded or intentionally empty result.
@@ -278,17 +276,13 @@ export async function finalizeEmbeddedAgentCommand(params: {
         result,
         compactionAccounting: compactionFact,
         touchInteraction:
-          params.opts.bootstrapContextRunKind !== "cron" &&
-          !isHeartbeatLifecycleRun &&
-          !params.opts.internalEvents?.length,
-        // Cron output counts as unread-worthy activity; heartbeat and
-        // internal-event turns must not re-flag the session unread.
-        touchActivity: !isHeartbeatLifecycleRun && !params.opts.internalEvents?.length,
+          params.opts.bootstrapContextRunKind !== "cron" && !params.opts.internalEvents?.length,
+        // Cron output counts as unread-worthy activity; internal events do not.
+        touchActivity: !params.opts.internalEvents?.length,
         preserveRuntimeModel:
           fallbackExhausted ||
           fallbackProvider !== provider ||
           fallbackModel !== model ||
-          isHeartbeatLifecycleRun ||
           params.preserveUserFacingSessionModelState,
         preserveUserFacingSessionModelState: params.preserveUserFacingSessionModelState,
         clearRestartRecoveryForceSafeTools:
@@ -421,7 +415,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
       sessionStore &&
       !params.suppressVisibleSessionEffects &&
       !sessionReboundDuringRun &&
-      !isHeartbeatLifecycleRun &&
       cfg.agents?.defaults?.compaction?.enabled !== false &&
       embeddedMaintenance
         ? {

@@ -99,65 +99,19 @@ describe("pushResolvedAgentCapabilityChanges", () => {
   const agent = (settings: Omit<Agent, "id"> = {}): Agent => ({ id: "worker", ...settings });
   const cases: Case[] = [
     {
-      name: "effective sandbox and heartbeat changes",
-      currentAgent: agent({ sandbox: { mode: "all" }, heartbeat: { every: "1h" } }),
-      desiredAgent: agent({ sandbox: { mode: "off" }, heartbeat: { every: "5m" } }),
-      expected: [
-        ["sandbox.mode", "escalation"],
-        ["heartbeat.every", "escalation"],
-      ],
+      name: "effective sandbox changes",
+      currentAgent: agent({ sandbox: { mode: "all" } }),
+      desiredAgent: agent({ sandbox: { mode: "off" } }),
+      expected: [["sandbox.mode", "escalation"]],
     },
     {
-      name: "inherited sandbox and heartbeat changes",
-      currentAgent: agent({ sandbox: { mode: "all" }, heartbeat: { every: "1h" } }),
+      name: "inherited sandbox changes",
+      currentAgent: agent({ sandbox: { mode: "all" } }),
       desiredAgent: agent(),
-      defaults: { sandbox: { mode: "off" }, heartbeat: { every: "5m" } },
+      defaults: { sandbox: { mode: "off" } },
       expected: [
         ["sandbox.mode", "escalation", { desired: expect.objectContaining({ summary: "off" }) }],
-        [
-          "heartbeat.every",
-          "escalation",
-          {
-            current: expect.objectContaining({ summary: "1h" }),
-            desired: expect.objectContaining({ summary: "5m" }),
-          },
-        ],
       ],
-    },
-    {
-      name: "implicit heartbeat interval",
-      currentAgent: { id: "main", heartbeat: { every: "1h" } },
-      desiredAgent: { id: "main" },
-      expected: [
-        [
-          "heartbeat.every",
-          "escalation",
-          {
-            current: expect.objectContaining({ summary: "1h" }),
-            desired: expect.objectContaining({ summary: "30m" }),
-          },
-        ],
-      ],
-    },
-    {
-      name: "heartbeat activity reductions",
-      currentAgent: agent({
-        heartbeat: { every: "5m", isolatedSession: false, timeoutSeconds: 60 },
-      }),
-      desiredAgent: agent({
-        heartbeat: { every: "1h", isolatedSession: true, timeoutSeconds: 30 },
-      }),
-      expected: [
-        ["heartbeat.every", "reduction"],
-        ["heartbeat.isolatedSession", "reduction"],
-        ["heartbeat.timeoutSeconds", "reduction"],
-      ],
-    },
-    {
-      name: "disabled heartbeat",
-      currentAgent: agent({ heartbeat: { every: "5m" } }),
-      desiredAgent: agent({ heartbeat: { every: "0m" } }),
-      expected: [["heartbeat.every", "reduction"]],
     },
     {
       name: "narrower sandbox mode and sharing scope",
@@ -329,12 +283,6 @@ describe("pushResolvedAgentCapabilityChanges", () => {
     desiredAgent: Agent;
   }> = [
     {
-      name: "explicitly selected agent heartbeat",
-      prefix: "agent.heartbeat.",
-      config: { agents: { ownership: "explicit", entries: { worker: {}, other: {} } } },
-      desiredAgent: agent(),
-    },
-    {
       name: "inherited memory search",
       prefix: "agent.memory.search.",
       config: {
@@ -391,8 +339,8 @@ describe("pushResolvedAgentCapabilityChanges", () => {
     {
       name: "inherited capabilities",
       desiredAgent: agent(),
-      defaults: { sandbox: { mode: "all" as const }, heartbeat: { every: "1h" } },
-      paths: ["sandbox.mode", "heartbeat.every"],
+      defaults: { sandbox: { mode: "all" as const } },
+      paths: ["sandbox.mode"],
     },
   ])(
     "treats $name on a restored missing agent as escalations",

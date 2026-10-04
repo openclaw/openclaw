@@ -34,6 +34,7 @@ type AgentRuntimeThinkLevel =
 
 /** System prompt rendering mode selected for one attempt. */
 type AgentRuntimePromptMode = "full" | "minimal" | "none";
+
 /** Provider model descriptor consumed by runtime-plan hooks. */
 type AgentRuntimeModel = {
   id?: string;

@@ -4,6 +4,7 @@ import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 
 export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() => void) | undefined;
 
+// v21 fences ordinary automation timing and delivery policies from older schedulers.
 // v20 fences possibly delivered cron completions across restart recovery.
 // v19 preserves original channel-owner authorization across recovery.
 // v18 binds shared GitHub publication to its original requesting authority.
@@ -20,7 +21,7 @@ export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() =
 // v7 retires the inert shared commitments table.
 // v6 makes every committed shared-state table part of the canonical runtime schema.
 // v5 records durable cloud-worker result refs on pending workspace fences.
-export const OPENCLAW_STATE_SCHEMA_VERSION = 20;
+export const OPENCLAW_STATE_SCHEMA_VERSION = 21;
 export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 // Absence records lost history; only Doctor may reconstruct these on existing state.
 export const DOCTOR_OWNED_STATE_TABLES = ["agent_deletion_journal"] as const;
@@ -157,6 +158,7 @@ export type OpenClawStateDatabaseSchemaMigration = {
     | "skill-workshop-directory-ownership-v16"
     | "prepared-worker-ownership-v17"
     | "github-publication-requester-authority-v18"
+    | "automation-policy-fence-v21"
     | "operator-approvals-system-agent"
     | "session-watch-cursor-provenance-v4"
     | "strict-tables-v3";

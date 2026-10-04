@@ -38,11 +38,17 @@ function formatTarget(channel?: string, to?: string | null): string {
 }
 
 function formatDeliveryDetail(params: {
+  target?: "owner";
   requestedChannel?: string;
   resolved: boolean;
   sessionKey?: string;
   error?: string;
 }): string {
+  if (params.target === "owner") {
+    return params.resolved
+      ? "resolved from configured owner"
+      : (params.error ?? "owner has no route");
+  }
   if (params.requestedChannel === "last" || !params.requestedChannel) {
     if (!params.resolved) {
       return params.error
@@ -160,6 +166,7 @@ async function resolvePreparedCronDeliveryPreview(
         plan.mode === "none"
           ? `message tool target unresolved: ${resolved.error.message}`
           : formatDeliveryDetail({
+              target: plan.target,
               requestedChannel,
               resolved: false,
               sessionKey: deliverySessionKey,
@@ -170,6 +177,7 @@ async function resolvePreparedCronDeliveryPreview(
   return {
     label: `${plan.mode} -> ${formatTarget(resolved.channel, resolved.to)}`,
     detail: formatDeliveryDetail({
+      target: plan.target,
       requestedChannel,
       resolved: true,
       sessionKey: deliverySessionKey,

@@ -960,7 +960,7 @@ describe("collectGatewayHealthSnapshot", () => {
     expect(exceptionTelegram.probe?.error).toMatch(/network down/i);
   });
 
-  it("disables heartbeat for agents without heartbeat blocks", async () => {
+  it("does not revive unconverted legacy heartbeat configuration in health", async () => {
     testConfig = {
       agents: {
         ownership: "explicit",
@@ -986,8 +986,8 @@ describe("collectGatewayHealthSnapshot", () => {
 
     expect(main?.heartbeat.everyMs).toBeNull();
     expect(main?.heartbeat.every).toBe("disabled");
-    expect(ops?.heartbeat.everyMs).toBe(60 * 60 * 1000);
-    expect(ops?.heartbeat.every).toBe("1h");
+    expect(ops?.heartbeat.everyMs).toBeNull();
+    expect(ops?.heartbeat.every).toBe("disabled");
   });
 
   it("passes agent scope when summarizing configured agent sessions", async () => {

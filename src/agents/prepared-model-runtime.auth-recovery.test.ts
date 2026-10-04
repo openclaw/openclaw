@@ -323,7 +323,7 @@ describe("configured plugin generation recovery", () => {
         });
         const currentConfig: OpenClawConfig = fails
           ? config
-          : { ...config, agents: { defaults: { heartbeat: { every: "0m" } } } };
+          : { ...config, agents: { defaults: { timeoutSeconds: 120 } } };
         advancePreparedModelRuntimeConfig(currentConfig);
         const dispatch = loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
         if (fails) {

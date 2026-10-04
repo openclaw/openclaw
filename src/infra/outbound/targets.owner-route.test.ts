@@ -1,6 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { provisionDefaultProactiveJob } from "../../cron/default-proactive-job.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
@@ -12,8 +13,8 @@ import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
-  hasResolvableHeartbeatOwnerRoute,
-  resolveHeartbeatDeliveryTargetWithSessionRoute,
+  hasResolvableProactiveOwnerRoute,
+  resolveProactiveDeliveryTargetWithSessionRoute,
 } from "./targets.js";
 
 const registrySnapshot = captureActivePluginRegistrySnapshot();
@@ -42,21 +43,23 @@ it.each([
     await withPluginRuntimeRegistryScope(
       scope === "scoped" ? telegramRegistry : undefined,
       async () => {
-        expect(await hasResolvableHeartbeatOwnerRoute({ cfg })).toBe(true);
+        expect(await hasResolvableProactiveOwnerRoute({ cfg })).toBe(true);
         expect(
-          await resolveHeartbeatDeliveryTargetWithSessionRoute({ cfg, agentId: "main" }),
+          await resolveProactiveDeliveryTargetWithSessionRoute({ cfg, agentId: "main" }),
         ).toMatchObject({ channel: "telegram", to: "telegram:1234567890", chatType: "direct" });
       },
     );
   },
 );
 
-it("reports a scoped Telegram owner's heartbeat ready in the Gateway status summary", async () => {
+it("reports a scoped Telegram owner's proactive job ready in the legacy Gateway status summary", async () => {
   await withOpenClawTestState({ prefix: "heartbeat-owner-status-" }, async () => {
     const cfg: OpenClawConfig = {
+      agents: { entries: { main: {} } },
       commands: { ownerAllowFrom: ["telegram:1234567890"] },
       channels: { telegram: { botToken: "test-token" } },
     };
+    await provisionDefaultProactiveJob(cfg, "main");
     setActivePluginRegistry(createTestRegistry());
     await withPluginRuntimeRegistryScope(telegramRegistry, async () => {
       const summary = await getStatusSummary({ config: cfg, includeChannelSummary: false });

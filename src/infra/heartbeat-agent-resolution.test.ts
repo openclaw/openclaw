@@ -1,15 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import * as agentScopeConfig from "../agents/agent-scope-config.js";
+import { describe, expect, it } from "vitest";
+import { resolveHeartbeatAgents } from "../commands/doctor-heartbeat-legacy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
-import { tryResolveAmbientHeartbeatAgentId } from "./heartbeat-agent-resolution.js";
-import { isHeartbeatOwnerUnresolved, resolveHeartbeatAgents } from "./heartbeat-config.js";
-import { isHeartbeatEnabledForAgent } from "./heartbeat-summary.js";
-
-afterEach(() => {
-  vi.restoreAllMocks();
-});
 
 describe("resolveHeartbeatAgents", () => {
   const systemOwnedConfig = {
@@ -23,50 +15,17 @@ describe("resolveHeartbeatAgents", () => {
     agents: { ownership: "explicit", entries: { ops: {}, main: {} } },
   } as OpenClawConfig;
 
-  it.each([
-    { frozen: false, prepare: (cfg: OpenClawConfig) => cfg },
-    {
-      frozen: true,
-      prepare: (cfg: OpenClawConfig) => {
-        freezeJsonSnapshot(cfg);
-        resolveHeartbeatAgents(cfg);
-        return cfg;
-      },
-    },
-  ])("checks enrollment without hydrating a fleet's config (frozen=$frozen)", ({ prepare }) => {
-    const size = 512;
-    const entries = Object.fromEntries(
-      Array.from({ length: size }, (_, index) => [
-        `agent-${index}`,
-        { heartbeat: { every: "0m" } },
-      ]),
-    );
-    const cfg = prepare({ agents: { ownership: "explicit", entries } });
-    const hydrate = vi.spyOn(agentScopeConfig, "resolveAgentConfig");
-    const lastAgentId = `agent-${size - 1}`;
-
-    // Enrollment is independent of the recurring interval, including zero.
-    expect(isHeartbeatEnabledForAgent(cfg, lastAgentId)).toBe(true);
-    const firstCheckHydrations = hydrate.mock.calls.length;
-    expect(isHeartbeatEnabledForAgent(cfg, "missing")).toBe(false);
-    expect(isHeartbeatEnabledForAgent(ownerlessConfig, lastAgentId)).toBe(false);
-    expect(isHeartbeatEnabledForAgent(cfg, lastAgentId)).toBe(true);
-
-    // A membership query must not materialize and discard every agent config.
-    expect(firstCheckHydrations).toBe(0);
-  });
-
   it("refreshes membership after mutable heartbeat enrollment changes", () => {
     const entries: Record<string, { heartbeat?: { every: string } }> = {
       main: {},
       ops: { heartbeat: { every: "0m" } },
     };
     const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries } };
-    expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(true);
+    expect(resolveHeartbeatAgents(cfg).map((agent) => agent.agentId)).toEqual(["ops"]);
     entries.ops = { heartbeat: undefined };
-    expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(false);
+    expect(resolveHeartbeatAgents(cfg)).toEqual([]);
     entries.ops = { heartbeat: { every: "5m" } };
-    expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(true);
+    expect(resolveHeartbeatAgents(cfg).map((agent) => agent.agentId)).toEqual(["ops"]);
   });
 
   it("preserves explicit roster order and duplicate IDs with the first normalized config", () => {
@@ -85,8 +44,6 @@ describe("resolveHeartbeatAgents", () => {
       { agentId: "ops", heartbeat: { agentId: "main", target: "owner", every: "0m" } },
       { agentId: "ops", heartbeat: { agentId: "main", target: "owner", every: "0m" } },
     ]);
-    expect(isHeartbeatEnabledForAgent(cfg, "OPS")).toBe(true);
-    expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(false);
   });
 
   it.each([
@@ -141,20 +98,10 @@ describe("resolveHeartbeatAgents", () => {
     "enrolls exactly the runnable agents for the $name config",
     ({ name, cfg, expectedAgentIds }) => {
       const agents = resolveHeartbeatAgents(cfg);
-      if (name === "explicit heartbeat owner") {
-        expect(tryResolveAmbientHeartbeatAgentId(cfg)).toBe("ops");
-      } else if (name === "system agent") {
+      if (name === "system agent") {
         expect(agents).toEqual([{ agentId: "ops", heartbeat: undefined }]);
-        expect(isHeartbeatOwnerUnresolved(cfg)).toBe(false);
-      } else if (name === "ownerless roster") {
-        expect(agents).toEqual([]);
-        expect(isHeartbeatEnabledForAgent(cfg)).toBe(false);
-        expect(isHeartbeatOwnerUnresolved(cfg)).toBe(true);
       }
       expect(agents.map((agent) => agent.agentId)).toEqual(expectedAgentIds);
-      for (const agentId of Object.keys(cfg.agents?.entries ?? {})) {
-        expect(isHeartbeatEnabledForAgent(cfg, agentId)).toBe(expectedAgentIds.includes(agentId));
-      }
     },
   );
 

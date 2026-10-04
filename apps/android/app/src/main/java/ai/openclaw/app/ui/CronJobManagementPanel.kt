@@ -17,7 +17,6 @@ import ai.openclaw.app.ui.design.ClawListPanel
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawSecondaryButton
-import ai.openclaw.app.ui.design.ClawSegmentedControl
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTextField
@@ -277,23 +276,6 @@ private fun CronEditorPanel(
       placeholder = nativeString("main, isolated, current, or session:<id>"),
       label = nativeString("Session target"),
       enabled = enabled,
-    )
-    val wakeModeOptions = cronWakeModeOptions()
-    ClawSegmentedControl(
-      options = wakeModeOptions.map(CronWakeModeOption::label),
-      selected = cronWakeModeLabel(edit.wakeMode),
-      onSelect = { selectedLabel ->
-        wakeModeOptions
-          .firstOrNull { it.label == selectedLabel }
-          ?.let { onDraftChange(draft.withEdit(edit.copy(wakeMode = it.code))) }
-      },
-      modifier = Modifier.fillMaxWidth(),
-      enabledOptions =
-        if (enabled) {
-          wakeModeOptions.mapTo(mutableSetOf(), CronWakeModeOption::label)
-        } else {
-          emptySet()
-        },
     )
     CronPayloadEditor(
       payload = edit.payload,
@@ -620,19 +602,6 @@ private fun cronPayloadKindLabel(payload: GatewayCronPayloadEdit): String =
     is GatewayCronPayloadEdit.Command -> nativeString("Command")
     is GatewayCronPayloadEdit.ReadOnlyScript -> nativeString("Script · read-only")
   }
-
-internal data class CronWakeModeOption(
-  val code: String,
-  val label: String,
-)
-
-internal fun cronWakeModeOptions(): List<CronWakeModeOption> =
-  listOf(
-    CronWakeModeOption(code = "next-heartbeat", label = nativeString("Next heartbeat")),
-    CronWakeModeOption(code = "now", label = nativeString("Now")),
-  )
-
-internal fun cronWakeModeLabel(code: String): String = cronWakeModeOptions().firstOrNull { it.code == code }?.label ?: code
 
 internal fun cronRunSubtitle(run: GatewayCronRunSummary): String =
   listOfNotNull(

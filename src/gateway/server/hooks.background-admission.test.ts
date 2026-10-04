@@ -11,9 +11,15 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { resolveHooksConfig } from "../hooks.js";
 
 const mocks = vi.hoisted(() => ({
-  enqueueSystemEvent: vi.fn(),
+  enqueueSessionEvent: vi.fn((_text: string, _options: unknown) => ({
+    settled: Promise.resolve({ status: "completed" }),
+  })),
+  captureSessionEventTarget: vi.fn(async (agentId: string, sessionKey: string) => ({
+    agentId,
+    sessionKey,
+    sessionId: "accepted-session",
+  })),
   getRuntimeConfig: vi.fn<() => OpenClawConfig>(),
-  requestHeartbeat: vi.fn(),
   runCronIsolatedAgentTurn: vi.fn(),
 }));
 
@@ -23,12 +29,13 @@ vi.mock("../../config/io.js", () => ({
 vi.mock("../../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: mocks.runCronIsolatedAgentTurn,
 }));
-vi.mock("../../infra/heartbeat-wake.js", () => ({
-  requestHeartbeat: mocks.requestHeartbeat,
+// mock-isolation: Keep wake turns synthetic while testing background hook admission deadlines.
+vi.mock("../../auto-reply/reply/session-event-handoff.js", () => ({
+  captureSessionEventTargetForHost: mocks.captureSessionEventTarget,
+  enqueueSessionEventForHost: mocks.enqueueSessionEvent,
 }));
-vi.mock("../../infra/system-events.js", () => ({
-  enqueueSystemEvent: mocks.enqueueSystemEvent,
-}));
+// mock-isolation: Background admission tests must not publish into the process-wide event queue.
+vi.mock("../../infra/system-events.js", () => ({ enqueueSystemEvent: vi.fn() }));
 
 const { createGatewayHooksRequestHandler } = await import("./hooks.js");
 
@@ -140,7 +147,7 @@ describe("hook background admission", () => {
     });
 
     expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledTimes(4);
-    expect(mocks.enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual([
+    expect(mocks.enqueueSessionEvent.mock.calls.map(([text]) => text)).toEqual([
       "Hook Gmail (skipped): model provider unavailable",
       "Hook Gmail (skipped): model provider unavailable",
     ]);
@@ -149,7 +156,7 @@ describe("hook background admission", () => {
     try {
       expect((await post(handler, "/hooks/gmail", redelivered)).res.statusCode).toBe(502);
       expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledTimes(5);
-      expect(mocks.enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual([
+      expect(mocks.enqueueSessionEvent.mock.calls.map(([text]) => text)).toEqual([
         "Hook Gmail (skipped): model provider unavailable",
         "Hook Gmail (skipped): model provider unavailable",
         "Hook Gmail (skipped): model provider unavailable",
@@ -178,7 +185,7 @@ describe("hook background admission", () => {
     expect((await post(handler, "/hooks/gmail", redelivered)).res.statusCode).toBe(200);
 
     await vi.waitFor(() =>
-      expect(mocks.enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual([
+      expect(mocks.enqueueSessionEvent.mock.calls.map(([text]) => text)).toEqual([
         "Hook Gmail (skipped): model provider unavailable",
         "Hook Gmail (error): execution failed",
       ]),
@@ -211,7 +218,6 @@ describe("hook background admission", () => {
   it.each([
     { deliverySuppressionReason: "empty", replyDisposition: "empty" },
     { deliverySuppressionReason: "silent", replyDisposition: "silent" },
-    { deliverySuppressionReason: "heartbeat", replyDisposition: "empty" },
     { deliverySuppressionReason: "channel_transform", replyDisposition: "visible" },
   ] as const)(
     "returns the $deliverySuppressionReason terminal suppression reason to an explicit waiter",

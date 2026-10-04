@@ -1,6 +1,11 @@
 import type { getCommandLaneDiagnostics } from "../../../src/process/command-lane-diagnostics.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { HealthSnapshot, ModelCatalogResult, StatusSummary } from "../api/types.ts";
+import type {
+  CronStatus,
+  HealthSnapshot,
+  ModelCatalogResult,
+  StatusSummary,
+} from "../api/types.ts";
 
 export type { CommandLaneSnapshot } from "../../../src/process/command-queue.types.js";
 
@@ -11,7 +16,7 @@ type GatewayDiagnosticsSnapshot = CommandLaneDiagnostics & {
   status: StatusSummary;
   health: HealthSnapshot;
   models: unknown[];
-  heartbeat: unknown;
+  automations: CronStatus;
 };
 
 export async function loadCommandLaneDiagnostics(
@@ -35,18 +40,18 @@ export async function loadGatewayDiagnostics(
       )
     : Promise.resolve({ models: [] });
   const lanesRequest = loadCommandLaneDiagnostics(client, signal);
-  const [status, health, models, heartbeat, laneDiagnostics] = await Promise.all([
+  const [status, health, models, automations, laneDiagnostics] = await Promise.all([
     client.request<StatusSummary>("status", {}, { signal }),
     client.request<HealthSnapshot>("health", {}, { signal }),
     modelsRequest,
-    client.request("last-heartbeat", {}, { signal }),
+    client.request<CronStatus>("cron.status", {}, { signal }),
     lanesRequest,
   ]);
   return {
     status,
     health,
     models: models.models,
-    heartbeat,
+    automations,
     ...laneDiagnostics,
   };
 }

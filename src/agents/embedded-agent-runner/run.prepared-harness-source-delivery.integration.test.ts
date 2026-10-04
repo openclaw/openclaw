@@ -446,7 +446,6 @@ describe("prepared harness source delivery", () => {
         shouldEmitToolResult: () => true,
         shouldEmitToolOutput: () => false,
         pendingToolTasks: new Set(),
-        isHeartbeat: false,
         sessionKey: "main",
         getActiveSessionEntry: () => undefined,
         resolvedVerboseLevel: "off",

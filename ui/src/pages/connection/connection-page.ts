@@ -187,9 +187,9 @@ export class ConnectionPage extends OpenClawLightDomElement {
       this.gateway.isCurrent(scope);
     const started = performance.now();
     try {
-      // This RPC reads in-memory state; discard its payload and measure only the round trip.
+      // Use scheduler status as a read-only probe; discard its payload and measure the round trip.
       await scope.client.request(
-        "last-heartbeat",
+        "cron.status",
         {},
         {
           timeoutMs: SYSTEM_INFO_POLL_INTERVAL_MS,

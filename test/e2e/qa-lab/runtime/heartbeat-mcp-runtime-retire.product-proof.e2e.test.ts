@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -8,6 +9,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
@@ -20,26 +22,19 @@ import { createDeferred, withinTest } from "../../../helpers/promise.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 /**
- * Live product proof for #143381: an isolated heartbeat run mints a fresh
- * session ID, so its bundle MCP stdio runtime is never reused. Before the fix
- * nothing retired it, and every heartbeat left one MCP child process alive.
- *
- * The proof counts fixture MCP child processes around forced heartbeat runs on
- * a built Gateway. Variant labeling comes from the environment so the same
- * test can record the pre-fix (main) and fixed behavior.
+ * Ordinary isolated automations retire their MCP process after every run.
+ * Foreground turns in one session retain the same process as a positive control.
+ * Provider barriers and independent PID snapshots distinguish retirement from
+ * a runtime that never connected or finished before observation.
  */
 
 const MODEL_REF = "mock-openai/gpt-5.6-luna";
-const RESPONSE_TEXT = "HEARTBEAT_OK";
+const RESPONSE_TEXT = "QA-MCP-RUNTIME-OK";
 const HEARTBEAT_RUNS = 3;
 const TEST_TIMEOUT_MS = 600_000;
-const VARIANT =
-  process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF_VARIANT === "main" ? "main" : "fixed";
-// Shared heartbeats keep one persistent session runtime; isolated ones mint a
-// session per run and must retire it. Both live here so the control stays adjacent.
 const SESSION_MODE =
   process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF_SESSION === "shared" ? "shared" : "isolated";
-const LABEL = SESSION_MODE === "shared" ? "shared" : VARIANT;
+const LABEL = SESSION_MODE === "shared" ? "foreground-session" : "isolated-automation";
 const PROOF_OUT_DIR = process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF_OUT;
 
 const execFileAsync = promisify(execFile);
@@ -51,13 +46,6 @@ afterEach(async () => {
   }
 });
 
-type CronJob = {
-  agentId?: string;
-  declarationKey?: string;
-  enabled: boolean;
-  id: string;
-  payload: { kind: string };
-};
 type CronRunEntry = { error?: string; runId?: string; status?: string };
 type ProbeCount = { count: number; pids: number[] };
 type ProofCount = ProbeCount & { stage: string; at: string };
@@ -253,7 +241,7 @@ function redact(text: string, replacements: Array<[string, string]>): string {
 }
 
 describe.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
-  "Isolated heartbeat bundle MCP runtime retirement product proof",
+  "Automation bundle MCP runtime retirement product proof",
   () => {
     let receipts: FixtureReceiptChannel;
     beforeAll(async () => {
@@ -263,7 +251,7 @@ describe.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
       await receipts.close();
     });
     it(
-      `retires the isolated heartbeat MCP stdio child after each run (${LABEL})`,
+      `preserves the MCP process lifecycle for each run (${LABEL})`,
       { timeout: TEST_TIMEOUT_MS },
       async ({ signal }) => {
         const repoRoot = process.cwd();
@@ -309,14 +297,14 @@ describe.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
             );
           }
         };
-        // The shared control keeps its first child for every run; the fixed
-        // isolated build retires it; the main baseline keeps one child per run.
+        // Foreground turns retain their session runtime; isolated automation
+        // settlement must release each occurrence's runtime.
         let sharedPid: number | undefined;
-        const expectedAfterRun = (run: number) => (probe: ProbeCount) => {
+        const expectedAfterRun = (probe: ProbeCount) => {
           if (SESSION_MODE === "shared") {
             return probe.pids.length === 1 && probe.pids[0] === sharedPid;
           }
-          return probe.count === (VARIANT === "fixed" ? 0 : run);
+          return probe.count === 0;
         };
 
         await record("before-gateway-start");
@@ -360,44 +348,29 @@ describe.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
                 leakprobe: { command: process.execPath, args: [scriptPath], transport: "stdio" },
               },
             },
-            agents: {
-              ...config.agents,
-              defaults: {
-                ...config.agents?.defaults,
-                // 24h cadence: only the forced cron.run wakes below execute, so
-                // every count maps to one known heartbeat run.
-                heartbeat: {
-                  every: "24h",
-                  isolatedSession: SESSION_MODE === "isolated",
-                  target: "none",
-                  lightContext: true,
-                },
-              },
-            },
           }),
         });
         await record("after-gateway-start");
 
-        // The system-owned monitor appears once cron reconciles at startup.
-        let monitor: CronJob | undefined;
-        const listDeadline = Date.now() + 60_000;
-        while (!monitor && Date.now() < listDeadline) {
-          const listed = (await gateway.call(
-            "cron.list",
-            { includeDisabled: true },
-            { timeoutMs: 15_000 },
-          )) as { jobs: CronJob[] };
-          monitor = listed.jobs.find(
-            (job) => job.payload.kind === "heartbeat" && (job.agentId ?? "qa") === "qa",
-          );
-          if (!monitor) {
-            await sleep(500);
-          }
+        let automationId: string | undefined;
+        if (SESSION_MODE === "isolated") {
+          const automation = await gateway.call("cron.add", {
+            agentId: "qa",
+            name: "MCP runtime retirement proof",
+            enabled: true,
+            schedule: { kind: "every", everyMs: 86_400_000 },
+            sessionTarget: "isolated",
+            wakeMode: "now",
+            payload: {
+              kind: "agentTurn",
+              message: `Reply exactly ${RESPONSE_TEXT}.`,
+              lightContext: true,
+            },
+            delivery: { mode: "none" },
+          });
+          assert(isRecord(automation) && typeof automation.id === "string");
+          automationId = automation.id;
         }
-        if (!monitor) {
-          throw new Error("system-owned qa heartbeat monitor was not listed");
-        }
-        console.log(JSON.stringify({ phase: "hb-mcp-monitor", monitor }));
 
         const heartbeatStatuses: Array<{
           run: number;
@@ -409,12 +382,28 @@ describe.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
         for (let run = 1; run <= HEARTBEAT_RUNS; run += 1) {
           const requestsBefore = provider.responsesRequests;
           const responseEntered = provider.holdNextResponse();
-          const forced = (await gateway.call(
-            "cron.run",
-            { id: monitor.id, mode: "force" },
-            { timeoutMs: 15_000 },
-          )) as { ok: boolean; enqueued: boolean; runId: string };
-          expect(forced).toMatchObject({ ok: true, runId: expect.any(String) });
+          const admitted =
+            SESSION_MODE === "shared"
+              ? await gateway.call(
+                  "chat.send",
+                  {
+                    sessionKey: "agent:qa:main",
+                    message: `Reply exactly ${RESPONSE_TEXT}.`,
+                    idempotencyKey: randomUUID(),
+                    deliver: false,
+                  },
+                  { timeoutMs: 15_000 },
+                )
+              : await gateway.call(
+                  "cron.run",
+                  { id: automationId, mode: "force" },
+                  { timeoutMs: 15_000 },
+                );
+          assert(isRecord(admitted) && typeof admitted.runId === "string");
+          if (SESSION_MODE === "isolated") {
+            expect(admitted).toMatchObject({ ok: true, enqueued: true });
+          }
+          const runId = admitted.runId;
           // Keep the provider held through the independent PID census: a later zero
           // must mean retired, not never spawned or already finished before observation.
           let peak: ProbeCount;
@@ -437,12 +426,34 @@ describe.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
             if (live.count > peak.count) {
               peak = live;
             }
-            const history = (await gateway.call(
-              "cron.runs",
-              { id: monitor.id, runId: forced.runId, limit: 1 },
-              { timeoutMs: 15_000 },
-            )) as { entries: CronRunEntry[] };
-            entry = history.entries.find((candidate) => candidate.runId === forced.runId);
+            if (SESSION_MODE === "shared") {
+              const terminal = await gateway.call(
+                "agent.wait",
+                { runId, timeoutMs: 15_000 },
+                { timeoutMs: 20_000 },
+              );
+              assert(isRecord(terminal) && typeof terminal.status === "string");
+              if (terminal.status !== "timeout") {
+                entry = { runId, status: terminal.status };
+              }
+            } else {
+              const history = await gateway.call(
+                "cron.runs",
+                { id: automationId, runId, limit: 1 },
+                { timeoutMs: 15_000 },
+              );
+              assert(isRecord(history) && Array.isArray(history.entries));
+              const completed = history.entries.find(
+                (candidate) => isRecord(candidate) && candidate.runId === runId,
+              );
+              if (isRecord(completed) && typeof completed.status === "string") {
+                entry = {
+                  runId,
+                  status: completed.status,
+                  ...(typeof completed.error === "string" ? { error: completed.error } : {}),
+                };
+              }
+            }
             if (!entry) {
               await sleep(100);
             }
@@ -456,7 +467,7 @@ describe.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
           console.log(JSON.stringify({ phase: "hb-mcp-count", variant: LABEL, ...counts.at(-1) }));
           const status = {
             run,
-            runId: forced.runId,
+            runId,
             status: entry?.status,
             error: entry?.error,
             providerRequests: provider.responsesRequests - requestsBefore,
@@ -465,7 +476,7 @@ describe.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
           console.log(JSON.stringify({ phase: "hb-mcp-heartbeat", variant: LABEL, ...status }));
           expect(status.status).toBe("ok");
           expect(status.providerRequests).toBeGreaterThan(0);
-          await settle(`after-heartbeat-${run}`, expectedAfterRun(run));
+          await settle(`after-heartbeat-${run}`, expectedAfterRun);
         }
 
         const logs = await readLogFiles(gateway);
@@ -504,7 +515,7 @@ describe.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
 
         const proof = {
           variant: LABEL,
-          build: VARIANT,
+          build: "current",
           sessionMode: SESSION_MODE,
           issue: 143381,
           marker,
@@ -547,13 +558,9 @@ describe.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
               sharedPid,
             ]);
           }
-        } else if (VARIANT === "fixed") {
+        } else {
           for (const entry of afterRuns) {
             expect(entry.count, `${entry.stage} should retire the MCP child`).toBe(0);
-          }
-        } else {
-          for (const [index, entry] of afterRuns.entries()) {
-            expect(entry.count, `${entry.stage} should leak one child per run`).toBe(index + 1);
           }
         }
         expect(counts.at(-1)?.count, "gateway shutdown must reap every probe").toBe(0);

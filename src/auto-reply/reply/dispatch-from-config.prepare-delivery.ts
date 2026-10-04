@@ -70,10 +70,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     suppressDirectUserDelivery: suppressAcpChildUserDelivery,
     isRoutableChannel: Boolean,
   });
-  const routeReplyRuntime =
-    hasRouteReplyCandidate && !state.replyOperationRunState.heartbeat
-      ? await loadRouteReplyRuntime()
-      : undefined;
+  const routeReplyRuntime = hasRouteReplyCandidate ? await loadRouteReplyRuntime() : undefined;
   const {
     originatingChannel: routeReplyChannel,
     currentSurface,

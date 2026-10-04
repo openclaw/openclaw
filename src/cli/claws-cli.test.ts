@@ -3,7 +3,9 @@ import { join } from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { ClawRemoveApplyOptions, ClawRemovePlan } from "../claws/lifecycle-remove-contract.js";
 import { persistClawInstallRecord, type ClawInstallStatus } from "../claws/provenance.js";
+import type { applyClawUpdatePlan } from "../claws/update-apply.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import * as cliTestHelpers from "./claws-cli.test-helpers.js";
@@ -801,15 +803,29 @@ describe("claws cli", () => {
 
   it("applies a supported update only after explicit consent", async () => {
     const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
+    const jobs = [{ id: "updated-monitor", enabled: false }];
+    mocks.callGatewayFromCli.mockResolvedValueOnce({
+      jobs,
+      snapshotRevision: "update-inventory",
+      total: 1,
+      offset: 0,
+      limit: 200,
+      hasMore: false,
+      nextOffset: null,
+    });
+    let inventory: unknown;
     const applyUpdate = mocks.applyClawUpdatePlan.getMockImplementation();
     if (!applyUpdate) {
       throw new Error("missing update fixture implementation");
     }
-    mocks.applyClawUpdatePlan.mockImplementationOnce(async (...args) => {
-      const options = args[2] as { runtime?: typeof mocks.runtime };
-      (options.runtime ?? mocks.runtime).log("Installed plugin: demo");
-      return await applyUpdate(...args);
-    });
+    mocks.applyClawUpdatePlan.mockImplementationOnce(
+      async (...args: Parameters<typeof applyClawUpdatePlan>) => {
+        const [plan, , options] = args;
+        (options.runtime ?? mocks.runtime).log("Installed plugin: demo");
+        inventory = await options.cronGateway!.list!(plan.agentId);
+        return await applyUpdate(...args);
+      },
+    );
 
     await runCli([
       "claws",
@@ -848,6 +864,12 @@ describe("claws cli", () => {
       status: "complete",
       agentId: "demo-agent",
     });
+    expect(inventory).toMatchObject({ jobs });
+    expect(mocks.callGatewayFromCli).toHaveBeenCalledWith(
+      "cron.list",
+      {},
+      { agentId: "demo-agent", includeDisabled: true, limit: 200, offset: 0 },
+    );
     mocks.callGatewayFromCli.mockResolvedValue({
       config: { agents: { entries: { "demo-agent": {} } } },
       configRevisionHash: "applied",
@@ -884,6 +906,56 @@ describe("claws cli", () => {
       error: { code: "update_partial" },
     });
     expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("provides complete agent automation inventory during consented removal", async () => {
+    const removal = cliTestHelpers.createClawRemoveFixtures();
+    const jobs = [
+      { id: "enabled-job", enabled: true },
+      { id: "disabled-job", enabled: false },
+    ];
+    for (const offset of [0, 1]) {
+      mocks.callGatewayFromCli.mockResolvedValueOnce({
+        jobs: [jobs[offset]],
+        snapshotRevision: "removal-inventory",
+        total: 2,
+        offset,
+        limit: 200,
+        hasMore: offset === 0,
+        nextOffset: offset === 0 ? 1 : null,
+      });
+    }
+    let inventory: unknown;
+    mocks.applyClawRemovePlan.mockImplementationOnce(
+      async (plan: ClawRemovePlan, options: ClawRemoveApplyOptions) => {
+        inventory = await options.cronGateway!.list!(plan.agentId!);
+        return removal.result;
+      },
+    );
+
+    await runCli([
+      "claws",
+      "remove",
+      "demo-agent",
+      "--yes",
+      "--plan-integrity",
+      "sha256:remove-plan",
+      "--json",
+    ]);
+
+    expect(inventory).toMatchObject({ jobs, hasMore: false, nextOffset: null });
+    expect(mocks.callGatewayFromCli.mock.calls).toEqual(
+      [0, 1].map((offset) => [
+        "cron.list",
+        {},
+        { agentId: "demo-agent", includeDisabled: true, limit: 200, offset },
+      ]),
+    );
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      status: "complete",
+      agentRemoved: true,
+    });
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
   });
 
   it.each(

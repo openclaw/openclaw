@@ -272,8 +272,8 @@ async function generateAndAppendDreamNarrative(
 }
 
 /**
- * Single entry point for every dreaming phase. Cron sweeps detach so a stalled diary run
- * cannot hold the sweep open; heartbeat sweeps await so the phase reports the outcome.
+ * Single entry point for every dreaming phase. Scheduled sweeps detach so a stalled diary
+ * run cannot hold the sweep open; interactive phases await the narrative outcome.
  * A sweep without an owning agent still runs; only the subagent narrative is unavailable.
  */
 export async function runDreamNarrative(

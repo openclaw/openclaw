@@ -218,6 +218,8 @@ export function createFixture(groups: readonly string[], root: string) {
     "src/infra/format-time/format-duration-exact.ts",
     "src/infra/format-time/format-duration-internal.ts",
     "src/infra/node-runtime-executable.ts",
+    "src/infra/node-compiler-policy.mjs",
+    "src/infra/node-compiler-policy.d.mts",
     "src/infra/runtime-dependency-ownership.ts",
     "src/shared/non-packaged-plugin-dirs.ts",
     "src/infra/package-update-activation-runtime-assets.ts",

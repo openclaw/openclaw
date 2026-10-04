@@ -36,7 +36,7 @@ it("publishes a committed repair once after reply loss and leaves the remaining 
     job.failureAlert = { after: 1, cooldownMs: 0 };
     return job;
   });
-  const enqueueSystemEvent = vi.fn();
+  const enqueueSessionEvent = vi.fn();
   const onEvent = vi.fn<(event: CronEvent) => void>();
   const runner = vi.fn(async () => ({ status: "ok" as const }));
   const state = createCronServiceState({
@@ -47,8 +47,8 @@ it("publishes a committed repair once after reply loss and leaves the remaining 
     isAgentAvailable: () => true,
     nowMs: () => nowMs,
     log: logger,
-    enqueueSystemEvent,
-    requestHeartbeat: vi.fn(),
+    enqueueSystemEvent: vi.fn(),
+    enqueueSessionEvent,
     runIsolatedAgentJob: runner,
     runCommandJob: runner,
     onEvent,
@@ -65,7 +65,7 @@ it("publishes a committed repair once after reply loss and leaves the remaining 
   const finishedIds = () =>
     onEvent.mock.calls.flatMap(([event]) => (event.action === "finished" ? [event.jobId] : []));
   const notificationKeys = () =>
-    enqueueSystemEvent.mock.calls.map(([, options]) => options.contextKey);
+    enqueueSessionEvent.mock.calls.map(([, options]) => options.contextKey);
 
   const admissions = observeCronTimerAdmissions(state);
   const reply = loseFirstCronMutationReply();
@@ -120,8 +120,8 @@ it("publishes committed schedule maintenance once after its successful reply is 
   job.schedule = { kind: "cron", expr: "invalid" };
   job.state = { scheduleErrorCount: 2 };
   await writeCronStoreSnapshot({ storePath, jobs: [job] });
-  const enqueueSystemEvent = vi.fn();
-  const state = makeCronRecoveryState(logger, storePath, nowMs, { enqueueSystemEvent });
+  const enqueueSessionEvent = vi.fn();
+  const state = makeCronRecoveryState(logger, storePath, nowMs, { enqueueSessionEvent });
   const reply = loseFirstCronMutationReply("cron.scheduleUnowned");
   onTestFinished(async () => {
     await reply.close();
@@ -133,12 +133,12 @@ it("publishes committed schedule maintenance once after its successful reply is 
   expect(reply.wasDropped()).toBe(true);
   expect(state.store?.jobs[0]).toMatchObject({ enabled: false, state: { scheduleErrorCount: 3 } });
   expect((await loadCronStore(storePath)).jobs[0]).toEqual(state.store?.jobs[0]);
-  expect(enqueueSystemEvent).toHaveBeenCalledOnce();
-  expect(enqueueSystemEvent.mock.calls[0]?.[1].contextKey).toBe(
+  expect(enqueueSessionEvent).toHaveBeenCalledOnce();
+  expect(enqueueSessionEvent.mock.calls[0]?.[1].contextKey).toBe(
     "cron:invalid-schedule:auto-disabled",
   );
   await ensureLoadedForRead(state);
-  expect(enqueueSystemEvent).toHaveBeenCalledOnce();
+  expect(enqueueSessionEvent).toHaveBeenCalledOnce();
   expect(reply.attempts).toHaveLength(2);
 });
 
@@ -171,7 +171,7 @@ it("rolls schedule maintenance back when process ownership changes before commit
     );
     expect(activated).toBe(true);
     expect(await loadCronStore(storePath)).toEqual(before);
-    expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(state.deps.enqueueSessionEvent).not.toHaveBeenCalled();
   } finally {
     post.mockRestore();
     clearCronJobActive(job.id);

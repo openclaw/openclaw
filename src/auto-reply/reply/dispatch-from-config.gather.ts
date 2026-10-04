@@ -102,7 +102,7 @@ export async function gatherDispatchRequest(
   const state = {
     params: normalizedParams,
     messageAuditTerminal,
-    allowInboundHandlers: replyOperationRunState.heartbeat === undefined,
+    allowInboundHandlers: !params.replyOptions?.internalEventExecution,
     get inboundDedupeReplayUnsafe() {
       // Read the recorded input outcome even when source adoption or cleanup fails.
       // Queued followups have not transferred custody to the active run yet.
@@ -308,21 +308,6 @@ export async function gatherDispatchRequest(
   const initialDispatchReplyOperation = dispatchOperationSessionKey
     ? replyRunRegistry.get(dispatchOperationSessionKey)
     : undefined;
-  if (
-    params.replyOptions?.isHeartbeat === true &&
-    dispatchOperationSessionKey &&
-    initialDispatchReplyOperation
-  ) {
-    noteDispatchProcessedOutcome({ outcome: "skipped", reason: "reply-operation-active" });
-    messageAuditTerminal?.note("skipped", { reason: "reply-operation-active" });
-    return {
-      status: "complete" as const,
-      result: {
-        queuedFinal: false,
-        counts: dispatcher.getQueuedCounts(),
-      },
-    };
-  }
   const markProgress = () => {
     if (!canTrackSession || !sessionKey) {
       return;

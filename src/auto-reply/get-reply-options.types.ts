@@ -53,12 +53,7 @@ type ModelSelectedContext = {
 };
 
 /** Typing indicator class for channel-owned UX policy. */
-export type TypingPolicy =
-  | "auto"
-  | "user_message"
-  | "system_event"
-  | "internal_webchat"
-  | "heartbeat";
+export type TypingPolicy = "auto" | "user_message" | "system_event" | "internal_webchat";
 
 /** Per-turn policy for source-message reply threading. */
 export type ReplyThreadingPolicy = {
@@ -191,15 +186,10 @@ export type GetReplyOptions = {
   onTypingController?: (typing: TypingController) => void;
   /** If false, send only the initial typing signal without periodic keepalive refreshes. */
   typingKeepalive?: boolean;
-  isHeartbeat?: boolean;
-  /** Wording only; heartbeat visibility/suppression semantics stay on isHeartbeat. */
-  useHeartbeatFailureCopy?: boolean;
-  /** Policy-level typing control for run classes (user/system/internal/heartbeat). */
+  /** Policy-level typing control for ordinary user and internal turns. */
   typingPolicy?: TypingPolicy;
   /** Force-disable typing indicators for this run (system/internal/cross-channel routes). */
   suppressTyping?: boolean;
-  /** Resolved heartbeat model override (provider/model string from merged per-agent config). */
-  heartbeatModelOverride?: string;
   /** One-shot thinking level override for this run; does not persist to the session. */
   thinkingLevelOverride?: string;
   /** One-shot fast-mode override for this run; does not persist to the session. */
@@ -212,10 +202,6 @@ export type GetReplyOptions = {
   disableTools?: boolean;
   /** Runtime tool allow-list for this turn. Empty means no tools. */
   toolsAllow?: string[];
-  /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
-  enableHeartbeatTool?: boolean;
-  /** If true, keep the heartbeat response tool available even under narrow tool profiles. */
-  forceHeartbeatTool?: boolean;
   /**
    * @deprecated Ignored. The tool-failure warning is delivered whenever a run ends
    * without a reply and cannot be suppressed. Kept only so plugin-sdk callers that

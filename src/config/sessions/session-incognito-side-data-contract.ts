@@ -2,7 +2,6 @@ import type {
   AcpSessionEntryMutationInput,
   AcpSessionEntryMutationResult,
 } from "../../acp/runtime/session-meta-entry.types.js";
-import type { HeartbeatOutcomeWorkerOperations } from "../../infra/heartbeat-outcome-store.worker.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import type { readSessionProgressCard } from "../../session-cards/progress-card-store.js";
 import type { readLegacyAcpMigrationContextInDatabase } from "./session-accessor.sqlite-acp-provenance.js";
@@ -54,8 +53,6 @@ export type IncognitoSideDataOperations = {
     input: { sessionKey: string; params: SetSessionReactionParams };
     output: SessionReactionWrite;
   };
-  "session.heartbeat.persist": HeartbeatOutcomeWorkerOperations["persist"];
-  "session.heartbeat.claim": HeartbeatOutcomeWorkerOperations["claim"];
   "session.progressCard.get": {
     input: { sessionKey: string };
     output: ReturnType<typeof readSessionProgressCard>;
@@ -67,17 +64,13 @@ export function isIncognitoSideDataWrite(type: keyof IncognitoSideDataOperations
     type === "session.acp.entry" ||
     type === "session.category.apply" ||
     type === "session.reaction.set" ||
-    type.startsWith("session.sharing.") ||
-    type.startsWith("session.heartbeat.")
+    type.startsWith("session.sharing.")
   );
 }
 
 export function incognitoSideDataKeys(
   command: SqliteWorkerCommand<IncognitoSideDataOperations>,
 ): string[] {
-  if (command.type === "session.heartbeat.persist") {
-    return [command.input.session_key];
-  }
   if (command.type === "session.catalog.read") {
     return command.input.sessionKeys ?? [];
   }

@@ -863,7 +863,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       debugStatus: unknown;
       debugHealth: unknown;
       debugModels: unknown[];
-      debugHeartbeat: unknown;
+      debugAutomations: unknown;
       debugDiagnosticsError: string | null;
     };
     document.body.append(page);
@@ -871,7 +871,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     page.debugStatus = { version: "old" };
     page.debugHealth = { ok: true };
     page.debugModels = [{ id: "old" }];
-    page.debugHeartbeat = { provider: "old" };
+    page.debugAutomations = { provider: "old" };
     page.debugDiagnosticsError = "old diagnostics failure";
 
     await replaceContext(page, client);
@@ -879,7 +879,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     expect(page.debugStatus).toBeNull();
     expect(page.debugHealth).toBeNull();
     expect(page.debugModels).toEqual([]);
-    expect(page.debugHeartbeat).toBeNull();
+    expect(page.debugAutomations).toBeNull();
     expect(page.debugDiagnosticsError).toBeNull();
   });
 
@@ -892,7 +892,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       debugStatus: unknown;
       debugHealth: unknown;
       debugModels: unknown[];
-      debugHeartbeat: unknown;
+      debugAutomations: unknown;
       debugLanes: unknown[];
       diagnosticsTask: { readonly status: TaskStatus };
     };
@@ -910,7 +910,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     expect(page.debugStatus).toBeNull();
     expect(page.debugHealth).toBeNull();
     expect(page.debugModels).toEqual([]);
-    expect(page.debugHeartbeat).toBeNull();
+    expect(page.debugAutomations).toBeNull();
     expect(page.debugLanes).toEqual([]);
   });
 

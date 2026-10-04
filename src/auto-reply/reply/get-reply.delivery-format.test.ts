@@ -1,32 +1,30 @@
-// Reply and heartbeat turns get the delivering Telegram account's formatting contract once.
+// Reply and event turns get the delivering Telegram account's formatting contract once.
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { heartbeatRunnerTelegramPlugin } from "../../../test/helpers/infra/heartbeat-runner-channel-plugins.js";
 import * as embeddedAgent from "../../agents/embedded-agent.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { runHeartbeatOnce } from "../../infra/heartbeat-runner.js";
-import { seedMainSessionStore } from "../../infra/heartbeat-runner.test-utils.js";
-import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
-import { getReplyFromConfig } from "./get-reply.js";
+import { getReplyFromConfigInternal } from "./get-reply.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 
 let state: OpenClawTestState | undefined;
 beforeEach(() => {
-  resetSystemEventsForTest();
   setActivePluginRegistry(
     createTestRegistry([
       {
         pluginId: "telegram",
         source: "test",
         plugin: {
-          ...heartbeatRunnerTelegramPlugin,
+          ...createChannelTestPluginBase({ id: "telegram" }),
           agentPrompt: {
             inboundFormattingHints: (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
               params.cfg.channels?.telegram?.accounts?.[params.accountId ?? ""]?.richMessages
@@ -43,7 +41,6 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await state?.cleanup();
   state = undefined;
-  resetSystemEventsForTest();
   resetPluginRuntimeStateForTest();
 });
 
@@ -57,7 +54,6 @@ async function setup(label: string) {
         skipBootstrap: true,
         model: { primary: "mock-openai/gpt-5.6-luna" },
         models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-        heartbeat: { every: "5m", target: "last" },
       },
     },
     channels: {
@@ -71,14 +67,14 @@ async function setup(label: string) {
   } as OpenClawConfig);
   await state.writeConfig(cfg);
   const runAgent = vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async (p) => ({
-    payloads: [{ text: "HEARTBEAT_OK" }],
+    payloads: [{ text: "Status table ready." }],
     meta: {
       durationMs: 1,
       agentMeta: { sessionId: p.sessionId, provider: "mock-openai", model: "gpt-5.6-luna" },
     },
   }));
   const lastPrompt = () => runAgent.mock.calls.at(-1)?.[0].extraSystemPrompt ?? "";
-  return { cfg, storePath, lastPrompt };
+  return { cfg, lastPrompt };
 }
 
 function expectContractOnce(prompt: string, markup: string) {
@@ -90,7 +86,7 @@ it.each([["rich", "markdown_telegram_rich"]])(
   "gives a Telegram reply on the %s account its contract once",
   async (accountId, markup) => {
     const { cfg, lastPrompt } = await setup("reply-delivery-format");
-    await getReplyFromConfig(
+    await getReplyFromConfigInternal(
       finalizeInboundContext({
         Body: "Post the status table",
         Provider: "telegram",
@@ -108,26 +104,22 @@ it.each([["rich", "markdown_telegram_rich"]])(
   },
 );
 
-it("gives a heartbeat delivered to Telegram the delivering account's contract once", async () => {
-  const { cfg, storePath, lastPrompt } = await setup("heartbeat-delivery-format");
-  const sessionKey = await seedMainSessionStore(storePath, cfg, {
-    lastChannel: "telegram",
-    lastProvider: "telegram",
-    lastTo: "-100155462274",
-    lastAccountId: "rich",
-  });
-  enqueueSystemEvent("Reminder: post the status table", {
-    sessionKey,
-    contextKey: "cron:status",
-  });
-  const result = await runHeartbeatOnce({
+it("gives an event targeting Telegram the delivering account's contract once", async () => {
+  const { cfg, lastPrompt } = await setup("event-delivery-format");
+  await getReplyFromConfigInternal(
+    finalizeInboundContext({
+      Body: "Reminder: post the status table",
+      Provider: "internal",
+      InternalTurnSource: "event",
+      InputProvenance: { kind: "internal_system", sourceTool: "session-event" },
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:123",
+      AccountId: "rich",
+      ChatType: "direct",
+      SessionKey: "agent:main:telegram:rich:direct:123",
+    }),
+    { internalEventExecution: { onStarted: () => {}, onTerminal: async () => {} } },
     cfg,
-    agentId: "main",
-    sessionKey,
-    source: "cron",
-    reason: "cron:status",
-    deps: { getReplyFromConfig },
-  });
-  expect(result.status).toBe("ran");
+  );
   expectContractOnce(lastPrompt(), "markdown_telegram_rich");
 });

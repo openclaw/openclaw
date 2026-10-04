@@ -171,10 +171,13 @@ describe("channel reply message authority", () => {
     expect(resolveCapability(cliToken)).toBeUndefined();
   });
 
-  it.each(["heartbeat", "untrusted-ingress"] as const)(
+  it.each(["event", "untrusted-ingress"] as const)(
     "does not mint channel authority for %s routing metadata",
     async (mode) => {
       const turn = channelTurn();
+      if (mode === "event") {
+        turn.followupRun.run.internalEventExecution = { onStarted: vi.fn(), onTerminal: vi.fn() };
+      }
       state.runCliAgentMock.mockImplementationOnce(async (run: RunCliAgentParams) => {
         expect(run.messageActionTurnCapability).toBeUndefined();
         return { payloads: [{ text: "done" }], meta: {} };
@@ -182,10 +185,10 @@ describe("channel reply message authority", () => {
       const execute = await getExecuteAgentTurnForTest();
       await execute({
         ...turn,
-        isHeartbeat: mode === "heartbeat",
+        opts: { ...turn.opts, internalEventExecution: turn.followupRun.run.internalEventExecution },
         sessionCtx: {
           ...turn.sessionCtx,
-          Provider: mode === "untrusted-ingress" ? "webchat" : "discord",
+          Provider: mode === "untrusted-ingress" ? "webchat" : "event",
         },
       });
       expect(state.runCliAgentMock).toHaveBeenCalledOnce();

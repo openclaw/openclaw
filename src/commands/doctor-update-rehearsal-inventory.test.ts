@@ -83,7 +83,7 @@ async function fixture(
       configPath,
       JSON.stringify({
         agents: {
-          defaults: { workspace, cwd: workspace, heartbeat: { every: "0m" } },
+          defaults: { workspace, cwd: workspace },
           entries: {},
         },
         logging: { file: path.join(root, "canary.log") },

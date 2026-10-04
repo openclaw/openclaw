@@ -25,13 +25,11 @@ export type ContextEngineTurnAttemptFacts = {
   promptError: boolean;
   aborted: boolean;
   yieldAborted: boolean;
-  isHeartbeat?: boolean;
   runtimeContext?: ContextEngineTurnRuntimeContext;
 };
 
 export async function drainPendingContextEngineTurnsBeforeRun(params: {
   admission: TranscriptTurnBoundary["admission"] | undefined;
-  isHeartbeat?: boolean;
   lease: ContextEngineLogicalTurnLease;
   recorder?: UserTurnTranscriptRecorder;
   sessionTarget?: ContextEngineSessionTarget;
@@ -75,7 +73,6 @@ export async function drainPendingContextEngineTurnsBeforeRun(params: {
     const prepared = await store.prepareRun({
       ...owner,
       admission: params.admission,
-      isHeartbeat: params.isHeartbeat === true,
       sessionId: target.sessionId,
     });
     for (const message of prepared.warnings) {
@@ -108,7 +105,6 @@ export async function drainPendingContextEngineTurnsBeforeRun(params: {
       return store.enqueueIntent({
         ...owner,
         admission,
-        isHeartbeat: params.isHeartbeat === true,
       });
     };
     if (params.admission) {
@@ -211,7 +207,6 @@ export async function finalizeAcceptedContextEngineTurn(params: {
     const accepted = {
       boundary: params.facts.boundary,
       engineId: params.lease.effectiveEngineId,
-      isHeartbeat: params.facts.isHeartbeat === true,
       ownerPluginId: params.lease.effectiveEnginePluginId,
       runtimeContext: params.facts.runtimeContext,
     };

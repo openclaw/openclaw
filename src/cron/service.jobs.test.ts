@@ -621,10 +621,38 @@ describe("session targets", () => {
     ).toThrow('cron channel delivery config is only supported for sessionTarget="isolated"');
   });
 
-  it("rejects patching a main-session job to a non-default agent", () => {
-    expect(() =>
-      applyJobPatch(job(), { agentId: "custom-agent" }, { defaultAgentId: "main" }),
-    ).toThrow('cron: sessionTarget "main" is only valid for the default agent');
+  it("keeps explicit agent ownership when patching a main-session job", () => {
+    const current = job();
+    applyJobPatch(current, { agentId: "custom-agent" }, { defaultAgentId: "main" });
+    expect(current).toMatchObject({ agentId: "custom-agent", sessionTarget: "main" });
+  });
+
+  it("creates an ordinary main-session agent turn with its delivery and execution policy", () => {
+    const created = createJob(
+      state("main"),
+      agentInput({
+        agentId: "custom-agent",
+        sessionTarget: "main",
+        activeHours: { start: "08:00", end: "24:00" },
+        idleOnly: true,
+        delivery: {
+          mode: "announce",
+          target: "owner",
+          failureDestination: { mode: "announce", channel: "telegram", to: "123" },
+        },
+      }),
+    );
+    expect(created).toMatchObject({
+      agentId: "custom-agent",
+      sessionTarget: "main",
+      payload: { kind: "agentTurn" },
+      activeHours: { start: "08:00", end: "24:00" },
+      idleOnly: true,
+      delivery: {
+        target: "owner",
+        failureDestination: { mode: "announce", channel: "telegram", to: "123" },
+      },
+    });
   });
 });
 

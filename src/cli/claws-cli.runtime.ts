@@ -566,6 +566,8 @@ export async function runClawsRemoveCommand(
       referencedCleanup,
       cronGateway: {
         get: async (id) => await callGatewayFromCli("cron.get", {}, { id }),
+        list: async (agentId) =>
+          await listCronJobsFromGateway({}, { agentId, includeDisabled: true }),
         remove: async (id) => await callGatewayFromCli("cron.remove", {}, { id }),
       },
     });

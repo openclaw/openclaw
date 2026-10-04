@@ -2,10 +2,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emitHeartbeatEvent,
+  emitLegacyHeartbeatCronOutcome,
   getLastHeartbeatEvent,
   onHeartbeatEvent,
   resetHeartbeatEventsForTest,
-  resolveIndicatorType,
 } from "./heartbeat-events.js";
 
 type HeartbeatEventsModule = typeof import("./heartbeat-events.js");
@@ -15,16 +15,6 @@ const heartbeatEventsModuleUrl = new URL("./heartbeat-events.ts", import.meta.ur
 async function importHeartbeatEventsModule(cacheBust: string): Promise<HeartbeatEventsModule> {
   return (await import(`${heartbeatEventsModuleUrl}?t=${cacheBust}`)) as HeartbeatEventsModule;
 }
-
-describe("resolveIndicatorType", () => {
-  it("maps heartbeat statuses to indicator types", () => {
-    expect(resolveIndicatorType("ok-empty")).toBe("ok");
-    expect(resolveIndicatorType("ok-token")).toBe("ok");
-    expect(resolveIndicatorType("sent")).toBe("alert");
-    expect(resolveIndicatorType("failed")).toBe("error");
-    expect(resolveIndicatorType("skipped")).toBeUndefined();
-  });
-});
 
 describe("heartbeat events", () => {
   beforeEach(() => {
@@ -47,7 +37,7 @@ describe("heartbeat events", () => {
       ts: 1767960000000,
       status: "skipped",
       reason: "target-none",
-      message: "Heartbeat delivery is disabled by configuration (target: none).",
+      message: "Proactive automation delivery is disabled.",
     };
     expect(getLastHeartbeatEvent()).toEqual(expected);
     expect(listener).toHaveBeenCalledWith(expected);
@@ -74,8 +64,31 @@ describe("heartbeat events", () => {
     expect(getLastHeartbeatEvent()).toMatchObject({
       reason: "no-route",
       message:
-        "Heartbeat has no delivery route yet. Message your bot once, or set agents.defaults.heartbeat.target.",
+        "Proactive automation has no delivery route. Configure its delivery in Automations; run openclaw doctor --fix for legacy configuration.",
     });
+  });
+
+  it.each([
+    {
+      completionStatus: "failed" as const,
+      deliveryError: "owner route unavailable",
+      expected: "failed",
+    },
+    { completionStatus: "unknown" as const, expected: "skipped" },
+    {
+      completionStatus: "succeeded" as const,
+      deliverySuppressionReason: "silent" as const,
+      expected: "ok-empty",
+    },
+  ])("projects canonical $completionStatus without inventing delivery success", (outcome) => {
+    emitLegacyHeartbeatCronOutcome({
+      action: "finished",
+      jobId: "converted",
+      status: "ok",
+      delivered: false,
+      ...outcome,
+    });
+    expect(getLastHeartbeatEvent()).toMatchObject({ status: outcome.expected, silent: true });
   });
 
   it("delivers events to listeners, isolates listener failures, and supports unsubscribe", () => {

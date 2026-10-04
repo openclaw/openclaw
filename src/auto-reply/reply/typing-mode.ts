@@ -10,7 +10,7 @@ type TypingModeContext = {
   configured?: TypingMode;
   isGroupChat: boolean;
   wasMentioned: boolean;
-  isHeartbeat: boolean;
+
   typingPolicy?: TypingPolicy;
   suppressTyping?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -21,18 +21,12 @@ export function resolveTypingMode({
   configured,
   isGroupChat,
   wasMentioned,
-  isHeartbeat,
+
   typingPolicy,
   suppressTyping,
   sourceReplyDeliveryMode,
 }: TypingModeContext): TypingMode {
-  if (
-    isHeartbeat ||
-    typingPolicy === "heartbeat" ||
-    typingPolicy === "system_event" ||
-    typingPolicy === "internal_webchat" ||
-    suppressTyping
-  ) {
+  if (typingPolicy === "system_event" || typingPolicy === "internal_webchat" || suppressTyping) {
     return "never";
   }
   if (configured) {
@@ -67,14 +61,13 @@ export type TypingSignaler = {
 export function createTypingSignaler(params: {
   typing: TypingController;
   mode: TypingMode;
-  isHeartbeat: boolean;
 }): TypingSignaler {
-  const { typing, mode, isHeartbeat } = params;
+  const { typing, mode } = params;
   const shouldStartImmediately = mode === "instant";
   const shouldStartOnMessageStart = mode === "message";
   const shouldStartOnText = mode === "message" || mode === "instant";
   const shouldStartOnReasoning = mode === "thinking";
-  const disabled = isHeartbeat || mode === "never";
+  const disabled = mode === "never";
   let hasRenderableText = false;
 
   const refreshTyping = async (allowStart: boolean) => {

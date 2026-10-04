@@ -10,7 +10,7 @@ import {
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../agents/harness/tool-authority.runtime.js";
 import { withFullRuntimeReplyConfig } from "../../auto-reply/reply/get-reply-fast-path.js";
-import { getReplyFromConfig } from "../../auto-reply/reply/get-reply.js";
+import { getReplyFromConfigInternal } from "../../auto-reply/reply/get-reply.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
@@ -180,7 +180,7 @@ it.each([true, false])(
           throw error;
         }
       });
-      const result = await getReplyFromConfig(
+      const result = await getReplyFromConfigInternal(
         finalizeInboundContext({
           ...authority.replyCaller,
           AgentId: "main",

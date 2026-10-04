@@ -61,13 +61,13 @@ vi.mock("../../media-understanding/apply.runtime.js", () => ({
 }));
 registerGetReplyRuntimeOverrides(mocks);
 
-let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
+let getReplyFromConfigInternal: typeof import("./get-reply.js").getReplyFromConfigInternal;
 let defaultModel: typeof import("./directive-handling.defaults.js").resolveDefaultModel;
 let runReply: typeof import("./get-reply-run.js").runPreparedReply;
 let stageMedia: typeof import("./stage-sandbox-media.runtime.js").stageSandboxMedia;
 
 async function loadGetReplyRuntimeForTest() {
-  ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
+  ({ getReplyFromConfigInternal } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
   ({ resolveDefaultModel: defaultModel } = await import("./directive-handling.defaults.js"));
   ({ runPreparedReply: runReply } = await import("./get-reply-run.js"));
   ({ stageSandboxMedia: stageMedia } = await import("./stage-sandbox-media.runtime.js"));
@@ -178,7 +178,7 @@ async function resetMocks() {
 async function runLocalPathSelfServeCase(params: {
   ctx: Partial<MsgContext>;
   cfg: OpenClawConfig;
-  opts?: Parameters<typeof getReplyFromConfig>[1];
+  opts?: Parameters<typeof getReplyFromConfigInternal>[1];
   provider?: string;
   model?: string;
   senderIsOwner?: boolean;
@@ -211,11 +211,11 @@ async function runLocalPathSelfServeCase(params: {
     }),
   );
 
-  await getReplyFromConfig(ctx, params.opts, withFastReplyConfig(params.cfg));
+  await getReplyFromConfigInternal(ctx, params.opts, withFastReplyConfig(params.cfg));
   return enableLocalPathSelfServe;
 }
 
-describe("getReplyFromConfig message hooks", () => {
+describe("getReplyFromConfigInternal message hooks", () => {
   beforeEach(resetMocks);
 
   it.each([
@@ -251,7 +251,7 @@ describe("getReplyFromConfig message hooks", () => {
         ctx.agentText = preparedText;
         ctx.BodyForAgent = preparedText;
       });
-      await getReplyFromConfig(
+      await getReplyFromConfigInternal(
         buildCtx({
           SessionKey: sessionKey,
           media: [
@@ -417,7 +417,7 @@ describe("getReplyFromConfig message hooks", () => {
       }),
     );
 
-    const reply = getReplyFromConfig(
+    const reply = getReplyFromConfigInternal(
       buildTextCtx(body, { SessionKey: sessionKey }),
       undefined,
       withFastReplyConfig({}),
@@ -486,7 +486,7 @@ describe("getReplyFromConfig message hooks", () => {
     );
 
     await expect(
-      getReplyFromConfig(
+      getReplyFromConfigInternal(
         buildTextCtx("describe image", {
           Provider: "webchat",
           Surface: "webchat",
@@ -533,7 +533,7 @@ describe("getReplyFromConfig message hooks", () => {
 
   it("skips media understanding for a cached sticker", async () => {
     const stickerPath = "/tmp/cached-sticker.webp";
-    await getReplyFromConfig(
+    await getReplyFromConfigInternal(
       buildTextCtx("[Sticker] Cached description", {
         media: [{ path: stickerPath, url: stickerPath, contentType: "image/webp" }],
         Sticker: { cachedDescription: "Cached description" },
@@ -551,7 +551,7 @@ describe("getReplyFromConfig message hooks", () => {
       new Error("Cannot find module '/tmp/openclaw/dist/media-understanding/apply.runtime-old.js'"),
     );
 
-    const reply = await getReplyFromConfig(buildCtx(), undefined, withFastReplyConfig({}));
+    const reply = await getReplyFromConfigInternal(buildCtx(), undefined, withFastReplyConfig({}));
 
     expect(reply).toEqual({ text: "ok" });
     expect(mocks.applyMediaUnderstanding).toHaveBeenCalledTimes(1);
@@ -591,7 +591,7 @@ describe("getReplyFromConfig message hooks", () => {
 
       await expect
         .soft(
-          getReplyFromConfig(
+          getReplyFromConfigInternal(
             buildTextCtx("read https://example.test/page"),
             {
               abortSignal: controller.signal,
@@ -617,7 +617,7 @@ describe("getReplyFromConfig message hooks", () => {
       new Error("Cannot find module '/tmp/openclaw/dist/link-understanding/apply.runtime-old.js'"),
     );
 
-    const reply = await getReplyFromConfig(ctx, undefined, withFastReplyConfig({}));
+    const reply = await getReplyFromConfigInternal(ctx, undefined, withFastReplyConfig({}));
 
     expect(reply).toEqual({ text: "ok" });
     expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
@@ -627,7 +627,7 @@ describe("getReplyFromConfig message hooks", () => {
   });
 });
 
-describe("getReplyFromConfig media staging", () => {
+describe("getReplyFromConfigInternal media staging", () => {
   beforeAll(async () => {
     await loadGetReplyRuntimeForTest();
     const scope = await import("../../agents/agent-scope.js");
@@ -717,7 +717,7 @@ describe("getReplyFromConfig media staging", () => {
               }
             },
           );
-          const reply = getReplyFromConfig(
+          const reply = getReplyFromConfigInternal(
             ctx,
             { abortSignal: controller.signal },
             withFastReplyConfig({ agents: { defaults: { workspace: state.workspaceDir } } }),
@@ -797,7 +797,7 @@ describe("getReplyFromConfig media staging", () => {
         });
         prepareMediaReply(ctx, state, sessionEntry);
 
-        await getReplyFromConfig(
+        await getReplyFromConfigInternal(
           ctx,
           undefined,
           withFastReplyConfig({ agents: { defaults: { workspace: configuredWorkspace } } }),

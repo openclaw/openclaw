@@ -26,7 +26,6 @@ import {
   type ProviderRuntimePluginHandle,
 } from "../../../plugins/provider-hook-runtime.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
-import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers/context-file.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
@@ -340,7 +339,6 @@ export function installEmbeddedAttemptContextGuards(input: {
             }),
         }),
       runtimeSettings,
-      isHeartbeat: isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind),
     });
   }
   const removeToolResultGuard = installToolResultContextGuard({

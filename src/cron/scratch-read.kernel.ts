@@ -47,62 +47,12 @@ export function readScratchStateFromDatabase(
   return row ? rowToState(row) : { currentRevision: 0 };
 }
 
-export function readHeartbeatMonitorScratchFromDatabase(
-  db: DatabaseSync,
-  storeKey: string,
-  agentId: string,
-): { jobId: string; state: CronJobScratchState } | undefined {
-  const cronDb = getCronStoreKysely(db);
-  const row = executeSqliteQuerySync(
-    db,
-    cronDb
-      .selectFrom("cron_jobs")
-      .leftJoin("cron_job_scratch", (join) =>
-        join
-          .onRef("cron_job_scratch.store_key", "=", "cron_jobs.store_key")
-          .onRef("cron_job_scratch.job_id", "=", "cron_jobs.job_id"),
-      )
-      .select([
-        "cron_jobs.job_id as job_id",
-        "cron_job_scratch.content as content",
-        "cron_job_scratch.revision as revision",
-        "cron_job_scratch.source_sha256 as source_sha256",
-        "cron_job_scratch.updated_at_ms as updated_at_ms",
-      ])
-      .where("cron_jobs.store_key", "=", storeKey)
-      .where("cron_jobs.declaration_key", "=", `heartbeat:${agentId}`)
-      .where("cron_jobs.payload_kind", "=", "heartbeat"),
-  ).rows[0];
-  if (!row) {
-    return undefined;
-  }
-  if (row.revision === null || row.updated_at_ms === null) {
-    return { jobId: row.job_id, state: { currentRevision: 0 } };
-  }
-  return {
-    jobId: row.job_id,
-    state: rowToState({
-      content: row.content,
-      revision: row.revision,
-      source_sha256: row.source_sha256,
-      updated_at_ms: row.updated_at_ms,
-    }),
-  };
-}
-
 /** The authorized definition and private content belong to one native read snapshot. */
 export function readCronScratchSnapshotInDatabase(
   db: DatabaseSync,
   command: CronScratchReadCommand,
 ): CronScratchSnapshot | undefined {
   return runSqliteDeferredTransactionSync(db, () => {
-    if (command.selector.kind === "heartbeat") {
-      return readHeartbeatMonitorScratchFromDatabase(
-        db,
-        command.storeKey,
-        command.selector.agentId,
-      );
-    }
     // Missing creation metadata keeps the original projection's clock fallback;
     // every actual persisted definition value still comes from this snapshot.
     const job = loadedCronStoreFromRows(

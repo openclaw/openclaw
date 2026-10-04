@@ -68,7 +68,7 @@ async function createScheduler(cronEnabled: boolean, owner?: string) {
     resolveDefaultAgentId: () => owner,
     log: createNoopLogger(),
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    runSessionEvent: vi.fn(async () => ({ status: "ok" as const })),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
   schedulers.add(cron);

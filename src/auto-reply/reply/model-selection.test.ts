@@ -586,7 +586,6 @@ describe("session override precedence and persistence", () => {
         sessionStore,
         storePath: "sessions.json",
         model: "gpt-4o-mini",
-        isHeartbeat: automatic,
       });
       expect(state.modelPolicy.allows({ provider: "openai", model: "gpt-5.5" })).toBe(!automatic);
       expect(state).toMatchObject({
@@ -701,7 +700,6 @@ describe("automatic fallback provenance", () => {
         modelOverrideFallbackOriginModel: "gpt-4o",
       },
       options: {
-        isHeartbeat: true,
         primaryProvider: "openai",
         primaryModel: "gpt-4o",
         provider: "openrouter",
@@ -709,13 +707,7 @@ describe("automatic fallback provenance", () => {
       },
     },
     {
-      name: "clears a heartbeat pin without origin metadata",
-      reset: true,
-      usePrimary: true,
-      options: { isHeartbeat: true, provider: "openrouter", model: "minimax/minimax-m2.7" },
-    },
-    {
-      name: "recovers a legacy heartbeat origin from its notice",
+      name: "recovers a legacy fallback origin from its notice",
       entry: {
         fallbackNotice: {
           kind: "active",
@@ -723,7 +715,7 @@ describe("automatic fallback provenance", () => {
           activeModel: "openrouter/minimax/minimax-m2.7",
         },
       },
-      options: { isHeartbeat: true, provider: "openrouter", model: "minimax/minimax-m2.7" },
+      options: { provider: "openrouter", model: "minimax/minimax-m2.7" },
     },
   ])("$name", async (fixture) => {
     const entry = makeEntry({
@@ -1027,7 +1019,6 @@ describe("refused pins use the primary instead of catalog order", () => {
       sessionEntry: entry,
       provider: "provider-c",
       model: "model-c1",
-      isHeartbeat: true,
     });
     expect(state).toMatchObject({
       resetModelOverride: false,

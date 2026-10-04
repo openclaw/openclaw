@@ -30,14 +30,16 @@ async function withStreamService(
     storePath: string;
     source: { scheduleKey: string; identity: string };
     setDefaultAgent: (agentId: string | undefined) => void;
-    enqueueSystemEvent: ReturnType<typeof vi.fn<CronServiceDeps["enqueueSystemEvent"]>>;
+    enqueueSessionEvent: ReturnType<
+      typeof vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>
+    >;
     onEvent: ReturnType<typeof vi.fn<NonNullable<CronServiceDeps["onEvent"]>>>;
   }) => Promise<void>,
 ) {
   await withOpenClawTestState({ label: "cron-stream-worker" }, async (fixture) => {
     const storePath = fixture.statePath("cron", "jobs.json");
     let defaultAgentId: string | undefined = "alpha";
-    const enqueueSystemEvent = vi.fn<CronServiceDeps["enqueueSystemEvent"]>();
+    const enqueueSessionEvent = vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>();
     const onEvent = vi.fn<NonNullable<CronServiceDeps["onEvent"]>>();
     const service = new CronService({
       scheduler: createTestGatewayScheduler(),
@@ -51,8 +53,8 @@ async function withStreamService(
         failureAlert: { enabled: true, after: 5, cooldownMs: 0 },
       },
       log: createNoopLogger(),
-      enqueueSystemEvent,
-      requestHeartbeat: vi.fn(),
+      enqueueSystemEvent: vi.fn(),
+      enqueueSessionEvent,
       runIsolatedAgentJob: async () => ({ status: "ok" }),
       onEvent,
     });
@@ -84,7 +86,7 @@ async function withStreamService(
         setDefaultAgent: (agentId) => {
           defaultAgentId = agentId;
         },
-        enqueueSystemEvent,
+        enqueueSessionEvent,
         onEvent,
       });
     } finally {
@@ -361,12 +363,20 @@ describe("cron stream worker service", () => {
     },
   ])("$name", async ({ loseReply }) => {
     await withStreamService(
-      async ({ service, job, storePath, source, setDefaultAgent, enqueueSystemEvent, onEvent }) => {
+      async ({
+        service,
+        job,
+        storePath,
+        source,
+        setDefaultAgent,
+        enqueueSessionEvent,
+        onEvent,
+      }) => {
         const historyEntered = createDeferred();
         const releaseHistory = createDeferred();
         const historyAtAlert: Array<ReturnType<typeof readCronRunHistoryPageForTests>["entries"]> =
           [];
-        enqueueSystemEvent.mockImplementation(() => {
+        enqueueSessionEvent.mockImplementation(() => {
           historyAtAlert.push(
             readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId: job.id })
               .entries,
@@ -420,7 +430,7 @@ describe("cron stream worker service", () => {
             ]),
           ).toBe("history-entered");
           expect(settled).toBe(false);
-          expect(enqueueSystemEvent).not.toHaveBeenCalled();
+          expect(enqueueSessionEvent).not.toHaveBeenCalled();
           expect(onEvent.mock.calls.filter(([event]) => event.action === "finished")).toHaveLength(
             0,
           );
@@ -461,7 +471,7 @@ describe("cron stream worker service", () => {
               readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId: job.id })
                 .entries,
             ).toEqual([]);
-            expect(enqueueSystemEvent).not.toHaveBeenCalled();
+            expect(enqueueSessionEvent).not.toHaveBeenCalled();
             expect(
               onEvent.mock.calls.filter(([event]) => event.action === "finished"),
             ).toHaveLength(0);

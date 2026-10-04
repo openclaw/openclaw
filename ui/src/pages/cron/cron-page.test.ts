@@ -386,46 +386,6 @@ describe("CronPage editor state sync", () => {
     },
   );
 
-  it("drops pending heartbeat scratch when admin access is removed", async () => {
-    const job = createCronViewJob("heartbeat-job", {
-      payload: { kind: "heartbeat" },
-      sessionTarget: "main",
-    });
-    const scratch = createDeferred<object>();
-    const request = vi.fn(async (method: string) =>
-      method === "cron.list"
-        ? cronListResponse([job])
-        : method === "cron.scratch.get"
-          ? scratch.promise
-          : {},
-    );
-    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
-    const page = createPage(createContext(gateway), { render: true });
-
-    const row = `[data-test-id="cron-row-${job.id}"]`;
-    await waitForCronPage(() => expect(page.querySelector(row)).not.toBeNull());
-    (page.querySelector(`${row} .cron-table__name-text`) as HTMLElement).click();
-    await waitForCronPage(() =>
-      expect(request.mock.calls.filter(([method]) => method === "cron.scratch.get")).toHaveLength(
-        1,
-      ),
-    );
-
-    gateway.emitSnapshot({ hello: operatorHello(["operator.read"]) });
-    await page.updateComplete;
-    scratch.resolve({
-      scratch: { content: "private checklist", revision: 1, updatedAtMs: 1 },
-      currentRevision: 1,
-      maxBytes: 262_144,
-    });
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    await page.updateComplete;
-
-    expect(page.cron.cronForm.payloadText).toBe("");
-  });
-
   it.each([
     { scenario: "an unsaved enable edit", active: false, edited: true, saved: false },
     { scenario: "an unsaved disable edit", active: true, edited: false, saved: false },

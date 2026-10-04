@@ -12,7 +12,7 @@ export type CliShimOptions = {
   toolingDependencies?: string;
 };
 
-export function resolveForwardedNodeCompilerArgs(execArgv?: readonly string[]): string[];
+export { resolveForwardedNodeCompilerArgs } from "../../src/infra/node-compiler-policy.mjs";
 export function resolveConfiguredModulesDir(checkoutRoot: string): string | undefined;
 export function resolveTsxImport(checkoutRoot: string): string;
 export function registerToolingTsx(): Promise<void>;

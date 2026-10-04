@@ -68,7 +68,6 @@ type TerminalAttemptState = Pick<
   | "clientToolCalls"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
-  | "heartbeatToolResponse"
   | "lastToolError"
   | "toolMediaUrls"
   | "toolAudioAsVoice"
@@ -97,7 +96,6 @@ export function hasAttemptTerminalState(attempt: TerminalAttemptState): boolean 
     attempt.clientToolCalls ||
     attempt.yieldDetected ||
     attempt.didSendDeterministicApprovalPrompt ||
-    attempt.heartbeatToolResponse ||
     attempt.toolMediaUrls?.some((url) => url.trim().length > 0) ||
     attempt.toolAudioAsVoice ||
     attempt.toolTrustedLocalMedia ||
@@ -123,7 +121,6 @@ type AcceptedSessionSpawnContinuationAttempt = Pick<
   | "didDeliverSourceReplyViaMessageTool"
   | "didSendDeterministicApprovalPrompt"
   | "didSendViaMessagingTool"
-  | "heartbeatToolResponse"
   | "lastToolError"
   | "messagingToolSentMediaUrls"
   | "messagingToolSentTargets"

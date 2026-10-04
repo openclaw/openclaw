@@ -161,7 +161,11 @@ describe("status commands", () => {
     vi.clearAllMocks();
     vi.stubEnv("OPENCLAW_PROFILE", "isolated");
     vi.stubEnv("OPENCLAW_CONTAINER_HINT", undefined);
-    mocks.callGateway.mockReset().mockResolvedValue(null);
+    mocks.callGateway
+      .mockReset()
+      .mockImplementation(async ({ method }) =>
+        method === "cron.status" ? { enabled: true, jobs: 0, nextWakeAtMs: null } : null,
+      );
     mocks.usage.mockReset().mockResolvedValue(summaries.default);
     mocks.nodeConfig.mockReset().mockResolvedValue(null);
     mocks.audit.mockReset().mockResolvedValue({
@@ -305,7 +309,7 @@ describe("status commands", () => {
             clock.mockReturnValue(35_000);
             return { ok: true, channels: {}, agents: [], ts: 1, durationMs: 0 };
           }
-          return null;
+          return method === "cron.status" ? { enabled: true, jobs: 0, nextWakeAtMs: null } : null;
         });
         if (mode === "fast-json") {
           await statusJsonCommand({ usage: true, deep: true }, defaultRuntime);
@@ -329,7 +333,7 @@ describe("status commands", () => {
           mocks.callGateway.mock.calls.map(([input]) => [input.method, input.timeoutMs]),
         ).toEqual([
           ["health", 30_000],
-          ["last-heartbeat", 25_000],
+          [mode === "text" ? "cron.status" : "last-heartbeat", 25_000],
         ]);
       } finally {
         clock.mockRestore();

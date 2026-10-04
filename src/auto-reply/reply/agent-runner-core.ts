@@ -329,7 +329,6 @@ export async function handleReplyAgentRunError(
   error: unknown,
   context: {
     resolveVisibleReplyDelivery: () => Promise<boolean>;
-    isHeartbeat: boolean;
     replyExpectation: ReplyExpectation;
     isRestartRecoveryArmed: () => Promise<boolean>;
     replyOperation: ReplyOperation;
@@ -340,7 +339,6 @@ export async function handleReplyAgentRunError(
 ): Promise<ReplyPayload | undefined> {
   const {
     resolveVisibleReplyDelivery,
-    isHeartbeat,
     replyExpectation,
     isRestartRecoveryArmed,
     replyOperation,
@@ -396,7 +394,7 @@ export async function handleReplyAgentRunError(
     return returnWithQueuedFollowupDrain(knownFailurePayload);
   }
   const visibleReplyDelivered = await resolveVisibleReplyDelivery();
-  if (!isHeartbeat && visibleReplyDelivered && !replyOperation.abortSignal.aborted) {
+  if (visibleReplyDelivered && !replyOperation.abortSignal.aborted) {
     replyOperation.fail("run_failed", error);
     return returnWithQueuedFollowupDrain(
       buildTerminalAgentRunFailureReplyPayload({ replyExpectation, visibleReplyDelivered }),

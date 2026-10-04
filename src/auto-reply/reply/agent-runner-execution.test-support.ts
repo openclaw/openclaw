@@ -20,12 +20,13 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import type { TemplateContext } from "../templating.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { ReplyPayload } from "../types.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import type {
   buildEmbeddedRunExecutionParams,
   mintReplyMessageActionTurnCapability,
 } from "./agent-runner-utils.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import type { FollowupRun } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import type { TypingSignaler } from "./typing-mode.js";
@@ -613,7 +614,6 @@ export function createAgentTurnExecutionDefaults() {
     shouldEmitToolResult: () => true,
     shouldEmitToolOutput: () => false,
     pendingToolTasks: new Set<Promise<void>>(),
-    isHeartbeat: false,
     sessionKey: "main",
     getActiveSessionEntry: () => undefined,
     resolvedVerboseLevel: "off",
@@ -636,7 +636,7 @@ export function createRunAgentTurnParams(followupRun: FollowupRun): AgentTurnPar
 
 export function createMinimalRunAgentTurnParams(overrides?: {
   followupRun?: FollowupRun;
-  opts?: GetReplyOptions;
+  opts?: InternalGetReplyOptions;
   replyOperation?: ReplyOperation;
   sessionCtx?: TemplateContext;
   typingSignals?: TypingSignaler;
@@ -650,7 +650,7 @@ export function createMinimalRunAgentTurnParams(overrides?: {
         Provider: "whatsapp",
         MessageSid: "msg",
       } as unknown as TemplateContext),
-    opts: overrides?.opts ?? ({} satisfies GetReplyOptions),
+    opts: overrides?.opts ?? ({} satisfies InternalGetReplyOptions),
     replyOperation: overrides?.replyOperation,
     typingSignals: overrides?.typingSignals ?? createMockTypingSignaler(),
     ...createAgentTurnExecutionDefaults(),

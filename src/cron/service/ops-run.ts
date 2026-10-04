@@ -29,7 +29,7 @@ import {
 import { clearManualCronJobActive } from "./ops-shared.js";
 import { releaseQueuedCronRun, runWithCronAdmission } from "./run-admission.js";
 import { createCronOwnerExecutionIdentityAdmission } from "./run-history.js";
-import type { CronRunMode, CronServiceState, CronWakeMode } from "./state.js";
+import type { CronRunMode, CronServiceState } from "./state.js";
 import { isImmediateCronRunMode } from "./state.js";
 import { emitCronRunFinished, type ManualRunTerminalTracker } from "./timer-outcome-events.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
@@ -42,7 +42,7 @@ async function finishPreparedManualRun(
   state: CronServiceState,
   prepared: ActivatedManualRun,
   mode?: CronRunMode,
-): Promise<void> {
+): Promise<Awaited<ReturnType<typeof executeJobCoreWithTimeout>> | undefined> {
   const executionJob = prepared.executionJob;
   const startedAt = prepared.startedAt;
   const jobId = prepared.jobId;
@@ -92,7 +92,7 @@ async function finishPreparedManualRun(
       prepared.onTriggerDisposition(disposition);
     }
     finalizationStarted = true;
-    await finalizeCompletedCronRunOutcomes(
+    const finalized = await finalizeCompletedCronRunOutcomes(
       state,
       [
         {
@@ -117,6 +117,9 @@ async function finishPreparedManualRun(
         },
       ],
       { onRequestedRunFinalized: () => armTimer(state) },
+    );
+    return finalized.find(
+      (outcome) => outcome.runReceipt?.receiptId === prepared.runReceipt.receiptId,
     );
   } finally {
     if (!finalizationStarted) {
@@ -221,7 +224,10 @@ async function executePreparedManualRun(
       if (!activeRun.ran) {
         return activeRun;
       }
-      await finishPreparedManualRun(state, activeRun, mode);
+      const outcome = await finishPreparedManualRun(state, activeRun, mode);
+      if (outcome) {
+        activeRun.onSettledResult?.(outcome);
+      }
       return { ok: true, ran: true } as const;
     },
     undefined,
@@ -439,9 +445,6 @@ export async function waitForManualRun(
 }
 
 /** Enqueues manual wake text through the cron wake API. */
-export function wakeNow(
-  state: CronServiceState,
-  opts: { mode: CronWakeMode; text: string; sessionKey?: string; agentId?: string },
-) {
+export function wakeNow(state: CronServiceState, opts: Parameters<typeof wake>[1]) {
   return wake(state, opts);
 }

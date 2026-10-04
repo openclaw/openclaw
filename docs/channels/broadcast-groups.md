@@ -181,7 +181,6 @@ Runtime membership uses the canonical `agents.entries` roster. Run `openclaw doc
     "ownership": "explicit",
     "defaults": {
       "authInheritance": { "agentId": "code-reviewer" },
-      "heartbeat": { "agentId": "code-reviewer" },
       "systemAgent": { "agentId": "code-reviewer" }
     },
     "entries": {
@@ -305,7 +304,6 @@ In group `120363403215116621@g.us` with agents `["alfred", "baerbel"]`:
         "ownership": "explicit",
         "defaults": {
           "authInheritance": { "agentId": "security-scanner" },
-          "heartbeat": { "agentId": "security-scanner" },
           "systemAgent": { "agentId": "security-scanner" }
         },
         "entries": {
@@ -328,7 +326,6 @@ In group `120363403215116621@g.us` with agents `["alfred", "baerbel"]`:
         "ownership": "explicit",
         "defaults": {
           "authInheritance": { "agentId": "reviewer" },
-          "heartbeat": { "agentId": "reviewer" },
           "systemAgent": { "agentId": "reviewer" }
         },
         "entries": {
@@ -434,7 +431,6 @@ Broadcast groups work alongside existing routing:
         "ownership": "explicit",
         "defaults": {
           "authInheritance": { "agentId": "code-formatter" },
-          "heartbeat": { "agentId": "code-formatter" },
           "systemAgent": { "agentId": "code-formatter" }
         },
         "entries": {
@@ -474,7 +470,6 @@ Broadcast groups work alongside existing routing:
         "ownership": "explicit",
         "defaults": {
           "authInheritance": { "agentId": "detect-language" },
-          "heartbeat": { "agentId": "detect-language" },
           "systemAgent": { "agentId": "detect-language" }
         },
         "entries": {

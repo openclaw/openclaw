@@ -22,12 +22,34 @@ import {
   resolveConfiguredSubagentSpawnModelSelection,
   resolveThinkingDefault,
 } from "../../model-selection.js";
-import type { PreparedSpawnThreadBinding } from "../../spawn-plan.js";
+import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
+import { resolveSpawnSandboxError, type PreparedSpawnThreadBinding } from "../../spawn-plan.js";
 import { buildSpawnThreadBinding } from "./spawn-thread-binding.js";
 import { splitModelRef } from "./subagent-spawn-plan.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
 
 const ACP_RUNTIME_TIMEOUT_MAX_SECONDS = 24 * 60 * 60;
+
+export type SpawnAcpSandboxMode = "inherit" | "require";
+
+export function resolveAcpSpawnRuntimePolicyError(params: {
+  cfg: OpenClawConfig;
+  requesterAgentId: string;
+  requesterSessionKey?: string;
+  requesterSandboxed?: boolean;
+  sandbox?: SpawnAcpSandboxMode;
+}): string | undefined {
+  const requesterRuntime = resolveSandboxRuntimeStatus({
+    cfg: params.cfg,
+    sessionKey: params.requesterSessionKey,
+    agentId: params.requesterAgentId,
+  });
+  return resolveSpawnSandboxError({
+    backend: "acp",
+    requesterSandboxed: params.requesterSandboxed === true || requesterRuntime.sandboxed,
+    sandbox: params.sandbox === "require" ? "require" : "inherit",
+  });
+}
 
 export async function resolveRuntimeCwdForAcpSpawn(params: {
   resolvedCwd?: string;

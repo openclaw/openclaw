@@ -35,7 +35,6 @@ export function createFixture(mocks: {
     getAssistantTurnCount: vi.fn(() => 1),
     getCompactionCount: vi.fn(() => 0),
     getCurrentAttemptAssistant: vi.fn(() => undefined),
-    getHeartbeatToolResponse: vi.fn(() => undefined),
     getItemLifecycle: vi.fn(() => ({ startedCount: 0, completedCount: 0, activeCount: 0 })),
     getLastAssistantTextMessageIndex: vi.fn(() => undefined),
     getLastAssistantUsage: vi.fn(() => undefined),

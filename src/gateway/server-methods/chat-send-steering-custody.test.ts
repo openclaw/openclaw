@@ -24,7 +24,7 @@ import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { createScreenTool } from "../../agents/tools/screen-tool.js";
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
-import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import type { dispatchInboundMessageInternal } from "../../auto-reply/dispatch.js";
 import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
 import { callPersonalToolUiCommand } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
 import { buildReplyPromptEnvelopeBase } from "../../auto-reply/reply/prompt-prelude.js";
@@ -245,7 +245,7 @@ describe("steering input custody", () => {
           );
           await fixture.dispatchedRecorder;
           const ownerDispatchParams = dispatchInboundMessageMock.mock.calls[0]![0] as Parameters<
-            typeof dispatchInboundMessage
+            typeof dispatchInboundMessageInternal
           >[0];
           const ownerCtx = ownerDispatchParams.ctx;
           expect(ownerCtx).not.toHaveProperty("SenderId");

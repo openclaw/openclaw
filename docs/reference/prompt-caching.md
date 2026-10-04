@@ -4,7 +4,7 @@ title: "Prompt caching"
 read_when:
   - You want to reduce prompt token costs with cache retention
   - You need per-agent cache behavior in multi-agent setups
-  - You are tuning heartbeat and cache-ttl pruning together
+  - You are tuning automation cadence and cache-ttl pruning together
 ---
 
 Prompt caching lets a model provider reuse an unchanged prompt prefix (system/developer instructions, tool definitions, other stable context) across turns instead of reprocessing it every request. This cuts token cost and latency on long-running sessions with repeated context.
@@ -95,16 +95,25 @@ agents:
 
 See [Session pruning](/concepts/session-pruning) for full behavior.
 
-### Heartbeat keep-warm
+<a id="heartbeat-keep-warm" />
 
-Heartbeat can keep cache windows warm and reduce repeated cache writes after idle gaps. Configurable globally (`agents.defaults.heartbeat`) or per agent (`agents.entries.*.heartbeat`).
+### Scheduled cache reuse
 
-```yaml
-agents:
-  defaults:
-    heartbeat:
-      every: "55m"
+An ordinary agent-turn automation that uses the same persistent session can keep
+eligible cache prefixes warm between useful checks. An isolated job starts a new
+session each time, so it does not keep another conversation's history warm.
+For an existing persistent-session check using one-hour cache retention, adjust
+its stored schedule rather than adding heartbeat config:
+
+```bash
+openclaw automations edit <job-id> --every 55m
 ```
+
+Each run still costs tokens, and active hours or idle-only admission can delay
+it beyond the cache window. Choose a cadence for useful work and compare total
+usage; a periodic request does not guarantee a cache hit. See
+[Automations](/automation/cron-jobs) and
+[Heartbeat migration](/gateway/heartbeat).
 
 ## Provider behavior
 
@@ -298,8 +307,6 @@ agents:
   list:
     - id: "research"
       default: true
-      heartbeat:
-        every: "55m"
     - id: "alerts"
       params:
         cacheRetention: "none"
@@ -309,7 +316,7 @@ agents:
 
 - Set baseline `cacheRetention: "short"`.
 - Enable `contextPruning.mode: "cache-ttl"`.
-- Keep heartbeat below your TTL only for agents that benefit from warm caches.
+- Keep a useful persistent-session automation's cadence below the cache TTL only when the measured savings outweigh the extra turns.
 
 ## Live regression tests
 

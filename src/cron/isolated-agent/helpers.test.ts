@@ -32,10 +32,16 @@ describe("text payload pickers", () => {
 });
 
 describe("cron delivery outcomes", () => {
-  it("keeps NO_REPLY as a silent heartbeat acknowledgement", () => {
+  it("treats the retired heartbeat acknowledgement as ordinary output", () => {
+    const payload = { text: "HEARTBEAT_OK" };
+    const outcome = resolveCronPayloadOutcome({ payloads: [payload] });
+    expect(outcome.deliveryDisposition).toEqual({ kind: "visible" });
+    expect(outcome.deliveryPayloads).toEqual([payload]);
+  });
+  it("keeps NO_REPLY as a silent silent acknowledgement", () => {
     expect(
       resolveCronPayloadOutcome({ payloads: [{ text: "NO_REPLY" }] }).deliveryDisposition,
-    ).toEqual({ kind: "heartbeat", controlOnly: true });
+    ).toEqual({ kind: "silent", controlOnly: true });
   });
 
   it("keeps media visible even when its text is a silent acknowledgement", () => {

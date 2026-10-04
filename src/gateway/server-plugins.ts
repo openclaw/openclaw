@@ -4,6 +4,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { allowsProcessHomeSessionScan } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { publicReplyOptions } from "../plugin-sdk/reply-options.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
 import type {
@@ -251,6 +252,7 @@ function createGatewayPluginRuntimeBindings(
         const run = async () =>
           await dispatchLowLevelChannelReplyFromConfig({
             ...params,
+            replyOptions: publicReplyOptions(params.replyOptions),
             ...(sessionWorkerPlacementContext ? { sessionWorkerPlacementContext } : {}),
           });
         return resolveBoundGatewayContext

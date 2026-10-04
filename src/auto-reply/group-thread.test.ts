@@ -17,7 +17,7 @@ import {
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
 import type { PluginHookReplyPayloadSendingEvent } from "../plugins/hook-types.js";
-import { dispatchInboundMessage } from "./dispatch.js";
+import { dispatchInboundMessageInternal } from "./dispatch.js";
 import { resolveGroupThreadConfig } from "./group-thread-config.js";
 import { buildThreadingToolContext } from "./reply/agent-runner-utils.js";
 import { createReplyTurnLedger } from "./reply/dispatch-from-config.turn-ledger.js";
@@ -113,7 +113,7 @@ function dispatch(
     deliverPrepared: (plan, info) => deliver(plan.payload, info),
   });
   const text = params.text ?? "Discuss the proposal.";
-  const done = dispatchInboundMessage({
+  const done = dispatchInboundMessageInternal({
     cfg: params.cfg ?? config(),
     ctx: {
       Body: text,

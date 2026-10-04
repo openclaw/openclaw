@@ -1,11 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
 import { FailoverError } from "../../agents/failover-error.js";
-import {
-  formatBillingErrorMessage,
-  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
-  renderHeartbeatRunFailureCopy,
-} from "../../agents/failover/user-copy.js";
+import { formatBillingErrorMessage } from "../../agents/failover/user-copy.js";
 import {
   AgentHarnessPreflightError,
   AgentHarnessSessionSupersededError,
@@ -588,44 +584,27 @@ describe("executeAgentTurn: terminal failures", () => {
     }
   });
 
-  it("uses heartbeat failure copy for raw external errors during heartbeat runs", async () => {
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new Error('Command lane "main" task timed out after 120000ms'),
-    );
-
+  it.each([
+    new Error("opaque-private-provider-detail"),
+    new AgentHarnessPreflightError("opaque-private-preflight-detail"),
+  ])("uses ordinary diagnostic policy for required event failures: %s", async (error) => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(error);
+    const followupRun = createFollowupRun();
+    followupRun.run.internalEventExecution = { onStarted: vi.fn(), onTerminal: vi.fn() };
+    followupRun.run.terminalReplyExpectation = "required";
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams(),
-      isHeartbeat: true,
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      opts: { internalEventExecution: followupRun.run.internalEventExecution },
     });
 
     expect(result.kind).toBe("final");
     if (result.kind !== "final") {
       throw new Error("expected final reply");
     }
-    expect(result.payload.text).toBe(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT);
-    expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
-    expect(result.payload.text).not.toContain("/new");
-  });
-
-  it("includes heartbeat preflight reasons in terminal failure replies", async () => {
-    const message =
-      "Codex session became active in another runner; wait for it to finish before continuing";
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(new AgentHarnessPreflightError(message));
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams(),
-      isHeartbeat: true,
-    });
-
-    expect(result.kind).toBe("final");
-    if (result.kind !== "final") {
-      throw new Error("expected final reply");
-    }
-    expect(result.payload.text).toBe(renderHeartbeatRunFailureCopy(message));
+    expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
     expect(result.payload.isError).toBe(true);
-    expect(result.payload.text).not.toContain("/new");
+    expect(result.payload.text).not.toContain(error.message);
   });
 
   it.each([

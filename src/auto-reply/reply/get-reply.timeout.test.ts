@@ -7,7 +7,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
-import { getReplyFromConfig } from "./get-reply.js";
+import { getReplyFromConfigInternal } from "./get-reply.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 
 vi.mock("../../agents/embedded-agent.js", async (importOriginal) => ({
@@ -43,7 +43,7 @@ async function runReply(
     commands: { text: true },
   });
   await state.writeConfig(cfg);
-  const reply = await getReplyFromConfig(
+  const reply = await getReplyFromConfigInternal(
     finalizeInboundContext({
       Provider: "webchat",
       Surface: "webchat",

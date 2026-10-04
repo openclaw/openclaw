@@ -64,6 +64,8 @@ describe("tool schema hints", () => {
     ({ schema, input }) => {
       expect(compactToolInputHint(schema)).toBe(input);
       expect(compactToolOutputHint(schema)).toBe("number");
+      expect(toolSchemaDeclaration(schema)).toBe(input);
+      expect(toolSchemaDeclaration(schema, "output")).toBe("number");
     },
   );
 

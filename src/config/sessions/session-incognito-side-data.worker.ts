@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { mutateAcpSessionEntryInWorker } from "../../acp/runtime/session-meta-entry.worker.js";
-import type { HeartbeatOutcomeWorkerOperations } from "../../infra/heartbeat-outcome-store.worker.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
@@ -21,7 +20,7 @@ import { listSessionReactionsInDatabase } from "./session-reaction-store.read.js
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import type { SessionSharingWorkerOperations } from "./session-sharing-store.types.js";
 
-type DomainOperations = SessionSharingWorkerOperations & HeartbeatOutcomeWorkerOperations;
+type DomainOperations = SessionSharingWorkerOperations;
 type Command = SqliteWorkerCommand<IncognitoSideDataOperations>;
 
 /** Adapters borrow the actor connection; domain kernels still own their transactions. */
@@ -71,9 +70,7 @@ export function createIncognitoSideDataWorker(
       const module =
         command.type.startsWith("session.sharing.") || command.type === "session.category.apply"
           ? runtimeProcessEntrypoints.sessionSharingStore
-          : command.type.startsWith("session.heartbeat.")
-            ? runtimeProcessEntrypoints.heartbeatOutcomeStore
-            : undefined;
+          : undefined;
       if (module) {
         binding = {
           id: randomUUID(),
@@ -139,10 +136,6 @@ export function createIncognitoSideDataWorker(
               keys = prepared;
               return executeDomain({ type: "category.apply", input });
             }
-            case "session.heartbeat.persist":
-              return executeDomain({ type: "persist", input: command.input });
-            case "session.heartbeat.claim":
-              return executeDomain({ type: "claim", input: command.input });
             case "session.reaction.set":
               return reactions.execute(command, context);
             case "session.category.keys":

@@ -75,7 +75,7 @@ describe("cron recovery run identity", () => {
       isAgentAvailable: () => true,
       log: logger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
+      enqueueSessionEvent: vi.fn(),
       evaluateCronTrigger,
       runIsolatedAgentJob,
     };

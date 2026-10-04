@@ -7,6 +7,7 @@ import {
 } from "../cron/skill-collection-review-monitor.js";
 import { partitionSystemMonitors } from "../cron/system-monitor-jobs.js";
 import type { CronJob } from "../cron/types.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 
 type SkillReviewJobCron = Pick<GatewayCronServiceContract, "add" | "list" | "remove">;
@@ -27,7 +28,12 @@ export async function reconcileSkillCollectionReviewJobs(params: {
   }
   params.commitGuard?.();
 
-  const specs = resolveSkillCollectionReviewMonitorSpecs(params.cfg, jobs);
+  const { deviceId } = await loadOrCreateProcessDeviceIdentityAsync();
+  params.commitGuard?.();
+  const specs = resolveSkillCollectionReviewMonitorSpecs(params.cfg, jobs, {
+    schedulerSeed: deviceId,
+  });
+  params.commitGuard?.();
   const { retained, duplicates } = partitionSystemMonitors(
     jobs,
     skillCollectionReviewMonitorAgentId,
@@ -56,7 +62,7 @@ export async function reconcileSkillCollectionReviewJobs(params: {
       }),
     );
   }
-  for (const spec of specs) {
+  for await (const spec of specs) {
     await runMutation(spec.agentId, "cron-skill-review: monitor convergence failed", () => {
       retained.delete(spec.agentId);
       return params.cron.add(spec.input, {

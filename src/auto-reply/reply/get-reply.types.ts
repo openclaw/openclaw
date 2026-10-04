@@ -25,6 +25,10 @@ import type { FollowupQueueDisposition, QueuedFollowupReplyDelivery } from "./qu
 import type { ReplyOptionsWithAdmissionTicket } from "./reply-admission-ticket.js";
 import type { ReplyOptionsWithOperationRunState } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
+import type {
+  ScheduledSessionAutomation,
+  SessionEventExecution,
+} from "./session-event-contract.js";
 
 export type ReplySessionBinding = {
   sessionKey?: string;
@@ -43,6 +47,11 @@ export type ReplyRunVerbosity = {
 };
 
 type InternalReplySessionOptions = {
+  /** Cron-owned occurrence authority, retained through ordinary session execution. */
+  scheduledAutomation?: ScheduledSessionAutomation;
+  modelOverride?: string;
+  /** Producer callbacks follow this occurrence through queueing and delivery. */
+  internalEventExecution?: SessionEventExecution;
   /** Source-owned cancellation retained when dispatch borrows an active lane for queued followups. */
   queuedFollowupAbortSignal?: AbortSignal;
   /** Host-minted original operator authority; never restored from session metadata. */
@@ -71,7 +80,7 @@ type InternalReplySessionOptions = {
   onDeliberateSilentTerminalReply?: () => void;
   /** Source-specific final delivery, e.g. a committed answer in the current WebChat history. */
   resolveReplyDelivery?: ReplyDeliveryObserver;
-  /** Retire the run's bundle MCP runtime at settlement. Set by one-shot isolated runs (isolated heartbeats) whose session ID is never reused. */
+  /** Retire the run's bundle MCP runtime at settlement for one-shot sessions. */
   cleanupBundleMcpOnRunEnd?: boolean;
   /** Defers the child-completion wake until the visible waiting status is delivered. */
   onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;
@@ -92,6 +101,8 @@ type InternalReplySessionOptions = {
   queueModeOverride?: QueueMode;
   /** Dispatch-owned operation used to defer hooks until durable run admission. */
   replyOperation?: ReplyOperation;
+  /** Retain exact reply custody before pre-adoption writes can outlive cancellation. */
+  onReplyOperationOwned?: (operation: ReplyOperation) => void;
   skillOverrides?: SessionToolOverrides["skills"];
   /** Gateway-private optimistic-concurrency constraint for an operator-requested proposal revision. */
   skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;

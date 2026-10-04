@@ -729,13 +729,13 @@ describe("terminal resolution", () => {
     });
   });
 
-  it("settles a heartbeat reasoning-only stop from the prepared silence contract", async () => {
+  it("settles an automation reasoning-only stop from the prepared silence contract", async () => {
     const assistant = buildEmbeddedRunnerAssistant({
       content: [
         {
           type: "thinking",
           thinking: "internal reasoning",
-          thinkingSignature: JSON.stringify({ id: "rs_heartbeat", type: "reasoning" }),
+          thinkingSignature: JSON.stringify({ id: "rs_automation", type: "reasoning" }),
         },
       ],
     });
@@ -750,7 +750,7 @@ describe("terminal resolution", () => {
       attempt,
       attemptAssistant: assistant,
       runParams: {
-        trigger: "heartbeat",
+        trigger: "cron",
         allowEmptyAssistantReplyAsSilent: true,
         terminalReplyExpectation: "optional",
       },
@@ -767,7 +767,7 @@ describe("terminal resolution", () => {
     const undeclared = makeTerminalInput({
       attempt,
       attemptAssistant: assistant,
-      runParams: { trigger: "heartbeat", allowEmptyAssistantReplyAsSilent: false },
+      runParams: { trigger: "cron", allowEmptyAssistantReplyAsSilent: false },
     });
     await expect(resolveEmbeddedRunTerminal(undeclared)).resolves.toEqual({ action: "retry" });
   });

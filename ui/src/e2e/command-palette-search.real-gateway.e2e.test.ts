@@ -197,7 +197,6 @@ const suite = createControlUiE2eSuite({
             workspace: owner.state.workspaceDir,
             model: "fixture/search-model",
             modelPolicy: { allow: ["fixture/*"] },
-            heartbeat: { every: "0m" },
           },
           entries: Object.fromEntries(
             agentIds.map((id) => [id, { identity: { name: `Synthetic ${id} assistant` } }]),

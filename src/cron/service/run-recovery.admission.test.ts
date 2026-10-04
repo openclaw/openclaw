@@ -57,7 +57,7 @@ it("lists behind healthy recovery while a writer is held, and retires a waiting 
     nowMs: () => nowMs,
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSessionEvent: vi.fn(),
     runIsolatedAgentJob: runner,
     runCommandJob: runner,
     onEvent,

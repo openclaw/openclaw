@@ -1718,14 +1718,14 @@ describe("gateway server chat", () => {
 
   test("chat.send preserves sessions and denies operator.write reset triggers", async () => {
     const message = "/reset soft Create a note";
-    const { getReplyFromConfig } = await import("../auto-reply/reply/get-reply.js");
+    const { getReplyFromConfigInternal } = await import("../auto-reply/reply/get-reply.js");
     const { withFullRuntimeReplyConfig } =
       await import("../auto-reply/reply/get-reply-fast-path.js");
     const replyRun = await import("../auto-reply/reply/get-reply-run.js");
     const runSpy = vi.spyOn(replyRun, "runPreparedReply").mockResolvedValue(undefined);
     // Keep real command/session dispatch; only intercept the model-run boundary.
     mockGetReplyFromConfigOnce((ctx, opts, cfg) =>
-      getReplyFromConfig(ctx, opts, cfg ? withFullRuntimeReplyConfig(cfg) : cfg),
+      getReplyFromConfigInternal(ctx, opts, cfg ? withFullRuntimeReplyConfig(cfg) : cfg),
     );
     try {
       await withMainSessionStore(async () => {

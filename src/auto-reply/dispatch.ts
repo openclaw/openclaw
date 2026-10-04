@@ -180,7 +180,7 @@ type DispatchInboundResult = DispatchFromConfigResult;
 export { settleReplyDispatcher } from "./dispatch-dispatcher.js";
 
 /** Dispatches one finalized inbound message through reply resolution and queued delivery. */
-export async function dispatchInboundMessage(params: {
+export async function dispatchInboundMessageInternal(params: {
   ctx: MsgContext | FinalizedMsgContext;
   cfg: OpenClawConfig;
   dispatcher: ReplyDispatcher;
@@ -263,7 +263,7 @@ export async function dispatchInboundMessage(params: {
 }
 
 type BufferedInboundDispatcherParams = Omit<
-  Parameters<typeof dispatchInboundMessage>[0],
+  Parameters<typeof dispatchInboundMessageInternal>[0],
   "dispatcher" | "replyPayloadRunState" | "outboundHooks" | "onSettled"
 > & {
   dispatcherOptions: ReplyDispatcherWithTypingOptions;
@@ -347,7 +347,7 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
     : replyOptions.onTypingController;
   markReplyPayloadSendingBeforeDeliverInstalled(dispatcher, replyPayloadBeforeDeliver);
   try {
-    return await dispatchInboundMessage({
+    return await dispatchInboundMessageInternal({
       ctx: finalized,
       cfg: params.cfg,
       dispatcher,
@@ -375,7 +375,7 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
   }
 }
 
-export async function dispatchInboundMessageWithBufferedDispatcher(
+export async function dispatchInboundMessageWithBufferedDispatcherInternal(
   params: BufferedInboundDispatcherParams,
 ): Promise<DispatchInboundResult> {
   return await dispatchInboundMessageWithBufferedDispatcherCore(params, {
@@ -440,7 +440,7 @@ async function dispatchInboundMessageWithPlainDispatcherCore(
     silentReplyContext: params.dispatcherOptions.silentReplyContext ?? silentReplyContext,
   });
   markReplyPayloadSendingBeforeDeliverInstalled(dispatcher, replyPayloadBeforeDeliver);
-  return await dispatchInboundMessage({
+  return await dispatchInboundMessageInternal({
     ctx: params.ctx,
     cfg: params.cfg,
     dispatcher,
@@ -453,7 +453,7 @@ async function dispatchInboundMessageWithPlainDispatcherCore(
 }
 
 /** Creates a plain dispatcher, installs global send hooks, and dispatches the inbound message. */
-export async function dispatchInboundMessageWithDispatcher(
+export async function dispatchInboundMessageWithDispatcherInternal(
   params: Omit<PlainInboundDispatcherParams, "onSessionMetadataChanges">,
 ): Promise<DispatchInboundResult> {
   return await dispatchInboundMessageWithPlainDispatcherCore(params, "legacy");

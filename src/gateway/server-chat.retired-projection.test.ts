@@ -7,7 +7,6 @@ import {
   withAgentRunLifecycleGeneration,
 } from "../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
-import { registerChatRun } from "./server-chat.agent-events.test-helpers.js";
 import {
   createAgentEventHandler,
   createChatRunState,
@@ -18,9 +17,6 @@ import {
 const sessionFixture = vi.hoisted(() => ({ updatedAt: 50 }));
 
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
-vi.mock("../infra/heartbeat-visibility.js", () => ({
-  resolveHeartbeatVisibility: () => ({ showOk: false, showAlerts: true, useIndicator: true }),
-}));
 vi.mock("./session-utils.js", async () => {
   const { resolveSessionStoreIdentity } = await import("./session-store-key.js");
   return {
@@ -94,7 +90,7 @@ describe("retired execution event projection", () => {
     });
   }
 
-  it.each([false, true])("preserves hidden heartbeat tool suppression (%s)", (isHeartbeat) => {
+  it("preserves tool results for hidden session subscribers after cleanup", () => {
     const receiver = withReceiver(() => {
       registerAgentRunContext("late", {
         agentId: "delivery",
@@ -102,7 +98,6 @@ describe("retired execution event projection", () => {
         sessionId: "session",
         isControlUiVisible: false,
         projectSessionMessages: true,
-        isHeartbeat,
         verboseLevel: "full",
         registeredAt: 100,
       });
@@ -110,7 +105,7 @@ describe("retired execution event projection", () => {
       emitToolResult("late");
     });
     const delivered = receiver.broadcastToConnIds.mock.calls.filter(([name]) => name === "agent");
-    expect(delivered).toHaveLength(isHeartbeat ? 0 : 1);
+    expect(delivered).toHaveLength(1);
     expect(receiver.broadcast).not.toHaveBeenCalled();
   });
 
@@ -130,75 +125,6 @@ describe("retired execution event projection", () => {
     expect(delivered).toHaveLength(1);
     expect(delivered[0]?.[2]).toMatchObject({ data: { result: { value: "retained" } } });
   });
-
-  const alert = `Service outage requires action. ${"Repair is still required. ".repeat(20)}`;
-  it.each([
-    { text: "HEARTBEAT_OK", expected: undefined },
-    { text: `HEARTBEAT_OK ${alert}`, expected: alert.trim() },
-  ])("preserves heartbeat final ACK/alert policy after cleanup ($text)", ({ text, expected }) => {
-    const receiver = withReceiver(() => {
-      registerAgentRunContext("heartbeat", {
-        agentId: "delivery",
-        sessionKey: "agent:delivery:late",
-        sessionId: "session",
-        isHeartbeat: true,
-      });
-      clearAgentRunContext("heartbeat");
-      emitAgentEvent({ runId: "heartbeat", stream: "assistant", data: { text, delta: text } });
-      emitAgentEvent({ runId: "heartbeat", stream: "lifecycle", data: { phase: "end" } });
-    });
-    const chat = receiver.broadcast.mock.calls.filter(([name]) => name === "chat");
-    expect(chat.filter(([, payload]) => payload.state === "delta")).toEqual([]);
-    const final = chat.filter(([, payload]) => payload.state === "final");
-    expect(final).toHaveLength(1);
-    if (expected) {
-      expect(final[0]?.[1]).toMatchObject({ message: { content: [{ text: expected }] } });
-    } else {
-      expect(final[0]?.[1].message).toBeUndefined();
-    }
-  });
-
-  it.each([false, undefined])(
-    "keeps heartbeat alias suppression separate from source flags (%s)",
-    (sourceFlag) => {
-      const receiver = withReceiver((chatRunState) => {
-        registerAgentRunContext("client", {
-          agentId: "delivery",
-          sessionKey: "agent:delivery:late",
-          isHeartbeat: true,
-        });
-        registerAgentRunContext("source", {
-          agentId: "delivery",
-          sessionKey: "agent:delivery:late",
-          isHeartbeat: sourceFlag,
-          verboseLevel: "full",
-        });
-        registerChatRun(chatRunState, "source", "agent:delivery:late", "client", {
-          agentId: "delivery",
-        });
-        emitAgentEvent({
-          runId: "source",
-          stream: "assistant",
-          data: { text: "A source event", delta: "A source event" },
-        });
-        emitToolResult("source", "late");
-      });
-      const source = receiver.broadcast.mock.calls.find(
-        ([name, payload]) => name === "agent" && payload.stream === "assistant",
-      )?.[1];
-      expect(source).toBeDefined();
-      if (sourceFlag === undefined) {
-        expect(source).not.toHaveProperty("isHeartbeat");
-      } else {
-        expect(source).toHaveProperty("isHeartbeat", sourceFlag);
-      }
-      expect(
-        receiver.nodeSendToSession.mock.calls.filter(
-          ([, name, payload]) => name === "agent" && payload.stream === "tool",
-        ),
-      ).toEqual([]);
-    },
-  );
 
   it("uses the selected agent for newer global-session verbosity", () => {
     sessionFixture.updatedAt = 200;

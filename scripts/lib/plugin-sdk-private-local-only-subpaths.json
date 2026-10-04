@@ -64,7 +64,6 @@
   "gateway-config-runtime",
   "global-singleton",
   "group-activation",
-  "heartbeat-runtime",
   "host-runtime",
   "html-entity-runtime",
   "image-generation",

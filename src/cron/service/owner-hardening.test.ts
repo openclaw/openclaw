@@ -96,10 +96,10 @@ beforeEach(async () => {
         storePath,
         cronEnabled: true,
         log: logger,
-        enqueueSystemEvent() {
+        enqueueSystemEvent() {},
+        enqueueSessionEvent() {
           if (mode === "manual-postcommit-crash") process.kill(process.pid, "SIGKILL");
         },
-        requestHeartbeat() {},
         evaluateCronTrigger: async () => {
           process.stdout.write("trigger\\n");
           while (!fs.existsSync(releasePath)) await sleep(10);
@@ -270,7 +270,7 @@ function makeParentService(
     cronEnabled: true,
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSessionEvent: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     runCommandJob,
   });

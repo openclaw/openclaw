@@ -5,6 +5,7 @@ import {
   normalizeOptionalStringifiedId,
   normalizeOptionalThreadValue,
 } from "@openclaw/normalization-core/string-coerce";
+import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-reply-skip-reason.js";
 import type { CronFailureDestinationConfig } from "../config/types.cron.js";
 import { resolveTargetPrefixedChannel } from "../infra/outbound/channel-target-prefix.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
@@ -13,23 +14,52 @@ import {
   assertCanonicalCronDeliveryMode,
   hasCanonicalCronDeliveryMode,
 } from "./store/delivery-codec.js";
-import type { CronDelivery, CronJob, CronMessageChannel } from "./types.js";
+import type { CronDelivery, CronJob, CronMessageChannel, CronRunOutcome } from "./types.js";
 
 /** Normalized routing plan for a cron job's primary delivery behavior. */
 export type CronDeliveryPlan = Pick<
   CronDelivery,
-  "mode" | "channel" | "to" | "threadId" | "accountId"
+  "mode" | "target" | "directPolicy" | "channel" | "to" | "threadId" | "accountId"
 > & {
   source: "delivery";
   requested: boolean;
 };
 
+/** An owner-only announcement without an authorized route has no work to admit. */
+export function resolveCronOwnerDeliverySkip(context: {
+  deliveryPlan: CronDeliveryPlan;
+  deliveryRequested: boolean;
+  resolvedDelivery:
+    | { ok: true }
+    | { ok: false; error: Error; deliverySuppressionReason?: NormalizeReplySkipReason };
+}): (CronRunOutcome & { delivered: false; deliveryAttempted: false }) | undefined {
+  if (
+    !context.deliveryRequested ||
+    context.deliveryPlan.target !== "owner" ||
+    context.resolvedDelivery.ok ||
+    context.resolvedDelivery.deliverySuppressionReason
+  ) {
+    return undefined;
+  }
+  return {
+    status: "skipped",
+    executionStarted: false,
+    delivered: false,
+    deliveryAttempted: false,
+    summary: context.resolvedDelivery.error.message,
+  };
+}
+
 /** Returns whether a delivery plan names a concrete channel, recipient, thread, or account. */
 export function hasExplicitCronDeliveryTarget(
-  plan: Pick<CronDeliveryPlan, "channel" | "to" | "threadId" | "accountId">,
+  plan: Pick<CronDeliveryPlan, "target" | "channel" | "to" | "threadId" | "accountId">,
 ): boolean {
   return Boolean(
-    (plan.channel && plan.channel !== "last") || plan.to || plan.threadId != null || plan.accountId,
+    plan.target ||
+    (plan.channel && plan.channel !== "last") ||
+    plan.to ||
+    plan.threadId != null ||
+    plan.accountId,
   );
 }
 
@@ -64,6 +94,8 @@ export function resolveCronDeliveryPlan(
         : deliveryChannel;
     return {
       mode: resolvedMode,
+      target: delivery.target,
+      directPolicy: delivery.directPolicy,
       channel: resolvedMode === "webhook" ? undefined : channel,
       to,
       threadId: resolvedMode === "webhook" ? undefined : deliveryThreadId,

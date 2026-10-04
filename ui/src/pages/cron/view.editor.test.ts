@@ -466,7 +466,7 @@ describe("cron view editor", () => {
     );
   });
 
-  it("highlights locked command payloads as shell and keeps heartbeat payloads plain", () => {
+  it("highlights locked command payloads as shell", () => {
     const job = createJob("job-command", {
       name: "Backup",
       payload: { kind: "script", script: "" },
@@ -486,19 +486,6 @@ describe("cron view editor", () => {
     expect(payload.textContent).toBe("echo $HOME");
     expect(payload.querySelector(".hljs-built_in")?.textContent).toBe("echo");
     expect(findToggleByLabel(command, "Condition trigger")).not.toBeNull();
-
-    const heartbeat = renderView({
-      jobs: [job],
-      editingJob: job,
-      form: {
-        ...DEFAULT_CRON_FORM,
-        name: job.name,
-        payloadKind: "heartbeat",
-        payloadLocked: true,
-        payloadText: "",
-      },
-    });
-    expect(heartbeat.querySelector("#cron-payload-text")).toBeInstanceOf(HTMLTextAreaElement);
   });
 
   it("disables submit and lists blocking fields when validation fails", () => {
@@ -583,7 +570,6 @@ describe("cron view editor", () => {
   });
 
   it.each([
-    { declarationKey: "heartbeat:test", payload: { kind: "heartbeat" as const } },
     {
       declarationKey: "skill-collection-review:test",
       payload: { kind: "agentTurn" as const, message: "Review the Workshop collection." },

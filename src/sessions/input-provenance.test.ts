@@ -130,6 +130,15 @@ describe("isAgentMediatedCompletionSourceTool", () => {
 });
 
 describe("shouldPreserveUserFacingSessionStateForInputProvenance", () => {
+  it("preserves user-selected state for internal system events", () => {
+    expect(
+      shouldPreserveUserFacingSessionStateForInputProvenance({
+        kind: "internal_system",
+        sourceTool: "session",
+      }),
+    ).toBe(true);
+  });
+
   it.each([
     "agent_harness_task",
     "exec_approval_followup",

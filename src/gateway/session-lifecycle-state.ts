@@ -35,7 +35,6 @@ type LifecyclePhase = "start" | "end" | "error";
 
 type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
   controlUiVisible?: boolean;
-  isHeartbeat?: boolean;
   contextClaimId?: string;
   runId?: string;
   clientRunId?: string;
@@ -208,7 +207,6 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
     ...(terminal &&
     !interruptedForRestart &&
     params.event.controlUiVisible === true &&
-    params.event.isHeartbeat !== true &&
     endedAt !== undefined
       ? { lastActivityAt: Math.max(existing?.lastActivityAt ?? 0, endedAt) }
       : {}),

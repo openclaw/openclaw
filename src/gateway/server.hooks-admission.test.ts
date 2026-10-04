@@ -2,13 +2,23 @@
 import fs from "node:fs/promises";
 import { Agent, request as httpRequest } from "node:http";
 import path from "node:path";
-import { afterEach, assert, describe, expect, test, vi, type TestContext } from "vitest";
+import {
+  afterEach,
+  assert,
+  beforeEach,
+  describe,
+  expect,
+  test,
+  vi,
+  type TestContext,
+} from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { DEFAULT_WEBHOOK_MAX_BODY_BYTES } from "../infra/http-body.js";
 import { drainSystemEvents, peekSystemEventEntries } from "../infra/system-events.js";
@@ -31,6 +41,16 @@ const HOOK_TOKEN = "hook-secret";
 const ROTATED_HOOK_TOKEN = "hook-secret-rotated";
 
 const fixtureLifetime = createFixtureLifetime();
+const enqueueSessionEvent = vi.fn<typeof sessionEvents.enqueueSessionEventForHost>();
+
+beforeEach(() => {
+  enqueueSessionEvent.mockReset().mockReturnValue({
+    id: "hook-event",
+    cancel: () => false,
+    settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
+  });
+  vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockImplementation(enqueueSessionEvent);
+});
 
 afterEach(async () => {
   await fixtureLifetime.cleanup();
@@ -255,6 +275,15 @@ function withRevokedHook(
                 { timeout: 2_000, interval: 10 },
               )
               .toBe(true);
+            expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
+              "before-reload",
+              expect.objectContaining({
+                agentId: "main",
+                sessionKey: mainSessionKey,
+                source: "hook",
+              }),
+            );
+            enqueueSessionEvent.mockClear();
             drainSystemEvents(mainSessionKey);
             const revoked = postHook(port, "/hooks/revoked", { text: "after-reload" }, "revoked");
             let response: Response;
@@ -307,6 +336,7 @@ function withRevokedHook(
                 event.text.includes("after-reload"),
               ),
             ).toBe(false);
+            expect(enqueueSessionEvent).not.toHaveBeenCalled();
             await afterRotation?.(port, socket);
           } finally {
             socket.close();
@@ -433,6 +463,7 @@ describe("gateway hook admission", () => {
       expect(response.status).toBe(204);
       expect(cronIsolatedRun).not.toHaveBeenCalled();
       expect(peekSystemEventEntries(resolveMainSessionKeyFromConfig())).toEqual([]);
+      expect(enqueueSessionEvent).not.toHaveBeenCalled();
     });
   });
 

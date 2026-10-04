@@ -32,9 +32,6 @@ import { activateGatewayScheduledServices } from "./server-runtime-services.js";
 import * as updateRunNotices from "./update-run-notice.runtime.js";
 import { startUpdateRunWatcher } from "./update-run-watcher.js";
 
-vi.mock("../infra/heartbeat-runner-scheduler.js", () => ({
-  startHeartbeatRunner: () => ({ stop() {}, updateConfig() {} }),
-}));
 vi.mock("../sessions/session-upstream-monitor.js", () => ({
   startSessionUpstreamMonitor: () => ({ stop() {} }),
 }));
@@ -57,7 +54,7 @@ afterEach(async () => {
   await watcher?.stop();
   await lifecycle?.stop();
   await services?.stopDeliveryRecovery();
-  services?.heartbeatRunner.stop();
+  await services?.stopScheduledServices();
   await scheduler?.stop();
   watcher = undefined;
   services = undefined;
@@ -86,7 +83,6 @@ it("recovers a watcher-owned update notice on its runtime state after ambient ro
   const recipient = "@owner:example.org";
   const cfg: OpenClawConfig = {
     commands: { ownerAllowFrom: [`matrix:${recipient}`] },
-    agents: { defaults: { heartbeat: { every: "0m" } } },
     skills: { workshop: { autonomous: { mode: "off" } } },
   };
   setRuntimeConfigSnapshot(cfg);

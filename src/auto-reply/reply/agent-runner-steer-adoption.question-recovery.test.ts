@@ -115,7 +115,7 @@ describe("question response custody through reply adoption", () => {
             sessionKey: key,
             touchActiveSessionEntry: async () => {},
             typing,
-            typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+            typingSignals: createTypingSignaler({ typing, mode: "never" }),
             toolAuthorityFingerprint: fingerprint,
           });
           expect(state.admission).toEqual({ status: "accepted", mode: "followup" });
@@ -197,7 +197,7 @@ describe("question response custody through reply adoption", () => {
           sessionKey: key,
           touchActiveSessionEntry: async () => {},
           typing,
-          typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+          typingSignals: createTypingSignaler({ typing, mode: "never" }),
           toolAuthorityFingerprint: fingerprint,
         });
       };
@@ -294,7 +294,7 @@ describe("question response custody through reply adoption", () => {
           sessionKey: key,
           touchActiveSessionEntry: async () => {},
           typing,
-          typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+          typingSignals: createTypingSignaler({ typing, mode: "never" }),
           toolAuthorityFingerprint: fingerprint,
         });
         void adoption.catch(() => undefined);
@@ -691,7 +691,6 @@ describe("question response custody through reply adoption", () => {
                   typingSignals: createTypingSignaler({
                     typing,
                     mode: "never",
-                    isHeartbeat: false,
                   }),
                   toolAuthorityFingerprint:
                     mode === "legacy-receipt" ? "incoming-authority" : fingerprint,

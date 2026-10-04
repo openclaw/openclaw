@@ -6,7 +6,6 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import { requestHeartbeat, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
 import { drainSystemEvents } from "../infra/system-events.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -86,7 +85,6 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
       const provider = api.runtime.modelAuth.resolveProviderIdForAuth(" Fixture ", { metadataSnapshot: { plugins: [] } });
       const system = api.runtime.system;
       system.enqueueSystemEvent("registration", { sessionKey: "prepared-runtime-system" });
-      system.requestHeartbeat({ source: "other", intent: "immediate", reason: "registration", coalesceMs: 0 });
       const asyncStore = api.runtime.state.openKeyedStore({ namespace: "registration", maxEntries: 2 });
       fs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify({ entries, selection, runtimePolicy, provider, config: api.runtime.config.current() }));
       api.registerCli(({ program }) => program.command("state-proof").action(async () => {
@@ -95,7 +93,6 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
         const chunks = runtime.channel.text.chunkText("channel runtime works", 100);
         const version = runtime.version;
         runtime.system.enqueueSystemEvent("materialized", { sessionKey: "prepared-runtime-system" });
-        runtime.system.requestHeartbeat({ source: "other", intent: "immediate", reason: "materialized", coalesceMs: 0 });
         const row = await asyncStore.lookup("before");
         fs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify({ chunks, version, row }));
       }), { commands: ["state-proof"] });
@@ -118,8 +115,6 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
     },
     async () => {
-      const heartbeat = vi.fn(async () => ({ status: "skipped" as const, reason: "disabled" }));
-      const disposeHeartbeat = setHeartbeatWakeHandler(heartbeat);
       try {
         const resolveRuntime = vi.spyOn(sdkAlias, "resolvePluginRuntimeModulePathWithDiagnostics");
         let fullRuntime: typeof import("./runtime/index.js") | null = null;
@@ -200,14 +195,8 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
         expect(configApi.current()).toBe(refreshedConfig);
         const state = runtime.state;
         const system = runtime.system;
-        expect(system.requestHeartbeat).toBe(requestHeartbeat);
         expect(system.runCommandWithTimeout).toBe(runCommandWithTimeout);
         expect(drainSystemEvents("agent:main:prepared-runtime-system")).toEqual(["registration"]);
-        await vi.waitFor(() =>
-          expect(heartbeat).toHaveBeenCalledWith(
-            expect.objectContaining({ reason: "registration" }),
-          ),
-        );
         const command = await system.runCommandWithTimeout(
           [process.execPath, "-e", 'process.stdout.write("system-ready")'],
           { timeoutMs: 1_000, killProcessTree: true },
@@ -272,11 +261,6 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
           "retained method",
         );
         expect(drainSystemEvents("agent:main:prepared-runtime-system")).toEqual(["materialized"]);
-        await vi.waitFor(() =>
-          expect(heartbeat).toHaveBeenCalledWith(
-            expect.objectContaining({ reason: "materialized" }),
-          ),
-        );
         expect(runtime.hooks).toBe(hooks);
         expect(runtime.nodes).toBe(nodes);
         for (const [key, facade] of [
@@ -294,7 +278,38 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
           expect(Reflect.set(runtime, key, {})).toBe(false);
           expect(runtime[key]).toBe(facade);
         }
-        expect(runtime.channel.reply.dispatchReplyFromConfig).toBe(dispatchReplyFromConfig);
+        const { dispatcher } = runtime.channel.reply.createReplyDispatcherWithTyping({
+          deliver: async () => {},
+        });
+        try {
+          const onReplyStart = vi.fn();
+          const replyOptions = {
+            onReplyStart,
+            operatorAuthority: { assertCurrent: vi.fn() },
+            preparedTtsPreferences: {
+              machinePrefsPath: "/synthetic/plugin-authored-tts-preferences.json",
+            },
+          };
+          const dispatchParams = {
+            ctx: { Body: "host dispatch probe", CommandAuthorized: false },
+            cfg: config,
+            dispatcher,
+            replyOptions,
+          };
+          const dispatched = { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+          dispatchReplyFromConfig.mockResolvedValueOnce(dispatched);
+
+          await expect(runtime.channel.reply.dispatchReplyFromConfig(dispatchParams)).resolves.toBe(
+            dispatched,
+          );
+          expect(dispatchReplyFromConfig).toHaveBeenCalledExactlyOnceWith({
+            ...dispatchParams,
+            replyOptions: { onReplyStart },
+          });
+          expect(replyOptions.operatorAuthority.assertCurrent).not.toHaveBeenCalled();
+        } finally {
+          await runtime.channel.reply.settleReplyDispatcher({ dispatcher });
+        }
         for (const key of [
           "gateway",
           "subagent",
@@ -378,7 +393,6 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
         }
         expect(resolveRuntime).toHaveBeenCalledTimes(1);
       } finally {
-        disposeHeartbeat();
         drainSystemEvents("agent:main:prepared-runtime-system");
       }
     },

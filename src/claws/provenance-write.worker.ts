@@ -1,8 +1,10 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import {
   CLAW_PACKAGE_LIFECYCLE_LEASE_SCOPE,
   clawPackageLifecycleLeaseKey,
@@ -11,19 +13,44 @@ import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "../state/openclaw-state-lease-worker.js";
 import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease.types.js";
-import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
+import type { WorkerOperationContext } from "../state/worker-operation-registry.js";
 import { rowToRef, selectMcpRefs } from "./mcp-records.js";
+import { readClawMonitorCleanupSnapshotInDatabase } from "./monitor-cleanup-read.kernel.js";
+import type { ClawMonitorCleanupSnapshot } from "./monitor-cleanup.read.types.js";
 import type {
   ClawPackageRefStatus,
   PersistedClawPackageRef,
 } from "./package-extension-provenance.js";
 import { updateClawPackageRefStatusInDatabase } from "./package-status.kernel.js";
+import { mutatePortableHeartbeatInWorker } from "./portable-heartbeat-write.kernel.js";
+import type { PortableHeartbeatMutation } from "./portable-heartbeat-write.types.js";
 import {
   readClawInstallRecordFromDatabase,
   readClawOrphanWorkspaceInDatabase,
 } from "./provenance-read.kernel.js";
+import type { ClawProvenanceWriteOperations } from "./provenance-write.worker-contract.js";
 
 export const clawProvenanceOperations = {
+  "clawProvenance.portableHeartbeat": (
+    input: PortableHeartbeatMutation & { nonce: string },
+    { open, stateOptions },
+  ) => mutatePortableHeartbeatInWorker(open(), input, stateOptions()),
+  "clawProvenance.monitorCleanupGuard": (
+    input: { agentId: string; storePath: string; expected: ClawMonitorCleanupSnapshot },
+    { open, stateOptions },
+  ) =>
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        const snapshot = readClawMonitorCleanupSnapshotInDatabase(db, input);
+        if (!isDeepStrictEqual(snapshot, input.expected)) {
+          throw new Error(
+            "Attached scheduled work or Claw removal ownership changed before monitor cancellation.",
+          );
+        }
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      },
+      { database: open(), ...stateOptions() },
+    ),
   "clawProvenance.packageStatus": (
     input: {
       ref: PersistedClawPackageRef;
@@ -120,4 +147,9 @@ export const clawProvenanceOperations = {
       },
       { database: open(), ...stateOptions() },
     ),
-} satisfies WorkerOperationHandlers;
+} satisfies {
+  [Key in keyof ClawProvenanceWriteOperations]: (
+    input: ClawProvenanceWriteOperations[Key]["input"],
+    context: WorkerOperationContext,
+  ) => ClawProvenanceWriteOperations[Key]["output"];
+};

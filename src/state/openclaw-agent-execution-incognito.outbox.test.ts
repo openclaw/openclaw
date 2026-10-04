@@ -102,25 +102,25 @@ async function createTurn(name: string, owner = actor, agentId = "main"): Promis
 async function accept(turn: Turn, owner = actor) {
   await owner.sessions.outbox(authority, {
     type: "session.outbox.enqueueIntent",
-    input: { ...turn, engineId, isHeartbeat: false, admission: turn.boundary.admission },
+    input: { ...turn, engineId, admission: turn.boundary.admission },
   });
   await owner.sessions.outbox(authority, {
     type: "session.outbox.acceptIntent",
-    input: { ...turn, engineId, isHeartbeat: false },
+    input: { ...turn, engineId },
   });
 }
 
 function publish(turn: Turn, source = authority, owner = actor) {
   return owner.sessions.outbox(source, {
     type: "session.outbox.publishClosedTurn",
-    input: { ...turn, engineId, isHeartbeat: false, maxBytes: 10_000, maxEvents: 10 },
+    input: { ...turn, engineId, maxBytes: 10_000, maxEvents: 10 },
   });
 }
 
 function recover(turn: Turn) {
   return actor.sessions.outbox(authority, {
     type: "session.outbox.prepareRun",
-    input: { ...turn, engineId, isHeartbeat: false },
+    input: { ...turn, engineId },
   });
 }
 

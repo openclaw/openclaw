@@ -80,7 +80,6 @@ export function collectConfiguredModelRefs(
     for (const capability of ["image", "video", "music"] as const) {
       collectModelConfig(`${path}.mediaModels.${capability}`, mediaModels[capability], "literal");
     }
-    pushModelRef(`${path}.heartbeat.model`, asOptionalRecord(agent.heartbeat)?.model, "selector");
     collectModelConfig(
       `${path}.subagents.model`,
       asOptionalRecord(agent.subagents)?.model,

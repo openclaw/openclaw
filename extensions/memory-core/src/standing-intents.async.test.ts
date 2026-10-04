@@ -505,31 +505,28 @@ describe("standing-intent admitted operations", () => {
     }
   });
 
-  it.each(["heartbeat", "cron"] as const)(
-    "awaits registered %s lifecycle maintenance",
-    async (trigger) => {
-      const existing = await seed(true);
-      const { runner } = await registerHooks();
-      const held = await holdWriter();
-      const work = keep(
-        runner.runBeforeAgentReply(
-          { cleanedBody: "ordinary scheduled turn" },
-          { ...context, trigger },
-        ),
-      );
-      await expectWaiting(work, held.entered);
-      expect(readStored(existing.id)?.status).toBe("armed");
-      const observation = observeStandingIntentHostSql();
-      try {
-        held.release();
-        await work;
-      } finally {
-        observation.restore();
-      }
-      expect(readStored(existing.id)?.status).toBe("expired");
-      expectNoHostStandingIntentSql(observation);
-    },
-  );
+  it("awaits registered scheduled-turn lifecycle maintenance", async () => {
+    const existing = await seed(true);
+    const { runner } = await registerHooks();
+    const held = await holdWriter();
+    const work = keep(
+      runner.runBeforeAgentReply(
+        { cleanedBody: "ordinary scheduled turn" },
+        { ...context, trigger: "cron" },
+      ),
+    );
+    await expectWaiting(work, held.entered);
+    expect(readStored(existing.id)?.status).toBe("armed");
+    const observation = observeStandingIntentHostSql();
+    try {
+      held.release();
+      await work;
+    } finally {
+      observation.restore();
+    }
+    expect(readStored(existing.id)?.status).toBe("expired");
+    expectNoHostStandingIntentSql(observation);
+  });
 
   it("refuses a queued create when its original database path is replaced", async () => {
     const replacementState = tempDirs.make("standing-intent-replacement-");
