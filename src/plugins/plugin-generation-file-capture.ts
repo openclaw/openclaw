@@ -138,14 +138,20 @@ export function createPluginGenerationFileCapture({
         hardlinkedSources.add(target);
       }
       fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+      // Register before copying or admission can fail: known aliases must remain
+      // rejected by the acquisition owner even when the first attempt is incomplete.
+      additions.add(target);
       const native = nativeAdmission.materialize(real, inputBoundary, target, stat, source);
+      let copiedContent: ReturnType<typeof copyPluginSourceFile>;
       if (native) {
         nativeAdmission.reconcileSourceInputs(inputs);
       } else if (captured) {
         // A second filename for a prefetched entry retains its first bytes and source identity.
         fs.copyFileSync(captured, target, fs.constants.COPYFILE_FICLONE);
       } else {
-        copyPluginSourceFile(real, inputBoundary, target);
+        copiedContent = copyPluginSourceFile(real, inputBoundary, target, {
+          hashCopiedContent: true,
+        });
         fs.chmodSync(target, 0o600 | Number(stat.mode & 0o100n));
       }
       receipt.file({
@@ -153,7 +159,7 @@ export function createPluginGenerationFileCapture({
         boundary: native?.boundary ?? directory,
         sizeBytes: Number(stat.size),
         native: native !== undefined,
-        prepared: native?.content,
+        prepared: native?.content ?? copiedContent,
         onContent: (content) => {
           native?.record(content);
           recordContent(
@@ -165,7 +171,6 @@ export function createPluginGenerationFileCapture({
           );
         },
       });
-      additions.add(target);
       if (path.basename(target) === "package.json") {
         onPackageMetadata(source, target);
       }
