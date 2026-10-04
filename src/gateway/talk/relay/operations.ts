@@ -33,9 +33,12 @@ import {
   submitRelayAgentControlProviderResults,
 } from "./forced-consults.js";
 import {
+  attachRelayAgentToolCall,
   broadcastToolResultToOwner,
   clearRelayAgentToolCall,
   completeAfterToolResultSubmissions,
+  isRelayAgentRunShared,
+  type RelayAgentRunJoin,
   submitFinalProviderToolResult,
   suppressedToolResultOptions,
   trackToolResultCompletion,
@@ -416,7 +419,13 @@ export function registerTalkRealtimeRelayAgentRun(params: {
   });
 }
 
-/** Retires one provider-owned tool call and aborts its exact relay consult, if started. */
+/** Attaches a repeated provider tool call to the consult run that its first call started. */
+export function joinTalkRealtimeRelayAgentRun(params: RelayAgentRunJoin): void {
+  const session = getRelaySession(params.relaySessionId, params.connId);
+  attachRelayAgentToolCall(session, params.runId, params.callId.trim());
+}
+
+/** Retires one provider-owned tool call and aborts its relay consult once no other call shares it. */
 export function cancelTalkRealtimeRelayProviderToolCall(
   session: RelaySession,
   providerCallId: string,
@@ -457,7 +466,7 @@ export function cancelTalkRealtimeRelayProviderToolCall(
 
   const runId = session.activeAgentToolCalls.get(relayCallId);
   const sessionKey = runId ? session.activeAgentRuns.get(runId) : undefined;
-  if (runId && sessionKey) {
+  if (runId && sessionKey && !isRelayAgentRunShared(session, runId, relayCallId)) {
     abortChatRunById(session.context, {
       runId,
       sessionKey,
@@ -470,12 +479,20 @@ export function cancelTalkRealtimeRelayProviderToolCall(
   return relayCallId;
 }
 
-/** Wait for server-owned final transcript appends before a relay consult is authorized. */
+/** Wait for server-owned speech before a relay consult is authorized. */
 export async function flushTalkRealtimeRelayVoiceWrites(params: {
   relaySessionId: string;
   connId: string;
+  waitForConfirmation?: boolean;
 }): Promise<void> {
-  await getRelaySession(params.relaySessionId, params.connId).voiceTranscriptQueue.flush();
+  const session = getRelaySession(params.relaySessionId, params.connId);
+  if (params.waitForConfirmation) {
+    // App-routed tool calls need the same future-speech barrier as native consults.
+    // A queue flush alone snapshots existing writes and cannot wait for a later yes.
+    await session.confirmationReadiness.wait();
+  } else {
+    await session.voiceTranscriptQueue.flush();
+  }
 }
 
 export async function steerTalkRealtimeRelayAgentRun(params: {

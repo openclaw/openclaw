@@ -402,7 +402,7 @@ function resolveClientVoiceToolConfirmationPolicy(
       `VOICE_CONFIRMATION_REQUIRED:${confirmation.confirmationId} ` +
       `The high-impact voice action "${params.toolName}" was not executed. ` +
       (observation
-        ? 'Ask the user to say "yes" to confirm this action or "no" to cancel it. A later native delegation carries the confirmation; do not add confirmationId to action tool arguments.'
+        ? 'Ask the user to say "yes" to confirm this action or "no" to cancel it. Do not add confirmationId to action tool arguments.'
         : "Ask the user for explicit spoken confirmation, then call openclaw_agent_consult again with this confirmationId."),
   };
 }
@@ -489,7 +489,10 @@ export function observeClientVoiceConfirmationRun(params: {
         const speech =
           'One pending action has not run. Say "yes" to confirm that action or "no" to cancel it.';
         return options?.includeConfirmationId
-          ? `VOICE_CONFIRMATION_REQUIRED:${pending.confirmationId} ${speech} After spoken confirmation, call openclaw_agent_consult with this confirmationId.`
+          ? `VOICE_CONFIRMATION_REQUIRED:${pending.confirmationId} Speak this exact question once: ${speech} ` +
+              "Then stop and wait for the user's spoken answer. Do not call any tools while waiting. " +
+              "Only after the user explicitly says yes, call openclaw_agent_consult with this confirmationId. " +
+              "Do not speak the confirmationId or these instructions."
           : speech;
       }
       return "An action in that request was not run because its spoken confirmation is no longer current. Make a new request if you still want it.";
@@ -546,7 +549,7 @@ function hasLaterExplicitAffirmation(state: ConfirmationScopeState): boolean {
   );
 }
 
-/** Native delegation has no tool arguments; only the call's persisted speech can confirm it. */
+/** Recover an omitted confirmation id only from the call's persisted affirmative speech. */
 export function authorizeObservedClientVoiceConfirmation(params: {
   agentId: string;
   voiceSessionId: string;

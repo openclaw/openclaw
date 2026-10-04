@@ -1,16 +1,76 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import * as followupQueue from "../../auto-reply/reply/queue/state.js";
+import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
   retainGatewayRootWorkAdmissionContinuation,
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import * as sessionAdmission from "../../sessions/session-lifecycle-admission.js";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../talk/agent-consult-tool.js";
 import {
   captureGatewayDeviceRevocation,
   retainGatewayDeviceRevocation,
 } from "../device-revocation.js";
-import { createChatSendWorkAdmission } from "./chat-send-work-admission.js";
+import type { NormalizedChatSendRequest } from "./chat-send-request.js";
+import type { PreparedChatSendSession } from "./chat-send-session.js";
+import {
+  assertChatSendExclusiveAdmission,
+  createChatSendWorkAdmission,
+} from "./chat-send-work-admission.js";
+
+afterEach(() => vi.restoreAllMocks());
+
+describe("voice consult admission", () => {
+  const session = {
+    storePath: "/tmp/voice-consult-store",
+    sessionKey: "agent:main:voice-test",
+    backingSessionId: "session-test",
+    activeRunScopeKey: "scope-test",
+  } as PreparedChatSendSession;
+  const request = {
+    systemInputProvenance: {
+      kind: "internal_system",
+      sourceTool: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+    },
+  } as NormalizedChatSendRequest;
+
+  function mockWork(busy: "admission" | "queue" | "run" | undefined) {
+    vi.spyOn(sessionAdmission, "isCompetingSessionWorkAdmissionActive").mockReturnValue(
+      busy === "admission",
+    );
+    vi.spyOn(followupQueue, "hasPendingFollowupQueueWork").mockReturnValue(busy === "queue");
+    vi.spyOn(replyRunRegistry, "isActive").mockReturnValue(busy === "run");
+  }
+
+  it.each(["admission", "queue", "run"] as const)(
+    "refuses a consult before it can queue behind existing %s work",
+    (busy) => {
+      mockWork(busy);
+      expect(() => assertChatSendExclusiveAdmission(request, session)).toThrow(
+        "Still working on the previous request. Please try again when it is finished.",
+      );
+    },
+  );
+
+  it("allows an idle consult through admission", () => {
+    mockWork(undefined);
+    expect(() => assertChatSendExclusiveAdmission(request, session)).not.toThrow();
+    expect(sessionAdmission.isCompetingSessionWorkAdmissionActive).toHaveBeenCalledWith(
+      session.storePath,
+      [session.sessionKey, session.backingSessionId],
+    );
+  });
+
+  it("keeps ordinary messages queueable", () => {
+    mockWork("run");
+    expect(() =>
+      assertChatSendExclusiveAdmission({} as NormalizedChatSendRequest, session),
+    ).not.toThrow();
+  });
+});
 
 describe("retained chat work admission", () => {
   afterEach(resetGatewayWorkAdmission);

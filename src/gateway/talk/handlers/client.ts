@@ -18,7 +18,9 @@ import {
 import { controlRealtimeVoiceAgentRun } from "../../../talk/agent-run-control.js";
 import {
   authorizeClientVoiceConfirmation,
+  authorizeObservedClientVoiceConfirmation,
   bindAuthorizedClientVoiceConfirmation,
+  observeClientVoiceConfirmationRun,
   type ClientVoiceConfirmationGrant,
 } from "../../../talk/client-voice-confirmation.js";
 import {
@@ -28,6 +30,7 @@ import {
   createOrResumeClientVoiceSession,
   ensureClientVoiceAgentSessionEntry,
   registerClientVoiceConsultRun,
+  resolveClientVoiceRunBinding,
   resolveClientVoiceSessionOrigin,
   resolveOpenClientVoiceSessionId,
 } from "../../../talk/client-voice-session.js";
@@ -36,7 +39,11 @@ import type { GatewayRequestHandlers } from "../../server-methods/types.js";
 import { defineValidatedGatewayHandler } from "../../server-methods/validation.js";
 import { SessionMutationAuthorizationChangedError } from "../../session-mutation-authorization-error.js";
 import { formatForLog } from "../../ws-log.js";
-import { startTalkRealtimeAgentConsult } from "../agent-consult.js";
+import {
+  joinOrStartTalkConsult,
+  normalizeTalkConsultJoinRequest,
+  startTalkRealtimeAgentConsult,
+} from "../agent-consult.js";
 import { prepareTalkClientControlAuthority } from "../client-agent-consult.js";
 import {
   closeTalkClientGatewayControlSession,
@@ -45,6 +52,7 @@ import {
 import {
   ensureTalkRealtimeRelayVoiceSession,
   flushTalkRealtimeRelayVoiceWrites,
+  joinTalkRealtimeRelayAgentRun,
 } from "../relay/index.js";
 import { resolveOwnedActiveTalkRunTarget } from "../run-ownership.js";
 import { prepareTalkSessionTarget, requirePreparedTalkSessionTarget } from "../session-target.js";
@@ -95,6 +103,8 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      let consultArgs: unknown = params.args ?? {};
+      let joinRequest: string;
       let confirmationGrant: ClientVoiceConfirmationGrant | undefined;
       let voiceSessionId: string;
       try {
@@ -122,9 +132,15 @@ export const talkClientHandlers: GatewayRequestHandlers = {
             connId,
             sessionKey: params.sessionKey,
           });
-          await flushTalkRealtimeRelayVoiceWrites({ relaySessionId, connId });
+          await flushTalkRealtimeRelayVoiceWrites({
+            relaySessionId,
+            connId,
+            waitForConfirmation: true,
+          });
+          request.sessionMutationAuthorization?.assertCurrent();
         }
         const parsedArgs = parseRealtimeVoiceAgentConsultArgs(params.args ?? {});
+        joinRequest = normalizeTalkConsultJoinRequest(parsedArgs);
         const origin = assertClientVoiceSessionOpen({
           agentId,
           sessionKey: params.sessionKey,
@@ -141,6 +157,16 @@ export const talkClientHandlers: GatewayRequestHandlers = {
             voiceSessionId,
             confirmationId: parsedArgs.confirmationId,
           });
+        } else {
+          confirmationGrant = authorizeObservedClientVoiceConfirmation({ agentId, voiceSessionId });
+        }
+        if (confirmationGrant?.retryContext) {
+          consultArgs = {
+            ...parsedArgs,
+            context: [parsedArgs.context, confirmationGrant.retryContext]
+              .filter(Boolean)
+              .join("\n\n"),
+          };
         }
         // Only validated calls may replace the legacy client's connection binding.
         if (connId && !relaySessionId) {
@@ -151,28 +177,65 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         return;
       }
 
-      const result = await startTalkRealtimeAgentConsult(request, {
-        sessionTarget: target,
-        callId: params.callId,
-        args: params.args ?? {},
-        relaySessionId: normalizeOptionalString(params.relaySessionId),
-        connId,
-        onRunStarted: (runId) => {
-          registerClientVoiceConsultRun({
-            agentId,
-            sessionKey: params.sessionKey,
-            voiceSessionId,
-            runId,
-            config: request.context.getRuntimeConfig(),
+      let startedOwnRun = false;
+      const startConsult = () => {
+        startedOwnRun = true;
+        return startTalkRealtimeAgentConsult(request, {
+          sessionTarget: target,
+          callId: params.callId,
+          args: consultArgs,
+          relaySessionId: normalizeOptionalString(params.relaySessionId),
+          connId,
+          onRunStarted: (runId) => {
+            registerClientVoiceConsultRun({
+              agentId,
+              sessionKey: params.sessionKey,
+              voiceSessionId,
+              runId,
+              config: request.context.getRuntimeConfig(),
+            });
+            const observation = observeClientVoiceConfirmationRun({
+              agentId,
+              voiceSessionId,
+              runId,
+            });
+            // CLI diagnostics retire the binding before the outer lifecycle publishes chat.final.
+            // Chat run state retains only the veto reply, never execution authority.
+            request.context.chatRunState.getOrCreate(runId).readVoiceConfirmationReply = () =>
+              observation.readReply({ includeConfirmationId: true });
+            if (confirmationGrant) {
+              bindAuthorizedClientVoiceConfirmation({ grant: confirmationGrant, runId });
+            }
+          },
+        });
+      };
+      // A confirmed retry must reach the agent; never fold it into the blocked run.
+      const result = confirmationGrant
+        ? await startConsult()
+        : await joinOrStartTalkConsult({
+            key: `${agentId}:${voiceSessionId}`,
+            request: joinRequest,
+            isRunLive: (runId) => resolveClientVoiceRunBinding(runId) !== undefined,
+            start: startConsult,
           });
-          if (confirmationGrant) {
-            bindAuthorizedClientVoiceConfirmation({ grant: confirmationGrant, runId });
-          }
-        },
-      });
       if (!result.ok) {
         respond(false, undefined, result.error);
         return;
+      }
+      if (!startedOwnRun && relaySessionId && connId) {
+        // A joined repeat started no run of its own. Attach its call to the shared run
+        // so cancelling one of the two calls does not abort the other's work.
+        try {
+          joinTalkRealtimeRelayAgentRun({
+            relaySessionId,
+            connId,
+            runId: result.runId,
+            callId: params.callId,
+          });
+        } catch (err) {
+          respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+          return;
+        }
       }
       respond(
         true,
