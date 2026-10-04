@@ -947,6 +947,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugins/services.cron.test.ts",
   "test/plugins/dreaming-cron-doctor.integration.test.ts",
   "test/plugins/memory-dreaming-cron.test.ts",
+  "test/plugins/qwen-dashscope-throttle.integration.test.ts",
   "test/plugins/workboard-automation-authority.test.ts",
   "src/state/creator-namespace-migration.test.ts",
   "src/agents/auth-profiles/store-owner-publication.test.ts",
@@ -1032,6 +1033,7 @@ export const databaseWorkerCoreFormerFastKinds = new Map([
   ["src/plugin-sdk/outbound-media.bulk.test.ts", "unitFast"],
   ["src/agents/provider-transport-fetch.capture.test.ts", "unitFast"],
   ["src/proxy-capture/proxy-server.test.ts", "unitFast"],
+  ["test/plugins/qwen-dashscope-throttle.integration.test.ts", "unitFast"],
 ]);
 
 export const DATABASE_WORKER_WATCH_OWNER_ENV_KEY = "OPENCLAW_VITEST_DATABASE_WORKER_WATCH_OWNER";
