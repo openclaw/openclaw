@@ -12,6 +12,7 @@ import {
   type MsgContext,
 } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { expect, vi, type Mock } from "vitest";
 import {
   holdTelegramMediaTimeouts,
@@ -20,6 +21,7 @@ import {
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { createTelegramBot } from "./bot.js";
 import type { TelegramTransport } from "./fetch.js";
+import * as messageDispatchDedupe from "./message-dispatch-dedupe.js";
 import { setTelegramRuntime } from "./runtime.js";
 import { resetTelegramAccountThrottlersForTest } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
@@ -269,18 +271,85 @@ export async function admitAlbum(
 
 export type TelegramIngressResources = Awaited<ReturnType<typeof createIngressMonitor>>;
 
-export async function stopIngressResources(activeResources: TelegramIngressResources[]) {
+export async function stopIngressResources(
+  activeResources: TelegramIngressResources[],
+  activeTurns: Set<Promise<void>>,
+  stateDir: string,
+) {
   await Promise.all(
-    activeResources.map(async ({ monitor, telegramTransport, abortController }) => {
+    activeResources.splice(0).map(async ({ monitor, telegramTransport, abortController }) => {
       abortController.abort(new Error("test cleanup"));
       await monitor.stop();
       await telegramTransport.close();
     }),
   );
+  // Shutdown settles claims without waiting for turns still recording their session;
+  // a late write would bind this case's agent database to the next case's state.
+  while (activeTurns.size > 0) {
+    await Promise.all(activeTurns);
+  }
+  // Session maintenance outlives its writer by design; retire it with this case's databases.
+  await closeOpenClawAgentDatabasesAsync(stateDir);
 }
 
 export function useIngressTimers() {
   vi.useFakeTimers({
     toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"],
   });
+}
+
+/** Intercepts durable replay settlement while preserving the real claim and rollback operations. */
+export function interceptReplayGuard(hooks: {
+  commit: (count: number, commit: () => Promise<boolean>) => Promise<boolean>;
+  forget?: (forget: () => Promise<boolean>) => Promise<boolean>;
+}) {
+  const createGuard = messageDispatchDedupe.createTelegramMessageDispatchReplayGuard;
+  const commitReplay = messageDispatchDedupe.commitTelegramMessageDispatchReplay;
+  const settlements: Promise<void>[] = [];
+  const commitSpy = vi
+    .spyOn(messageDispatchDedupe, "commitTelegramMessageDispatchReplay")
+    .mockImplementation((params) => {
+      const settlement = commitReplay(params);
+      settlements.push(settlement);
+      return settlement;
+    });
+  let commitCount = 0;
+  const guardSpy = vi
+    .spyOn(messageDispatchDedupe, "createTelegramMessageDispatchReplayGuard")
+    .mockImplementation((options) => {
+      const guard = createGuard(options);
+      const forget = hooks.forget;
+      return {
+        ...guard,
+        claim: async (...args) => {
+          const claim = await guard.claim(...args);
+          if (claim.kind !== "claimed") {
+            return claim;
+          }
+          return {
+            ...claim,
+            handle: {
+              ...claim.handle,
+              commit: async (commitOptions) => {
+                commitCount += 1;
+                return await hooks.commit(commitCount, () => claim.handle.commit(commitOptions));
+              },
+            },
+          };
+        },
+        ...(forget
+          ? {
+              forget: async (...args: Parameters<typeof guard.forget>) =>
+                await forget(() => guard.forget(...args)),
+            }
+          : {}),
+      };
+    });
+  return {
+    settlements,
+    restore: () => {
+      commitSpy.mockRestore();
+      guardSpy.mockRestore();
+    },
+  };
 }
