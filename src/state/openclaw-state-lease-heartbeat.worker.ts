@@ -121,7 +121,7 @@ const renewInWorker = (explicit: boolean, path: LeaseHeartbeatLoss["path"]): num
               processOwner?.identity,
             );
           },
-          { logger: { warn() {} } },
+          { operationLabel: "state.lease.renew", logger: { warn() {} } },
         ),
       { lockFailureReporting: "suppress" },
     );

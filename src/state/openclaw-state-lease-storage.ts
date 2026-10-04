@@ -104,13 +104,17 @@ export function renewOpenClawStateLease(
     leaseMs: number;
   },
 ): number {
-  return withLeaseWriteTransaction(params.database, params.operationLabel, (db) => {
-    const expiresAt = renewOpenClawStateLeaseInTransaction(db, params, params.leaseMs);
-    if (expiresAt === undefined) {
-      throw createOpenClawStateLeaseLostError(params);
-    }
-    return expiresAt;
-  });
+  return withLeaseWriteTransaction(
+    params.database,
+    params.operationLabel === "state.lease" ? "state.lease.renew" : params.operationLabel,
+    (db) => {
+      const expiresAt = renewOpenClawStateLeaseInTransaction(db, params, params.leaseMs);
+      if (expiresAt === undefined) {
+        throw createOpenClawStateLeaseLostError(params);
+      }
+      return expiresAt;
+    },
+  );
 }
 
 function assertOpenClawStateLeaseOwnedInDatabase(
@@ -151,8 +155,10 @@ export function releaseOpenClawStateLease(
     operationLabel: string;
   },
 ): void {
-  withLeaseWriteTransaction(params.database, params.operationLabel, (db) =>
-    releaseOpenClawStateLeaseInTransaction(db, params),
+  withLeaseWriteTransaction(
+    params.database,
+    params.operationLabel === "state.lease" ? "state.lease.release" : params.operationLabel,
+    (db) => releaseOpenClawStateLeaseInTransaction(db, params),
   );
 }
 

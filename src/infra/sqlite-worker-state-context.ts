@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { OpenClawStateIntegrityAdmission } from "../state/openclaw-state-db-async-lifecycle.js";
 import { withExistingOpenClawStateSchema } from "../state/openclaw-state-db-schema-policy.js";
 
 /** Resolved host facts for the canonical shared-state owner, never authority. */
@@ -13,6 +14,7 @@ export type SqliteWorkerStateContext = {
   /** Known agent paths preserve deletion-history uncertainty during native initialization. */
   initializationAgentPaths?: readonly string[];
   existingSchemaPath?: string;
+  stateIntegrity?: OpenClawStateIntegrityAdmission;
 };
 
 export function captureSqliteWorkerStateContext(
@@ -27,6 +29,7 @@ export function captureSqliteWorkerStateContext(
       ? { initializationAgentPaths: [...context.initializationAgentPaths] }
       : {}),
     existingSchemaPath: context.existingSchemaPath,
+    stateIntegrity: context.stateIntegrity,
   };
 }
 
@@ -82,6 +85,12 @@ export function withSqliteWorkerExistingDatabase<T>(
 export function getSqliteWorkerExistingDatabaseIdentity(databasePath: string): string | undefined {
   const existing = stateContexts.getStore()?.existingDatabase;
   return existing?.databasePath === databasePath ? existing.identity : undefined;
+}
+
+export function getSqliteWorkerStateIntegrityAdmission():
+  | OpenClawStateIntegrityAdmission
+  | undefined {
+  return stateContexts.getStore()?.stateIntegrity;
 }
 
 export function runWithSqliteWorkerStateContext<T>(

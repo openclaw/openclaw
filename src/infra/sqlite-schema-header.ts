@@ -45,19 +45,23 @@ export function readSqliteSchemaHeader(
   agentSchemaVersionForOwnership?: number,
 ): SqliteSchemaHeader {
   configureSqliteReadOnlyPragmas(database);
-  return runSqliteDeferredTransactionSync(database, () => {
-    const userVersion = readSqliteUserVersion(database);
-    const writerAppVersion = readSqliteWriterAppVersion(database);
-    return {
-      userVersion,
-      ...(writerAppVersion ? { writerAppVersion } : {}),
-      // A newer schema may have a different metadata contract; its version alone refuses admission.
-      ...(agentSchemaVersionForOwnership !== undefined &&
-      userVersion <= agentSchemaVersionForOwnership
-        ? { agentSchemaMeta: readExistingAgentSchemaMeta(database) }
-        : {}),
-    };
-  });
+  return runSqliteDeferredTransactionSync(
+    database,
+    () => {
+      const userVersion = readSqliteUserVersion(database);
+      const writerAppVersion = readSqliteWriterAppVersion(database);
+      return {
+        userVersion,
+        ...(writerAppVersion ? { writerAppVersion } : {}),
+        // A newer schema may have a different metadata contract; its version alone refuses admission.
+        ...(agentSchemaVersionForOwnership !== undefined &&
+        userVersion <= agentSchemaVersionForOwnership
+          ? { agentSchemaMeta: readExistingAgentSchemaMeta(database) }
+          : {}),
+      };
+    },
+    { operationLabel: "database.schema-header" },
+  );
 }
 
 function readSqliteSchemaHeaderSnapshot(

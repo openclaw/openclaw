@@ -552,6 +552,30 @@ failed lock waits therefore identify the domain operation without logging its
 input. Explicit labels take precedence; native callers outside a command scope
 must supply their own label for the same attribution.
 
+Admission transactions use `state.admission.fast-path` and
+`state.admission.existing-schema`. Default lease labels distinguish
+`state.lease.acquire`, `state.lease.renew`, and `state.lease.release`;
+caller-supplied labels still take precedence. Slow holds include `phases`:
+`sqlMs` covers synchronous transaction work (including JavaScript and rollback),
+`hostAdmissionWaitMs` measures in-transaction worker-to-host admission waits,
+and `commitMs` measures the physical COMMIT. These three account for the hold.
+`beginMs` and, inside an operation scope, `prepareMs` report time outside the
+hold. Preparation starts at worker dispatch or the preceding transaction's
+settlement; it includes command loading and opening the database, not broker
+queue residence.
+
+Runtime connections borrow completed integrity and foreign-key proof from the
+shared-state file's process-local lifecycle generation. Native file identity,
+schema version, and the owner's schema revision must still match. Schema changes
+revoke the revision, including rolled-back DDL; new captures can establish fresh
+proof. Observed corruption revokes borrowed proof before native cleanup;
+canonical close and replacement revoke the generation. Proof is published
+only after successful transaction settlement. Simultaneous first opens can each
+validate while proof is pending; they never wait on a new admission lock.
+Per-connection schema contracts and mutable metadata remain checked. Explicit
+maintenance and copied-file verification always check integrity, with canonical
+read-only admission performing one scan instead of two.
+
 Slow agent transaction diagnostics retain their hold and lock-wait labels and
 include prepared session identifiers and counts. History snapshots report active
 events, active messages, and the reader operation; append diagnostics distinguish

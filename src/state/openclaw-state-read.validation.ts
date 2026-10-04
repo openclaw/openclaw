@@ -25,6 +25,16 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
     (input.snapshotRoot === undefined || typeof input.snapshotRoot === "string") &&
     (input.context.existingSchemaPath === undefined ||
       typeof input.context.existingSchemaPath === "string") &&
+    (input.context.stateIntegrity === undefined ||
+      (isRecord(input.context.stateIntegrity) &&
+        isRecord(input.context.stateIntegrity.identity) &&
+        typeof input.context.stateIntegrity.identity.key === "string" &&
+        input.context.stateIntegrity.revision instanceof SharedArrayBuffer &&
+        input.context.stateIntegrity.revision.byteLength === BigInt64Array.BYTES_PER_ELEMENT &&
+        typeof input.context.stateIntegrity.epoch === "bigint" &&
+        input.context.stateIntegrity.epoch >= 0n &&
+        input.context.stateIntegrity.proof instanceof SharedArrayBuffer &&
+        input.context.stateIntegrity.proof.byteLength === BigInt64Array.BYTES_PER_ELEMENT)) &&
     isRecord(environment) &&
     typeof environment.OPENCLAW_STATE_DIR === "string" &&
     (environment.OPENCLAW_SUPERVISOR_MODE === undefined ||

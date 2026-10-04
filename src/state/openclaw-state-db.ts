@@ -217,13 +217,14 @@ export async function openExistingOpenClawStateDatabaseReadOnly(
   const connection = openOpenClawStateReadConnection(pathname, prepared);
   const { db } = connection.database;
   try {
-    assertSupportedStateSchemaVersion(db, pathname);
-    assertSqliteIntegrity(db, pathname);
     if (isExistingOpenClawStateSchema(pathname, db) || options.requireCanonicalSchema) {
       assertExistingOpenClawStateRuntimeSchema(db, pathname);
-    }
-    if (readStateSchemaContentVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
-      assertOpenClawStateDatabaseForMaintenance(db, { pathname });
+    } else {
+      assertSupportedStateSchemaVersion(db, pathname);
+      assertSqliteIntegrity(db, pathname);
+      if (readStateSchemaContentVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
+        assertOpenClawStateDatabaseForMaintenance(db, { pathname });
+      }
     }
   } catch (error) {
     try {

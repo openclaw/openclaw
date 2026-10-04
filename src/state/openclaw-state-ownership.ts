@@ -191,8 +191,10 @@ export function inspectOpenClawStateOwnershipInProcess(
       database.exec(
         `PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}; PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;`,
       );
-      return runSqliteDeferredTransactionSync(database, () =>
-        inspectOpenClawStateOwnershipFromDatabase(database, databasePath),
+      return runSqliteDeferredTransactionSync(
+        database,
+        () => inspectOpenClawStateOwnershipFromDatabase(database, databasePath),
+        { operationLabel: "state.ownership.inspect" },
       );
     });
   }

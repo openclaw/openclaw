@@ -37,6 +37,7 @@ type SchemaOwner = {
   authorizerActive: boolean;
   scope?: SchemaScope;
   scopeRevision?: number;
+  mutationListeners?: Set<() => void>;
 };
 
 type SchemaScope = { key?: string; revision: number; users: number };
@@ -89,6 +90,9 @@ function publishSchemaChange(database: DatabaseSync, owner: SchemaOwner): void {
 export function invalidateSqliteSchemaFacts(database: DatabaseSync): void {
   const owner = owners.get(database);
   if (owner) {
+    for (const listener of owner.mutationListeners ?? []) {
+      listener();
+    }
     // Capture physical identity before DDL, while the caller owns cleanup on admission failure.
     bindScope(database, owner);
     invalidate(owner);
@@ -97,6 +101,20 @@ export function invalidateSqliteSchemaFacts(database: DatabaseSync): void {
       publishSchemaChange(database, owner);
     }
   }
+}
+
+/** Admission proof is revoked at the same producer boundary as prepared schema facts. */
+export function registerSqliteSchemaMutationListener(
+  database: DatabaseSync,
+  listener: () => void,
+): () => void {
+  const owner = owners.get(database);
+  if (!owner) {
+    throw new Error("SQLite schema observation requires a tracked connection");
+  }
+  const listeners = (owner.mutationListeners ??= new Set());
+  listeners.add(listener);
+  return () => listeners.delete(listener);
 }
 
 // Conservative matching also covers multi-statement migration batches and catalog repairs.

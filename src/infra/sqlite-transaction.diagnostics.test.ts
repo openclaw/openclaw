@@ -6,6 +6,11 @@ import {
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
 } from "./sqlite-transaction.js";
+import {
+  createSqliteWorkerOperationAdmission,
+  requestSqliteWorkerOperationAdmission,
+  withSqliteWorkerOperationAdmission,
+} from "./sqlite-worker-operation-admission.js";
 
 const openDatabases: Array<import("node:sqlite").DatabaseSync> = [];
 
@@ -34,6 +39,84 @@ afterEach(() => {
 });
 
 describe("SQLite transaction diagnostics", () => {
+  it.each([false, true])(
+    "separates preparation, SQL, host wait and COMMIT (failure: %s)",
+    (failCommit) => {
+      const db = createDatabase();
+      const logger = { warn: vi.fn() };
+      let now = 0;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      const admission = createSqliteWorkerOperationAdmission((_request, grant) => {
+        now += 350;
+        grant();
+      });
+      // Service the real private port at the native wait, without sleeping.
+      vi.spyOn(Atomics, "wait").mockImplementation(() => {
+        admission.service();
+        return "ok";
+      });
+      const exec = db.exec.bind(db);
+      vi.spyOn(db, "exec").mockImplementation((sql) => {
+        if (sql === "BEGIN IMMEDIATE") {
+          now += 100;
+        }
+        if (sql === "COMMIT") {
+          now += 500;
+          if (failCommit) {
+            throw new Error("commit failed");
+          }
+        }
+        exec(sql);
+      });
+      try {
+        const run = () =>
+          withSqliteReaderOwner({ operation: "state.lease.renew", ownerKind: "worker" }, () => {
+            now += 200;
+            return withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
+              runSqliteImmediateTransactionSync(
+                db,
+                () => {
+                  requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: null });
+                  db.prepare("INSERT INTO entries VALUES ('committed', 'value')").run();
+                  now += 50;
+                },
+                {
+                  logger,
+                  withCommit(commit) {
+                    requestSqliteWorkerOperationAdmission({ stage: "commit", facts: null });
+                    commit();
+                  },
+                },
+              ),
+            );
+          });
+        if (failCommit) {
+          expect(run).toThrow("commit failed");
+        } else {
+          run();
+        }
+        expect(readEntries(db)).toEqual(failCommit ? [] : ["committed"]);
+        expect(db.isTransaction).toBe(false);
+        expect(logger.warn).toHaveBeenCalledWith(
+          "slow SQLite transaction hold",
+          expect.objectContaining({
+            operation: "state.lease.renew",
+            elapsedMs: 1_250,
+            phases: {
+              prepareMs: 200,
+              beginMs: 100,
+              sqlMs: 50,
+              hostAdmissionWaitMs: 700,
+              commitMs: 500,
+            },
+          }),
+        );
+      } finally {
+        admission.finish();
+      }
+    },
+  );
+
   it.each(["explicit", "inherited", "unlabeled"] as const)(
     "logs one structured warning for a terminal lock failure (%s labels)",
     (labels) => {

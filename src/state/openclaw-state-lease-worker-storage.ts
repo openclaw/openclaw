@@ -244,6 +244,7 @@ export function createOpenClawStateLeaseWorkerStorage(
         const cleanupContext = {
           environment: context.environment,
           existingSchemaPath: context.existingSchemaPath,
+          stateIntegrity: context.stateIntegrity,
         };
         // Canonical close seals reads first; this owner retains only release authority.
         const store = await openOpenClawStateWorkerCleanupStore(

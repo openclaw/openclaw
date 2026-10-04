@@ -62,6 +62,7 @@ import { inspectGatewayOwnerLeaseForMaintenance } from "../infra/gateway-owner-l
 import { bunSqliteNativeCleanupPending } from "../infra/node-sqlite.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
 import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
+import { withSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import {
@@ -124,13 +125,10 @@ import {
 import { readUserChannelIdentityResult } from "./user-channel-identities.worker.js";
 import { listUserProfileAuthLinksInDatabase } from "./user-model-accounts.js";
 import { selectUserPreferenceValues } from "./user-preferences.store.js";
-import {
-  readUserProfileGitHubCommand,
-  selectProfileAccessEntries,
-} from "./user-profile-github-identity.js";
+import { readUserProfileGitHubCommand } from "./user-profile-github-identity.js";
 import {
   readUserProfileAuthorityInDatabase,
-  readUserProfileEmailBindings,
+  readUserProfileSnapshotCommand,
   readUserProfileIdForEmail,
 } from "./user-profile-identity.read.js";
 import { readUserProfileAvatarCommand } from "./user-profiles-internal.js";
@@ -147,7 +145,7 @@ serveOwnedWorkerTasks(
       if (prepared) {
         return prepared.then(() => read(input));
       }
-      const reply = runWithSqliteWorkerStateContext(input.context, (): OpenClawStateReadReply => {
+      const executeRead = (): OpenClawStateReadReply => {
         if (input.checkFreshAdmission) {
           openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
             input.databasePath,
@@ -327,7 +325,9 @@ serveOwnedWorkerTasks(
                   ...loadVersionedSubagentRunsInDatabase({ db }, command.scope.runIds),
                 };
               }
-              const rows = loadSubagentRunsForSessionFromSqlite(command.scope.sessionKey, { db });
+              const rows = loadSubagentRunsForSessionFromSqlite(command.scope.sessionKey, {
+                db,
+              });
               return {
                 type: command.type,
                 runs: new Map(rows.map((entry) => [entry.runId, entry])),
@@ -583,25 +583,17 @@ serveOwnedWorkerTasks(
                 linked: resolveUserChannelIdentityInDatabase(db, command.identity),
               };
             }
-            if (command.type === "userProfiles.reconcile") {
-              const facts = runSqliteDeferredTransactionSync(db, () => ({
-                profile: selectProfileAccessEntries(db, [command.profileId])[0]?.[1],
-                emailBindings: readUserProfileEmailBindings(db, command.profileId),
-              }));
-              return { type: command.type, ...facts };
+            if (
+              command.type === "userProfiles.reconcile" ||
+              command.type === "userProfiles.catalog"
+            ) {
+              return readUserProfileSnapshotCommand(db, command);
             }
             if (
               command.type === "userProfiles.avatar.inspect" ||
               command.type === "userProfiles.avatar.read"
             ) {
               return readUserProfileAvatarCommand(db, command);
-            }
-            if (command.type === "userProfiles.catalog") {
-              const facts = runSqliteDeferredTransactionSync(db, () => ({
-                profiles: tableExists(db, "user_profiles") ? selectProfileAccessEntries(db) : [],
-                emailBindings: readUserProfileEmailBindings(db),
-              }));
-              return { type: command.type, ...facts };
             }
             if (command.type === "userPreferences.values") {
               return {
@@ -680,7 +672,11 @@ serveOwnedWorkerTasks(
           ...locationArgs,
         );
         return { ok: true, sourceAdmitted: true, ...result };
-      });
+      };
+      const reply = withSqliteReaderOwner(
+        { operation: input.command.type, ownerKind: "worker" },
+        () => runWithSqliteWorkerStateContext(input.context, executeRead),
+      );
       if (
         !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources &&
         bunSqliteNativeCleanupPending

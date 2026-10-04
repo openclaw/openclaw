@@ -15,10 +15,15 @@ export function captureOpenClawStateReadContextWithAdmission(
   captureAdmission: (pathname: string) => OpenClawStateWorkerContext["admission"],
 ): Pick<
   OpenClawStateWorkerContext,
-  "admission" | "maintenanceScope" | "existingSchemaPath" | "runInCapturedSchemaScope"
+  | "admission"
+  | "maintenanceScope"
+  | "existingSchemaPath"
+  | "runInCapturedSchemaScope"
+  | "stateIntegrity"
 > & { assertPublicationCurrent: () => void } {
   const schema = captureOpenClawStateSchemaReadAdmission(pathname);
   const capturedAdmission = captureAdmission(pathname);
+  const integrity = capturedAdmission.captureIntegrity?.();
   const assertPublicationCurrent = capturedAdmission.assertCurrent;
   let admission = capturedAdmission;
   let runInCapturedSchemaScope: OpenClawStateWorkerContext["runInCapturedSchemaScope"];
@@ -30,6 +35,7 @@ export function captureOpenClawStateReadContextWithAdmission(
       get identity() {
         return capturedAdmission.identity;
       },
+      captureIntegrity: capturedAdmission.captureIntegrity,
       assertCurrent() {
         capturedAdmission.assertCurrent();
         schema.assertCurrent();
@@ -46,6 +52,7 @@ export function captureOpenClawStateReadContextWithAdmission(
     admission,
     assertPublicationCurrent,
     existingSchemaPath: schema?.path,
+    stateIntegrity: integrity,
     runInCapturedSchemaScope,
   };
 }
