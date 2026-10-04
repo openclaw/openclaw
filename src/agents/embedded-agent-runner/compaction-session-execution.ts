@@ -40,7 +40,7 @@ import {
 import { type AgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
 import { DefaultResourceLoader } from "../sessions/resource-loader.js";
-import { createAgentSessionForEmbeddedRunner } from "../sessions/sdk.js";
+import { createAgentSession } from "../sessions/sdk.js";
 import { setSessionModelUsageSink } from "../sessions/session-model-usage.js";
 import { normalizeUsage, type UsageLike } from "../usage.js";
 import { resolveCompactionFailure } from "./compact-reasons.js";
@@ -70,7 +70,6 @@ import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-d
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import { estimateLlmBoundaryTokenPressure } from "./run/preemptive-compaction.js";
 import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
-import { applySystemPromptToSession } from "./system-prompt.js";
 import { collectRegisteredToolNames, toSessionToolAllowlist } from "./tool-name-allowlist.js";
 import {
   mapThinkingLevel,
@@ -256,24 +255,20 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       let diagnosticOwner: DiagnosticEmbeddedRunOwner | undefined;
       let resetCompactionTimeout: (() => void) | undefined;
       try {
-        const createdSession = await createAgentSessionForEmbeddedRunner(
-          {
-            cwd: effectiveCwd,
-            agentDir,
-            authStorage,
-            modelRegistry,
-            model: effectiveModel,
-            thinkingLevel: mapThinkingLevel(
-              mapThinkingLevelForProvider(thinkLevel, effectiveModel),
-            ),
-            tools: sessionToolAllowlist,
-            customTools,
-            sessionManager,
-            settingsManager,
-            resourceLoader,
-          },
-          {},
-        );
+        const createdSession = await createAgentSession({
+          cwd: effectiveCwd,
+          agentDir,
+          authStorage,
+          modelRegistry,
+          model: effectiveModel,
+          thinkingLevel: mapThinkingLevel(mapThinkingLevelForProvider(thinkLevel, effectiveModel)),
+          tools: sessionToolAllowlist,
+          customTools,
+          sessionManager,
+          settingsManager,
+          resourceLoader,
+          cleanupProviderSessionResourcesOnDispose: false,
+        });
         session = createdSession.session;
         session[agentSessionSetContextReplacementHook](
           (tokensAfter, tokensBefore) =>
@@ -281,7 +276,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           assertActive,
         );
         session.setActiveToolsByName(sessionToolAllowlist);
-        applySystemPromptToSession(session, systemPromptText);
+        session.setBaseSystemPrompt(systemPromptText.trim());
         // Compaction builds the same embedded system prompt, so it must flow
         // through the same transport/payload shaping stack as normal turns.
         const { effectiveExtraParams, transportApiKey } = await prepareCompactionSessionAgent({

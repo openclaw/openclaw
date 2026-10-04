@@ -32,7 +32,7 @@ import {
   SessionManager,
 } from "../../sessions/index.js";
 import { DefaultResourceLoader } from "../../sessions/resource-loader.js";
-import { createAgentSessionForEmbeddedRunner } from "../../sessions/sdk.js";
+import { createAgentSession } from "../../sessions/sdk.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { resolveToolSearchCatalogTool } from "../../tool-search.js";
@@ -42,7 +42,6 @@ import { log } from "../logger.js";
 import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
 import { recordRuntimeContextProjection } from "../session-prompt-state.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
-import { applySystemPromptToSession } from "../system-prompt.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
 import { createAttemptCompactionThinkingResolver } from "./attempt-compaction-thinking.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt-history.js";
@@ -210,7 +209,9 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     withSessionWriteSettlement: (operation) =>
       input.transcriptLifecycle.withTranscriptWrite(operation),
   };
-  const { session: activeSession } = await createAgentSessionForEmbeddedRunner(sessionOptions, {
+  const { session: activeSession } = await createAgentSession({
+    ...sessionOptions,
+    cleanupProviderSessionResourcesOnDispose: false,
     // Without a resolved model budget, the outer loop cannot own bounded recovery.
     contextOverflowRecoveryOwner: attempt.contextTokenBudget === undefined ? "session" : "caller",
     resolveCompactionThinkingLevel: createAttemptCompactionThinkingResolver(
@@ -228,7 +229,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   activeSession.setActiveToolsByName(sessionToolAllowlist);
   const setActiveSessionSystemPrompt = (nextSystemPrompt: string) => {
     input.onSystemPromptChanged(nextSystemPrompt);
-    applySystemPromptToSession(activeSession, nextSystemPrompt);
+    activeSession.setBaseSystemPrompt(nextSystemPrompt.trim());
     return nextSystemPrompt;
   };
   const setPermissionPromptPreparation = installAttemptPermissionPrompt({

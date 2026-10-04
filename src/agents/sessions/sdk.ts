@@ -50,7 +50,13 @@ import { SettingsManager } from "./settings-manager.js";
 import { isInstallTelemetryEnabled } from "./telemetry.js";
 import type { ToolName } from "./tools/index.js";
 
-export interface CreateAgentSessionOptions {
+export interface CreateAgentSessionOptions extends Pick<
+  AgentSessionConfig,
+  | "contextOverflowRecoveryOwner"
+  | "resolveCompactionThinkingLevel"
+  | "cleanupProviderSessionResourcesOnDispose"
+> {
+  beforeToolBatch?: InternalBeforeToolBatchHook;
   /** Working directory for project-local discovery. Default: process.cwd() */
   cwd?: string;
   /** Agent config directory. Defaults to the configured installation owner. */
@@ -100,11 +106,6 @@ export interface CreateAgentSessionOptions {
   /** Optional settlement boundary for session writes and write-capable extension hooks. */
   withSessionWriteSettlement?: AgentSessionWriteSettlementRunner;
 }
-
-type CreateAgentSessionInternalOptions = Pick<
-  AgentSessionConfig,
-  "contextOverflowRecoveryOwner" | "resolveCompactionThinkingLevel"
-> & { beforeToolBatch?: InternalBeforeToolBatchHook };
 
 /** Result from createAgentSession */
 interface CreateAgentSessionResult {
@@ -212,22 +213,6 @@ function getAttributionHeaders(
 
 export async function createAgentSession(
   options: CreateAgentSessionOptions,
-): Promise<CreateAgentSessionResult> {
-  return await createAgentSessionImpl(options);
-}
-
-/** Internal factory for temporary embedded sessions that do not own durable provider resources. */
-export async function createAgentSessionForEmbeddedRunner(
-  options: CreateAgentSessionOptions,
-  internalOptions: CreateAgentSessionInternalOptions,
-): Promise<CreateAgentSessionResult> {
-  return await createAgentSessionImpl(options, internalOptions, false);
-}
-
-async function createAgentSessionImpl(
-  options: CreateAgentSessionOptions,
-  internalOptions: CreateAgentSessionInternalOptions = {},
-  cleanupProviderSessionResourcesOnDispose = true,
 ): Promise<CreateAgentSessionResult> {
   const cwd = options.cwd ?? options.sessionManager?.getCwd() ?? process.cwd();
   const install = getAgentDirResolution(options.agentDir);
@@ -394,7 +379,7 @@ async function createAgentSessionImpl(
     thinkingBudgets: settingsManager.getThinkingBudgets(),
     maxRetryDelayMs: settingsManager.getProviderRetrySettings().maxRetryDelayMs,
   });
-  setInternalBeforeToolBatch(agent, internalOptions.beforeToolBatch);
+  setInternalBeforeToolBatch(agent, options.beforeToolBatch);
   if (agent.streamFn) {
     bindStreamLlmRuntime(agent.streamFn, modelRegistryRuntime.llmRuntime);
   }
@@ -473,9 +458,9 @@ async function createAgentSessionImpl(
     extensionRunnerRef,
     sessionStartEvent: options.sessionStartEvent,
     withSessionWriteSettlement: options.withSessionWriteSettlement,
-    contextOverflowRecoveryOwner: internalOptions.contextOverflowRecoveryOwner,
-    resolveCompactionThinkingLevel: internalOptions.resolveCompactionThinkingLevel,
-    cleanupProviderSessionResourcesOnDispose,
+    contextOverflowRecoveryOwner: options.contextOverflowRecoveryOwner,
+    resolveCompactionThinkingLevel: options.resolveCompactionThinkingLevel,
+    cleanupProviderSessionResourcesOnDispose: options.cleanupProviderSessionResourcesOnDispose,
   });
   const extensionsResult = resourceLoader.getExtensions();
 
