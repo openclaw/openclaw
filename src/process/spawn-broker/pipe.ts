@@ -1,7 +1,14 @@
 import type { Socket } from "node:net";
 import { SpawnBrokerError } from "./protocol.js";
 
-type HeldPipe = { read: Socket["read"]; resumed: boolean; onResume: () => void };
+type HeldPipe = {
+  read: Socket["read"];
+  pause: Socket["pause"];
+  resume: Socket["resume"];
+  /** The caller's latest flow request, recorded until Node's release tick. */
+  flow?: "pause" | "resume";
+  releasing?: boolean;
+};
 const readers = new WeakMap<Socket, HeldPipe>();
 const holdReadable = () => {};
 
@@ -9,13 +16,20 @@ const holdReadable = () => {};
 export function holdPipe(socket: Socket): void {
   const held: HeldPipe = {
     read: socket.read.bind(socket),
-    resumed: false,
-    onResume: () => {
-      held.resumed = true;
-    },
+    pause: socket.pause.bind(socket),
+    resume: socket.resume.bind(socket),
   };
   readers.set(socket, held);
-  socket.on("resume", held.onResume);
+  // Node reports a pause made while a readable listener exists through no event,
+  // and its resume event arrives a tick late, so record the calls themselves.
+  for (const flow of ["pause", "resume"] as const) {
+    socket[flow] = () => {
+      if (!held.releasing) {
+        held.flow = flow;
+      }
+      return held[flow]();
+    };
+  }
   socket.on("readable", holdReadable);
   // Node's exit drain resumes pipes, and its EOF callback calls read(0) even on
   // paused sockets. Gate reads until publication; native buffering stays bounded.
@@ -72,7 +86,8 @@ export function takePipePrefix(socket: Socket): Buffer {
     throw new Error("Spawn broker pipe was not held for handoff");
   }
   const buffered: unknown = held.read.call(socket, socket.readableLength);
-  restoreReader(socket);
+  restoreReader(socket, held);
+  restoreFlow(socket, held);
   if (buffered === null) {
     return Buffer.alloc(0);
   }
@@ -84,31 +99,38 @@ export function takePipePrefix(socket: Socket): Buffer {
 
 /** Publish stream data and EOF after the caller's readiness continuation. */
 export function releasePipe(socket: Socket): void {
-  const held = restoreReader(socket);
+  const held = readers.get(socket);
   if (!held) {
     return;
   }
-  // Removing a readable listener takes effect on nextTick. Preserve consumption
-  // requested while held, including async iterators waiting for another notification.
+  // Removing a readable listener takes effect on nextTick, and Node then resumes
+  // any stream with data listeners. That resume is not the caller's, so stop
+  // recording just ahead of it, and keep recording calls made before it.
   process.nextTick(() => {
+    held.releasing = true;
+  });
+  restoreReader(socket, held);
+  // Replay the caller's latest flow request over Node's resume, and wake async
+  // iterators waiting for another notification.
+  process.nextTick(() => {
+    restoreFlow(socket, held);
     if (socket.destroyed) {
       return;
     }
     socket.emit("readable");
-    if (held.resumed) {
-      socket.resume();
+    if (held.flow) {
+      socket[held.flow]();
     }
   });
 }
 
-function restoreReader(socket: Socket): HeldPipe | undefined {
-  const held = readers.get(socket);
-  if (!held) {
-    return undefined;
-  }
+function restoreReader(socket: Socket, held: HeldPipe): void {
   socket.read = held.read;
   readers.delete(socket);
-  socket.removeListener("resume", held.onResume);
   socket.removeListener("readable", holdReadable);
-  return held;
+}
+
+function restoreFlow(socket: Socket, held: HeldPipe): void {
+  socket.pause = held.pause;
+  socket.resume = held.resume;
 }
