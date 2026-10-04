@@ -25,7 +25,7 @@ import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { validateExplicitMessageAccountSelection } from "../../infra/outbound/message-account-selection.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { enqueueSystemEvent, enqueueSystemEventWithReceipt } from "../../infra/system-events.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
@@ -273,7 +273,7 @@ export function createGatewayHookDispatcher(params: {
     });
     const sessionKey = target.eventSessionKey;
     const eventOptions = { sessionKey };
-    const queued = enqueueSystemEvent(
+    const queued = enqueueSystemEventWithReceipt(
       value.text,
       isUnscopedSessionKeySentinel(sessionKey)
         ? withSystemEventOwner(eventOptions, agentId)

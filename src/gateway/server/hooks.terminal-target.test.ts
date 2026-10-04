@@ -9,8 +9,11 @@ const runCronIsolatedAgentTurnMock = vi.fn();
 const loadConfigMock = vi.fn<() => OpenClawConfig>();
 const logHooksWarnMock = vi.fn();
 
-vi.mock("../../infra/system-events.js", () => ({
+vi.mock("../../infra/system-events.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/system-events.js")>()),
   enqueueSystemEvent: enqueueSystemEventMock,
+  enqueueSystemEventWithReceipt: (...args: unknown[]) =>
+    enqueueSystemEventMock(...args) ? () => true : null,
 }));
 vi.mock("../../infra/heartbeat-wake.js", () => ({
   requestHeartbeat: requestHeartbeatMock,

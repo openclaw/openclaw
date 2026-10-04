@@ -154,6 +154,8 @@ limits, routing policy, and error responses.
 
     HTTP `200` includes `eventOutcome: "queued"` when the queue accepts the wake or `eventOutcome: "coalesced"` when the same wake is already the queue's most recent pending event. With `mode: "now"`, a wake is requested in either case; the response does not mean a heartbeat completed. Use `mode: "next-heartbeat"` to avoid requesting an immediate wake.
 
+    A full session queue returns HTTP `503` with an actionable error instead of evicting an accepted event. Let the session process its pending events before retrying. This applies to mapped wake actions too; duplicate wakes can still coalesce when the queue is full.
+
     A supplied `agentId` must name a configured agent. Supply it explicitly when the fleet has no implicit or retained legacy owner. A caller-selected `sessionKey` requires `mode: "now"`, `hooks.allowRequestSessionKey: true`, and the configured prefix policy; deferred wakes use the main session.
 
     Wake text is a system event, not an isolated, safety-wrapped email reader turn. Send only a short notification you control. Route raw email, documents, or other untrusted content through an `agent` action with a restricted reader.

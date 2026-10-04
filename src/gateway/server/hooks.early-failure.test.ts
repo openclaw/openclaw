@@ -46,8 +46,11 @@ vi.mock("../../cron/isolated-agent.js", () => ({
 vi.mock("../../infra/heartbeat-wake.js", () => ({
   requestHeartbeat: mocks.requestHeartbeat,
 }));
-vi.mock("../../infra/system-events.js", () => ({
+vi.mock("../../infra/system-events.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/system-events.js")>()),
   enqueueSystemEvent: mocks.enqueueSystemEvent,
+  enqueueSystemEventWithReceipt: (...args: unknown[]) =>
+    mocks.enqueueSystemEvent(...args) ? () => true : null,
 }));
 
 const { createGatewayHookDispatcher, createGatewayHooksRequestHandler } =
