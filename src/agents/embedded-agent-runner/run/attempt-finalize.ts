@@ -1,4 +1,5 @@
-import { readActiveTranscriptEntryAnchor } from "../../../config/sessions/session-accessor.js";
+import { readActiveTranscriptEntryAnchorAsync } from "../../../config/sessions/session-transcript-anchor-read.js";
+import { captureOwnedTranscriptWriteAssertion } from "../../../config/sessions/transcript-write-context.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { createAbortError } from "../../../infra/abort-signal.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
@@ -13,7 +14,7 @@ import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
 import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.js";
 import { isSignalTimeoutReason } from "../../failover-error.js";
-import { runAgentEndSideEffects } from "../../harness/agent-end-side-effects.js";
+import { runAgentEndSideEffectsAsync } from "../../harness/agent-end-side-effects.js";
 import { finalizeHarnessContextEngineTurn } from "../../harness/context-engine-lifecycle.js";
 import { bindAgentHarnessHookMessages } from "../../harness/lifecycle-hook-messages.js";
 import type { AgentSession, SessionMessageEntry } from "../../sessions/index.js";
@@ -206,9 +207,10 @@ export async function completeEmbeddedAttemptAfterTurn(
     if (attempt.onContextEngineTurnCandidate) {
       const admission = attempt.userTurnTranscriptRecorder?.getAdmissionReceipt();
       const terminalEntryId = resolveTerminalMessageEntryId(sessionManager) ?? undefined;
+      const assertCurrent = admission && captureOwnedTranscriptWriteAssertion(admission);
       const terminal =
         admission && terminalEntryId
-          ? readActiveTranscriptEntryAnchor({
+          ? await readActiveTranscriptEntryAnchorAsync({
               agentId: admission.agentId,
               sessionId: admission.sessionId,
               sessionKey: admission.sessionKey,
@@ -216,14 +218,24 @@ export async function completeEmbeddedAttemptAfterTurn(
               entryId: terminalEntryId,
             })
           : undefined;
-      if (admission && terminal) {
+      assertCurrent?.();
+      const currentAdmission = attempt.userTurnTranscriptRecorder?.getAdmissionReceipt();
+      const currentLifecycle = projectAgentRunAttemptTerminal(executionState.terminal);
+      if (
+        admission &&
+        terminal &&
+        currentAdmission?.logicalTurnId === admission.logicalTurnId &&
+        currentAdmission.entryId === admission.entryId &&
+        currentAdmission.generation === admission.generation &&
+        resolveTerminalMessageEntryId(sessionManager) === terminalEntryId
+      ) {
         attempt.onContextEngineTurnCandidate({
           boundary: { admission, terminal },
           sessionIdUsed,
           sessionKey: attempt.sessionKey,
           sessionTarget: attempt.sessionTarget,
           promptError: Boolean(promptError),
-          aborted: lifecycleState.aborted,
+          aborted: currentLifecycle.aborted,
           yieldAborted,
           isHeartbeat: isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind),
           runtimeContext: {
@@ -348,7 +360,7 @@ export async function completeEmbeddedAttemptAfterTurn(
       entry = entry.parentId ? sessionManager.getEntry(entry.parentId) : undefined;
     }
     const reachedPromptBoundary = transcriptLeafId === null || entry?.id === transcriptLeafId;
-    runAgentEndSideEffects({
+    await runAgentEndSideEffectsAsync({
       skillExperienceReviewSource:
         sourceTarget && terminalEntry && reachedPromptBoundary
           ? { ...sourceTarget, entryId: terminalEntry.id }

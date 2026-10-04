@@ -1250,6 +1250,17 @@ before returning the result. Cold archives retain their existing restoration
 owner. Native transaction callbacks and process-held incognito transcripts retain
 their synchronous reader; worker failures never fall back to host disk reads.
 
+Turn completion and reply-delivery observation read durable anchors, projection
+readiness, and reply-tail identities through that same history worker. Each batch
+uses one snapshot and refuses stale projections without rebuilding them. Final
+delivery validation retains the existing writer FIFO through synchronous host
+consumption; the native connection's mutation witness also rejects an intervening
+synchronous SDK write. Source identity and current run authority are rechecked
+after reads. Native writer callbacks, shipped synchronous SDK compatibility,
+and process-held incognito retain their existing owners. Context and watermark
+validation remain separate work. Schemas, retention, durability, and update
+behavior are unchanged.
+
 Awaited full-transcript event reads use the same history worker's hydration stream.
 Compaction preflight, reset hooks, BTW context, exports, and the asynchronous SDK
 reader retain raw event order, read fences, and byte limits. The host captures the

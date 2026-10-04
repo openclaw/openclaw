@@ -304,6 +304,11 @@ export type SqliteReadOperationRevision = {
   mutationRevision: number;
 };
 
+/** Local mutation witness only; foreign writers still require their owning admission fence. */
+export function readSqliteNativeMutationRevision(database: DatabaseSync): number | undefined {
+  return owners.get(database)?.mutationRevision;
+}
+
 /** Reuse row facts only inside admitted reads, never during a native write or snapshot. */
 export function getSqliteReadOperationRevision(
   database: DatabaseSync,

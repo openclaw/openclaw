@@ -32,7 +32,6 @@ import {
   loadSessionEntryReadOnly,
   isSessionTranscriptProjectionUnavailableError,
   persistSessionTranscriptTurn,
-  readActiveTranscriptEntryAnchor,
   readLatestTranscriptAssistantText,
   readSessionTranscriptMessageEventPage,
   resolveSessionEntrySelection,
@@ -45,6 +44,7 @@ import {
   type TranscriptEvent,
 } from "./session-accessor.js";
 import type { LatestTranscriptAssistantText } from "./session-accessor.types.js";
+import { readActiveTranscriptEntryAnchorAsync } from "./session-transcript-anchor-read.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import type {
   SessionLifecycleRevisionExpectation,
@@ -562,7 +562,7 @@ export async function appendExactAssistantMessageToSessionTranscript(
     };
   }
   if (latestEquivalentAssistantId) {
-    const anchor = readActiveTranscriptEntryAnchor({
+    const anchor = await readActiveTranscriptEntryAnchorAsync({
       ...target,
       entryId: latestEquivalentAssistantId,
     });
