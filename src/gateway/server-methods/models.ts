@@ -96,6 +96,12 @@ export const modelsHandlers: GatewayRequestHandlers = {
       if (!publicationScope) {
         return;
       }
+      const { ensureGatewayPreparedModelRuntimeReady } =
+        await import("../../agents/prepared-model-runtime.js");
+      publicationScope.draftAccountSelection?.assertCurrent();
+      publicationScope.assertCurrent?.();
+      await ensureGatewayPreparedModelRuntimeReady({ agentId: resolved.agentId });
+      publicationScope.draftAccountSelection?.assertCurrent();
       publicationScope.assertCurrent?.();
       if (params.refresh !== true) {
         refreshExpiredPreparedModelCatalog({ agentId: resolved.agentId, config: cfg });

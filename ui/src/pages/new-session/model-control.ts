@@ -99,11 +99,10 @@ export class NewSessionModelControl extends NewSessionModelSelection {
           }
           this.updateMetadataState({
             ...this.metadataState,
-            status: this.metadataState.hasSnapshot
-              ? this.metadataState.status === "error"
-                ? "error"
-                : "ready"
-              : "loading",
+            status:
+              this.metadataState.hasSnapshot && this.metadataState.status === "ready"
+                ? "ready"
+                : "loading",
           });
         } else {
           this.notify();

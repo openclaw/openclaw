@@ -76,7 +76,7 @@ const enModelControls = {
       chatOnly: "Chat only",
       chatOnlyHelp:
         "This model can chat, but it cannot use tools. Choose another model for files, commands, web, or media tasks.",
-      loadingModels: "Loading models…",
+      loadingModels: "Checking models…",
       refreshingModels: "Refreshing models…",
       refreshingProviderModels: "Refreshing models for {providers}…",
       modelPending: "Model pending",

@@ -56,13 +56,20 @@ function buildReplyDispatchPublication(
   return Object.freeze(runtimes);
 }
 
+type PreparedReplyDispatchLoadParams = {
+  agentId: string;
+  abortSignal?: AbortSignal;
+  demand?: "interactive" | "scheduled";
+};
+
 type PreparedReplyDispatchPublicationHost = Readonly<{
   isGatewayLifecycleActive: () => boolean;
   getConfiguredOwner: (agentId: string) => PreparedModelRuntimeOwner | undefined;
   getPendingReplacement: () => Promise<void> | undefined;
+  ensureReady: (params: PreparedReplyDispatchLoadParams) => Promise<void>;
 }>;
 
-/** Reads one immutable configured Gateway dispatch generation without activating an owner. */
+/** Reads an immutable dispatch generation after the lifecycle's demand preparation. */
 export class PreparedReplyDispatchPublicationOwner {
   #publication = EMPTY_REPLY_DISPATCH_PUBLICATION;
 
@@ -112,13 +119,11 @@ export class PreparedReplyDispatchPublicationOwner {
     );
   }
 
-  readonly load = async ({
-    agentId,
-    abortSignal,
-  }: {
-    agentId: string;
-    abortSignal?: AbortSignal;
-  }): Promise<PreparedReplyDispatchRuntime | undefined> => {
+  readonly load = async (
+    params: PreparedReplyDispatchLoadParams,
+  ): Promise<PreparedReplyDispatchRuntime | undefined> => {
+    await this.host.ensureReady(params);
+    const { agentId, abortSignal } = params;
     for (;;) {
       if (abortSignal?.aborted) {
         throw createAbortError("Prepared reply dispatch admission aborted", {

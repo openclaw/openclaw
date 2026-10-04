@@ -100,6 +100,7 @@ export async function prepareCronRunContext(params: {
   );
   const publishedRuntime = await loadPublishedGatewayReplyDispatchRuntime({
     agentId: initialAgentId,
+    demand: "scheduled",
     abortSignal: input.abortSignal ?? input.signal,
   });
   const modelOwner = await resolveCronModelSelectionOwner({

@@ -63,7 +63,7 @@ function retainedAccountDraft() {
     select(`account:${account.authProfileId}`);
     return {
       completion: vi.waitFor(() =>
-        expect(control.modelSelectionBlockedReason(agent)).not.toBe("Loading models…"),
+        expect(control.modelSelectionBlockedReason(agent)).not.toBe("Checking models…"),
       ),
     };
   };
@@ -257,7 +257,7 @@ describe("new-session model metadata lifecycle", () => {
       await vi.waitFor(() => expect(draw().textContent).toContain(account.label));
       select(`account:${account.authProfileId}`);
       expect(draw().querySelector('[data-chat-model-option="anthropic/model"]')).not.toBeNull();
-      expect(control.modelSelectionBlockedReason(agent)).toBe("Loading models…");
+      expect(control.modelSelectionBlockedReason(agent)).toBe("Checking models…");
       expect(control.accountSelectionReady()).toBe(false);
       expect(
         draw()
@@ -398,7 +398,7 @@ describe("new-session model metadata lifecycle", () => {
       "models.list",
       { view: "configured", agentId: "main", authProfileId: account.authProfileId },
     ]);
-    expect(control.modelSelectionBlockedReason(agent)).toBe("Loading models…");
+    expect(control.modelSelectionBlockedReason(agent)).toBe("Checking models…");
     preview.resolve({ ...connected, refreshFailed: true });
     await completion;
     expect(control.modelSelectionBlockedReason(agent)).toBeUndefined();
@@ -436,7 +436,7 @@ describe("new-session model metadata lifecycle", () => {
     const failedRetry = deferred<ModelCatalogResult>();
     request.mockReturnValueOnce(failedRetry.promise);
     select(`account:${account.authProfileId}`);
-    expect(control.modelSelectionBlockedReason(agent)).toBe("Loading models…");
+    expect(control.modelSelectionBlockedReason(agent)).toBe("Checking models…");
     failedRetry.reject(new Error("Preview still unavailable"));
     await vi.waitFor(() =>
       expect(control.modelSelectionBlockedReason(agent)).toBe("Models unavailable"),
@@ -461,7 +461,7 @@ describe("new-session model metadata lifecycle", () => {
     async (outcome) => {
       const { agent, control, preview, connected, chooseAccount } = retainedAccountDraft();
       const { completion } = await chooseAccount();
-      expect(control.modelSelectionBlockedReason(agent)).toBe("Loading models…");
+      expect(control.modelSelectionBlockedReason(agent)).toBe("Checking models…");
       preview.resolve({
         ...connected,
         ...(outcome === "unconfirmed account" ? { accountSelection: undefined } : {}),

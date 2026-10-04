@@ -260,6 +260,13 @@ export type PreparedModelRuntimeOwner = {
   /** Source-bound attempt status, including failure before any inventory was published. */
   catalogAttempt?: PreparedModelCatalogAttempt;
   refreshError?: Error;
+  /** Demand may recheck a failed catalog-worker replacement; scheduled demand gets one attempt. */
+  catalogRecovery?: {
+    error: Error;
+    scheduledAttempted: boolean;
+    retryAfter: number;
+    replacementGateId?: PreparedModelRuntimeReplacementGateId;
+  };
   /** The configured publication owner recovers when an idle Gateway lender retires. */
   onPluginGenerationRetired?: () => void;
   snapshot?: PreparedModelRuntimeSnapshot;

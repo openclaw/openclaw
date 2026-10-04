@@ -4153,7 +4153,7 @@ describe("chat model controls", () => {
     expect(trigger.getAttribute("aria-busy")).toBe("true");
     expect(trigger.getAttribute("aria-disabled")).toBe("false");
     expect(trigger.querySelector(".chat-controls__model-trigger-skeleton")).not.toBeNull();
-    expect(trigger.textContent).not.toContain("Loading models");
+    expect(trigger.textContent).not.toContain("Checking models");
     const effort = container.querySelector(".chat-controls__effort-picker");
     expect(effort?.getAttribute("aria-hidden")).toBe("true");
     expect(effort?.hasAttribute("inert")).toBe(true);
