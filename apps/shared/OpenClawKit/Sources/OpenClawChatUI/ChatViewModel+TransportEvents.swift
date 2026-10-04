@@ -12,7 +12,7 @@ private final class PendingRunOwnerReference {
 }
 
 extension OpenClawChatViewModel {
-    /// Returns the task that settles the event's transcript or question reconciliation, when it starts one.
+    /// Returns a completion task for event reconciliation, settling both model and swarm refreshes for metadata changes.
     @discardableResult
     func handleTransportEvent(_ evt: OpenClawChatTransportEvent) -> Task<Void, Never>? {
         guard !self.isTransportDetached else { return nil }
@@ -51,8 +51,12 @@ extension OpenClawChatViewModel {
             self.refreshSourceContext()
             self.refreshAgentsIfRequested()
             let session = self.currentSessionSnapshot()
-            Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
-            return Task { [weak self] in await self?.refreshSwarmCapability(sessionSnapshot: session) }
+            let modelRefresh = Task<Void, Never> { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
+            let swarmRefresh = Task<Void, Never> { [weak self] in await self?.refreshSwarmCapability(sessionSnapshot: session) }
+            return Task {
+                await modelRefresh.value
+                await swarmRefresh.value
+            }
         case let .sessionsChanged(change):
             return self.handleSessionsChangedEvent(change)
         case let .sessionObserver(digest):
@@ -201,8 +205,7 @@ extension OpenClawChatViewModel {
         self.refreshSessions(limit: 50)
         guard matchesCurrentSession(eventSessionKey) else { return nil }
         let session = self.currentSessionSnapshot()
-        Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
-        return nil
+        return Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
     }
 
     private func handleLifecycleSessionChange(
@@ -561,8 +564,7 @@ extension OpenClawChatViewModel {
     }
 
     private func appendFinalChatMessageIfPresent(_ chat: OpenClawChatEventPayload) {
-        guard chat.state == "final" else { return }
-        guard let text = OpenClawChatEventText.assistantText(from: chat) else { return }
+        guard chat.state == "final", let text = OpenClawChatEventText.assistantText(from: chat) else { return }
 
         let decoded = chat.message.flatMap {
             try? GatewayPayloadDecoding.decode($0, as: OpenClawChatMessage.self)
@@ -803,9 +805,7 @@ extension OpenClawChatViewModel {
         if let boolValue = value?.value as? Bool {
             return boolValue
         }
-        guard let stringValue = lowercasedAgentEventString(value) else {
-            return false
-        }
+        guard let stringValue = lowercasedAgentEventString(value) else { return false }
         return stringValue == "true" || stringValue == "yes" || stringValue == "1"
     }
 
