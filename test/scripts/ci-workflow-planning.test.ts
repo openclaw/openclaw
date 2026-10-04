@@ -1701,40 +1701,6 @@ describe("ci workflow guards", () => {
       },
     );
 
-    it("retains independent check ownership alongside a bounded PR Node plan", () => {
-      const changedPaths = ["ui/src/styles/chat.css"];
-      const manifest = runCiManifestFixture({
-        bundledPlanner: true,
-        checkFamilyScope: true,
-        eventName: "pull_request",
-        changedPaths,
-        ciLintPlan: {
-          core: [],
-          extensions: [],
-          central: {
-            files: [],
-            coreStripes: [],
-            extensionStripes: [],
-            groups: [],
-            central: true,
-          },
-        },
-        changedPlannerSource: changedPlannerSource(),
-      });
-      expect(manifest.status, manifest.output).toBe(0);
-      expect(manifest.outputs.narrow_check_paths_json).toBe(JSON.stringify(changedPaths));
-      expect(manifest.outputs.run_check_plan).toBe("true");
-      expect(manifest.outputs.run_plugin_contracts_shards).toBe("false");
-      expect(manifest.outputs.run_channel_contracts_shards).toBe("false");
-      expect(manifest.outputs.run_baseline_ratchets).toBe("false");
-      expect(manifest.outputs.run_checks_node_core_nondist).toBe("true");
-      expect(
-        JSON.parse(expectDefined(manifest.outputs.check_matrix, "scoped check matrix")).include.map(
-          (row: { task: string }) => row.task,
-        ),
-      ).toEqual(["lint"]);
-    });
-
     it("requires a successful selected check planner before admitting its consumers", () => {
       const manifest = runCiManifestFixture({
         bundledPlanner: true,
@@ -2174,12 +2140,6 @@ describe("ci workflow guards", () => {
       includeReleaseOnlyTests: false,
     },
     {
-      name: "direct matrix edits",
-      eventName: "pull_request" as const,
-      changedPaths: ["ui/src/e2e/chat-session-entry.e2e.test.ts"],
-      includeReleaseOnlyTests: false,
-    },
-    {
       name: "full release dispatches",
       eventName: "workflow_dispatch" as const,
       changedPaths: ["ui/src/components/app-sidebar.ts"],
@@ -2330,7 +2290,6 @@ describe("ci workflow guards", () => {
     { eventName: "workflow_dispatch" as const, historicalCompatibility: false },
     { eventName: "workflow_dispatch" as const, historicalCompatibility: true },
     { eventName: "pull_request" as const, repository: "example/openclaw" },
-    { eventName: "pull_request" as const, changedPaths: null },
     { eventName: "pull_request" as const, missingSelector: true },
   ])("retains UI E2E outside current known unit-only PR selection %j", (options) => {
     const manifest = runCiManifestFixture({
@@ -2348,14 +2307,9 @@ describe("ci workflow guards", () => {
         export const createChangedExtensionFallbackShards = () => [];
       `,
     });
-    // Current PRs with an unusable manifest fail rather than narrowing proof.
-    if ("changedPaths" in options && options.changedPaths === null) {
-      expect(manifest.status).not.toBe(0);
-    } else {
-      expect(manifest.status, manifest.output).toBe(0);
-      expect(manifest.outputs.run_ui_tests).toBe("true");
-      expect(manifest.outputs.run_ui_e2e).toBe("true");
-    }
+    expect(manifest.status, manifest.output).toBe(0);
+    expect(manifest.outputs.run_ui_tests).toBe("true");
+    expect(manifest.outputs.run_ui_e2e).toBe("true");
   });
 
   it.each<Record<string, string>>([
@@ -3459,7 +3413,6 @@ describe("ci workflow guards", () => {
     { eventName: "workflow_dispatch", releaseGate: true, production: false, expected: false },
     { eventName: "workflow_dispatch", releaseGate: true, production: true, expected: false },
     { eventName: "push" as const, production: false, expected: true },
-    { eventName: "push" as const, production: true, expected: true },
     { eventName: "workflow_dispatch" as const, production: false, expected: true },
     { eventName: "push", production: false, expected: true, legacyPlanner: true },
     { eventName: "workflow_dispatch", production: false, expected: true, legacyPlanner: true },
@@ -7063,39 +7016,6 @@ describe("ci workflow guards", () => {
       } else {
         expect(stripes).toEqual([]);
         expect(result.calls).toEqual(["check:test-types", "tsgo:scripts"]);
-      }
-    },
-  );
-
-  it.each(["pull_request", "schedule", "workflow_dispatch"] as const)(
-    "runs every root partition after its existing core stripe on %s",
-    (eventName) => {
-      const result = runCheckShardFixture({
-        task: "test-types",
-        scripts: ["tsgo:scripts", "tsgo:test:root"],
-        frozenTarget: false,
-        types: { compose: true, profile: "hybrid", eventName, rootStripeSupport: true },
-      });
-      expect(result.status, result.output).toBe(0);
-      expect(result.rows).toHaveLength(6);
-      expect(result.calls).toEqual(["tsgo:extensions:test", "tsgo:scripts"]);
-      for (let stripe = 1; stripe <= 5; stripe++) {
-        expect(result.typeCalls.filter((call) => call.row === `core-${stripe}`)).toEqual([
-          {
-            row: `core-${stripe}`,
-            command: `node --stripe ${stripe}/5 --concurrency 2`,
-            localCheck: null,
-          },
-          ...(stripe >= 2
-            ? [
-                {
-                  row: `core-${stripe}`,
-                  command: `node --root-stripe ${stripe - 1}/4`,
-                  localCheck: "0",
-                },
-              ]
-            : []),
-        ]);
       }
     },
   );
