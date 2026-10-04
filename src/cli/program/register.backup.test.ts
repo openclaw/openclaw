@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   backupSqliteListCommand: vi.fn(),
   backupSqliteRestoreCommand: vi.fn(),
   backupSqliteVerifyCommand: vi.fn(),
+  backupSqliteBatchCommand: vi.fn(),
   backupVerifyCommand: vi.fn(),
   runtime: {
     log: vi.fn(),
@@ -41,6 +42,10 @@ vi.mock("../../commands/backup-sqlite.js", () => ({
   backupSqliteVerifyCommand: mocks.backupSqliteVerifyCommand,
 }));
 
+vi.mock("../../commands/backup-sqlite-batch.js", () => ({
+  backupSqliteBatchCommand: mocks.backupSqliteBatchCommand,
+}));
+
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: mocks.runtime,
 }));
@@ -49,6 +54,20 @@ const { runtime } = mocks;
 beforeEach(() => vi.resetAllMocks());
 
 describe("registered backup routes", () => {
+  it("dispatches one SQLite batch without starting a command for each store", async () => {
+    const program = new Command().exitOverride().configureOutput({ writeErr: () => {} });
+    registerBackupCommand(program);
+    await program.parseAsync(["backup", "sqlite", "batch", "/tmp/request.json", "--json"], {
+      from: "user",
+    });
+    expect(mocks.backupSqliteBatchCommand).toHaveBeenCalledExactlyOnceWith(
+      runtime,
+      "/tmp/request.json",
+      { json: true },
+    );
+    expect(mocks.backupSqliteCreateCommand).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       args: "create --output /tmp/backups --json --dry-run",

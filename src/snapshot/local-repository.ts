@@ -50,6 +50,7 @@ import {
   writeSnapshotManifest,
 } from "./manifest.js";
 import {
+  assertSnapshotDatabaseIdentity,
   buildSnapshotValidator,
   createOpenClawSnapshotCopy,
   normalizeSnapshotIdentity,
@@ -267,7 +268,7 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
   async verify(snapshot: SnapshotRef): Promise<SnapshotVerificationResult> {
     const snapshotDir = await this.#resolveSnapshotDirectory(snapshot);
     const manifest = await readVerifiedSnapshotManifest(snapshotDir);
-    assertAllowedDatabaseRole(manifest, this.#allowedDatabaseRoles);
+    assertSnapshotDatabaseIdentity(manifest.database, this.#allowedDatabaseRoles);
     const artifact = await hashSnapshotArtifact(snapshotDir);
     const artifactPath = path.join(snapshotDir, SNAPSHOT_SQLITE_FILENAME);
     assertArtifactMatchesManifest(artifactPath, artifact, manifest);
@@ -284,10 +285,11 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
   async restoreFresh(
     snapshot: SnapshotRef,
     targetPath: string,
+    expectedIdentity?: SnapshotDatabaseIdentity,
   ): Promise<SnapshotVerificationResult> {
     const snapshotDir = await this.#resolveSnapshotDirectory(snapshot);
     const manifest = await readVerifiedSnapshotManifest(snapshotDir);
-    assertAllowedDatabaseRole(manifest, this.#allowedDatabaseRoles);
+    assertSnapshotDatabaseIdentity(manifest.database, this.#allowedDatabaseRoles, expectedIdentity);
     const resolvedTargetPath = path.resolve(targetPath);
     await assertFreshRestoreTarget(resolvedTargetPath);
     const canonicalRepositoryPath = await fs.realpath(this.#repositoryPath);
@@ -412,7 +414,7 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
               validationRootPath: this.#validationRootPath,
             })
           : await readVerifiedSnapshotManifest(snapshotPath);
-      assertAllowedDatabaseRole(manifest, this.#allowedDatabaseRoles);
+      assertSnapshotDatabaseIdentity(manifest.database, this.#allowedDatabaseRoles);
       snapshots.push({
         ref: { path: snapshotPath },
         manifest,
@@ -482,18 +484,6 @@ function assertArtifactMatchesManifest(
       `Snapshot artifact hash mismatch for ${artifactPath}: expected ${manifest.artifact.sha256}, got ${artifact.sha256}`,
     );
   }
-}
-
-function assertAllowedDatabaseRole(
-  manifest: SnapshotManifest,
-  allowedRoles: readonly SnapshotDatabaseIdentity["role"][] | undefined,
-): void {
-  if (!allowedRoles || allowedRoles.includes(manifest.database.role)) {
-    return;
-  }
-  throw new Error(
-    `SQLite snapshot database role ${manifest.database.role} is not allowed for this operation.`,
-  );
 }
 
 async function verifySnapshotDatabaseFile(
@@ -829,7 +819,7 @@ async function commitPendingSnapshot(
   if (expected && !isDeepStrictEqual(manifest, expected.manifest)) {
     throw new Error(`SQLite snapshot manifest changed during publication: ${snapshotPath}`);
   }
-  assertAllowedDatabaseRole(manifest, params.allowedDatabaseRoles);
+  assertSnapshotDatabaseIdentity(manifest.database, params.allowedDatabaseRoles);
   const artifact = await hashSnapshotArtifact(snapshotPath);
   const artifactPath = path.join(snapshotPath, SNAPSHOT_SQLITE_FILENAME);
   assertArtifactMatchesManifest(artifactPath, artifact, manifest);

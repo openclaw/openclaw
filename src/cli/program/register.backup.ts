@@ -343,6 +343,17 @@ function registerBackupSqliteCommands(backup: Command): void {
     });
 
   sqlite
+    .command("batch <request>")
+    .description("Run ordered agent SQLite snapshot and preflight operations in one process")
+    .option("--json", "Output JSON", false)
+    .action(async (request, opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { backupSqliteBatchCommand } = await import("../../commands/backup-sqlite-batch.js");
+        await backupSqliteBatchCommand(defaultRuntime, request, opts);
+      });
+    });
+
+  sqlite
     .command("list")
     .description("List committed snapshots in a repository")
     .requiredOption("--repository <path>", "Snapshot repository directory")

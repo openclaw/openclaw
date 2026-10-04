@@ -47,6 +47,10 @@ export type SnapshotSummary = SnapshotResult;
 export type SqliteSnapshotProvider = {
   create(database: SnapshotDatabaseRef): Promise<SnapshotResult>;
   list(): Promise<SnapshotSummary[]>;
-  restoreFresh(snapshot: SnapshotRef, targetPath: string): Promise<SnapshotVerificationResult>;
+  restoreFresh(
+    snapshot: SnapshotRef,
+    targetPath: string,
+    expectedIdentity?: SnapshotDatabaseIdentity,
+  ): Promise<SnapshotVerificationResult>;
   verify(snapshot: SnapshotRef): Promise<SnapshotVerificationResult>;
 };

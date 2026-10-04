@@ -181,6 +181,7 @@ describe("SQLite backup commands", () => {
 
     const restored = await backupSqliteRestoreCommand(runtime, created.snapshotPath, {
       target: restorePath,
+      expectedIdentity: { role: "global" },
       json: true,
     });
     expect(restored).toMatchObject({

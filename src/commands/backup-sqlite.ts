@@ -9,6 +9,7 @@ import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { createLocalSqliteSnapshotProvider } from "../snapshot/local-repository.js";
 import type {
   SnapshotDatabaseManifest,
+  SnapshotDatabaseIdentity,
   SnapshotManifest,
   SnapshotRef,
   SnapshotSummary,
@@ -43,6 +44,7 @@ type BackupSqliteVerifyOptions = BackupSqliteJsonOptions & {
 
 type BackupSqliteRestoreOptions = BackupSqliteJsonOptions & {
   target?: string;
+  expectedIdentity?: SnapshotDatabaseIdentity;
 };
 
 type BackupSqliteListResult = {
@@ -171,7 +173,11 @@ export async function backupSqliteRestoreCommand(
 ): Promise<BackupSqliteRestoreResult> {
   const resolved = resolveSnapshot(snapshot);
   const targetPath = resolveRequiredBackupPath(options.target, "--target");
-  const restored = await resolved.provider.restoreFresh(resolved.ref, targetPath);
+  const restored = await resolved.provider.restoreFresh(
+    resolved.ref,
+    targetPath,
+    options.expectedIdentity,
+  );
   const report: BackupSqliteRestoreResult = {
     ok: true,
     snapshotPath: resolved.ref.path,

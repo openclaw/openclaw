@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { resolveStateDir } from "../config/paths.js";
 import { embedSessionColdArchivesInSnapshot } from "../config/sessions/session-cold-storage-backup.js";
@@ -19,7 +20,7 @@ export function normalizeSnapshotIdentity(
   identity: SnapshotDatabaseIdentity,
 ): SnapshotDatabaseIdentity {
   if (identity.role === "global") {
-    return identity;
+    return { role: "global" };
   }
   if (identity.role === "agent") {
     const agentId = normalizeAgentId(identity.agentId);
@@ -50,6 +51,29 @@ export function buildSnapshotValidator(
       });
   }
   return () => undefined;
+}
+
+export function assertSnapshotDatabaseIdentity(
+  identity: SnapshotDatabaseIdentity,
+  allowedRoles: readonly SnapshotDatabaseIdentity["role"][] | undefined,
+  expectedIdentity?: SnapshotDatabaseIdentity,
+): void {
+  if (allowedRoles && !allowedRoles.includes(identity.role)) {
+    throw new Error(
+      `SQLite snapshot database role ${identity.role} is not allowed for this operation.`,
+    );
+  }
+  if (
+    expectedIdentity &&
+    !isDeepStrictEqual(
+      normalizeSnapshotIdentity(identity),
+      normalizeSnapshotIdentity(expectedIdentity),
+    )
+  ) {
+    throw new Error(
+      "SQLite snapshot database identity does not match the requested restore owner.",
+    );
+  }
 }
 
 /** Produce the canonical sanitized, compact, verified copy used by every snapshot provider. */

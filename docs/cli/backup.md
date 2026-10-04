@@ -315,6 +315,61 @@ Restore repeats verification and writes only to a fresh target. It refuses an ex
 
 Snapshot repositories are local directories. Scheduling, upload, retention, incremental WAL bundles, failover, and restore-on-boot behavior are intentionally outside this command.
 
+### Batch agent database operations
+
+Use `openclaw backup sqlite batch <request.json> --json` to process several agent
+stores in one CLI process. The request is a regular JSON file, at most 1 MiB, with
+1–1,000 operations and unique operation IDs. The entire request is validated
+before any operation runs. Agent IDs must be canonical.
+
+```json
+{
+  "schema": "openclaw.sqlite-batch.v1",
+  "operations": [
+    {
+      "id": "main",
+      "operation": "create",
+      "agentId": "main",
+      "repository": "~/Backups/main"
+    },
+    {
+      "id": "research",
+      "operation": "create",
+      "agentId": "research",
+      "repository": "~/Backups/research"
+    }
+  ]
+}
+```
+
+Each operation selects one agent database:
+
+| Operation   | Required fields beyond `id`, `operation`, and `agentId` | Result                                           |
+| ----------- | ------------------------------------------------------- | ------------------------------------------------ |
+| `create`    | `repository`                                            | Snapshot path and manifest                       |
+| `restore`   | `snapshot`, `target`                                    | Verified snapshot manifest and fresh target path |
+| `preflight` | `path`                                                  | The exact native agent schema preflight result   |
+
+Creation resolves each source from the active configuration, including custom
+agent directories, and uses the same WAL-aware snapshot owner as single-store
+creation. A staging caller can keep its existing isolated, plugin-disabled
+configuration through `OPENCLAW_CONFIG_PATH` and `OPENCLAW_STATE_DIR`; batching
+does not change configuration selection or activate plugins. Restore checks that
+the snapshot belongs to the requested agent before creating a target, then uses
+the existing hash, integrity, schema, filesystem, and fresh-target verification
+once. A separate `verify` operation is unnecessary before restore. Preflight is
+read-only and succeeds only for an `exact` result; it never repairs a database.
+
+The response has `schema: "openclaw.sqlite-batch-result.v1"`, an overall `ok`, and
+an ordered `outcomes` array. Completed entries include `id`, `operation`,
+`status: "completed"`, and the operation's `result`. A failure includes
+`status: "failed"` and `error.code`/`error.message`; preflight refusals also retain
+the native `result`. Execution stops at the first failure. Every remaining entry
+has `status: "skipped"` with `error.code: "prior-operation-failed"`, and the command
+exits nonzero after writing the report. Successfully created snapshots and fresh
+restores remain available; a batch is not an atomic transaction across stores.
+Snapshot formats, sanitization, schema versions, and update behavior are unchanged.
+
 ## Versioned Git backups
 
 `openclaw backup git` stores deterministic, per-table JSONL dumps in a plain Git repository owned by the operator. One repository can hold the shared database and every per-agent database:
