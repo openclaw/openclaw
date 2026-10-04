@@ -47,6 +47,13 @@ describe("tool-authored source replies", () => {
       label: "attachment-only sourceReply",
       details: { sourceReply: { attachments: [{ path: "/tmp/albaran.pdf" }] } },
     },
+    // Delivery drops blank media, so blank entries alone cannot end a turn.
+    { label: "blank mediaUrls", details: { sourceReply: { mediaUrls: ["", "   "] } } },
+    { label: "blank mediaUrl", details: { sourceReply: { mediaUrl: "  " } } },
+    {
+      label: "blank mediaUrls shadowing a mediaUrl",
+      details: { sourceReply: { mediaUrls: [" "], mediaUrl: "/tmp/flyer.png" } },
+    },
     // A non-final reply is not deliverable; the model keeps the turn.
     { label: "final: false", details: { sourceReply: { text: "Comprobando…", final: false } } },
   ])("ignores results with $label", ({ details }) => {

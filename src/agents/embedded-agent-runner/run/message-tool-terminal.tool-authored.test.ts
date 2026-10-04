@@ -196,6 +196,11 @@ describe("tool-authored source reply turn completion", () => {
     { label: "failed", details: finalReply, isError: true },
     { label: "reported ok: false", details: { ...finalReply, ok: false }, isError: false },
     { label: "returned no source reply", details: { ok: true }, isError: false },
+    {
+      label: "returned only blank media",
+      details: { sourceReply: { mediaUrls: ["", "  "] } },
+      isError: false,
+    },
   ])("lets the model continue when the capable tool $label", async ({ details, isError }) => {
     const run = await runBatch({
       tools: [

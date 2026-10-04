@@ -5,6 +5,7 @@ import {
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../../../auto-reply/reply-payload.js";
+import { resolveSourceReplyMediaUrls } from "../../embedded-agent-messaging-extraction.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -29,9 +30,7 @@ export function buildSourceReplyPayloadState(params: {
   const sourceReplyPayloads = params.payloads ?? [];
   const replyItems = sourceReplyPayloads.flatMap((payload, index): ReplyPayload[] => {
     const text = normalizeOptionalString(payload.text) ?? "";
-    const media = (
-      payload.mediaUrls?.length ? payload.mediaUrls : payload.mediaUrl ? [payload.mediaUrl] : []
-    ).filter((value) => value.trim().length > 0);
+    const media = resolveSourceReplyMediaUrls(payload);
     if (
       !text &&
       media.length === 0 &&

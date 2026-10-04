@@ -57,13 +57,26 @@ export function extractToolAuthoredSourceReplyPayload(
   if (!payload) {
     return undefined;
   }
-  // Same admission as final payload delivery: attachments ride along but do not
-  // qualify a reply on their own.
+  // Same admission as source-reply delivery: blank text and blank media entries are
+  // dropped there, and attachments ride along but do not qualify a reply on their own.
   const hasDeliverableContent =
-    Boolean(payload.text?.trim()) ||
-    Boolean(payload.mediaUrl) ||
-    Boolean(payload.mediaUrls?.length);
+    Boolean(payload.text?.trim()) || resolveSourceReplyMediaUrls(payload).length > 0;
   return hasDeliverableContent ? payload : undefined;
+}
+
+/**
+ * The media a source reply delivers: `mediaUrls` when present, else `mediaUrl`,
+ * without blank entries. Delivery and tool-authored admission share it.
+ */
+export function resolveSourceReplyMediaUrls(
+  payload: Pick<MessagingToolSourceReplyPayload, "mediaUrl" | "mediaUrls">,
+): string[] {
+  const media = payload.mediaUrls?.length
+    ? payload.mediaUrls
+    : payload.mediaUrl
+      ? [payload.mediaUrl]
+      : [];
+  return media.filter((value) => value.trim().length > 0);
 }
 
 function readSourceReplyPayload(
