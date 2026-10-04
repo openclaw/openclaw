@@ -68,6 +68,7 @@ import {
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { isPersonLikePage } from "./person-page.js";
 import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
+import { writeManagedMarkdownFile, writeVerifiedVaultTextFile } from "./vault-page-write.js";
 import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
 import { buildMemoryWikiOverview, projectMemoryWikiOverviewItem } from "./wiki-overview.js";
 
@@ -856,43 +857,15 @@ async function refreshPageRelatedBlocks(params: {
     if (updated === original) {
       continue;
     }
-    await root.write(page.relativePath, updated);
+    await writeVerifiedVaultTextFile({
+      vault: root,
+      pagePath: page.relativePath,
+      content: updated,
+    });
     params.signal?.throwIfAborted();
     updatedFiles.push(page.absolutePath);
   }
   return updatedFiles;
-}
-
-async function writeManagedMarkdownFile(params: {
-  rootDir: string;
-  relativePath: string;
-  title: string;
-  startMarker: string;
-  endMarker: string;
-  body: string;
-  signal?: AbortSignal;
-}): Promise<boolean> {
-  params.signal?.throwIfAborted();
-  const root = await fsRoot(params.rootDir);
-  const original = await root.readText(params.relativePath).catch(() => `# ${params.title}\n`);
-  params.signal?.throwIfAborted();
-  // Generated indexes bypass page discovery. Parse existing content here so
-  // managed-block updates cannot rewrite malformed frontmatter.
-  parseWikiMarkdown(original);
-  const updated = replaceManagedMarkdownBlock({
-    original,
-    heading: "## Generated",
-    startMarker: params.startMarker,
-    endMarker: params.endMarker,
-    body: params.body,
-  });
-  const rendered = withTrailingNewline(updated);
-  if (rendered === original) {
-    return false;
-  }
-  await root.write(params.relativePath, rendered);
-  params.signal?.throwIfAborted();
-  return true;
 }
 
 async function writeDashboardPage(params: {
@@ -957,7 +930,11 @@ async function writeDashboardPage(params: {
     return false;
   }
   const rendered = renderWithUpdatedAt(params.now.toISOString());
-  await root.write(params.definition.relativePath, rendered);
+  await writeVerifiedVaultTextFile({
+    vault: root,
+    pagePath: params.definition.relativePath,
+    content: rendered,
+  });
   return true;
 }
 

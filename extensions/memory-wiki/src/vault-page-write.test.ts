@@ -5,12 +5,18 @@ import { writeGuardedVaultPage } from "./vault-page-write.js";
 
 type FakeVault = Parameters<typeof writeGuardedVaultPage>[0]["vault"];
 
-function fakeVault(write: () => Promise<void>): {
+function fakeVault(
+  write: () => Promise<void>,
+  readText: () => Promise<string> = async () => "",
+): {
   vault: FakeVault;
   remove: ReturnType<typeof vi.fn>;
 } {
   const remove = vi.fn(async () => {});
-  return { vault: { write: vi.fn(write), remove } as unknown as FakeVault, remove };
+  return {
+    vault: { write: vi.fn(write), readText: vi.fn(readText), remove } as unknown as FakeVault,
+    remove,
+  };
 }
 
 describe("writeGuardedVaultPage", () => {
@@ -51,6 +57,52 @@ describe("writeGuardedVaultPage", () => {
       }),
     ).rejects.toThrow(
       /Refusing to write imported source page \(path-mismatch\): sources\/page\.md/u,
+    );
+  });
+
+  it("accepts a verified publication when DrvFS reports not-found after the write", async () => {
+    const publicationError = new FsSafeError("not-found", "fstat failed with ENOENT");
+    const { vault } = fakeVault(
+      async () => {
+        throw publicationError;
+      },
+      async () => "body",
+    );
+
+    await expect(
+      writeGuardedVaultPage({
+        vault,
+        pagePath: "sources/page.md",
+        content: "body",
+        pageStat: null,
+        pageLabel: "imported source page",
+      }),
+    ).resolves.toBeUndefined();
+    expect((vault as unknown as { write: ReturnType<typeof vi.fn> }).write).toHaveBeenCalledTimes(
+      1,
+    );
+  });
+
+  it("preserves not-found when the published bytes do not match", async () => {
+    const publicationError = new FsSafeError("not-found", "fstat failed with ENOENT");
+    const { vault } = fakeVault(
+      async () => {
+        throw publicationError;
+      },
+      async () => "previous body",
+    );
+
+    await expect(
+      writeGuardedVaultPage({
+        vault,
+        pagePath: "sources/page.md",
+        content: "body",
+        pageStat: null,
+        pageLabel: "imported source page",
+      }),
+    ).rejects.toThrow(/Refusing to write imported source page \(not-found\)/u);
+    expect((vault as unknown as { write: ReturnType<typeof vi.fn> }).write).toHaveBeenCalledTimes(
+      1,
     );
   });
 
