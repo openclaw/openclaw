@@ -17,116 +17,82 @@ describe("default pattern table", () => {
     }
   });
 
-  describe("bare pass assignment boundary", () => {
-    it("keeps prose where pass: ends a clause but still masks pass as a config key", () => {
-      function expectRedaction(input: string, expected = input) {
-        expect(redactSensitiveText(input, { mode: "tools" })).toBe(expected);
-      }
-      const prose =
-        "The boundary tests now pass: older clients receive compatible speed values. All checks pass: lint, types.";
-      expectRedaction(prose);
-      const value = "opaque-pass-secret-1234567890";
-      expectRedaction(`smtp.pass: ${value}`, "smtp.pass: opaque…7890");
-      expectRedaction(`db-pass: ${value}`, "db-pass: opaque…7890");
-      expectRedaction(`pass: "${value}"`, 'pass: "opaque…7890"');
-      expectRedaction(`pass = ${value}`, "pass = opaque…7890");
-      expectRedaction(`pass= ${value}`, "pass= opaque…7890");
-      expectRedaction(`pass: ${value}`, "pass: opaque…7890");
-      expectRedaction(
-        `smtp:\n  pass: ${value}\n  user: bot`,
-        "smtp:\n  pass: opaque…7890\n  user: bot",
-      );
-      expectRedaction(`{ user: bot, pass: ${value} }`, "{ user: bot, pass: opaque…7890 }");
-      expectRedaction(
-        `accounts:\n  - pass: ${value}\n  - user: bot`,
-        "accounts:\n  - pass: opaque…7890\n  - user: bot",
-      );
-      expectRedaction(`user=bot; pass: ${value}`, "user=bot; pass: opaque…7890");
-      expectRedaction(`user: bot\rpass: ${value}`, "user: bot\rpass: opaque…7890");
-      expectRedaction(`user=bot pass: ${value}`, "user=bot pass: opaque…7890");
-      expectRedaction(`user = bot pass: ${value}`, "user = bot pass: opaque…7890");
-      expectRedaction(`user= bot pass: ${value}`, "user= bot pass: opaque…7890");
-      expectRedaction(`user =     bot pass: ${value}`, "user =     bot pass: opaque…7890");
-      const longValue = "v".repeat(300);
-      expectRedaction(`key=${longValue} pass: ${value}`, `key=${longValue} pass: opaque…7890`);
-      expectRedaction(`user\tpass: ${value}`, "user\tpass: opaque…7890");
-      expectRedaction(`pass: ${value} pass: ${value}`, "pass: opaque…7890 pass: opaque…7890");
-      expectRedaction(
-        "pass: opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
-        "pass: opaque…ghij pass: opaque…qrst",
-      );
-      expectRedaction(
-        "smtp.pass: opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
-        "smtp.pass: opaque…ghij pass: opaque…qrst",
-      );
-      expectRedaction(
-        "pass:\n  opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
-        "pass:\n  opaque…ghij pass: opaque…qrst",
-      );
-      expectRedaction(
-        "db_pass: opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
-        "db_pass: opaque…ghij pass: opaque…qrst",
-      );
-      expectRedaction(`bypass:\n  pass: ${value}`, "bypass:\n  pass: opaque…7890");
-      expectRedaction(
-        "smtp.pass:\n  opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
-        "smtp.pass:\n  opaque…ghij pass: opaque…qrst",
-      );
-      expectRedaction(
-        "password: opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
-        "password: opaque…ghij pass: opaque…qrst",
-      );
-      expectRedaction(
+  it("distinguishes bare pass assignments from prose across record and chunk boundaries", () => {
+    const value = "opaque-pass-secret-1234567890";
+    const token = "a".repeat(200_000);
+    // A chunk start must not turn mid-sentence prose into a record start.
+    const prefix = "prose ".repeat(4096).slice(0, 16_384 - "the tests now ".length);
+    const chunked = `${prefix}the tests now pass: older clients receive compatible speed values. ${"more prose ".repeat(2000)}`;
+    expect(chunked.length).toBeGreaterThan(32_768);
+    expect(chunked.indexOf("pass:")).toBe(16_384);
+    for (const input of [
+      "The boundary tests now pass: older clients receive compatible speed values. All checks pass: lint, types.",
+      "Use the bypass: it keeps the compass: north.",
+      "Release notes: all suites pass: nothing else changed. Both pass: done.",
+      "The boundary tests now pass:\nolder clients receive compatible values.",
+      "Suite result: 12 pass: 0 fail, 1 skipped.",
+      chunked,
+      `${token} pass: still prose`,
+    ]) {
+      expect(redactSensitiveText(input, { mode: "tools" })).toBe(input);
+    }
+    const assignments: [string, string][] = [
+      ["smtp.pass: ", ""],
+      ["db-pass: ", ""],
+      ['pass: "', '"'],
+      ["pass = ", ""],
+      ["pass= ", ""],
+      ["pass: ", ""],
+      ["smtp:\n  pass: ", "\n  user: bot"],
+      ["{ user: bot, pass: ", " }"],
+      ["accounts:\n  - pass: ", "\n  - user: bot"],
+      ["user=bot; pass: ", ""],
+      ["user: bot\rpass: ", ""],
+      ["user=bot pass: ", ""],
+      ["user = bot pass: ", ""],
+      ["user= bot pass: ", ""],
+      ["user =     bot pass: ", ""],
+      [`key=${"v".repeat(300)} pass: `, ""],
+      ["user\tpass: ", ""],
+      ["bypass:\n  pass: ", ""],
+      ["? pass\n: ", ""],
+      ["host:db.example.test pass: ", ""],
+      ["login (pass: ", ")"],
+      ["smtp:\n  pass:\n    ", "\n  user: bot"],
+      // JSC abandoned the old nested prefilter lookbehind on key runs above roughly 70k.
+      [`${token}=v pass: `, ""],
+    ];
+    const cases: [string, string][] = assignments.map(([start, end]) => [
+      `${start}${value}${end}`,
+      `${start}opaque…7890${end}`,
+    ]);
+    for (const start of [
+      "pass: ",
+      "smtp.pass: ",
+      "pass:\n  ",
+      "db_pass: ",
+      "smtp.pass:\n  ",
+      "password: ",
+    ]) {
+      cases.push([
+        `${start}opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst`,
+        `${start}opaque…ghij pass: opaque…qrst`,
+      ]);
+    }
+    cases.push(
+      [`pass: ${value} pass: ${value}`, "pass: opaque…7890 pass: opaque…7890"],
+      [
         "Authorization: Bearer opaque-bearer-token-value-1234567890 pass: opaque-second-value-klmnopqrst",
         "Authorization: Bearer opaque…7890 pass: opaque…qrst",
-      );
-      expectRedaction(
+      ],
+      [
         "pass: prefix/pass:embedded\npass: opaque-second-value-klmnopqrst",
         "pass: prefix…dded\npass: opaque…qrst",
-      );
-      expectRedaction(`? pass\n: ${value}`, "? pass\n: opaque…7890");
-      const wordProse = "Use the bypass: it keeps the compass: north.";
-      expectRedaction(wordProse);
-      expectRedaction(
-        `host:db.example.test pass: ${value}`,
-        "host:db.example.test pass: opaque…7890",
-      );
-      expectRedaction(`login (pass: ${value})`, "login (pass: opaque…7890)");
-      const moreProse = "Release notes: all suites pass: nothing else changed. Both pass: done.";
-      expectRedaction(moreProse);
-      expectRedaction(
-        `smtp:\n  pass:\n    ${value}\n  user: bot`,
-        "smtp:\n  pass:\n    opaque…7890\n  user: bot",
-      );
-      const wrappedProse = "The boundary tests now pass:\nolder clients receive compatible values.";
-      expectRedaction(wrappedProse);
-      const summaryProse = "Suite result: 12 pass: 0 fail, 1 skipped.";
-      expectRedaction(summaryProse);
-    });
-
-    it("keeps mid-sentence pass: prose when it lands on a bounded-replacement chunk start", () => {
-      // Inputs above 32 KiB are matched in 16 KiB chunks unless a pattern is registered as
-      // chunk-unsafe; a chunk start must not read as a record start for the `^` alternative.
-      const clause = "the tests now pass: older clients receive compatible speed values.";
-      const prefix = "prose ".repeat(4096).slice(0, 16_384 - "the tests now ".length);
-      const text = `${prefix}${clause} ${"more prose ".repeat(2000)}`;
-      expect(text.length).toBeGreaterThan(32_768);
-      expect(text.indexOf("pass:")).toBe(16_384);
-      expect(redactSensitiveText(text, { mode: "tools" })).toBe(text);
-    });
-
-    it("stays linear on a long unbroken token before pass:", () => {
-      // One forward pass classifies every occurrence, so the cost is linear in the text.
-      const token = "a".repeat(200_000);
-      const prose = `${token} pass: still prose`;
-      expect(redactSensitiveText(prose, { mode: "tools" })).toBe(prose);
-      // The `=` after a 200k key run also exercises the default prefilter's obfuscated-key lookbehind
-      // on every runtime: JSC abandoned the previous nested form above roughly 70k characters, which
-      // skipped default redaction for the whole text on Bun.
-      expect(
-        redactSensitiveText(`${token}=v pass: opaque-pass-secret-1234567890`, { mode: "tools" }),
-      ).toBe(`${token}=v pass: opaque…7890`);
-    });
+      ],
+    );
+    for (const [input, expected] of cases) {
+      expect(redactSensitiveText(input, { mode: "tools" }), input).toBe(expected);
+    }
   });
 });
 
