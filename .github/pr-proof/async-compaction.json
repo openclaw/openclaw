@@ -1,0 +1,84 @@
+{
+  "baseline_sha": "14fd53f8f69b2272c758e46b116605000475512f",
+  "probe_sha256": "47b63bf08e8fc651afabfcd61b8403e36ce25e6c97e7963172ce866335468b45",
+  "keepRecentTokens": "default 20000 retained-history budget",
+  "pipeline": "Registered async tool via AgentSession.prompt -> in-memory SessionManager branch -> session.compact with real safeguard -> next prompt through production replay sanitizer -> registered provider request",
+  "model_boundary": "Controlled provider stream and registered local summarizer; no public provider or account used",
+  "records": [
+    {
+      "variant": "baseline",
+      "timing": "early",
+      "keepRecentTokens": 20000,
+      "resultCharacters": 75630,
+      "resultIndex": 4,
+      "terminalIndex": 5,
+      "summaryContainsResult": true,
+      "retainedContainsResult": false,
+      "nextRequestContainsResult": true,
+      "lookupExecutions": 1,
+      "agentError": null
+    },
+    {
+      "variant": "baseline",
+      "timing": "late",
+      "keepRecentTokens": 20000,
+      "resultCharacters": 75630,
+      "resultIndex": 5,
+      "terminalIndex": 4,
+      "summaryContainsResult": false,
+      "retainedContainsResult": true,
+      "nextRequestContainsResult": false,
+      "lookupExecutions": 1,
+      "agentError": null
+    },
+    {
+      "variant": "patched",
+      "timing": "early",
+      "keepRecentTokens": 20000,
+      "resultCharacters": 75630,
+      "resultIndex": 4,
+      "terminalIndex": 5,
+      "summaryContainsResult": true,
+      "retainedContainsResult": false,
+      "nextRequestContainsResult": true,
+      "lookupExecutions": 1,
+      "agentError": null
+    },
+    {
+      "variant": "patched",
+      "timing": "late",
+      "keepRecentTokens": 20000,
+      "resultCharacters": 75630,
+      "resultIndex": 5,
+      "terminalIndex": 4,
+      "summaryContainsResult": false,
+      "retainedContainsResult": true,
+      "nextRequestContainsResult": true,
+      "lookupExecutions": 1,
+      "agentError": null
+    }
+  ],
+  "scope": "Model context preservation; no claim of real-model decision quality, public transport, or newly tested SQLite crash recovery",
+  "tested_source_sha256": {
+    "packages/agent-core/src/harness/compaction/compaction.ts": "bcf12fcb390709068cf1e17219d9ef0c168a9a7a6a9103c3819d036bc30ff316",
+    "packages/agent-core/src/harness/compaction/compaction-cut-point.ts": "8f651ccd9c49e9fded7bb518a66933824390161e237860521bc64e1721c6e3f9",
+    "packages/agent-core/src/harness/compaction/compaction-cut-point.test.ts": "992cac0899b462bc95ee3a7843cf8d2c6396daa1e73c3023a665406521343fee",
+    "config/max-lines-baseline.txt": "31286da1ff0ea251f2400f50f389a8a3c4e9d15c304b87cb62d8dcfb5a5c6aa4"
+  },
+  "validation": {
+    "focused_baseline": {
+      "failed": 7,
+      "passed": 5
+    },
+    "focused_patched": {
+      "passed": 12
+    },
+    "adjacent_patched": {
+      "files": 18,
+      "passed": 353,
+      "includes_focused": true
+    },
+    "changed_file_checks": "passed",
+    "hosted_ci": "not run before publication"
+  }
+}
