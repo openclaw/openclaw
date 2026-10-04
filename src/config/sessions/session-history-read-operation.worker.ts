@@ -93,11 +93,9 @@ async function prepareHistoryRead(
       const [
         { withOpenClawAgentDatabaseReadOnly },
         { readSessionTranscriptAnchorFactsInDatabase },
-        { assertExistingDatabaseIdentity },
       ] = await Promise.all([
         import("../../state/openclaw-agent-db-readonly.js"),
         import("./session-transcript-anchor-read.kernel.js"),
-        import("../../infra/sqlite-worker-identity.js"),
       ]);
       return () => {
         assertExistingDatabaseIdentity(

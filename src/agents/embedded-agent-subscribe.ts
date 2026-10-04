@@ -47,7 +47,8 @@ function resolveEmbeddedAgentSessionLogger(messageChannel?: string) {
   return embeddedLog;
 }
 
-export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSessionParams) {
+export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessionParams) {
+  let params = input;
   const onAgentEvent = params.onAgentEvent;
   if (onAgentEvent) {
     let transcriptStartPublished = false;

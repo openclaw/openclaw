@@ -55,8 +55,11 @@ export function readSessionTranscriptModelContextAsync<T>(
   return withSessionTranscriptReadSource(
     capturedTarget,
     async (scope) => {
-      const context = await withSessionContextAdmission(capturedTarget, admission, () =>
-        readSessionTranscriptModelContext(scope, through, limits),
+      // Capture incognito synchronously, then revalidate after the public async boundary.
+      const context = await Promise.resolve(
+        withSessionContextAdmission(capturedTarget, admission, () =>
+          readSessionTranscriptModelContext(scope, through, limits),
+        ),
       );
       return accept(capturedTarget, context, () => signal?.throwIfAborted());
     },

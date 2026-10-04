@@ -249,7 +249,7 @@ async function executeAgentTurnInternalLoop(
   let transcriptStartPreparation: Promise<void> | undefined;
   const prepareAgentRunStart = () => {
     if (didNotifyAgentRunStart || preparedTranscriptStart !== undefined || !params.sessionKey) {
-      return;
+      return undefined;
     }
     if (transcriptStartPreparation) {
       return transcriptStartPreparation;
