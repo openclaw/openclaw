@@ -64,9 +64,11 @@ terminal replay keys, JSON payloads, retention limits, schema, and restart
 recovery policy remain unchanged.
 
 Ordinary operator approval lookups, pending replay, verdicts, expiry, and allow-once
-consumption execute in the shared-state worker. Lookups and pending scans retain
-their expiry and corrupt-row repair transactions; history pages use the read-only
-worker. The approval manager retains live authority and decision handoffs, checks
+consumption execute in the shared-state worker. Replay expires and publishes due
+approvals before listing the pending set; the pending query excludes expired rows
+without repeating that sweep. Lookups retain expiry, and both reads retain
+corrupt-row repair transactions; history pages use the read-only worker. The
+approval manager retains live authority and decision handoffs, checks
 authority at transaction and commit admission, and joins accepted mutations before
 retiring their local bindings. Startup orphan closure and pruning remain boot
 admission operations. Stored bytes, schemas, retention, and update behavior are
