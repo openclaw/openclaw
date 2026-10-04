@@ -135,6 +135,7 @@ import type {
   SessionTranscriptMatchWorkerInput,
   SessionTranscriptSearchWorkerInput,
   SessionTranscriptAnchorsWorkerInput,
+  SessionProgressCardWorkerInput,
 } from "./session-transcript-worker-read.types.js";
 import type {
   ConversationDeliveryWorkerInput,
@@ -269,13 +270,6 @@ type SessionProjectionStatusWorkerInput = {
   database: { agentId: string; path: string };
   env: NodeJS.ProcessEnv;
   sessionId?: string;
-};
-
-type SessionProgressCardWorkerInput = {
-  kind: "session-progress-card";
-  database: { agentId: string; path: string };
-  sessionKey: string;
-  env: NodeJS.ProcessEnv;
 };
 
 type SessionUsageCacheWorkerInput = {

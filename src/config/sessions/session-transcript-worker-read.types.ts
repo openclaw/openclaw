@@ -31,3 +31,10 @@ export type SessionTranscriptAnchorsWorkerInput = {
   selection: SessionTranscriptAnchorSelection;
   expectedIdentity: DatabaseFileIdentity;
 };
+
+export type SessionProgressCardWorkerInput = {
+  kind: "session-progress-card";
+  database: { agentId: string; path: string };
+  sessionKey: string;
+  env: NodeJS.ProcessEnv;
+};
