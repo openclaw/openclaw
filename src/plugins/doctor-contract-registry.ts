@@ -632,6 +632,9 @@ export function resolvePluginDoctorStateMigrationInventory(params: {
 export function resolveLivePluginDoctorStateMigrationInventory(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  /** Explicit recovery supplies its trusted artifact without bypassing migration policy. */
+  manifestRegistry?: PluginManifestRegistry;
+  pluginIds?: readonly string[];
 }): PluginDoctorStateMigrationInventory {
   const bundledInventory = listPluginDoctorStateMigrationInventory(params);
   let records: PluginManifestRegistryRecord[];

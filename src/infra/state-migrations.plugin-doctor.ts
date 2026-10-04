@@ -3,6 +3,7 @@ import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope-con
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginDoctorRecoveryRequest } from "../plugins/doctor-contract-module.js";
 import {
   listPluginDoctorStateMigrationEntries,
   PluginDoctorStateMigrationDeclarationError,
@@ -410,6 +411,13 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
   maintenanceAuthority?: { assertCurrent(): void };
   plannedActions?: readonly PlannedPluginDoctorAction[];
   inventory?: PluginDoctorStateMigrationInventory;
+  recovery?: {
+    pluginId: string;
+    migrationId: string;
+    request: PluginDoctorRecoveryRequest;
+    /** Existing-schema CLI leases release before ordinary worker-backed repair. */
+    deferRepair?: true;
+  };
   beforeCompletion?: (
     completedPluginIds: readonly string[],
     assertCurrent: () => void,
@@ -536,7 +544,52 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
           try {
             // Lease settlement can reject after the callback's mutations committed.
             // Retain those facts without treating a failed settlement as success.
-            completed = await run(authority, certifyCompletion);
+            let recoveryResult: MigrationMessages = { changes: [], warnings: [] };
+            if (params.recovery) {
+              const selection = params.recovery;
+              const entry = listPluginDoctorStateMigrationEntries({
+                config: params.config,
+                env: params.env,
+                inventory: params.inventory,
+              }).find(
+                (candidate) =>
+                  candidate.pluginId === selection.pluginId &&
+                  candidate.migration.id === selection.migrationId,
+              );
+              if (!entry?.trustedForDurableStores || !entry.migration.recoverLegacyState) {
+                throw new Error(
+                  "Selected trusted plugin migration has no explicit recovery action",
+                );
+              }
+              authority.assertCurrent();
+              recoveryResult = await entry.migration.recoverLegacyState(
+                {
+                  ...input,
+                  assertCurrent: () => authority.assertCurrent(),
+                  context: createPluginDoctorStateMigrationContext({
+                    pluginId: entry.pluginId,
+                    config: params.config,
+                    env: params.env,
+                    trustedForDurableStores: true,
+                    repairAuthority: authority,
+                  }),
+                },
+                selection.request,
+              );
+              authority.assertCurrent();
+              completed = recoveryResult;
+              if (recoveryResult.warnings.length || selection.deferRepair) {
+                return recoveryResult;
+              }
+            }
+            const inspected = await run(authority, certifyCompletion);
+            completed = {
+              ...inspected,
+              changes: [...recoveryResult.changes, ...inspected.changes],
+              ...(recoveryResult.notices?.length || inspected.notices?.length
+                ? { notices: [...(recoveryResult.notices ?? []), ...(inspected.notices ?? [])] }
+                : {}),
+            };
             return completed;
           } finally {
             active = false;

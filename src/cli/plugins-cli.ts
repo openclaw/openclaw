@@ -37,6 +37,13 @@ export type PluginRegistryOptions = {
 
 export type PluginDoctorOptions = {
   json?: boolean;
+  plugin?: string;
+  migration?: string;
+  recovery?: string;
+  source?: string;
+  ids?: string[];
+  reason?: string;
+  confirmRetiredWithoutDelivery?: boolean;
 };
 
 const pluginAction = createLazyRuntimeMethodBinder(() => import("./plugins-cli.runtime.js"));
@@ -202,9 +209,23 @@ export function registerPluginsCli(program: Command) {
 
   plugins
     .command("doctor")
-    .description("Report plugin load issues")
+    .description("Report plugin load issues or run an explicit offline plugin recovery")
+    .option("--plugin <id>", "Exact plugin owner for offline recovery")
+    .option("--migration <id>", "Exact declared state migration")
+    .option("--recovery <action>", "Explicit plugin-owned recovery action")
+    .option("--source <source>", "Trusted artifact selection: installed or bundled")
+    .option("--ids <ids...>", "Exact retained record IDs; no wildcard selection")
+    .option("--reason <text>", "Operator reason retained in the recovery receipt")
+    .option(
+      "--confirm-retired-without-delivery",
+      "Confirm selected obligations are abandoned without claiming delivery",
+      false,
+    )
     .option("--json", "Print JSON")
-    .action(pluginAction((runtime) => runtime.runPluginsDoctorCommand));
+    .action(async (opts: PluginDoctorOptions) => {
+      const { runPluginsDoctorCommand } = await import("./plugins-doctor-recovery.js");
+      await runPluginsDoctorCommand(opts);
+    });
 
   plugins
     .command("build")

@@ -2,11 +2,22 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { runPluginsDoctorCommand } from "../cli/plugins-doctor-recovery.js";
+import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
+import type {
+  PluginDoctorStateRecoveryInput,
+  PluginDoctorRecoveryRequest,
+} from "../plugins/doctor-contract-module.js";
 import type { listPluginDoctorStateMigrationEntries } from "../plugins/doctor-contract-registry.js";
+import { defaultRuntime, ExitError } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createOpenClawStateLeaseLostError } from "../state/openclaw-state-lease-error.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import {
+  readDeferredPluginMigrations,
+  recordDeferredPluginMigrations,
+} from "./deferred-plugin-migrations.js";
 import {
   autoMigrateLegacyPluginDoctorState,
   runPostSessionPluginDoctorStateRepairs,
@@ -16,6 +27,22 @@ import { resetAutoMigrateLegacyStateDirForTest } from "./state-migrations.state-
 const controls = vi.hoisted(() => ({
   entries: [] as ReturnType<typeof listPluginDoctorStateMigrationEntries>,
   failSettlement: false,
+  manifestRecord: {
+    id: "recovery-owner",
+    origin: "bundled" as "bundled" | "global",
+    trustedOfficialInstall: true,
+    channels: [],
+    providers: [],
+    cliBackends: [],
+    skills: [],
+    hooks: [],
+    rootDir: "/fixture",
+    source: "/fixture/index.js",
+    manifestPath: "/fixture/openclaw.plugin.json",
+    doctorContract: {
+      stateMigrations: [{ id: "legacy-recovery", phase: "after-session-repair" as const }],
+    },
+  },
 }));
 
 vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => ({
@@ -49,11 +76,30 @@ vi.mock("../plugins/plugin-lifecycle-lease.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../plugins/manifest-registry-build.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/manifest-registry-build.js")>()),
+  loadBundledPluginManifestRegistry: () => ({
+    plugins: [controls.manifestRecord],
+    diagnostics: [],
+  }),
+}));
+
+vi.mock("../plugins/plugin-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-registry.js")>()),
+  loadPluginManifestRegistryForPluginRegistry: () => ({
+    plugins: [controls.manifestRecord],
+    diagnostics: [],
+  }),
+}));
+
 const tempDirs = createTrackedTempDirs();
 
 afterEach(async () => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   controls.entries = [];
   controls.failSettlement = false;
+  controls.manifestRecord.origin = "bundled";
   resetAutoMigrateLegacyStateDirForTest();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
@@ -61,6 +107,140 @@ afterEach(async () => {
 });
 
 describe("plugin Doctor migrations", () => {
+  it.each([true, false, "cli", "cli-disabled-external"] as const)(
+    "runs only trusted explicit recovery and settles native readiness (trusted=%s)",
+    async (trusted) => {
+      const stateDir = await tempDirs.make("openclaw-explicit-plugin-recovery-");
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      await autoMigrateLegacyPluginDoctorState({
+        config: {},
+        env,
+        doctorOnlyStateMigrations: true,
+      });
+      await recordDeferredPluginMigrations({
+        env,
+        pending: [
+          {
+            pluginId: "recovery-owner",
+            reason: "saved state pending",
+            command: "openclaw doctor --fix",
+            requiresStateMigration: true,
+          },
+        ],
+      });
+      const recoverLegacyState = vi.fn(
+        async (params: PluginDoctorStateRecoveryInput, request: PluginDoctorRecoveryRequest) => {
+          params.assertCurrent();
+          if (!params.context.openPluginStateRetainedStore) {
+            throw new Error("Missing native retained receipt authority");
+          }
+          const store = params.context.openPluginStateRetainedStore({
+            namespace: "recovery-receipt",
+            retention: "retained",
+          });
+          if (!store.withCurrent) {
+            throw new Error("Missing action-bound native retained writer");
+          }
+          await store
+            .withCurrent({ assertCurrent: () => params.assertCurrent() })
+            .register("selected", request);
+          return { changes: ["explicit recovery recorded"], warnings: [] };
+        },
+      );
+      controls.entries = [
+        {
+          pluginId: "recovery-owner",
+          channelIds: [],
+          trustedForDurableStores: trusted !== false,
+          migration: {
+            id: "legacy-recovery",
+            label: "Legacy recovery",
+            phase: "after-session-repair",
+            detectLegacyState: () => null,
+            migrateLegacyState: () => ({ changes: [], warnings: [] }),
+            recoverLegacyState,
+          },
+        },
+      ];
+      const request = {
+        action: "retire-without-delivery",
+        ids: ["selected"],
+        reason: "Explicit operator decision",
+      };
+      const result = await (async () => {
+        if (trusted !== "cli" && trusted !== "cli-disabled-external") {
+          return runPostSessionPluginDoctorStateRepairs({
+            config: {},
+            env,
+            maintenanceAuthority: { assertCurrent() {} },
+            recovery: { pluginId: "recovery-owner", migrationId: "legacy-recovery", request },
+          });
+        }
+        // The actual CLI adds existing-schema leases before normal worker-backed
+        // readiness publication. Owner-only coverage does not exercise that handoff.
+        vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+        vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+        const disabledExternal = trusted === "cli-disabled-external";
+        if (disabledExternal) {
+          controls.manifestRecord.origin = "global";
+        }
+        fs.writeFileSync(
+          path.join(stateDir, "openclaw.json"),
+          JSON.stringify(
+            disabledExternal
+              ? { plugins: { entries: { "recovery-owner": { enabled: false } } } }
+              : {},
+          ),
+        );
+        const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+        const outcome = await runPluginsDoctorCommand({
+          plugin: "recovery-owner",
+          migration: "legacy-recovery",
+          recovery: request.action,
+          ids: request.ids,
+          reason: request.reason,
+          source: disabledExternal ? "installed" : "bundled",
+          confirmRetiredWithoutDelivery: true,
+          json: true,
+        }).catch((error: unknown) => error);
+        const output = log.mock.calls.at(-1)?.[0];
+        if (output !== undefined && typeof output !== "string") {
+          throw new Error("Plugin Doctor JSON output must be a string");
+        }
+        if (disabledExternal) {
+          return output === undefined
+            ? { changes: [], warnings: [String(outcome)], completedPluginIds: undefined }
+            : JSON.parse(output);
+        }
+        const commandResult = JSON.parse(String(output));
+        expect(commandResult.warnings).toEqual([]);
+        expect(outcome).toEqual(new ExitError(0));
+        return commandResult;
+      })();
+      const receipt = await createPluginStateKeyedStore("recovery-owner", {
+        namespace: "recovery-receipt",
+        retention: "retained",
+        env,
+      }).lookup("selected");
+      if (trusted && trusted !== "cli-disabled-external") {
+        expect(result.warnings).toEqual([]);
+        expect(receipt).toEqual(request);
+        expect(readDeferredPluginMigrations({ env })).toEqual([]);
+        expect(result.completedPluginIds).toEqual(["recovery-owner"]);
+      } else {
+        expect(receipt).toBeUndefined();
+        expect(recoverLegacyState).not.toHaveBeenCalled();
+        expect(readDeferredPluginMigrations({ env })).toHaveLength(1);
+        expect(result.completedPluginIds).toBeUndefined();
+        expect(result.warnings.join("\n")).toContain(
+          trusted === "cli-disabled-external"
+            ? "native migration activation policy"
+            : "trusted plugin migration",
+        );
+      }
+    },
+  );
+
   it("refuses pre-July shared schema before plugin migrations", async () => {
     const root = await tempDirs.make("openclaw-plugin-doctor-shared-schema-");
     const stateDir = path.join(root, ".openclaw");

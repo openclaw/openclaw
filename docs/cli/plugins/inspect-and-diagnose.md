@@ -81,6 +81,51 @@ If a configured plugin is present on disk but blocked by the loader's path-safet
 
 For module-shape failures such as missing `register`/`activate` exports, rerun with `OPENCLAW_PLUGIN_LOAD_DEBUG=1` to include a compact export-shape summary in the diagnostic output.
 
+### Explicit offline recovery
+
+Plugins may expose a recovery action through their declared Doctor state migration.
+The operator must name the exact plugin, migration, action, retained IDs, and reason.
+Native migration eligibility still applies: disabled external and disabled channel
+owners are refused; bundled non-channel maintenance follows Doctor's existing policy.
+Recovery requires the Gateway to be stopped; it acquires the normal offline state,
+agent maintenance, and plugin lifecycle leases. It never activates a disabled plugin.
+Only a trusted installed owner or the current distribution's packaged bundled owner
+can execute an action. `--source bundled` selects that packaged owner explicitly;
+it does not accept a filesystem path or confer trust on a downloaded artifact.
+
+For the Codex native-task migration, an operator may explicitly abandon up to three
+obsolete terminal, undelivered legacy obligations:
+
+```bash
+openclaw plugins doctor --plugin codex --migration codex-native-task-assignments \
+  --recovery retire-without-delivery --source bundled \
+  --ids <task-id-1> <task-id-2> <task-id-3> \
+  --reason "These obsolete results are no longer required" \
+  --confirm-retired-without-delivery --json
+```
+
+Back up the owning state through the native backup command first. The action records
+one non-expiring, atomic Codex receipt containing the exact selected source fingerprints,
+original native ownership, reason, and retirement time. It preserves original rows,
+results, bindings, ownership stamps, and delivery status. Retirement is explicitly
+without delivery and prevents later Doctor import even if original ownership returns.
+Active, delivered, unknown, duplicate, or already imported/recovery-owned assignments
+are refused before the receipt is written. A different selected scope or reason cannot
+replace the receipt; changed source is refused for inspection. Repeating the same
+request is idempotent. Keep this retirement-capable core and Codex owner together
+until an upstream version recognizes the same receipt contract or provides a supported
+transfer. A binary-only downgrade to a core or Codex reader that ignores receipts is
+unsupported: it can import abandoned work when original ownership matches again.
+Matching SQLite schema versions do not establish receipt compatibility.
+
+Before retirement, retain a verified backup and its matching core and plugin versions.
+Restoring that pre-retirement backup restores the original pending obligations too;
+it does not preserve the later retirement decision. To preserve retirement during
+recovery, restore the receipt and original source together with receipt-aware readers.
+Do not copy a receipt into different source state or delete it to force readiness.
+Normal migration inspection must still certify all remaining plugin state before the
+existing readiness guard clears.
+
 ## Registry
 
 ```bash

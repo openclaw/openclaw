@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -6,6 +7,7 @@ import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doc
 import { z } from "zod";
 import { readCodexNativeSubagentRunId } from "../app-server/native-subagent-assignment.js";
 import {
+  codexNativeSubagentHistoryOwnerSchema,
   codexNativeSubagentHistoryConnectionFingerprint,
   readCodexNativeSubagentHistoryOwner,
 } from "../app-server/native-subagent-history-owner.js";
@@ -52,6 +54,33 @@ type LegacyDatabase = {
 const importSchema = z
   .object({ version: z.literal(1), taskIds: z.array(z.string().min(1)) })
   .strict();
+const RETIREMENT_NAMESPACE = "codex-legacy-native-task-retirement";
+const RETIREMENT_KEY = "retired-without-delivery";
+const retirementSchema = z
+  .object({
+    version: z.literal(1),
+    disposition: z.literal("retired-without-delivery"),
+    reason: z.string().trim().min(1).max(512),
+    retiredAt: z.number().int().positive(),
+    tasks: z
+      .array(
+        z
+          .object({
+            taskId: z.string().min(1),
+            runId: z.string().min(1),
+            sourceFingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
+            owner: codexNativeSubagentHistoryOwnerSchema,
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(3),
+  })
+  .strict();
+type RetirementReceipt = z.infer<typeof retirementSchema>;
+function sourceFingerprint(task: LegacyTask) {
+  return createHash("sha256").update(JSON.stringify(task)).digest("hex");
+}
 const detailSchema = z.object({ nativeTurnId: z.string().trim().min(1).optional() });
 
 function databasePath(params: Pick<Params, "stateDir">) {
@@ -79,12 +108,25 @@ function taskIdentity(task: LegacyTask) {
   }
 }
 
-async function inspect(params: Params) {
+async function inspect(params: Params, includeResolved = false) {
   const source = databasePath(params);
+  const rawReceipt = includeResolved
+    ? undefined
+    : await params.context.lookupPluginStateRetainedEntry?.<RetirementReceipt>(
+        RETIREMENT_NAMESPACE,
+        RETIREMENT_KEY,
+      );
+  const receipt = rawReceipt === undefined ? undefined : retirementSchema.parse(rawReceipt);
   try {
     await fs.access(source);
   } catch (error) {
     if (extractErrorCode(error) === "ENOENT") {
+      if (receipt) {
+        throw new Error(
+          "Retired Codex source database is missing; preserve its receipt for inspection",
+          { cause: error },
+        );
+      }
       return [];
     }
     throw error;
@@ -98,11 +140,21 @@ async function inspect(params: Params) {
     prepareSqliteReadOnlyLocation,
     tableExists,
   } = await import("openclaw/plugin-sdk/sqlite-runtime");
+  if (!params.context.lookupPluginStateRetainedEntry) {
+    throw new Error(
+      "Codex legacy recovery requires the current host's retained-receipt inspection capability",
+    );
+  }
   const snapshot = await prepareSqliteReadOnlyLocation(source, { preserveSourceArtifacts: true });
   try {
     const db = openNodeSqliteDatabase(snapshot.location, { readOnly: true });
     try {
       if (!tableExists(db, "task_runs") || !tableExists(db, "plugin_state_entries")) {
+        if (receipt) {
+          throw new Error(
+            "Retired Codex source tables are missing; preserve the receipt for inspection",
+          );
+        }
         return [];
       }
       const sql = getNodeSqliteKysely<LegacyDatabase>(db);
@@ -110,21 +162,7 @@ async function inspect(params: Params) {
         db,
         sql
           .selectFrom("task_runs")
-          .select([
-            "task_id",
-            "runtime",
-            "task_kind",
-            "run_id",
-            "agent_id",
-            "requester_session_key",
-            "owner_key",
-            "scope_kind",
-            "status",
-            "delivery_status",
-            "ended_at",
-            "terminal_summary",
-            "detail_json",
-          ])
+          .selectAll("task_runs")
           .select((eb) =>
             eb
               .selectFrom("task_runs as all_runs")
@@ -136,19 +174,55 @@ async function inspect(params: Params) {
           )
           .where("runtime", "=", "subagent")
           .where("task_kind", "=", "codex-native")
-          .where("delivery_status", "!=", "delivered")
-          .where((eb) =>
-            eb.or([
-              eb("status", "in", ["queued", "running"]),
-              eb("delivery_status", "=", "pending"),
-              eb.and([
-                eb("delivery_status", "=", "not_applicable"),
-                eb("ended_at", ">=", Date.now() - 60_000),
+          .$if(!includeResolved, (query) =>
+            query.where((eb) =>
+              eb.or([
+                eb.and([
+                  eb("delivery_status", "!=", "delivered"),
+                  eb.or([
+                    eb("status", "in", ["queued", "running"]),
+                    eb("delivery_status", "=", "pending"),
+                    eb.and([
+                      eb("delivery_status", "=", "not_applicable"),
+                      eb("ended_at", ">=", Date.now() - 60_000),
+                    ]),
+                  ]),
+                ]),
+                ...(receipt
+                  ? [
+                      eb(
+                        "task_id",
+                        "in",
+                        receipt.tasks.map((entry) => entry.taskId),
+                      ),
+                    ]
+                  : []),
               ]),
-            ]),
+            ),
           ),
       ).rows;
+      if (includeResolved) {
+        return rows;
+      }
+      // Receipts are checked independently of candidate eligibility. A changed
+      // delivery status or removed source must not silently certify readiness.
+      for (const retired of receipt?.tasks ?? []) {
+        const row = rows.find((entry) => entry.task_id === retired.taskId);
+        if (
+          !row ||
+          row.run_count !== 1 ||
+          retired.runId !== row.run_id ||
+          retired.sourceFingerprint !== sourceFingerprint(row)
+        ) {
+          throw new Error(
+            `Retired Codex task ${retired.taskId} changed or is missing; preserve its receipt and source for inspection`,
+          );
+        }
+      }
       return rows.filter((row) => {
+        if (receipt?.tasks.some((entry) => entry.taskId === row.task_id)) {
+          return false;
+        }
         const identity = taskIdentity(row);
         if (!identity) {
           return true;
@@ -255,9 +329,148 @@ function prepareAssignment(
   return assignment;
 }
 
+async function retireLegacyTasks(
+  params: Parameters<NonNullable<PluginDoctorStateMigration["recoverLegacyState"]>>[0],
+  request: Parameters<NonNullable<PluginDoctorStateMigration["recoverLegacyState"]>>[1],
+) {
+  const ids = request.ids.map((id) => id.trim());
+  const reason = request.reason.trim();
+  if (
+    request.action !== "retire-without-delivery" ||
+    ids.length < 1 ||
+    ids.length > 3 ||
+    ids.some((id) => !id) ||
+    new Set(ids).size !== ids.length ||
+    !reason ||
+    reason.length > 512
+  ) {
+    throw new Error(
+      "Retirement requires one to three distinct explicit task IDs and a reason of 1–512 characters",
+    );
+  }
+  params.assertCurrent();
+  if (!params.context.openPluginStateRetainedStore) {
+    throw new Error(
+      "Retirement requires the current host's trusted offline retained-state authority",
+    );
+  }
+  const receiptStore = params.context.openPluginStateRetainedStore<RetirementReceipt>({
+    namespace: RETIREMENT_NAMESPACE,
+    retention: "retained",
+    env: params.env,
+  });
+  if (!receiptStore.observe || !receiptStore.withCurrent) {
+    throw new Error("Retirement requires action-bound atomic plugin state");
+  }
+  const observed = await receiptStore.observe(RETIREMENT_KEY);
+  params.assertCurrent();
+  const rows = await inspect(params, true);
+  params.assertCurrent();
+  const bindings = params.context.openPluginStateKeyedStore<StoredCodexAppServerBinding>({
+    namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
+    maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+    overflowPolicy: "reject-new",
+    env: params.env,
+  });
+  const { readStoredCodexAppServerBinding } =
+    await import("../app-server/session-binding-record.js");
+  const entries = await bindings.entries();
+  params.assertCurrent();
+  const tasks = ids
+    .map((id) => {
+      const row = rows.find((task) => task.task_id === id);
+      if (
+        !row ||
+        row.run_count !== 1 ||
+        !row.run_id ||
+        !taskIdentity(row) ||
+        row.scope_kind !== "session" ||
+        row.owner_key !== row.requester_session_key ||
+        !["succeeded", "failed", "cancelled"].includes(row.status) ||
+        row.delivery_status !== "pending" ||
+        row.ended_at === null ||
+        row.ended_at <= 0 ||
+        !readCodexNativeSubagentRunId(row.run_id)
+      ) {
+        throw new Error(
+          `Task ${id} is not a uniquely owned terminal undelivered legacy Codex assignment`,
+        );
+      }
+      for (const entry of entries) {
+        const stored = readStoredCodexAppServerBinding(entry.value);
+        const imported =
+          stored?.nativeSubagentTaskImport === undefined
+            ? undefined
+            : importSchema.parse(stored.nativeSubagentTaskImport);
+        if (
+          imported?.taskIds.includes(id) ||
+          readNativePendingAssignments(
+            stored?.state === "active" ? stored.nativeSubagentAssignments : undefined,
+          )?.assignments.some((assignment) => assignment.runId === row.run_id)
+        ) {
+          throw new Error(`Task ${id} already has native recovery ownership; retirement refused`);
+        }
+      }
+      const owner = readCodexNativeSubagentHistoryOwner(JSON.parse(row.detail_json!));
+      if (!owner) {
+        throw new Error(missingOwnerMessage);
+      }
+      return { taskId: id, runId: row.run_id, sourceFingerprint: sourceFingerprint(row), owner };
+    })
+    .toSorted((a, b) => a.taskId.localeCompare(b.taskId));
+  if (observed.value !== undefined) {
+    const existing = retirementSchema.parse(observed.value);
+    if (!isDeepStrictEqual(existing.tasks, tasks) || existing.reason !== reason) {
+      throw new Error(
+        "An existing retirement receipt covers a different scope or reason; preserve it for inspection",
+      );
+    }
+    return {
+      changes: [],
+      warnings: [],
+      notices: ["Selected legacy Codex obligations were already retired without delivery"],
+    };
+  }
+  // Offline host authority excludes Gateway, peer Doctor, and plugin installation.
+  // It remains current through the one atomic receipt commit below.
+  const currentRows = await inspect(params, true);
+  params.assertCurrent();
+  if (
+    tasks.some((task) => {
+      const current = currentRows.find((row) => row.task_id === task.taskId);
+      return !current || sourceFingerprint(current) !== task.sourceFingerprint;
+    })
+  ) {
+    throw new Error("Legacy Codex source changed before retirement; no receipt was written");
+  }
+  const result = await receiptStore
+    .withCurrent({ assertCurrent: () => params.assertCurrent() })
+    .compareAndApply(RETIREMENT_KEY, observed.comparison, {
+      operation: "update",
+      action: "set",
+      value: {
+        version: 1,
+        disposition: "retired-without-delivery",
+        reason,
+        retiredAt: Date.now(),
+        tasks,
+      },
+    });
+  if (result.status === "conflict") {
+    throw new Error("Retirement receipt changed concurrently; inspect it before retrying");
+  }
+  return {
+    changes: [
+      `Retired ${tasks.length} legacy Codex obligation(s) without delivery; original history and ownership preserved`,
+    ],
+    warnings: [],
+  };
+}
+
 export const codexNativeTaskAssignmentMigration = {
   id: "codex-native-task-assignments",
   label: "Codex native pending assignments",
+  recoverLegacyState: retireLegacyTasks,
   collectBackupResources: (params) => [{ path: databasePath(params), kind: "sqlite" }],
   async detectLegacyState(params) {
     return (await inspect(params)).length > 0
