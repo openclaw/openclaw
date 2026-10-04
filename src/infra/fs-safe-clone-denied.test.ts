@@ -21,7 +21,21 @@ const nativeFailure = (message: string) =>
 const seccomp = vi.hoisted(() => ({
   failure: undefined as undefined | (() => Error),
   attempts: [] as Array<string | undefined>,
+  options: [] as Array<Record<string, unknown> | undefined>,
 }));
+
+// The retry may change only the clone mode; every guard must carry over unchanged.
+const expectRetryKeepsGuards = () => {
+  // Callers may rebuild per-attempt callbacks; compare those by presence, values exactly.
+  const [denied, retried] = seccomp.options.map((options) =>
+    Object.fromEntries(
+      Object.entries(options ?? {})
+        .filter(([key]) => key !== "clone")
+        .map(([key, value]) => [key, typeof value === "function" ? "function" : value]),
+    ),
+  );
+  expect(retried).toEqual(denied);
+};
 
 vi.mock("./fs-safe.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./fs-safe.js")>();
@@ -37,6 +51,7 @@ vi.mock("./fs-safe.js", async (importOriginal) => {
           return async (...copyArgs: Parameters<typeof opened.copyIn>) => {
             const clone = copyArgs[2]?.clone;
             seccomp.attempts.push(clone);
+            seccomp.options.push(copyArgs[2]);
             if (seccomp.failure && (clone === "auto" || clone === "always")) {
               throw seccomp.failure();
             }
@@ -52,6 +67,7 @@ const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   seccomp.failure = undefined;
   seccomp.attempts = [];
+  seccomp.options = [];
 });
 
 async function fixture() {
@@ -87,6 +103,8 @@ it("retains the running updater when the clone ioctl is denied", async () => {
 
   expect(result.copied).toBe(1);
   expect(seccomp.attempts).toEqual(["auto", "never"]);
+  expectRetryKeepsGuards();
+  expect(seccomp.options[1]).toMatchObject({ overwrite: false, maxBytes: expect.any(Number) });
   const retained = path.join(f.destination, "node_modules", ".bin", "tool");
   expect((await fs.stat(retained)).mode & 0o777).toBe(0o755);
   expect(await fs.readFile(retained, "utf8")).toContain("exec node");
@@ -102,6 +120,7 @@ it("copies candidate plugin trees when the clone ioctl is denied", async () => {
   });
 
   expect(seccomp.attempts).toEqual(["auto", "never"]);
+  expectRetryKeepsGuards();
   expect(
     await fs.readFile(path.join(f.destination, "node_modules", ".bin", "tool"), "utf8"),
   ).toContain("exec node");
@@ -129,6 +148,7 @@ it.each([
     );
 
     expect(seccomp.attempts).toEqual([first, "never"]);
+    expectRetryKeepsGuards();
     expect(admitted).toBe(admission ? 1 : 0);
     expect(await fs.readFile(target)).toEqual(bytes);
   },
