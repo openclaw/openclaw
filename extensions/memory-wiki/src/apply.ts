@@ -23,7 +23,7 @@ import {
 } from "./markdown.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { readQueryableWikiPages, resolveQueryableWikiPageByLookup } from "./query.js";
-import { readExistingWikiPage } from "./vault-page-write.js";
+import { readExistingWikiPage, writeVerifiedVaultTextFile } from "./vault-page-write.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 const GENERATED_START = "<!-- openclaw:wiki:generated:start -->";
@@ -205,7 +205,11 @@ async function writeWikiPage(params: {
   if (existing === rendered) {
     return false;
   }
-  await root.write(params.relativePath, rendered);
+  await writeVerifiedVaultTextFile({
+    vault: root,
+    pagePath: params.relativePath,
+    content: rendered,
+  });
   return true;
 }
 

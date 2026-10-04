@@ -4,7 +4,11 @@ import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
-import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
+import {
+  extractErrorCode,
+  replaceFileAtomic,
+  root as fsRoot,
+} from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   assessPageFreshness,
@@ -22,6 +26,7 @@ import {
   type WikiPageSummary,
 } from "./markdown.js";
 import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
+import { writeTextWithVerifiedPublication } from "./vault-page-write.js";
 
 type MemoryWikiLintIssue = {
   severity: "error" | "warning";
@@ -462,16 +467,24 @@ async function writeLintReport(rootDir: string, issues: MemoryWikiLintIssue[]): 
     endMarker: "<!-- openclaw:wiki:lint:end -->",
     body: buildLintReportBody(issues),
   });
-  await replaceFileAtomic({
-    filePath: reportPath,
-    content: withTrailingNewline(updated),
-    dirMode,
-    mode: 0o600,
-    preserveExistingMode: true,
-    tempPrefix: `${path.basename(reportPath)}.lint-report`,
-    syncTempFile: true,
-    syncParentDir: true,
-    throwOnCleanupError: true,
+  const rendered = withTrailingNewline(updated);
+  const vault = await fsRoot(rootDir);
+  await writeTextWithVerifiedPublication({
+    publish: () =>
+      replaceFileAtomic({
+        filePath: reportPath,
+        content: rendered,
+        dirMode,
+        mode: 0o600,
+        preserveExistingMode: true,
+        tempPrefix: `${path.basename(reportPath)}.lint-report`,
+        syncTempFile: true,
+        syncParentDir: true,
+        throwOnCleanupError: true,
+      }),
+    readPublished: () => vault.readText(path.join("reports", "lint.md")),
+    expected: rendered,
+    shouldVerify: (error) => extractErrorCode(error) === "ENOENT",
   });
   return reportPath;
 }

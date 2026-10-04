@@ -839,6 +839,29 @@ describe("lintMemoryWikiVault", () => {
     expect(lintPublicationFiles).toEqual(["lint.md"]);
   });
 
+  it("accepts a lint report published before an ENOENT verification failure", async () => {
+    const { config } = await createVault({
+      prefix: "memory-wiki-lint-published-enoent-",
+    });
+    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/security-runtime")>(
+      "openclaw/plugin-sdk/security-runtime",
+    );
+    const publicationError = Object.assign(new Error("injected post-publication failure"), {
+      code: "ENOENT",
+    });
+    vi.mocked(replaceFileAtomic).mockImplementationOnce(async (options) => {
+      await actual.replaceFileAtomic(options);
+      throw publicationError;
+    });
+
+    const result = await lintMemoryWikiVault(config);
+
+    expect(result.issueCount).toBe(0);
+    await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain(
+      "<!-- openclaw:wiki:lint:start -->\nNo issues found.\n<!-- openclaw:wiki:lint:end -->",
+    );
+  });
+
   it.each([
     {
       name: "syntax-error",
