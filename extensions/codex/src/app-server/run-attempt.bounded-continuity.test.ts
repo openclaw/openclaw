@@ -119,7 +119,7 @@ describe("Codex bounded assistant continuity", () => {
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const harness = mode === "resumed" ? createResumeHarness() : createStartedThreadHarness();
       const run = runCodexAppServerAttempt(params);
-      await harness.waitForMethod("turn/start");
+      await run.waitForTurnAccepted();
       await harness.completeTurn({
         threadId: mode === "resumed" ? "thread-existing" : "thread-1",
         turnId: "turn-1",
@@ -156,7 +156,7 @@ describe("Codex bounded assistant continuity", () => {
     manager.appendMessage(assistantMessage("  \n  ", 4));
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
     const request = harness.requests.find((entry) => entry.method === "turn/start");
@@ -191,7 +191,7 @@ describe("Codex bounded assistant continuity", () => {
       agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
     };
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
     // The first build fixes thread instructions; a new-thread continuity projection
