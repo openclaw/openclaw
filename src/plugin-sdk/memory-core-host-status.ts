@@ -9,6 +9,7 @@ export {
 export type { Tone } from "../../packages/memory-host-sdk/src/status.js";
 export {
   formatMemoryDreamingDay,
+  isSameMemoryDreamingDay,
   resolveMemoryDeepDreamingConfig,
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingWorkspace,

@@ -4,25 +4,37 @@ export type { MemoryWorkspaceFiles, MemoryWorkspaceWatchRequest } from "./host/w
 export {
   buildFileEntry,
   buildMultimodalChunkForIndexing,
+  chunkMarkdown,
   encodeMemoryEmbedding,
   decodeMemoryEmbedding,
+  extractProjectKeysFromCuratedEntry,
+  ensureDir,
   hashText,
   INVALID_PROJECT_ANNOTATION_KEY,
   listMemoryFiles,
   matchesExtraMemoryPathEntry,
   MEMORY_CHUNKING_VERSION,
   normalizeExtraMemoryPathEntries,
+  normalizeProjectAnnotationKey,
+  normalizeExtraMemoryPaths,
+  remapChunkLines,
   runWithConcurrency,
+  splitCuratedMarkdownEntries,
   stripMemoryAnnotationCarriers,
   type MemoryChunk,
   type MemoryFileEntry,
 } from "./host/internal.js";
 export { readMemoryFile } from "./host/read-file.js";
 export { retryTransientMemoryRead } from "./host/read-retry.js";
-export { type MemoryReadResult } from "./host/read-file-shared.js";
+export {
+  buildMemoryReadResultFromSlice,
+  type LegacyMemoryReadResult,
+  type MemoryReadResult,
+} from "./host/read-file-shared.js";
 export {
   formatMemoryIndexRebuildGuidance,
   resolveMemoryIndexIdentityDiagnostic,
+  resolveMemoryIndexIdentityReason,
   resolveMemoryIndexSearchDiagnostic,
   resolveMemorySearchStaleness,
 } from "./host/types.js";
@@ -33,6 +45,7 @@ export {
   type MemorySearchDeadlineControlOptions,
 } from "./host/search-deadline-control.js";
 export type {
+  MemoryEmbeddingProbeResult,
   MemoryEntryProvenance,
   MemoryExtraPath,
   MemoryIndexIdentityDiagnostic,

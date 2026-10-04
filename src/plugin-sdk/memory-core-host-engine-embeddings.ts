@@ -57,9 +57,13 @@ export type {
 export { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
 export { registerRuntimeAuthProfileStoreMutationListener } from "../agents/auth-profiles/runtime-snapshots.js";
 export type {
+  MemoryEmbeddingBatchChunk,
+  MemoryEmbeddingBatchOptions,
   MemoryEmbeddingProvider,
   MemoryEmbeddingProviderAdapter,
+  MemoryEmbeddingProviderCallOptions,
   MemoryEmbeddingProviderCreateOptions,
   MemoryEmbeddingProviderCreateResult,
+  MemoryEmbeddingProviderIndexIdentity,
   MemoryEmbeddingProviderRuntime,
 } from "../plugins/memory-embedding-providers.js";

@@ -5,6 +5,7 @@ export {
   buildSessionEntry,
   listSessionTranscriptCorpusEntriesForAgent,
   matchesSessionEntryPrefixHash,
+  parseCanonicalSessionSyncTargetFromPath,
   readTranscriptStatsBatchReadOnlySync,
   sessionPathForFile,
   sessionPathForSessionIdentity,
@@ -12,6 +13,7 @@ export {
   type SessionFileEntry,
   type SessionFileState,
   type SessionTranscriptCorpusEntry,
+  type SessionTranscriptCorpusOptions,
 } from "./host/session-files.js";
 export {
   isCronRunSessionKey,

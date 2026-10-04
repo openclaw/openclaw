@@ -20,9 +20,13 @@ export {
   runEmbeddingBatches,
   type EmbeddingBatchExecutionParams,
 } from "./host/batch-runner.js";
-export { waitForEmbeddingBatch } from "./host/batch-status.js";
+export {
+  resolveBatchCompletionFromStatus,
+  throwIfBatchTerminalFailure,
+  waitForEmbeddingBatch,
+} from "./host/batch-status.js";
 export { uploadBatchJsonlFile } from "./host/batch-upload.js";
-export { buildBatchHeaders } from "./host/batch-utils.js";
+export { buildBatchHeaders, normalizeBatchBaseUrl } from "./host/batch-utils.js";
 export {
   isMissingEmbeddingApiKeyError,
   mapBatchEmbeddingsByIndex,

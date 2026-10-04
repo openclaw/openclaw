@@ -42,7 +42,7 @@ export {
   realtimeVoiceAudioDurationMs,
   toOpenAICompatibleRealtimeAudioFormat,
 } from "../talk/provider-types.js";
-export { type TalkEvent, type TalkEventInput } from "../talk/talk-events.js";
+export { TALK_EVENT_TYPES, type TalkEvent, type TalkEventInput } from "../talk/talk-events.js";
 export { recordTalkObservabilityEvent } from "../talk/observability.js";
 export {
   createTalkSessionController,
@@ -116,6 +116,7 @@ export {
 export {
   buildRealtimeVoiceAgentCancelProviderResult,
   buildRealtimeVoiceAgentErrorProviderResult,
+  classifyRealtimeVoiceAgentControlText,
   controlRealtimeVoiceAgentRun,
   parseRealtimeVoiceAgentControlToolArgs,
   REALTIME_VOICE_AGENT_CONTROL_TOOL,

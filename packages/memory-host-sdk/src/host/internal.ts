@@ -34,6 +34,7 @@ export { hashText } from "./hash.js";
 export { encodeMemoryEmbedding, decodeMemoryEmbedding } from "./embedding-vector.js";
 export {
   chunkMarkdown,
+  splitCuratedMarkdownEntries,
   remapChunkLines,
   MEMORY_CHUNKING_VERSION,
   type MemoryChunk,
@@ -485,7 +486,9 @@ export async function buildMultimodalChunkForIndexing(
 }
 
 export {
+  extractProjectKeysFromCuratedEntry,
   INVALID_PROJECT_ANNOTATION_KEY,
+  normalizeProjectAnnotationKey,
   stripMemoryAnnotationCarriers,
 } from "./curated-annotations.js";
 
