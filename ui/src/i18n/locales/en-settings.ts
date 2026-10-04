@@ -1319,6 +1319,10 @@ const enSettings = {
       openSystemSettings: "Open System Settings",
       blockedHint: "Allow notifications in this site's browser permissions.",
       nativeBlockedHint: "Allow OpenClaw in macOS System Settings > Notifications.",
+      iosNativeHint:
+        "Notifications are managed by the OpenClaw app. Open device settings to change delivery, or device permissions to manage notification access.",
+      deviceDelivery: "Deliver notifications on this device",
+      devicePermissions: "Device permissions",
       iosInstallRequired: "On iPhone or iPad, use Share > Add to Home Screen, then open OpenClaw.",
       accountDefaults: "Account defaults",
       installedApp: "This browser or app",

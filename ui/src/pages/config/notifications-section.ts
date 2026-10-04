@@ -3,6 +3,7 @@ import type {
   WebPushDevicePreferences,
   WebPushNotificationPreferences,
 } from "../../../../packages/gateway-protocol/src/schema/push.js";
+import { deviceSettingsGroupLabelKey } from "../../app-navigation.ts";
 import type { NativeNotificationsPermission } from "../../app/native-notifications.ts";
 import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { icons } from "../../components/icons.ts";
@@ -15,6 +16,7 @@ import {
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
+import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { resolveTimezoneSuggestions } from "../../lib/timezone-suggestions.ts";
 import { renderSettingsSelectRow } from "./settings-select-row.ts";
 import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
@@ -28,6 +30,11 @@ type NotificationsSectionProps = Pick<
   | "nativeNotifications"
   | "onNativeNotificationsRequestPermission"
   | "onNativeNotificationsSendTest"
+  | "nativeDeviceSettings"
+  | "deviceSettingsHref"
+  | "devicePermissionsHref"
+  | "onOpenDeviceSettings"
+  | "onOpenDevicePermissions"
   | "webPush"
   | "onWebPushSubscribe"
   | "onWebPushUnsubscribe"
@@ -419,6 +426,69 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
                 : nothing
             }
           `,
+        )}
+      </div>
+    `;
+  }
+
+  const device = props.nativeDeviceSettings;
+  if (device === null || device?.device.platform === "ios") {
+    const permission = device?.permissions.entries.find((entry) => entry.id === "notifications");
+    const permissionLabel = device
+      ? t(`configPage.deviceSettings.permissionStatuses.${permission?.status ?? "unavailable"}`)
+      : t("configView.notifications.checking");
+    const enabled = device?.app?.notificationsEnabled;
+    return html`
+      <div class="settings-page" ${shellLayoutTraits({ settingsPage: true })}>
+        ${renderNotificationSection(
+          t("configView.notifications.nativeTitle"),
+          renderSettingsStatus({ kind: "muted", label: permissionLabel }),
+          device
+            ? html`
+                ${renderSettingsRow({
+                  title: t("configView.notifications.deviceDelivery"),
+                  control: renderSettingsValue(
+                    enabled === undefined
+                      ? t("configView.notifications.unavailable")
+                      : t(enabled ? "common.enabled" : "common.disabled"),
+                  ),
+                })}
+                ${renderSettingsRow({
+                  title: t("configView.notifications.permission"),
+                  control: renderSettingsValue(permissionLabel),
+                })}
+                <div class="settings-row">
+                  <div class="settings-row__control">
+                    <a
+                      class="btn"
+                      href=${props.deviceSettingsHref}
+                      @click=${(event: MouseEvent) => {
+                        if (!props.onOpenDeviceSettings || !shouldHandleNavigationClick(event)) {
+                          return;
+                        }
+                        event.preventDefault();
+                        props.onOpenDeviceSettings();
+                      }}
+                      >${t(deviceSettingsGroupLabelKey(device))}</a
+                    >
+                    <a
+                      class="btn"
+                      href=${props.devicePermissionsHref}
+                      @click=${(event: MouseEvent) => {
+                        if (!props.onOpenDevicePermissions || !shouldHandleNavigationClick(event)) {
+                          return;
+                        }
+                        event.preventDefault();
+                        props.onOpenDevicePermissions();
+                      }}
+                      >${t("configView.notifications.devicePermissions")}</a
+                    >
+                  </div>
+                </div>
+              `
+            : html`<div class="settings-row">
+                <span class="settings-row__desc">${t("configPage.deviceSettings.loading")}</span>
+              </div>`,
         )}
       </div>
     `;

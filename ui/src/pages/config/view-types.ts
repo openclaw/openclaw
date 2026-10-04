@@ -6,6 +6,7 @@ import type {
   WebPushNotificationPreferences,
 } from "../../../../packages/gateway-protocol/src/schema/push.js";
 import type { ConfigUiHints, ModelCatalogEntry } from "../../api/types.ts";
+import type { NativeDeviceSettingsSnapshot } from "../../app/native-device-settings.ts";
 import type {
   NativeNotificationsPermission,
   NativeNotificationTestOutcome,
@@ -218,6 +219,11 @@ export type ConfigProps = {
   };
   onNativeNotificationsRequestPermission?: () => void;
   onNativeNotificationsSendTest?: () => void;
+  nativeDeviceSettings?: NativeDeviceSettingsSnapshot | null;
+  deviceSettingsHref?: string;
+  devicePermissionsHref?: string;
+  onOpenDeviceSettings?: () => void;
+  onOpenDevicePermissions?: () => void;
   webPush?: WebPushSnapshot;
   onWebPushSubscribe?: () => void;
   onWebPushUnsubscribe?: () => void;
