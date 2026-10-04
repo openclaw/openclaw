@@ -393,20 +393,12 @@ async function readPagesViaPlaywright(
               if (isBlockedTarget(opts.cdpUrl, targetInfo.targetId)) {
                 return { status: "blocked" as const };
               }
-              let url = "";
-              try {
-                url = page.url();
-              } catch (err) {
-                if (isRecoverablePlaywrightDisconnectError(err)) {
-                  throw err;
-                }
-              }
               return {
                 status: "available" as const,
                 page: {
                   targetId: targetInfo.targetId,
                   title: targetInfo.title,
-                  url,
+                  url: page.url(),
                   type: "page" as const,
                 },
               };

@@ -11,16 +11,9 @@ function normalizeArgValue(value: unknown): string | undefined {
   if (value == null) {
     return undefined;
   }
-  if (typeof value === "string") {
-    return normalizeOptionalString(value);
-  }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return normalizeOptionalString(String(value));
-  }
-  if (typeof value === "symbol" || typeof value === "function") {
-    return normalizeOptionalString(value.toString());
-  }
-  return JSON.stringify(value) || undefined;
+  return typeof value === "object"
+    ? JSON.stringify(value) || undefined
+    : normalizeOptionalString(String(value));
 }
 
 function formatActionArgs(

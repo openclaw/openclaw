@@ -142,7 +142,7 @@ function extendSchemaDefs(
     return defs;
   }
 
-  const next = defs ? new Map(defs) : new Map<string, unknown>();
+  const next = new Map(defs);
   if (defsEntry) {
     for (const [key, value] of Object.entries(defsEntry)) {
       next.set(key, value);
@@ -281,7 +281,7 @@ function* cleanSchemaForGeminiWithDefs(
 
       const resolved = tryResolveLocalRef(refValue, nextDefs);
       if (resolved) {
-        const nextRefStack = refStack ? new Set(refStack) : new Set<string>();
+        const nextRefStack = new Set(refStack);
         nextRefStack.add(refValue);
 
         // Reference strings own expansion cycles; raw descent starts a new segment.

@@ -106,7 +106,6 @@ export function mergeAnnotationSpans(spans: MarkdownAnnotationSpan[]): MarkdownA
     if (
       previous &&
       previous.end === span.start &&
-      previous.type === span.type &&
       previous.kind === span.kind &&
       previous.role === span.role
     ) {

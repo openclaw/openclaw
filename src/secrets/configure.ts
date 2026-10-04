@@ -32,17 +32,13 @@ import {
   buildConfigureCandidatesForScope,
   buildSecretsConfigurePlan,
   collectConfigureProviderChanges,
-  getSecretProviders,
   hasConfigurePlanChanges,
   type ConfigureCandidate,
 } from "./configure-plan.js";
 import { getSkippedExecRefStaticError } from "./exec-resolution-policy.js";
 import type { SecretsApplyPlan } from "./plan.js";
 import { getProviderEnvVarsCore } from "./provider-env-vars.js";
-import {
-  listSecretProviderIntegrationPresets,
-  type SecretProviderIntegrationPreset,
-} from "./provider-integrations.js";
+import { listSecretProviderIntegrationPresets } from "./provider-integrations.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidExecSecretRefId,
@@ -91,14 +87,12 @@ function setSecretProvider(
   providerConfig: SecretProviderConfig,
 ): void {
   config.secrets ??= {};
-  if (!isRecord(config.secrets.providers)) {
-    config.secrets.providers = {};
-  }
+  config.secrets.providers ??= {};
   config.secrets.providers[providerAlias] = providerConfig;
 }
 
 function removeSecretProvider(config: OpenClawConfig, providerAlias: string): boolean {
-  if (!isRecord(config.secrets?.providers)) {
+  if (!config.secrets?.providers) {
     return false;
   }
   const providers = config.secrets.providers;
@@ -107,10 +101,10 @@ function removeSecretProvider(config: OpenClawConfig, providerAlias: string): bo
   }
   delete providers[providerAlias];
   if (Object.keys(providers).length === 0) {
-    delete config.secrets?.providers;
+    delete config.secrets.providers;
   }
 
-  if (isRecord(config.secrets?.defaults)) {
+  if (config.secrets.defaults) {
     const defaults = config.secrets.defaults;
     const sources = ["env", "file", "exec", "store"] as const;
     for (const source of sources) {
@@ -119,7 +113,7 @@ function removeSecretProvider(config: OpenClawConfig, providerAlias: string): bo
       }
     }
     if (sources.every((source) => defaults[source] === undefined)) {
-      delete config.secrets?.defaults;
+      delete config.secrets.defaults;
     }
   }
   return true;
@@ -142,13 +136,9 @@ function providerHint(provider: SecretProviderConfig): string {
   return `exec (${provider.jsonOnly === false ? "json+text" : "json"})`;
 }
 
-function providerPresetKey(preset: SecretProviderIntegrationPreset): string {
-  return `${preset.pluginId}:${preset.id}:${preset.providerAlias}`;
-}
-
 function toSourceChoices(config: OpenClawConfig): Array<{ value: SecretRefSource; label: string }> {
   const hasSource = (source: SecretRefSource) =>
-    Object.values(config.secrets?.providers ?? {}).some((provider) => provider?.source === source);
+    Object.values(config.secrets?.providers ?? {}).some((provider) => provider.source === source);
   const choices: Array<{ value: SecretRefSource; label: string }> = [
     {
       value: "env",
@@ -170,6 +160,23 @@ function assertNoCancel<T>(value: T | typeof CANCEL_SYMBOL): T {
     throw new Error("Secrets configure cancelled.");
   }
   return value;
+}
+
+async function promptRequiredText(params: {
+  message: string;
+  initialValue?: string;
+  validate?: (value: string) => string | undefined;
+}): Promise<string> {
+  const value = assertNoCancel(
+    await text({
+      ...params,
+      validate: (value) => {
+        const trimmed = value?.trim() ?? "";
+        return trimmed ? params.validate?.(trimmed) : "Required";
+      },
+    }),
+  );
+  return value.trim();
 }
 
 const AUTH_PROFILE_ID_PATTERN = /^[A-Za-z0-9:_-]{1,128}$/;
@@ -195,7 +202,7 @@ async function promptEnvNameCsv(params: {
       validate: (value) => validateEnvNameCsv(value ?? ""),
     }),
   );
-  return normalizeCsvOrLooseStringList(raw ?? "");
+  return normalizeCsvOrLooseStringList(raw);
 }
 
 async function promptOptionalPositiveInt(params: {
@@ -220,11 +227,7 @@ async function promptOptionalPositiveInt(params: {
       },
     }),
   );
-  const parsed = parseOptionalPositiveInt(
-    normalizeStringifiedOptionalString(raw) ?? "",
-    params.max,
-  );
-  return parsed;
+  return parseOptionalPositiveInt(raw, params.max);
 }
 
 function configureCandidateKey(candidate: {
@@ -297,21 +300,11 @@ function countSharedAuthProfilePlaintext(env: NodeJS.ProcessEnv): number {
 }
 
 async function promptNewAuthProfileCandidate(agentId: string): Promise<ConfigureCandidate> {
-  const profileId = assertNoCancel(
-    await text({
-      message: "Auth profile id",
-      validate: (value) => {
-        const trimmed = normalizeStringifiedOptionalString(value) ?? "";
-        if (!trimmed) {
-          return "Required";
-        }
-        if (!AUTH_PROFILE_ID_PATTERN.test(trimmed)) {
-          return 'Use letters/numbers/":"/"_"/"-" only.';
-        }
-        return undefined;
-      },
-    }),
-  );
+  const profileId = await promptRequiredText({
+    message: "Auth profile id",
+    validate: (value) =>
+      AUTH_PROFILE_ID_PATTERN.test(value) ? undefined : 'Use letters/numbers/":"/"_"/"-" only.',
+  });
 
   const credentialType = assertNoCancel(
     await select({
@@ -323,54 +316,37 @@ async function promptNewAuthProfileCandidate(agentId: string): Promise<Configure
     }),
   );
 
-  const provider = assertNoCancel(
-    await text({
-      message: "Provider id",
-      validate: (value) => (normalizeStringifiedOptionalString(value) ? undefined : "Required"),
-    }),
-  );
+  const provider = await promptRequiredText({ message: "Provider id" });
 
-  const profileIdTrimmed = normalizeStringifiedOptionalString(profileId) ?? "";
-  const providerTrimmed = normalizeStringifiedOptionalString(provider) ?? "";
   const field = credentialType === "token" ? "token" : "key";
   return {
     type: credentialType === "token" ? "auth-profiles.token.token" : "auth-profiles.api_key.key",
-    path: `profiles.${profileIdTrimmed}.${field}`,
-    pathSegments: ["profiles", profileIdTrimmed, field],
-    label: `profiles.${profileIdTrimmed}.${field} (auth profile, agent ${agentId})`,
+    path: `profiles.${profileId}.${field}`,
+    pathSegments: ["profiles", profileId, field],
+    label: `profiles.${profileId}.${field} (auth profile, agent ${agentId})`,
     configFile: "auth-profile-store",
     agentId,
-    authProfileProvider: providerTrimmed,
+    authProfileProvider: provider,
     expectedResolvedValue: "string",
   };
 }
 
 async function promptProviderAlias(params: { existingAliases: Set<string> }): Promise<string> {
-  const alias = assertNoCancel(
-    await text({
-      message: "Provider alias",
-      initialValue: "default",
-      validate: (value) => {
-        const trimmed = normalizeStringifiedOptionalString(value) ?? "";
-        if (!trimmed) {
-          return "Required";
-        }
-        if (!isValidSecretProviderAlias(trimmed)) {
-          return "Must match /^[a-z][a-z0-9_-]{0,63}$/";
-        }
-        if (params.existingAliases.has(trimmed)) {
-          return "Alias already exists";
-        }
-        return undefined;
-      },
-    }),
-  );
-  return normalizeStringifiedOptionalString(alias) ?? "";
+  return await promptRequiredText({
+    message: "Provider alias",
+    initialValue: "default",
+    validate: (value) => {
+      if (!isValidSecretProviderAlias(value)) {
+        return "Must match /^[a-z][a-z0-9_-]{0,63}$/";
+      }
+      return params.existingAliases.has(value) ? "Alias already exists" : undefined;
+    },
+  });
 }
 
 async function promptProviderSource(initial?: SecretRefSource): Promise<SecretRefSource> {
-  const source = assertNoCancel(
-    await select({
+  return assertNoCancel(
+    await select<SecretRefSource>({
       message: "Provider source",
       options: [
         { value: "env", label: "env" },
@@ -381,7 +357,6 @@ async function promptProviderSource(initial?: SecretRefSource): Promise<SecretRe
       initialValue: initial,
     }),
   );
-  return source as SecretRefSource;
 }
 
 async function promptEnvProvider(
@@ -400,22 +375,11 @@ async function promptEnvProvider(
 async function promptFileProvider(
   base?: Extract<SecretProviderConfig, { source: "file" }>,
 ): Promise<Extract<SecretProviderConfig, { source: "file" }>> {
-  const filePath = assertNoCancel(
-    await text({
-      message: "File path (absolute)",
-      initialValue: base?.path ?? "",
-      validate: (value) => {
-        const trimmed = normalizeStringifiedOptionalString(value) ?? "";
-        if (!trimmed) {
-          return "Required";
-        }
-        if (!isAbsolutePathValue(trimmed)) {
-          return "Must be an absolute path";
-        }
-        return undefined;
-      },
-    }),
-  );
+  const filePath = await promptRequiredText({
+    message: "File path (absolute)",
+    initialValue: base?.path ?? "",
+    validate: (value) => (isAbsolutePathValue(value) ? undefined : "Must be an absolute path"),
+  });
 
   const mode = assertNoCancel(
     await select({
@@ -440,7 +404,7 @@ async function promptFileProvider(
   });
   return {
     source: "file",
-    path: normalizeStringifiedOptionalString(filePath) ?? "",
+    path: filePath,
     mode,
     ...(timeoutMs ? { timeoutMs } : {}),
     ...(maxBytes ? { maxBytes } : {}),
@@ -462,25 +426,16 @@ async function parseArgsInput(rawValue: string): Promise<string[] | undefined> {
 async function promptExecProvider(
   base?: ManualExecSecretProviderConfig,
 ): Promise<ManualExecSecretProviderConfig> {
-  const command = assertNoCancel(
-    await text({
-      message: "Command path (absolute)",
-      initialValue: base?.command ?? "",
-      validate: (value) => {
-        const trimmed = normalizeStringifiedOptionalString(value) ?? "";
-        if (!trimmed) {
-          return "Required";
-        }
-        if (!isAbsolutePathValue(trimmed)) {
-          return "Must be an absolute path";
-        }
-        if (!isSafeExecutableValue(trimmed)) {
-          return "Command value is not allowed";
-        }
-        return undefined;
-      },
-    }),
-  );
+  const command = await promptRequiredText({
+    message: "Command path (absolute)",
+    initialValue: base?.command ?? "",
+    validate: (value) => {
+      if (!isAbsolutePathValue(value)) {
+        return "Must be an absolute path";
+      }
+      return isSafeExecutableValue(value) ? undefined : "Command value is not allowed";
+    },
+  });
 
   const argsRaw = assertNoCancel(
     await text({
@@ -550,20 +505,20 @@ async function promptExecProvider(
     }),
   );
 
-  const args = await parseArgsInput(normalizeStringifiedOptionalString(argsRaw) ?? "");
-  const trustedDirs = normalizeCsvOrLooseStringList(trustedDirsRaw ?? "");
+  const args = await parseArgsInput(argsRaw);
+  const trustedDirs = normalizeCsvOrLooseStringList(trustedDirsRaw);
 
   return {
     source: "exec",
-    command: normalizeStringifiedOptionalString(command) ?? "",
+    command,
     ...(args && args.length > 0 ? { args } : {}),
     ...(timeoutMs ? { timeoutMs } : {}),
     ...(noOutputTimeoutMs ? { noOutputTimeoutMs } : {}),
     ...(maxOutputBytes ? { maxOutputBytes } : {}),
-    ...(jsonOnly ? { jsonOnly } : { jsonOnly: false }),
+    jsonOnly,
     ...(passEnv.length > 0 ? { passEnv } : {}),
     ...(trustedDirs.length > 0 ? { trustedDirs } : {}),
-    ...(isRecord(base?.env) ? { env: base.env } : {}),
+    ...(base?.env ? { env: base.env } : {}),
   };
 }
 
@@ -592,7 +547,7 @@ async function configureProvidersInteractive(
   const manifestRegistry = loadPluginManifestRegistryCore({ config, env });
   const presets = listSecretProviderIntegrationPresets({ manifestRegistry, config, env });
   while (true) {
-    const providers = getSecretProviders(config);
+    const providers = config.secrets?.providers ?? {};
     const providerEntries = Object.entries(providers).toSorted(([left], [right]) =>
       left.localeCompare(right),
     );
@@ -658,20 +613,16 @@ async function configureProvidersInteractive(
     }
 
     if (action === "preset") {
-      const selectedPresetKey = assertNoCancel(
+      const preset = assertNoCancel(
         await select({
           message: "Select plugin preset",
           options: presetEntries.map((preset) => ({
-            value: providerPresetKey(preset),
+            value: preset,
             label: preset.displayName,
             hint: `${preset.providerAlias} | ${preset.pluginId}:${preset.id} | exec plugin`,
           })),
         }),
       );
-      const preset = presetEntries.find((entry) => providerPresetKey(entry) === selectedPresetKey);
-      if (!preset) {
-        throw new Error(`Unknown secret provider preset: ${selectedPresetKey}`);
-      }
       const current = providers[preset.providerAlias];
       if (current) {
         const shouldReplace = assertNoCancel(
@@ -689,21 +640,17 @@ async function configureProvidersInteractive(
     }
 
     if (action === "edit" || action === "remove") {
-      const alias = assertNoCancel(
+      const { alias, provider: current } = assertNoCancel(
         await select({
           message: action === "edit" ? "Select provider to edit" : "Select provider to remove",
           options: providerEntries.map(([providerAlias, providerConfig]) => ({
-            value: providerAlias,
+            value: { alias: providerAlias, provider: providerConfig },
             label: providerAlias,
             hint: providerHint(providerConfig),
           })),
         }),
       );
       if (action === "edit") {
-        const current = providers[alias];
-        if (!current) {
-          continue;
-        }
         const source = await promptProviderSource(current.source);
         const nextProviderConfig = await promptProviderConfig(source, current);
         if (!isDeepStrictEqual(current, nextProviderConfig)) {
@@ -801,8 +748,12 @@ export async function runSecretsConfigureInteractive(
       const visibleCandidates = showDerivedCandidates
         ? candidates
         : candidates.filter((candidate) => candidate.isDerived !== true);
-      const options = visibleCandidates.map((candidate) => ({
-        value: configureCandidateKey(candidate),
+      const options: Array<{
+        value: ConfigureCandidate | "__create_auth_profile__" | "__toggle_derived__" | "__done__";
+        label: string;
+        hint: string;
+      }> = visibleCandidates.map((candidate) => ({
+        value: candidate,
         label: candidate.label,
         hint: [
           // Auth profiles live in the agent's SQLite store; naming the retired
@@ -835,17 +786,17 @@ export async function runSecretsConfigureInteractive(
         });
       }
 
-      const selectedPath = assertNoCancel(
+      const candidate = assertNoCancel(
         await select({
           message: "Select credential field",
           options,
         }),
       );
 
-      if (selectedPath === "__done__") {
+      if (candidate === "__done__") {
         break;
       }
-      if (selectedPath === "__create_auth_profile__") {
+      if (candidate === "__create_auth_profile__") {
         const createdCandidate = await promptNewAuthProfileCandidate(configureAgentId);
         const key = configureCandidateKey(createdCandidate);
         const existingIndex = candidates.findIndex((entry) => configureCandidateKey(entry) === key);
@@ -856,17 +807,11 @@ export async function runSecretsConfigureInteractive(
         }
         continue;
       }
-      if (selectedPath === "__toggle_derived__") {
+      if (candidate === "__toggle_derived__") {
         showDerivedCandidates = !showDerivedCandidates;
         continue;
       }
 
-      const candidate = visibleCandidates.find(
-        (entry) => configureCandidateKey(entry) === selectedPath,
-      );
-      if (!candidate) {
-        throw new Error(`Unknown configure target: ${selectedPath}`);
-      }
       const candidateKey = configureCandidateKey(candidate);
       const priorSelection = selectedByPath.get(candidateKey);
       const existingRef = priorSelection?.ref ?? candidate.existingRef;
@@ -881,30 +826,19 @@ export async function runSecretsConfigureInteractive(
           options: sourceChoices,
           initialValue: sourceInitialValue,
         }),
-      ) as SecretRefSource;
+      );
 
       const defaultAlias = resolveDefaultSecretProviderAlias(stagedConfig, source, {
         preferFirstProviderForSource: true,
       });
       const providerInitialValue =
         existingRef?.source === source ? existingRef.provider : defaultAlias;
-      const provider = assertNoCancel(
-        await text({
-          message: "Provider alias",
-          initialValue: providerInitialValue,
-          validate: (value) => {
-            const trimmed = normalizeStringifiedOptionalString(value) ?? "";
-            if (!trimmed) {
-              return "Required";
-            }
-            if (!isValidSecretProviderAlias(trimmed)) {
-              return "Must match /^[a-z][a-z0-9_-]{0,63}$/";
-            }
-            return undefined;
-          },
-        }),
-      );
-      const providerAlias = normalizeStringifiedOptionalString(provider) ?? "";
+      const providerAlias = await promptRequiredText({
+        message: "Provider alias",
+        initialValue: providerInitialValue,
+        validate: (value) =>
+          isValidSecretProviderAlias(value) ? undefined : "Must match /^[a-z][a-z0-9_-]{0,63}$/",
+      });
       const suggestedIdFromExistingRef =
         existingRef?.source === source ? existingRef.id : undefined;
       let suggestedId = suggestedIdFromExistingRef;
@@ -917,29 +851,22 @@ export async function runSecretsConfigureInteractive(
           suggestedId = "value";
         }
       }
-      const id = assertNoCancel(
-        await text({
-          message: "Secret id",
-          initialValue: suggestedId,
-          validate: (value) => {
-            const trimmed = normalizeStringifiedOptionalString(value) ?? "";
-            if (!trimmed) {
-              return "Required";
-            }
-            if ((source === "env" || source === "store") && !isValidEnvSecretRefId(trimmed)) {
-              return `${source} ids must match /^[A-Z][A-Z0-9_]{0,127}$/`;
-            }
-            if (source === "exec" && !isValidExecSecretRefId(trimmed)) {
-              return formatExecSecretRefIdValidationMessage();
-            }
-            return undefined;
-          },
-        }),
-      );
+      const id = await promptRequiredText({
+        message: "Secret id",
+        initialValue: suggestedId,
+        validate: (value) => {
+          if ((source === "env" || source === "store") && !isValidEnvSecretRefId(value)) {
+            return `${source} ids must match /^[A-Z][A-Z0-9_]{0,127}$/`;
+          }
+          return source === "exec" && !isValidExecSecretRefId(value)
+            ? formatExecSecretRefIdValidationMessage()
+            : undefined;
+        },
+      });
       const ref: SecretRef = {
         source,
         provider: providerAlias,
-        id: normalizeStringifiedOptionalString(id) ?? "",
+        id,
       };
       if (ref.source === "exec" && !allowExecInPreflight) {
         const staticError = getSkippedExecRefStaticError({

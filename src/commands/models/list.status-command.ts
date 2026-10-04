@@ -58,7 +58,6 @@ import { loadPreparedModelCatalogSnapshot } from "../../agents/prepared-model-ca
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { readUtilityModelSetting } from "../../agents/utility-model-setting.js";
 import { resolveUtilityModelRefForAgent } from "../../agents/utility-model.js";
-import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import { createConfigIO } from "../../config/config.js";
 import {
@@ -275,8 +274,7 @@ export async function modelsStatusCommand(
   // Only an explicit --agent narrows the reported model/fallback overrides; an inferred
   // system-agent target still reports unscoped defaults, matching this command's shipped output.
   const agentId = explicitAgentId ? workspaceAgentId : undefined;
-  const workspaceDir =
-    resolveAgentWorkspaceDir(cfg, workspaceAgentId) ?? resolveDefaultAgentWorkspaceDir();
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, workspaceAgentId);
   const agentModelPrimary = agentId ? resolveAgentNativeModelPrimary(cfg, agentId) : undefined;
   const agentFallbacksOverride = agentId
     ? resolveAgentModelFallbacksOverride(cfg, agentId)

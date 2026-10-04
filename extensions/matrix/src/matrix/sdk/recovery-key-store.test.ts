@@ -17,6 +17,7 @@ import {
   writeMatrixRecoveryKeyStateForPathAsync,
   type MatrixSnapshotStateRuntime,
 } from "../crypto-state-store.js";
+import { createMatrixCryptoApi } from "./crypto.test-support.js";
 import { LogService } from "./logger.js";
 import { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
 import type { MatrixCryptoBootstrapApi, MatrixSecretStorageStatus } from "./types.js";
@@ -86,14 +87,11 @@ function createRecoveryKeyCrypto(params: {
   createRecoveryKeyFromPassphrase: ReturnType<typeof vi.fn>;
   status: MatrixSecretStorageStatus;
 }): MatrixCryptoBootstrapApi {
-  return {
-    on: vi.fn(),
-    bootstrapCrossSigning: vi.fn(async () => {}),
+  return createMatrixCryptoApi({
     bootstrapSecretStorage: params.bootstrapSecretStorage,
     createRecoveryKeyFromPassphrase: params.createRecoveryKeyFromPassphrase,
     getSecretStorageStatus: vi.fn(async () => params.status),
-    requestOwnUserVerification: vi.fn(async () => null),
-  } as unknown as MatrixCryptoBootstrapApi;
+  });
 }
 
 function bootstrapSecretStorageCallArg(
@@ -663,14 +661,11 @@ describe("MatrixRecoveryKeyStore", () => {
     const createRecoveryKeyFromPassphrase = vi.fn(async () => {
       throw new Error("should not be called");
     });
-    const crypto = {
-      on: vi.fn(),
-      bootstrapCrossSigning: vi.fn(async () => {}),
+    const crypto = createMatrixCryptoApi({
       bootstrapSecretStorage,
       createRecoveryKeyFromPassphrase,
       getSecretStorageStatus: vi.fn(async () => ({ ready: true, defaultKeyId: "NEW" })),
-      requestOwnUserVerification: vi.fn(async () => null),
-    } as unknown as MatrixCryptoBootstrapApi;
+    });
 
     await store.bootstrapSecretStorageWithRecoveryKey(crypto);
 
@@ -781,16 +776,13 @@ describe("MatrixRecoveryKeyStore", () => {
       keyId: "NEW",
     });
 
-    const crypto = {
-      on: vi.fn(),
-      bootstrapCrossSigning: vi.fn(async () => {}),
+    const crypto = createMatrixCryptoApi({
       bootstrapSecretStorage: vi.fn(async () => {}),
       createRecoveryKeyFromPassphrase: vi.fn(async () => {
         throw new Error("should not be called");
       }),
       getSecretStorageStatus: vi.fn(async () => ({ ready: true, defaultKeyId: "NEW" })),
-      requestOwnUserVerification: vi.fn(async () => null),
-    } as unknown as MatrixCryptoBootstrapApi;
+    });
 
     await store.bootstrapSecretStorageWithRecoveryKey(crypto);
 

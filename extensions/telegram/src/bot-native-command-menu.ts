@@ -455,17 +455,10 @@ async function clearTelegramMenuCommandsForScopes(params: {
   let allCleared = true;
   for (const scope of TELEGRAM_COMMAND_MENU_SCOPES) {
     const options = buildTelegramCommandScopeOptions(scope, languageCode);
-    const operation =
-      typeof bot.api.deleteMyCommands === "function" ? "deleteMyCommands" : "setMyCommands";
     const cleared = await withTelegramApiErrorLogging({
-      operation: formatTelegramCommandScopeOperation(operation, scope, languageCode),
+      operation: formatTelegramCommandScopeOperation("deleteMyCommands", scope, languageCode),
       runtime,
-      fn: () => {
-        if (typeof bot.api.deleteMyCommands === "function") {
-          return options ? bot.api.deleteMyCommands(options) : bot.api.deleteMyCommands();
-        }
-        return options ? bot.api.setMyCommands([], options) : bot.api.setMyCommands([]);
-      },
+      fn: () => (options ? bot.api.deleteMyCommands(options) : bot.api.deleteMyCommands()),
     })
       .then(() => true)
       .catch(() => false);

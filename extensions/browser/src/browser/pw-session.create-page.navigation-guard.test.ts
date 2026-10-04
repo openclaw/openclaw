@@ -45,7 +45,7 @@ type MockRoute = {
 type MockRequest = {
   isNavigationRequest: () => boolean;
   frame: () => object;
-  resourceType?: () => string;
+  resourceType: () => string;
   url: () => string;
 };
 type MockRouteHandler = (route: MockRoute, request: MockRequest) => Promise<void>;
@@ -88,6 +88,7 @@ function installBrowserMocks() {
   } as unknown as import("playwright-core").BrowserContext;
   const page = {
     on: vi.fn(),
+    isClosed: vi.fn(() => false),
     context: () => context,
     goto: pageGoto,
     title: vi.fn(async () => ""),
@@ -168,7 +169,6 @@ async function dispatch(
   if (!handler) {
     throw new Error("missing route handler");
   }
-  const { resourceType } = opts;
   await handler(createMockRoute(opts.route), {
     isNavigationRequest: () => opts.isNavigationRequest ?? true,
     frame: () => {
@@ -177,7 +177,7 @@ async function dispatch(
       }
       return opts.frame ?? f.mainFrame;
     },
-    ...(resourceType ? { resourceType: () => resourceType } : {}),
+    resourceType: () => opts.resourceType ?? "document",
     url: () => opts.url ?? publicUrl,
   });
 }

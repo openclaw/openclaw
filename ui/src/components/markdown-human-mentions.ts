@@ -108,11 +108,7 @@ export function installMarkdownHumanMentions(parser: MarkdownIt): void {
     const restore = (value: string) => restoreMarkdownHumanMentions(value, mentions);
     const restoreToken = (token: Token) => {
       token.content = restore(token.content);
-      token.attrs =
-        token.attrs?.map(([name, value]) => [
-          name,
-          typeof value === "string" ? restore(value) : value,
-        ]) ?? null;
+      token.attrs = token.attrs?.map(([name, value]) => [name, restore(value)]) ?? null;
       token.children?.forEach(restoreToken);
     };
     for (const block of state.tokens) {

@@ -123,23 +123,15 @@ function patternSubs(pattern: OcPath): readonly SlotSub[] {
 }
 
 function repackSlotSubs(pattern: OcPath, slotSubs: readonly SlotSub[]): OcPath {
-  const sectionSubs: string[] = [];
-  const itemSubs: string[] = [];
-  const fieldSubs: string[] = [];
-  for (const s of slotSubs) {
-    if (s.slot === "section") {
-      sectionSubs.push(s.value);
-    } else if (s.slot === "item") {
-      itemSubs.push(s.value);
-    } else {
-      fieldSubs.push(s.value);
-    }
+  const values: Record<Slot, string[]> = { section: [], item: [], field: [] };
+  for (const { slot, value } of slotSubs) {
+    values[slot].push(value);
   }
   return {
     file: pattern.file,
-    ...(sectionSubs.length > 0 ? { section: sectionSubs.join(".") } : {}),
-    ...(itemSubs.length > 0 ? { item: itemSubs.join(".") } : {}),
-    ...(fieldSubs.length > 0 ? { field: fieldSubs.join(".") } : {}),
+    ...(values.section.length > 0 ? { section: values.section.join(".") } : {}),
+    ...(values.item.length > 0 ? { item: values.item.join(".") } : {}),
+    ...(values.field.length > 0 ? { field: values.field.join(".") } : {}),
     ...(pattern.session !== undefined ? { session: pattern.session } : {}),
   };
 }

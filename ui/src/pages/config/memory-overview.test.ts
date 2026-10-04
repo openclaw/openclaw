@@ -87,8 +87,8 @@ function fixturePayload(): DoctorMemoryStatusPayload {
 function renderOverview(
   status: MemoryOverviewStatus,
   engineSelection: MemoryOverviewProps["engineSelection"] = {
-    kind: "auto",
-    engineId: "memory-core",
+    kind: "default",
+    pluginId: "memory-core",
   },
   overrides: Partial<MemoryOverviewProps> = {},
 ) {
@@ -147,7 +147,7 @@ describe("renderMemoryOverview", () => {
   it("hibernates a disabled pinned engine and points to Settings", () => {
     const container = renderOverview(
       { kind: "ready", payload: fixturePayload() },
-      { kind: "pinned", engineId: "memory-core" },
+      { kind: "pinned", pluginId: "memory-core" },
       { engineDisabled: true },
     );
 

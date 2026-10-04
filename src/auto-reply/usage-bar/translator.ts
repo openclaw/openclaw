@@ -92,8 +92,6 @@ function meter(value: unknown, width: number, scale: unknown): string {
   return full.repeat(fullc) + partial + empty.repeat(width - fullc - 1);
 }
 
-const VERB_NAMES = new Set(["num", "fixed", "dur", "pct", "inv", "alias", "meter"]);
-
 function parseBoundedIntegerArg(
   raw: string | undefined,
   options: { defaultValue: number; min: number; max: number },
@@ -102,41 +100,35 @@ function parseBoundedIntegerArg(
   return asSafeIntegerInRange(value, options);
 }
 
-function applyVerb(name: string, args: string[], value: unknown, vocab: Vocab): unknown {
-  switch (name) {
-    case "num":
-      return num(value);
-    case "fixed": {
-      const digits = parseBoundedIntegerArg(args[0], { defaultValue: 2, min: 0, max: 100 });
-      return digits === undefined ? "" : fixed(value, digits);
+type UsageVerb = (value: unknown, args: string[], vocab: Vocab) => unknown;
+
+const VERBS: Record<string, UsageVerb> = {
+  num,
+  dur,
+  pct,
+  inv,
+  fixed(value, args) {
+    const digits = parseBoundedIntegerArg(args[0], { defaultValue: 2, min: 0, max: 100 });
+    return digits === undefined ? "" : fixed(value, digits);
+  },
+  alias(value, args, vocab) {
+    const aliases = isObject(vocab["_aliases"]) ? vocab["_aliases"] : {};
+    const table =
+      args[0] && isObject(aliases[args[0]]) ? (aliases[args[0]] as Record<string, unknown>) : {};
+    const key = String(value);
+    if (Object.hasOwn(table, key)) {
+      return table[key];
     }
-    case "dur":
-      return dur(value);
-    case "pct":
-      return pct(value);
-    case "inv":
-      return inv(value);
-    case "alias": {
-      const aliases = isObject(vocab["_aliases"]) ? vocab["_aliases"] : {};
-      const table =
-        args[0] && isObject(aliases[args[0]]) ? (aliases[args[0]] as Record<string, unknown>) : {};
-      const key = String(value);
-      if (Object.hasOwn(table, key)) {
-        return table[key];
-      }
-      const lower = key.toLowerCase();
-      return Object.hasOwn(table, lower) ? table[lower] : value;
-    }
-    case "meter": {
-      const rawWidth = args[0]?.trim() ? args[0] : undefined;
-      const width = parseBoundedIntegerArg(rawWidth, { defaultValue: 5, min: 1, max: 100 });
-      const scale = args.length > 1 ? vocab[expectDefined(args[1], "args entry at 1")] : undefined;
-      return width === undefined ? "" : meter(value, width, scale);
-    }
-    default:
-      return String(value);
-  }
-}
+    const lower = key.toLowerCase();
+    return Object.hasOwn(table, lower) ? table[lower] : value;
+  },
+  meter(value, args, vocab) {
+    const rawWidth = args[0]?.trim() ? args[0] : undefined;
+    const width = parseBoundedIntegerArg(rawWidth, { defaultValue: 5, min: 1, max: 100 });
+    const scale = args.length > 1 ? vocab[expectDefined(args[1], "args entry at 1")] : undefined;
+    return width === undefined ? "" : meter(value, width, scale);
+  },
+};
 
 function getPath(ctx: unknown, path: string): unknown {
   let cur: unknown = ctx;
@@ -158,13 +150,14 @@ function interp(text: string, ctx: unknown, vocab: Vocab): string {
   return text.replace(TOKEN, (_match, body: string) => {
     const parts = body.split("|");
     let val = getPath(ctx, (parts[0] ?? "").trim());
-    const ops: Array<{ name: string; args: string[] }> = [];
+    const ops: Array<{ apply: UsageVerb; args: string[] }> = [];
     let fallback: string | undefined;
     for (const segRaw of parts.slice(1)) {
       const seg = segRaw.trim();
       const [name = "", ...args] = seg.split(":");
-      if (VERB_NAMES.has(name)) {
-        ops.push({ name, args });
+      const apply = Object.hasOwn(VERBS, name) ? VERBS[name] : undefined;
+      if (apply) {
+        ops.push({ apply, args });
       } else {
         fallback = seg;
       }
@@ -173,7 +166,7 @@ function interp(text: string, ctx: unknown, vocab: Vocab): string {
       return fallback ?? "";
     }
     for (const op of ops) {
-      val = applyVerb(op.name, op.args, val, vocab);
+      val = op.apply(val, op.args, vocab);
     }
     return String(val);
   });

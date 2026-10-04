@@ -217,15 +217,7 @@ export async function inspectMatrixDirectRooms(params: {
   );
   const mappedStrict = mappedRooms.find((room) => room.strict);
 
-  let joinedRooms: string[] = [];
-  if (typeof params.client.getJoinedRooms === "function") {
-    try {
-      const resolved = await params.client.getJoinedRooms();
-      joinedRooms = Array.isArray(resolved) ? resolved : [];
-    } catch {
-      joinedRooms = [];
-    }
-  }
+  const joinedRooms = await params.client.getJoinedRooms().catch(() => []);
   const discoveredStrictRooms: MatrixDirectRoomCandidate[] = [];
   for (const roomId of normalizeUniqueTrimmedStringList(joinedRooms)) {
     if (mappedRoomIds.includes(roomId)) {

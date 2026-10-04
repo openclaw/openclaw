@@ -15,7 +15,8 @@ import {
 import { BROWSER_REF_MARKER_ATTRIBUTE } from "./pw-session.page-cdp.js";
 
 type MutableDownload = {
-  url?: () => string;
+  url: () => string;
+  cancel: () => Promise<void>;
   suggestedFilename: () => string;
   saveAs: ReturnType<typeof vi.fn>;
   path?: () => Promise<string>;
@@ -247,10 +248,14 @@ describe("pw-session ensurePageState", () => {
     const saveAsA = saveContents("download-a");
     const saveAsB = saveContents("download-b");
     const downloadA: MutableDownload = {
+      url: () => "",
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => "report.pdf",
       saveAs: saveAsA,
     };
     const downloadB: MutableDownload = {
+      url: () => "",
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => "report.pdf",
       saveAs: saveAsB,
     };
@@ -291,6 +296,8 @@ describe("pw-session ensurePageState", () => {
 
     const err = new Error("save failed");
     const download: MutableDownload = {
+      url: () => "",
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => "report.pdf",
       saveAs: vi.fn(async () => {
         throw err;
@@ -320,6 +327,7 @@ describe("pw-session ensurePageState", () => {
     setImmediate(() => {
       handlers.get("download")?.[0]?.({
         url: () => "https://example.com/late.txt",
+        cancel: vi.fn(async () => {}),
         suggestedFilename: () => "late.txt",
         saveAs,
       });
@@ -346,6 +354,7 @@ describe("pw-session ensurePageState", () => {
     });
     handlers.get("download")?.[0]?.({
       url: () => "https://example.com/first.txt",
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => "first.txt",
       saveAs: firstSave,
     });
@@ -354,6 +363,7 @@ describe("pw-session ensurePageState", () => {
     const lateSave = saveContents("late");
     const lateDownload: MutableDownload = {
       url: () => "https://example.com/late.txt",
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => "late.txt",
       saveAs: lateSave,
     };
@@ -376,6 +386,7 @@ describe("pw-session ensurePageState", () => {
     const firstSaveAs = saveContents("first-action-download");
     handlers.get("download")?.[0]?.({
       url: () => "https://example.com/first.txt",
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => "first.txt",
       saveAs: firstSaveAs,
     });
@@ -385,6 +396,7 @@ describe("pw-session ensurePageState", () => {
     const latestSaveAs = saveContents("latest-action-download");
     handlers.get("download")?.[0]?.({
       url: () => "https://example.com/latest.txt",
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => "latest.txt",
       saveAs: latestSaveAs,
     });
@@ -406,6 +418,8 @@ describe("pw-session ensurePageState", () => {
     state.downloadWaiterDepth = 1;
     const capture = beginActionDownloadCaptureOnPage(page);
     const download = {
+      url: () => "",
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => "explicit.txt",
       saveAs: vi.fn(async () => {}),
     };
@@ -431,12 +445,14 @@ describe("pw-session ensurePageState", () => {
 
     handlers.get("download")?.[0]?.({
       url: () => "http://127.0.0.1/first.txt",
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => "first.txt",
       saveAs: firstSave,
     });
     setImmediate(() => {
       handlers.get("download")?.[0]?.({
         url: () => "http://127.0.0.1/second.txt",
+        cancel: vi.fn(async () => {}),
         suggestedFilename: () => "second.txt",
         saveAs: secondSave,
       });
@@ -465,6 +481,7 @@ describe("pw-session ensurePageState", () => {
     });
     const allowedDownload: MutableDownload = {
       url: () => "https://example.com/allowed.txt",
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => "allowed.txt",
       saveAs: vi.fn(async (outPath: string) => {
         await allowedSaveGate;
@@ -475,6 +492,7 @@ describe("pw-session ensurePageState", () => {
     setImmediate(() => {
       handlers.get("download")?.[0]?.({
         url: () => "https://example.com/blocked.txt",
+        cancel: vi.fn(async () => {}),
         suggestedFilename: () => "blocked.txt",
         saveAs: vi.fn(async () => {}),
       });
@@ -496,6 +514,7 @@ describe("pw-session ensurePageState", () => {
     });
 
     handlers.get("download")?.[0]?.({
+      url: () => "",
       suggestedFilename: () => "failed.txt",
       saveAs: vi.fn(async () => {
         throw error;
@@ -515,6 +534,7 @@ describe("pw-session ensurePageState", () => {
     const saveAs = saveContents("attachment");
     const download = {
       url: () => "https://example.com/export.csv",
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => "export.csv",
       saveAs,
     };
@@ -543,6 +563,7 @@ describe("pw-session ensurePageState", () => {
     const saveAs = saveContents("blocked");
     const download = {
       url: () => "http://127.0.0.1:18080/export.csv",
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => "export.csv",
       saveAs,
     };

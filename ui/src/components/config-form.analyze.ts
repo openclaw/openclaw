@@ -22,6 +22,8 @@ export type ConfigSchemaAnalysis = {
   unsupportedPaths: string[];
 };
 
+type NormalizedConfigSchema = ConfigSchemaAnalysis & { schema: JsonSchema };
+
 const META_KEYS = new Set([
   "$id",
   "$schema",
@@ -237,7 +239,7 @@ function normalizeSchemaNode(
   compositionBranch = false,
   inheritedCompositionType?: string,
   inheritedCompositionAllowsNull?: boolean,
-): ConfigSchemaAnalysis {
+): NormalizedConfigSchema {
   // Plugins and Zod emit unions as type arrays; keep their branch editor and
   // sibling constraints on the same normalization path as anyOf schemas.
   let schema = input;
@@ -323,7 +325,7 @@ function normalizeSchemaNode(
         continue;
       }
       const result = normalizeSchemaNode(entry, path, true, type, allowsNull);
-      normalizedAllOf.push(result.schema ?? entry);
+      normalizedAllOf.push(result.schema);
       for (const unsupportedPath of result.unsupportedPaths) {
         unsupported.add(unsupportedPath);
       }
@@ -353,7 +355,7 @@ function normalizeSchemaNode(
     child: JsonSchema,
     childPath: Array<string | number>,
     constraintPath?: string,
-  ): JsonSchema | null => {
+  ): JsonSchema => {
     if (compositionBranch && constraintPath !== undefined && !shouldNormalizeAllOfBranch(child)) {
       if (!hasOnlySupportedKeywords(child, SUPPORTED_CONSTRAINT_ONLY_KEYS)) {
         unsupported.add(constraintPath);
@@ -383,10 +385,7 @@ function normalizeSchemaNode(
     const normalizedProps: Record<string, JsonSchema> = {};
     for (const [key, value] of Object.entries(properties)) {
       const childPath = [...path, key];
-      const child = normalizeChild(value, childPath, pathKey(childPath) || "<root>");
-      if (child !== null) {
-        normalizedProps[key] = child;
-      }
+      normalizedProps[key] = normalizeChild(value, childPath, pathKey(childPath) || "<root>");
     }
     normalized.properties = normalizedProps;
 
@@ -410,9 +409,10 @@ function normalizeSchemaNode(
       normalized.additionalProperties = false;
     } else if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
       if (!isAnySchema(schema.additionalProperties)) {
-        normalized.additionalProperties =
-          normalizeChild(schema.additionalProperties, [...path, "*"]) ??
-          schema.additionalProperties;
+        normalized.additionalProperties = normalizeChild(schema.additionalProperties, [
+          ...path,
+          "*",
+        ]);
       }
     }
   } else if (type === "array" && (!inheritedCompositionOnly || hasLocalArrayStructure)) {
@@ -424,20 +424,22 @@ function normalizeSchemaNode(
           unsupported.add(pathLabel);
           continue;
         }
-        normalizedItems.push(normalizeChild(itemSchema, [...path, index], pathLabel) ?? itemSchema);
+        normalizedItems.push(normalizeChild(itemSchema, [...path, index], pathLabel));
       }
       normalized.items = normalizedItems;
       if (schema.additionalItems && typeof schema.additionalItems === "object") {
-        normalized.additionalItems =
-          normalizeChild(schema.additionalItems, [...path, "*"], pathLabel) ??
-          schema.additionalItems;
+        normalized.additionalItems = normalizeChild(
+          schema.additionalItems,
+          [...path, "*"],
+          pathLabel,
+        );
       } else {
         normalized.additionalItems = schema.additionalItems;
       }
     } else if (!schema.items) {
       unsupported.add(pathLabel);
     } else {
-      normalized.items = normalizeChild(schema.items, [...path, "*"], pathLabel) ?? schema.items;
+      normalized.items = normalizeChild(schema.items, [...path, "*"], pathLabel);
     }
     if (schema.allOf) {
       for (const index of arrayItemSchemaIndexes(schema)) {
@@ -505,7 +507,7 @@ function secretInputStringVariant(remaining: JsonSchema[]): JsonSchema | undefin
 function normalizeUnion(
   schema: JsonSchema,
   path: Array<string | number>,
-): ConfigSchemaAnalysis | null {
+): NormalizedConfigSchema | null {
   // Union normalization replaces the composition keywords, so mixed allOf schemas
   // must stay unsupported instead of silently losing sibling restrictions.
   if (schema.allOf) {

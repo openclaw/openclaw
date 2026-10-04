@@ -117,13 +117,10 @@ function jsoncValueToJson(value: JsoncValue): unknown {
     case "array":
       return value.items.map(jsoncValueToJson);
     case "string":
-      return value.value;
     case "number":
-      return value.value;
     case "boolean":
       return value.value;
     case "null":
       return null;
   }
-  return null;
 }

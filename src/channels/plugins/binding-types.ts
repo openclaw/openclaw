@@ -29,6 +29,10 @@ export type ConfiguredBindingRecordResolution = {
   statefulTarget: StatefulBindingTargetDescriptor;
 };
 
+export type StatefulBindingTargetResetResult =
+  | { ok: true; sessionKey?: string; sessionId?: string; storePath?: string }
+  | { ok: false; skipped?: boolean; error?: string };
+
 /**
  * Compiled binding rule with provider matcher, target factory, and static target facts.
  */

@@ -27,11 +27,9 @@ export function renderJsoncValue(
       }
       return JSON.stringify(value.value);
     case "number":
-      return String(value.value);
     case "boolean":
       return String(value.value);
     case "null":
       return "null";
   }
-  return "";
 }

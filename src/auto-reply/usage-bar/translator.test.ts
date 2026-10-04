@@ -142,6 +142,10 @@ describe("usage-bar verbs", () => {
     expect(render([{ text: "{identity.emoji|🤖} hi" }], { identity: { emoji: "🩺" } })).toBe(
       "🩺 hi",
     );
+    for (const name of ["constructor", "toString", "__proto__"]) {
+      expect(render([{ text: `{x|${name}}` }], {})).toBe(name);
+      expect(render([{ text: `{x|${name}}` }], { x: "value" })).toBe("value");
+    }
   });
 });
 
