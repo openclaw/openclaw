@@ -36,6 +36,7 @@ const hoisted = vi.hoisted(() => ({
   createPreparedEmbeddedAgentSettingsManager: vi.fn(),
   getGlobalHookRunner: vi.fn(),
   installMessageToolOnlyTerminalHook: vi.fn(),
+  installToolAuthoredSourceReplyTerminalHook: vi.fn(),
   prepareEmbeddedAttemptClientTools: vi.fn(),
   resolveEffectiveCompactionMode: vi.fn(),
   isSilentOverflowProneModel: vi.fn(),
@@ -78,6 +79,7 @@ vi.mock("./attempt-client-tools.js", () => ({
 }));
 vi.mock("./message-tool-terminal.js", () => ({
   installMessageToolOnlyTerminalHook: hoisted.installMessageToolOnlyTerminalHook,
+  installToolAuthoredSourceReplyTerminalHook: hoisted.installToolAuthoredSourceReplyTerminalHook,
 }));
 
 import { prepareEmbeddedAttemptAgentSession } from "./attempt-session-prepare.js";
@@ -142,6 +144,7 @@ function createInput(options?: { activationError?: Error }) {
     replaySafeToolNames: new Set(["read"]),
     replaySafeTools: new Set(allCustomTools),
     trustedLocalMediaToolNames: new Set(["read"]),
+    sourceReplyCapableToolNames: new Set(["order_status"]),
   };
   let onDeliveredSourceReply: (() => void) | undefined;
 
@@ -662,6 +665,11 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     expect(fixture.activeSession.agent.state.systemPrompt).toBe("system prompt");
     expect(fixture.input.onSystemPromptChanged).toHaveBeenCalledWith("  system prompt\n");
     expect(fixture.setActiveToolsByName).toHaveBeenCalledWith(fixture.sessionToolAllowlist);
+    // Only author-declared reply tools may end the batch with their own reply.
+    expect(hoisted.installToolAuthoredSourceReplyTerminalHook).toHaveBeenCalledWith({
+      agent: fixture.activeSession.agent,
+      sourceReplyCapableToolNames: new Set(["order_status"]),
+    });
     expect(result).toEqual(
       expect.objectContaining({
         activeSession: fixture.activeSession,

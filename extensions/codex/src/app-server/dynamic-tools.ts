@@ -8,7 +8,6 @@ import {
   finalizeToolTerminalPresentation,
   formatToolExecutionErrorMessage,
   getBeforeToolCallFailureDisposition,
-  captureToolAuthoredSourceReply,
   embeddedAgentLog,
   getChannelAgentToolMeta,
   getPluginToolMeta,
@@ -78,6 +77,7 @@ import {
   failedToolResult,
   type CodexDynamicToolRuntimeResponse,
 } from "./dynamic-tool-response-state.js";
+import { resolveCodexToolResultSourceReply } from "./dynamic-tool-source-reply.js";
 import type { CodexDynamicToolCallParams, CodexDynamicToolSpec } from "./protocol.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import {
@@ -634,16 +634,20 @@ export function createCodexDynamicToolBridge(params: {
               resultFailureKind === "blocked" ? undefined : resultFailureKind,
             transcriptDetails: asOptionalRecord(sanitizeToolResult(result))?.details,
           };
-          const toolConfirmedSourceReply =
-            params.hookContext?.sourceReplyDeliveryMode === "message_tool_only" &&
-            toolName === "message" &&
-            !resultIsError &&
-            (rawResult.terminate === true || result.terminate === true);
-          const confirmedSourceReply =
-            params.hookContext?.sourceReplyDeliveryMode === "message_tool_only" &&
-            toolName === "message" &&
-            (toolConfirmedSourceReply || deliveredSourceReply);
-          const sourceReplyFinal = confirmedSourceReply ? executedArgs.final !== false : undefined;
+          const sourceReply = resolveCodexToolResultSourceReply({
+            sourceReplyDeliveryMode: params.hookContext?.sourceReplyDeliveryMode,
+            canDeliverSourceReply: toolEntry.tool.canDeliverSourceReply,
+            toolName,
+            call,
+            resultIsError,
+            rawResult,
+            result,
+            deliveredSourceReply,
+            executedArgs,
+            config: params.hookContext?.config,
+            hookContext: toolResultHookContext,
+            payloads: telemetry.messagingToolSourceReplyPayloads,
+          });
           const autoDeliveryTtsMediaUrls = getCoreTtsToolResultMediaUrls(rawResult);
           recordAgentHarnessToolResultTelemetry({
             extractSourceReplyPayload: extractMessagingToolSourceReplyPayload,
@@ -662,48 +666,13 @@ export function createCodexDynamicToolBridge(params: {
             autoDeliveryTtsMediaUrls,
             coreTtsToolResult: autoDeliveryTtsMediaUrls?.length ? rawResult : undefined,
             messagingTarget: confirmedMessagingTarget,
-            sourceReplyFinal,
+            sourceReplyFinal: sourceReply.final,
             trustedLocalMediaToolNames: pluginLocalMediaTrustByToolName.get(toolName),
           });
-          if (deliveredSourceReply || toolConfirmedSourceReply) {
+          if (deliveredSourceReply || sourceReply.toolConfirmed) {
             telemetry.didDeliverSourceReplyViaMessageTool = true;
           }
-          // A `canDeliverSourceReply` tool may hand the host a finished reply. The
-          // host delivers it and records the assistant turn, so a final reply ends
-          // the Codex turn without another model step.
-          const toolAuthoredSourceReply =
-            toolEntry.tool.canDeliverSourceReply === true && !resultIsError
-              ? captureToolAuthoredSourceReply({
-                  result: rawResult,
-                  toolName,
-                  toolCallId: call.callId,
-                  idempotencyScope: toolResultHookContext.runId ?? call.turnId,
-                  cfg: params.hookContext?.config,
-                  sessionKey: toolResultHookContext.sessionKey,
-                  sessionId: toolResultHookContext.sessionId,
-                  agentId: toolResultHookContext.agentId,
-                  runId: toolResultHookContext.runId,
-                  log: embeddedAgentLog,
-                })
-              : undefined;
-          // Result handling is synchronous here; the transcript write is best effort
-          // and delivery does not depend on it (the helper logs failures).
-          if (toolAuthoredSourceReply) {
-            telemetry.messagingToolSourceReplyPayloads.push(toolAuthoredSourceReply.payload);
-            void toolAuthoredSourceReply.persistence;
-          }
-          const toolAuthoredSourceReplyFinal = toolAuthoredSourceReply?.payload.sourceReplyFinal;
-          const continuesSourceReplyProgress = confirmedSourceReply && sourceReplyFinal === false;
-          response.terminate =
-            toolAuthoredSourceReplyFinal === true ||
-            ((rawResult.terminate === true || result.terminate === true) &&
-              !continuesSourceReplyProgress) ||
-            // Yield is an explicit owner-level turn handoff, not termination
-            // inferred from source-reply delivery, so finality does not mask it.
-            isToolResultYield(rawResult) ||
-            isToolResultYield(result) ||
-            (confirmedSourceReply && sourceReplyFinal === true) ||
-            undefined;
+          response.terminate = sourceReply.terminate;
           const asyncStarted =
             isAsyncStartedToolResult(rawResult) || isAsyncStartedToolResult(result);
           response.asyncStarted = asyncStarted || undefined;
@@ -873,13 +842,6 @@ function toToolResultHookContext(
   };
 }
 
-function isToolResultYield(result: AgentToolResult<unknown>): boolean {
-  const details = result.details;
-  if (!isRecord(details) || typeof details.status !== "string") {
-    return false;
-  }
-  return details.status.trim().toLowerCase() === "yielded";
-}
 function isAsyncStartedToolResult(result: AgentToolResult<unknown>): boolean {
   const details = result.details;
   return isRecord(details) && details.async === true && details.status === "started";

@@ -24,7 +24,6 @@ import {
 } from "../../tool-replay-safety.js";
 import { addClientToolsToToolCatalog } from "../../tool-search-catalog.js";
 import { resolveToolSearchConfig, type ToolSearchCatalogRef } from "../../tool-search.js";
-import type { AnyAgentTool } from "../../tools/common.js";
 import { log } from "../logger.js";
 import {
   AGENT_RESERVED_TOOL_NAMES,
@@ -135,7 +134,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
     // the completion handler checks exact registered names, never result fields.
     const sourceReplyCapableToolNames = new Set(
       params.uncompactedEffectiveTools
-        .filter((tool) => (tool as AnyAgentTool).canDeliverSourceReply === true)
+        .filter((tool) => "canDeliverSourceReply" in tool && tool.canDeliverSourceReply === true)
         .map((tool) => (tool.name ?? "").trim())
         .filter((name) => name.length > 0),
     );
