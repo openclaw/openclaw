@@ -313,6 +313,30 @@ proc.spawn("node", ["server.js"]);
       expected: { ruleId: "dangerous-exec", severity: "critical" as const },
     },
     {
+      name: "detects child_process call through a compact renamed import",
+      source: `
+import{spawn as launch}from"node:child_process";
+launch("node", ["server.js"]);
+`,
+      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
+    },
+    {
+      name: "detects child_process call through a compact namespace import",
+      source: `
+import*as proc from"node:child_process";
+proc.spawn("node", ["server.js"]);
+`,
+      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
+    },
+    {
+      name: "detects child_process member call with whitespace after the dot",
+      source: `
+const proc = require("node:child_process");
+proc. spawn("node", ["server.js"]);
+`,
+      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
+    },
+    {
       name: "detects child_process call through a computed member",
       source: `
 import cp from "node:child_process";

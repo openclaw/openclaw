@@ -226,13 +226,13 @@ function collectChildProcessBindings(source: string): ChildProcessBindings {
 
   // ESM named imports, optionally after a default import.
   const esmNamed =
-    /\bimport\s+(?:\w+\s*,\s*)?\{([^}]*)\}\s*from\s*["'](?:node:)?child_process["']/g;
+    /\bimport(?:\s+\w+\s*,\s*|\s*)\{([^}]*)\}\s*from\s*["'](?:node:)?child_process["']/g;
   // ESM default namespace, alone or before named/namespace imports.
   const esmDefault =
     /\bimport\s+(\w+)(?:\s*,\s*(?:\{[^}]*\}|\*\s*as\s+\w+))?\s+from\s*["'](?:node:)?child_process["']/g;
   // ESM namespace import, optionally after a default import.
   const esmNamespace =
-    /\bimport\s+(?:\w+\s*,\s*)?\*\s*as\s+(\w+)\s+from\s*["'](?:node:)?child_process["']/g;
+    /\bimport(?:\s+\w+\s*,\s*|\s*)\*\s*as\s+(\w+)\s+from\s*["'](?:node:)?child_process["']/g;
   // CJS destructured: const { exec: run, spawn } = require("child_process")
   const cjsDestructured =
     /\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\s*\(\s*["'](?:node:)?child_process["']\s*\)/g;
@@ -314,13 +314,14 @@ function isBenignDangerousExecMatch(
   const inlineChildProcessReceiver = new RegExp(
     String.raw`(?:\brequire\s*\(\s*["'](?:node:)?child_process["']\s*\)|(?:\(\s*)?(?:await\s+)?import\s*\(\s*["'](?:node:)?child_process["']\s*\)\s*\)?)\s*(?:\.\s*|\[\s*)$`,
   ).test(prefix);
+  const memberReceiver = prefix.match(/(\w+)\s*\.\s*$/)?.[1];
   let receiver: string | undefined;
   // Computed and member calls require a known receiver for every watched
   // method. This excludes RegExp.exec and similarly named bundled helpers.
   if (charAtMatch === '"' || charAtMatch === "'") {
     receiver = prefix.match(/(\w+)\s*\[\s*$/)?.[1];
-  } else if (matchIndex > 0 && line[matchIndex - 1] === ".") {
-    receiver = line.slice(0, matchIndex - 1).match(/(\w+)\s*$/)?.[1];
+  } else if (memberReceiver) {
+    receiver = memberReceiver;
   } else {
     return !methodAliases.has(command);
   }
