@@ -17,6 +17,10 @@ type SendStoryParams = {
   kind?: MessageReceiptPartKind;
 };
 
+function formatTlonPostId(sentAt: number): string {
+  return scot("ud", da.fromUnix(sentAt));
+}
+
 function createTlonSendReceipt(params: {
   messageId: string;
   conversationId: string;
@@ -50,8 +54,7 @@ export async function sendDmWithStory({
   kind = "unknown",
 }: SendStoryParams) {
   const sentAt = Date.now();
-  const idUd = scot("ud", da.fromUnix(sentAt));
-  const id = `${fromShip}/${idUd}`;
+  const id = `${fromShip}/${formatTlonPostId(sentAt)}`;
 
   const delta = {
     add: {
@@ -139,7 +142,7 @@ export async function sendGroupMessageWithStory({
     json: action,
   });
 
-  const messageId = `${fromShip}/${sentAt}`;
+  const messageId = formatTlonPostId(sentAt);
   return {
     channel: "tlon",
     messageId,
