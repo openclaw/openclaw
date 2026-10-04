@@ -8,10 +8,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveRealpathOrAbsolute as canonicalizePathForComparison } from "../../infra/boundary-path.js";
 import {
-  resolveTrajectoryFilePath,
-  resolveTrajectoryPointerFilePath,
-} from "../../trajectory/paths.js";
-import {
   isCompactionCheckpointTranscriptFileName,
   isPrimarySessionTranscriptFileName,
   isRetainedSessionTranscriptArchiveName,
@@ -19,6 +15,8 @@ import {
   isSessionStoreTempArtifactName,
   SESSION_STORE_TEMP_STALE_MS,
   isTrajectorySessionArtifactName,
+  resolveTrajectoryPath,
+  resolveTrajectoryPointerPath,
 } from "./artifacts.js";
 import {
   isSessionPromptBlobTempArtifactName,
@@ -108,12 +106,8 @@ function resolveSessionArtifactPathsForEntry(params: {
   }
   return [
     transcriptPath,
-    resolveTrajectoryPointerFilePath(transcriptPath),
-    resolveTrajectoryFilePath({
-      env: {},
-      sessionFile: transcriptPath,
-      sessionId: params.entry.sessionId,
-    }),
+    resolveTrajectoryPointerPath(transcriptPath) ?? `${transcriptPath}.trajectory-path.json`,
+    resolveTrajectoryPath(transcriptPath) ?? `${transcriptPath}.trajectory.jsonl`,
   ];
 }
 

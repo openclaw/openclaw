@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
+import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
@@ -57,10 +58,21 @@ export async function certifySessionCanonicalValidationPending(
   const { database, claim } = retained;
   let oversizedRows = 0;
   try {
-    let initializeCanonicalValidation = !hasOpenClawAgentCanonicalValidation(database);
-    if (!initializeCanonicalValidation && !hasPendingCanonicalSessionValidation(database)) {
+    const readiness = runSqliteReadOperationSync(
+      database.db,
+      () => {
+        const initialize = !hasOpenClawAgentCanonicalValidation(database);
+        return {
+          initialize,
+          hasWork: initialize || hasPendingCanonicalSessionValidation(database),
+        };
+      },
+      "fresh",
+    );
+    if (!readiness.hasWork) {
       return;
     }
+    let initializeCanonicalValidation = readiness.initialize;
     const databaseOptions = {
       agentId: normalizeAgentId(options.agentId),
       path: readOpenClawAgentDatabaseIdentity(database).filename,

@@ -24,6 +24,7 @@ const DASHBOARD_REQUEST_PARAMS = {
   includeUnknown: true,
   limit: SIDEBAR_SESSION_ROSTER_LIMIT,
   rowMode: "compact",
+  source: "dashboard",
 } as const;
 
 function sessionsResult(key: string, label: string, updatedAt: number) {
@@ -284,6 +285,8 @@ suite.define(() => {
             includeLastMessage: true,
             includeUnknown: true,
             limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+            rowMode: "compact",
+            source: "sidebar",
           });
           await waitForControlUiRoute(page, { pathname: "/new", routeId: "new-session" });
           await page.waitForFunction(() => {

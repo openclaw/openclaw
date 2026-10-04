@@ -10,6 +10,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { clampText, formatRelativeTimestamp } from "../../lib/format.ts";
 import {
   isNativeExecApprovalsSnapshot,
@@ -21,6 +22,8 @@ import {
 } from "../../lib/nodes/page-operations.ts";
 import { resolveConfigAgents, resolveNodeTargets } from "./view-shared.ts";
 import type { DevicesProps } from "./view.types.ts";
+
+registerDevicesEnglish();
 
 type ExecApprovalsAgentOption = {
   id: string;

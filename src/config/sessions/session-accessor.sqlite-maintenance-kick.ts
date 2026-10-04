@@ -10,7 +10,7 @@ import {
   getGatewayRestartDrainSignal,
   isGatewayRestartDrainError,
 } from "../../process/gateway-work-admission.js";
-import { runInDetachedAsyncContext } from "../../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { captureAgentDatabaseAdmission } from "../../state/agent-database-admission.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import {
@@ -28,6 +28,7 @@ import {
 } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
+import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   SESSION_ENTRY_MAINTENANCE_INTERVAL_MS,
   observeSessionEntryMaintenanceAgeChanges,
@@ -36,7 +37,7 @@ import {
 import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from "./session-accessor.sqlite-maintenance.js";
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
-import { createSessionMaintenancePlanningOperation } from "./session-accessor.sqlite-reclamation.js";
+import { resolveSessionReclamationDatabaseOptions } from "./session-accessor.sqlite-reclamation.js";
 import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
@@ -351,12 +352,19 @@ async function runPendingMaintenance(
         const maintenance = owner.maintenanceConfig
           ? normalizeResolvedMaintenanceConfigInput(owner.maintenanceConfig)
           : resolveMaintenanceConfig();
-        const operation =
+        const operation: Extract<
+          SqliteSessionReclamationPlan,
+          { kind: "maintenance-plan" }
+        > | null =
           maintenance.mode === "warn"
             ? null
-            : createSessionMaintenancePlanningOperation({
-                databaseOptions: toDatabaseOptions(owner.scope),
+            : {
+                databaseOptions: resolveSessionReclamationDatabaseOptions(
+                  toDatabaseOptions(owner.scope),
+                ),
                 ageOwner: owner.ageOwner,
+                kind: "maintenance-plan",
+                materializedPlans: [],
                 input: {
                   activeSessionKeys,
                   archiveDirectory: owner.archiveDirectory,
@@ -364,7 +372,7 @@ async function runPendingMaintenance(
                   preservation: null,
                   storePath: owner.storePath,
                 },
-              });
+              };
         return { maintenance, operation };
       },
       "session.maintenance.plan",

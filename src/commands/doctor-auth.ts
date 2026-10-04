@@ -362,7 +362,6 @@ function loadAuthProfileHealth(params: {
       store: { ...store, profiles },
       cfg: params.cfg,
       warnAfterMs: DEFAULT_OAUTH_WARN_MS,
-      allowKeychainPrompt: params.allowKeychainPrompt,
     }),
   };
 }

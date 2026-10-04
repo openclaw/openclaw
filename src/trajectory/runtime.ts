@@ -391,9 +391,7 @@ export function createTrajectoryRuntimeRecorder(
       seq = nextSeq;
       sink.write(boundedEvent, boundedLine);
     },
-    flush: async () => {
-      await sink.flush();
-    },
-    describeFlushState: () => sink.describeFlushState(),
+    flush: sink.flush,
+    describeFlushState: sink.describeFlushState,
   };
 }

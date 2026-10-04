@@ -65,12 +65,8 @@ function trustedExternalAppUrl(event: MouseEvent): { anchor: HTMLAnchorElement; 
   if (!anchor || anchor.hasAttribute("download") || anchor.hasAttribute("data-file-path")) {
     return null;
   }
-  try {
-    const url = new URL(anchor.href, window.location.href);
-    return url.protocol === "mailto:" || url.protocol === "tel:" ? { anchor, url } : null;
-  } catch {
-    return null;
-  }
+  const url = URL.parse(anchor.href, window.location.href);
+  return url && (url.protocol === "mailto:" || url.protocol === "tel:") ? { anchor, url } : null;
 }
 
 function postNativeLink(postMessage: NativeLinkPoster, url: URL): boolean {
@@ -87,11 +83,8 @@ export function postNativeExternalLink(url: string): boolean {
   if (!poster) {
     return false;
   }
-  try {
-    return postNativeLink(poster, new URL(url));
-  } catch {
-    return false;
-  }
+  const parsed = URL.parse(url);
+  return parsed !== null && postNativeLink(poster, parsed);
 }
 
 function openBrowserPanel(url: URL): void {

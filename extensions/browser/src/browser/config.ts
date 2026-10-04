@@ -125,10 +125,8 @@ function normalizeExistingSessionCdpUrl(
     return undefined;
   }
 
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
+  const parsed = URL.parse(value);
+  if (!parsed) {
     throw new Error(`browser.profiles.${profileName}.cdpUrl must be a valid URL.`);
   }
 

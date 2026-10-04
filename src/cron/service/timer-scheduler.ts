@@ -9,7 +9,7 @@ import {
   GatewayDrainingError,
 } from "../../process/gateway-work-admission.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { runInDetachedAsyncContext } from "../../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type { InterruptedStartupRun } from "../store/run-recovery.types.js";
 import type { CronJob } from "../types.js";

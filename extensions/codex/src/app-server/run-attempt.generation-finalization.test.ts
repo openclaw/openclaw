@@ -250,6 +250,8 @@ describe("Codex finalization generation ownership", () => {
           },
         },
       );
+      // Authority assertions do not spend their attempt budget on worker preparation.
+      vi.useFakeTimers({ toFake: ["Date"] });
       const harness = createResumeHarness();
       if (!("writes" in harness)) {
         throw new Error("expected the persisted-thread app-server harness");
@@ -383,6 +385,8 @@ describe("Codex finalization generation ownership", () => {
         },
       ]),
     );
+    // This case controls generation handoff, including the awaited finalization tail.
+    vi.useFakeTimers({ toFake: ["Date"] });
     const harness = createResumeHarness();
     await prepareGenerationAttempt(params);
     const run = runCodexAppServerAttempt(params, { bindingStore: baseStore });

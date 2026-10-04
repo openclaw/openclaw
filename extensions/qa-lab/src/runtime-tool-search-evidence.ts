@@ -64,18 +64,14 @@ function readToolSearchDiscoveryReceipt(
   ) {
     return undefined;
   }
-  const discovered = search.tools.find(
-    (tool) =>
-      isRecord(tool) &&
-      normalizeOptionalString(tool.namespace) === targetNamespace &&
-      normalizeOptionalString(tool.name) === targetTool,
-  );
-  if (!isRecord(discovered)) {
-    return undefined;
-  }
-  const discoveredNamespace = normalizeOptionalString(discovered.namespace);
-  const discoveredTool = normalizeOptionalString(discovered.name);
-  if (!discoveredNamespace || !discoveredTool) {
+  if (
+    !search.tools.some(
+      (tool) =>
+        isRecord(tool) &&
+        normalizeOptionalString(tool.namespace) === targetNamespace &&
+        normalizeOptionalString(tool.name) === targetTool,
+    )
+  ) {
     return undefined;
   }
   return {
@@ -84,8 +80,8 @@ function readToolSearchDiscoveryReceipt(
     ...(searchCallStatus ? { searchCallStatus } : {}),
     searchOutputExecution,
     searchOutputStatus,
-    discoveredNamespace,
-    discoveredTool,
+    discoveredNamespace: targetNamespace,
+    discoveredTool: targetTool,
     targetCallId,
     targetNamespace,
     targetTool,

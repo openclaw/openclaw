@@ -89,14 +89,11 @@ describe("scanPlainTextJsonToolCall", () => {
 
   it("uses a virtual text-part boundary as the named-header line break", () => {
     const raw = '[read]{"path":"/tmp/file"}[/read]';
-    const usedLineBreakOffsets = new Set<number>();
     const scan = scanPlainTextJsonToolCall(raw, 0, {
       lineBreakOffsets: new Set(["[read]".length]),
-      usedLineBreakOffsets,
     });
 
     expect(scan.kind).toBe("complete");
-    expect([...usedLineBreakOffsets]).toEqual(["[read]".length]);
   });
 
   it.each([

@@ -86,10 +86,10 @@ export function readPendingCanonicalSessionValidationBatch(
   ) {
     throw new Error("Canonical validation batch limits must be positive safe integers");
   }
-  if (!hasCanonicalSessionValidationProjection(database)) {
-    return { mainKey: "main", rows: [], absentKeys: [], hasMore: false, oversizedRows: 0 };
-  }
   return runSqliteDeferredTransactionSync(database.db, () => {
+    if (!hasCanonicalSessionValidationProjection(database)) {
+      return { mainKey: "main", rows: [], absentKeys: [], hasMore: false, oversizedRows: 0 };
+    }
     const mainKey = readCanonicalSessionMainKey(database);
     const db = getNodeSqliteKysely<PendingDatabase>(database.db);
     const candidates = executeSqliteQuerySync(

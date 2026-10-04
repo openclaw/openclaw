@@ -558,15 +558,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/state/openclaw-state.worker.ts",
     ],
   },
-  {
-    testFile: "src/commands/doctor-sandbox-legacy-registry.test.ts",
-    watchGlobs: [
-      "src/agents/sandbox/registry-import.worker.ts",
-      "src/infra/sqlite-store.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
-      "src/state/openclaw-state.worker.ts",
-    ],
-  },
   ...[
     "src/commands/doctor-skill-workshop-relocation.reservations.test.ts",
     "src/commands/doctor-skill-workshop-sqlite.relocation.test.ts",

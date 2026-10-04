@@ -453,16 +453,17 @@ private func makeViewModel(
     return (transport, vm)
 }
 
+@MainActor
 private func loadAndWaitBootstrap(
     vm: OpenClawChatViewModel,
     sessionId: String? = nil) async throws
 {
-    await MainActor.run { vm.load() }
-    try await waitUntil("bootstrap") {
-        await MainActor.run {
-            !vm.isLoading && vm.healthOK && (sessionId == nil || vm.sessionId == sessionId)
-        }
-    }
+    vm.load()
+    let bootstrap = try #require(vm.bootstrapTask)
+    await bootstrap.value
+    #expect(!vm.isLoading)
+    #expect(vm.healthOK)
+    if let sessionId { #expect(vm.sessionId == sessionId) }
 }
 
 /// Wakes on observed view-model mutations instead of a wall-clock deadline, for work no handle can reach.
@@ -2045,10 +2046,14 @@ struct ChatViewModelTests {
         vm.applyProgressCard(progressCard(sessionKey: "agent:research:global", revision: 1, markdown: "Retained"))
         vm.load()
         await modelsGate.waitUntilBlocked()
-        try await waitUntil("unsupported progress request completes before bootstrap") { await calls.current() == 1 }
-        await Task { @MainActor in }.value
+        // The transport call count advances before its error reaches the view model.
+        await waitForObservedState { vm.errorText != nil }
+        #expect(await calls.current() == 1)
+        #expect(vm.errorText == OpenClawChatTransportUpgradeMessage.progressCardAgentScope)
         await modelsGate.release()
-        try await waitUntil("bootstrap completes after unsupported progress") { await MainActor.run { !vm.isLoading } }
+        let bootstrap = try #require(vm.bootstrapTask)
+        await bootstrap.value
+        #expect(!vm.isLoading)
         #expect(vm.progressCard?.markdown == "Retained")
         #expect(vm.errorText == OpenClawChatTransportUpgradeMessage.progressCardAgentScope)
 

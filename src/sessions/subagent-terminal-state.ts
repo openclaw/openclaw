@@ -16,6 +16,7 @@ const SUBAGENT_TERMINAL_SUMMARY: Record<SubagentTerminalStatus, string> = {
 
 type SubagentTerminalState = {
   childSessionKey: string;
+  agentId?: string;
   runId: string;
   requesterSessionKey: string;
   outcomeStatus: SubagentTerminalStatus;
@@ -36,7 +37,7 @@ export function prepareSubagentTerminalState(
     input: {
       event: {
         sessionKey: params.childSessionKey,
-        agentId: resolveAgentIdFromSessionKey(params.childSessionKey),
+        agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.childSessionKey),
         kind: params.outcomeStatus === "ok" ? "run_completed" : "run_failed",
         actorType: "system",
         runId: params.runId,

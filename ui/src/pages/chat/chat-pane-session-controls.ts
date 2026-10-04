@@ -73,9 +73,9 @@ export function readChatPaneComposerAccess(
   snapshot: Pick<ApplicationGatewaySnapshot, "hello">,
   session: GatewaySessionRow | undefined,
   catalog: boolean,
-) {
+): boolean {
   const auth = snapshot.hello?.auth ?? null;
-  const canSend =
+  return (
     hasOperatorWriteAccess(auth) ||
     (!catalog &&
       readSessionMethodScopeAccess(auth, {
@@ -83,8 +83,8 @@ export function readChatPaneComposerAccess(
         requiredScope: "operator.write",
         sessionScope: true,
         session,
-      }).allowed);
-  return { canCompose: canSend, canSend };
+      }).allowed)
+  );
 }
 
 export function readChatPaneMutationAccess(

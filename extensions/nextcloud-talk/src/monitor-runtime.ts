@@ -3,7 +3,6 @@ import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import { registerNextcloudTalkWebhook } from "./monitor.js";
@@ -20,11 +19,7 @@ import {
 } from "./webhook-spool.js";
 
 function normalizeOrigin(value: string): string | null {
-  try {
-    return normalizeLowercaseStringOrEmpty(new URL(value).origin);
-  } catch {
-    return null;
-  }
+  return URL.parse(value)?.origin.toLowerCase() ?? null;
 }
 
 type NextcloudTalkMonitorOptions = {

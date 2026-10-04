@@ -30,10 +30,8 @@ function parseSafeUrl(value: unknown, label: string): string {
   if (typeof value !== "string") {
     throw new Error(`${label} is not a string`);
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
+  const parsed = URL.parse(value);
+  if (!parsed) {
     throw new Error(`${label} is not a valid URL`);
   }
   if (["javascript:", "data:", "vbscript:"].includes(parsed.protocol)) {

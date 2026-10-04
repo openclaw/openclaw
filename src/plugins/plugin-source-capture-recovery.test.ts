@@ -367,13 +367,22 @@ it.each(["sync", "async"])("preserves custody after partial %s disposal", async 
   expect(fs.existsSync(root)).toBe(false);
 });
 
-it.each(["lease", "canonical path", "captures", "first capture"])(
-  "leaves no tokenless roots when %s preparation fails",
-  async (stage) => {
+it.each([
+  { stage: "lease", code: "EPERM" },
+  { stage: "canonical path", code: "EPERM" },
+  { stage: "captures", code: "ENOSPC" },
+  { stage: "first capture", code: "ENOSPC" },
+])(
+  "captures usable fallback bytes without tokenless roots after $stage fails with $code",
+  async ({ stage, code }) => {
     const stateDir = temp.make("capture-recovery-allocation-");
+    const source = temp.make("capture-recovery-source-");
+    const capturedSource = "module.exports = 'captured';\n";
+    fs.writeFileSync(path.join(source, "index.cjs"), capturedSource);
     const instance = retainPluginSourceCaptureInstance(stateDir);
     await sweepPluginSourceCapturesForTest(stateDir);
     const managed = path.join(stateDir, "tmp", "plugin-captures");
+    const failure = Object.assign(new Error("Fixture capture allocation refused"), { code });
     const acquire = stagingToken.acquireSqliteStagingToken;
     const realpath = fs.realpathSync.bind(fs);
     const mkdir = fs.mkdirSync.bind(fs);
@@ -382,7 +391,7 @@ it.each(["lease", "canonical path", "captures", "first capture"])(
       vi.spyOn(stagingToken, "acquireSqliteStagingToken").mockImplementation(
         (directory, mode, options) => {
           if (directory.startsWith(managed + path.sep)) {
-            throw locked;
+            throw failure;
           }
           return acquire(directory, mode, options);
         },
@@ -390,7 +399,7 @@ it.each(["lease", "canonical path", "captures", "first capture"])(
     } else if (stage === "canonical path") {
       vi.spyOn(fs, "realpathSync").mockImplementation((file, options) => {
         if (String(file).startsWith(managed + path.sep)) {
-          throw locked;
+          throw failure;
         }
         return realpath(file, options);
       });
@@ -400,28 +409,41 @@ it.each(["lease", "canonical path", "captures", "first capture"])(
           String(file).startsWith(managed + path.sep) &&
           path.basename(String(file)) === "captures"
         ) {
-          throw locked;
+          throw failure;
         }
         return mkdir(file, options);
       });
     } else {
       vi.spyOn(fs, "mkdtempSync").mockImplementation((prefix, options) => {
         if (prefix.startsWith(managed + path.sep)) {
-          throw locked;
+          throw failure;
         }
         return mkdtemp(prefix, options);
       });
     }
+    let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
     try {
-      const directory = instance.createDirectory();
-      fs.writeFileSync(path.join(directory, "source.js"), "captured after fallback");
+      artifact = withPluginSourceCaptureStorage({ stateDir, placement: "state" }, () =>
+        capturePluginGenerationArtifact(source),
+      );
+      const directory = artifact.boundaryRoot;
+      expect(fs.readFileSync(artifact.resolve(path.join(source, "index.cjs")), "utf8")).toBe(
+        capturedSource,
+      );
+      expect(directory.startsWith(stateDir + path.sep)).toBe(false);
       expect(fs.readdirSync(managed)).toEqual([]);
       expect(fs.existsSync(path.join(path.dirname(path.dirname(directory)), "owner.sqlite"))).toBe(
         true,
       );
+      await artifact.disposeAsync();
+      expect(fs.existsSync(directory)).toBe(false);
     } finally {
       vi.restoreAllMocks();
-      await instance.releaseAsync();
+      try {
+        await artifact?.disposeAsync();
+      } finally {
+        await instance.releaseAsync();
+      }
     }
     expect(
       fs.readdirSync(tmpdir()).filter((name) => name.startsWith("openclaw-plugin-captures-")),

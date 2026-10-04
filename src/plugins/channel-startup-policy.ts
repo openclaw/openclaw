@@ -6,6 +6,7 @@ import {
   type PluginActivationConfigSource,
 } from "./config-state.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 
 /** Shares configured-channel eligibility between startup and manifest schema selection. */
 export function canStartConfiguredChannelPlugin(params: {
@@ -18,10 +19,11 @@ export function canStartConfiguredChannelPlugin(params: {
   activationSource: PluginActivationConfigSource;
 }): boolean {
   const { id, origin, channelIds, config, pluginsConfig, activationSource } = params;
+  const policyId = normalizePluginPolicyId(id);
   if (
     !pluginsConfig.enabled ||
-    pluginsConfig.deny.includes(id) ||
-    pluginsConfig.entries[id]?.enabled === false
+    pluginsConfig.deny.includes(policyId) ||
+    pluginsConfig.entries[policyId]?.enabled === false
   ) {
     return false;
   }
@@ -35,7 +37,7 @@ export function canStartConfiguredChannelPlugin(params: {
     );
   if (
     pluginsConfig.allow.length > 0 &&
-    !pluginsConfig.allow.includes(id) &&
+    !pluginsConfig.allow.includes(policyId) &&
     !explicitBundledChannelConfig
   ) {
     return false;

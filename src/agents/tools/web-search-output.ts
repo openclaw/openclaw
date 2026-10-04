@@ -129,15 +129,12 @@ function toHttpUrl(value: string): string | undefined {
   if (value.length > 2_048) {
     return undefined;
   }
-  try {
-    const parsed = new URL(value);
-    return (parsed.protocol === "http:" || parsed.protocol === "https:") &&
-      parsed.href.length <= 2_048
-      ? parsed.href
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  const parsed = URL.parse(value);
+  return parsed &&
+    (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+    parsed.href.length <= 2_048
+    ? parsed.href
+    : undefined;
 }
 // Purely structural date charset; free-form dates could smuggle instructions.
 const PUBLISHED_RE = /^\d{4}-\d{2}-\d{2}(?:[T ][\d:.+Z-]{0,20})?$/u;

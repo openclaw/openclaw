@@ -19,15 +19,8 @@ type BrowserOpenEnvironment = {
 };
 
 function normalizeBrowserOpenUrl(raw: string): string | null {
-  try {
-    const parsed = new URL(raw);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return null;
-    }
-    return parsed.toString();
-  } catch {
-    return null;
-  }
+  const parsed = URL.parse(raw);
+  return parsed?.protocol === "http:" || parsed?.protocol === "https:" ? parsed.toString() : null;
 }
 
 /** Resolve the platform command used to open an HTTP(S) URL in a browser. */

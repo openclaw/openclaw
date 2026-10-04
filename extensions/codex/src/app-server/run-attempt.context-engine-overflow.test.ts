@@ -202,6 +202,8 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
             },
             { persistedThreads: ["thread-old"] },
           );
+          // Binding ownership is independent of real worker preparation time.
+          vi.useFakeTimers({ toFake: ["Date"] });
           const run = runCodexAppServerAttempt(params, {
             bindingStore: { ...bindingStore, mutate: observedMutate },
           });

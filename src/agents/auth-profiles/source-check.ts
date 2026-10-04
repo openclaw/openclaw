@@ -2,6 +2,7 @@
  * Auth-profile source probes for runtime and persisted stores.
  * These checks intentionally avoid loading secret-bearing credential payloads.
  */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { evaluateStoredCredentialEligibility } from "./credential-state.js";
 import { hasLegacyAuthProfileCredentialSource } from "./legacy-source-diagnostic.js";
 import { resolveSharedAuthStorePath } from "./path-resolve.js";
@@ -18,10 +19,6 @@ import {
 } from "./sqlite.js";
 import type { AuthProfileStore } from "./types.js";
 
-function normalizeProvider(provider: string): string {
-  return provider.trim().toLowerCase();
-}
-
 function storeHasProviderProfile(
   store: AuthProfileStore | null,
   provider: string,
@@ -31,13 +28,13 @@ function storeHasProviderProfile(
   if (!profiles) {
     return false;
   }
-  const expected = normalizeProvider(provider);
+  const expected = normalizeLowercaseStringOrEmpty(provider);
   const credentials =
     profileIds?.map((profileId) => profiles[profileId]) ?? Object.values(profiles);
   return credentials.some(
     (credential) =>
       credential !== undefined &&
-      normalizeProvider(credential.provider) === expected &&
+      normalizeLowercaseStringOrEmpty(credential.provider) === expected &&
       evaluateStoredCredentialEligibility({ credential }).eligible,
   );
 }
@@ -111,7 +108,7 @@ export function hasAuthProfileStoreSourceForProvider(
   agentDir?: string,
   options?: AuthProfileSourceForProviderOptions,
 ): boolean {
-  if (!normalizeProvider(provider)) {
+  if (!normalizeLowercaseStringOrEmpty(provider)) {
     return false;
   }
   const profileIds = options?.profileIds;

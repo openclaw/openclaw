@@ -1,8 +1,10 @@
 import {
   escapeRuntimeContextFooter,
   hasRuntimeContextMarker,
+  isRuntimeContextMessage,
   labelRuntimeContextText,
   RUNTIME_CONTEXT_HEADER,
+  setRuntimeContextRetention,
   type Context,
 } from "../../../llm/types.js";
 import {
@@ -160,6 +162,17 @@ export function resolveRuntimeContextPromptParts(params: {
     runtimeContext: runtimeContext || undefined,
     ...(runtimeOnly ? { runtimeOnly: true } : {}),
   };
+}
+
+export function applyRuntimeContextCarrierRetention(
+  messages: Context["messages"],
+  appendOnlyRuntimeContext: boolean | undefined,
+): void {
+  for (const message of messages) {
+    if (isRuntimeContextMessage(message)) {
+      setRuntimeContextRetention(message, appendOnlyRuntimeContext);
+    }
+  }
 }
 
 export function buildRuntimeContextCustomMessage(

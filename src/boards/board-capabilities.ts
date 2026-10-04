@@ -18,10 +18,8 @@ function normalizeBoardNetOrigin(value: string): string {
   if (value !== value.trim() || value.length === 0 || value.length > 2048) {
     return invalidDeclaration(`invalid board widget network origin: ${value}`);
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
+  const parsed = URL.parse(value);
+  if (!parsed) {
     return invalidDeclaration(`invalid board widget network origin: ${value}`);
   }
   const supportedHostname =

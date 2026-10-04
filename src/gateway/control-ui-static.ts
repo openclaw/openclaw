@@ -187,12 +187,6 @@ export function respondHeadForControlUiFile(
   res.end();
 }
 
-function compressControlUiBody(body: Buffer, encoding: ControlUiContentEncoding): Promise<Buffer> {
-  return encoding === "br"
-    ? compressBrotli(body, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } })
-    : compressGzip(body, { level: 6 });
-}
-
 export function serveControlUiAsset(
   res: ServerResponse,
   filePath: string,
@@ -221,7 +215,10 @@ function cachedCompressedControlUiHtml(
   const compression = getOrCreatePromise(
     controlUiHtmlCompressionCache,
     key,
-    () => compressControlUiBody(Buffer.from(body), encoding),
+    () =>
+      encoding === "br"
+        ? compressBrotli(Buffer.from(body), { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } })
+        : compressGzip(Buffer.from(body), { level: 6 }),
     { cacheRejections: false },
   );
   pruneMapToMaxSize(controlUiHtmlCompressionCache, CONTROL_UI_HTML_COMPRESSION_CACHE_MAX_ENTRIES);

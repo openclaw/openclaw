@@ -45,7 +45,7 @@ type DeletedSessionShell = {
   recoverNotFoundRoute: () => void;
   updateRouteState: (state: ReturnType<typeof selectShellRouteState>) => void;
   observeDeletedSessions: (state: ApplicationContext["sessions"]["state"]) => void;
-  recoverDeletedActiveSession: (state: ApplicationContext["sessions"]["state"]) => void;
+  recoverDeletedActiveSession: () => void;
 };
 
 const mainKey = "agent:main:main";
@@ -367,12 +367,12 @@ describe("OpenClaw shell deleted-session recovery", () => {
       },
       retryable: false,
     });
-    shell.recoverDeletedActiveSession(context.sessions.state);
+    shell.recoverDeletedActiveSession();
     expect(shell.activeSessionKey).toBe(deletedKey);
     expect(replace).not.toHaveBeenCalled();
     expect(setSessionKey).not.toHaveBeenCalled();
     get.mockReturnValue(null);
-    shell.recoverDeletedActiveSession(context.sessions.state);
+    shell.recoverDeletedActiveSession();
     expect(shell.activeSessionKey).toBe(mainKey);
     expect(replace).toHaveBeenCalledOnce();
   });
@@ -398,7 +398,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
         sessionKeys: [deletedKey, mainKey],
         sessions,
       });
-      const stop = sessions.subscribe((state) => shell.recoverDeletedActiveSession(state));
+      const stop = sessions.subscribe(() => shell.recoverDeletedActiveSession());
       const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
       try {
         const operation =
@@ -488,7 +488,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
         sessionKeys: [deletedKey],
         sessions,
       });
-      const stop = sessions.subscribe((state) => shell.recoverDeletedActiveSession(state));
+      const stop = sessions.subscribe(() => shell.recoverDeletedActiveSession());
       const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
       const operation = sessions.delete(deletedKey, { expectedSessionId: "predecessor" });
       try {
@@ -571,7 +571,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
         const draft = storage.getItem(storageKey);
         stop = h.sessions.subscribe((state) => {
           shell.observeDeletedSessions(state);
-          shell.recoverDeletedActiveSession(state);
+          shell.recoverDeletedActiveSession();
         });
         const payload = {
           sessionKey: h.alpha.key,

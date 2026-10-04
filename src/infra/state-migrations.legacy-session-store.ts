@@ -58,9 +58,6 @@ const log = createSubsystemLogger("sessions/legacy-importer");
 const loadSessionArchiveRuntime = createLazyRuntimeModule(
   () => import("../gateway/session-archive.runtime.js"),
 );
-const loadTrajectoryCleanupRuntime = createLazyRuntimeModule(
-  () => import("../trajectory/cleanup.js"),
-);
 
 function normalizeOptionalDeliveryContext(value: unknown): DeliveryContext | undefined {
   if (!isRecord(value)) {
@@ -305,10 +302,6 @@ async function writeLegacySessionStoreUnlocked(
       commitReducedStore: () => persistLegacySessionStore(storePath, store),
       artifacts: {
         archiveRemovedSessionTranscripts,
-        removeRemovedSessionTrajectoryArtifacts: async (params) => {
-          const { removeRemovedSessionTrajectoryArtifacts } = await loadTrajectoryCleanupRuntime();
-          await removeRemovedSessionTrajectoryArtifacts(params);
-        },
         cleanupArchivedSessionTranscripts: async (params) => {
           const { cleanupArchivedSessionTranscripts } = await loadSessionArchiveRuntime();
           await cleanupArchivedSessionTranscripts(params);

@@ -85,24 +85,26 @@ it.each([false, true])(
   },
 );
 
-it("rejects a discovery request for another workspace before scanning it", async () => {
-  const f = fixture();
-  const input = Readable.from([
-    JSON.stringify({ sourcePlan: { workspaceDir: path.join(f.home, "other") } }),
-  ]);
-  await expect(
-    serveWorkspaceSkills({ ...f, operation: "discovery", input, output: new PassThrough() }),
-  ).rejects.toThrow("does not match the provisioned workspace");
-});
-
-it("does not treat unknown operations as discovery", async () => {
-  const f = fixture();
-  await expect(
-    serveWorkspaceSkills({
-      ...f,
-      operation: "unknown",
-      input: Readable.from(["{}"]),
-      output: new PassThrough(),
-    }),
-  ).rejects.toThrow("Unknown skill worker operation");
-});
+it.each([
+  { operation: "discovery", error: "does not match the provisioned workspace" },
+  { operation: "unknown", error: "Unknown skill worker operation" },
+])(
+  "rejects $operation before scanning an unprovisioned workspace",
+  async ({ operation, error }) => {
+    const f = fixture();
+    await expect(
+      serveWorkspaceSkills({
+        ...f,
+        operation,
+        input: Readable.from([
+          JSON.stringify(
+            operation === "discovery"
+              ? { sourcePlan: { workspaceDir: path.join(f.home, "other") } }
+              : {},
+          ),
+        ]),
+        output: new PassThrough(),
+      }),
+    ).rejects.toThrow(error);
+  },
+);
