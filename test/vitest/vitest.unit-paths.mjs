@@ -10,6 +10,7 @@ export const unitTestIncludePatterns = [
   "src/**/*.test.ts",
   "packages/**/*.test.ts",
   "test/**/*.test.ts",
+  "apps/linux/scripts/**/*.test.mjs",
 ];
 
 export const boundaryTestFiles = [
