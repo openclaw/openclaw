@@ -30,6 +30,7 @@ export type SourceReplyDeliveryModeContext = Pick<
   | "CommandTurn"
   | "BotUsername"
   | "WasMentioned"
+  | "MentionSource"
   | "InputProvenance"
 >;
 
@@ -126,7 +127,8 @@ export function resolveSourceReplyExpectation(params: {
   });
   if (
     conversationType === "group" &&
-    params.ctx.WasMentioned !== true &&
+    // Thread participation admits the message but does not explicitly request a reply.
+    (params.ctx.WasMentioned !== true || params.ctx.MentionSource === "implicit_thread") &&
     resolveSilentReplySettings({
       cfg: params.cfg,
       surface: params.ctx.Surface ?? params.ctx.Provider,
