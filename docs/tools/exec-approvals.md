@@ -708,7 +708,7 @@ context when forwarding approved `system.run` requests:
 - The node exec path prepares one canonical plan up front.
 - The approval record stores that plan and its binding metadata.
 - Once approved, the final forwarded `system.run` call reuses the stored plan instead of trusting later caller edits.
-- If the caller changes `command`, `rawCommand`, `cwd`, `agentId`, or `sessionKey` after the approval request was created, the gateway rejects the forwarded run as an approval mismatch.
+- Edits to `command`, `rawCommand`, `cwd`, `agentId`, or `sessionKey` after the approval request was created are discarded: the gateway forwards the stored values instead. Changed `env` overrides are still rejected as an approval mismatch.
 
 ## Approval scope summaries
 
