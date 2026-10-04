@@ -85,8 +85,9 @@ function toIncognitoCollaborationCommand(
     case "category.prepare":
     case "category.apply":
     case "involvement":
-      throw new Error("Incognito collaboration command requires its dedicated owner");
+      break;
   }
+  throw new Error("Incognito collaboration command requires its dedicated owner");
 }
 
 export async function runSessionCollaborationWrite<

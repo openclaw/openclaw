@@ -46,7 +46,7 @@ afterEach(async () => {
     for (const receipt of receipts) {
       receipt.finish("interrupted");
     }
-    await Promise.allSettled([...receipts].map((receipt) => receipt.settled?.()));
+    await Promise.allSettled([...receipts].map(async (receipt) => receipt.settled?.()));
     receipts.clear();
     expect(sql.queries).toEqual([]);
   } finally {
@@ -79,7 +79,7 @@ async function fixture(name: string) {
   return {
     scope,
     history,
-    async stage(runId: string, trackCompletion = false, current = authority.assertCurrent) {
+    async stage(runId: string, trackCompletion = false, current = () => authority.assertCurrent()) {
       const receipt = await stageSessionPendingInput(scope, {
         runId,
         trackCompletion,
@@ -247,7 +247,7 @@ it("propagates a completion refusal without silently dispatching a terminal writ
   const f = await fixture("completion-refusal");
   const receipt = await f.stage("completion-refusal", true);
   const failure = new IncognitoSessionSyncAccessError("legacyCompletion", "completeAsync");
-  const mutate = actor.sessions.mutatePendingInput;
+  const mutate = actor.sessions.mutatePendingInput.bind(actor.sessions);
   const operations: string[] = [];
   vi.spyOn(actor.sessions, "mutatePendingInput").mockImplementation((...args) => {
     operations.push(args[1].kind);

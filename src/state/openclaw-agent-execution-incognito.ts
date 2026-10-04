@@ -347,14 +347,14 @@ function createIncognitoAgentExecutionOwner(
         ),
         acp: {
           prepareEntryRead(params) {
-            const authority = params.authority;
+            const readAuthority = params.authority;
             const env = cloneEnvWithPlatformSemantics(params.env);
             env.OPENCLAW_STATE_DIR = resolveStateDir(env);
             const shared = captureOpenClawStateReadWorkerContext({
               env,
               path: params.databasePath ? path.resolve(params.databasePath) : undefined,
             });
-            const input = {
+            const readInput = {
               cfg: captureRuntimeConfigWithSource(params.cfg, params.cfg),
               sessionKey: params.sessionKey,
               env,
@@ -364,23 +364,23 @@ function createIncognitoAgentExecutionOwner(
                 env,
               }),
             };
-            const assertCurrent = () => {
+            const assertReadCurrent = () => {
               execution.assertCurrent();
-              authority.assertCurrent();
+              readAuthority.assertCurrent();
               shared.maintenanceScope?.assertAdmission();
               shared.admission.assertCurrent();
             };
-            assertCurrent();
+            assertReadCurrent();
             return execution.sessions.withSharedState(async () => {
               const { prepareIncognitoAcpSessionEntryRead } =
                 await import("../acp/runtime/session-meta-worker-mutation.js");
-              assertCurrent();
+              assertReadCurrent();
               return prepareIncognitoAcpSessionEntryRead({
-                ...input,
+                ...readInput,
                 actor: execution,
                 authority: {
-                  assertCurrent,
-                  authorize: (stage, facts) => authority.authorize?.(stage, facts),
+                  assertCurrent: assertReadCurrent,
+                  authorize: (stage, facts) => readAuthority.authorize?.(stage, facts),
                 },
               });
             });
