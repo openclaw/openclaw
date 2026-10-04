@@ -28,7 +28,7 @@ Parameters:
 Behavior:
 
 - Foreground runs return retained output directly and disclose when earlier output exceeded the aggregate cap.
-- Set `required: true` when a command result is needed to finish the task. It stays an owned tool call through process settlement and terminal collection instead of returning an uncollected background handle. This works with `notifyOnExit=false`; no completion notification is enabled. `required: true` cannot be combined with `background: true`, which explicitly selects an independently running service. Run, tool, and process deadlines still apply. In OpenClaw Code Mode, the cell retains required calls and resumes on their settlement without model polling.
+- Set `awaitResults: true` when a command result is needed to finish the task. It stays an owned tool call through process settlement and terminal collection instead of returning an uncollected background handle. This works with `notifyOnExit=false`; no completion notification is enabled. `awaitResults: true` cannot be combined with `background: true`, which explicitly selects an independently running service. Run, tool, and process deadlines still apply. In OpenClaw Code Mode, the cell retains required calls and resumes on their settlement without model polling.
 - When backgrounded (explicit or via `yieldMs` timeout), the tool returns `status: "running"` + `sessionId` and a short output tail.
 - Launch failures return the operating-system error and release worker cleanup even when no process starts.
 - Backgrounded and `yieldMs` runs inherit `tools.exec.timeoutSeconds` unless the call passes an explicit `timeoutSeconds`.
