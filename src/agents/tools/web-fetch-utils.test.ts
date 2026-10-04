@@ -454,10 +454,16 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     const markdown = "Intro:\n\n- one\n  - nested\n\n## Steps\n\n1. first\n2. second";
     expect(markdownToText(markdown)).toBe("Intro:\n\none\nnested\n\nSteps\n\nfirst\nsecond");
     const result = await extractBasicHtmlContent({
-      html: "<p>Intro:</p><ul><li>one</li><li>two</li></ul>",
+      html: "<p>Intro:</p><ul><li>one</li><li>two</li></ul><h2>Steps</h2><ol><li>first</li><li>second</li></ol>",
       extractMode: "text",
     });
-    expect(result?.text).toBe("Intro:\n\none\ntwo");
+    expect(result?.text).toBe("Intro:\n\none\ntwo\n\nSteps\n\nfirst\nsecond");
+  });
+
+  it("keeps paragraph and list-item separation with CRLF line endings", () => {
+    expect(markdownToText("Install steps:\r\n\r\n- Download\r\n- Run")).toBe(
+      "Install steps:\n\nDownload\nRun",
+    );
   });
 
   it("truncates without splitting a boundary emoji", () => {

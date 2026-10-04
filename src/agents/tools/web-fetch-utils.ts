@@ -359,9 +359,9 @@ export function markdownToText(markdown: string): string {
   }
   text = unfenced;
   text = text.replace(/`([^`]+)`/g, "$1");
-  text = text.replace(/^#{1,6}[ \t]+/gm, "");
-  text = text.replace(/^[ \t]*[-*+][ \t]+/gm, "");
-  text = text.replace(/^[ \t]*\d+\.[ \t]+/gm, "");
+  text = text.replace(/^#{1,6}\s+/gm, "");
+  text = text.replace(/^[^\S\n]*[-*+]\s+/gm, "");
+  text = text.replace(/^[^\S\n]*\d+\.\s+/gm, "");
   return normalizeWhitespace(text);
 }
 
