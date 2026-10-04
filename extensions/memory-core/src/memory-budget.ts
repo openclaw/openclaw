@@ -1,11 +1,15 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 
-const PROMOTION_SECTION_HEADING_RE = /^## Promoted From Short-Term Memory \(([^)]+)\)\s*$/;
+// Both writers emit dated sections: the append path and deep consolidation.
+const PROMOTION_SECTION_HEADING_RE =
+  /^## (?:Promoted From Short-Term Memory|Consolidated Memory) \(([^)]+)\)\s*$/;
 
 const PROMOTION_SUBSECTION_HEADING_RE = /^### (?:Global|Project: .+?)\s*$/;
 
 const PROMOTION_ENTRY_MARKER_RE = /^<!--\s*openclaw-memory-promotion:.*-->\s*$/i;
+
+const LINEAGE_MARKER_RE = /^<!--\s*openclaw-memory-lineage:.*-->\s*$/i;
 
 const ATX_HEADING_RE = /^ {0,3}#{1,6}(?:[ \t]|$)/;
 
@@ -66,6 +70,12 @@ function isGeneratedPromotionBlock(lines: string[]): boolean {
       while (index < lines.length && (lines[index] ?? "").trim().length === 0) {
         index += 1;
       }
+    }
+
+    // Consolidation writes a lineage marker directly above the promotion
+    // marker of a lineage-tracked entry; it belongs to that generated entry.
+    if (LINEAGE_MARKER_RE.test(lines[index] ?? "")) {
+      index += 1;
     }
 
     if (!PROMOTION_ENTRY_MARKER_RE.test(lines[index] ?? "")) {

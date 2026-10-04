@@ -49,6 +49,20 @@ function markerFreeSection(date: string, body: string): string {
   return `## Promoted From Short-Term Memory (${date})\n${body}\n`;
 }
 
+// Mirrors applyMemoryConsolidationPlan: one plain entry and one lineage-tracked entry.
+function consolidatedSection(date: string): string {
+  return [
+    "",
+    `## Consolidated Memory (${date})`,
+    "",
+    `<!-- openclaw-memory-promotion:memory:memory/${date}.md:1:1 -->`,
+    `- ${"c".repeat(120)} Source: memory/${date}.md#L1-L1`,
+    `<!-- openclaw-memory-lineage:memory:memory/${date}.md:2:2 -->`,
+    `<!-- openclaw-memory-promotion:memory:memory/${date}.md:3:3 -->`,
+    `- ${"s".repeat(120)} Source: memory/${date}.md#L3-L3`,
+  ].join("\n");
+}
+
 function projectGroupedSection(date: string): string {
   return [
     "",
@@ -416,6 +430,51 @@ describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression fo
     const result = compactMemoryForBudget({
       existingMemory: existing,
       newSection: `\n${promotionSection("2026-04-29", 600)}`,
+      budgetChars: 400,
+    });
+    expect(result.droppedDates).toEqual([]);
+    expect(result.compacted).toBe(existing);
+  });
+
+  it("drops the oldest consolidation section, including lineage-tracked entries (#163900)", () => {
+    const existing = [
+      "# Long-Term Memory",
+      "",
+      "- hand-written fact",
+      ...["2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04"].map((date) =>
+        consolidatedSection(date),
+      ),
+      "",
+    ].join("\n");
+    const newSection = `${consolidatedSection("2026-09-05")}\n`;
+    const budgetChars = existing.length + newSection.length - 1;
+    const result = compactMemoryForBudget({
+      existingMemory: existing,
+      newSection,
+      budgetChars,
+      maxPriorEntryLossFraction: 0.25,
+    });
+    expect(result.droppedDates).toEqual(["2026-09-01"]);
+    expect(result.compacted).not.toContain("(2026-09-01)");
+    expect(result.compacted).toContain("- hand-written fact");
+    expect(result.compacted).toContain("## Consolidated Memory (2026-09-02)");
+    expect(result.compacted.length + newSection.length).toBeLessThanOrEqual(budgetChars);
+  });
+
+  it.each([
+    {
+      name: "user text after a consolidated entry",
+      tail: ["USER-AUTHORED: keep this note."],
+    },
+    {
+      name: "a lineage marker that no promotion entry follows",
+      tail: ["<!-- openclaw-memory-lineage:memory:memory/2026-09-01.md:9:9 -->", "- user bullet"],
+    },
+  ])("preserves a consolidation section holding $name", ({ tail }) => {
+    const existing = [consolidatedSection("2026-09-01").trimStart(), ...tail, ""].join("\n");
+    const result = compactMemoryForBudget({
+      existingMemory: existing,
+      newSection: `\n${promotionSection("2026-09-05", 600)}`,
       budgetChars: 400,
     });
     expect(result.droppedDates).toEqual([]);
