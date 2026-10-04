@@ -283,7 +283,13 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
         });
         try {
           const onReplyStart = vi.fn();
-          const replyOptions = { onReplyStart, operatorAuthority: { assertCurrent: vi.fn() } };
+          const replyOptions = {
+            onReplyStart,
+            operatorAuthority: { assertCurrent: vi.fn() },
+            preparedTtsPreferences: {
+              machinePrefsPath: "/synthetic/plugin-authored-tts-preferences.json",
+            },
+          };
           const dispatchParams = {
             ctx: { Body: "host dispatch probe", CommandAuthorized: false },
             cfg: config,

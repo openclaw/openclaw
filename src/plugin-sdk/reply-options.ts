@@ -52,6 +52,7 @@ const privateReplyOptions = {
   assertProviderLoginAuthority: true,
   getProviderLoginConfig: true,
   replyConversation: true,
+  preparedTtsPreferences: true,
   prepareAssistantTranscriptMessage: true,
   mediaNormalizationOwner: true,
   admittedSessionSettings: true,
