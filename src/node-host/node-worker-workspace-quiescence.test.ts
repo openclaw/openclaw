@@ -116,6 +116,9 @@ describe("Windows-selected quiescence controller contracts", () => {
     // The real scope-cleanup owner caches its result; retrying cannot invent extinction.
     mocks.cleanup.mockRejectedValue(failure);
     await expect(f.owner.execute(f.context)).rejects.toBe(failure);
+    expect(mocks.acquire).toHaveBeenCalledExactlyOnceWith(expect.any(String), {
+      processTree: "required-all",
+    });
     expect(f.owner.hasActiveWork()).toBe(true);
     expect(f.release).not.toHaveBeenCalled();
     await expect(f.owner.close()).rejects.toMatchObject({ errors: [failure] });
