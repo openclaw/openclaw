@@ -4,6 +4,7 @@ import { render, type LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { renderChatPagePaneCell } from "../pages/chat/chat-page-pane-render.ts";
+import { RouteDraftComposerFocus } from "../pages/chat/route-draft-focus-handoff.ts";
 import * as activityModule from "./person-activity-data.ts";
 import "./person-reference.ts";
 
@@ -158,9 +159,7 @@ describe("real PersonReference delayed hover presentation ownership", () => {
         typeof renderChatPagePaneCell
       >[0]["sessionSnapshotStore"],
       consumedDraftData: null,
-      draftFocus: { shouldFocusPane: () => false } as Parameters<
-        typeof renderChatPagePaneCell
-      >[0]["draftFocus"],
+      draftFocus: new RouteDraftComposerFocus(container),
       mergedChrome: false,
       narrow: false,
       navDrawerOpen: false,
