@@ -1682,17 +1682,18 @@ persist_shell_path_prepend() {
         bash_login_rc="$HOME/.bash_login"
     fi
 
+    local zsh_rc_dir="${ZDOTDIR:-$HOME}"
     local targets=()
     local fish_rc="$HOME/.config/fish/conf.d/openclaw.fish"
     case "$shell_name" in
         bash)
             targets+=("bash:$HOME/.bashrc" "bash:$bash_login_rc")
-            [[ -e "$HOME/.zshrc" || -L "$HOME/.zshrc" ]] && targets+=("zsh:$HOME/.zshrc")
-            [[ -e "$HOME/.zprofile" || -L "$HOME/.zprofile" ]] && targets+=("zsh:$HOME/.zprofile")
+            [[ -e "$zsh_rc_dir/.zshrc" || -L "$zsh_rc_dir/.zshrc" ]] && targets+=("zsh:$zsh_rc_dir/.zshrc")
+            [[ -e "$zsh_rc_dir/.zprofile" || -L "$zsh_rc_dir/.zprofile" ]] && targets+=("zsh:$zsh_rc_dir/.zprofile")
             [[ -e "$fish_rc" || -L "$fish_rc" ]] && targets+=("fish:$fish_rc")
             ;;
         zsh)
-            targets+=("zsh:$HOME/.zshrc" "zsh:$HOME/.zprofile")
+            targets+=("zsh:$zsh_rc_dir/.zshrc" "zsh:$zsh_rc_dir/.zprofile")
             [[ -e "$HOME/.bashrc" || -L "$HOME/.bashrc" ]] && targets+=("bash:$HOME/.bashrc")
             [[ -e "$bash_login_rc" || -L "$bash_login_rc" ]] && targets+=("bash:$bash_login_rc")
             [[ -e "$fish_rc" || -L "$fish_rc" ]] && targets+=("fish:$fish_rc")
@@ -1701,8 +1702,8 @@ persist_shell_path_prepend() {
             targets+=("fish:$fish_rc")
             [[ -e "$HOME/.bashrc" || -L "$HOME/.bashrc" ]] && targets+=("bash:$HOME/.bashrc")
             [[ -e "$bash_login_rc" || -L "$bash_login_rc" ]] && targets+=("bash:$bash_login_rc")
-            [[ -e "$HOME/.zshrc" || -L "$HOME/.zshrc" ]] && targets+=("zsh:$HOME/.zshrc")
-            [[ -e "$HOME/.zprofile" || -L "$HOME/.zprofile" ]] && targets+=("zsh:$HOME/.zprofile")
+            [[ -e "$zsh_rc_dir/.zshrc" || -L "$zsh_rc_dir/.zshrc" ]] && targets+=("zsh:$zsh_rc_dir/.zshrc")
+            [[ -e "$zsh_rc_dir/.zprofile" || -L "$zsh_rc_dir/.zprofile" ]] && targets+=("zsh:$zsh_rc_dir/.zprofile")
             ;;
         *)
             echo ""
@@ -2757,6 +2758,7 @@ warn_shell_path_missing_dir() {
     # persist_shell_path_prepend may already have written the export line; in
     # that case new shells are fine and the user only needs to reload this one.
     # RC lines may spell the home dir as $HOME instead of the expanded path.
+    local zsh_rc_dir="${ZDOTDIR:-$HOME}"
     local dir_home_form="\$HOME${dir#"$HOME"}"
     local managed_node_bin="$HOME/.openclaw/tools/node/bin"
     local managed_node_home_form="\$HOME/.openclaw/tools/node/bin"
@@ -2765,7 +2767,7 @@ warn_shell_path_missing_dir() {
         managed_node_bin=""
         managed_node_home_form=""
     fi
-    for rc in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile" "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.config/fish/conf.d/openclaw.fish"; do
+    for rc in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile" "$zsh_rc_dir/.zshrc" "$zsh_rc_dir/.zprofile" "$HOME/.config/fish/conf.d/openclaw.fish"; do
         if [[ -f "$rc" ]] && {
             grep -Fq "$dir" "$rc" || grep -Fq "$dir_home_form" "$rc" ||
                 { [[ -n "$managed_node_bin" ]] && { grep -Fq "$managed_node_bin" "$rc" || grep -Fq "$managed_node_home_form" "$rc"; }; }
@@ -2776,7 +2778,9 @@ warn_shell_path_missing_dir() {
             if [[ "$rc" == *.fish ]]; then
                 echo "  For this shell, run: source ${rc}"
             else
-                echo "  For this shell, run: source ${rc}; hash -r"
+                local quoted_rc
+                printf -v quoted_rc '%q' "$rc"
+                echo "  For this shell, run: source ${quoted_rc}; hash -r"
             fi
             return 0
         fi
@@ -2789,7 +2793,7 @@ warn_shell_path_missing_dir() {
         echo "  Fix (Fish: ~/.config/fish/conf.d/openclaw.fish):"
         echo "    fish_add_path -- \"${dir}\""
     else
-        echo "  Fix (zsh: ~/.zshrc, bash: ~/.bashrc):"
+        echo "  Fix (zsh: ${zsh_rc_dir}/.zshrc, bash: ~/.bashrc):"
         echo "    export PATH=\"${dir}:\$PATH\""
     fi
 }

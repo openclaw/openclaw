@@ -52,6 +52,7 @@ function runInstallShell(script: string, env: NodeJS.ProcessEnv = {}) {
       encoding: "utf8",
       env: {
         ...process.env,
+        ZDOTDIR: undefined,
         HOME: home,
         ...env,
         BASH_ENV: "",
@@ -2746,41 +2747,65 @@ EOF
     expect(existsSync(join(home, ".zprofile"))).toBe(false);
   });
 
-  it("persists to zsh contracts without creating unrelated Bash files", () => {
-    const tmp = tempDirs.make("openclaw-install-zsh-shell-path-");
-    const home = join(tmp, "home");
-    const bin = join(home, ".local", "bin");
-    mkdirSync(bin, { recursive: true });
-    writeFileSync(join(bin, "openclaw"), "#!/bin/sh\nexit 0\n");
-    chmodSync(join(bin, "openclaw"), 0o755);
+  it.each([undefined, "", ".config/zsh", ".config/zsh profiles"])(
+    "persists to zsh contracts without unrelated Bash files (ZDOTDIR suffix: %s)",
+    (suffix) => {
+      const tmp = tempDirs.make("openclaw-install-zsh-shell-path-");
+      const home = join(tmp, "home");
+      const bin = join(home, ".local", "bin");
+      const zshDir = suffix ? join(home, suffix) : home;
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(join(bin, "openclaw"), "#!/bin/sh\nexit 0\n");
+      chmodSync(join(bin, "openclaw"), 0o755);
 
-    const persist = runInstallShell(
-      `source "${SCRIPT_PATH}"; ensure_user_local_bin_on_path; ensure_user_local_bin_on_path`,
-      { HOME: home, PATH: "/usr/bin:/bin", SHELL: "/bin/zsh" },
-    );
-    const zsh = spawnSync("zsh", ["--version"], { encoding: "utf8" });
+      const persist = runInstallShell(
+        `source "${SCRIPT_PATH}"; ensure_user_local_bin_on_path; ensure_user_local_bin_on_path; warn_shell_path_missing_dir "$HOME/.local/bin" "user-local bin dir"`,
+        {
+          HOME: home,
+          PATH: "/usr/bin:/bin",
+          SHELL: "/bin/zsh",
+          ZDOTDIR: suffix === undefined ? undefined : zshDir,
+        },
+      );
+      const zsh = spawnSync("zsh", ["--version"], { encoding: "utf8" });
 
-    expect(persist.status).toBe(0);
-    for (const rc of [".zshrc", ".zprofile"]) {
-      expect(readFileSync(join(home, rc), "utf8")).toBe('export PATH="$HOME/.local/bin:$PATH"\n');
-    }
-    expect(existsSync(join(home, ".bashrc"))).toBe(false);
-    expect(existsSync(join(home, ".profile"))).toBe(false);
-
-    if (zsh.status === 0) {
-      for (const args of [
-        ["-ic", "command -v openclaw"],
-        ["-lic", "command -v openclaw"],
-      ]) {
-        const fresh = spawnSync("zsh", args, {
-          encoding: "utf8",
-          env: { HOME: home, PATH: "/usr/bin:/bin", ZDOTDIR: home },
-        });
-        expect(fresh.status).toBe(0);
-        expect(fresh.stdout.trim()).toBe(join(bin, "openclaw"));
+      expect(persist.status).toBe(0);
+      expect(persist.stdout).toContain(`PATH updated in ${join(zshDir, ".zshrc")}`);
+      expect(persist.stdout).not.toContain("PATH missing user-local bin dir");
+      for (const rc of [".zshrc", ".zprofile"]) {
+        expect(readFileSync(join(zshDir, rc), "utf8")).toBe(
+          'export PATH="$HOME/.local/bin:$PATH"\n',
+        );
       }
-    }
-  });
+      if (suffix) {
+        expect(existsSync(join(home, ".zshrc"))).toBe(false);
+        expect(existsSync(join(home, ".zprofile"))).toBe(false);
+      }
+      expect(existsSync(join(home, ".bashrc"))).toBe(false);
+      expect(existsSync(join(home, ".profile"))).toBe(false);
+
+      const reloadCommand = persist.stdout.match(/For this shell, run: (.+)/)?.[1];
+      expect(reloadCommand).toBeTruthy();
+      if (zsh.status === 0) {
+        for (const args of [
+          ["-ic", "command -v openclaw"],
+          ["-lic", "command -v openclaw"],
+          ["-f", "-c", `${reloadCommand}; command -v openclaw`],
+        ]) {
+          const fresh = spawnSync("zsh", args, {
+            encoding: "utf8",
+            env: {
+              HOME: home,
+              PATH: "/usr/bin:/bin",
+              ZDOTDIR: suffix === undefined ? undefined : zshDir,
+            },
+          });
+          expect(fresh.status).toBe(0);
+          expect(fresh.stdout.trim()).toBe(join(bin, "openclaw"));
+        }
+      }
+    },
+  );
 
   it("updates existing startup files for dual-shell users", () => {
     const tmp = tempDirs.make("openclaw-install-dual-shell-path-");
