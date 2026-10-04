@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createCommandError } from "../../process/command-error.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
-import type { WorktreeAllocationGuard } from "./allocation.js";
+import { withWorktreeAllocationLease, type WorktreeAllocationGuard } from "./allocation.js";
 import {
   commandError,
   listGitWorktrees,
@@ -17,9 +17,71 @@ import {
 import { worktreeOwnerMatches } from "./owner.js";
 import { listRegistryWorktrees } from "./registry.js";
 import { resolveCheckoutRootFromRealPath } from "./repository-paths.js";
-import type { CreateManagedWorktreeParams } from "./types.js";
+import type {
+  CreateManagedWorktreeParams,
+  ManagedWorktreeCreationOutcome,
+  ManagedWorktreeRecord,
+} from "./types.js";
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+export type WorktreeCreationPublication = {
+  record?: ManagedWorktreeRecord;
+  cleanup?: (assertCurrent: () => void) => Promise<void>;
+};
+
+export async function createWithWorktreeAllocation(
+  params: Pick<
+    CreateManagedWorktreeParams,
+    "signal" | "commitGuard" | "withSource" | "withRollback"
+  > & {
+    env: NodeJS.ProcessEnv;
+  },
+  run: (
+    guard: WorktreeAllocationGuard,
+    publication: WorktreeCreationPublication,
+  ) => Promise<ManagedWorktreeCreationOutcome>,
+  rollbackPublished: (record: ManagedWorktreeRecord) => Promise<void>,
+): Promise<ManagedWorktreeCreationOutcome> {
+  const publication: WorktreeCreationPublication = {};
+  try {
+    return await withWorktreeAllocationLease(params, (guard) => run(guard, publication));
+  } catch (error) {
+    const failures = [error];
+    if (publication.cleanup) {
+      try {
+        const cleanup = publication.cleanup;
+        // The failed allocation and source have unwound; keep allocation → source lock order.
+        await withWorktreeAllocationLease({ env: params.env }, async (allocation) => {
+          const remove = async (assertCheckoutCurrent?: () => void) =>
+            await cleanup(() => {
+              allocation.commitGuard();
+              assertCheckoutCurrent?.();
+            });
+          if (params.withRollback) {
+            await params.withRollback(remove);
+          } else {
+            await remove();
+          }
+        });
+      } catch (cleanupError) {
+        failures.push(cleanupError);
+      }
+    }
+    // Source unwind can fail after publication or restoration, before the caller receives the record.
+    if (params.withSource && publication.record) {
+      try {
+        await rollbackPublished(publication.record);
+      } catch (cleanupError) {
+        failures.push(cleanupError);
+      }
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, failures.map(String).join("\n"), { cause: error });
+    }
+    throw error;
+  }
+}
 
 export async function withWorktreeSource<T>(
   params: CreateManagedWorktreeParams & WorktreeAllocationGuard,

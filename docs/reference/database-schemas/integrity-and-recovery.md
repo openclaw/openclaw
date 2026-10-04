@@ -560,6 +560,11 @@ updater checks database integrity before it can launch the target version.
 Doctor checks database versions and active owners before repairing the exact
 known index. It restores catalog readability before loading dependent config
 and plugin state, then continues its normal migration and verification flow.
+The maintenance lease check can inspect a newer database without admitting it
+for runtime use. Doctor still refuses its newer schema before repair and reports
+the schema mismatch; a fresh, unverifiable Gateway owner still blocks maintenance.
+After the inspection reader closes, failure to remove its private snapshot warns
+and leaves cleanup to the snapshot owner; it does not block maintenance entry.
 The readability repair preserves review rows and schema-version markers;
 unrecognized damage and newer databases remain refused.
 

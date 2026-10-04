@@ -180,12 +180,11 @@ export function materializeLegacyAgentOwnershipForActiveChannelsResult(
     env,
     ...(manifestRecords ? { manifestRecords } : {}),
   });
-  const materialized = materializeLegacyDefaultAgentRoles(config, legacyDefaultAgentId, {
+  return materializeLegacyDefaultAgentRoles(config, legacyDefaultAgentId, {
     ambientChannelIds,
     env,
     homedir: options?.homedir,
     materializeSessionStore: options?.materializeSessionStore,
     materializeWorkspace: options?.materializeWorkspace,
   });
-  return materialized;
 }

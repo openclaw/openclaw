@@ -315,6 +315,7 @@ src/agents/worktrees/snapshot-inventory.ts
 src/agents/worktrees/template-cache.ts
 src/agents/worktrees/template-registry-async.ts
 src/agents/worktrees/template-registry.ts
+src/agents/worktrees/template-registry.worker.ts
 src/auto-reply/reply/delivery-hints.ts
 src/auto-reply/reply/display-text-sanitize.ts
 src/auto-reply/reply/history-limit.ts

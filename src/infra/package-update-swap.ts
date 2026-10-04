@@ -361,6 +361,12 @@ export async function swapStagedPackageInstall(
               warnings.push(message);
               params.activation?.onUnavailable?.(message);
             },
+            onWarning: (message) => {
+              if (!warnings.includes(message)) {
+                warnings.push(message);
+              }
+              params.activation?.onWarning?.(message);
+            },
           },
           liveRoot: targetSwapRoot,
           stageRoot: stagedSwapRoot,

@@ -318,10 +318,12 @@ describe("reference source candidate preparation", () => {
     },
   );
 
-  it.each([false, true])(
-    "builds accepted untracked and ignored inputs (same HEAD: %s)",
-    async (sameHead) => {
-      const targetRevision = sameHead ? base : await commitTarget("target.txt", "target\n");
+  it.each(["same-head", "updated", "working", "index", "committed"] as const)(
+    "admits operator inputs only while candidate source stays selected (%s)",
+    async (kind) => {
+      const accepted = kind === "same-head" || kind === "updated";
+      const targetRevision =
+        kind === "same-head" ? base : await commitTarget("target.txt", "target\n");
       const result = await preflight({
         branch: "main",
         beforeSha: base,
@@ -331,52 +333,43 @@ describe("reference source candidate preparation", () => {
           await fs.writeFile(path.join(candidate, "operator-input.txt"), "operator input\n");
           await fs.writeFile(path.join(candidate, ".fixture-env"), "ignored input\n");
         },
+        validateCandidate: accepted
+          ? undefined
+          : async (candidate) => {
+              await fs.writeFile(path.join(candidate, "target.txt"), "unpublished change\n");
+              if (kind !== "working") {
+                await git(candidate, "add", "target.txt");
+                if (kind === "index") {
+                  await fs.writeFile(path.join(candidate, "target.txt"), "target\n");
+                } else {
+                  await git(candidate, "commit", "-m", "unpublished change");
+                }
+              }
+            },
       });
 
-      expect(result.status).toBe("ok");
-      expect(builtInputs).toEqual([
-        expect.objectContaining({
-          "operator-input.txt": "operator input\n",
-          ".fixture-env": "ignored input\n",
-        }),
-      ]);
-      expect(installs).toEqual([["pnpm", "install", "--frozen-lockfile"]]);
-      expect(await git(root, "rev-parse", "HEAD")).toBe(base);
-    },
-  );
-
-  it.each(["working", "index", "committed"] as const)(
-    "rejects %s source changes despite accepted untracked inputs",
-    async (kind) => {
-      const targetRevision = await commitTarget("target.txt", "target\n");
-      const result = await preflight({
-        branch: "main",
-        beforeSha: base,
-        targetRevision,
-        copyBuildInputs: async (candidate) => {
-          await fs.writeFile(path.join(candidate, "operator-input.txt"), "operator input\n");
-        },
-        validateCandidate: async (candidate) => {
-          await fs.writeFile(path.join(candidate, "target.txt"), "unpublished change\n");
-          if (kind !== "working") {
-            await git(candidate, "add", "target.txt");
-            if (kind === "index") {
-              await fs.writeFile(path.join(candidate, "target.txt"), "target\n");
-            } else {
-              await git(candidate, "commit", "-m", "unpublished change");
-            }
-          }
-        },
-      });
-      expect(result.status).toBe("error");
-      expect(prepared).toBeUndefined();
-      expect(steps).toContainEqual(
-        expect.objectContaining({
-          name:
-            kind === "committed" ? "preflight-update-source-check" : "preflight-update-clean-check",
-          exitCode: 1,
-        }),
-      );
+      if (accepted) {
+        expect(result.status).toBe("ok");
+        expect(builtInputs).toEqual([
+          expect.objectContaining({
+            "operator-input.txt": "operator input\n",
+            ".fixture-env": "ignored input\n",
+          }),
+        ]);
+        expect(installs).toEqual([["pnpm", "install", "--frozen-lockfile"]]);
+      } else {
+        expect(result.status).toBe("error");
+        expect(prepared).toBeUndefined();
+        expect(steps).toContainEqual(
+          expect.objectContaining({
+            name:
+              kind === "committed"
+                ? "preflight-update-source-check"
+                : "preflight-update-clean-check",
+            exitCode: 1,
+          }),
+        );
+      }
       expect(await git(root, "rev-parse", "HEAD")).toBe(base);
     },
   );

@@ -79,6 +79,7 @@ import { reconcileListedWorktrees } from "./service-list.js";
 import {
   canResetFailedWorktreeAdd,
   cleanupFailedCreate,
+  createWithWorktreeAllocation,
   findWorktreeByName,
   generateName,
   resetFailedWorktreeAdd,
@@ -89,6 +90,7 @@ import {
   validateName,
   withWorktreeSource,
   type ResolvedRepository,
+  type WorktreeCreationPublication,
 } from "./service-preparation.js";
 import {
   exactStateRetirementSchema,
@@ -149,7 +151,6 @@ type ManagedWorktreeGcParams = WorktreeCleanupOwnerPolicy &
   };
 
 type WorktreeMutationGuard = Pick<CreateManagedWorktreeParams, "signal" | "commitGuard">;
-type WorktreeCreationPublication = { record?: ManagedWorktreeRecord };
 
 type RemoveWorktreeParams = WorktreeMutationGuard & {
   id: string;
@@ -315,24 +316,9 @@ export class ManagedWorktreeService {
       publication: WorktreeCreationPublication,
     ) => Promise<ManagedWorktreeCreationOutcome>,
   ): Promise<ManagedWorktreeCreationOutcome> {
-    const publication: WorktreeCreationPublication = {};
-    try {
-      return await this.withAllocationLease(params, (guard) => run(guard, publication));
-    } catch (error) {
-      const failures = [error];
-      // Source unwind can fail after publication or restoration, before the caller receives the record.
-      if (params.withSource && publication.record) {
-        try {
-          await this.rollbackPreparation(publication.record, params.withRollback);
-        } catch (cleanupError) {
-          failures.push(cleanupError);
-        }
-      }
-      if (failures.length > 1) {
-        throw new AggregateError(failures, failures.map(String).join("\n"), { cause: error });
-      }
-      throw error;
-    }
+    return await createWithWorktreeAllocation({ ...params, env: this.env }, run, (record) =>
+      this.rollbackPreparation(record, params.withRollback),
+    );
   }
 
   async rollbackPreparation(
@@ -464,6 +450,7 @@ export class ManagedWorktreeService {
           repository,
           inferredName,
           suppliedName,
+          publication,
         );
         prepared = created;
         return created;
@@ -529,6 +516,7 @@ export class ManagedWorktreeService {
     repository: ResolvedRepository,
     inferredName: string,
     suppliedName: string | undefined,
+    publication: WorktreeCreationPublication,
   ): Promise<MaterializedRepositoryWorktree> {
     const root = path.join(await this.worktreesRoot(), repository.fingerprint);
     const name =
@@ -648,6 +636,17 @@ export class ManagedWorktreeService {
         signal: params.signal,
         commitGuard: () => params.commitGuard?.(),
         rollbackGuard: params.rollbackGuard,
+        deferUnpreparedCleanup: (cleanup) => {
+          publication.cleanup = async (assertCurrent) => {
+            assertCurrent();
+            const live = await readRegistryWorktrees(this.env, { liveOnly: true });
+            assertCurrent();
+            if (live.some((record) => record.path === worktreePath)) {
+              throw new Error("Worktree was published before cleanup; checkout preserved.");
+            }
+            await cleanup(assertCurrent);
+          };
+        },
       });
     };
     let added = await addCheckout();
