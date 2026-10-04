@@ -92,6 +92,7 @@ function prepareTelegramConversationRoute(params: ResolveTelegramConversationRou
   // The binding owner supplies its agent before ordinary agent selection, which rejects an
   // ambiguous multi-agent roster even when this conversation's binding already names its
   // agent. Session-only config keeps scope derivation from consulting the roster at all.
+  // SAFETY: Widens the null initializer; TS does not see the synchronous callback's assignment.
   let selection = null as {
     route: TelegramResolvedRoute;
     ownerBinding: TelegramRuntimeBindingRecord | null;
