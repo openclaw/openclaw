@@ -250,11 +250,6 @@ export function scanPluginNpmArtifactSecurity(params: {
     );
   }
   const executables = declaredExecutablePaths(initial.packageManifest, packedFiles);
-  const layout = packedFiles.some((file) => file.startsWith("dist/.setup/"))
-    ? "setup"
-    : packedFiles.some((file) => file.startsWith("dist/"))
-      ? "dist"
-      : "source";
   const critical: CriticalFinding[] = [];
   let scannedFiles = 0;
   let scannedBytes = 0;
@@ -295,6 +290,11 @@ export function scanPluginNpmArtifactSecurity(params: {
   const unexpected: CriticalFinding[] = [];
   for (const finding of critical) {
     const dependencyPath = dependencyFindingPath(finding.path);
+    const layout = finding.path.startsWith("dist/.setup/")
+      ? "setup"
+      : finding.path.startsWith("dist/")
+        ? "dist"
+        : "source";
     const key = dependencyPath
       ? `${finding.ruleId}:${dependencyPath}`
       : `${layout}:${params.packageName}:${finding.ruleId}:${finding.path}`;

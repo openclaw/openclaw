@@ -364,6 +364,20 @@ const match = /^keychain:(.+)$/.exec(value);
     expectRulePresence(findings, "dangerous-exec", false);
   });
 
+  it("does not attribute unrelated direct calls to another bundled module's child_process import", () => {
+    const source = `
+import { spawn as launch } from "node:child_process";
+const exec = compileMatcher();
+exec(value);
+launch("node", ["server.js"]);
+`;
+    const findings = scanSource(source, "bundle.js").filter(
+      (finding) => finding.ruleId === "dangerous-exec",
+    );
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.evidence).toContain("launch");
+  });
+
   it("does not flag an alias call when the alias is not from child_process", () => {
     // The source-wide child_process gate passes (a type import), and the alias
     // name `launch` matches the call site — but the alias was bound from a

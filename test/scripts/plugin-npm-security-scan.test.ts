@@ -143,4 +143,16 @@ describe("plugin npm artifact security scan", () => {
       }),
     ).toThrow("unreviewed critical findings in exact npm artifact");
   });
+
+  it("classifies reviewed findings by their file layout", () => {
+    const result = scanPluginNpmArtifactSecurity({
+      packageName: "@openclaw/acpx",
+      packageVersion: "1.0.0",
+      tarball: packageTarball("@openclaw/acpx", {
+        "dist/.setup/index.mjs": "export const value = 1;\n",
+        "dist/mcp-proxy.mjs": SPAWN_SOURCE,
+      }),
+    });
+    expect(result.criticalFindingCount).toBe(1);
+  });
 });

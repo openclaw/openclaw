@@ -246,9 +246,11 @@ function collectChildProcessBindings(source: string): ChildProcessBindings {
         if (CHILD_PROCESS_EXEC_METHODS.has(asMatch[1])) {
           methodAliases.add(asMatch[2]);
         }
+        continue;
       }
-      // Bare imported method name (`execFile`) is already matched by the
-      // literal pattern, so no alias entry is needed for it.
+      if (CHILD_PROCESS_EXEC_METHODS.has(spec)) {
+        methodAliases.add(spec);
+      }
     }
   };
 
@@ -281,9 +283,10 @@ function matchAliasedChildProcessCalls(line: string, methodAliases: Set<string>)
 // Retain the conventional child_process names alongside proven namespace aliases.
 const LITERAL_NAMESPACE_RECEIVERS = new Set(["cp", "childProcess", "child_process"]);
 
-function isBenignMemberExecMatch(
+function isBenignDangerousExecMatch(
   line: string,
   match: RegExpExecArray,
+  methodAliases: Set<string>,
   namespaceAliases: Set<string>,
 ): boolean {
   // group 1 = direct call command, group 2 = computed-member command.
@@ -295,14 +298,14 @@ function isBenignMemberExecMatch(
   const matchIndex = match.index;
   const charAtMatch = line[matchIndex];
   let receiver: string | undefined;
-  // Computed calls require a known receiver for every watched method;
-  // direct calls require it only for .exec, excluding RegExp.exec.
+  // Computed and member calls require a known receiver for every watched
+  // method. This excludes RegExp.exec and similarly named bundled helpers.
   if (charAtMatch === '"' || charAtMatch === "'") {
     receiver = line.slice(0, matchIndex).match(/(\w+)\s*\[\s*$/)?.[1];
-  } else if (command === "exec" && matchIndex > 0 && line[matchIndex - 1] === ".") {
+  } else if (matchIndex > 0 && line[matchIndex - 1] === ".") {
     receiver = line.slice(0, matchIndex - 1).match(/(\w+)\s*$/)?.[1];
   } else {
-    return false;
+    return !methodAliases.has(command);
   }
   return (
     !receiver || (!namespaceAliases.has(receiver) && !LITERAL_NAMESPACE_RECEIVERS.has(receiver))
@@ -458,7 +461,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
       for (const match of matches) {
         if (
           rule.ruleId === "dangerous-exec" &&
-          isBenignMemberExecMatch(line, match, namespaceAliases)
+          isBenignDangerousExecMatch(line, match, methodAliases, namespaceAliases)
         ) {
           continue;
         }
