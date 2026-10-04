@@ -72,6 +72,7 @@ describe("update-cli", () => {
           signal: null,
           killed: false,
           termination: "exit",
+          cleanup: "normal",
           stdout: params.stdout ?? "",
           stderr: params.stderr,
         };
