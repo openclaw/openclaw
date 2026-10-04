@@ -28,7 +28,7 @@ async function loadRevisionSessionsForAgent(
   if (current.agentId === agentId && current.result?.sessions.length) {
     return current.result;
   }
-  return context.sessions.list({ agentId });
+  return context.sessions.list({ agentId, source: "skill-workshop" });
 }
 
 type SkillWorkshopRevisionTarget = {

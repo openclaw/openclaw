@@ -8,26 +8,16 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 export { getAcpSessionManager };
 export { AcpRuntimeError, isAcpRuntimeError } from "../acp/runtime/errors.js";
 export type { AcpRuntimeErrorCode } from "../acp/runtime/errors.js";
-export {
-  getAcpRuntimeBackend,
-  registerAcpRuntimeBackend,
-  unregisterAcpRuntimeBackend,
-} from "../acp/runtime/registry.js";
-export { requireAcpRuntimeBackend };
+export { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "../acp/runtime/registry.js";
 export type {
   AcpRuntime,
   AcpRuntimeCapabilities,
-  AcpRuntimeConfigOptionResult,
   AcpRuntimeDoctorReport,
   AcpRuntimeEnsureInput,
   AcpRuntimeEvent,
   AcpRuntimeHandle,
   AcpRuntimeStatus,
-  AcpRuntimeTurn,
-  AcpRuntimeTurnAttachment,
   AcpRuntimeTurnInput,
-  AcpRuntimeTurnResult,
-  AcpRuntimeTurnResultError,
   AcpSessionUpdateTag,
 } from "@openclaw/acp-core/runtime/types";
 /** @deprecated Shipped in v2026.9.4; use readAcpSessionEntryAsync for runtime reads. */
@@ -87,8 +77,5 @@ export const testing = new Proxy({} as typeof managerTesting & typeof registryTe
     return undefined;
   },
 });
-
-/** @deprecated Use `testing`. */
-export { testing as __testing };
 
 export { consumeAcpTurnStream } from "../acp/control-plane/manager.turn-stream.js";

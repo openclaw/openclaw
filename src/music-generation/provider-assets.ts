@@ -31,7 +31,7 @@ type GeneratedMusicResponseFactory = (params: {
  * helpers normalize those shapes into bounded in-memory GeneratedMusicAsset values.
  */
 /** Candidate audio file returned by a provider before download. */
-export type GeneratedMusicFileCandidate = {
+type GeneratedMusicFileCandidate = {
   url: string;
   mimeType?: string;
   fileName?: string;

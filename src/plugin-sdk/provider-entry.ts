@@ -116,7 +116,7 @@ type ManifestProviderAuthOptions = Omit<
 /**
  * Catalog configuration accepted by the single-provider entry helper.
  */
-export type SingleProviderPluginCatalogOptions =
+type SingleProviderPluginCatalogOptions =
   | {
       /**
        * Builds the live provider catalog through the shared API-key catalog path.

@@ -2,6 +2,7 @@ import type {
   WorkerOperationHandlers,
   WorkerOperations,
 } from "../../state/worker-operation-registry.js";
+import { writeProvisionedSnapshotInWorker } from "./provisioned-snapshot.worker.js";
 import {
   getRegistryWorktreeInDatabase,
   getRegistryWorktreeProvisionedChunkInDatabase,
@@ -37,6 +38,10 @@ export const worktreeOperations = {
     input: Parameters<typeof getRegistryWorktreeProvisionedChunkInDatabase>[1],
     { open },
   ) => getRegistryWorktreeProvisionedChunkInDatabase(open().db, input),
+  "worktrees.writeProvisionedSnapshot": (
+    input: Parameters<typeof writeProvisionedSnapshotInWorker>[0],
+    { open, stateOptions },
+  ) => writeProvisionedSnapshotInWorker(input, { ...stateOptions(), database: open() }),
   "worktrees.retireMissing": (
     input: Parameters<typeof retireMissingWorktreeInWorker>[0],
     { open, stateOptions },

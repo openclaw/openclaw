@@ -25,6 +25,7 @@ import {
   listUserProfileAuthLinks,
   listUserProfileAuthLinksAsync,
   readUserModelAccountSummary,
+  readSelectedUserModelAccount,
   readUserModelAuthProfile,
   resolveUserProfileAuthLink,
   setUserProfileAuthLink,
@@ -81,7 +82,7 @@ function connectToken(
     {
       ownerProfileId,
       credential: { type: "token", provider: "anthropic", token },
-      matchesCredential: (current) => current.type === "token",
+      replacement: readSelectedUserModelAccount(ownerProfileId, "anthropic", options),
       assertCurrent() {},
     },
     options,

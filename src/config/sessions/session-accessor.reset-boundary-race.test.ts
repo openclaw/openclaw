@@ -196,6 +196,7 @@ describe("reset boundary concurrency", () => {
       ),
     ).toContain("concurrent");
 
+    await agentDatabase.closeOpenClawAgentDatabasesAsync();
     agentDatabase.closeOpenClawAgentDatabasesForTest();
     await waitForSessionTranscriptProjection(scope);
     expect(

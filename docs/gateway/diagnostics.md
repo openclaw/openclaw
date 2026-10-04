@@ -566,6 +566,13 @@ with power-of-two buckets from 1 KiB to 64 MiB. Slow-response journal lines incl
 `bytes=` for the same frame; it always means encoded response bytes, never heap
 allocation or an exclusive-window sample.
 
+For `sessions.list`, response journal lines and `slow session list` records also
+include `source`, `rowMode` (`compact` or `full`), `limit`, `offset`, and
+`filterKind`. The caller source is a bounded Control UI tag or `unspecified`;
+filter kinds contain parameter names, never search text, identities, or paths.
+The optimized WebSocket journal also records fast `sessions.list` responses of
+at least 200 KiB. Metric labels remain unchanged.
+
 `openclaw_gateway_rpc_handler_heap_delta_bytes` samples main-thread
 `process.memoryUsage().heapUsed` immediately around handler execution. A sample
 is emitted only if that handler was the sole active RPC handler for its entire

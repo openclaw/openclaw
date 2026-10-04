@@ -68,7 +68,6 @@ import {
   getSessionBindingService,
   type SessionBindingRecord,
 } from "../../infra/outbound/session-binding-service.js";
-import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding-metadata.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -963,24 +962,9 @@ async function initSessionStateAttemptLocked(
       : undefined,
     activeSessionKey: sessionKey,
     agentId,
-    archivePreviousTranscript: false,
     expectedRevision: initializationSnapshot.revision,
     relatedSessionKeys,
     maintenanceConfig,
-    onArchiveError: (error, sourcePath) => {
-      log.warn(
-        `failed to archive previous session transcript ${sourcePath} for session ${previousSessionEntry?.sessionId}`,
-        { error: String(error) },
-      );
-    },
-    onMaintenanceWarning: (warning) =>
-      deliverSessionMaintenanceWarning({
-        cfg,
-        agentId,
-        sessionKey,
-        entry: sessionEntry,
-        warning,
-      }),
     prepareSessionEntry: async ({ readEntry, sessionEntry: entryToCommit }) => {
       if (params.signal?.aborted === true) {
         throw new Error("reply session initialization aborted");

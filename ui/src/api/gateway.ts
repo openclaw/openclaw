@@ -7,7 +7,6 @@ import {
   type GatewayProtocolCloseContext,
   type GatewayProtocolRequestOptions,
   type GatewayProtocolRequestTiming,
-  type GatewayProtocolTiming,
   type ErrorShape,
   type EventFrame,
   type HelloOk,
@@ -68,11 +67,6 @@ export class GatewayRequestError extends GatewayProtocolRequestError {
   }
 }
 
-function browserSecureContext(): boolean {
-  const win = typeof window !== "undefined" ? window : undefined;
-  return win?.isSecureContext === true;
-}
-
 function isTrustedRetryEndpoint(url: string): boolean {
   try {
     const gatewayUrl = new URL(url, window.location.href);
@@ -109,22 +103,10 @@ export type GatewayBrowserClientOptions = GatewayBrowserConnectOptions & {
   onReconnectScheduled?: (delayMs: number) => void;
   onGap?: (info: { expected: number; received: number }) => void;
   onRequestTiming?: (timing: GatewayProtocolRequestTiming) => void;
-  onConnectTiming?: (timing: GatewayConnectTiming) => void;
   onRecoveryScopeChange?: () => void;
 };
 
 export type GatewayEventListener = (evt: EventFrame) => void;
-
-type GatewayConnectTiming = Omit<GatewayProtocolTiming<ConnectPlan>, "plan" | "detail"> & {
-  secureContext?: boolean;
-  hasDeviceIdentity?: boolean;
-  hasDevice?: boolean;
-  hasAuthToken?: boolean;
-  hasBootstrapToken?: boolean;
-  hasDeviceToken?: boolean;
-  hasPassword?: boolean;
-  errorCode?: string;
-};
 
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
 const CONNECT_FAILED_CLOSE_CODE = 4008;
@@ -214,12 +196,7 @@ export class GatewayBrowserClient {
       },
       onConnectHello: (hello, context) => this.handleConnectHello(hello, context.plan),
       onHello: (hello) => this.opts.onHello?.(hello),
-      onConnectFailure: (error, context) => {
-        this.client.recordTiming("failed", context.generation, context.plan, {
-          errorCode: error.code,
-        });
-        return this.handleConnectFailure(error, context.plan);
-      },
+      onConnectFailure: (error, context) => this.handleConnectFailure(error, context.plan),
       resolveClose: (context) => this.resolveClose(context),
       onClose: (context, decision) => {
         this.nativeAuthAbort?.abort();
@@ -229,9 +206,6 @@ export class GatewayBrowserClient {
         this.scopeUpgradeBinding = null;
         const error = this.pairingFailure ?? context.connectFailure?.error ?? this.nativeAuthError;
         this.pendingPairing = null;
-        this.client.recordTiming("failed", context.generation, undefined, {
-          errorCode: error instanceof GatewayRequestError ? error.code : "SOCKET_CLOSED",
-        });
         if (decision.notify) {
           const info = {
             code: context.code,
@@ -281,13 +255,6 @@ export class GatewayBrowserClient {
       onActivity: () => {
         this.inboundActivitySeq += 1;
         this.lastInboundActivityAtMs = Date.now();
-      },
-      onTiming: ({ plan, detail, ...timing }) => {
-        this.opts.onConnectTiming?.({
-          ...timing,
-          ...(plan ? this.connectPlanTimingPayload(plan) : {}),
-          ...(detail && typeof detail === "object" ? detail : {}),
-        });
       },
       onRequestTiming: (timing) => this.opts.onRequestTiming?.(timing),
       onCallbackError: (label, error) => console.error(`[gateway] ${label} handler error:`, error),
@@ -378,20 +345,6 @@ export class GatewayBrowserClient {
     return this.connected && this.scopeUpgradeBinding !== null;
   }
 
-  private connectPlanTimingPayload(plan: ConnectPlan): Partial<GatewayConnectTiming> {
-    return {
-      secureContext: browserSecureContext(),
-      hasDeviceIdentity: Boolean(plan.deviceIdentity),
-      hasDevice: Boolean(plan.params.device),
-      hasAuthToken: Boolean(plan.selectedAuth.authToken),
-      hasBootstrapToken: Boolean(plan.selectedAuth.authBootstrapToken),
-      hasDeviceToken: Boolean(
-        plan.selectedAuth.authDeviceToken ?? plan.selectedAuth.resolvedDeviceToken,
-      ),
-      hasPassword: Boolean(plan.selectedAuth.authPassword),
-    };
-  }
-
   private async buildConnectPlan(
     connectNonce: string | null,
     connectChallengeTs: number | null | undefined,
@@ -410,12 +363,6 @@ export class GatewayBrowserClient {
       serverCapabilities,
       nativeSignal: this.nativeAuthAbort.signal,
       selectAuth: (input) => this.selectConnectAuth(input),
-      onDeviceIdentityReady: (hasDeviceIdentity) => {
-        this.client.recordTiming("device-identity-ready", generation, undefined, {
-          secureContext: browserSecureContext(),
-          hasDeviceIdentity,
-        });
-      },
     });
     if (this.pendingDeviceTokenRetry && plan.selectedAuth.authDeviceToken) {
       this.pendingDeviceTokenRetry = false;

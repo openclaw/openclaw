@@ -20,7 +20,6 @@ import {
   invalidateOpenClawAgentDatabaseValidation,
 } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -195,8 +194,8 @@ function fixture() {
 
 type Fixture = ReturnType<typeof fixture>;
 
-function closeForIntegrityAdmission(f: Fixture) {
-  expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
+async function closeForIntegrityAdmission(f: Fixture) {
+  expect(await closeOpenClawAgentDatabaseByPathAsync(f.databasePath)).toBe(true);
   invalidateOpenClawAgentDatabaseValidation(f.databasePath);
   clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
 }
@@ -242,7 +241,7 @@ it.each(cases)(
   async ({ owner, mode }) => {
     const f = fixture();
     if (mode === "cold-preparation") {
-      closeForIntegrityAdmission(f);
+      await closeForIntegrityAdmission(f);
     }
     const probe = observeAdmission(f.databasePath);
     const workerProbe =
@@ -422,13 +421,13 @@ it("keeps lifecycle commit denial before its stale-row check after admission", a
   });
   const committed = vi.fn();
   const buildEntry = vi.fn(
-    ({ currentEntry }: { currentEntry?: import("./types.js").SessionEntry }) => {
+    async ({ currentEntry }: { currentEntry?: import("./types.js").SessionEntry }) => {
       replaceSessionEntrySync(f.input, {
         sessionId: "original",
         label: "newer",
         updatedAt: Date.now(),
       });
-      closeForIntegrityAdmission(f);
+      await closeForIntegrityAdmission(f);
       return { ...currentEntry!, label: "uncommitted" };
     },
   );
@@ -824,7 +823,7 @@ it("rechecks maintenance lifetime after cold finalizer admission", async () => {
   const plan = maintenancePlan(f);
   const probe = observeWorkerAdmission(f.databasePath, "cold");
   hooks.afterMaterialize = async () => {
-    closeForIntegrityAdmission(f);
+    await closeForIntegrityAdmission(f);
   };
   let current = true;
   const work = own(
@@ -858,7 +857,7 @@ it.each([false, true])(
         throw new Error("unused test harness");
       },
       withSessionDeletion: async (params, run) => {
-        closeForIntegrityAdmission(f);
+        await closeForIntegrityAdmission(f);
         params.assertCurrent();
         return await run({ commit, rollback });
       },

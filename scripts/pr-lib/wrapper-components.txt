@@ -295,15 +295,20 @@ src/agents/worktrees/checkout-apfs.ts
 src/agents/worktrees/checkout-git-config.ts
 src/agents/worktrees/checkout.ts
 src/agents/worktrees/errors.ts
+src/agents/worktrees/eviction.runtime.ts
 src/agents/worktrees/filesystem-apfs.native.ts
 src/agents/worktrees/filesystem-backend.ts
 src/agents/worktrees/filesystem-native.ts
 src/agents/worktrees/filesystem-refs.native.ts
+src/agents/worktrees/gc-dependencies.ts
+src/agents/worktrees/gc-fingerprint.runtime.ts
 src/agents/worktrees/git-path-inventory.ts
 src/agents/worktrees/git-worktree-operations.runtime.ts
 src/agents/worktrees/git.ts
 src/agents/worktrees/owner.ts
 src/agents/worktrees/provisioned-file-inspection.ts
+src/agents/worktrees/provisioned-snapshot-store.ts
+src/agents/worktrees/provisioned-snapshot.ts
 src/agents/worktrees/registry-read.kernel.ts
 src/agents/worktrees/registry-read.ts
 src/agents/worktrees/registry.ts
@@ -681,6 +686,7 @@ src/gateway/control-ui-session-prs-landing.ts
 src/gateway/github-publication-base.ts
 src/gateway/github-remote.ts
 src/gateway/github-repository-publication-snapshot.ts
+src/gateway/model-account-connect-errors.ts
 src/gateway/operator-scopes.ts
 src/gateway/security-path.ts
 src/gateway/server-methods/workspace-fs.ts
@@ -832,6 +838,7 @@ src/infra/git-exec.ts
 src/infra/git-network-retry.ts
 src/infra/git-operation-timing.ts
 src/infra/git-operation.worker.ts
+src/infra/git-path-quote.ts
 src/infra/git-read-operations.runtime.ts
 src/infra/git-root.ts
 src/infra/git-worker-context.ts
@@ -1167,6 +1174,7 @@ src/plugins/compat/channel-pairing-record.ts
 src/plugins/compat/deprecation-marking.ts
 src/plugins/compat/media-legacy-projection.ts
 src/plugins/compat/mention-inbox-record.ts
+src/plugins/compat/model-account-connect-record.ts
 src/plugins/compat/plugin-sdk-subpath-records.ts
 src/plugins/compat/registry-records.ts
 src/plugins/compat/registry.ts

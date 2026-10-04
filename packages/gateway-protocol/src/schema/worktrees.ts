@@ -117,8 +117,15 @@ export const WorktreesRestoreParamsSchema = closedObject({
 });
 export const WorktreesGcParamsSchema = closedObject({
   expectedOwnerId: Type.Optional(NonEmptyString),
+  jobId: Type.Optional(NonEmptyString),
+  retryDeferred: Type.Optional(Type.Boolean()),
 });
 export const WorktreesGcResultSchema = closedObject({
+  jobId: Type.Optional(NonEmptyString),
+  state: Type.Optional(Type.String({ enum: ["queued", "running", "completed", "failed"] })),
+  startedAt: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
+  completedAt: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
+  error: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   removed: Type.Array(NonEmptyString),
   orphansDeleted: Type.Integer({ minimum: 0 }),
   snapshotsPruned: Type.Integer({ minimum: 0 }),
@@ -141,6 +148,7 @@ export const WorktreesGcResultSchema = closedObject({
   protectedCount: Type.Optional(Type.Integer({ minimum: 0 })),
   protectionReasons: Type.Optional(Type.Record(Type.String(), Type.Integer({ minimum: 0 }))),
   limitsSatisfied: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
+  evictions: Type.Optional(Type.Record(Type.String(), Type.Integer({ minimum: 0 }))),
 });
 
 export const WorktreesRecoverRemovalParamsSchema = closedObject({

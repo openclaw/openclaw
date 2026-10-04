@@ -8,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -199,10 +200,12 @@ describe("SQLite session handle lifecycle", () => {
     async (kind) => {
       const message = { role: "user", content: "retained", idempotencyKey: "handle-message" };
       await appendTranscriptMessage(scope, { message });
+      const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
 
       await withTranscriptWriteLock(scope, async (transcript) => {
         const before = await transcript.readEvents();
-        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+        closeCachedOpenClawAgentDatabase(database, { eviction: true });
+        expect(database.db.isOpen).toBe(false);
         if (kind === "events") {
           await expect(transcript.readEvents()).resolves.toEqual(before);
         } else {
@@ -250,6 +253,7 @@ describe("SQLite session handle lifecycle", () => {
       sessionId: staleDashboardScope.sessionId,
       updatedAt: 1,
     });
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
     const writerStarted = createDeferred();
     const writerRelease = createDeferred();
     const blockedWrite = patchSessionEntryCore(
@@ -270,7 +274,8 @@ describe("SQLite session handle lifecycle", () => {
     );
     expect(drains).not.toHaveLength(0);
 
-    expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+    closeCachedOpenClawAgentDatabase(database, { eviction: true });
+    expect(database.db.isOpen).toBe(false);
     const replacement = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
     writerRelease.resolve();
     await Promise.all([blockedWrite, ...drains]);
@@ -304,6 +309,7 @@ describe("SQLite session handle lifecycle", () => {
       });
       if (closure === "database retirement") {
         await expect(operation).rejects.toThrow("Agent database execution admission is closed");
+        await closeOpenClawAgentDatabaseByPathAsync(databasePath);
         expect(loadSessionEntry(scope)?.label).toBeUndefined();
       } else {
         await expect(operation).resolves.toMatchObject({ afterCount: 1 });

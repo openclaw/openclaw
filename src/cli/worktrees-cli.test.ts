@@ -219,9 +219,10 @@ describe("worktrees cli", () => {
       .mockImplementation(() => undefined);
     const program = new Command().name("openclaw");
     registerWorktreesCli(program);
-    const pending = program.parseAsync(["worktrees", "gc", ...(partial ? ["--json"] : [])], {
-      from: "user",
-    });
+    const pending = program.parseAsync(
+      ["worktrees", "gc", ...(partial ? ["--json", "--retry-deferred"] : [])],
+      { from: "user" },
+    );
     if (partial) {
       await expect(pending).rejects.toThrow();
       expect(output).toHaveBeenCalledWith(result);
@@ -229,10 +230,9 @@ describe("worktrees cli", () => {
       await pending;
     }
     expect(gc).toHaveBeenCalledWith({
-      limits: { maxCount: 100 },
       signal: expect.any(AbortSignal),
       commitGuard: expect.any(Function),
-      retryDeferred: true,
+      retryDeferred: partial,
       shouldProtectOwner: expect.any(Function),
       shouldRemoveOwner: expect.any(Function),
     });

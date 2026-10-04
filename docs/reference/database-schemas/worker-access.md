@@ -705,11 +705,14 @@ survives cleanup failure while the failed native owner retires. Use `run` when
 dependent commands share a binding or host publication must stay inside the
 same FIFO interval.
 
-During Gateway restart drain, an accepted publication sequence retains its native
-agent lease until its publication store closes. Close rejects new publications,
-joins accepted work, and releases that lease before its database borrow. Normal
-idle retirement and per-command authority checks remain unchanged; updates need
-no schema or state migration.
+During Gateway restart grace, an accepted publication sequence retains its native
+agent lease. When the process finishes active-work drain and begins shutdown
+cleanup, publication stores release that retained lease without waiting for restart
+markers or external cleanup. Accepted publications still settle through their
+original writer; later cleanup can acquire a new lease through normal admission.
+Store close rejects new publications, joins accepted work and lease release, then
+releases its database borrow. Normal idle retirement and per-command authority
+checks remain unchanged; updates need no schema or state migration.
 
 Memory Core standing-intent operations queue through the canonical agent writer
 before acquiring their database generation. Their connection-bound worker handles
@@ -893,6 +896,27 @@ personal credentials and selection never enter shared rotation. Post-run success
 remains nonblocking, while maintenance close joins accepted bookkeeping. OAuth
 refresh, selection, and released SDK updater callbacks retain their existing
 owners. Schemas, credential bytes, retention, and update behavior are unchanged.
+
+Personal account inventory, reconnect preparation, connection, selection, and
+unlinking use the existing shared-state profile worker. The Gateway captures the
+physical store before yielding; provider identity comparison runs before BEGIN,
+and the worker compares the current credential and selection again inside the
+transaction. Transaction and commit grants consume current actor role rows from
+that transaction while the Gateway rechecks the original connections, operation,
+and live role policy. Control-plane replies contain only account summaries and
+links, with disclosure authority rechecked after reads. Accepted persistence
+settles before the close prelude releases workers, independently of provider I/O
+cancellation. Lost replies never replay writes. The separate live account-pin
+guard, OAuth refresh, and Doctor/merge kernels keep their existing owners.
+Schemas, credential bytes, retention, RPC envelopes, and update behavior are unchanged.
+The synchronous `modelAccountConnectService.listLinks`, `link`, `unlink`, `list`,
+`select`, `status`, and `cancel` methods shipped through the 2026.9.8 Gateway
+Plugin SDK retain their native storage kernels as deprecated compatibility
+through the next Plugin SDK major. Their synchronous SQL sites remain T1 debt;
+core and bundled callers use the corresponding `Async` methods. The
+[SDK migration guide](/plugins/sdk-migration/how-to-migrate#await-personal-model-account-operations)
+records the unchanged synchronous signatures and timing, per-plugin warnings,
+and removal gate.
 
 Message-tool-only completion records use the canonical per-agent writer. The
 host captures the original store and run facts before waiting; configured-store
@@ -1627,6 +1651,16 @@ Edit and dismiss resolutions retain caller authority through finalization. These
 guards reuse committed in-memory facts for process-held incognito sessions without
 adding native SQL reads. Stored formats, schemas, retention, and update behavior
 are unchanged.
+
+Committed human mentions and personal session visibility write involvement through
+the existing collaboration worker. The profile owner prepares merge aliases before
+the agent transaction and revalidates them at admission and commit; the worker
+rereads the exact session incarnation and preserves mention source ordering.
+Acknowledged results invalidate session rows through their existing owner.
+The Inbox FIFO joins accepted involvement and Inbox persistence before shutdown
+closes either database owner. Unknown outcomes are never replayed. The deprecated
+synchronous MentionInbox SDK contract remains until the next Plugin SDK major.
+Schemas, stored bytes, retention, permissions, and update behavior are unchanged.
 
 Sharing management retains the original session and physical source before
 membership preparation yields. Member add/remove grants and list disclosure
