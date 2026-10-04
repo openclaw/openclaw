@@ -7,6 +7,7 @@ import {
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
 import { resolveExecutablePath } from "./executable-path.js";
+import { supersedePackageActivationCustody } from "./package-update-activation-custody.js";
 import {
   openPackageActivationJournal,
   assertPackageActivationOperation,
@@ -195,12 +196,12 @@ export async function supersedePackageActivationAfterManualInstall(installKey: s
       if (packageActivationIdentity(installKey, true) !== replacementIdentity) {
         throw new Error("The manually installed package changed before recovery settlement.");
       }
-      const retained = await createPublicationOwner(
+      const retained = await supersedePackageActivationCustody(
         anchor,
         journal,
-        fence.assertCurrent,
         initial,
-      ).supersede();
+        fence.assertCurrent,
+      );
       return { operationId: initial.descriptor.operationId, retained };
     },
     { existingAuthority: initial.descriptor.authority },

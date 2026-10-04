@@ -400,6 +400,8 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     `strict: false`. Debug logs report the downgrade under `openai-transport`,
     with a bounded sample of incompatible tools. Built-in and managed Responses
     requests share duplicate suppression for the same model and schemas.
+    Compatibility checks inspect schema constraints, not literal names in schema maps
+    or annotation data such as examples and defaults.
 
   </Accordion>
 </AccordionGroup>

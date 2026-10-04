@@ -7,6 +7,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import { runWithGatewayDetachedWorkAdmission } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { normalizeHeartbeatWakeReason } from "./heartbeat-reason.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "./heartbeat-wake-contracts.js";
@@ -478,26 +479,28 @@ function createSessionEventWakeRuntime() {
     clearTimeout(timer);
     timerDueAt = dueAt;
     timerDefersReadyWork = defersReadyWork;
-    timer = setTimeout(
-      () => {
-        timer = undefined;
-        timerDefersReadyWork = false;
-        const run = handler;
-        if (!run) {
-          return;
-        }
-        // Register the whole batch first so replacement retires unstarted work too.
-        const ready = takeReady().map(({ key, wakes }) => {
-          const owner = { generation, controller: new AbortController(), wakes };
-          active.set(key, owner);
-          return { key, wakes, owner };
-        });
-        for (const { key, wakes, owner } of ready) {
-          void dispatch(key, wakes, owner, run);
-        }
-        schedulePending();
-      },
-      resolveTimerTimeoutMs(Math.max(0, dueAt - performance.now()), COALESCE_MS, 0),
+    timer = runInDetachedAsyncContext(() =>
+      setTimeout(
+        () => {
+          timer = undefined;
+          timerDefersReadyWork = false;
+          const run = handler;
+          if (!run) {
+            return;
+          }
+          // Register the whole batch first so replacement retires unstarted work too.
+          const ready = takeReady().map(({ key, wakes }) => {
+            const owner = { generation, controller: new AbortController(), wakes };
+            active.set(key, owner);
+            return { key, wakes, owner };
+          });
+          for (const { key, wakes, owner } of ready) {
+            void dispatch(key, wakes, owner, run);
+          }
+          schedulePending();
+        },
+        resolveTimerTimeoutMs(Math.max(0, dueAt - performance.now()), COALESCE_MS, 0),
+      ),
     );
     timer.unref?.();
   }

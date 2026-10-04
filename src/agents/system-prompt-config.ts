@@ -16,6 +16,7 @@ type ConfiguredAgentSystemPromptParams = Parameters<typeof buildAgentSystemPromp
   config?: OpenClawConfig;
   agentId?: string;
   preparedTtsPreferences?: PreparedTtsPreferences;
+  tools?: { name: string; parameters: unknown }[];
   preparedModelRuntime?: Pick<PreparedModelRuntimeSnapshot, "configuredModelAliases" | "isCurrent">;
 };
 
@@ -30,7 +31,19 @@ function buildModelAliasLines(owner: ConfiguredAgentSystemPromptParams["prepared
 
 /** Builds the agent system prompt after applying config-derived prompt fields. */
 export function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSystemPromptParams) {
-  const { config, agentId, preparedModelRuntime, preparedTtsPreferences, ...renderParams } = params;
+  const {
+    config,
+    tools,
+    agentId: explicitAgentId,
+    preparedModelRuntime,
+    preparedTtsPreferences,
+    ...renderParams
+  } = params;
+  const agentId = explicitAgentId ?? (tools ? params.runtimeInfo?.agentId : undefined);
+  if (tools) {
+    renderParams.toolNames = tools.map((tool) => tool.name);
+    renderParams.messageTool = tools.find((tool) => tool.name.trim().toLowerCase() === "message");
+  }
   if (!config) {
     return buildAgentSystemPrompt(renderParams);
   }

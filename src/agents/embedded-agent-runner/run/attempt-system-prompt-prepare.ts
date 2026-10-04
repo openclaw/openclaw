@@ -24,13 +24,13 @@ import {
 } from "../../project-memory-bootstrap.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../../prompt-surface.js";
 import { resolveAgentRuntimePrompt } from "../../runtime-prompt.js";
+import type { buildConfiguredAgentSystemPrompt } from "../../system-prompt-config.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { toolPolicyRestrictsTools } from "../../tool-policy.js";
 import type { ToolSearchCatalogRef } from "../../tool-search.js";
 import { buildToolSchemaDirectoryPrompt } from "../../tool-search.js";
 import { prepareWatchedSessionsPromptAsync } from "../../watched-sessions-prompt.js";
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "../sandbox-info.js";
-import { buildEmbeddedSystemPrompt } from "../system-prompt.js";
 import type { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import { resolvePromptModeForSession } from "./attempt-prompt-helpers.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
@@ -38,12 +38,38 @@ import { buildAttemptSystemPrompt, type SystemPromptRefresh } from "./attempt-sy
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type PreparedBootstrap = Awaited<ReturnType<typeof prepareEmbeddedAttemptBootstrap>>;
-type PromptTools = Parameters<typeof buildEmbeddedSystemPrompt>[0]["tools"];
+type PromptTools = NonNullable<Parameters<typeof buildConfiguredAgentSystemPrompt>[0]["tools"]>;
 
 export async function prepareEmbeddedAttemptSystemPrompt(params: {
   activeContextEngine: EmbeddedRunAttemptParams["contextEngine"];
-  attempt: EmbeddedRunAttemptParams;
-  setup: EmbeddedAttemptSetup;
+  attempt: Omit<
+    EmbeddedRunAttemptParams,
+    | "workspaceDir"
+    | "prompt"
+    | "timeoutMs"
+    | "sessionFile"
+    | "authStorage"
+    | "authProfileStore"
+    | "modelRegistry"
+    | "thinkLevel"
+    | "fastMode"
+  >;
+  setup: Pick<
+    EmbeddedAttemptSetup,
+    | "effectiveCwd"
+    | "effectiveWorkspace"
+    | "proactiveSubagentOrchestration"
+    | "sandbox"
+    | "sandboxReport"
+    | "sandboxSessionKey"
+    | "sessionAgentId"
+  > & {
+    prepStages?: Pick<EmbeddedAttemptSetup["prepStages"], "mark">;
+    getProviderRuntimeHandle: () => import("../../../plugins/provider-hook-runtime.js").ProviderRuntimePluginHandle;
+  };
+  referencePaths?: Awaited<ReturnType<typeof resolveOpenClawReferencePaths>>;
+  remoteWorkspace?: boolean;
+  toolSchemaDirectoryPrompt?: () => string | undefined;
   bootstrap: PreparedBootstrap;
   capabilityToolNames: Set<string>;
   requireExplicitMessageTarget?: boolean;
@@ -60,7 +86,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   if (attempt.operation === "settled-tool-finalization") {
     // Finalization resumes the settled transcript with only the host prompt.
     // Do not invoke provider/plugin contributors or assemble ambient context.
-    params.setup.prepStages.mark("system-prompt");
+    params.setup.prepStages?.mark("system-prompt");
     return {
       runtimeChannel: undefined,
       runtimeInfo: { model: `${attempt.provider}/${attempt.modelId}` },
@@ -113,7 +139,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     runtimeHandle: params.setup.getProviderRuntimeHandle(),
   });
   const resolveToolSchemaDirectoryPrompt = () =>
-    params.toolSearchDirectoryEnabled && params.toolSearchCatalogRef?.current?.entries.length
+    params.toolSchemaDirectoryPrompt?.() ??
+    (params.toolSearchDirectoryEnabled && params.toolSearchCatalogRef?.current?.entries.length
       ? buildToolSchemaDirectoryPrompt(
           {
             config: attempt.config,
@@ -126,35 +153,30 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
           },
           { contextTokenBudget: attempt.contextTokenBudget },
         )
-      : undefined;
+      : undefined);
 
   const toolSchemaDirectoryPrompt = resolveToolSchemaDirectoryPrompt();
 
-  const {
-    runtimeChannel,
-    runtimeCapabilities,
-    reactionGuidance,
-    messageToolHints,
-    runtimeInfo,
-    userTimezone,
-    userDate,
-  } = await resolveAgentRuntimePrompt({
-    config: attempt.config,
-    preparedGitCoauthorPrompt: attempt.gitCoauthorPrompt,
-    agentId: params.setup.sessionAgentId,
-    workspaceDir: params.setup.effectiveWorkspace,
-    cwd: params.setup.effectiveCwd,
-    ...(attempt.preparedModelRuntime && Object.hasOwn(attempt.preparedModelRuntime, "repoRoot")
-      ? { preparedRepoRoot: attempt.preparedModelRuntime.repoRoot }
-      : {}),
-    sessionKey: attempt.sessionKey,
-    sessionId: attempt.sessionId,
-    model: `${attempt.provider}/${attempt.modelId}`,
-    channel: attempt.messageChannel ?? attempt.messageProvider,
-    accountId: attempt.agentAccountId,
-    chatType: attempt.chatType,
-    requesterProfileId: readAdmittedRunOperatorAuthority(attempt.admittedRunContext)?.profileId,
-  });
+  const { runtimeChannel, runtimeCapabilities, ...runtimePrompt } = await resolveAgentRuntimePrompt(
+    {
+      remoteWorkspace: params.remoteWorkspace,
+      config: attempt.config,
+      preparedGitCoauthorPrompt: attempt.gitCoauthorPrompt,
+      agentId: params.setup.sessionAgentId,
+      workspaceDir: params.setup.effectiveWorkspace,
+      cwd: params.setup.effectiveCwd,
+      ...(attempt.preparedModelRuntime && Object.hasOwn(attempt.preparedModelRuntime, "repoRoot")
+        ? { preparedRepoRoot: attempt.preparedModelRuntime.repoRoot }
+        : {}),
+      sessionKey: attempt.sessionKey,
+      sessionId: attempt.sessionId,
+      model: `${attempt.provider}/${attempt.modelId}`,
+      channel: attempt.messageChannel ?? attempt.messageProvider,
+      accountId: attempt.agentAccountId,
+      chatType: attempt.chatType,
+      requesterProfileId: readAdmittedRunOperatorAuthority(attempt.admittedRunContext)?.profileId,
+    },
+  );
   const promptMode =
     attempt.promptMode ??
     (params.isRawModelRun ? "none" : resolvePromptModeForSession(attempt.sessionKey));
@@ -162,13 +184,15 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   const toolPolicyRestricted = toolPolicyRestrictsTools({ allow: attempt.toolsAllow });
   const effectivePromptMode = toolPolicyRestricted ? ("minimal" as const) : promptMode;
   const effectiveSkillsPrompt = toolPolicyRestricted ? undefined : params.skillsPrompt;
-  const openClawReferences = await resolveOpenClawReferencePaths({
-    workspaceDir: params.setup.effectiveWorkspace,
-    argv1: process.argv[1],
-    cwd: params.setup.effectiveCwd,
-    moduleUrl: import.meta.url,
-  });
-  const buildProviderPromptContext = () => ({
+  const openClawReferences =
+    params.referencePaths ??
+    (await resolveOpenClawReferencePaths({
+      workspaceDir: params.setup.effectiveWorkspace,
+      argv1: process.argv[1],
+      cwd: params.setup.effectiveCwd,
+      moduleUrl: import.meta.url,
+    }));
+  const providerPromptContext = Object.freeze({
     config: attempt.config,
     agentDir: attempt.agentDir,
     workspaceDir: params.setup.effectiveWorkspace,
@@ -179,7 +203,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     runtimeCapabilities,
     agentId: params.setup.sessionAgentId,
   });
-  const promptContributionContext = { ...buildProviderPromptContext(), trigger: attempt.trigger };
+  const promptContributionContext = { ...providerPromptContext, trigger: attempt.trigger };
   const promptContribution =
     attempt.runtimePlan?.prompt.resolveSystemPromptContribution(promptContributionContext) ??
     resolveProviderSystemPromptContribution({
@@ -206,8 +230,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         ...toolContext,
         enabled: effectivePromptMode === "full" && includeMemorySection,
         citationsMode: attempt.config?.memory?.citations,
-        agentId: runtimeInfo.agentId,
-        agentSessionKey: runtimeInfo.sessionKey,
+        agentId: runtimePrompt.runtimeInfo.agentId,
+        agentSessionKey: runtimePrompt.runtimeInfo.sessionKey,
       }),
       preparedWatchedSessions: await prepareWatchedSessionsPromptAsync({
         ...toolContext,
@@ -261,12 +285,14 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
 
   const promptInputs: Parameters<typeof buildAttemptSystemPrompt>[0] = {
     isRawModelRun: params.isRawModelRun,
-    transformProviderSystemPrompt: (transformParams) =>
+    transformSystemPrompt: (systemPrompt) =>
       transformProviderSystemPrompt({
-        ...transformParams,
+        ...providerPromptContext,
         runtimeHandle: params.setup.getProviderRuntimeHandle(),
+        context: { ...providerPromptContext, systemPrompt },
       }),
     embeddedSystemPrompt: {
+      ...runtimePrompt,
       config: attempt.config,
       preparedModelRuntime: attempt.preparedModelRuntime,
       preparedTtsPreferences:
@@ -286,7 +312,6 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       workspaceNotes: params.bootstrap.workspaceNotes.length
         ? params.bootstrap.workspaceNotes
         : undefined,
-      reactionGuidance,
       promptMode: effectivePromptMode,
       sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
       requireExplicitMessageTarget: params.requireExplicitMessageTarget,
@@ -300,14 +325,10 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance({
         surface: promptSurface,
       }),
-      runtimeInfo,
-      messageToolHints,
       toolSchemaDirectoryPrompt,
       sandboxInfo,
       capabilityToolNames: [...params.capabilityToolNames].toSorted(),
       tools: params.effectiveTools,
-      userTimezone,
-      userDate,
       contextFiles: params.bootstrap.contextFiles,
       bootstrapMode: params.bootstrap.bootstrapMode,
       bootstrapTruncationNotice: buildBootstrapPromptWarningNotice(
@@ -319,12 +340,6 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       projectMemoryBootstrap,
       activeProjectKeys,
       promptContribution,
-    },
-    providerTransform: {
-      provider: attempt.provider,
-      config: attempt.config,
-      workspaceDir: params.setup.effectiveWorkspace,
-      context: buildProviderPromptContext(),
     },
   };
   const attemptSystemPrompt = await buildAttemptSystemPrompt(promptInputs);
@@ -352,7 +367,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     tools: params.effectiveTools,
   };
   const systemPromptReport = buildSystemPromptReport(reportInputs);
-  params.setup.prepStages.mark("system-prompt");
+  params.setup.prepStages?.mark("system-prompt");
 
   let toolPromptPreparation: {
     mode: EmbeddedRunAttemptParams["permissionMode"];
@@ -372,7 +387,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
 
   return {
     runtimeChannel,
-    runtimeInfo,
+    runtimeInfo: runtimePrompt.runtimeInfo,
     systemPromptReport,
     systemPromptText: attemptSystemPrompt.systemPrompt,
     prepareToolPrompt: (

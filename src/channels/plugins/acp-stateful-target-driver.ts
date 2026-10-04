@@ -1,8 +1,5 @@
 import { resolveAcpSessionTarget } from "../../acp/control-plane/manager.utils.js";
-import {
-  ensureConfiguredAcpBindingReadyCore,
-  ensureConfiguredAcpBindingSession,
-} from "../../acp/persistent-bindings.lifecycle.js";
+import { ensureConfiguredAcpBindingSession } from "../../acp/persistent-bindings.lifecycle.js";
 import { resolveConfiguredAcpBindingSpecBySessionKey } from "../../acp/persistent-bindings.resolve.js";
 import { resolveConfiguredAcpBindingSpecFromRecord } from "../../acp/persistent-bindings.types.js";
 import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
@@ -62,28 +59,12 @@ export const acpStatefulBindingTargetDriver: StatefulBindingTargetDriver = {
         error: "Configured ACP binding unavailable",
       };
     }
-    return await ensureConfiguredAcpBindingReadyCore({
+    const result = await ensureConfiguredAcpBindingSession({
       ...(params.assertActive ? { assertActive: params.assertActive } : {}),
       cfg: params.cfg,
-      configuredBinding: {
-        spec: configuredBinding,
-        record: params.bindingResolution.record,
-      },
+      spec: configuredBinding,
     });
-  },
-  async ensureSession(params) {
-    const spec = resolveConfiguredAcpBindingSpecFromRecord(params.bindingResolution.record);
-    if (!spec) {
-      return {
-        ok: false,
-        sessionKey: params.bindingResolution.statefulTarget.sessionKey,
-        error: "Configured ACP binding unavailable",
-      };
-    }
-    return await ensureConfiguredAcpBindingSession({
-      cfg: params.cfg,
-      spec,
-    });
+    return result.ok ? { ok: true } : { ok: false, error: result.error ?? "unknown error" };
   },
   async resetInPlace(params) {
     const stored = await readAcpSessionEntryAsync({

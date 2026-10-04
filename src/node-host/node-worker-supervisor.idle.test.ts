@@ -442,34 +442,63 @@ describe("node worker idle retention", () => {
     }
   });
 
-  it("joins idle cleanup before capacity-one admission, including an expiry race", async () => {
-    const f = fixture();
-    const cleanup = createDeferred();
-    try {
-      const old = input("old", "old-environment");
-      const owner = await f.launch(old);
-      await owner.complete(old.launchId, "idle");
-      await vi.advanceTimersByTimeAsync(119_999);
-      owner.holdCleanup(cleanup.promise);
-      const replacement = f.supervisor.launch(
-        input("replacement", "new-environment"),
-        TEST_WORKER_ENDPOINT,
-      );
-      await owner.killed.promise;
-      expect(mocks.prepare).toHaveBeenCalledTimes(1);
-      expect(f.snapshots.at(-1)).toEqual({ total: 1, available: 0, reclaimableIdle: 0 });
-      await vi.advanceTimersByTimeAsync(9_999);
-      expect(owner.adapter.kill).toHaveBeenCalledTimes(2);
-      expect(mocks.prepare).toHaveBeenCalledTimes(1);
-      cleanup.resolve();
-      expect(await replacement).toMatchObject({ launchId: "replacement", state: "running" });
-      expect(owner.adapter.dispose).toHaveBeenCalledOnce();
-      expect(mocks.prepare).toHaveBeenCalledTimes(2);
-    } finally {
-      cleanup.resolve();
-      await f.supervisor.close();
-    }
-  });
+  it.each(["before", "at"] as const)(
+    "settles idle cleanup %s the admission deadline",
+    async (timing) => {
+      const f = fixture();
+      const cleanup = createDeferred();
+      try {
+        const old = input("old", "old-environment");
+        const owner = await f.launch(old);
+        await owner.complete(old.launchId, "idle");
+        if (timing === "before") {
+          await vi.advanceTimersByTimeAsync(119_999);
+        }
+        owner.holdCleanup(cleanup.promise);
+        const replacement = f.supervisor
+          .launch(input("replacement", "new-environment"), TEST_WORKER_ENDPOINT)
+          .then(
+            (value) => ({ value }),
+            (error: unknown) => ({ error }),
+          );
+        await owner.killed.promise;
+        expect(mocks.prepare).toHaveBeenCalledTimes(1);
+        expect(f.snapshots.at(-1)).toEqual({ total: 1, available: 0, reclaimableIdle: 0 });
+        if (timing === "before") {
+          await vi.advanceTimersByTimeAsync(9_999);
+          expect(owner.adapter.kill).toHaveBeenCalledTimes(2);
+          expect(mocks.prepare).toHaveBeenCalledTimes(1);
+        } else {
+          // Move wall time to the boundary without firing the deadline callback.
+          vi.setSystemTime(10_000);
+        }
+        cleanup.resolve();
+        if (timing === "before") {
+          expect(await replacement).toMatchObject({
+            value: { launchId: "replacement", state: "running" },
+          });
+          expect(mocks.prepare).toHaveBeenCalledTimes(2);
+        } else {
+          expect(await replacement).toEqual({
+            error: expect.objectContaining({
+              name: "NodeWorkerCapacityExhaustedError",
+              message: "node worker capacity remained full for 10000 ms",
+            }),
+          });
+          expect(owner.adapter.kill).toHaveBeenCalledOnce();
+          expect(f.launches.get("old")?.state).toBe("interrupted");
+          expect(f.launches.has("replacement")).toBe(false);
+          expect(mocks.prepare).toHaveBeenCalledTimes(1);
+          expect(f.snapshots.at(-1)).toEqual({ total: 1, available: 1, reclaimableIdle: 0 });
+          expect(vi.getTimerCount()).toBe(0);
+        }
+        expect(owner.adapter.dispose).toHaveBeenCalledOnce();
+      } finally {
+        cleanup.resolve();
+        await f.supervisor.close();
+      }
+    },
+  );
 
   it.each(["deadline", "abort", "close"] as const)(
     "bounds admission by %s while retaining stalled idle cleanup",
@@ -538,44 +567,6 @@ describe("node worker idle retention", () => {
         cleanup.resolve();
         await admitted;
         await (closing ?? f.supervisor.close());
-      }
-    },
-  );
-
-  it.each([10_000, 10_001])(
-    "rejects idle reclamation completed at %i ms before its timeout callback runs",
-    async (elapsedMs) => {
-      const f = fixture();
-      const cleanup = createDeferred();
-      try {
-        const owner = await f.launch(input("old", "old-environment"));
-        await owner.complete("old", "idle");
-        owner.holdCleanup(cleanup.promise);
-        const outcome = f.supervisor
-          .launch(input("replacement", "new-environment"), TEST_WORKER_ENDPOINT)
-          .then(
-            (value) => ({ value }),
-            (error: unknown) => ({ error }),
-          );
-        await owner.killed.promise;
-        vi.setSystemTime(elapsedMs);
-        cleanup.resolve();
-        expect(await outcome).toEqual({
-          error: expect.objectContaining({
-            name: "NodeWorkerCapacityExhaustedError",
-            message: "node worker capacity remained full for 10000 ms",
-          }),
-        });
-        expect(owner.adapter.kill).toHaveBeenCalledOnce();
-        expect(owner.adapter.dispose).toHaveBeenCalledOnce();
-        expect(f.launches.get("old")?.state).toBe("interrupted");
-        expect(f.launches.has("replacement")).toBe(false);
-        expect(mocks.prepare).toHaveBeenCalledTimes(1);
-        expect(f.snapshots.at(-1)).toEqual({ total: 1, available: 1, reclaimableIdle: 0 });
-        expect(vi.getTimerCount()).toBe(0);
-      } finally {
-        cleanup.resolve();
-        await f.supervisor.close();
       }
     },
   );

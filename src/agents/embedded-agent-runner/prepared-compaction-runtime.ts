@@ -51,6 +51,7 @@ import {
   SESSION_PERMISSION_BY_EXEC_MODE,
 } from "../session-permission-exec-mode.js";
 import { detectRuntimeShell } from "../shell-utils.js";
+import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import { resolveRuntimeAgentName } from "../system-prompt-params.js";
 import { toolPolicyRestrictsTools } from "../tool-policy.js";
 import {
@@ -68,7 +69,6 @@ import { resolveAttemptSpawnWorkspaceDir } from "./run/attempt-thread-helpers.js
 import { applyEmbeddedAttemptToolsAllow } from "./run/attempt-tool-construction-plan.js";
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "./sandbox-info.js";
 import { prepareEmbeddedSkills } from "./skill-runtime.js";
-import { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 import { collectAllowedToolNames } from "./tool-name-allowlist.js";
 import { mapThinkingLevelForProvider } from "./utils.js";
 
@@ -536,7 +536,7 @@ export async function buildPreparedCompactionRuntime(
     const preparedTtsPreferences =
       promptMode === "full" ? await prepareTtsPreferences() : undefined;
     const buildSystemPromptText = () => {
-      const builtSystemPrompt = buildEmbeddedSystemPrompt({
+      const builtSystemPrompt = buildConfiguredAgentSystemPrompt({
         preparedTtsPreferences,
         config: params.config,
         preparedModelRuntime: params.preparedModelRuntime,

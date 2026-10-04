@@ -7,6 +7,7 @@ import {
 import { normalizeChatChannelId } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_PLUGINS_ENABLED } from "./default-enablement.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { normalizeSlotValue, resolveSlotSelection } from "./slots.js";
 
 /** Canonical plugin config shape consumed by runtime policy and loaders. */
@@ -179,16 +180,17 @@ export function normalizePluginsConfigWithResolverCore(
   normalizePluginId: NormalizePluginId = identityNormalizePluginId,
 ): NormalizedPluginsConfig {
   const memorySlot = resolveSlotSelection("memory", config?.slots?.memory);
+  const resolvePolicyId = (id: string) => normalizePluginPolicyId(normalizePluginId(id));
   return {
     enabled: config?.enabled ?? DEFAULT_PLUGINS_ENABLED,
-    allow: normalizePluginConfigList(config?.allow, normalizePluginId),
-    deny: normalizePluginConfigList(config?.deny, normalizePluginId),
+    allow: normalizePluginConfigList(config?.allow, resolvePolicyId),
+    deny: normalizePluginConfigList(config?.deny, resolvePolicyId),
     loadPaths: normalizePluginConfigList(config?.load?.paths, identityNormalizePluginId),
     slots: {
       memory: memorySlot.kind === "off" ? null : memorySlot.pluginId,
       contextEngine: normalizeSlotValue(config?.slots?.contextEngine),
     },
-    entries: normalizePluginEntries(config?.entries, normalizePluginId),
+    entries: normalizePluginEntries(config?.entries, resolvePolicyId),
   };
 }
 

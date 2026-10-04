@@ -433,7 +433,15 @@ describe("memory runtime handles", () => {
         entries: { "memory-core": { enabled: false } },
       },
     },
+    { plugins: { slots: { memory: "MeMoRy-Fixture" }, deny: ["memory-fixture"] } },
+    {
+      plugins: {
+        slots: { memory: "MeMoRy-Fixture" },
+        entries: { "memory-fixture": { enabled: false } },
+      },
+    },
   ])("does not load a disabled memory selection", async (cfg) => {
+    mocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
     await expect(
       getActiveMemorySearchManagerCore({ cfg: cfg as never, agentId: "main" }),
     ).resolves.toEqual({ manager: null, error: "memory plugin unavailable" });

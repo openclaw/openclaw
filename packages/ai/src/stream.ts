@@ -96,8 +96,6 @@ function retainUnscopedStreamLifetime(
   const bufferWaiters = new Set<() => void>();
   let bufferError: Error | undefined;
   let resultPromise: ReturnType<typeof result> | undefined;
-  const wrapIterationError = (error: unknown) =>
-    new Error("Stream iteration failed", { cause: error });
   const notifyBufferWaiters = () => {
     for (const resolve of bufferWaiters) {
       resolve();
@@ -112,16 +110,11 @@ function retainUnscopedStreamLifetime(
       } catch (error) {
         providerResult = Promise.reject(new Error("Stream result failed", { cause: error }));
       }
-      void providerResult.then(
-        () => {
-          resultSettled = true;
-          releaseIfSettled();
-        },
-        () => {
-          resultSettled = true;
-          releaseIfSettled();
-        },
-      );
+      const settleResult = () => {
+        resultSettled = true;
+        releaseIfSettled();
+      };
+      void providerResult.then(settleResult, settleResult);
       resultPromise = providerResult;
     }
     return resultPromise;
@@ -138,7 +131,7 @@ function retainUnscopedStreamLifetime(
         notifyBufferWaiters();
       }
     } catch (error) {
-      bufferError = wrapIterationError(error);
+      bufferError = new Error("Stream iteration failed", { cause: error });
     } finally {
       bufferSettled = true;
       notifyBufferWaiters();

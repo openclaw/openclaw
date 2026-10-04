@@ -362,7 +362,6 @@ describe("AgentSession model-visible tool-result redaction", () => {
     const resourceLoader = new DefaultResourceLoader({
       cwd,
       agentDir: cwd,
-      settingsManager,
       extensionFactories: buildEmbeddedExtensionFactories({
         cfg: {},
         sessionManager,
@@ -418,12 +417,11 @@ describe("AgentSession model-visible tool-result redaction", () => {
       streamSimple: streamMocks.streamSimple,
     });
     const { session } = await createAgentSession({
+      systemPrompt: "Test session prompt",
       cwd,
-      agentDir: cwd,
       model,
       thinkingLevel: "medium",
       modelRegistry,
-      authStorage,
       tools: [toolName],
       sessionManager,
       settingsManager,

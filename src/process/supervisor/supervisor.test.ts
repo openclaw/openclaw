@@ -334,6 +334,36 @@ describe("process supervisor", () => {
     await supervisor.shutdown();
   });
 
+  it.each([
+    { mode: "child", argv: ["bad\0executable"] },
+    { mode: "child", argv: ["fixture", "bad\0argument"] },
+    { mode: "child", argv: ["fixture"], resolveArgs: () => ["bad\0resolved"] },
+    { mode: "child", argv: ["fixture"], argv0: "bad\0name" },
+    { mode: "pty", argv: ["bad\0shell"] },
+    { mode: "pty", argv: ["fixture", "bad\0argument"] },
+    { mode: "anchored-shell", command: "printf bad\0command" },
+  ] satisfies SpawnInput[])(
+    "rejects NUL-containing $mode input before construction or scope replacement (%#)",
+    async (input) => {
+      const adapter = prepare();
+      const run = await spawn({ scopeKey: "scope" });
+      child.mockResolvedValue(terminating());
+      pty.mockResolvedValue(terminating());
+      try {
+        await expect(
+          supervisor.spawn({ ...input, scopeKey: "scope", replaceExistingScope: true }),
+        ).rejects.toThrow("must not contain NUL bytes");
+        expect(adapter.killMock).not.toHaveBeenCalled();
+        expect(child).toHaveBeenCalledOnce();
+        expect(pty).not.toHaveBeenCalled();
+      } finally {
+        adapter.settle(0);
+        await run.wait();
+        await supervisor.shutdown();
+      }
+    },
+  );
+
   it("rejects retired authority behind a scope fence without cancelling its survivor", async () => {
     const startup = createDeferred<StubChildAdapter>();
     child.mockReturnValueOnce(startup.promise);
