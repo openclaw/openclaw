@@ -12,7 +12,7 @@ private final class PendingRunOwnerReference {
 }
 
 extension OpenClawChatViewModel {
-    /// Returns a completion task for event reconciliation, settling both model and swarm refreshes for metadata changes.
+    /// Returns the task that settles the reconciliation this event starts, when it starts one.
     @discardableResult
     func handleTransportEvent(_ evt: OpenClawChatTransportEvent) -> Task<Void, Never>? {
         guard !self.isTransportDetached else { return nil }
@@ -51,12 +51,9 @@ extension OpenClawChatViewModel {
             self.refreshSourceContext()
             self.refreshAgentsIfRequested()
             let session = self.currentSessionSnapshot()
-            let modelRefresh = Task<Void, Never> { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
-            let swarmRefresh = Task<Void, Never> { [weak self] in await self?.refreshSwarmCapability(sessionSnapshot: session) }
-            return Task {
-                await modelRefresh.value
-                await swarmRefresh.value
-            }
+            let models = Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
+            let swarm = Task { [weak self] in await self?.refreshSwarmCapability(sessionSnapshot: session) }
+            return Task { _ = await (models.value, swarm.value) }
         case let .sessionsChanged(change):
             return self.handleSessionsChangedEvent(change)
         case let .sessionObserver(digest):
@@ -805,7 +802,9 @@ extension OpenClawChatViewModel {
         if let boolValue = value?.value as? Bool {
             return boolValue
         }
-        guard let stringValue = lowercasedAgentEventString(value) else { return false }
+        guard let stringValue = lowercasedAgentEventString(value) else {
+            return false
+        }
         return stringValue == "true" || stringValue == "yes" || stringValue == "1"
     }
 
