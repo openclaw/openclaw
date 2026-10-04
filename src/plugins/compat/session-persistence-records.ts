@@ -179,4 +179,27 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     releaseNote:
       "Provider replay hooks can await committed transcript metadata through additive V2 context types. Legacy hooks, context types, and the synchronous Gemini helper remain available for third-party migration through the next Plugin SDK major.",
   },
+  {
+    code: "acp-session-metadata-released-signatures",
+    status: "active",
+    owner: "sdk",
+    introduced: "2026-10-04",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Keep the released one-argument ACP reader and manager read/write injection signatures. Internal actor bindings are not plugin arguments; actor activation must preserve these callable contracts. The APIs remain supported and are not deprecated.",
+    docsPath: "/plugins/sdk-migration/compatibility-policy#acp-metadata-binding-compatibility",
+    surfaces: [
+      "openclaw/plugin-sdk/acp-runtime.readAcpSessionEntryAsync",
+      "AcpSessionManagerDeps.loadSessionEntryAsync",
+      "AcpSessionManagerDeps.upsertSessionMeta",
+    ],
+    diagnostics: ["SDK type assertions and compatibility documentation; no runtime warnings"],
+    tests: [
+      "src/plugin-sdk/acp-runtime.test.ts",
+      "src/acp/runtime/session-meta-read.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Released ACP readers and manager injection callbacks keep their one-argument contracts while incognito actor composition remains internal and inactive.",
+  },
 ] as const satisfies readonly PluginCompatRecord[];

@@ -229,6 +229,19 @@ explicit breaking-release approval. The compatibility registry records the
 migration without runtime warnings. Schemas, retained data, and update behavior
 are unchanged.
 
+### ACP metadata binding compatibility
+
+`openclaw/plugin-sdk/acp-runtime` retains the one-argument
+`readAcpSessionEntryAsync` callable published in `v2026.9.8`. The returned ACP
+manager's `loadSessionEntryAsync` and `upsertSessionMeta` injection callbacks also
+keep their released one-argument signatures and Promise results. Plugins do not
+supply internal incognito actor bindings.
+
+The `acp-session-metadata-released-signatures` compatibility record is active:
+these APIs remain supported, with no deprecation warning or required migration.
+Worker activation must preserve them; changing these released contracts requires
+an explicitly approved Plugin SDK major release.
+
 ### Native session generation authority
 
 The production-private `agent-harness-session-runtime` subpath retains the

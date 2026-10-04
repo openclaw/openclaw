@@ -37,7 +37,7 @@ scan. Clean same-version receipts retain the fast path, including owner, schema,
 canonical-index, and background-check requirements. Pending migrations, strict
 update canaries, Doctor, and explicit copied-file verification retain full checks.
 
-Writable agent admission runs one full-file `integrity_check` and
+Writable agent admission normally runs one full-file `integrity_check` and
 `foreign_key_check` when reusable proof is unavailable. These checks protect
 table and index consistency, uniqueness, cross-table page ownership, unused
 pages, and foreign-key relationships. Per-table checks cannot establish global
@@ -47,8 +47,53 @@ Gateway startup runs this admission in its native execution Worker; other
 asynchronous openers use a read-only child and retain the lease until it closes.
 No schema, stored data, or configuration changes are required.
 
-The Gateway does not schedule a delayed full scan after startup or repeat full
-scans on a daily timer. For operator-requested or scheduled full verification,
+Native Gateway admission distinguishes two missing-receipt classes:
+
+- **Process death:** every swept lease belongs to the same Linux host, OS boot,
+  PID namespace, OpenClaw version, and physical database file; the recorded
+  owner has a known start identity, completed admission, and its PID is definitely dead; no foreign or
+  unknown live owner remains. SQLite opens normally with a nonempty WAL and no
+  rollback journal. Page size, schema version, WAL journal mode, and non-mutating
+  WAL frame state are readable/consistent, and the existing owner, current-schema,
+  and canonical-index preflight passes. Admission runs **no synchronous page
+  scan**. SQLite's WAL crash-recovery guarantee supplies consistency after a
+  process crash; it does not establish freedom from unrelated storage damage.
+  The listening Gateway queues a full integrity and foreign-key check in its
+  existing low-priority verifier child.
+- **Corruption risk:** foreign host/boot, changed PID start identity, legacy or
+  unknown provenance, dirty receipt without a matching dead lease, missing WAL,
+  failed journal/header checks, and pending migrations retain the full admission
+  gate. Other platforms, SQLite before 3.53 without `wal_checkpoint(NOOP)`, and
+  non-native openers remain conservative.
+
+Lease IDs retain their UUID format. The nullable `agent_database_leases.provenance`
+column binds the provenance above separately from ownership identifiers. The
+lease owner adds this column on first use without changing the schema version;
+existing rows receive `NULL` and cannot defer integrity verification. Maintenance
+accepts an absent provenance column so it can claim stopped-writer ownership
+before migration without modifying the old schema. Older readers ignore this
+additive column. Newly created files without a prior physical identity also use the
+full gate. A new claim has `opened_at=0`; only successful admission publishes its
+opening timestamp. A process killed during a required full gate therefore cannot
+lend restart provenance, even when its host, boot, and WAL match. Updates, rollback, canaries, Doctor, and copied-file verification retain
+their existing strict checks. Admission observes WAL state without a passive
+checkpoint, which would synchronously copy WAL pages and grow with the journal.
+SQLite still performs its own required recovery; OpenClaw adds no full-file scan.
+
+The deferred open lends only revocable runtime admission and does not publish
+durable verification or a clean-close receipt. Background success is logged;
+it does not independently certify the writer's checkpoint/close. If no full
+admission has established durable verification, even a subsequent graceful
+restart retains the full gate. Confirmed background corruption drains existing
+agent actors, reconfirms the current file generation in a child, latches refusal,
+drains any intervening actor, and records the existing durable quarantine. New
+opens and retained actors then refuse writes until Doctor repair. Transient I/O
+or lock failures remain inconclusive and are logged, not relabeled as corruption.
+Confirmation treats an empty WAL and an absent WAL as equivalent: SQLite readers
+can create or remove those empty sidecars without changing committed contents.
+Nonempty WALs, rollback journals, and the main file retain full generation checks.
+
+The Gateway does not repeat full scans on a daily timer. For operator-requested or scheduled full verification,
 use `openclaw doctor --fix --non-interactive` during a planned maintenance window.
 This is repair maintenance: Doctor can apply supported repairs and migrations,
 and manages the matching Gateway's stop and restart. Externally supervised
@@ -59,7 +104,9 @@ update, or rollback contract.
 
 Each executed admission gate logs its mode, outcome, duration, process, thread,
 and reason. Reasons are
-`stale-lease` when a previous process left an unreleased lease, `revoked` for other
+`process-death` with mode `deferred` and outcome `pending` for the narrowly
+classified crash above, `stale-lease-full` with mode `full` for other unreleased
+leases, `revoked` for other
 invalidated proof, `dirty-receipt` when verification remains without a certified
 final checkpoint and close, `no-proof` for unavailable or nonmatching proof, and
 `lease-class` when a foreign or unknown lease owner prevents runtime reuse.
@@ -67,8 +114,8 @@ Slow-open summaries include the same facts. A dirty receipt alone does not
 distinguish an incomplete checkpoint from a live lease; neither permits restart
 reuse. A process exiting with status zero after its shutdown deadline can still
 leave a stale lease and require the admission gate. Stale-lease diagnostics name
-`owner-pid-dead` or `owner-start-time-changed`; agent leases do not use an expiry,
-boot ID, or generation field. A surviving stale lease means its release was not
+`owner-pid-dead` or `owner-start-time-changed`; agent leases do not use an expiry.
+Their provenance column carries the boot/file binding. A surviving stale lease means its release was not
 observed, rather than proving which signal ended the old process.
 
 The lease owner logs `agent database clean-close receipt` with `written` or the
@@ -80,7 +127,7 @@ for the next admission to diagnose.
 | When                                        | Check                                                                                                                                           |
 | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | Every open                                  | Validate the `schema_meta` table and primary metadata row                                                                                       |
-| Writable agent open and Gateway readiness   | Run full integrity and foreign-key checks when neither current runtime proof nor a clean same-version restart receipt is available              |
+| Writable agent open and Gateway readiness   | Run full integrity and foreign-key checks without reusable proof; proven same-boot native process-death recovery defers that scan               |
 | Same-process agent reopen                   | Reuse current file-bound runtime proof without another integrity or quick check; recheck owner, version, schema, and canonical indexes          |
 | Clean same-version agent restart            | Recheck owner, version, schema, and canonical indexes; queue a child-process `quick_check` and foreign-key check after the Gateway is listening |
 | Before a pending migration                  | Run a full integrity, foreign-key, role, schema, and index scan                                                                                 |

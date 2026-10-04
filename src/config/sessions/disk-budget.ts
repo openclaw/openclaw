@@ -7,6 +7,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveRealpathOrAbsolute as canonicalizePathForComparison } from "../../infra/boundary-path.js";
+import { isPathStrictlyInside } from "../../infra/path-guards.js";
 import {
   isCompactionCheckpointTranscriptFileName,
   isPrimarySessionTranscriptFileName,
@@ -138,8 +139,7 @@ function resolveReferencedSessionArtifactPaths(params: {
     }
     for (const checkpointFile of readLegacyCompactionSnapshotPaths(entry)) {
       const resolvedCheckpointPath = canonicalizePathForComparison(checkpointFile);
-      const relative = path.relative(resolvedSessionsDir, resolvedCheckpointPath);
-      if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+      if (isPathStrictlyInside(resolvedSessionsDir, resolvedCheckpointPath)) {
         referenced.add(resolvedCheckpointPath);
       }
     }

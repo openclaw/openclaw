@@ -63,12 +63,12 @@ function normalizePage(value: number | undefined): number {
   return Math.max(1, Math.floor(asFiniteNumber(value) ?? 1));
 }
 
-function paginateItems<T>(items: T[], page?: number, pageSize = MODELS_PAGE_SIZE) {
-  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+function paginateItems<T>(items: T[], page?: number) {
+  const totalPages = Math.max(1, Math.ceil(items.length / MODELS_PAGE_SIZE));
   const safePage = Math.max(1, Math.min(normalizePage(page), totalPages));
-  const start = (safePage - 1) * pageSize;
+  const start = (safePage - 1) * MODELS_PAGE_SIZE;
   return {
-    items: items.slice(start, start + pageSize),
+    items: items.slice(start, start + MODELS_PAGE_SIZE),
     page: safePage,
     totalPages,
     hasPrev: safePage > 1,

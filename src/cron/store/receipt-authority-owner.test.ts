@@ -15,6 +15,8 @@ import { acquireFileLock } from "../../infra/file-lock.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import * as workerCpu from "../../infra/worker-cpu.js";
+import { AsyncWorkScope, getAsyncWorkSignal } from "../../shared/async-work-scope.js";
+import { captureEffectAuthority, withEffectPreparation } from "../../shared/effect-authority.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -28,7 +30,13 @@ import { runCronRuntimeMutation } from "../service/runtime-mutation.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronStoredJob } from "../types.js";
 import { cronStoreKey } from "./key.js";
-import { observeCronReceiptAuthority } from "./receipt-authority-owner.js";
+import { CronReceiptAuthorityRefusal } from "./receipt-authority-error.js";
+import {
+  beginCronReceiptAuthorityClose,
+  drainCronReceiptAuthority,
+  observeCronReceiptAuthority,
+  startCronReceiptAuthorityHost,
+} from "./receipt-authority-owner.js";
 import { finishCronRunReceiptAsync } from "./run-receipt-store.js";
 import {
   claimCronRunReceiptForTest,
@@ -458,6 +466,12 @@ it.each([false, true])(
           messageRevoked: admittedEnabled,
           sourceRevoked: admittedEnabled,
         });
+        const use = owner.observation.acquireUse({ permission: "message", assertCurrent() {} });
+        if (admittedEnabled) {
+          await expect(use).rejects.toMatchObject({ reason: "permission" });
+        } else {
+          (await use).initiate(() => undefined);
+        }
       } finally {
         await owner.close();
       }
@@ -597,6 +611,131 @@ it("joins lost-reply worker settlement without replay, then retires old observat
     }
   });
 });
+
+it("holds message authority through preparation and releases at initiation before the response", async () => {
+  await withOpenClawTestState({ label: "cron-held-message-use" }, async (fixture) => {
+    const owner = await seed(fixture);
+    const providerResponse = createDeferred<string>();
+    const options = { permission: "message" as const, assertCurrent() {} };
+    const retained = await withEffectPreparation(
+      () => owner.observation.acquireUse(options),
+      async () => {
+        const effect = captureEffectAuthority();
+        await effect.initiate(() => undefined);
+        return effect;
+      },
+    );
+    const lateEffect = vi.fn();
+    await expect(retained.initiate(lateEffect)).rejects.toThrow(
+      "Effect authority is no longer active",
+    );
+    expect(lateEffect).not.toHaveBeenCalled();
+    // The operation ended; the same receipt still admits a fresh use below.
+    const use = await owner.observation.acquireUse(options);
+    let acknowledged = false;
+    const saving = saveCronStore(owner.storePath, {
+      version: 1,
+      jobs: [{ ...owner.job, enabled: false }],
+    }).then(() => {
+      acknowledged = true;
+    });
+    const next = owner.observation.acquireUse(options);
+    void next.catch(() => {});
+    try {
+      // A separate worker read remains possible while an authority mutation waits behind use.
+      expect((await owner.read()).job?.enabled).toBe(true);
+      expect(acknowledged).toBe(false);
+      const sql = observeMainThreadSql();
+      sql.calibrate();
+      let response: Promise<string>;
+      try {
+        use.assertCurrent();
+        response = use.initiate(() => {
+          expect(() => use.initiate(() => undefined)).toThrow(CronReceiptAuthorityRefusal);
+          return providerResponse.promise;
+        });
+        sql.expectIdle();
+      } finally {
+        sql.restore();
+      }
+      await saving;
+      expect(acknowledged).toBe(true);
+      expect(() => use.assertCurrent()).toThrow(CronReceiptAuthorityRefusal);
+      await expect(next).rejects.toMatchObject({ reason: "permission" });
+      await saveCronStore(owner.storePath, { version: 1, jobs: [owner.job] });
+      await expect(owner.observation.acquireUse(options)).rejects.toMatchObject({
+        reason: "permission",
+      });
+      providerResponse.resolve("accepted");
+      await expect(response).resolves.toBe("accepted");
+    } finally {
+      use.release();
+      providerResponse.resolve("cleanup");
+      await Promise.allSettled([saving, next]);
+      await owner.close();
+    }
+  });
+});
+
+it.each(["mutation", "other database"] as const)(
+  "retires uses on close while joining accepted %s work",
+  async (kind) => {
+    await withOpenClawTestState({ label: "cron-held-use-close" }, async (fixture) => {
+      const owner = await seed(fixture);
+      const options = { permission: "execution" as const, assertCurrent() {} };
+      const use = await owner.observation.acquireUse(options);
+      const entered = createDeferred();
+      const settle = createDeferred();
+      const scheduler = new AsyncWorkScope();
+      const work = async (assertCurrent: () => void) => {
+        assertCurrent();
+        if (kind === "other database") {
+          expect(owner.observation.readForPreparation().messageRevoked).toBe(false);
+        }
+        expect(getAsyncWorkSignal()).not.toBe(scheduler.signal);
+        entered.resolve();
+        await settle.promise;
+        expect(getAsyncWorkSignal()?.aborted).toBe(false);
+        expect(() => assertCurrent()).toThrow(CronReceiptAuthorityRefusal);
+        return "settled";
+      };
+      const borrowing = scheduler.track(() =>
+        kind === "mutation"
+          ? use.mutate((mutation) => work(mutation.assertCurrent))
+          : use.persist(work),
+      );
+      await entered.promise;
+      const queued = owner.observation.acquireUse(options);
+      void queued.catch(() => {});
+      let drained = false;
+      try {
+        expect(() => use.initiate(() => undefined)).toThrow(/busy/);
+        beginCronReceiptAuthorityClose();
+        scheduler.beginClose();
+        const draining = drainCronReceiptAuthority().then(() => {
+          drained = true;
+        });
+        expect(() => use.assertCurrent()).toThrow(CronReceiptAuthorityRefusal);
+        await expect(owner.observation.acquireUse(options)).rejects.toMatchObject({
+          reason: "retired",
+        });
+        expect(drained).toBe(false);
+        settle.resolve();
+        await expect(borrowing).resolves.toBe("settled");
+        await expect(queued).rejects.toMatchObject({ reason: "retired" });
+        await draining;
+        expect(drained).toBe(true);
+      } finally {
+        settle.resolve();
+        use.release();
+        await Promise.allSettled([borrowing, queued]);
+        await owner.close();
+        await closeOpenClawStateDatabaseAsync();
+        startCronReceiptAuthorityHost();
+      }
+    });
+  },
+);
 
 it("enrolls approval mutations in the same physical receipt authority boundary", async () => {
   await withOpenClawTestState({ label: "cron-authority-approval-enrollment" }, async (fixture) => {

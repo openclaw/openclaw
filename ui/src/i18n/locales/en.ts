@@ -3483,8 +3483,6 @@ export const en: TranslationMap & {
       activeFilterCount: "Active filters: {count}",
       sortSessions: "Filter & sort",
       sessionSources: "Session sources",
-      showOnlyPerson: "Show only {name}",
-      showEveryone: "Show everyone",
       showAllSessions: "Show all sessions",
       noActiveSessionsForFilter: "No active sessions match this filter",
       sortUpdated: "Last updated",

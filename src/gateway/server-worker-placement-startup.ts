@@ -48,6 +48,7 @@ import type { WorkerDevicePlacementRequirementResolver } from "./worker-environm
 import { createWorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
 import { createWorkerPlacementIdleSweep } from "./worker-environments/placement-idle-sweep.js";
 import { createWorkerPlacementRunnerAvailabilityReader } from "./worker-environments/placement-projector.js";
+import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 import { createPlacementSessionRetirement } from "./worker-environments/placement-session-retirement.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "./worker-environments/placement-target.js";
@@ -371,17 +372,30 @@ export function createGatewayWorkerPlacementRuntime(
       isStopping: () => stopped,
     });
     // Session evidence must survive until its remote owner has been reclaimed or proven gone.
+    const preservationKeys = (placements: readonly WorkerSessionPlacementRecord[]) =>
+      placements.flatMap((placement) =>
+        placement.state === "failed" &&
+        isFailedWorkerPlacementEnvironmentGone({
+          environmentService: params.environments,
+          placement,
+        })
+          ? []
+          : [placement.sessionKey],
+      );
     const uninstallSessionMaintenancePreservation = registerSessionMaintenancePreserveKeysProvider(
-      () =>
-        params.placements.listForReconcile().flatMap((placement) =>
-          placement.state === "failed" &&
-          isFailedWorkerPlacementEnvironmentGone({
-            environmentService: params.environments,
-            placement,
-          })
-            ? []
-            : [placement.sessionKey],
-        ),
+      () => preservationKeys(params.placements.listForReconcile()),
+      async () => {
+        const prepared = await params.placements.prepareMaintenancePlacements();
+        return {
+          capture() {
+            prepared.assertCurrent();
+            const keys = preservationKeys(prepared.placements);
+            prepared.assertCurrent();
+            return keys;
+          },
+          dispose: prepared.release,
+        };
+      },
     );
     const trackOperation = (
       slot: { current: Promise<void> | undefined },

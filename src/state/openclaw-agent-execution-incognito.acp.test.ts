@@ -3,8 +3,11 @@ import assert from "node:assert/strict";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { IncognitoAcpSessionAccess } from "../acp/runtime/session-meta-incognito.types.js";
+import { readAcpSessionEntryAsync } from "../acp/runtime/session-meta-read.js";
 import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
 import * as metadataReader from "../acp/runtime/session-meta-readonly.js";
+import { upsertAcpSessionMeta } from "../acp/runtime/session-meta-write.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -53,7 +56,43 @@ afterAll(async () => {
   await closeOpenClawStateDatabaseAsync();
 });
 
+it.each(["", " \t "])("returns null for the empty ACP session key %j", async (sessionKey) => {
+  await expect(
+    readAcpSessionEntryAsync({ cfg, env, sessionKey }, { actor, authority }),
+  ).resolves.toBeNull();
+  await expect(
+    upsertAcpSessionMeta(
+      {
+        cfg,
+        env,
+        sessionKey,
+        mutate() {
+          throw new Error("Empty ACP mutation invoked its mutator");
+        },
+      },
+      { actor, authority },
+    ),
+  ).resolves.toBeNull();
+});
+
+it("normalizes an ACP session key while retaining a missing-entry result", async () => {
+  const sessionKey = key("missing");
+  await expect(
+    readAcpSessionEntryAsync({ cfg, env, sessionKey: ` ${sessionKey} ` }, { actor, authority }),
+  ).resolves.toMatchObject({ sessionKey, storeSessionKey: sessionKey, entry: undefined });
+});
+
 it("orders set, link and clear through both owners with zero caller-thread SQL", async () => {
+  const readComposed = async ({
+    authority: boundAuthority,
+    ...input
+  }: Parameters<IncognitoAcpSessionAccess["readEntry"]>[0]) =>
+    (await readAcpSessionEntryAsync(input, { actor, authority: boundAuthority }))?.entry;
+  const upsertComposed = ({
+    authority: boundAuthority,
+    ...input
+  }: Parameters<IncognitoAcpSessionAccess["upsertMeta"]>[0]) =>
+    upsertAcpSessionMeta(input, { actor, authority: boundAuthority });
   const sessionKey = key("sequence");
   const target = { authority, cfg, env, sessionKey };
   await actor.sessions.create(authority, {
@@ -93,8 +132,8 @@ it("orders set, link and clear through both owners with zero caller-thread SQL",
     );
   const observe = observeHostDataSql();
   try {
-    expect((await actor.acp.readEntry(target))?.acp).toBeUndefined();
-    const set = await actor.acp.upsertMeta({
+    expect((await readComposed(target))?.acp).toBeUndefined();
+    const set = await upsertComposed({
       ...target,
       now: () => 200,
       mutate: () => meta,
@@ -104,28 +143,26 @@ it("orders set, link and clear through both owners with zero caller-thread SQL",
     expect(sequence).toEqual(["entry", "metadata"]);
     const stored = (await actor.sessions.read(authority, { sessionKey })).entry;
     expect(stored?.acp).toBeUndefined();
-    const joined = await actor.acp.readEntry(target);
+    const joined = await readComposed(target);
     expect(joined?.acp).toEqual(meta);
     expect(joined?.updatedAt).toBe(stored?.updatedAt);
     sequence.length = 0;
-    expect(await actor.acp.upsertMeta({ ...target, mutate: () => undefined })).toMatchObject({
+    expect(await upsertComposed({ ...target, mutate: () => undefined })).toMatchObject({
       acp: meta,
     });
     expect(sequence).toEqual([]);
-    expect(await actor.acp.upsertMeta({ ...target, mutate: () => null })).toMatchObject({
+    expect(await upsertComposed({ ...target, mutate: () => null })).toMatchObject({
       sessionId: "sequence",
     });
     expect(sequence).toEqual(["entry", "metadata"]);
-    expect((await actor.acp.readEntry(target))?.acp).toBeUndefined();
-    const linked = await actor.acp.upsertMeta({
+    expect((await readComposed(target))?.acp).toBeUndefined();
+    const linked = await upsertComposed({
       ...target,
       sessionKey: key("new-link"),
       mutate: () => meta,
     });
     expect(linked?.lifecycleRevision).toEqual(expect.any(String));
-    expect((await actor.acp.readEntry({ ...target, sessionKey: key("new-link") }))?.acp).toEqual(
-      meta,
-    );
+    expect((await readComposed({ ...target, sessionKey: key("new-link") }))?.acp).toEqual(meta);
     expect(observe.queries).toEqual([]);
   } finally {
     observe.restore();
@@ -133,6 +170,29 @@ it("orders set, link and clear through both owners with zero caller-thread SQL",
     shared.mockRestore();
   }
 });
+
+it.each(["read", "write"] as const)(
+  "captures the ACP %s environment before deferred composition",
+  async (operation) => {
+    const sessionKey = key(`capture-${operation}`);
+    await actor.sessions.create(authority, { sessionKey, entry: entry(`capture-${operation}`) });
+    await actor.acp.upsertMeta({ authority, cfg, env, sessionKey, mutate: () => meta });
+    const requestEnv = { ...env };
+    const input = { cfg, env: requestEnv, sessionKey };
+    const updated = { ...meta, lastActivityAt: 300 };
+    const pending =
+      operation === "read"
+        ? readAcpSessionEntryAsync(input, { actor, authority }).then((value) => value?.acp)
+        : upsertAcpSessionMeta({ ...input, mutate: () => updated }, { actor, authority }).then(
+            (value) => value?.acp,
+          );
+    requestEnv.OPENCLAW_STATE_DIR = tempDirs.make("incognito-acp-redirect-");
+    expect(await pending).toEqual(operation === "read" ? meta : updated);
+    expect((await actor.acp.readEntry({ authority, cfg, env, sessionKey }))?.acp).toEqual(
+      operation === "read" ? meta : updated,
+    );
+  },
+);
 
 it.each(["snapshot", "policy"] as const)(
   "refuses changed %s before shared publication without replaying the mutator",

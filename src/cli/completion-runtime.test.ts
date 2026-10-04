@@ -302,9 +302,10 @@ describe("completion-runtime", () => {
       await withBashCompletionHome(async ({ homeDir }) => {
         await writeCompletionCache("bash", "complete -W 'status' openclaw\n");
 
+        const profilePath = path.join(homeDir, ".bash_profile");
+        await fs.writeFile(profilePath, "export COMPLETION_PROOF=value\\ \n", "utf8");
         await installCompletion("bash", true, "openclaw");
 
-        const profilePath = path.join(homeDir, ".bash_profile");
         await expect(isCompletionInstalled("bash", "openclaw")).resolves.toBe(true);
         await expect(usesSlowDynamicCompletion("bash", "openclaw")).resolves.toBe(false);
 
@@ -314,7 +315,7 @@ describe("completion-runtime", () => {
             "--noprofile",
             "--norc",
             "-c",
-            'source "$1"; complete -p openclaw',
+            'source "$1"; complete -p openclaw; printf "<%s>\\n" "$COMPLETION_PROOF"',
             "openclaw",
             profilePath,
           ],
@@ -323,6 +324,7 @@ describe("completion-runtime", () => {
         expect(shell.stderr).toBe("");
         expect(shell.status).toBe(0);
         expect(shell.stdout).toContain("complete -W 'status' openclaw");
+        expect(shell.stdout).toContain("<value >\n");
       }, `openclaw-completion-${stateName}-`);
     },
   );

@@ -4,6 +4,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
+import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -15,6 +16,7 @@ import { createWorkerPlacementDiskSpaceMonitor } from "./placement-disk-space.js
 import { placementTurnOwner, type WorkerPlacementExecutionMode } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
+import { stagePlacementTurnClaimWorkerPublication } from "./placement-turn-authority.js";
 import { matchesWorkspaceResultClaim } from "./placement-workspace-result.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 
@@ -54,6 +56,66 @@ async function activePlacement(
 }
 
 describe("worker placement read projection", () => {
+  it("invalidates an empty maintenance scan when a new placement commits", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-maintenance-inventory-"));
+    const database = openOpenClawStateDatabase();
+    const store = createWorkerSessionPlacementStore({ database });
+    const empty = await store.prepareMaintenancePlacements();
+    try {
+      expect(empty.placements).toEqual([]);
+      const placement = await store.startDispatch({
+        sessionId: "new-placement",
+        sessionKey: "agent:main:new-placement",
+        agentId: "main",
+      });
+      expect(() => empty.assertCurrent()).toThrow("placement inventory changed");
+      const current = await store.prepareMaintenancePlacements();
+      try {
+        expect(current.placements).toEqual([placement]);
+        current.assertCurrent();
+      } finally {
+        current.release();
+      }
+      expect(() => current.assertCurrent()).toThrow("placement inventory changed");
+    } finally {
+      empty.release();
+    }
+  });
+
+  it("keeps maintenance observations fenced until their placement publication settles", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-maintenance-settlement-"));
+    const database = openOpenClawStateDatabase();
+    const store = createWorkerSessionPlacementStore({ database });
+    const placement = await store.startDispatch({
+      sessionId: "settling-placement",
+      sessionKey: "agent:main:settling-placement",
+      agentId: "main",
+    });
+    const identity = requireOpenClawStateDatabaseIdentity({ db: database.db });
+    for (const settlement of ["rollback", "commit", "invalidate"] as const) {
+      const prepared = await store.prepareMaintenancePlacements();
+      try {
+        const publication = stagePlacementTurnClaimWorkerPublication(identity, placement);
+        expect(() => prepared.assertCurrent()).toThrow("placement inventory changed");
+        publication[settlement]();
+        if (settlement === "rollback") {
+          expect(() => prepared.assertCurrent()).not.toThrow();
+        } else {
+          expect(() => prepared.assertCurrent()).toThrow("placement inventory changed");
+        }
+      } finally {
+        prepared.release();
+      }
+    }
+    const closing = await store.prepareMaintenancePlacements();
+    try {
+      await closeOpenClawStateDatabaseAsync();
+      expect(() => closing.assertCurrent()).toThrow();
+    } finally {
+      closing.release();
+    }
+  });
+
   it("discovers disk-probe placements off thread in session order before live sample checks", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-disk-inventory-"));
     const database = openOpenClawStateDatabase();

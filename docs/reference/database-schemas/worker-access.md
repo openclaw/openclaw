@@ -99,6 +99,15 @@ These cutovers change no schema, stored bytes, retention, or update behavior.
 
 ## Keep one store owner
 
+Ordinary `chat.send` turns prepare persisted session lookups and sharing facts
+through the existing session workers. Missing rows retain the selected store's routing
+facts without opening a writable database on the Gateway thread. The router
+captures the original caller before session preparation yields, and admission
+rechecks current membership, session identity, and physical source before starting
+work. Read refreshes retain the original discovery owner and never replay a
+consumer that has begun effects. Process-held incognito reads keep their existing
+owner. Configuration, schemas, and stored formats are unchanged.
+
 ### Incognito worker ownership (P1, inactive)
 
 The accepted incognito migration extends the canonical agent execution owner
@@ -316,6 +325,38 @@ metadata, retention, durability, update behavior, or operator configuration and
 retires no T1 sites. The following audit is an activation checklist, not a claim
 that current production has already completed the cutover.
 
+### Incognito Board and lifecycle composition (P7b, inactive)
+
+The Board facade accepts a captured actor and executes its existing domain commands
+on that actor. Session existence is checked by the Board kernel in the worker;
+interactive preparation runs outside the transaction and retains the selected
+session generation. Reads release their FIFO turn before invoking a consumer that
+may enqueue another write. Commit results publish through `sessionChanges`;
+failed disclosure invalidates the captured Board without replaying the operation.
+
+Internal ACP read/write facades, report selection and append, and the closed-turn
+outbox store accept explicit actor bindings. Released ACP helpers keep their
+one-argument signatures; actor bindings stay outside the Plugin SDK. ACP metadata
+remains in shared storage.
+Report selection retries only a confirmed no-write version mismatch. Outbox
+commands constrain reads, recovery, and acknowledgments to the captured session.
+Deletion and reclamation prepare through the existing lifecycle owner and settle
+host companions from the actor receipt. Existing host lifecycle facades accept an
+explicit actor target, leaving their ordinary deletion safeguards unchanged.
+Repository cleanup checks committed actor
+facts instead of opening the sentinel. Fork preparation retains both actors while
+awaiting the destination entry, without holding either actor's writer turn.
+
+Runtime deletion-journal checks on worker threads use the existing current,
+read-only connection path. They keep live fencing and admission without spawning
+an inspection subprocess for every actor command. Host, maintenance, and
+artifact-preserving reads retain their existing behavior.
+
+Production does not supply these bindings until the atomic P7d activation. Native
+incognito arms remain for that cutover; worker failure never selects them. Durable
+flows, schemas, retention, update behavior, and operator configuration are unchanged.
+This stage retires no T1 sites.
+
 #### Remaining synchronous contracts before P7
 
 All synchronous kernels below must execute only inside the actor after activation,
@@ -334,7 +375,7 @@ Retained durable SDK and offline kernels do not justify a native incognito fallb
 | Reports/outbox, deletion/reclamation/fork and SessionManager writes                                                                                                                                                                                                                | P4 commands retain their settlement owner. Finish the general SessionManager metadata, suffix/rewrite, and admission composition before routing every awaited twin to the actor.                                                                                                                     |
 | Hydration, context/history, title/preview, search/match, branches/stats/watermarks/receipts, usage/projection, Memory and Codex history                                                                                                                                            | P5 adapters exist; switch all runtime entry points together and remove native extraction/reverse-RPC branches.                                                                                                                                                                                       |
 | Pending-input source/history/store/withdrawal, message-tool run outcomes, cold-storage inspection, historical eviction, maintenance sizing and page reclamation                                                                                                                    | Audit and route these remaining native branches; a maintenance filename is not proof of an offline-only contract.                                                                                                                                                                                    |
-| `SqliteBoardStore.requireExistingSession`, native `write` and sentinel `consumeRead`                                                                                                                                                                                               | Add actor Board commands using transaction-local `hasBoardSession`; host grants consume prepared routing/authority. Do not replace the native opening guard with same-actor RPC.                                                                                                                     |
+| `SqliteBoardStore.requireExistingSession`, native `write` and sentinel `consumeRead`                                                                                                                                                                                               | P7b prepares typed Board commands and captured actor bindings. Activation must supply those bindings and remove native admission, writes, and sentinel reads; grants consume transaction-local facts without same-actor RPC.                                                                         |
 | ACP projection and lifecycle consumers                                                                                                                                                                                                                                             | Supply awaited metadata to `readAcpMetaForDeletedAgentCheck` and `resolveGatewaySessionRuntimeProjection`; keep controller shared-row predicates separate from actor predicates. Discord and Telegram startup reconciliation must not treat a refused join as absent metadata or delete its binding. |
 
 `readAcpSessionMetaForEntry` and `readAcpSessionMetaBatch` read shared metadata,
@@ -559,9 +600,19 @@ reuse the binding settlement owner; a confirmed rollback restores the removed ro
 conditionally, while unknown outcomes block that generation without replay.
 Acknowledged receipts invalidate branch summaries and publish entry and identity
 facts before native subscription cleanup. Accepted work settles before Gateway
-close retires the database transports. Existing fork paths keep their current
-owners; opaque SDK callbacks retain their synchronous transaction visibility.
+close retires the database transports. Message-cut forks use the same executor
+without retiring the source native context. Repository forks compare the prepared
+source workspace against the transaction's fresh row; host commit grants use
+the repository owner's published facts. Opaque SDK callbacks retain their synchronous transaction visibility.
 There is no schema, retention, durability, configuration, or update migration.
+
+Parent forks run source selection, token decisions, transcript copying, and child
+entry changes in the existing agent executor. Same-store reads and writes share
+one transaction; cross-store forks retain their separate source snapshot and
+target commit. Bundled child-entry patches use prepared data with exact parent
+and child comparisons. Private fork commands use the existing connection-bound
+domain envelope without expanding released SDK operation unions. Opaque SDK callbacks and process-held incognito retain
+their existing owners. These cutovers require no update migration.
 
 Channel setup awaits a fresh policy read after the agent-selection prompt.
 Deferred plugin migration rows are read by the shared-state worker, and setup
@@ -1068,6 +1119,19 @@ selection remains a prepared default; the placement claim writer still authorize
 execution. Other placement lifecycle reads remain separate migration work; the
 released synchronous placement SDK contract is unchanged. No schema, retention,
 durability, or update change is required.
+
+Session maintenance prepares placement preservation through the shared-state
+reader before lifecycle or entry-replacement worker admission. A scan-wide
+observation from the placement authority owner fences newly created placements,
+pending mutations, uncertain outcomes, and physical-store replacement. Transaction
+and commit grants consume those prepared rows and the environment owner's current
+inventory without SQL or worker requests. Confirmed rollback restores observation
+availability; committed changes require fresh preparation outside the grant.
+Prepared custody lasts through settlement. Native SDK, process-held incognito,
+and offline maintenance keep their existing synchronous transaction view. Entry
+replacement also carries the prepared subagent basis into the existing worker
+validation before mutation and after the final host grant. Schemas,
+retention, durability, and update behavior are unchanged.
 
 Placement turn claims and releases execute through the shared-state writer,
 including their coordinator acquisition. Local turns retain durable claims:
@@ -1876,8 +1940,10 @@ session authority from worktree ownership so host admission callbacks do not rer
 worktree rows. Native receipts acknowledge lost replies, while unknown outcomes
 retain recovery custody without replay or compensating
 chunk deletion. Capacity eviction awaits each removal claim and validates all
-held claims inside the transaction. Once deletion is admitted, its allocation
-lease owns final settlement independently of caller cancellation.
+held claims inside the transaction. Registered retirement holds its per-checkout
+mutation lease; creation and restore retain their allocation lease too. Worker
+admission and commit validate every retained lease. Once deletion is admitted,
+those leases own final settlement independently of caller cancellation.
 Restoration settles old leases before publishing a live row, so
 an awaited finalizer cannot remove a successor run's lease. The final Gateway close seals
 new worktree operations and joins accepted settlement before worker teardown,
@@ -1903,6 +1969,16 @@ a child-process snapshot while holding the shared-state write transaction. Agent
 database admission refusals remain with their in-memory admission owner. Schemas,
 retention, configuration, and update behavior are unchanged.
 
+Shared HTTP, Discord, Slack, and Telegram message handoffs add owner-held uses
+from exact receipt, job, and deletion facts prepared by the existing read worker.
+After asynchronous preparation, the Gateway owner acquires an interval through
+provider initiation, then releases it without waiting for the response. Each
+retry prepares a fresh use; reads also prepare authority before accepting their
+results. Transcript writes retain their interval through commit and settlement.
+The existing synchronous current-job guards remain active during this staged
+transport migration. Their native SQL path is removed only after the remaining
+transports adopt prepared initiation; this stage does not claim its elimination.
+
 Cron mutations share host-owned receipt-authority custody for the physical shared
 database, across store partitions and approval writers. Runtime mutations, raw
 saves, mutable-load repairs, native grant consumption, and agent-deletion
@@ -1921,8 +1997,10 @@ prelude seals new work before scheduler cancellation, while accepted persistence
 and receipt finalizers retain their original source through settlement and
 publication. Stored grants survive restart; process-local observations do not.
 This publication foundation preserves receipt revisions, force-run eligibility,
-schemas, retention, and update behavior. Existing final message and execution
-SQL guards remain until their separate consumer cutovers.
+schemas, retention, and update behavior. Native standing-grant lookup and
+consumption remain a separate execution cutover. Provider-library preparation
+after an SDK handoff remains inside that accepted operation; OpenClaw does not
+hold cron authority through the provider response.
 
 Cron display names are prepared through the existing shared-state and history workers.
 Live resolvers retain their physical database generation; cron's mutation owner

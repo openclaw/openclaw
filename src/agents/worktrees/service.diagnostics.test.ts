@@ -38,7 +38,6 @@ const execFileAsync = promisify(execFile);
 const realRunCommand = commandExec.runCommandWithTimeout;
 const realRunGitWorkerOperation = gitWorker.runGitWorkerOperation;
 const realAbortWorktreeRemoval = worktreeRunLease.abortWorktreeRemoval;
-const realWithOpenClawStateLease = stateLease.withOpenClawStateLease;
 const emptyFailure: SpawnResult = {
   stdout: "",
   stderr: "",
@@ -291,6 +290,16 @@ describe("ManagedWorktreeService failure diagnostics", () => {
       await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
       expect(await git(repo, "rev-parse", snapshotRef!)).toBe(snapshot);
       expect(await git(repo, "show", `${snapshotRef}:README.md`)).toBe("complete recoverable edit");
+      expect(
+        (await service.listRegistryRecords()).find((record) => record.id === created.id),
+      ).toMatchObject({ removedAt: expect.any(Number), snapshotRef });
+      await expect(
+        git(repo, "show-ref", "--verify", `refs/openclaw/removals/${created.id}`),
+      ).rejects.toThrow();
+      const restored = await service.restore({ id: created.id });
+      expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
+        "complete recoverable edit\n",
+      );
     } finally {
       abort.abort();
       await fs.writeFile(release, "release");
@@ -419,10 +428,11 @@ describe("ManagedWorktreeService removal timing", { concurrent: false }, () => {
     const finalizeEntered = createDeferredCore();
     const releaseFinalize = createDeferredCore();
     let callbackResult: unknown;
-    vi.spyOn(stateLease, "withOpenClawStateLease").mockImplementation(async (options, run) => {
+    const acquire = stateLease.withOpenClawStateLeaseAsync;
+    vi.spyOn(stateLease, "withOpenClawStateLeaseAsync").mockImplementation(async (...args) => {
       admissionEntered.resolve();
       await releaseAdmission.promise;
-      const result = await realWithOpenClawStateLease(options, run);
+      const result = await acquire(...args);
       callbackResult = result;
       finalizeEntered.resolve();
       await releaseFinalize.promise;
