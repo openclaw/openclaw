@@ -217,6 +217,8 @@ export async function prepareChatSendUserTurn(params: {
   const sandbox = session.cfg ? resolveCreatorSandbox(session.cfg, creation) : undefined;
   // Current and historical turns must reach the single LLM timestamp boundary
   // with identical bare text. Stamping this live turn would bust the prompt cache.
+  // The RPC run ID is not a channel message ID. Publishing it as MessageSid
+  // makes inherited channel routes try to reply to a nonexistent platform message.
   const ctx: MsgContext = {
     ...buildTextContext(commandBody),
     InputProvenance: request.systemInputProvenance,
@@ -245,7 +247,6 @@ export async function prepareChatSendUserTurn(params: {
           body: commandBody,
         },
     ...(request.suppressCommandInterpretation ? { CommandInterpretationSuppressed: true } : {}),
-    MessageSid: session.clientRunId,
     SessionCreation: { ...creation, ...(sandbox ? { sandbox } : {}) },
     ...resolveChatSendCallerContext(client, request.clientInfo, originatingChannel),
     GatewayRunToolBindings: request.toolBindings,
