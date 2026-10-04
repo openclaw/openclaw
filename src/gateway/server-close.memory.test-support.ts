@@ -17,9 +17,9 @@ import { resolveRelativeBundledPluginPublicModuleId } from "../test-utils/bundle
 export async function createGatewayMemoryCloseRegistryFactory(config: OpenClawConfig) {
   const { memoryRuntime, configureMemoryCoreDreamingState } = await vi.importActual<{
     memoryRuntime: MemoryPluginRuntime;
-    configureMemoryCoreDreamingState(
+    configureMemoryCoreDreamingState: (
       open: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
-    ): void;
+    ) => void;
   }>(
     resolveRelativeBundledPluginPublicModuleId({
       fromModuleUrl: import.meta.url,
