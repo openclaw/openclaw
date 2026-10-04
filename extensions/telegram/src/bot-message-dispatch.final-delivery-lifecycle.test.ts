@@ -283,6 +283,42 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
     );
   });
 
+  it("retires a repositioned preview after a rejected replacement once the final lands", async () => {
+    const { bot, messages, sendMessage } = await setupObservedProgressTransport();
+    const preTool = "Let me check the workspace first";
+    const final = "The workspace has three projects";
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
+      await params.replyOptions?.onAssistantMessageStart?.();
+      await params.replyOptions?.onPartialReply?.({ text: preTool });
+      await createTelegramDraftStream.mock.results[0]?.value?.flush();
+      expect([...messages.values()]).toEqual([preTool]);
+      return dispatchThroughSharedOwner({
+        ...params,
+        replyResolver: async (_ctx, options) => {
+          sendMessage.mockRejectedValueOnce(new Error("replacement preview rejected"));
+          await emitToolStart(options, { name: "read", phase: "start", toolCallId: "read-1" });
+          return { text: final };
+        },
+      });
+    });
+
+    const result = await dispatchWithContext({
+      bot,
+      context: progressContext(),
+      streamMode: "partial",
+      telegramCfg: { streaming: { mode: "partial" } },
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(sendMessage.mock.calls.map(([, text]) => text)).toEqual([
+      preTool,
+      expect.stringContaining("Read"),
+      final,
+    ]);
+    expect(result).toEqual({ kind: "completed" });
+    expect([...messages.values()]).toEqual([final]);
+  });
+
   it("does not retry or erase an accepted final after late cancellation", async () => {
     const { bot, messages, sendMessage, deliver } = await setupObservedProgressTransport();
     const status = createStatusReactionController();
