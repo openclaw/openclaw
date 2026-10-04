@@ -107,7 +107,7 @@ export function compileStructuredInputForm(params: {
     );
   }
 
-  const metadata = new Map<string, FieldMetadata>();
+  const validatedFields: Array<[string, StructuredInputRecord, FieldMetadata]> = [];
   const otherFields = new Map<string, { fieldId: string; secret: boolean }>();
   for (const [fieldId, rawSchema] of propertyEntries) {
     if (!validFieldName(fieldId) || !isStructuredInputRecord(rawSchema)) {
@@ -117,7 +117,7 @@ export function compileStructuredInputForm(params: {
     if (typeof fieldMetadata === "string") {
       return unsupported(`${protocol} form field ${quote(fieldId)} ${fieldMetadata}`);
     }
-    metadata.set(fieldId, fieldMetadata);
+    validatedFields.push([fieldId, rawSchema, fieldMetadata]);
     if (fieldMetadata.otherAnswer) {
       const target = fieldMetadata.otherQuestionId;
       if (!target || otherFields.has(target)) {
@@ -134,13 +134,9 @@ export function compileStructuredInputForm(params: {
 
   const usedQuestionIds = new Set<string>();
   const fields: StructuredInputField[] = [];
-  for (const [fieldId, rawSchema] of propertyEntries) {
-    const fieldMetadata = metadata.get(fieldId)!;
+  for (const [fieldId, schema, fieldMetadata] of validatedFields) {
     if (fieldMetadata.otherAnswer) {
       continue;
-    }
-    if (!isStructuredInputRecord(rawSchema)) {
-      return unsupported(`${protocol} form field ${quote(fieldId)} has an invalid schema.`);
     }
     const other = otherFields.get(fieldId);
     const field = compileStructuredInputField(
@@ -151,7 +147,7 @@ export function compileStructuredInputForm(params: {
         secret: fieldMetadata.secret || other?.secret === true,
         otherFieldId: other?.fieldId,
       },
-      rawSchema,
+      schema,
       options,
     );
     if (typeof field === "string") {

@@ -506,13 +506,34 @@ export async function prepareGatewayReplyRuntimeForTest(options?: {
   force?: boolean;
   config?: OpenClawConfig;
 }): Promise<void> {
-  if (
-    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY !== "1" ||
-    (!options?.force && gatewayReplyRuntimePrepared)
-  ) {
+  if (process.env.OPENCLAW_TEST_MINIMAL_GATEWAY !== "1") {
     return;
   }
   const config = publishGatewayTestConfig(options?.config);
+  if (!options?.force && gatewayReplyRuntimePrepared) {
+    const [
+      { listAgentIds },
+      { getPreparedModelCatalogOwnerSnapshot },
+      { readAgentDatabaseAdmissionRefusal },
+    ] = await Promise.all([
+      import("../agents/agent-scope-config.js"),
+      import("../agents/prepared-model-catalog.js"),
+      import("../state/agent-database-admission.js"),
+    ]);
+    if (
+      listAgentIds(config).every(
+        (agentId) =>
+          readAgentDatabaseAdmissionRefusal(agentId) ||
+          getPreparedModelCatalogOwnerSnapshot({
+            agentId,
+            config,
+            allowGatewaySubagentBinding: true,
+          })?.isCurrent(),
+      )
+    ) {
+      return;
+    }
+  }
   const preparedRuntime = await import("../agents/prepared-model-runtime.js");
   await preparedRuntime.refreshPreparedModelRuntimeSnapshots(config, {
     gatewayLifecycle: true,
@@ -1251,7 +1272,12 @@ export async function rpcReq<T extends Record<string, unknown>>(
   if (hasUnsyncedGatewayTestSessionConfig()) {
     await persistTestSessionConfig();
   }
-  if (method === "agent" || method === "chat.send") {
+  if (
+    method === "agent" ||
+    method === "chat.send" ||
+    method === "chat.metadata" ||
+    method === "models.list"
+  ) {
     await prepareGatewayReplyRuntimeForTest();
   }
   const { randomUUID } = await import("node:crypto");

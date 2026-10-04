@@ -249,6 +249,32 @@ describe.each(["anthropic", undefined])(
   },
 );
 
+describe.each([false, true])("CLI run rejection (cleanupFails=%s)", (cleanupFails) => {
+  it.each([undefined, null, 0, false])(
+    "rejects the thrown value %s after cleanup",
+    async (error) => {
+      const context = buildPreparedCliRunContext();
+      const cleanup = vi.fn(async () => {
+        if (cleanupFails) {
+          throw new Error("synthetic cleanup failure");
+        }
+      });
+      context.params.cleanupCliLiveSessionOnRunEnd = true;
+      context.preparedBackend.closeLiveSession = cleanup;
+
+      await expect(
+        settlePreparedCliRun({
+          context,
+          run: async () => {
+            throw error;
+          },
+        }),
+      ).rejects.toThrow(new Error(String(error)));
+      expect(cleanup).toHaveBeenCalledOnce();
+    },
+  );
+});
+
 it("preserves completed result boundaries for independent final delivery", async () => {
   const context = buildPreparedCliRunContext({ provider: "claude-cli" });
   const result = buildCliRunResult({

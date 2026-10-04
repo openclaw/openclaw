@@ -248,7 +248,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     const visibilityIdentity = sessionCap && profileId ? `${profileId}:${sessionCap}` : undefined;
     const { startMs, endMs, includeUntimestamped } = range;
     const dayBucket = resolveDayBucket(dateInterpretation);
-    const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
+    const limit = p.limit ?? 50;
     const includeContextWeight = p.includeContextWeight ?? false;
     const creatorKey = normalizeOptionalString(p.creatorKey);
     const specificKey = normalizeOptionalString(p.key) ?? null;

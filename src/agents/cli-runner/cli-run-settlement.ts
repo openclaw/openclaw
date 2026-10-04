@@ -193,18 +193,16 @@ export async function settlePreparedCliRun(params: {
 }): Promise<EmbeddedAgentRunResult> {
   const { context, diagnosticLifecycle, run } = params;
   const runParams = context.params;
-  let result: EmbeddedAgentRunResult | undefined;
-  let runError: unknown;
+  let outcome: { result: EmbeddedAgentRunResult } | { error: unknown };
   try {
-    result = await run();
+    outcome = { result: await run() };
   } catch (error) {
-    runError = error;
+    outcome = { error };
   }
-  const terminalRunError = runError;
-  let cleanupError: unknown;
+  let cleanupError: Error | undefined;
   const recordCleanupError = (error: unknown) => {
     recordAgentCleanupFailure();
-    cleanupError ??= error;
+    cleanupError ??= error instanceof Error ? error : new Error(formatErrorMessage(error));
   };
   if (runParams.cleanupCliLiveSessionOnRunEnd === true) {
     try {
@@ -220,12 +218,10 @@ export async function settlePreparedCliRun(params: {
     recordCleanupError(error);
   }
   if (cleanupError) {
-    if (runError || result?.didSendViaMessagingTool === true) {
+    if ("error" in outcome || outcome.result.didSendViaMessagingTool === true) {
       log.warn(`cli run cleanup failed after completion: ${formatErrorMessage(cleanupError)}`);
     } else {
       diagnosticLifecycle?.setPhase("cleanup");
-      runError =
-        cleanupError instanceof Error ? cleanupError : new Error(formatErrorMessage(cleanupError));
     }
   }
   // Retiring a caller is not a provider failure and must not quarantine its credential.
@@ -236,15 +232,15 @@ export async function settlePreparedCliRun(params: {
     const profileId = context.effectiveAuthProfileId;
     const authProfileStore = context.authProfileStore;
     const terminal: Parameters<typeof settleCliAuthProfile>[0]["terminal"] | undefined =
-      terminalRunError
+      "error" in outcome
         ? {
             outcome: "failure",
-            error: terminalRunError,
+            error: outcome.error,
             config: runParams.config,
             runId: runParams.runId,
             modelId: context.modelId,
           }
-        : result?.meta.executionTrace?.attempts?.at(-1)?.result === "success"
+        : outcome.result.meta.executionTrace?.attempts?.at(-1)?.result === "success"
           ? { outcome: "success" }
           : undefined;
     if (terminal) {
@@ -257,10 +253,15 @@ export async function settlePreparedCliRun(params: {
       });
     }
   }
-  if (runError) {
-    throw runError instanceof Error ? runError : new Error(formatErrorMessage(runError));
+  if ("error" in outcome) {
+    throw outcome.error instanceof Error
+      ? outcome.error
+      : new Error(formatErrorMessage(outcome.error));
   }
-  return result as EmbeddedAgentRunResult;
+  if (cleanupError && outcome.result.didSendViaMessagingTool !== true) {
+    throw cleanupError;
+  }
+  return outcome.result;
 }
 
 export function resolveCliSourceReplyMirror(params: {

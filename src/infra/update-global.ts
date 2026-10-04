@@ -139,9 +139,6 @@ function isMainPackageTarget(value: string): boolean {
 
 function isExplicitPackageInstallSpec(value: string): boolean {
   const trimmed = value.trim();
-  if (!trimmed) {
-    return false;
-  }
   return (
     /\.(?:tgz|tar\.gz)$/iu.test(trimmed) ||
     trimmed.includes("://") ||
@@ -380,9 +377,6 @@ async function collectInstalledPackageDistErrors(params: {
     const supplementalCriticalPaths = criticalPaths.filter(
       (relativePath) => !inventorySet.has(relativePath),
     );
-    if (supplementalCriticalPaths.length === 0) {
-      return inventoryErrors;
-    }
     return [
       ...inventoryErrors,
       ...(await collectInstalledPathErrors({
@@ -469,9 +463,6 @@ async function collectInstalledPathErrors(params: {
  */
 export function canResolveRegistryVersionForPackageTarget(value: string): boolean {
   const trimmed = stripPrimaryPackageAlias(value);
-  if (!trimmed) {
-    return true;
-  }
   return !isMainPackageTarget(trimmed) && !isExplicitPackageInstallSpec(trimmed);
 }
 
@@ -483,7 +474,6 @@ export function isPackageTargetAlreadyCurrent(params: {
 }): boolean {
   return (
     params.currentVersion !== null &&
-    params.targetVersion !== null &&
     params.currentVersion === params.targetVersion &&
     canResolveRegistryVersionForPackageTarget(params.target)
   );
@@ -542,7 +532,7 @@ export function resolveGlobalInstallSpec(params: {
 export async function createGlobalInstallEnv(
   env?: NodeJS.ProcessEnv,
   options: { manager?: GlobalInstallManager } = {},
-): Promise<NodeJS.ProcessEnv | undefined> {
+): Promise<NodeJS.ProcessEnv> {
   const pathPrepend = await resolvePortableGitPathPrepend();
   const sourceEnv = env ?? process.env;
   const merged = Object.fromEntries(
@@ -1187,9 +1177,6 @@ export async function detectGlobalInstallManagerForRoot(
     const res = await runCommand(argv, { timeoutMs }).catch(() => null);
     const globalRoot = res?.code === 0 ? readPackageManagerProbeValue(res.stdout) : "";
     diagnostics.push(`${argv.join(" ")}: ${globalRoot || "unavailable"}`);
-    if (!res || res.code !== 0) {
-      continue;
-    }
     if (!globalRoot) {
       continue;
     }

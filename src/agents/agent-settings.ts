@@ -5,21 +5,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineInfo } from "../context-engine/types.js";
 import { resolveEffectiveCompactionReserveTokens } from "./agent-compaction-constants.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
+import type { SettingsManager } from "./sessions/settings-manager.js";
 
 export const DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR = 20_000;
-
-type AgentSettingsManagerLike = {
-  getCompactionEnabled?: () => boolean;
-  getCompactionReserveTokens: () => number;
-  getCompactionKeepRecentTokens: () => number;
-  applyOverrides: (overrides: {
-    compaction: {
-      reserveTokens?: number;
-      keepRecentTokens?: number;
-    };
-  }) => void;
-  setCompactionEnabled?: (enabled: boolean) => void;
-};
 
 function toPositiveInt(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
@@ -30,14 +18,11 @@ function toPositiveInt(value: unknown): number | undefined {
 
 /** Applies configured compaction reserve/keep-recent settings to an agent settings manager. */
 export function applyAgentCompactionSettingsFromConfig(params: {
-  settingsManager: AgentSettingsManagerLike;
+  settingsManager: SettingsManager;
   cfg?: OpenClawConfig;
   /** When known, the resolved context window budget for the current model. */
   contextTokenBudget?: number;
-}): {
-  didOverride: boolean;
-  compaction: { reserveTokens: number; keepRecentTokens: number };
-} {
+}): void {
   const currentReserveTokens = params.settingsManager.getCompactionReserveTokens();
   const currentKeepRecentTokens = params.settingsManager.getCompactionKeepRecentTokens();
   const compactionCfg = params.cfg?.agents?.defaults?.compaction;
@@ -71,24 +56,13 @@ export function applyAgentCompactionSettingsFromConfig(params: {
 
   const shouldApplyEnabled =
     configuredEnabled !== undefined &&
-    typeof params.settingsManager.setCompactionEnabled === "function" &&
-    (typeof params.settingsManager.getCompactionEnabled !== "function" ||
-      params.settingsManager.getCompactionEnabled() !== configuredEnabled);
+    params.settingsManager.getCompactionEnabled() !== configuredEnabled;
   if (shouldApplyEnabled) {
-    params.settingsManager.setCompactionEnabled!(configuredEnabled);
+    params.settingsManager.setCompactionEnabled(configuredEnabled);
   }
   if (Object.keys(overrides).length > 0) {
     params.settingsManager.applyOverrides({ compaction: overrides });
   }
-  const didOverride = shouldApplyEnabled || Object.keys(overrides).length > 0;
-
-  return {
-    didOverride,
-    compaction: {
-      reserveTokens: targetReserveTokens,
-      keepRecentTokens: targetKeepRecentTokens,
-    },
-  };
 }
 
 /** Resolve the compaction mode after provider-backed safeguard promotion. */
@@ -129,21 +103,18 @@ export function isSilentOverflowProneModel(model: {
 
 // Reapply after resource reload: settingsManager.reload() restores the disk setting.
 export function applyAgentAutoCompactionGuard(params: {
-  settingsManager: AgentSettingsManagerLike;
+  settingsManager: SettingsManager;
   contextEngineInfo?: ContextEngineInfo;
   compactionMode?: AgentCompactionMode;
   silentOverflowProneProvider?: boolean;
-}): { supported: boolean; disabled: boolean } {
+}): void {
   // Leave compaction with its selected owner so prompt-time runtime compaction
   // cannot rewrite the transcript before OpenClaw's provider call.
   const disable =
     params.contextEngineInfo?.ownsCompaction === true ||
     params.compactionMode === "safeguard" ||
     params.silentOverflowProneProvider === true;
-  const hasMethod = typeof params.settingsManager.setCompactionEnabled === "function";
-  if (!disable || !hasMethod) {
-    return { supported: hasMethod, disabled: false };
+  if (disable) {
+    params.settingsManager.setCompactionEnabled(false);
   }
-  params.settingsManager.setCompactionEnabled!(false);
-  return { supported: true, disabled: true };
 }

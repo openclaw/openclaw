@@ -45,7 +45,6 @@ export type UsageCostWorkerOperation =
   | {
       kind: "refresh";
       pricingFingerprint: string;
-      maxFiles?: number;
       sessionsDir?: string;
       sessionFiles?: string[];
       startMs?: number;

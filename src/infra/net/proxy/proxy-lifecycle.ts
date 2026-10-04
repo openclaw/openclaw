@@ -212,7 +212,7 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
   }
   baseProxyEnvSnapshot ??= captureProxyEnv();
   const lifecycleBaseEnvSnapshot = baseProxyEnvSnapshot;
-  let registration: ActiveManagedProxyRegistration | null = null;
+  let registration: ActiveManagedProxyRegistration;
 
   try {
     applyProxyEnv(proxyUrl, loopbackMode, proxyCaFile);
@@ -230,9 +230,6 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
       proxyTls,
     });
   } catch (err) {
-    if (registration) {
-      stopActiveManagedProxyRegistration(registration);
-    }
     restoreInactiveProxyRuntime(lifecycleBaseEnvSnapshot);
     baseProxyEnvSnapshot = null;
     throw new Error(`proxy: failed to activate external proxy routing: ${String(err)}`, {

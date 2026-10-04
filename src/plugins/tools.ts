@@ -578,7 +578,7 @@ function resolvePluginToolsFromRegistry(
         continue;
       }
       const manifestPlugin = snapshot.byPluginId.get(entry.pluginId);
-      const declaredNames = entry.names ?? [];
+      const declaredNames = entry.names;
       const availabilityNames =
         declaredNames.length > 0 ? declaredNames : Array.from(entry.declaredNames ?? []);
       const allowlistNames = manifestPlugin

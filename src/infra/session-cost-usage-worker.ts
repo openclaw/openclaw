@@ -444,12 +444,6 @@ export async function executeUsageCostWorker(
     }
   }
   stale.sort((a, b) => a.file.size - b.file.size || a.file.filePath.localeCompare(b.file.filePath));
-  const maxFiles =
-    operation.maxFiles !== undefined &&
-    Number.isFinite(operation.maxFiles) &&
-    operation.maxFiles > 0
-      ? Math.floor(operation.maxFiles)
-      : undefined;
   const prices = new Map<string, ModelCostConfig | undefined>();
   const resolveCosts = async (pairs: Array<{ provider?: string; model?: string }>) => {
     const missing = new Map(
@@ -539,7 +533,7 @@ export async function executeUsageCostWorker(
     }
   };
   let changed = false;
-  for (const { file, row, envelope, rebuild } of stale.slice(0, maxFiles)) {
+  for (const { file, row, envelope, rebuild } of stale) {
     control.throwIfCancelled();
     await host("refresh-session", { sessionFile: file.filePath });
     let previous: UsageCostRollupEntry | undefined;
