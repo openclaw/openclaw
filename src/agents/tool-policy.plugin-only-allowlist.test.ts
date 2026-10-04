@@ -82,6 +82,41 @@ describe("analyzeAllowlistByToolType", () => {
     expect(policy.unknownAllowlist).toStrictEqual(["papreless__*"]);
   });
 
+  it("recognizes a core group shorthand when its members ship via a bundled plugin", () => {
+    const bundledPluginGroups: PluginToolGroups = {
+      all: ["web_search", "web_fetch"],
+      byPlugin: new Map([["web", ["web_search", "web_fetch"]]]),
+    };
+    const noCoreWebTools = new Set(["read", "write", "exec"]);
+    const input = { allow: ["group:web"] };
+    const policy = analyzeAllowlistByToolType(input, bundledPluginGroups, noCoreWebTools);
+    expect(input).toEqual({ allow: ["group:web"] });
+    expect(policy.unknownAllowlist).toStrictEqual([]);
+  });
+
+  it("recognizes a core group shorthand when some members are core and some ship via a plugin", () => {
+    const mixedGroups: PluginToolGroups = {
+      all: ["x_search"],
+      byPlugin: new Map([["x", ["x_search"]]]),
+    };
+    const partialCore = new Set(["web_search", "web_fetch"]);
+    const input = { allow: ["group:web"] };
+    const policy = analyzeAllowlistByToolType(input, mixedGroups, partialCore);
+    expect(policy.unknownAllowlist).toStrictEqual([]);
+  });
+
+  it("still reports a core group shorthand when no member tool is available", () => {
+    const emptyGroups: PluginToolGroups = { all: [], byPlugin: new Map() };
+    const noMembers = new Set(["read", "write", "exec"]);
+    const policy = analyzeAllowlistByToolType({ allow: ["group:web"] }, emptyGroups, noMembers);
+    expect(policy.unknownAllowlist).toEqual(["group:web"]);
+  });
+
+  it("still reports an unknown group typo that matches no core or plugin group", () => {
+    const policy = analyzeAllowlistByToolType({ allow: ["group:webs"] }, pluginGroups, coreTools);
+    expect(policy.unknownAllowlist).toEqual(["group:webs"]);
+  });
+
   it("ignores empty plugin ids when building groups", () => {
     const groups = buildPluginToolGroups({
       tools: [{ name: "lobster" }],

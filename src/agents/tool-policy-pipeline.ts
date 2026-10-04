@@ -12,6 +12,7 @@ import {
   analyzeAllowlistByToolType,
   buildPluginToolGroups,
   expandPolicyWithPluginGroups,
+  isCoreToolGroupEntry,
   normalizeToolPolicyName,
   type DeclaredToolAllowlistContext,
   type ToolPolicyLike,
@@ -188,14 +189,14 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
             normalizeToolPolicyName(entry),
           ),
         );
-        const gatedCoreEntries = resolved.unknownAllowlist.filter((entry) =>
-          isKnownCoreToolId(entry),
-        );
+        const isGatedCoreEntry = (entry: string) =>
+          isKnownCoreToolId(entry) || isCoreToolGroupEntry(entry);
+        const gatedCoreEntries = resolved.unknownAllowlist.filter(isGatedCoreEntry);
         const warnableGatedCoreEntries = step.suppressUnavailableCoreToolWarning
           ? []
           : gatedCoreEntries.filter((entry) => !unavailableCoreWarningAllowlist.has(entry));
         const otherEntries = resolved.unknownAllowlist.filter(
-          (entry) => !isKnownCoreToolId(entry) && !unavailableCoreWarningAllowlist.has(entry),
+          (entry) => !isGatedCoreEntry(entry) && !unavailableCoreWarningAllowlist.has(entry),
         );
         const warningEntries = [...warnableGatedCoreEntries, ...otherEntries];
         if (warningEntries.length > 0) {

@@ -25,6 +25,11 @@ type ToolAllowlistWithIntersection = readonly string[] & {
 /** Core tool groups exposed to allow/deny policy config. */
 const TOOL_GROUPS: Record<string, string[]> = { ...CORE_TOOL_GROUPS };
 
+/** Returns true when a normalized policy entry names a built-in core tool group. */
+export function isCoreToolGroupEntry(entry: string): boolean {
+  return Object.hasOwn(TOOL_GROUPS, entry);
+}
+
 /**
  * Preserves independent allowlists until a concrete tool surface can evaluate
  * them. Intersections of overlapping globs cannot be represented by one glob list.

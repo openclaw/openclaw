@@ -212,6 +212,36 @@ describe("tool-policy-pipeline", () => {
     ]);
   });
 
+  test("does not warn for a core group shorthand whose members ship via a bundled plugin", () => {
+    const warnings: string[] = [];
+    const tools = [{ name: "web_search" }, { name: "web_fetch" }, { name: "exec" }];
+    const filtered = applyToolPolicyPipeline({
+      tools,
+      toolMeta: (tool) =>
+        tool.name === "web_search" || tool.name === "web_fetch" ? { pluginId: "web" } : undefined,
+      warn: (msg) => warnings.push(msg),
+      steps: [
+        {
+          policy: { allow: ["group:web"] },
+          label: "agents.example.tools.allow",
+          stripPluginOnlyAllowlist: true,
+        },
+      ],
+    });
+    expect(warnings).toStrictEqual([]);
+    expect(filtered.map((tool) => tool.name).toSorted()).toEqual(["web_fetch", "web_search"]);
+  });
+
+  test("describes an unavailable core group shorthand as shipped core, not plugin-only", () => {
+    const warnings = runAllowlistWarningStep({
+      allow: ["group:web"],
+      label: "tools.allow",
+    });
+    expect(warnings).toEqual([
+      "tools: tools.allow allowlist contains unknown entries (group:web). These entries are shipped core tools but unavailable in the current runtime/provider/model/config.",
+    ]);
+  });
+
   test("still warns for explicit allowlists that mention unavailable gated core tools", () => {
     const warnings = runAllowlistWarningStep({
       allow: ["apply_patch"],
