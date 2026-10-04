@@ -45,8 +45,9 @@ export function inspectGatewayOwnerLeaseForMaintenance(
             return undefined;
           }
           // Like state ownership admission, lease custody cannot trust a damaged lookup index.
-          /* kysely-allow-raw: maintenance authority inspection requires SQLite's NOT INDEXED table scan. */
-          const query = sql<GatewayOwnerLeaseRow>`SELECT owner, created_at AS createdAt,
+          const query =
+            /* kysely-allow-raw: maintenance authority inspection requires SQLite's NOT INDEXED table scan. */
+            sql<GatewayOwnerLeaseRow>`SELECT owner, created_at AS createdAt,
             expires_at AS expiresAt, heartbeat_at AS heartbeatAt, payload_json AS payloadJson
             FROM state_leases NOT INDEXED
             WHERE scope = ${gatewayOwnerKey.scope} AND lease_key = ${gatewayOwnerKey.key}
