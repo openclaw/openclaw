@@ -155,4 +155,16 @@ describe("plugin npm artifact security scan", () => {
     });
     expect(result.criticalFindingCount).toBe(1);
   });
+
+  it("keeps reviewed dist findings reachable in mixed-layout artifacts", () => {
+    const result = scanPluginNpmArtifactSecurity({
+      packageName: "@openclaw/google-meet",
+      packageVersion: "1.0.0",
+      tarball: packageTarball("@openclaw/google-meet", {
+        "dist/.setup/chunk.mjs": "export const value = 1;\n",
+        "dist/index.js": SPAWN_SOURCE,
+      }),
+    });
+    expect(result.criticalFindingCount).toBe(1);
+  });
 });

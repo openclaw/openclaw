@@ -266,6 +266,21 @@ run("node server.js");
       expected: { ruleId: "dangerous-exec", severity: "critical" as const },
     },
     {
+      name: "detects child_process call through a dynamic ESM destructured import",
+      source: `
+const { spawn } = await import("node:child_process");
+spawn("node", ["server.js"]);
+`,
+      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
+    },
+    {
+      name: "detects child_process call through an inline require receiver",
+      source: `
+require("node:child_process").spawn("node", ["server.js"]);
+`,
+      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
+    },
+    {
       name: "detects child_process call through a computed member",
       source: `
 import cp from "node:child_process";

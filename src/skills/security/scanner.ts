@@ -233,6 +233,9 @@ function collectChildProcessBindings(source: string): ChildProcessBindings {
   // CJS destructured: const { exec: run, spawn } = require("child_process")
   const cjsDestructured =
     /\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\s*\(\s*["'](?:node:)?child_process["']\s*\)/g;
+  // Dynamic ESM destructured: const { spawn } = await import("child_process")
+  const dynamicEsmDestructured =
+    /\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(?:await\s+)?import\s*\(\s*["'](?:node:)?child_process["']\s*\)/g;
   // CJS namespace: const proc = require("child_process")
   const cjsNamespace =
     /\b(?:const|let|var)\s+(\w+)\s*=\s*require\s*\(\s*["'](?:node:)?child_process["']\s*\)/g;
@@ -254,7 +257,7 @@ function collectChildProcessBindings(source: string): ChildProcessBindings {
     }
   };
 
-  for (const pattern of [esmNamed, cjsDestructured]) {
+  for (const pattern of [esmNamed, cjsDestructured, dynamicEsmDestructured]) {
     for (const match of source.matchAll(pattern)) {
       collectSpecifiers(expectDefined(match[1], "child_process import specifiers"));
     }
@@ -297,18 +300,22 @@ function isBenignDangerousExecMatch(
 
   const matchIndex = match.index;
   const charAtMatch = line[matchIndex];
+  const prefix = line.slice(0, matchIndex);
+  const inlineChildProcessReceiver =
+    /\brequire\s*\(\s*["'](?:node:)?child_process["']\s*\)\s*(?:\.\s*|\[\s*)$/.test(prefix);
   let receiver: string | undefined;
   // Computed and member calls require a known receiver for every watched
   // method. This excludes RegExp.exec and similarly named bundled helpers.
   if (charAtMatch === '"' || charAtMatch === "'") {
-    receiver = line.slice(0, matchIndex).match(/(\w+)\s*\[\s*$/)?.[1];
+    receiver = prefix.match(/(\w+)\s*\[\s*$/)?.[1];
   } else if (matchIndex > 0 && line[matchIndex - 1] === ".") {
     receiver = line.slice(0, matchIndex - 1).match(/(\w+)\s*$/)?.[1];
   } else {
     return !methodAliases.has(command);
   }
   return (
-    !receiver || (!namespaceAliases.has(receiver) && !LITERAL_NAMESPACE_RECEIVERS.has(receiver))
+    !inlineChildProcessReceiver &&
+    (!receiver || (!namespaceAliases.has(receiver) && !LITERAL_NAMESPACE_RECEIVERS.has(receiver)))
   );
 }
 
