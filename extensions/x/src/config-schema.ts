@@ -2,9 +2,10 @@ import { buildMultiAccountChannelSchema } from "openclaw/plugin-sdk/channel-conf
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
 
-export const XAccountSchema = z.object({
+const XAccountSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
+  configWrites: z.boolean().optional(),
   userId: z.string().regex(/^\d+$/).optional(),
   username: z
     .string()

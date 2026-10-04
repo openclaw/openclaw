@@ -4,7 +4,7 @@ import tlds from "tlds" with { type: "json" };
 import type { XApiClient, XAssertActive } from "./api.js";
 import { normalizeXReplyTarget } from "./target.js";
 
-export const DEFAULT_X_REPLY_SIGNATURE = "🤖 automated reply";
+const DEFAULT_X_REPLY_SIGNATURE = "🤖 automated reply";
 export type XVisibleWorkSession = { sessionKey: string; url: string; label?: string };
 const graphemes = new Intl.Segmenter("en", { granularity: "grapheme" });
 const emojiSequence = new RegExp("^\\p{RGI_Emoji}$", "v");
@@ -52,19 +52,16 @@ function weightedTokens(text: string): { text: string; weight: number }[] {
   return tokens;
 }
 
-export function xWeightedLength(text: string): number {
+function xWeightedLength(text: string): number {
   return weightedTokens(text.normalize("NFC")).reduce((sum, token) => sum + token.weight, 0);
 }
 
-export function appendVisibleWorkSession(
-  text: string,
-  sessions: XVisibleWorkSession[] = [],
-): string {
+function appendVisibleWorkSession(text: string, sessions: XVisibleWorkSession[] = []): string {
   const url = sessions[0]?.url;
   return url && !text.includes(url) ? `${text.trimEnd()}\n${url}` : text;
 }
 
-export function chunkXReply(text: string, signature = DEFAULT_X_REPLY_SIGNATURE): string[] {
+function chunkXReply(text: string, signature = DEFAULT_X_REPLY_SIGNATURE): string[] {
   const normalized = text.normalize("NFC").trim();
   const suffix = signature.normalize("NFC").trim();
   if (!normalized) {

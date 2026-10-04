@@ -1,4 +1,5 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const X_API_ORIGIN = "https://api.x.com";
 const POST_FIELDS =
@@ -33,12 +34,6 @@ export class XApiError extends Error {
     super(`X API ${operation} failed (HTTP ${status})`);
     this.name = "XApiError";
   }
-}
-
-function record(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 async function readJson(response: Response): Promise<unknown> {
@@ -112,6 +107,19 @@ function parseUser(value: unknown): XUser | undefined {
         id: row.id,
         username: row.username,
         ...(typeof row.name === "string" ? { name: row.name } : {}),
+      }
+    : undefined;
+}
+
+export function parseXPostEnvelope(input: unknown): XPostEnvelope | undefined {
+  const row = record(input);
+  const post = parseXPost(row?.post);
+  return post
+    ? {
+        post,
+        users: (Array.isArray(row?.users) ? row.users : []).flatMap(
+          (value) => parseUser(value) ?? [],
+        ),
       }
     : undefined;
 }

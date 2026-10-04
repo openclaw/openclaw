@@ -1,3 +1,4 @@
+import { asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { XApiError, parseXPost, type XApiClient, type XPostEnvelope } from "./api.js";
 import { resolveXRecipient } from "./recipient.js";
 
@@ -24,7 +25,7 @@ function laterId(a: string | undefined, b: string): string {
   return !a || BigInt(b) > BigInt(a) ? b : a;
 }
 
-export async function pollXMentions(options: XReceiveOptions): Promise<void> {
+async function pollXMentions(options: XReceiveOptions): Promise<void> {
   const sinceId = await options.getCursor();
   let newestId = sinceId;
   let paginationToken: string | undefined;
@@ -79,18 +80,12 @@ function wait(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 function eventEnvelope(value: unknown): XPostEnvelope | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const event = value as Record<string, unknown>;
+  const event = asRecord(value);
   if (typeof event.event_type === "string" && event.event_type !== "post.mention.create") {
     return undefined;
   }
-  const data =
-    event.data && typeof event.data === "object"
-      ? (event.data as Record<string, unknown>)
-      : undefined;
-  const post = parseXPost(event.post ?? data?.post ?? event.data);
+  const data = asRecord(event.data);
+  const post = parseXPost(event.post ?? data.post ?? event.data);
   return post ? { post, users: [] } : undefined;
 }
 

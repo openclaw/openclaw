@@ -93,7 +93,10 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                           .value=${accountId ?? ""}
                           ?disabled=${busy || !snapshot}
                           @change=${(event: Event) => {
-                            accountId = (event.currentTarget as HTMLSelectElement).value;
+                            if (!(event.currentTarget instanceof HTMLSelectElement)) {
+                              return;
+                            }
+                            accountId = event.currentTarget.value;
                             snapshot = undefined;
                             void request("x.allowlist.list");
                           }}
@@ -130,7 +133,9 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                             .value=${username}
                             ?disabled=${busy}
                             @input=${(event: Event) => {
-                              username = (event.currentTarget as HTMLInputElement).value;
+                              if (event.currentTarget instanceof HTMLInputElement) {
+                                username = event.currentTarget.value;
+                              }
                             }}
                           />
                         </label>

@@ -48,7 +48,7 @@ function page(data: XPost[]): XPage {
   };
 }
 const config: OpenClawConfig = {
-  agents: { list: [{ id: "maintainer" }] },
+  agents: { entries: { maintainer: {} } },
   bindings: [
     {
       agentId: "maintainer",
@@ -234,7 +234,7 @@ describe("X account monitor", () => {
     test.api.searchConversation.mockImplementationOnce(async () => {
       setRuntimeConfigSnapshot({
         ...config,
-        agents: { list: [{ id: "updated" }] },
+        agents: { entries: { updated: {} } },
         bindings: [
           {
             agentId: "updated",

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createXApiClient, type XPost, type XPostEnvelope } from "./api.js";
-import { pollXMentions, runXEvents, type XEventStatus } from "./events.js";
+import { runXEvents, type XEventStatus } from "./events.js";
 
 const post = (id: string): XPost => ({
   id,
@@ -16,6 +16,10 @@ afterEach(() => {
 
 describe("X event transport", () => {
   it("admits every page in order before advancing the cursor and retains it on admission failure", async () => {
+    vi.useFakeTimers();
+    const abort = new AbortController();
+    const failed = Promise.withResolvers<void>();
+    const completed = Promise.withResolvers<void>();
     let cursor = "10";
     let fail = true;
     const order: string[] = [];
@@ -37,10 +41,11 @@ describe("X event transport", () => {
         );
       },
     });
-    const options = {
+    const run = runXEvents({
       api,
       userId: "9",
-      signal: new AbortController().signal,
+      signal: abort.signal,
+      bearerConfigured: false,
       getCursor: async () => cursor,
       setCursor: async (id: string) => {
         order.push(`cursor:${id}`);
@@ -52,14 +57,28 @@ describe("X event transport", () => {
           throw new Error("disk unavailable");
         }
       },
-    };
-    await expect(pollXMentions(options)).rejects.toThrow("disk unavailable");
-    expect(cursor).toBe("10");
-    expect(order).toEqual(["append:11", "append:12"]);
-    fail = false;
-    order.length = 0;
-    await pollXMentions(options);
-    expect(order).toEqual(["append:11", "append:12", "append:13", "cursor:13"]);
+      onStatus: (value) => {
+        if (value.message === "mentions poll failed; retrying after the poll interval") {
+          failed.resolve();
+        }
+        if (value.cursor === "13") {
+          completed.resolve();
+        }
+      },
+    });
+    try {
+      await failed.promise;
+      expect(cursor).toBe("10");
+      expect(order).toEqual(["append:11", "append:12"]);
+      fail = false;
+      order.length = 0;
+      await vi.advanceTimersByTimeAsync(60_000);
+      await completed.promise;
+      expect(order).toEqual(["append:11", "append:12", "append:13", "cursor:13"]);
+    } finally {
+      abort.abort();
+      await run;
+    }
   });
 
   it("filters app-wide recipients before advancing the cursor and backfills after an idle reconnect", async () => {

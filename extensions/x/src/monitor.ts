@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { ResolvedXAccount } from "./accounts.js";
-import { parseXPost, type XPostEnvelope } from "./api.js";
+import { parseXPost, parseXPostEnvelope, type XPostEnvelope } from "./api.js";
 import { getXApi, getXTokenState } from "./client.js";
 import { runXEvents, type XEventStatus } from "./events.js";
 import { resolveXIngress, xMentionFacts } from "./ingress.js";
@@ -78,7 +78,13 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
       storage: "raw-event",
       version: 1,
       serialize: (value) => JSON.stringify(value),
-      deserialize: (value) => JSON.parse(value) as XPostEnvelope,
+      deserialize: (value) => {
+        const envelope = parseXPostEnvelope(JSON.parse(value));
+        if (!envelope) {
+          throw new InvalidXEvent("Invalid stored X mention envelope");
+        }
+        return envelope;
+      },
       createClaimError: () => new InvalidXEvent("X mention identity changed after admission"),
     },
     pollIntervalMs: 1_000,
