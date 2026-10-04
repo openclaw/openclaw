@@ -169,6 +169,7 @@ async function runShortTermDreamingPromotion(params: {
     { runDreamingSweepPhases },
     {
       applyShortTermPromotions,
+      countLowDiversityRecurrences,
       repairShortTermPromotionArtifacts,
       rankShortTermPromotionCandidates,
     },
@@ -222,6 +223,17 @@ async function runShortTermDreamingPromotion(params: {
       });
       totalCandidates += candidates.length;
       reportLines.push(`- Ranked ${candidates.length} candidate(s) for durable promotion.`);
+      const lowDiversityCount = await countLowDiversityRecurrences({
+        workspaceDir,
+        minRecallCount: params.config.minRecallCount,
+        minUniqueQueries: params.config.minUniqueQueries,
+        nowMs: sweepNowMs,
+      });
+      if (lowDiversityCount > 0) {
+        reportLines.push(
+          `- Recurrence without diversity: ${lowDiversityCount} candidate(s) (not promoted).`,
+        );
+      }
       if (params.config.verboseLogging) {
         const candidateSummary =
           candidates.length > 0
@@ -292,7 +304,8 @@ async function runShortTermDreamingPromotion(params: {
       const hasReportableRejections = applied.rejectedCandidates.some(
         ({ category }) => category !== "memory budget",
       );
-      const deepHasContent = repair.changed || applied.applied > 0 || hasReportableRejections;
+      const deepHasContent =
+        repair.changed || applied.applied > 0 || hasReportableRejections || lowDiversityCount > 0;
       await writeDeepDreamingReport({
         workspaceDir,
         bodyLines: reportLines,

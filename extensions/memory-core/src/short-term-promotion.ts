@@ -226,6 +226,74 @@ export async function rankShortTermPromotionCandidates(
   return sorted.slice(0, limit);
 }
 
+export type CountLowDiversityRecurrencesOptions = {
+  workspaceDir: string;
+  minRecallCount?: number;
+  minUniqueQueries?: number;
+  nowMs?: number;
+};
+
+/**
+ * Count eligible short-term entries that recur at or above the recall
+ * threshold while remaining below the query-diversity threshold:
+ * signalCount >= minRecallCount AND uniqueQueries < minUniqueQueries.
+ * (Proposed as "circling" in design discussion; named here for the
+ * measurable property only.)
+ * This is a structural retrieval observation. It does not identify
+ * rumination, worry, unresolved concerns, importance, or any other
+ * psychological state. Returns a count; never snippets, paths, or keys.
+ */
+export async function countLowDiversityRecurrences(
+  options: CountLowDiversityRecurrencesOptions,
+): Promise<number> {
+  const workspaceDir = options.workspaceDir.trim();
+  if (!workspaceDir) {
+    return 0;
+  }
+  const minRecallCount = toFiniteNonNegativeInt(
+    options.minRecallCount,
+    DEFAULT_PROMOTION_MIN_RECALL_COUNT,
+  );
+  const minUniqueQueries = toFiniteNonNegativeInt(
+    options.minUniqueQueries,
+    DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
+  );
+  const nowMs = resolveMemoryCoreNowMs(options.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
+  const store = await readStore(workspaceDir, nowIso);
+  let recurrences = 0;
+  for (const entry of Object.values(store.entries)) {
+    if (!isShortTermMemoryPath(entry.path)) {
+      continue;
+    }
+    if (isPromotionOriginBlocked(entry)) {
+      continue;
+    }
+    if (
+      isContaminatedDreamingSnippet(entry.snippet, {
+        allowTranscriptTurnSnippet: isShortTermSessionCorpusPath(entry.path),
+      })
+    ) {
+      continue;
+    }
+    if (entry.promotedAt) {
+      continue;
+    }
+    const signalCount = totalSignalCountForEntry(entry);
+    // Match the ranker's zero-signal guard: an entry with no signals has not
+    // recurred, regardless of a zero recall threshold.
+    if (signalCount <= 0 || signalCount < minRecallCount) {
+      continue;
+    }
+    const uniqueQueries = entry.userQueryHashes?.length ?? 0;
+    if (uniqueQueries >= minUniqueQueries) {
+      continue;
+    }
+    recurrences += 1;
+  }
+  return recurrences;
+}
+
 export {
   type PromotionCandidate,
   type RepairShortTermPromotionArtifactsResult,

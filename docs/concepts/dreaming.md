@@ -78,6 +78,7 @@ Dreaming runs three cooperative phases per sweep, in order: light -> REM -> deep
     - Passes gated owner and agent-derived candidates to a tool-free completion that chooses additions, merges, and supersessions against the current `MEMORY.md`.
     - Composes `MEMORY.md` from validated source evidence, preserving unrelated entries and candidate source references within the prior-entry loss limit and bootstrap budget.
     - Falls back to the previous append-only promotion path when the model is unavailable or the rewrite fails validation.
+    - Counts eligible entries that recur at or above the recall threshold while remaining below the configured query-diversity threshold (`signalCount >= minRecallCount` with `uniqueQueries < minUniqueQueries`, using the existing deep thresholds) and reports them as a `Recurrence without diversity` count in `DREAMS.md`. This is a structural retrieval observation. It does not identify rumination, worry, unresolved concerns, importance, or any other psychological state. Such entries are never promoted into `MEMORY.md`.
     - Writes a `## Deep Sleep` summary into `DREAMS.md` and optionally `memory/dreaming/deep/YYYY-MM-DD.md`.
 
   </Accordion>
