@@ -60,24 +60,24 @@ describe("native bounded launch preparation", () => {
   ] as const)(
     "projects %s handoff to only its allowed information class",
     (boundary, kept, dropped) => {
-    const result = prepareBoundedLaunch({
-      ...base,
-      boundedLaunch: {
-        boundary,
-        handoff: {
-          candidateDigest: "candidate:matrix",
-          artifactRefs: ["artifact:matrix"],
-          evidenceRefs: ["evidence:matrix"],
-          summary: "summary:matrix",
+      const result = prepareBoundedLaunch({
+        ...base,
+        boundedLaunch: {
+          boundary,
+          handoff: {
+            candidateDigest: "candidate:matrix",
+            artifactRefs: ["artifact:matrix"],
+            evidenceRefs: ["evidence:matrix"],
+            summary: "summary:matrix",
+          },
         },
-      },
-    });
-    for (const value of kept) {
-      expect(result.task).toContain(value);
-    }
-    for (const value of dropped) {
-      expect(result.task).not.toContain(value);
-    }
+      });
+      for (const value of kept) {
+        expect(result.task).toContain(value);
+      }
+      for (const value of dropped) {
+        expect(result.task).not.toContain(value);
+      }
     },
   );
 
