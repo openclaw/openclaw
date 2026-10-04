@@ -15,15 +15,27 @@ enum ExecApprovalsPromptPresenter {
         var cancelled = false
     }
 
+    #if DEBUG
+    private struct PendingPromptWaiter {
+        let count: Int
+        let continuation: CheckedContinuation<Void, Never>
+    }
+    #endif
+
     @MainActor
     private static var activePrompt: ActivePrompt?
     @MainActor
     private static var pendingPrompts: [PendingPrompt] = []
+    #if DEBUG
+    @MainActor
+    private static var pendingPromptWaitersForTesting: [UUID: PendingPromptWaiter] = [:]
+    #endif
 
     @MainActor
     static func prompt(
         _ request: ExecApprovalPromptRequest,
-        timeoutMs: Int? = nil) async -> ExecApprovalDecision?
+        timeoutMs: Int? = nil,
+        isStillEligible: @MainActor () -> Bool = { true }) async -> ExecApprovalDecision?
     {
         if let timeoutMs, timeoutMs <= 0 { return nil }
         let promptID = UUID()
@@ -43,6 +55,10 @@ enum ExecApprovalsPromptPresenter {
         return await withTaskCancellationHandler {
             guard !Task.isCancelled, await self.acquirePrompt(id: promptID) else { return nil }
             guard !Task.isCancelled, self.activePrompt?.cancelled != true else {
+                self.releasePrompt(id: promptID)
+                return nil
+            }
+            guard isStillEligible() else {
                 self.releasePrompt(id: promptID)
                 return nil
             }
@@ -103,6 +119,9 @@ enum ExecApprovalsPromptPresenter {
         }
         return await withCheckedContinuation { continuation in
             self.pendingPrompts.append(PendingPrompt(id: id, continuation: continuation))
+            #if DEBUG
+            self.resumePendingPromptWaitersForTesting()
+            #endif
         }
     }
 
@@ -112,6 +131,9 @@ enum ExecApprovalsPromptPresenter {
         self.activePrompt = nil
         guard !self.pendingPrompts.isEmpty else { return }
         let next = self.pendingPrompts.removeFirst()
+        #if DEBUG
+        self.resumePendingPromptWaitersForTesting()
+        #endif
         self.activePrompt = ActivePrompt(id: next.id)
         next.continuation.resume(returning: true)
     }
@@ -125,6 +147,9 @@ enum ExecApprovalsPromptPresenter {
         }
         guard let index = self.pendingPrompts.firstIndex(where: { $0.id == id }) else { return }
         let pending = self.pendingPrompts.remove(at: index)
+        #if DEBUG
+        self.resumePendingPromptWaitersForTesting()
+        #endif
         pending.continuation.resume(returning: false)
     }
 
@@ -213,8 +238,25 @@ extension ExecApprovalsPromptPresenter {
     }
 
     @MainActor
-    static var pendingPromptCountForTesting: Int {
-        self.pendingPrompts.count
+    static func waitForPendingPromptCountForTesting(_ count: Int) async {
+        guard self.pendingPrompts.count != count else { return }
+        let id = UUID()
+        await withCheckedContinuation { continuation in
+            self.pendingPromptWaitersForTesting[id] = PendingPromptWaiter(
+                count: count,
+                continuation: continuation)
+        }
+    }
+
+    @MainActor
+    private static func resumePendingPromptWaitersForTesting() {
+        let count = self.pendingPrompts.count
+        let waiterIDs = self.pendingPromptWaitersForTesting.compactMap { id, waiter in
+            waiter.count == count ? id : nil
+        }
+        for id in waiterIDs {
+            self.pendingPromptWaitersForTesting.removeValue(forKey: id)?.continuation.resume()
+        }
     }
 }
 #endif
