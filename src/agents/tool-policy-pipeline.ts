@@ -5,7 +5,7 @@
  */
 import { isFrozenClawToolAllowPolicy } from "../claws/tool-policy-runtime.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { isKnownCoreToolId } from "./tool-catalog.js";
+import { CORE_TOOL_GROUPS, isKnownCoreToolId } from "./tool-catalog.js";
 import { auditToolPolicyFilter } from "./tool-policy-audit.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
 import {
@@ -47,6 +47,12 @@ function rememberToolPolicyWarning(warning: string): boolean {
   }
   seenToolPolicyWarnings.add(warning);
   return true;
+}
+
+// Built-in groups stay core entries even when the inspected subset lacks every
+// member, such as the bundle-tool pass that runs after core tools are validated.
+function isKnownCoreToolPolicyEntry(entry: string): boolean {
+  return isKnownCoreToolId(entry) || Object.hasOwn(CORE_TOOL_GROUPS, entry);
 }
 
 /** One named policy layer in the effective runtime tool policy pipeline. */
@@ -188,14 +194,13 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
             normalizeToolPolicyName(entry),
           ),
         );
-        const gatedCoreEntries = resolved.unknownAllowlist.filter((entry) =>
-          isKnownCoreToolId(entry),
-        );
+        const gatedCoreEntries = resolved.unknownAllowlist.filter(isKnownCoreToolPolicyEntry);
         const warnableGatedCoreEntries = step.suppressUnavailableCoreToolWarning
           ? []
           : gatedCoreEntries.filter((entry) => !unavailableCoreWarningAllowlist.has(entry));
         const otherEntries = resolved.unknownAllowlist.filter(
-          (entry) => !isKnownCoreToolId(entry) && !unavailableCoreWarningAllowlist.has(entry),
+          (entry) =>
+            !isKnownCoreToolPolicyEntry(entry) && !unavailableCoreWarningAllowlist.has(entry),
         );
         const warningEntries = [...warnableGatedCoreEntries, ...otherEntries];
         if (warningEntries.length > 0) {
