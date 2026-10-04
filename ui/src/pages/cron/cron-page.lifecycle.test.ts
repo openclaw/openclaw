@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import { createChannelCapability } from "../../lib/channels/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
@@ -113,6 +114,85 @@ describe("CronPage lifecycle", () => {
       expect(page.textContent).not.toContain("Retired catalog error");
     },
   );
+
+  it("refreshes model suggestions when team selection changes without changing scope", async () => {
+    const lateMain = createDeferred<{ models: { id: string }[] }>();
+    const writer = createDeferred<{ models: { id: string }[] }>();
+    const fallback = createRequest();
+    const modelRequests: unknown[] = [];
+    let mainReads = 0;
+    const client = createTestGatewayClient((method, params) => {
+      if (method !== "models.list") {
+        return fallback(method);
+      }
+      modelRequests.push(params);
+      const agentId = (params as { agentId?: string } | undefined)?.agentId;
+      if (agentId === "writer") {
+        return writer.promise;
+      }
+      mainReads += 1;
+      return mainReads === 1 ? { models: [{ id: "main-model" }] } : lateMain.promise;
+    });
+    const gateway = createGateway(client, true);
+    gateway.emitSnapshot({ assistantAgentId: "main" });
+    const agentSelection = createAgentSelectionCapability(
+      gateway,
+      {
+        state: {
+          agentsList: {
+            defaultId: "main",
+            mainKey: "main",
+            scope: "per-sender",
+            agents: [{ id: "main" }, { id: "writer" }],
+          },
+        },
+        subscribe: () => () => undefined,
+      },
+      undefined,
+      {
+        settings: {
+          gatewayUrl: "",
+          sidebarAgentsMode: "roster",
+          sidebarPreTeamScope: undefined,
+        },
+        patch: () => undefined,
+        subscribe: () => () => undefined,
+      },
+    );
+    const page = createPage(
+      { ...createContext(gateway, null, "main"), agentSelection },
+      { render: true },
+    );
+    try {
+      await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["main-model"]));
+      const cron = page.cron;
+      gateway.emitRetiredEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+      await waitForCronPage(() => expect(modelRequests).toHaveLength(2));
+
+      agentSelection.set("writer");
+      expect(agentSelection.state).toEqual({ selectedId: "writer", scopeId: null });
+      await waitForCronPage(() => expect(modelRequests).toHaveLength(3));
+      expect(page.cron).toBe(cron);
+      expect(page.cronModelSuggestions).toEqual([]);
+      expect(modelRequests).toEqual([
+        { agentId: "main", view: "configured" },
+        { agentId: "main", view: "configured" },
+        { agentId: "writer", view: "configured" },
+      ]);
+
+      writer.resolve({ models: [{ id: "writer-model" }] });
+      await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["writer-model"]));
+      lateMain.resolve({ models: [{ id: "late-main-model" }] });
+      await lateMain.promise;
+      await page.updateComplete;
+      expect(page.cronModelSuggestions).toEqual(["writer-model"]);
+    } finally {
+      page.remove();
+      agentSelection.dispose();
+      writer.resolve({ models: [] });
+      lateMain.resolve({ models: [] });
+    }
+  });
 
   it("coalesces a cron event burst into one trailing refresh of the current page", async () => {
     const held = createDeferred();

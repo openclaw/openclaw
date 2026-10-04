@@ -1,12 +1,12 @@
-export type SessionAgentSelection = {
+export type SelectedAgentSource = {
   readonly state: { readonly selectedId: string | null };
   readonly intentRevision?: number;
   subscribe: (listener: () => void) => () => void;
 };
 
 /** Distinguish deliberate navigation from automatic default-agent reconciliation. */
-export function subscribeAgentSelection(
-  selection: SessionAgentSelection,
+export function watchSelectedAgent(
+  selection: SelectedAgentSource,
   changed: (agentId: string | null, foreground: boolean) => void,
 ): () => void {
   let selectedId = selection.state.selectedId;
