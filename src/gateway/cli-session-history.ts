@@ -32,13 +32,11 @@ import {
   readChatHistoryPaginationKey,
   readIncrementalChatHistoryTail,
 } from "./session-history-tail.js";
-import {
-  filterSessionMessageHistoryVisibility,
-  type SessionTranscriptPageReader,
-} from "./session-transcript-read-kernel.js";
+import { filterSessionMessageHistoryVisibility } from "./session-transcript-read-kernel.js";
 import type {
   ReadSessionMessageByIdResult,
   SessionTranscriptPageOptions,
+  SessionTranscriptPageReader,
 } from "./session-transcript-read.types.js";
 
 export type CliHistoryRevision = {

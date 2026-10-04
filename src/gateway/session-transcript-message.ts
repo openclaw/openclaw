@@ -1,6 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TranscriptDisplayPosition } from "../chat/transcript-display-position.js";
-import type { SubagentCoordinationDisplayResolver } from "./chat-display-projection.history.js";
 import {
   createCurrentUserProfileMessageProjector,
   projectChatDisplayMessage,
@@ -12,6 +11,7 @@ import {
   attachOpenClawTranscriptMeta,
   readTranscriptMessageIdempotencyKey,
 } from "./session-transcript-entry-message.js";
+import type { SubagentCoordinationDisplayResolver } from "./session-transcript-read.types.js";
 
 export type SessionMessageProjectionState = {
   assistantErrorPending: boolean;

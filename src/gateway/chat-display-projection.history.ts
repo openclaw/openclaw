@@ -33,14 +33,9 @@ import {
   isCronRunMessage,
   type RoleContentMessage,
 } from "./chat-display-projection.helpers.js";
+import type { SubagentCoordinationDisplayResolver } from "./session-transcript-read.types.js";
 
 type TtsSupplementMarker = { textSha256?: string; spokenText?: string };
-
-export type SubagentCoordinationDisplayResolver = {
-  assertCurrent?: () => void;
-  isSubagentSession: (sessionKey: string) => boolean;
-  isSubagentRunMessage: (runId: string, messageSeq: number | undefined) => boolean;
-};
 
 export function isSubagentCoordinationHistoryInput(
   message: Record<string, unknown>,

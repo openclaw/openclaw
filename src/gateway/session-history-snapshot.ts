@@ -19,14 +19,16 @@ import {
   type ChatDisplayProjectionOptions,
 } from "./chat-display-projection.core.js";
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./chat-display-projection.helpers.js";
-import type { SubagentCoordinationDisplayResolver } from "./chat-display-projection.history.js";
 import type { CurrentUserProfileDisplayResolver } from "./current-user-profile-display.js";
 import { getMaxChatHistoryMessagesBytes } from "./server-constants.js";
 import {
   readChatHistoryMessageSeq as resolveMessageSeq,
   readIncrementalChatHistoryTail,
 } from "./session-history-tail.js";
-import type { SessionTranscriptReader } from "./session-transcript-read-kernel.js";
+import type {
+  SessionTranscriptReader,
+  SubagentCoordinationDisplayResolver,
+} from "./session-transcript-read.types.js";
 
 type SessionHistorySnapshotOptions = {
   readers: SessionTranscriptReader;

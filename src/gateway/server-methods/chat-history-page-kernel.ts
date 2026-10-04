@@ -27,7 +27,7 @@ import {
 import type {
   SessionTranscriptPageReader,
   ReadRecentSessionMessagesResult,
-} from "../session-transcript-read-kernel.js";
+} from "../session-transcript-read.types.js";
 import { attachChatHistoryReplyMessages } from "./chat-history-reply-messages.js";
 
 export type ChatHistoryPageKernelOptions = {

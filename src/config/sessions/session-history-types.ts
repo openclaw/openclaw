@@ -9,7 +9,7 @@ import type {
   ReadSessionMessagesAroundIdResult,
   ReadSessionMessagesResult,
   SessionTranscriptReader,
-} from "../../gateway/session-transcript-read-kernel.js";
+} from "../../gateway/session-transcript-read.types.js";
 import type {
   SessionTranscriptSummaryQuery,
   SessionTranscriptSummaryResult,

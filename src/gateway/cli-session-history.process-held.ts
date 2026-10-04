@@ -10,8 +10,10 @@ import type {
 import type { WorkerTaskChannel } from "../infra/worker-task-server.js";
 import type { CliHistoryReaders } from "./cli-session-history.js";
 import { projectChatHistoryWithReplies } from "./server-methods/chat-history-reply-messages.js";
-import type { SessionTranscriptPageReader } from "./session-transcript-read-kernel.js";
-import type { SessionTranscriptPageOptions } from "./session-transcript-read.types.js";
+import type {
+  SessionTranscriptPageOptions,
+  SessionTranscriptPageReader,
+} from "./session-transcript-read.types.js";
 
 type Request =
   | {

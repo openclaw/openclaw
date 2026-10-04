@@ -1,7 +1,7 @@
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import type { SessionEntry } from "../config/sessions.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveTranscriptPageEnd } from "../sessions/transcript-anchor-page.js";
 import type { TranscriptReadWindow } from "../sessions/transcript-read-window.js";
 import {
@@ -19,7 +19,7 @@ import type {
   SessionTranscriptPageReader,
   ReadRecentSessionMessagesResult,
   SessionTranscriptReadScope,
-} from "./session-transcript-read-kernel.js";
+} from "./session-transcript-read.types.js";
 
 const SILENT_CHAT_HISTORY_TAIL_SCAN_MAX_MESSAGES = 8_000;
 const SILENT_CHAT_HISTORY_TAIL_SCAN_CHUNK_MESSAGES = 100;

@@ -1,6 +1,5 @@
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { resolveVisibleHistoryEventCount } from "../config/sessions/session-accessor.sqlite-history-projection.js";
 import {
   readTranscriptDisplayDeltaFromProjection,
@@ -31,7 +30,6 @@ import {
 import {
   dropPreSessionStartAnnouncePairs,
   isPreSessionStartAssistantMessage,
-  type SubagentCoordinationDisplayResolver,
 } from "./chat-display-projection.history.js";
 import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
 import {
@@ -53,22 +51,17 @@ import type {
   SessionTranscriptProjectionSelection,
   SessionTranscriptProjectionSelectionResults,
   SessionTranscriptReadOptions,
+  SessionTranscriptReadScope,
+  SessionTranscriptReader,
+  SessionTranscriptPageReader,
+  SessionTranscriptVisitor,
+  SubagentCoordinationDisplayResolver,
 } from "./session-transcript-read.types.js";
 import {
   prepareSessionTranscriptSummaryReader,
   type SessionTranscriptSummaryQuery,
 } from "./session-transcript-summary.js";
 
-export type {
-  ReadRecentSessionMessagesResult,
-  ReadSessionMessageByIdResult,
-  ReadSessionMessagesAroundIdResult,
-  ReadSessionMessagesResult,
-  SessionTranscriptProjectionSelection,
-  SessionTranscriptProjectionSelectionResults,
-} from "./session-transcript-read.types.js";
-
-export type { SessionTranscriptReadScope };
 export type SessionTranscriptReadAccess = {
   subagentCoordination?: SubagentCoordinationDisplayResolver;
   resolveTarget: (scope: SessionTranscriptReadScope) => Promise<ResolvedTranscriptReadTarget>;
@@ -631,20 +624,5 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     readSessionMessagesPageWithStatsAsync,
     readSessionMessagesAroundIdWithStatsAsync,
   };
-  return reader;
+  return reader satisfies SessionTranscriptReader & SessionTranscriptVisitor;
 }
-export type SessionTranscriptReader = Omit<
-  ReturnType<typeof createSessionTranscriptReader>,
-  "visitSessionMessagesAsync" | "readSessionTranscriptSummaryAsync"
-> & {
-  subagentCoordination?: SubagentCoordinationDisplayResolver;
-};
-
-export type SessionTranscriptPageReader = Pick<
-  SessionTranscriptReader,
-  | "readRecentSessionMessagesWithStatsAsync"
-  | "readSessionMessagesPageWithStatsAsync"
-  | "readSessionMessagesAroundIdWithStatsAsync"
-  | "readSessionMessageByIdAsync"
-  | "subagentCoordination"
->;
