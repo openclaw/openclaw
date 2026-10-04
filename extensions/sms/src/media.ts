@@ -19,7 +19,11 @@ import {
 } from "openclaw/plugin-sdk/outbound-media";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { isTransientNetworkError } from "openclaw/plugin-sdk/retry-runtime";
-import { safeEqualSecret, SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
+import {
+  redactSensitiveText,
+  safeEqualSecret,
+  SsrFBlockedError,
+} from "openclaw/plugin-sdk/security-runtime";
 import { assertSmsCredentialOwnerAvailable } from "./credential-availability.js";
 import { getSmsRuntime } from "./runtime.js";
 import { TWILIO_MMS_MAX_BYTES } from "./twilio.js";
@@ -28,6 +32,17 @@ import type { ResolvedSmsAccount, SmsInboundMessage } from "./types.js";
 const TWILIO_API_HOSTNAME = "api.twilio.com";
 const TWILIO_MEDIA_PATH_RE =
   /^\/2010-04-01\/Accounts\/([^/]+)\/Messages\/([^/]+)\/Media\/(ME[0-9a-fA-F]{32})$/u;
+// Twilio answers a media instance URL with a redirect to the host that actually
+// stores the bytes, so the inbound fetch must survive that hop. The redirect
+// loop re-checks `hostnameAllowlist` per URL, and the guard strips the Twilio
+// Basic credential on the cross-origin hop, so listing these adds no new
+// credential exposure.
+const TWILIO_MEDIA_CONTENT_HOSTNAMES = [
+  "mms.twiliocdn.com",
+  "media.twiliocdn.com",
+  "s3-external-1.amazonaws.com",
+] as const;
+const TWILIO_MEDIA_FETCH_HOSTNAMES = [TWILIO_API_HOSTNAME, ...TWILIO_MEDIA_CONTENT_HOSTNAMES];
 const TWILIO_MEDIA_TOTAL_TIMEOUT_MS = 60_000;
 const TWILIO_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 30_000;
 const TWILIO_MEDIA_READ_IDLE_TIMEOUT_MS = 30_000;
@@ -332,6 +347,20 @@ function inboundMediaUnavailableBody(body: string, count: number): string {
   });
 }
 
+// "attachment unavailable" is all the operator sees in the transcript, so the
+// warn has to carry enough of the cause to tell an auth failure, a size cap, a
+// blocked redirect target, and a network timeout apart without a repro.
+function describeInboundMediaError(error: unknown): string {
+  if (error instanceof MediaFetchError) {
+    const status = typeof error.status === "number" ? ` status=${error.status}` : "";
+    return redactSensitiveText(`code=${error.code}${status} ${error.message}`);
+  }
+  if (error instanceof Error) {
+    return redactSensitiveText(`${error.name}: ${error.message}`);
+  }
+  return redactSensitiveText(String(error));
+}
+
 function inboundMediaFileName(contentType: string | undefined, index: number): string {
   return `mms-${index + 1}${extensionForMime(contentType) ?? ".bin"}`;
 }
@@ -394,6 +423,14 @@ export async function materializeSmsInboundMedia(params: {
   const cleanup = createInboundMediaCleanup(savedPaths);
   const declaredUnavailableCount = params.msg.unavailableMediaCount ?? 0;
   if (params.msg.media.length === 0) {
+    if (declaredUnavailableCount > 0) {
+      // Twilio declared media the webhook form never carried a usable MediaUrl
+      // for, so no download is even attempted. Without this the transcript
+      // notice is the only trace the message ever had an attachment.
+      params.log?.warn?.(
+        `Twilio MMS ${params.msg.messageSid} declared ${declaredUnavailableCount} attachment(s) with no usable media URL in the webhook form`,
+      );
+    }
     return {
       body:
         declaredUnavailableCount > 0
@@ -433,6 +470,9 @@ export async function materializeSmsInboundMedia(params: {
       abortSignal.throwIfAborted();
       if (remainingBytes <= 0) {
         unavailableCount += 1;
+        params.log?.warn?.(
+          `Skipped Twilio MMS attachment ${index + 1} for ${params.msg.messageSid}: message media budget of ${TWILIO_MMS_MAX_BYTES} bytes is exhausted`,
+        );
         continue;
       }
       try {
@@ -460,7 +500,7 @@ export async function materializeSmsInboundMedia(params: {
           filePathHint: inboundMediaFileName(media.contentType, index),
           fallbackContentType: media.contentType,
           maxBytes: Math.min(params.account.mediaMaxBytes ?? remainingBytes, remainingBytes),
-          ssrfPolicy: { hostnameAllowlist: [TWILIO_API_HOSTNAME] },
+          ssrfPolicy: { hostnameAllowlist: TWILIO_MEDIA_FETCH_HOSTNAMES },
           timeoutMs: TWILIO_MEDIA_TOTAL_TIMEOUT_MS,
           responseHeaderTimeoutMs: TWILIO_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
           readIdleTimeoutMs: TWILIO_MEDIA_READ_IDLE_TIMEOUT_MS,
@@ -482,7 +522,7 @@ export async function materializeSmsInboundMedia(params: {
         }
         unavailableCount += 1;
         params.log?.warn?.(
-          `Failed to download Twilio MMS attachment ${index + 1} for ${params.msg.messageSid}`,
+          `Failed to download Twilio MMS attachment ${index + 1} for ${params.msg.messageSid}: ${describeInboundMediaError(error)}`,
         );
       }
     }
