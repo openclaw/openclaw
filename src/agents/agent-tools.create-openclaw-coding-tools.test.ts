@@ -1557,6 +1557,88 @@ describe("createOpenClawCodingTools", () => {
       }),
     ).rejects.toThrow(/Missing required parameter: path/);
   });
+
+  it("serializes concurrent sandbox memory-flush appends instead of losing one", async () => {
+    const workspaceDir = tempDirs.make("openclaw-memory-sandbox-race-");
+    const memoryRelativePath = "memory/2026-08-01.md";
+    const memoryAbsolutePath = path.join(workspaceDir, memoryRelativePath);
+    await fs.mkdir(path.dirname(memoryAbsolutePath), { recursive: true });
+    await fs.writeFile(memoryAbsolutePath, "seed", "utf8");
+
+    // Hold the first append inside the bridge write. A second append sharing the
+    // same mutation queue must not reach the bridge write until the first commits.
+    let releaseFirstWriter = () => {};
+    let resolveFirstWriterEntered = () => {};
+    const firstWriterEntered = new Promise<void>((resolve) => {
+      resolveFirstWriterEntered = resolve;
+    });
+    const baseBridge = createHostSandboxFsBridge(workspaceDir);
+    const writeCalls = { count: 0 };
+    const sharedBridge: typeof baseBridge = {
+      ...baseBridge,
+      writeFile: async (params: Parameters<typeof baseBridge.writeFile>[0]) => {
+        writeCalls.count += 1;
+        if (writeCalls.count === 1) {
+          resolveFirstWriterEntered();
+          await new Promise<void>((resolve) => {
+            releaseFirstWriter = resolve;
+          });
+        }
+        return baseBridge.writeFile(params);
+      },
+    };
+
+    const buildWriteTool = () => {
+      const sandbox = createAgentToolsSandboxContext({
+        workspaceDir,
+        fsBridge: sharedBridge,
+        workspaceAccess: "rw",
+      });
+      const tools = createOpenClawCodingTools({
+        workspaceDir,
+        sandbox,
+        trigger: "memory",
+        memoryFlushWritePath: memoryRelativePath,
+      });
+      return requireToolExecute(requireTool(tools, "write"));
+    };
+
+    const writeA = buildWriteTool();
+    const writeB = buildWriteTool();
+
+    const writeAPromise = writeA("session-a-flush", {
+      path: memoryRelativePath,
+      content: "durable-note-A",
+    });
+    await firstWriterEntered;
+    const writeBPromise = writeB("session-b-flush", {
+      path: memoryRelativePath,
+      content: "durable-note-B",
+    });
+
+    // Deterministic window: give the second append every chance to reach the
+    // bridge. The queued section calls writeFile only under the mutation queue,
+    // so more than one write call means the second append bypassed
+    // serialization. (The memory-flush wrapper performs an unqueued
+    // contentBefore pre-read for provenance before it enters the queue, so reads
+    // are not a reliable signal here.)
+    const deadline = Date.now() + 300;
+    while (Date.now() < deadline && writeCalls.count < 2) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 5);
+      });
+    }
+
+    const secondAppendStayedQueued = writeCalls.count === 1;
+    releaseFirstWriter();
+    await Promise.all([writeAPromise, writeBPromise]);
+
+    const finalContent = await fs.readFile(memoryAbsolutePath, "utf8");
+    // The data-loss assertion is the primary evidence: both flushes reported
+    // success, so both notes must be durable.
+    expect(finalContent).toBe("seed\ndurable-note-A\ndurable-note-B");
+    expect(secondAppendStayedQueued).toBe(true);
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 

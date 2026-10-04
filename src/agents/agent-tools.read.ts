@@ -53,6 +53,7 @@ import type { AgentTool, AgentToolResult } from "./runtime/index.js";
 import { assertSandboxPath, normalizeFileReferencePrefix } from "./sandbox-paths.js";
 import { resolveSandboxFileMutationQueueKey } from "./sandbox/file-mutation-identity.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { withFileMutationQueueKeyResolution } from "./sessions/tools/file-mutation-queue.js";
 import {
   createEditTool,
   createReadTool,
@@ -670,7 +671,8 @@ async function appendMemoryFlushContent(params: {
   signal?: AbortSignal;
   assertCurrent: () => void;
 }) {
-  if (!params.sandbox) {
+  const sandbox = params.sandbox;
+  if (!sandbox) {
     const root = await fsRoot(params.root);
     params.assertCurrent();
     await root.append(params.relativePath, params.content, {
@@ -681,31 +683,55 @@ async function appendMemoryFlushContent(params: {
     return;
   }
 
-  const existing = await readOptionalUtf8File({
-    absolutePath: params.absolutePath,
-    relativePath: params.relativePath,
-    sandbox: params.sandbox,
+  // The sandbox backend has no atomic append primitive: it reads, concatenates,
+  // and overwrites the whole file. Serialize same-path appends through the same
+  // in-process mutation queue ordinary write/edit tools use, keyed by the
+  // canonical sandbox queue key, so this serializes append-vs-append,
+  // append-vs-write, and append-vs-edit within one gateway process. Cross-process
+  // serialization still needs a true atomic append in the sandbox backend.
+  const queueKey = resolveSandboxFileMutationQueueKey({
+    bridge: sandbox.bridge,
+    root: sandbox.root,
+    filePath: params.absolutePath,
+    cwd: sandbox.root,
     signal: params.signal,
   });
-  const separator =
-    existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n") ? "\n" : "";
-  const next = `${existing}${separator}${params.content}`;
-  const parent = path.posix.dirname(params.relativePath);
-  params.assertCurrent();
-  if (parent && parent !== ".") {
-    await params.sandbox.bridge.mkdirp({
-      filePath: parent,
-      cwd: params.sandbox.root,
+  await withFileMutationQueueKeyResolution(queueKey, async () => {
+    if (params.signal?.aborted) {
+      throw new Error("Operation aborted");
+    }
+    params.assertCurrent();
+    const existing = await readOptionalUtf8File({
+      absolutePath: params.absolutePath,
+      relativePath: params.relativePath,
+      sandbox,
       signal: params.signal,
     });
-  }
-  params.assertCurrent();
-  await params.sandbox.bridge.writeFile({
-    filePath: params.relativePath,
-    cwd: params.sandbox.root,
-    data: next,
-    mkdir: true,
-    signal: params.signal,
+    const separator =
+      existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n")
+        ? "\n"
+        : "";
+    const next = `${existing}${separator}${params.content}`;
+    const parent = path.posix.dirname(params.relativePath);
+    if (parent && parent !== ".") {
+      // Recheck authority immediately before creating the parent directory: the
+      // queued read above awaits sandbox I/O, so a receipt revoked while queued
+      // must not be able to create a directory before the write is rejected.
+      params.assertCurrent();
+      await sandbox.bridge.mkdirp({
+        filePath: parent,
+        cwd: sandbox.root,
+        signal: params.signal,
+      });
+    }
+    params.assertCurrent();
+    await sandbox.bridge.writeFile({
+      filePath: params.relativePath,
+      cwd: sandbox.root,
+      data: next,
+      mkdir: true,
+      signal: params.signal,
+    });
   });
 }
 
