@@ -1,6 +1,10 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import {
+  formatAgentSkillAllowlistBlockHint,
+  resolveAgentSkillAllowlistBlockPath,
+} from "../../skills/discovery/agent-filter.js";
 import { AUTONOMOUS_SKILL_MAX_CHARS } from "../../skills/workshop/collection-contracts.js";
 import { resolveSkillWorkshopConfig } from "../../skills/workshop/config.js";
 import { stripProposalFrontmatterForSkill } from "../../skills/workshop/frontmatter.js";
@@ -322,8 +326,16 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           ...lifecycleParams(),
           reason: readToolStringParam(params, "reason"),
         });
+        const appliedSkillName = applied.record.target.skillName;
+        const blockedAllowlistPath = resolveAgentSkillAllowlistBlockPath({
+          config: options.config,
+          agentId: options.agentId,
+          skillName: appliedSkillName,
+        });
         return actionResult(applied.record, {
-          contentText: `Applied skill proposal ${applied.record.id}.`,
+          contentText: blockedAllowlistPath
+            ? `Applied skill proposal ${applied.record.id}. ${formatAgentSkillAllowlistBlockHint({ configPath: blockedAllowlistPath, skillName: appliedSkillName })}`
+            : `Applied skill proposal ${applied.record.id}.`,
           targetSkillFile: applied.targetSkillFile,
         });
       }

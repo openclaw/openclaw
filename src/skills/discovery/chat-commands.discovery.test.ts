@@ -11,6 +11,10 @@ import { resolveWorkspaceSkillSourcePlan } from "../loading/workspace-skill-sour
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import {
+  formatAgentSkillAllowlistBlockHint,
+  resolveAgentSkillAllowlistBlockPath,
+} from "./agent-filter.js";
+import {
   expandExplicitSkillReferences,
   listSkillCommandsForWorkspace,
   listSkillCommandsForAgents,
@@ -261,4 +265,50 @@ describe("skill command discovery through workspace loading", () => {
       );
     },
   );
+});
+
+describe("agent skill allowlist block path", () => {
+  const config = {
+    agents: {
+      defaults: { skills: ["default-skill"] },
+      entries: {
+        scoped: { skills: ["github"] },
+        inheriting: {},
+      },
+    },
+  } satisfies OpenClawConfig;
+
+  it("names the per-agent allowlist that excludes the skill", () => {
+    expect(
+      resolveAgentSkillAllowlistBlockPath({ config, agentId: "scoped", skillName: "new-skill" }),
+    ).toBe("agents.entries.scoped.skills");
+    expect(
+      resolveAgentSkillAllowlistBlockPath({ config, agentId: "scoped", skillName: "github" }),
+    ).toBeUndefined();
+  });
+
+  it("falls back to the shared defaults allowlist for agents without their own entry", () => {
+    expect(
+      resolveAgentSkillAllowlistBlockPath({
+        config,
+        agentId: "inheriting",
+        skillName: "new-skill",
+      }),
+    ).toBe("agents.defaults.skills");
+  });
+
+  it("returns undefined when no allowlist is configured", () => {
+    expect(
+      resolveAgentSkillAllowlistBlockPath({ config: {}, agentId: "main", skillName: "new-skill" }),
+    ).toBeUndefined();
+  });
+
+  it("renders a hint naming the config path the operator must change", () => {
+    expect(
+      formatAgentSkillAllowlistBlockHint({
+        configPath: "agents.entries.scoped.skills",
+        skillName: "new-skill",
+      }),
+    ).toContain("agents.entries.scoped.skills");
+  });
 });
