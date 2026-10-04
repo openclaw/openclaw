@@ -28,6 +28,7 @@ import {
   listCronHeartbeatWaitOwners,
 } from "../cron/active-jobs.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
+import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { getQueueSize, isCommandLaneTaskMarkerCurrent } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -46,6 +47,7 @@ import {
   resolveHeartbeatPreflight,
   resolveHeartbeatRunPrompt,
   shouldPreflightWakeBeforeBusy,
+  shouldSkipConsumedExecWake,
 } from "./heartbeat-runner-prompt.js";
 import {
   resolveHeartbeatSession,
@@ -61,7 +63,10 @@ import {
 import {
   areHeartbeatsEnabled,
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
+  HEARTBEAT_SKIP_NO_PENDING_EVENT,
+  HEARTBEAT_SKIP_PREEMPTED,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+  type HeartbeatRunResult,
   type HeartbeatScheduledTask,
   type HeartbeatWakeIntent,
   type HeartbeatWakeSource,
@@ -72,6 +77,12 @@ import {
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
 import { deferSessionEventWakePoll } from "./session-event-wake.js";
+import { resolveSystemEventQueueKey } from "./system-event-ownership.js";
+import {
+  peekSelectedSystemEventEntries,
+  resolveSystemEventDeliveryContext,
+  type SystemEvent,
+} from "./system-events.js";
 
 const CRON_COMMAND_LANE: string = CommandLane.Cron;
 
@@ -347,12 +358,74 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     startedAt,
     isEmbeddedRunActive,
     isReplyRunActive,
+    isSessionExecCompletion,
     preflight,
   } as const;
 }
 
 type StageResult<T, K extends string> = Extract<Awaited<T>, { kind: K }>;
 export type ReadyHeartbeatWake = StageResult<ReturnType<typeof resolveHeartbeatWakeStage>, "ready">;
+
+// Session-owned work: a background command completion, or the continuation of a turn
+// interrupted by a Gateway restart. Both answer the session that owns them.
+function isSessionOwnedEvent(wake: ReadyHeartbeatWake, event: SystemEvent): boolean {
+  return (
+    isExecCompletionEvent(event.text) ||
+    (wake.wakeSource === "restart-sentinel" && isRestartContinuationEvent(event))
+  );
+}
+
+/** A selection of only session-owned work publishes to its internal session. */
+function isSessionOwnedCompletion(
+  wake: ReadyHeartbeatWake,
+  events: readonly SystemEvent[],
+  hasInternalProjection: boolean,
+): boolean {
+  return (
+    hasInternalProjection &&
+    events.length > 0 &&
+    events.every((event) => isSessionOwnedEvent(wake, event))
+  );
+}
+
+/** Prompt and outcome policy for one occurrence selection, prepared or revalidated. */
+function resolveHeartbeatRunSelection(params: {
+  wake: ReadyHeartbeatWake;
+  preflight: ReadyHeartbeatWake["preflight"];
+  delivery: { channel: string; to?: string };
+  showAlerts: boolean;
+  hasInternalProjection: boolean;
+  useHeartbeatResponseTool: boolean;
+}) {
+  const { wake, preflight, delivery, hasInternalProjection } = params;
+  const heartbeatRunPrompt = resolveHeartbeatRunPrompt({
+    cfg: wake.cfg,
+    heartbeat: wake.heartbeat,
+    preflight,
+    canRelayToUser:
+      params.showAlerts &&
+      ((delivery.channel !== "none" && Boolean(delivery.to)) || hasInternalProjection),
+    scheduledTasks: wake.scheduledTasks,
+    heartbeatScratchContent: preflight.heartbeatScratchContent,
+    useHeartbeatResponseTool: params.useHeartbeatResponseTool,
+  });
+  return {
+    ...heartbeatRunPrompt,
+    // Selected work outranks a coalesced wake; periodic tasks own their prompt even on an exec wake.
+    useHeartbeatFailureCopy:
+      wake.scheduledTasks.length > 0 ||
+      (!heartbeatRunPrompt.hasTaskContinuation &&
+        !heartbeatRunPrompt.hasCronEvents &&
+        (wake.wakeSource === undefined ||
+          wake.wakeSource === "interval" ||
+          wake.wakeSource === "manual")),
+    // Session publication owns restart custody through commit, not prompt admission.
+    deferredGenericEvents:
+      hasInternalProjection && delivery.channel === "none"
+        ? heartbeatRunPrompt.genericEvents.filter(isRestartContinuationEvent)
+        : [],
+  };
+}
 
 export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
   const { cfg, agentId, heartbeat, preflight } = wake;
@@ -363,15 +436,10 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
   const projectionSessionKey = run.kind === "isolated" ? run.baseSessionKey : sessionKey;
   // Capture the client-owned generation before routing can await. The inspected
   // completion queue owns publication eligibility, not the coalesced wake source.
-  // Session-owned work: a background command completion, or the continuation of a turn
-  // interrupted by a Gateway restart. Both answer the session that owns them.
-  const isSessionOwnedEvent = (event: (typeof preflight.pendingEventEntries)[number]) =>
-    isExecCompletionEvent(event.text) ||
-    (wake.wakeSource === "restart-sentinel" && isRestartContinuationEvent(event));
   const projectionCandidate =
     scheduledTasks.length === 0 &&
     preflight.shouldInspectPendingEvents &&
-    preflight.pendingEventEntries.some(isSessionOwnedEvent) &&
+    preflight.pendingEventEntries.some((event) => isSessionOwnedEvent(wake, event)) &&
     !preflight.session.suppressOriginatingContext &&
     !isInternalSessionEffectsKey(projectionSessionKey) &&
     conversationEntry?.delivery?.kind === "internal" &&
@@ -416,10 +484,11 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
   // capture it. Mixed batches keep the resolved route for their other events. If the
   // session write fails, the events stay queued for a later wake; there is no channel
   // fallback.
-  const sessionOwnedCompletion =
-    internalProjection !== undefined &&
-    preflight.pendingEventEntries.length > 0 &&
-    preflight.pendingEventEntries.every(isSessionOwnedEvent);
+  const sessionOwnedCompletion = isSessionOwnedCompletion(
+    wake,
+    preflight.pendingEventEntries,
+    internalProjection !== undefined,
+  );
   const delivery: typeof resolvedDelivery = sessionOwnedCompletion
     ? { ...resolvedDelivery, channel: "none", to: undefined, reason: "session-owned-completion" }
     : resolvedDelivery;
@@ -464,9 +533,6 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     channel: delivery.channel !== "none" ? delivery.channel : undefined,
     accountId: delivery.accountId,
   });
-  const canRelayToUser =
-    visibility.showAlerts &&
-    ((delivery.channel !== "none" && Boolean(delivery.to)) || internalProjection !== undefined);
   const useHeartbeatResponseToolPrompt = shouldUseHeartbeatResponseToolPrompt({
     cfg,
     agentId,
@@ -476,13 +542,12 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     chatType: delivery.chatType,
   });
   const resolveRunPrompt = (useHeartbeatResponseTool: boolean) =>
-    resolveHeartbeatRunPrompt({
-      cfg,
-      heartbeat,
+    resolveHeartbeatRunSelection({
+      wake,
       preflight,
-      canRelayToUser,
-      scheduledTasks,
-      heartbeatScratchContent: preflight.heartbeatScratchContent,
+      delivery,
+      showAlerts: visibility.showAlerts,
+      hasInternalProjection: internalProjection !== undefined,
       useHeartbeatResponseTool,
     });
   let heartbeatRunPrompt = resolveRunPrompt(useHeartbeatResponseToolPrompt);
@@ -605,19 +670,6 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     outboundPolicySessionKey,
     internalProjection,
     ...heartbeatRunPrompt,
-    // Selected work outranks a coalesced wake; periodic tasks own their prompt even on an exec wake.
-    useHeartbeatFailureCopy:
-      scheduledTasks.length > 0 ||
-      (!heartbeatRunPrompt.hasTaskContinuation &&
-        !heartbeatRunPrompt.hasCronEvents &&
-        (wake.wakeSource === undefined ||
-          wake.wakeSource === "interval" ||
-          wake.wakeSource === "manual")),
-    // Session publication owns restart custody through commit, not prompt admission.
-    deferredGenericEvents:
-      internalProjection && delivery.channel === "none"
-        ? heartbeatRunPrompt.genericEvents.filter(isRestartContinuationEvent)
-        : [],
   } as const;
 }
 
@@ -625,3 +677,71 @@ export type PreparedHeartbeatRun = StageResult<
   ReturnType<typeof prepareHeartbeatRunStage>,
   "ready"
 >;
+
+/**
+ * Routing and typing can await while process polling acknowledges a selected completion.
+ * Recheck the original occurrences; a same-text successor belongs to a later wake.
+ */
+export function revalidatePreparedHeartbeatRun(
+  wake: ReadyHeartbeatWake,
+  prepared: PreparedHeartbeatRun,
+) {
+  const { agentId, preflight, scheduledTasks, startedAt } = wake;
+  const pendingEventEntries = peekSelectedSystemEventEntries(
+    resolveSystemEventQueueKey(preflight.session.sessionKey, agentId),
+    preflight.pendingEventEntries,
+  );
+  if (pendingEventEntries.length === preflight.pendingEventEntries.length) {
+    return { kind: "ready", prepared } as const;
+  }
+  const skip = (result: Extract<HeartbeatRunResult, { status: "skipped" }>) => {
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: result.reason,
+      durationMs: Date.now() - startedAt,
+    });
+    return { kind: "skipped", result } as const;
+  };
+  const current = { ...preflight, pendingEventEntries };
+  if (shouldSkipConsumedExecWake(current, scheduledTasks)) {
+    return skip({ status: "skipped", reason: HEARTBEAT_SKIP_NO_PENDING_EVENT });
+  }
+  // Session publication belongs to surviving session-owned work; coalesced work cannot inherit it.
+  const internalProjection = pendingEventEntries.some((event) => isSessionOwnedEvent(wake, event))
+    ? prepared.internalProjection
+    : undefined;
+  const target = wake.heartbeat?.target;
+  if (
+    // Only the session's own completion lets a wake pass agent-wide busy guards.
+    (wake.isSessionExecCompletion &&
+      !pendingEventEntries.some((event) => isExecCompletionEvent(event.text))) ||
+    isSessionOwnedCompletion(
+      wake,
+      preflight.pendingEventEntries,
+      prepared.internalProjection !== undefined,
+    ) !== isSessionOwnedCompletion(wake, pendingEventEntries, internalProjection !== undefined) ||
+    (prepared.inspectsRunQueue &&
+      (target === undefined || target === "owner" || target === "last") &&
+      channelRouteDedupeKey(resolveSystemEventDeliveryContext(pendingEventEntries)) !==
+        channelRouteDedupeKey(preflight.turnSourceDeliveryContext))
+  ) {
+    // Admission or routing belonged to a consumed occurrence. Retry at once so the wake
+    // owner rebuilds both from the live queue instead of reusing them for the survivors.
+    return skip({ status: "skipped", reason: HEARTBEAT_SKIP_PREEMPTED, retryAtMs: Date.now() });
+  }
+  return {
+    kind: "ready",
+    prepared: {
+      ...prepared,
+      internalProjection,
+      ...resolveHeartbeatRunSelection({
+        wake,
+        preflight: current,
+        delivery: prepared.delivery,
+        showAlerts: prepared.visibility.showAlerts,
+        hasInternalProjection: internalProjection !== undefined,
+        useHeartbeatResponseTool: prepared.usesHeartbeatResponseTool,
+      }),
+    },
+  } as const;
+}

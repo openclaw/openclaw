@@ -154,13 +154,7 @@ export async function resolveHeartbeatPreflight(params: {
 
   // The exec completion can be acknowledged by process poll after its wake is
   // queued. Treat that stale wake as consumed without touching unrelated events.
-  if (
-    wakeFlags.isExecEventWake &&
-    !basePreflight.authoritativeScheduledTick &&
-    !params.scheduledTasks?.length &&
-    !hasTaggedCronEvents &&
-    !pendingEventEntries.some((event) => isExecCompletionEvent(event.text))
-  ) {
+  if (shouldSkipConsumedExecWake(basePreflight, params.scheduledTasks ?? [])) {
     return {
       ...basePreflight,
       skipReason: HEARTBEAT_SKIP_NO_PENDING_EVENT,
@@ -181,6 +175,24 @@ export async function resolveHeartbeatPreflight(params: {
     };
   }
   return basePreflight;
+}
+
+/** An exec wake has no work left without a completion, cron event, cadence tick, or due task. */
+export function shouldSkipConsumedExecWake(
+  preflight: Pick<
+    HeartbeatPreflight,
+    "isExecEventWake" | "authoritativeScheduledTick" | "pendingEventEntries"
+  >,
+  scheduledTasks: readonly HeartbeatScheduledTask[],
+): boolean {
+  return (
+    preflight.isExecEventWake &&
+    !preflight.authoritativeScheduledTick &&
+    scheduledTasks.length === 0 &&
+    !preflight.pendingEventEntries.some(
+      (event) => event.contextKey?.startsWith("cron:") || isExecCompletionEvent(event.text),
+    )
+  );
 }
 
 type HeartbeatPromptResolution = {

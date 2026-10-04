@@ -21,6 +21,7 @@ import {
 import {
   prepareHeartbeatRunStage,
   resolveHeartbeatWakeStage,
+  revalidatePreparedHeartbeatRun,
   type HeartbeatRunOptions,
 } from "./heartbeat-runner-execution.js";
 import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
@@ -34,10 +35,11 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
   }
   // Preparation can admit isolated work; later busy skips must retain the occurrence.
   markSessionEventWakeWorkStarted();
-  const prepared = await prepareHeartbeatRunStage(wake);
-  if (prepared.kind === "skipped") {
-    return { status: "skipped", reason: prepared.reason };
+  const preparation = await prepareHeartbeatRunStage(wake);
+  if (preparation.kind === "skipped") {
+    return { status: "skipped", reason: preparation.reason };
   }
+  let prepared = preparation;
   const { cfg, agentId, heartbeat, startedAt } = wake;
   const { delivery, visibility, sender, runSessionKey, suppressOriginatingContext } = prepared;
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
@@ -74,6 +76,13 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
     const { dispatchInboundMessageWithRoutedChannelDispatcher } =
       await import("../auto-reply/dispatch.js");
     await typing?.onReplyStart();
+    const revalidated = revalidatePreparedHeartbeatRun(wake, prepared);
+    if (revalidated.kind === "skipped") {
+      return revalidated.result;
+    }
+    // Outcome handling consumes the same selection the agent receives.
+    prepared = revalidated.prepared;
+    policy.prepared = prepared;
     const heartbeatContext = {
       Body: appendCronStyleCurrentTimeLine(prepared.prompt, cfg, startedAt),
       From: sender,
