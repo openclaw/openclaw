@@ -137,8 +137,8 @@ describe("plugin npm artifact security scan", () => {
         packageName: "@openclaw/signal",
         packageVersion: "1.0.0",
         tarball: packageTarball("@openclaw/signal", {
-          "dist/index.js": "export const value = 1;\n",
-          "src/daemon.ts": SPAWN_SOURCE,
+          "dist/daemon.js": SPAWN_SOURCE,
+          "src/index.ts": "export const value = 1;\n",
         }),
       }),
     ).toThrow("unreviewed critical findings in exact npm artifact");
