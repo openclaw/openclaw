@@ -232,7 +232,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
       const observer = observeAliasRootProbes(stateDir);
       expect(receive()).toBe(true);
       const probes = observer.finish("event-merged-suggestion-stress");
-      expect(probes.aliasRootProbes).toBe(1);
+      expect(probes.aliasRootProbes).toBe(0);
       expect(probes.otherRootProbes).toBeLessThanOrEqual(7);
     });
   });
@@ -286,7 +286,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
             `broadcast-${shape}-${phase}-${client.connId}`,
             eventKeys.length,
           );
-          expect.soft(probes.aliasRootProbes).toBe(1);
+          expect.soft(probes.aliasRootProbes).toBe(0);
           expect.soft(probes.otherRootProbes).toBeLessThanOrEqual(7);
           return allowed;
         },
@@ -657,9 +657,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
       expect(broadcastToConnIds.mock.calls[0]?.[1]?.catalog.hosts[0]?.sessions).toEqual([]);
       expect(broadcastToConnIds.mock.calls[1]?.[1]?.catalog.hosts[0]?.sessions).toHaveLength(100);
       expect(respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toHaveLength(100);
-      // Cache key, three publications, and the explicit post-merge warm read (three probes cold).
-      expect(probes).toBeGreaterThan(0);
-      expect(probes).toBeLessThanOrEqual(7);
+      expect(probes).toBe(0);
     });
   });
 });
