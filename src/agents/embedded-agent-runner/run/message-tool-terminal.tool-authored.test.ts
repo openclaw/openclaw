@@ -71,9 +71,19 @@ async function runBatch(params: {
   capableToolNames?: string[];
   configureAgent?: (agent: Agent) => void;
 }) {
-  const gates = new Map(params.tools.map((tool) => [tool.name, createDeferred()]));
-  const started = new Map(params.tools.map((tool) => [tool.name, createDeferred()]));
-  const finished = new Map(params.tools.map((tool) => [tool.name, createDeferred()]));
+  const signalsByTool = new Map(
+    params.tools.map((tool) => [
+      tool.name,
+      { gate: createDeferred(), started: createDeferred(), finished: createDeferred() },
+    ]),
+  );
+  const signals = (name: string) => {
+    const toolSignals = signalsByTool.get(name);
+    if (!toolSignals) {
+      throw new Error(`no planned tool ${name}`);
+    }
+    return toolSignals;
+  };
   const completed: string[] = [];
   const tools: AgentTool[] = params.tools.map((plan) => ({
     name: plan.name,
@@ -83,10 +93,10 @@ async function runBatch(params: {
       ? Type.Object({ path: Type.String() }, { additionalProperties: false })
       : Type.Object({}, { additionalProperties: false }),
     execute: async () => {
-      started.get(plan.name)?.resolve();
-      await gates.get(plan.name)?.promise;
+      signals(plan.name).started.resolve();
+      await signals(plan.name).gate.promise;
       completed.push(plan.name);
-      finished.get(plan.name)?.resolve();
+      signals(plan.name).finished.resolve();
       if (plan.isError) {
         throw new Error(`${plan.name} failed`);
       }
@@ -127,10 +137,10 @@ async function runBatch(params: {
   });
   const run = agent.prompt("confirm the order");
   const executing = params.tools.filter((plan) => !plan.rejectBeforeExecution);
-  await Promise.all(executing.map((plan) => started.get(plan.name)?.promise));
+  await Promise.all(executing.map((plan) => signals(plan.name).started.promise));
   for (const name of params.completionOrder) {
-    gates.get(name)?.resolve();
-    await finished.get(name)?.promise;
+    signals(name).gate.resolve();
+    await signals(name).finished.promise;
   }
   await run;
   return { requests, completed };
