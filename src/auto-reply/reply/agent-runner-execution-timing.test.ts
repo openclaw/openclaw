@@ -1,5 +1,7 @@
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { InternalSessionEntry } from "../../config/sessions.js";
+import * as transcriptWatermarks from "../../config/sessions/session-transcript-watermark.js";
 import { deriveGatewaySessionLifecycleSnapshot } from "../../gateway/session-lifecycle-state.js";
 import { emitAgentEvent, onAgentEvent, type AgentEventPayload } from "../../infra/agent-events.js";
 import {
@@ -11,6 +13,53 @@ import {
 vi.mock("../../gateway/session-utils.js", () => ({ loadSessionEntry: vi.fn() }));
 
 const state = await setupAgentRunnerExecutionTestState();
+
+it("keeps native start facts when an earlier event's preparation settles late", async () => {
+  const { executeAgentTurn } = await import("./agent-runner-execution.js");
+  const onAgentRunStart = vi.fn();
+  const entered = createDeferred();
+  const fallback =
+    createDeferred<
+      Awaited<ReturnType<typeof transcriptWatermarks.readSessionTranscriptStartAsync>>
+    >();
+  const nativeStart = {
+    agentId: "main",
+    sessionId: "session",
+    sessionKey: "main",
+    storePath: "/synthetic/sessions.json",
+    generation: "native-start",
+    maxSeq: 11,
+  };
+  const prepare = vi
+    .spyOn(transcriptWatermarks, "readSessionTranscriptStartAsync")
+    .mockImplementationOnce(() => {
+      entered.resolve();
+      return fallback.promise;
+    });
+  state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+    params.onExecutionPhase?.({ phase: "model_call_started" });
+    expect(onAgentRunStart).not.toHaveBeenCalled();
+    const early = params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
+    await entered.promise;
+    await params.onAgentEvent?.({
+      stream: "lifecycle",
+      data: { phase: "start" },
+      transcriptStart: nativeStart,
+    });
+    fallback.resolve({ ...nativeStart, generation: "earlier-read", maxSeq: 8 });
+    await early;
+    return { payloads: [{ text: "done" }], meta: {} };
+  });
+  try {
+    await executeAgentTurn(createMinimalRunAgentTurnParams({ opts: { onAgentRunStart } }));
+    expect(onAgentRunStart).toHaveBeenCalledTimes(1);
+    expect(onAgentRunStart.mock.lastCall?.[3]).toEqual(nativeStart);
+    expect(prepare).toHaveBeenCalledTimes(1);
+  } finally {
+    fallback.resolve(nativeStart);
+    prepare.mockRestore();
+  }
+});
 
 it.each(["embedded preparation", "fallback preparation"])(
   "times %s failure between successful turns without borrowing the previous start",
@@ -28,6 +77,14 @@ it.each(["embedded preparation", "fallback preparation"])(
       Object.assign(session, deriveGatewaySessionLifecycleSnapshot({ session, event }));
     });
     const onAgentRunStart = vi.fn();
+    const transcriptStart = {
+      agentId: "main",
+      sessionId: "session",
+      sessionKey: "main",
+      storePath: "/synthetic/sessions.json",
+      generation: "prompt-start-generation",
+      maxSeq: 11,
+    };
     const turn = createMinimalRunAgentTurnParams({ opts: { onAgentRunStart } });
     const run = (runId: string) =>
       executeAgentTurn({
@@ -39,7 +96,8 @@ it.each(["embedded preparation", "fallback preparation"])(
     const succeed = async (params: EmbeddedAgentParams) => {
       const data = { phase: "start", startedAt: now };
       emitAgentEvent({ runId: params.runId, sessionKey: "main", stream: "lifecycle", data });
-      await params.onAgentEvent?.({ stream: "lifecycle", data });
+      await params.onAgentEvent?.({ stream: "lifecycle", data, transcriptStart });
+      expect(onAgentRunStart.mock.lastCall?.[3]).toEqual(transcriptStart);
       expect(session).toMatchObject({ status: "running", startedAt: now });
       expect(session.lastRunError).toBeUndefined();
       expect(session.runtimeMs).toBeUndefined();

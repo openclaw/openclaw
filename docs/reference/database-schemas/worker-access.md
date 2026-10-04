@@ -1503,9 +1503,21 @@ delivery validation retains the existing writer FIFO through synchronous host
 consumption; the native connection's mutation witness also rejects an intervening
 synchronous SDK write. Source identity and current run authority are rechecked
 after reads. Native writer callbacks, shipped synchronous SDK compatibility,
-and process-held incognito retain their existing owners. Context and watermark
-validation remain separate work. Schemas, retention, durability, and update
+and process-held incognito retain their existing owners. Schemas, retention, durability, and update
 behavior are unchanged.
+
+Awaited model-context reads retain their captured physical source through scanning
+and final admission, version, and completed-turn anchor validation in the history
+reader. The anchor reader retains its writer FIFO and native mutation witness
+through synchronous acceptance of the detached context. Watermarks and message-presence probes use that same reader lifecycle;
+cold markers and hot rows remain in one synchronous snapshot, and restoration
+keeps its existing owner. Native reply-start callbacks consume the SessionManager's
+acknowledged transcript version at the first execution event. Other bundled
+execution paths prepare that boundary before their synchronous start notification.
+Activity recap settlement rechecks its current owner after reading the final
+watermark. These facts select transcript boundaries, never writer or turn authority.
+Released synchronous SDK callbacks and process-held incognito retain their existing
+contracts. Schemas, stored bytes, retention, durability, and update behavior are unchanged.
 
 Awaited full-transcript event reads use the same history worker's hydration stream.
 Compaction preflight, reset hooks, BTW context, exports, and the asynchronous SDK

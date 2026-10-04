@@ -24,6 +24,11 @@ export const sessionManagerReadInitialContext: unique symbol = Symbol.for(
   "openclaw.session-manager.read-initial-context",
 );
 
+/** @internal Committed manager facts for the current execution boundary. */
+export const sessionManagerReadTranscriptStart: unique symbol = Symbol.for(
+  "openclaw.session-manager.read-transcript-start",
+);
+
 export type CurrentTurnReplayWitness = {
   anchor: TranscriptEntryAnchor;
   version: SessionTranscriptContextVersion;

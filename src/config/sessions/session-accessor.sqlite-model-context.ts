@@ -163,6 +163,42 @@ export function validateSessionTranscriptContextAdmission(
   }
 }
 
+/** Validate detached context using the final reader's transaction-local facts. */
+export function validateSessionTranscriptContextInDatabase(
+  database: Pick<OpenClawAgentDatabase, "db" | "path">,
+  resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>,
+  validation: {
+    version?: SessionTranscriptContextVersion;
+    admission?: UserTurnTranscriptAdmissionReceipt;
+    through?: TranscriptEntryAnchor;
+  },
+): void {
+  const { version, admission, through } = validation;
+  if (admission) {
+    if (
+      !runWithSessionTranscriptReadFence(admission, () =>
+        resolveSqliteSessionTranscriptReadFence({ database, ...resolved }),
+      )
+    ) {
+      throw new SessionTranscriptReadFenceError(
+        "Current-turn transcript admission is no longer readable",
+      );
+    }
+  } else if (!through) {
+    const current = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
+    if (
+      current?.generation !== version?.generation ||
+      current?.rawSeq !== version?.rawSeq ||
+      current?.updatedAt !== version?.updatedAt
+    ) {
+      throw new SessionTranscriptReadFenceError("Session transcript changed during context read");
+    }
+  }
+  if (through) {
+    assertContextAnchor(database, resolved, through);
+  }
+}
+
 /** Select an owned suffix before SQLite payloads can enter JavaScript or cross a worker. */
 function selectBoundedModelRequests(
   requests: ModelContextRequest[],

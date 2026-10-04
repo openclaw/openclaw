@@ -49,17 +49,18 @@ const sessionEntries = createTranscriptReadPool<
 // Branch scans share background compute admission without delaying foreground history or context.
 const branchSummaries = createTranscriptReadPool<SessionBranchSummaryWorkerInput>(true);
 
-export async function readSessionTranscriptModelContextAsync(
+export async function readSessionTranscriptModelContextInWorker(
   target: SessionTranscriptRuntimeTarget,
   admission: SessionModelContextWorkerInput["admission"],
   signal?: AbortSignal,
   through?: SessionModelContextWorkerInput["through"],
   limits?: SessionModelContextWorkerInput["limits"],
+  expectedIdentity?: SessionModelContextWorkerInput["expectedIdentity"],
 ): Promise<ReturnType<typeof readSessionTranscriptModelContext>> {
   signal?.throwIfAborted();
   const value = unwrapSessionTranscriptWorkerReply<"model-context" | "sqlite-target">(
     await modelContextReads.run(
-      { kind: "model-context", target, admission, through, limits },
+      { kind: "model-context", target, admission, through, limits, expectedIdentity },
       { timeoutMs: 60_000, signal },
     ),
   );

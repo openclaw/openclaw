@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { observeReplyDelivery } from "../../agents/reply-completion.js";
+import { sessionManagerReadTranscriptStart } from "../../agents/sessions/session-manager-current-turn.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../../agents/stream-message-shared.js";
 import {
   copyReplyPayloadMetadata,
@@ -201,6 +203,32 @@ describe("buildTranscriptReplyTextFromInputs", () => {
 });
 
 describe("chat delivery watermark preparation", () => {
+  it("consumes the committed manager boundary without caller transcript SQL", async () => {
+    await withOpenClawTestState({ label: "chat-prepared-start" }, async () => {
+      const { dispatch, append, scope, runId } = await createReplyTranscriptFixture();
+      await append("prior-answer", { role: "assistant", content: "Earlier answer." });
+      const manager = await SessionManager.openAsync(scope);
+      const observed = observeHostDataSql();
+      try {
+        const start = manager[sessionManagerReadTranscriptStart]();
+        expect(observed.queries).toEqual([]);
+        expect(dispatch.captureAgentTranscriptStart(runId, start)).toBe(true);
+        expect(
+          observed.queries.filter((sql) =>
+            /transcript_events|transcript_rewrite_watermarks|session_transcript_cold_archives/i.test(
+              sql,
+            ),
+          ),
+        ).toEqual([]);
+      } finally {
+        observed.restore();
+      }
+      expect(await dispatch.resolveReplyDelivery()).toBe("missing");
+      await append("current-answer", { role: "assistant", content: "Current answer." });
+      expect(await dispatch.resolveReplyDelivery()).toBe("delivered");
+    });
+  });
+
   it("refuses a final anchor snapshot changed by an unpublished native append", async () => {
     await withOpenClawTestState({ label: "chat-anchor-delay" }, async () => {
       const { dispatch, append, scope } = await createReplyTranscriptFixture();

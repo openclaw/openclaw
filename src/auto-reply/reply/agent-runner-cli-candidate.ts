@@ -218,6 +218,8 @@ export async function runCliFallbackCandidate(
           turn.followupRun.run.agentId,
         );
         let droppedCliSessionReplacement = false;
+        await params.prepareAgentRunStart();
+        assertSettlementCurrent();
         const candidateResult = await runCliAgentWithLifecycle({
           runId: params.runId,
           lifecycleGeneration: params.lifecycleGeneration,

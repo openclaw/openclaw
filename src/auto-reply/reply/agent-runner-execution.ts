@@ -22,6 +22,7 @@ import { resolveReplyExpectation } from "../../agents/reply-completion.js";
 import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { logVerbose } from "../../globals.js";
 import {
   captureAgentRunLifecycleGeneration,
@@ -40,6 +41,7 @@ import {
 import { progressCardRefreshRunProjection } from "../../sessions/input-provenance.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { captureCommandOwnerAssertion } from "../command-owner-authority.js";
+import type { PreparedReplyTranscriptStart } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../types.js";
 import {
   clearRecoveredAutoFallbackPrimaryProbeSelection,
@@ -242,16 +244,54 @@ async function executeAgentTurnInternalLoop(
     throw error;
   }
   let didNotifyAgentRunStart = false;
+  let preparedTranscriptStart: PreparedReplyTranscriptStart | null | undefined =
+    params.opts?.onAgentRunStart && params.sessionKey ? undefined : null;
+  let transcriptStartPreparation: Promise<void> | undefined;
+  const prepareAgentRunStart = () => {
+    if (didNotifyAgentRunStart || preparedTranscriptStart !== undefined || !params.sessionKey) {
+      return;
+    }
+    if (transcriptStartPreparation) {
+      return transcriptStartPreparation;
+    }
+    const target = {
+      agentId: effectiveRun.agentId,
+      sessionId: params.replyOperation?.sessionId ?? effectiveRun.sessionId,
+      sessionKey: params.sessionKey,
+      storePath:
+        params.storePath ??
+        resolveSessionStorePathCore(runtimeConfig.session?.store, {
+          agentId: effectiveRun.agentId,
+        }),
+    };
+    return (transcriptStartPreparation = (async () => {
+      const { readSessionTranscriptStartAsync } =
+        await import("../../config/sessions/session-transcript-watermark.js");
+      const prepared = await readSessionTranscriptStartAsync(target);
+      preparedRunAdmission.assertSourceCurrent();
+      params.opts?.abortSignal?.throwIfAborted();
+      params.replyOperation?.abortSignal?.throwIfAborted();
+      if (!didNotifyAgentRunStart) {
+        preparedTranscriptStart = prepared;
+      }
+    })());
+  };
   let lastRunStartupPhase: ReturnType<typeof resolveRunStartupPhase>;
-  const notifyAgentRunStart = () => {
-    if (didNotifyAgentRunStart) {
+  const notifyAgentRunStart = (transcriptStart?: PreparedReplyTranscriptStart | null) => {
+    const prepared = transcriptStart === undefined ? preparedTranscriptStart : transcriptStart;
+    if (didNotifyAgentRunStart || prepared === undefined) {
       return;
     }
     didNotifyAgentRunStart = true;
     if (params.replyOperation) {
       markReplyOperationExecutionStarted(params.replyOperation);
     }
-    params.opts?.onAgentRunStart?.(runId, admittedRunContext.current?.executionIdentityToken);
+    params.opts?.onAgentRunStart?.(
+      runId,
+      admittedRunContext.current?.executionIdentityToken,
+      undefined,
+      prepared,
+    );
   };
   const signalExecutionPhaseForTyping = (
     info: Parameters<NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>>[0],
@@ -343,6 +383,7 @@ async function executeAgentTurnInternalLoop(
         state: fallbackCycleState,
         presentation,
         directBlockDeliveries,
+        prepareAgentRunStart,
         notifyAgentRunStart,
         signalExecutionPhaseForTyping,
         notifyUserAboutCompaction,

@@ -304,6 +304,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             bootstrapPromptWarningSignaturesSeen: params.state.bootstrapPromptWarningSignaturesSeen,
             currentTurnImages: params.currentTurnImages,
             signalExecutionPhaseForTyping: signalExecutionPhaseForCandidate,
+            prepareAgentRunStart: params.prepareAgentRunStart,
             notifyAgentRunStart: params.notifyAgentRunStart,
             preserveProgressCallbackStartOrder,
             presentation: params.presentation,
