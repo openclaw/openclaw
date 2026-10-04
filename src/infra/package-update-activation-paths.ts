@@ -85,11 +85,22 @@ export function packageActivationIdentity(
   return `${stat.dev}:${stat.ino}`;
 }
 
-export function privatePackageActivationIdentity(file: string, directory: boolean): string {
+export function privatePackageActivationIdentity(
+  file: string,
+  role: "anchor" | "control" | "journal" | "helper" | "rollback-journal",
+): string {
+  const directory = role === "anchor" || role === "control";
   const value = packageActivationIdentity(file, directory);
   const stat = fs.lstatSync(file);
   if ((stat.mode & 0o077) !== 0 || (!directory && stat.nlink !== 1)) {
-    throw new Error("Package publication recovery permissions are unsafe");
+    const basename = path
+      .basename(file)
+      .replace(/[^A-Za-z0-9_.-]/gu, "_")
+      .slice(0, 64);
+    const mode = (stat.mode & 0o7777).toString(8).padStart(4, "0");
+    throw new Error(
+      `Package recovery ${role} ${JSON.stringify(basename)} unsafe: mode=${mode} nlink=${stat.nlink} uid=${stat.uid}; expected owner-only mode${directory ? "" : " nlink=1"}.`,
+    );
   }
   return value;
 }
