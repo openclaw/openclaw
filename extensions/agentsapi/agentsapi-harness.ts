@@ -3,7 +3,9 @@ import {
   embeddedAgentLog,
   resolveAgentExecutorController,
   AgentHarnessPreflightError,
+  AgentHarnessSessionCleanupError,
   AgentHarnessSessionSupersededError,
+  formatErrorMessage,
   toolPolicy,
   type AgentHarnessAttemptParamsV2,
   type AgentHarnessV2,
@@ -220,14 +222,22 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
       }
     },
     reset: async (params) => {
-      assertCurrent();
-      if (params.sessionId) {
-        if (runningSessions.has(params.sessionId) || preparedNativeCleanup.has(params.sessionId)) {
-          await drainForExecutorCleanup(params.sessionId);
-          assertCurrent();
+      try {
+        assertCurrent();
+        if (params.sessionId) {
+          if (
+            runningSessions.has(params.sessionId) ||
+            preparedNativeCleanup.has(params.sessionId)
+          ) {
+            await drainForExecutorCleanup(params.sessionId);
+            assertCurrent();
+          }
+          await getBindings().reset(params.sessionId, assertCurrent);
+          preparedNativeCleanup.delete(params.sessionId);
         }
-        await getBindings().reset(params.sessionId, assertCurrent);
-        preparedNativeCleanup.delete(params.sessionId);
+      } catch (error) {
+        // Native ownership is required cleanup, not a best-effort reset observer.
+        throw new AgentHarnessSessionCleanupError(formatErrorMessage(error), { cause: error });
       }
     },
     withSessionDeletion: async (params, run) => {

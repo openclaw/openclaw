@@ -942,7 +942,14 @@ it.each([
                   { ...fixture.params.sessionTarget, assertCurrent: () => {} },
                   async (mutation) => mutation.commit(),
                 );
-          await expect(cleanup()).rejects.toBe(failure);
+          if (operation === "reset") {
+            await expect(cleanup()).rejects.toMatchObject({
+              name: "AgentHarnessSessionCleanupError",
+              cause: failure,
+            });
+          } else {
+            await expect(cleanup()).rejects.toBe(failure);
+          }
           expect(await fixture.openStore().lookup(fixture.params.sessionId)).toEqual(saved);
           expect(fixture.events).toEqual([]);
           await cleanup();

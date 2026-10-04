@@ -116,6 +116,13 @@ The harness retains session binding persistence, native readiness checks, work
 settlement before retirement, and retryable cleanup. An executor controller
 does not confer permission to reset unrelated sessions or stop a shared runtime.
 
+A harness whose `reset` cannot settle required native work throws
+`AgentHarnessSessionCleanupError` from `openclaw/plugin-sdk/agent-harness-runtime`.
+The host waits for the other cleanup callbacks, then rejects the reset before
+replacing the local session. Ordinary reset-hook errors remain best effort.
+Reply-driven resets use the same required-cleanup check before committing their
+session boundary.
+
 ### Isolated completion
 
 The optional `runIsolatedCompletionV2(params)` capability serves product paths

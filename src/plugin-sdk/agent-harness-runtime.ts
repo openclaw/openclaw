@@ -140,6 +140,7 @@ export type {
 } from "../agents/harness/types.js";
 export {
   AgentHarnessPreflightError,
+  AgentHarnessSessionCleanupError,
   AgentHarnessSessionSupersededError,
 } from "../agents/harness/errors.js";
 export { projectSettledTurnFinalizationAttemptResult } from "../agents/harness/settled-turn-finalization-result.js";

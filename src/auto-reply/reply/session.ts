@@ -986,6 +986,13 @@ async function initSessionStateAttemptLocked(
       if (!previousSessionEntry || !currentEntry) {
         return;
       }
+      await resetRegisteredAgentHarnessSessions({
+        agentId,
+        sessionId: currentEntry.sessionId,
+        sessionKey,
+        sessionFile: sessionKey,
+        reason: previousSessionEndReason ?? "unknown",
+      });
       const memoryEvent = resetTriggered ? "command" : "session";
       const memoryAction = resetTriggered ? (previousSessionEndReason ?? "new") : "auto-reset";
       if (hasInternalHookListeners(memoryEvent, memoryAction)) {
@@ -1108,13 +1115,6 @@ async function initSessionStateAttemptLocked(
           error: String(error),
         });
       },
-    });
-    await resetRegisteredAgentHarnessSessions({
-      agentId,
-      sessionId: previousSessionEntry.sessionId,
-      sessionKey,
-      sessionFile: sessionKey,
-      reason: previousSessionEndReason ?? "unknown",
     });
     // Direct-message browser tabs use a peer-scoped runtime identity even when
     // their transcript aliases main; cleanup must carry both exact keys.
