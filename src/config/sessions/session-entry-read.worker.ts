@@ -9,6 +9,7 @@ import {
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
+  assertOpenClawAgentDatabaseIdentity,
   isOpenClawAgentDatabasePathCurrent,
   readOpenClawAgentDatabaseIdentity,
 } from "../../state/openclaw-agent-db-identity.js";
@@ -24,15 +25,19 @@ import { readSessionCreationSnapshotInDatabase } from "./session-accessor.sqlite
 import { readExactSessionEntryCandidatesInDatabase } from "./session-accessor.sqlite-entry-cache.js";
 import {
   listSessionEntriesReadOnly,
+  listSqliteSessionEntriesFromDatabase,
   readSelectedSessionEntriesInDatabase,
 } from "./session-accessor.sqlite-entry-list.read.js";
 import {
+  prepareExactSessionEntryRowReads,
+  readExactSessionEntryRow,
   readSessionEntryByIdInDatabase,
   readSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
 import { participantRecordsBySessionKey } from "./session-accessor.sqlite-participant-projection.js";
 import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
+import { resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
 import {
   hasSessionEntriesByStatus,
   readSessionEntriesByStatus,
@@ -45,7 +50,6 @@ import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sql
 import {
   assertCanonicalSessionKeyWrite,
   assertCanonicalSqliteSessionKeysCurrent,
-  assertCanonicalSqliteSessionRowsCurrent,
   canonicalSessionKeyMigrationRequiredError,
   readWithCanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
@@ -61,6 +65,7 @@ import type {
   SessionRuntimeTargetWorkerResult,
 } from "./session-entry-read.types.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
+import type { SessionStoreProjectionWorkerInput } from "./session-store-projection.types.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
   MAX_SESSION_ROW_FACTS_KEYS,
@@ -73,7 +78,49 @@ import {
   type SessionRowDatabaseFacts,
   type SessionRowFactsWorkerInput,
   type SessionRowFactsWorkerResult,
+  type SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
+import { normalizeStoreSessionKey } from "./store-entry.js";
+
+/** Hydrate a newly admitted resident store using the projection lane's native reader. */
+export function readSessionStoreProjection(
+  request: SessionStoreProjectionWorkerInput,
+): SessionTranscriptWorkerValues["session-store-projection"] {
+  const env = cloneEnvWithPlatformSemantics(request.env);
+  const scope = {
+    agentId: request.database.agentId,
+    databaseAgentId: request.database.agentId,
+    storePath: request.database.path,
+    projection: "list" as const,
+    clone: false,
+    env,
+  };
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) => {
+      assertOpenClawAgentDatabaseIdentity(database, request.expectedIdentity);
+      const source = readOpenClawAgentDatabaseIdentity(database);
+      if (typeof source.identity !== "string") {
+        throw new Error("Resident session projection requires a durable store");
+      }
+      const entries = listSqliteSessionEntriesFromDatabase(
+        database,
+        resolveSqliteScope({ ...scope, sessionKey: "" }),
+        scope,
+        { deferParticipants: true },
+      );
+      return {
+        entries,
+        source: {
+          identity: source.identity,
+          birthtime: source.birthtime,
+          filename: source.filename,
+        },
+      };
+    },
+    { ...request.database, env },
+  );
+  return { kind: "session-store-projection", ...(result.found ? result.value : { entries: [] }) };
+}
 
 /** Private entry and transcript-target reads share the same admitted reader and error codec. */
 export async function readSessionEntryWorkerRequest(
@@ -299,6 +346,29 @@ export function readSessionDiagnosticText(request: SessionDiagnosticTextWorkerIn
 export function readExactSessionEntriesWithLifecycle(
   request: SessionExactEntriesWorkerInput,
 ): SessionExactEntriesWorkerResult {
+  if (request.projection === "exact") {
+    // Logical accessors validate only their candidates; unrelated rows are not listing admission.
+    const read = withOpenClawAgentDatabaseReadOnly(
+      (database) =>
+        runSqliteDeferredTransactionSync(database.db, () =>
+          request.sessionKeys.flatMap((sessionKey) => {
+            const entry = readExactSessionEntryRow(
+              database,
+              sessionKey,
+              "full",
+              "canonical",
+            )?.entry;
+            return entry ? [{ sessionKey, entry }] : [];
+          }),
+        ),
+      { ...request.database, env: request.env },
+    );
+    return {
+      kind: "session-exact-entries",
+      entries: read.found ? read.value : [],
+      lifecycleTimestamps: {},
+    };
+  }
   if (request.statusSelection) {
     const { statuses, presenceOnly } = request.statusSelection;
     const read = withOpenClawAgentDatabaseReadOnly(
@@ -395,6 +465,25 @@ export function readExactSessionEntriesWithLifecycle(
                   );
               if (!selected.ok) {
                 throw selected.error;
+              }
+              if (request.replyInitializationSessionKey) {
+                const parent = selected.value.find(
+                  ({ sessionKey }) => sessionKey === request.replyInitializationSessionKey,
+                )?.entry.parentSessionKey;
+                const parentKey = parent ? normalizeStoreSessionKey(parent) : undefined;
+                if (
+                  parentKey &&
+                  !selected.value.some(({ sessionKey }) => sessionKey === parentKey)
+                ) {
+                  const related = expectDefined(
+                    readExactSessionEntryCandidatesInDatabase(database, [[parentKey]], "full")[0],
+                    "reply initialization parent read result",
+                  );
+                  if (!related.ok) {
+                    throw related.error;
+                  }
+                  selected.value.push(...related.value);
+                }
               }
               if (request.projection === "sharing") {
                 const source = readOpenClawAgentDatabaseIdentity(database);
@@ -537,18 +626,20 @@ export function readSessionRowDatabaseFacts(
       readWithCanonicalSessionReaderContinuation(database, request.continuation, () =>
         withSqlitePostCommitPublications(database.db, () =>
           runSqliteDeferredTransactionSync(database.db, () => {
-            assertCanonicalSqliteSessionRowsCurrent(database, request.sessionKeys);
-            const selected = expectDefined(
-              readExactSessionEntryCandidatesInDatabase(database, [request.sessionKeys], "list")[0],
-              "session row facts read result",
+            const readRow = prepareExactSessionEntryRowReads(
+              database,
+              request.sessionKeys,
+              "list",
+              "canonical",
             );
-            if (!selected.ok) {
-              throw selected.error;
-            }
             const boardKeys = readBoardSessionKeys(database, request.sessionKeys);
             return {
               kind: "session-row-facts" as const,
-              rows: selected.value.map(({ sessionKey, entry }) => {
+              rows: request.sessionKeys.flatMap((sessionKey) => {
+                const entry = readRow(sessionKey)?.entry;
+                if (!entry) {
+                  return [];
+                }
                 const facts: SessionRowDatabaseFacts = {
                   sessionKey,
                   entry,

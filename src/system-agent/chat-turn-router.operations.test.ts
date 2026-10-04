@@ -369,7 +369,7 @@ describe("SystemAgentChatEngine operations", () => {
         readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
         loadAuthProfileStoreForRuntime: vi.fn(() => {
           authReads += 1;
-          // Turn start, overview, and post-agent checks see the verified grant.
+          // Turn start, dispatch, and post-agent checks see the verified grant.
           // The fourth read is the last-moment guard inside applyPersistentOperation.
           if (authReads === 4) {
             credential = { ...credential, access: "access-b", refresh: "refresh-b" };
@@ -571,7 +571,12 @@ describe("SystemAgentChatEngine operations", () => {
       ...baseConfig,
       agents: {
         ...baseConfig.agents,
-        list: baseConfig.agents.list.map((agent) => ({ ...agent, model: "openai/gpt-5.6-sol" })),
+        entries: Object.fromEntries(
+          Object.entries(baseConfig.agents.entries).map(([id, agent]) => [
+            id,
+            { ...agent, model: "openai/gpt-5.6-sol" },
+          ]),
+        ),
       },
     } satisfies OpenClawConfig;
     const verifiedInference = await createAmbientVerifiedBinding(baseConfig);

@@ -37,7 +37,7 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import * as entryReads from "../../config/sessions/session-entry-read-runtime.js";
-import type { TypingMode } from "../../config/types.js";
+import type { OpenClawConfig, TypingMode } from "../../config/types.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import {
   buildHandledBeforeAgentReplyPayloads,
@@ -2089,13 +2089,13 @@ describe("runReplyAgent heartbeat followup guard", () => {
 });
 
 describe("runReplyAgent pending final delivery capture", () => {
-  it("delivers an authenticated channel reply through the configured default agent", async () => {
+  it("delivers an authenticated channel reply through the explicitly selected agent", async () => {
     const config = {
       agents: {
-        list: [{ id: "ops", default: true }, { id: "worker" }],
+        entries: { ops: {}, worker: {} },
         defaults: { compaction: { memoryFlush: {} } },
       },
-    };
+    } satisfies OpenClawConfig;
     const sessionEntry = makeSessionEntry();
     const sessionStore = { main: sessionEntry };
     const storePath = join(
@@ -2124,7 +2124,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     const { followupRun, run, sourceTurnId } = createMinimalRun({
       sessionCtx,
       runOverrides: {
-        agentId: undefined,
+        agentId: "ops",
         config,
         messageProvider: "discord",
       },
@@ -4479,7 +4479,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(onBlockReply).toHaveBeenCalledOnce();
       expect(onBlockReply).toHaveBeenCalledWith(
         expect.objectContaining({
-          text: "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.",
+          text: "LLM request rejected: Synthetic provider failure for delivery proof\\.",
           isError: true,
         }),
       );

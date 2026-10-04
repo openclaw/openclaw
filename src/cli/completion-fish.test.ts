@@ -31,6 +31,55 @@ describe("completion-fish helpers", () => {
     );
   });
 
+  it
+    .skipIf(spawnSync("fish", ["--version"], { timeout: 15_000 }).status !== 0)
+    .each([
+      "Plain description",
+      "Files in C:\\",
+      "Two \\\\ separators",
+      "Bob's path\\",
+      "Slash before \\'quote'",
+    ])("preserves command, option, and optional-choice descriptions in Fish: %s", (description) => {
+    const script =
+      buildFishSubcommandCompletionLine({
+        rootCmd: "openclaw",
+        condition: "true",
+        name: "proof-command",
+        description,
+      }) +
+      buildFishOptionCompletionLine({
+        rootCmd: "openclaw",
+        condition: "true",
+        flags: ["--proof-option"],
+        description,
+        choices: ["auto"],
+      });
+    const result = spawnSync(
+      "fish",
+      [
+        "--no-config",
+        "-c",
+        `${script}
+complete --do-complete 'openclaw proof-c'
+complete --do-complete 'openclaw --proof-o'
+complete --do-complete 'openclaw --proof-option a'
+`,
+      ],
+      { encoding: "utf8", timeout: 15_000 },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout.split(/\r?\n/)).toEqual(
+      expect.arrayContaining([
+        `proof-command\t${description}`,
+        `--proof-option\t${description}`,
+        `--proof-option=\t${description}`,
+        `auto\t${description}`,
+      ]),
+    );
+  });
+
   it("preserves optional Commander option values without requiring an argument", () => {
     const line = buildFishOptionCompletionLine({
       rootCmd: "openclaw",

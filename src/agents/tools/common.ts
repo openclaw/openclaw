@@ -31,6 +31,12 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   catalogMode?: "direct-only";
   /** Gateway client capabilities required before this tool can be assembled. */
   requiredClientCaps?: string[];
+  /**
+   * Allow a result's `details.sourceReply` to be delivered to the current source as the
+   * user-visible reply, without another model turn. Only the tool author can declare this;
+   * tool results alone never grant it.
+   */
+  canDeliverSourceReply?: boolean;
   /** Tool-owned execution and transport wait budget, before any harness completion grace. */
   getExecutionTimeoutMs?: (args: unknown) => number | undefined;
   prepareBeforeToolCallParams?: (

@@ -2,7 +2,7 @@
 import type { Command } from "commander";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
-import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { AgentSelectionRequiredError, listAgentIds } from "../agents/agent-scope-config.js";
 import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -40,6 +40,7 @@ import {
 } from "./exec-policy-diagnostics.js";
 import { addGatewayClientOptions, resolveGatewayRpcOptionsWithLocalPort } from "./gateway-rpc.js";
 import { formatDocsHelp } from "./help-format.js";
+import { runWithLocalStateOwner } from "./local-state-owner.js";
 
 type ExecPolicyPresetName = "yolo" | "cautious" | "deny-all";
 
@@ -321,10 +322,7 @@ function buildExecPolicyShowScope(snapshot: ExecPolicyScopeSnapshot): ExecPolicy
 }
 
 function renderExecPolicyShow(payload: ExecPolicyShowPayload): void {
-  const rich = isRich();
-  const heading = (text: string) => (rich ? theme.heading(text) : text);
-  const muted = (text: string) => (rich ? theme.muted(text) : text);
-  defaultRuntime.log(heading("Exec Policy"));
+  defaultRuntime.log(theme.heading("Exec Policy"));
   defaultRuntime.log(
     renderTable({
       width: getTerminalTableWidth(),
@@ -345,7 +343,7 @@ function renderExecPolicyShow(payload: ExecPolicyShowPayload): void {
     }).trimEnd(),
   );
   defaultRuntime.log("");
-  defaultRuntime.log(heading("Effective Policy"));
+  defaultRuntime.log(theme.heading("Effective Policy"));
   defaultRuntime.log(
     renderTable({
       width: getTerminalTableWidth(),
@@ -374,11 +372,26 @@ function renderExecPolicyShow(payload: ExecPolicyShowPayload): void {
     }).trimEnd(),
   );
   defaultRuntime.log("");
-  defaultRuntime.log(muted(payload.effectivePolicy.note));
+  defaultRuntime.log(theme.muted(payload.effectivePolicy.note));
 }
 
-async function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPolicyShowPayload> {
+function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPolicyShowPayload> {
+  return runWithLocalStateOwner({
+    method: "exec-policy.set",
+    params: { ...policy },
+    target: "local exec policy and approvals",
+    onForeignOwner: "refuse",
+    runLocal: ({ assertCurrent }) => applyOwnedExecPolicy(policy, assertCurrent),
+  });
+}
+
+async function applyOwnedExecPolicy(
+  policy: ExecPolicyResolved,
+  assertCurrent: () => void,
+): Promise<ExecPolicyShowPayload> {
+  assertCurrent();
   const configSnapshot = await readConfigFileSnapshot();
+  assertCurrent();
   const nextConfig = structuredClone(configSnapshot.config ?? {});
   applyConfigExecPolicy(nextConfig, policy);
   if (nextConfig.tools?.exec?.host === "node") {
@@ -390,20 +403,25 @@ async function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPol
   const nextApprovals = applyApprovalsDefaults(approvalsSnapshot.file, policy);
   const writtenApprovals = await updateExecApprovals({
     baseHash: approvalsSnapshot.hash,
+    assertCurrent,
     update: () => nextApprovals,
   });
   if (!writtenApprovals) {
     throw new Error("Exec approvals changed; reload and retry.");
   }
   try {
+    assertCurrent();
     await replaceConfigFile({
       baseHash: configSnapshot.hash,
       nextConfig,
+      writeOptions: { assertCurrent },
     });
   } catch (err) {
     try {
+      assertCurrent();
       if (!(await restoreExecApprovalsSnapshotLocked(approvalsSnapshot, writtenApprovals.hash))) {
         await updateExecApprovals({
+          assertCurrent,
           update: (current) =>
             buildExecPolicyApprovalsRollback({
               current,
@@ -465,7 +483,7 @@ export function registerExecPolicyCli(program: Command) {
       } else if (payload.toolAccessSelectionRequired) {
         const { agentIds, hint } = payload.toolAccessSelectionRequired;
         const title = `TERMINAL ACCESS — ${agentIds.length ? "SELECT AGENT" : "NO AGENT CONFIGURED"}`;
-        defaultRuntime.log(isRich() ? theme.heading(title) : title);
+        defaultRuntime.log(theme.heading(title));
         if (agentIds.length > 0) {
           defaultRuntime.log(
             `Configured agents: ${agentIds.map(sanitizeExecPolicyTableCell).join(", ")}`,
@@ -473,7 +491,7 @@ export function registerExecPolicyCli(program: Command) {
         }
         defaultRuntime.log("");
         const approvalsTitle = "── COMMAND APPROVALS (LOCAL) ──────────────────";
-        defaultRuntime.log(isRich() ? theme.heading(approvalsTitle) : approvalsTitle);
+        defaultRuntime.log(theme.heading(approvalsTitle));
         defaultRuntime.log("");
         defaultRuntime.log(
           formatExecPolicyCommandApprovals({
@@ -484,7 +502,7 @@ export function registerExecPolicyCli(program: Command) {
         );
         defaultRuntime.log("");
         const nextStep = "── NEXT STEP ─────────────────────────────────";
-        defaultRuntime.log(isRich() ? theme.heading(nextStep) : nextStep);
+        defaultRuntime.log(theme.heading(nextStep));
         defaultRuntime.log("");
         defaultRuntime.log(sanitizeExecPolicyTableCell(hint));
         if (!opts.verbose) {

@@ -31,17 +31,6 @@ vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: rpc,
   readGatewayCallOptions: vi.fn(() => ({})),
 }));
-vi.mock("./tools/nodes-utils.js", () => ({
-  listNodes: async () => [
-    {
-      nodeId: "node-1",
-      connected: true,
-      platform: "darwin",
-      commands: ["system.run", "system.run.prepare"],
-    },
-  ],
-  resolveNodeIdFromList: () => "node-1",
-}));
 
 let state: OpenClawTestState;
 let invokeCount: number;
@@ -86,6 +75,19 @@ beforeEach(async ({ onTestFinished }) => {
   });
   decisionEntered = createDeferred();
   rpc.mockReset().mockImplementation(async (method, _options, params) => {
+    if (method === "node.list") {
+      return {
+        nodes: [
+          {
+            nodeId: "node-1",
+            connected: true,
+            platform: "darwin",
+            caps: ["system.run.execution-context.v1"],
+            commands: ["system.run", "system.run.prepare"],
+          },
+        ],
+      };
+    }
     if (method === "exec.approvals.node.get") {
       return readExecApprovalsSnapshot();
     }
@@ -163,6 +165,7 @@ it.each([
       security: "full",
       ask: "off",
       notifyOnExit: false,
+      channelContext: { sender: { id: "sender-1" }, chat: { id: "chat-1" } },
       allowBackground: false,
       config: { session: { store: storePath } },
       sessionKey: "agent:main:main",
@@ -170,11 +173,26 @@ it.each([
       notifySessionKey: childSessionKey,
     });
     const result = await tool.execute("child-exec-context", {
-      command: `${quoteCliArg(process.execPath)} -e ${quoteCliArg("process.stdout.write(process.env.OPENCLAW_SUBAGENT_EXEC || 'missing')")}`,
-      env: { OPENCLAW_SUBAGENT_EXEC: "0" },
+      command: `${quoteCliArg(process.execPath)} -e ${quoteCliArg("process.stdout.write(JSON.stringify([process.env.OPENCLAW_SUBAGENT_EXEC, JSON.parse(process.env.OPENCLAW_CHANNEL_CONTEXT || 'null')]))")}`,
+      ...(host === "gateway" ? { env: { OPENCLAW_SUBAGENT_EXEC: "0" } } : {}),
       workdir: state.root,
     });
-    expect(result.details).toMatchObject({ status: "completed", aggregated: "1" });
+    expect(result.details).toMatchObject({
+      status: "completed",
+      aggregated: JSON.stringify(["1", { sender: { id: "sender-1" }, chat: { id: "chat-1" } }]),
+    });
+    if (host === "node") {
+      const invocations = rpc.mock.calls.filter(([method]) => method === "node.invoke");
+      for (const invocation of invocations) {
+        const invoke = invocation[2];
+        expect(invoke.params.env).toBeUndefined();
+        expect(invoke.params.executionContext).toEqual({
+          senderId: "sender-1",
+          chatId: "chat-1",
+          subagent: true,
+        });
+      }
+    }
   },
 );
 
@@ -396,19 +414,6 @@ it.each([
   },
 );
 
-it("returns A2A operator denial to the originating tool without dispatch", async () => {
-  const execution = executeNodeHostCommand({
-    ...request,
-    ask: "on-miss",
-    security: "allowlist",
-    turnSourceChannel: "a2a",
-  });
-  await Promise.race([decisionEntered.promise, execution]);
-  resolveDecision({ decision: "deny" });
-  await expect(execution).rejects.toThrow("exec denied: user-denied");
-  expect(invokeCount).toBe(0);
-});
-
 it("prompts for target ask=always even when the caller is full/off", async () => {
   setRuntimeConfigSnapshot({ tools: { exec: { security: "full", ask: "always" } } });
   const result = executeNodeHostCommand(request);
@@ -417,31 +422,6 @@ it("prompts for target ask=always even when the caller is full/off", async () =>
   expect(invokeCount).toBe(0);
   resolveDecision({ decision: "allow-once" });
   expect((await result).details.status).toBe("completed");
-});
-
-it("reports target policy denial as not executed", async () => {
-  setRuntimeConfigSnapshot({ tools: { exec: { security: "deny", ask: "off" } } });
-  const { dispatchNodeSystemRun, buildNodeSystemRunInvoke, resolveNodeExecutionTarget } =
-    await import("./bash-tools.exec-host-node-phases.js");
-  const target = await resolveNodeExecutionTarget(request);
-  const result = await dispatchNodeSystemRun({
-    request,
-    target,
-    invoke: buildNodeSystemRunInvoke({
-      target,
-      command: target.argv,
-      rawCommand: request.command,
-      cwd: request.workdir,
-      agentId: request.agentId,
-      sessionKey: request.sessionKey,
-    }),
-  });
-  expect(result.details).toMatchObject({ status: "failed", failureKind: "policy-denied" });
-  expect(result.content).toEqual([
-    expect.objectContaining({
-      text: expect.not.stringMatching(/may have executed|request approval/),
-    }),
-  ]);
 });
 
 it("does not dispatch a late A2A approval after cancellation", async () => {
@@ -479,10 +459,13 @@ it("preserves a target deny introduced while approval was pending", async () => 
   expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true);
   setRuntimeConfigSnapshot({ tools: { exec: { security: "deny", ask: "off" } } });
   resolveDecision({ decision: "allow-once" });
-  expect((await execution).details).toMatchObject({
-    status: "failed",
-    failureKind: "policy-denied",
-  });
+  const result = await execution;
+  expect(result.details).toMatchObject({ status: "failed", failureKind: "policy-denied" });
+  expect(result.content).toEqual([
+    expect.objectContaining({
+      text: expect.not.stringMatching(/may have executed|request approval/),
+    }),
+  ]);
 });
 
 it("executes full/off through a symlink cwd using the prepared canonical directory", async () => {

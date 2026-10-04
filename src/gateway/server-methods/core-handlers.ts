@@ -128,6 +128,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./sessions-messaging.js").then((module) => module.sessionMessagingHandlers),
   "sessions-mutations": () =>
     import("./sessions-mutations.js").then((module) => module.sessionMutationHandlers),
+  "session-processes": () =>
+    import("./session-processes.js").then((module) => module.sessionProcessHandlers),
   "sessions-read": () => import("./sessions-read.js").then((module) => module.sessionReadHandlers),
   "sessions-rewind": () =>
     import("./sessions-rewind.js").then((module) => module.sessionRewindHandlers),

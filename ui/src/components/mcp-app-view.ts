@@ -6,6 +6,7 @@ import {
   PostMessageTransport,
 } from "@modelcontextprotocol/ext-apps/app-bridge";
 import { isMcpAppViewExpiredError } from "@openclaw/gateway-protocol";
+import { raceWithTimeout } from "@openclaw/retry";
 import { LitElement, html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { createRef, ref } from "lit/directives/ref.js";
@@ -17,6 +18,7 @@ import { formatUiError } from "../lib/format-error.ts";
 import { parseMcpAppLink } from "../lib/mcp-app-route.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { OpenClawAppBridge, bindMcpAppResourceHandlers } from "./mcp-app-bridge.ts";
+import { McpAppConfirm } from "./mcp-app-confirm.ts";
 import {
   buildMcpAppHostCapabilities,
   dispatchMcpAppMessage,
@@ -26,12 +28,12 @@ import {
   type McpAppContextState,
   type McpAppContextEventDetail,
   MCP_APP_VIEW_EXPIRED_EVENT,
-  resolveMcpAppSandboxUrl,
   type McpAppHostSandboxCsp,
 } from "./mcp-app-security.ts";
 import { collectMcpAppStyleVariables } from "./mcp-app-theme.ts";
 import { mcpAppViewStyles } from "./mcp-app-view-styles.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
+import { resolveSandboxHostUrl } from "./sandbox-host.ts";
 
 registerMcpAppEnglish();
 
@@ -152,6 +154,7 @@ export class McpAppView extends LitElement {
     "inline";
   protected readonly i18nController = new I18nController(this);
   private readonly mount = createRef<HTMLDivElement>();
+  private readonly confirmation = new McpAppConfirm(() => this.requestUpdate());
   private resources: McpAppResources | null = null;
   private teardownPromise: Promise<void> | null = null;
 
@@ -188,6 +191,7 @@ export class McpAppView extends LitElement {
   }
 
   override updated(changedProperties: PropertyValues<this>) {
+    this.confirmation.update();
     if (changedProperties.has("displayMode")) {
       if (this.displayMode === "fullscreen") {
         promoteToPopoverTopLayer(this);
@@ -236,6 +240,7 @@ export class McpAppView extends LitElement {
         this.context?.gateway.snapshot.client === binding.client
       ) {
         this.inactive = "ended";
+        this.confirmation.cancel();
         this.dispatchEvent(
           new CustomEvent(MCP_APP_VIEW_EXPIRED_EVENT, { bubbles: true, composed: true }),
         );
@@ -268,19 +273,11 @@ export class McpAppView extends LitElement {
     }
     const teardown = (async () => {
       if (resources.bridge) {
-        let timeout: number | undefined;
-        try {
-          await Promise.race([
-            resources.bridge.teardownResource({}).catch(() => undefined),
-            new Promise<void>((resolve) => {
-              timeout = window.setTimeout(resolve, MCP_APP_TEARDOWN_TIMEOUT_MS);
-            }),
-          ]);
-        } finally {
-          if (timeout !== undefined) {
-            window.clearTimeout(timeout);
-          }
-        }
+        await raceWithTimeout(
+          resources.bridge.teardownResource({}).catch(() => undefined),
+          MCP_APP_TEARDOWN_TIMEOUT_MS,
+          () => undefined,
+        );
       }
       await resources.transport?.close().catch(() => undefined);
       resources.iframe.remove();
@@ -309,6 +306,28 @@ export class McpAppView extends LitElement {
     void this.setupTask.run();
   }
 
+  private isCurrentBinding(
+    binding: McpAppBinding,
+    resources: McpAppResources,
+    signal: AbortSignal,
+  ): boolean {
+    const gateway = this.context?.gateway;
+    return (
+      !signal.aborted &&
+      !resources.disposed &&
+      this.resources === resources &&
+      this.isConnected &&
+      this.inactive !== "ended" &&
+      this.sessionKey === binding.sessionKey &&
+      this.viewId === binding.viewId &&
+      (this.agentId || undefined) === binding.agentId &&
+      gateway?.snapshot.phase === "connected" &&
+      gateway.snapshot.client === binding.client &&
+      gateway.connectionRevision === binding.connectionRevision &&
+      gateway.snapshot.hello === binding.hello
+    );
+  }
+
   private bindOpenLinkHandler(
     bridge: OpenClawAppBridge,
     binding: McpAppBinding,
@@ -324,17 +343,7 @@ export class McpAppView extends LitElement {
       // must not redirect a collaborator or a replacement connection.
       if (
         !context ||
-        signal.aborted ||
-        resources.disposed ||
-        this.resources !== resources ||
-        !this.isConnected ||
-        this.sessionKey !== binding.sessionKey ||
-        this.viewId !== binding.viewId ||
-        (this.agentId || undefined) !== binding.agentId ||
-        context.gateway.snapshot.phase !== "connected" ||
-        context.gateway.snapshot.client !== binding.client ||
-        context.gateway.connectionRevision !== binding.connectionRevision ||
-        context.gateway.snapshot.hello !== binding.hello ||
+        !this.isCurrentBinding(binding, resources, signal) ||
         !isWidgetFrameInteractable(resources.iframe)
       ) {
         return { isError: true };
@@ -382,6 +391,7 @@ export class McpAppView extends LitElement {
       };
       resources = createdResources;
       this.resources = createdResources;
+      this.addResourceCleanup(createdResources, () => this.confirmation.cancel());
       signal.addEventListener("abort", () => void this.teardownResources(createdResources), {
         once: true,
       });
@@ -406,12 +416,13 @@ export class McpAppView extends LitElement {
         });
         window.addEventListener("message", onMessage);
       });
-      iframe.src = resolveMcpAppSandboxUrl(
+      iframe.src = resolveSandboxHostUrl(
         payload.sandboxUrl,
         payload.sandboxPort,
         payload.sandboxOrigin,
         this.context?.gateway.connection.gatewayUrl ?? "",
         window.location.origin,
+        t("mcpApp.errors.invalidSandboxUrl"),
       );
       await proxyReady;
       signal.throwIfAborted();
@@ -465,9 +476,7 @@ export class McpAppView extends LitElement {
           payload.csp,
           payload.messageSupported === true,
           payload.updateModelContextSupported === true,
-          payload.messageSupported === true,
           {
-            richMessage: payload.messageSupported === true,
             richModelContext: payload.richModelContextSupported === true,
             fileResources: payload.fileResourcesSupported === true,
             openFiles: payload.openFilesSupported === true,
@@ -478,6 +487,15 @@ export class McpAppView extends LitElement {
       createdResources.bridge = bridge;
       const request = (method: string, params: Record<string, unknown>) =>
         this.request(binding, method, params);
+      const isCurrent = () => this.isCurrentBinding(binding, createdResources, signal);
+      const confirm = (text: string, kind: "message" | "file") =>
+        this.confirmation.request({
+          frame: iframe,
+          title: this.title || t("mcpApp.title"),
+          text,
+          kind,
+          isCurrent,
+        });
       const refreshModelContext = (clearedUpdateId?: string) => {
         if (clearedUpdateId && modelContext && modelContext.updateId !== clearedUpdateId) {
           return undefined;
@@ -515,7 +533,8 @@ export class McpAppView extends LitElement {
             iframe,
             { sessionKey, viewId },
             params,
-            (prompt) => window.confirm(`${t("common.confirm")}:\n\n${prompt}`),
+            (prompt) => confirm(prompt, "message"),
+            isCurrent,
           );
           return accepted ? {} : { isError: true };
         });
@@ -536,7 +555,8 @@ export class McpAppView extends LitElement {
         agentId,
         fileResourcesSupported: payload.fileResourcesSupported,
         openFilesSupported: payload.openFilesSupported,
-        isDisposed: () => createdResources.disposed,
+        confirmOpenFile: (path) => confirm(path, "file"),
+        isDisposed: () => !isCurrent(),
         addCleanup: (cleanup) => {
           this.addResourceCleanup(createdResources, cleanup);
         },
@@ -670,6 +690,7 @@ export class McpAppView extends LitElement {
             </div>`
           : nothing
       }
+      ${this.confirmation.render()}
       <div ${ref(this.mount)} class="mount"></div>
       ${error ? html`<div class="error">${t("mcpApp.unavailable", { error: formatUiError(error, t("mcpApp.errors.requestFailed")) })}</div>` : nothing}`;
   }

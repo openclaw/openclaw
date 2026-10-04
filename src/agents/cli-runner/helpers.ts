@@ -41,11 +41,6 @@ import { buildSystemPromptParams } from "../system-prompt-params.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 import { cliBackendLog } from "./log.js";
 import { formatTomlConfigOverride } from "./toml-inline.js";
-export {
-  buildCliSupervisorScopeKey,
-  resolveCliNoOutputTimeoutMs,
-  resolveCliRunTimeoutOverrideMs,
-} from "./reliability.js";
 
 const CLI_RUN_QUEUE = new KeyedAsyncQueue();
 const CLI_IMAGE_SWEEP_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -93,6 +88,7 @@ export function resolveCliRunQueueKey(params: {
 }
 
 export function buildCliAgentSystemPrompt(params: {
+  preparedTtsPreferences?: import("../../tts/tts-preferences.js").PreparedTtsPreferences;
   requesterProfileId?: string;
   workspaceDir: string;
   cwd?: string;
@@ -152,6 +148,7 @@ export function buildCliAgentSystemPrompt(params: {
   return buildConfiguredAgentSystemPrompt({
     config: params.config,
     preparedModelRuntime: params.preparedModelRuntime,
+    preparedTtsPreferences: params.preparedTtsPreferences,
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
     runtimeCwd,

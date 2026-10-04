@@ -45,10 +45,13 @@ afterEach(() => {
 });
 
 describe("palette identity preferences", () => {
-  it("reads only its key and never migrates or writes ordinary defaults", async () => {
-    const { state, entries, writes, release, stop } = fixture();
+  it("scopes its cache and reads without migrating or writing ordinary defaults", async () => {
+    const { owner, state, entries, writes, release, stop } = fixture();
     try {
       await vi.waitFor(() => expect(state.mode).toBe("remote"));
+      expect(acquirePaletteIdentityPreferences(owner)).toBe(state);
+      expect(acquirePaletteIdentityPreferences({ ...owner, hello: {} })).not.toBe(state);
+      expect(acquirePaletteIdentityPreferences({ ...owner, profileId: "bob" })).not.toBe(state);
       expect(state.palettePreference).toBeNull();
       expect(writes).toEqual([]);
       expect(entries).toEqual({ "new-session.v1:main": { folder: "/normal" } });
@@ -58,53 +61,38 @@ describe("palette identity preferences", () => {
     }
   });
 
-  it("drops a queued write when its authenticated surface loses every current binding", async () => {
-    let current = true;
-    const { state, writes, release, stop } = fixture(() => current);
-    try {
-      await vi.waitFor(() => expect(state.mode).toBe("remote"));
-      const first = state.setPalettePreference({ agentId: "first", selection: {} }, () => true);
-      const second = state.setPalettePreference(
-        { agentId: "retired", selection: {} },
-        () => current,
-      );
-      await vi.waitFor(() => expect(writes).toHaveLength(1));
-      current = false;
-      release();
-      expect(await first).toBe(true);
-      expect(await second).toBe(false);
-      expect(writes).toHaveLength(1);
-    } finally {
-      release();
-      stop();
-    }
-  });
-
-  it("rejects new intent from a stale initiator even when another binding remains current", async () => {
-    const { state, writes, release, stop } = fixture();
-    try {
-      await vi.waitFor(() => expect(state.mode).toBe("remote"));
-      expect(
-        await state.setPalettePreference({ agentId: "stale", selection: {} }, () => false),
-      ).toBe(false);
-      expect(writes).toEqual([]);
-    } finally {
-      release();
-      stop();
-    }
-  });
-
-  it("shares a live handshake but never shares state with another profile or handshake", async () => {
-    const { owner, state, release, stop } = fixture();
-    try {
-      expect(acquirePaletteIdentityPreferences(owner)).toBe(state);
-      expect(acquirePaletteIdentityPreferences({ ...owner, hello: {} })).not.toBe(state);
-      expect(acquirePaletteIdentityPreferences({ ...owner, profileId: "bob" })).not.toBe(state);
-    } finally {
-      release();
-      stop();
-    }
-  });
+  it.each(["queued", "new"] as const)(
+    "rejects %s intent after its authority retires",
+    async (phase) => {
+      let current = true;
+      const { state, writes, release, stop } = fixture(() => phase === "new" || current);
+      try {
+        await vi.waitFor(() => expect(state.mode).toBe("remote"));
+        if (phase === "new") {
+          current = false;
+        }
+        const first =
+          phase === "queued"
+            ? state.setPalettePreference({ agentId: "first", selection: {} }, () => true)
+            : undefined;
+        const rejected = state.setPalettePreference(
+          { agentId: "retired", selection: {} },
+          () => current,
+        );
+        if (first) {
+          await vi.waitFor(() => expect(writes).toHaveLength(1));
+          current = false;
+          release();
+          expect(await first).toBe(true);
+        }
+        expect(await rejected).toBe(false);
+        expect(writes).toHaveLength(phase === "queued" ? 1 : 0);
+      } finally {
+        release();
+        stop();
+      }
+    },
+  );
 
   it("publishes a confirmed write to surviving current subscribers, not a retired initiator", async () => {
     const { state, writes, release, stop } = fixture();

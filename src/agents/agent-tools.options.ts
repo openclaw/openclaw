@@ -55,6 +55,8 @@ export type OpenClawCodingToolsOptions = {
   trace?: DiagnosticTraceContext;
   /** What initiated this run (for trigger-specific tool restrictions). */
   trigger?: string;
+  /** Heartbeat-transported turn that continues a conversation (its own command completion). */
+  continuesConversation?: boolean;
   /** Stable cron job identifier populated for cron-triggered runs. */
   jobId?: string;
   /** Relative workspace path that memory-triggered writes may append to. */

@@ -348,7 +348,6 @@ describe("anthropic provider replay hooks", () => {
         },
         agents: {
           defaults: {
-            agentRuntime: { id: "claude-cli" },
             model: { primary: "anthropic/claude-opus-4-7" },
             models: {
               "anthropic/claude-opus-4-7": {},
@@ -356,7 +355,7 @@ describe("anthropic provider replay hooks", () => {
           },
         },
       },
-    } as never);
+    });
 
     expectFields(next?.agents?.defaults?.heartbeat, {
       every: "1h",
@@ -457,7 +456,6 @@ describe("anthropic provider replay hooks", () => {
           },
           entries: {
             main: {
-              default: true,
               model: { primary: "anthropic/opus-4.7" },
               name: "Main",
               workspace: "/tmp/openclaw-agent",
@@ -565,7 +563,6 @@ describe("anthropic provider replay hooks", () => {
         },
         agents: {
           defaults: {
-            agentRuntime: { id: "claude-cli" },
             model: { primary: "anthropic/opus-5.0" },
             models: {
               "anthropic/opus-5.0": { alias: "Future Opus" },
@@ -573,7 +570,7 @@ describe("anthropic provider replay hooks", () => {
           },
         },
       },
-    } as never);
+    });
 
     const models = requireRecord(next?.agents?.defaults?.models, "models");
     expect(models["anthropic/opus-5.0"]).toEqual({

@@ -136,10 +136,11 @@ function normalizeQaProfile(
   if (input !== undefined && input !== null && (typeof input !== "string" || !input.trim())) {
     throw new Error("QA runner profile must be a non-empty string");
   }
-  const profile = typeof input === "string" ? input.trim() : fallback;
-  if (!profiles.some((entry) => entry.id === profile)) {
+  const profileId = typeof input === "string" ? input.trim() : fallback;
+  const profile = profiles.find((entry) => entry.id === profileId);
+  if (!profile) {
     throw new Error(
-      `unknown QA run profile: ${profile}; expected one of ${profiles.map((entry) => entry.id).join(", ")}`,
+      `unknown QA run profile: ${profileId}; expected one of ${profiles.map((entry) => entry.id).join(", ")}`,
     );
   }
   return profile;
@@ -184,12 +185,12 @@ export function normalizeQaRunSelection(
     throw new Error("QA runner request must be a JSON object");
   }
   const payload = input as Record<string, unknown>;
-  const profile = normalizeQaProfile(
+  const profileDefaults = normalizeQaProfile(
     payload.profile,
     profiles,
     Array.isArray(payload.scenarioIds) ? "all" : undefined,
   );
-  const profileDefaults = requireQaRunProfile(profiles, profile);
+  const profile = profileDefaults.id;
   const providerMode = normalizeQaProviderMode(
     payload.providerMode ?? (profile === "smoke-ci" ? "mock-openai" : undefined),
   );

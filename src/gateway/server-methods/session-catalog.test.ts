@@ -820,7 +820,7 @@ describe("session catalog Gateway methods", () => {
           catalogId: "claude",
           metadataOnly,
         },
-        { agents: { list: [{ id: "main" }, { id: "research" }] } },
+        { agents: { entries: { main: {}, research: {} } } },
       );
       expect(resolveCreateSession).toHaveBeenCalledWith({ agentId: "research" });
       expect(available).toHaveBeenCalledWith(true, {

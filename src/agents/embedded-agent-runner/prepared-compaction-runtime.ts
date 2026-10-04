@@ -12,8 +12,9 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { createBundleLspToolRuntime } from "../agent-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../agent-bundle-mcp-tools.js";
-import { createOpenClawCodingToolsInternal } from "../agent-tools.js";
+import { createOpenClawCodingToolsInternalAsync } from "../agent-tools.js";
 import { createSkillInstructionDeliveryCache } from "../agent-tools.read.js";
+import { hasAnyAuthProfileStoreSourceAsync } from "../auth-profiles/source-check.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../bash-process-scope.js";
 import {
@@ -51,6 +52,7 @@ import {
   SESSION_PERMISSION_BY_EXEC_MODE,
 } from "../session-permission-exec-mode.js";
 import { detectRuntimeShell } from "../shell-utils.js";
+import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import { resolveRuntimeAgentName } from "../system-prompt-params.js";
 import { toolPolicyRestrictsTools } from "../tool-policy.js";
 import {
@@ -68,7 +70,6 @@ import { resolveAttemptSpawnWorkspaceDir } from "./run/attempt-thread-helpers.js
 import { applyEmbeddedAttemptToolsAllow } from "./run/attempt-tool-construction-plan.js";
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "./sandbox-info.js";
 import { prepareEmbeddedSkills } from "./skill-runtime.js";
-import { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 import { collectAllowedToolNames } from "./tool-name-allowlist.js";
 import { mapThinkingLevelForProvider } from "./utils.js";
 
@@ -297,11 +298,15 @@ export async function buildPreparedCompactionRuntime(
       pluginMetadataSnapshot: params.preparedModelRuntime.metadataSnapshot,
     });
     const toolsEnabled = supportsModelTools(effectiveModel);
+    const authProfileStoreSource =
+      toolsEnabled && (await hasAnyAuthProfileStoreSourceAsync(agentDir));
+    params.abortSignal?.throwIfAborted();
     const skillInstructionDeliveryCache = createSkillInstructionDeliveryCache();
     const toolsRaw = toolsEnabled
-      ? createOpenClawCodingToolsInternal(
+      ? await createOpenClawCodingToolsInternalAsync(
           {
             ...conversationContext,
+            authProfileStoreSource,
             agentId: sessionAgentId,
             exec: {
               ...execOverrides,
@@ -532,8 +537,12 @@ export async function buildPreparedCompactionRuntime(
       assertCurrent: () => params.abortSignal?.throwIfAborted(),
     });
     const activeProjectKeys = params.preparedModelRuntime?.activeProjectKeys ?? [];
+    const { prepareTtsPreferences } = await import("../../tts/tts-preferences.js");
+    const preparedTtsPreferences =
+      promptMode === "full" ? await prepareTtsPreferences() : undefined;
     const buildSystemPromptText = () => {
-      const builtSystemPrompt = buildEmbeddedSystemPrompt({
+      const builtSystemPrompt = buildConfiguredAgentSystemPrompt({
+        preparedTtsPreferences,
         config: params.config,
         preparedModelRuntime: params.preparedModelRuntime,
         agentId: sessionAgentId,

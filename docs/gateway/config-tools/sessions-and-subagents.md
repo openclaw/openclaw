@@ -87,6 +87,10 @@ list the ops agent's sessions first. Call `sessions_send` with:
   Requester-owned native/ACP child access is unchanged. Incognito restrictions
   and the sandbox spawned-session clamp still apply, including to sandboxed
   subagents; `send` cannot reach outside that clamp.
+- **Changes before delivery:** the Gateway rechecks the current send policy after
+  asynchronous preparation and immediately before accepting the target input.
+  Withdrawing a destination blocks sends that have not been accepted; it does
+  not retract already accepted input or its owed reply.
 - **Replies, not history:** the reply belongs to the authorized sent turn.
   `send` does not grant list, history, search, status, or session-control access.
   `watch: true` additionally requires normal status visibility; send-only access

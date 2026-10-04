@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { resolveStateDir } from "../config/paths.js";
 import { backupFleetCell, restoreFleetCell } from "./backup.runtime.js";
 import {
@@ -66,11 +67,6 @@ export type { FleetHealthResult } from "./service-support.runtime.js";
 
 const OFFICIAL_IMAGE_UID = 1_000;
 const OFFICIAL_IMAGE_GID = 1_000;
-// Mirrors the compose healthcheck contract: an upgrade commits only after /healthz
-// answers. The deadline bounds how long a broken image can hold the cell before
-// restore without rolling back slow-booting cells prematurely.
-const CELL_VERIFY_TIMEOUT_MS = 60_000;
-const CELL_VERIFY_POLL_MS = 1_000;
 
 export type FleetCreateOptions = {
   tenant: string;
@@ -166,12 +162,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
     options.generateAttemptId ?? (() => crypto.randomBytes(16).toString("hex"));
   const getuid = options.getuid ?? (() => process.getuid?.());
   const getgid = options.getgid ?? (() => process.getgid?.());
-  const sleep =
-    options.sleep ??
-    ((ms: number) =>
-      new Promise<void>((resolve) => {
-        setTimeout(resolve, ms);
-      }));
+  const sleep = options.sleep ?? delay;
   const selinuxEnabled = options.selinuxEnabled ?? detectHostSelinux;
   const updateImage = options.updateImage ?? updateFleetCellImage;
   const probePort = options.probePort ?? probeLoopbackPort;
@@ -388,8 +379,6 @@ export function createFleetService(options: FleetServiceOptions = {}) {
                 now,
                 sleep,
                 checkpoint,
-                timeoutMs: CELL_VERIFY_TIMEOUT_MS,
-                pollMs: CELL_VERIFY_POLL_MS,
                 context: "create",
               });
             } catch (error) {
@@ -608,8 +597,6 @@ export function createFleetService(options: FleetServiceOptions = {}) {
               now,
               sleep,
               checkpoint,
-              timeoutMs: CELL_VERIFY_TIMEOUT_MS,
-              pollMs: CELL_VERIFY_POLL_MS,
               context: "upgrade",
             });
             await checkpoint();

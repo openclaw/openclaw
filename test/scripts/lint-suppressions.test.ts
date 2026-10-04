@@ -257,7 +257,6 @@ describe("production lint suppressions", () => {
         "src/plugins/plugin-return-value.ts|typescript/prefer-promise-reject-errors|1",
         "src/plugins/plugin-return-value.ts|typescript/unbound-method|1",
         "src/plugins/plugin-return-value.ts|unicorn/no-thenable|1",
-        "src/plugins/provider-auth-persistence.ts|preserve-caught-error|2",
         "src/plugins/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|3",
         // Admission records original factory identities; executable views bind their receivers.
         "src/plugins/registry-registrars-memory.ts|typescript/unbound-method|1",
@@ -267,7 +266,6 @@ describe("production lint suppressions", () => {
         "src/secrets/egress-proxy/proxy-server.ts|no-warning-comments|1",
         "src/secrets/private-plan-file.ts|preserve-caught-error|1",
         "src/state/config-machine-state.ts|typescript/no-unnecessary-type-parameters|2",
-        "src/state/openclaw-agent-db-admission.ts|typescript/prefer-promise-reject-errors|1",
         // Node worker BroadcastChannel.postMessage accepts only a message, not a browser targetOrigin.
         "src/state/openclaw-agent-worker-store.test-support.ts|unicorn/require-post-message-target-origin|1",
         "src/system-agent/setup-inference-activate.ts|preserve-caught-error|1",

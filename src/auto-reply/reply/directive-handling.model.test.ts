@@ -70,9 +70,14 @@ vi.mock("../../agents/auth-profiles/store.js", async (importOriginal) => {
     findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
       authProfilesStoreMock.profiles[profileId],
     getRuntimeAuthProfileStoreSnapshot: readAuthProfileStoreForTest,
-    hasAnyAuthProfileStoreSource: () => Object.keys(authProfilesStoreMock.profiles).length > 0,
   };
 });
+vi.mock("../../agents/auth-profiles/source-check.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-profiles/source-check.js")>()),
+  hasAnyAuthProfileStoreSourceAsync: async () =>
+    Object.keys(authProfilesStoreMock.profiles).length > 0,
+}));
+// mock-isolation: Directive tests own the in-memory credential map and stub writes; real persistence stays isolated.
 vi.mock("../../agents/auth-profiles/store-runtime.js", () => {
   return {
     ensureAuthProfileStore: readAuthProfileStoreForTest,
@@ -106,7 +111,7 @@ vi.mock("../../plugins/provider-thinking.js", () => ({
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { preparePublishedModelRuntimeChoice } from "../../agents/model-runtime-choice.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
-import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
@@ -239,18 +244,6 @@ function baseConfig(): OpenClawConfig {
     commands: { text: true },
     agents: { defaults: {} },
   } as unknown as OpenClawConfig;
-}
-
-function modelDefinition(id: string, name: string): ModelDefinitionConfig {
-  return {
-    id,
-    name,
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 8192,
-  };
 }
 
 function createSessionEntry(overrides?: Partial<InternalSessionEntry>): InternalSessionEntry {
@@ -752,7 +745,6 @@ describe("/model chat UX", () => {
     createModelVisibilityPolicy: (...args) => createModelVisibilityPolicy(...args),
     buildModelAliasIndex: (...args) => buildModelAliasIndex(...args),
     createSessionEntry,
-    modelDefinition,
     setAuthProfiles,
   });
 
@@ -813,7 +805,7 @@ describe("/model chat UX", () => {
       allowedModelKeys: new Set(["anthropic/claude-opus-4-6"]),
       cfg: {
         agents: {
-          list: [{ id: "ops", modelPolicy: { allow: ["anthropic/*"] } }],
+          entries: { ops: { modelPolicy: { allow: ["anthropic/*"] } } },
         },
       },
       agentId: "ops",

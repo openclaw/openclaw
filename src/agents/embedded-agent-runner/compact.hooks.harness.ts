@@ -11,6 +11,7 @@ import {
   agentSessionAutomaticCompaction,
   agentSessionSetContextReplacementHook,
 } from "../sessions/agent-session-compaction.js";
+import type { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import {
   getMemoryProviderMock,
   getMemorySearchManagerMock,
@@ -35,7 +36,6 @@ import {
 import { createCompactionSessionManagerMock } from "./compact.session-manager.test-support.js";
 import type { resolveModelAsync } from "./model.js";
 import type { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
-import type { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
 type MockEmbeddedAgentStreamFn = Mock<
   (model?: unknown, context?: unknown, options?: unknown) => unknown
@@ -233,7 +233,9 @@ export const listRegisteredPluginAgentPromptGuidanceMock = vi.fn((params?: { sur
       ? ["ACP compact command guidance."]
       : ["Main compact command guidance."],
 );
-export const buildEmbeddedSystemPromptMock = vi.fn<typeof buildEmbeddedSystemPrompt>(() => "");
+export const buildConfiguredAgentSystemPromptMock = vi.fn<typeof buildConfiguredAgentSystemPrompt>(
+  () => "",
+);
 export const resolveSkillsPromptMock = vi.fn<
   typeof import("../../skills/loading/workspace-skill-prompt.js").resolveSkillsPrompt
 >(async () => "");
@@ -480,8 +482,8 @@ export function resetCompactSessionStateMocks(): void {
   buildAgentRuntimePlanMock.mockImplementation((params: BuildAgentRuntimePlanParams) =>
     createCompactHooksRuntimePlan(params),
   );
-  buildEmbeddedSystemPromptMock.mockReset();
-  buildEmbeddedSystemPromptMock.mockReturnValue("");
+  buildConfiguredAgentSystemPromptMock.mockReset();
+  buildConfiguredAgentSystemPromptMock.mockReturnValue("");
   resolveSkillsPromptMock.mockReset();
   resolveSkillsPromptMock.mockResolvedValue("");
 }
@@ -678,8 +680,9 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
       generateSummary: vi.fn(async () => "summary"),
     }));
 
+    // mock-isolation: Keep durable session state outside the lightweight compaction fixture.
     vi.doMock("../sessions/sdk.js", () => ({
-      createAgentSessionForEmbeddedRunner: createAgentSessionMock,
+      createAgentSession: createAgentSessionMock,
     }));
 
     vi.doMock("../session-tool-result-guard-wrapper.js", () => ({
@@ -874,8 +877,9 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     };
   });
 
+  // mock-isolation: Compaction hook fixtures exercise lifecycle behavior without credential-source admission.
   vi.doMock("../auth-profiles/source-check.js", () => ({
-    hasAnyAuthProfileStoreSource: vi.fn(() => false),
+    hasAnyAuthProfileStoreSourceAsync: vi.fn(() => false),
   }));
 
   vi.doMock("../memory-search.js", () => ({
@@ -968,13 +972,9 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     resolveModelAsync: resolveModelAsyncMock,
   }));
 
-  vi.doMock("./system-prompt.js", () => ({
-    applySystemPromptToSession: vi.fn(
-      (session: { setBaseSystemPrompt: (systemPrompt: string) => void }, systemPrompt: string) => {
-        session.setBaseSystemPrompt(systemPrompt);
-      },
-    ),
-    buildEmbeddedSystemPrompt: buildEmbeddedSystemPromptMock,
+  // mock-isolation: Compaction fixtures capture prepared prompt inputs without loading ambient prompt owners.
+  vi.doMock("../system-prompt-config.js", () => ({
+    buildConfiguredAgentSystemPrompt: buildConfiguredAgentSystemPromptMock,
   }));
 
   vi.doMock("./utils.js", async () => {

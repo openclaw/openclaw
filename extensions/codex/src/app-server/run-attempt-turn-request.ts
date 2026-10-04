@@ -205,8 +205,7 @@ export async function prepareCodexAttemptTurnRequest(
       ),
     });
     const serviceTier = await resolveCodexUltrafastServiceTier({
-      enabled:
-        fastMode === "ultrafast" || (turnAppServer.enableUltrafast === true && fastMode !== false),
+      enabled: fastMode === "ultrafast" && turnAppServer.enableUltrafast !== false,
       serviceTier: turnStartParams.serviceTier,
       model: turnStartParams.model ?? model,
       modelProvider,

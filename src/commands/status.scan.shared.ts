@@ -28,12 +28,6 @@ import {
   type StatusGatewayProbeBudget,
 } from "./status.gateway-probe-budget.js";
 
-const gatewayProbeModuleLoader = createLazyImportLoader(() => import("./status.gateway-probe.js"));
-const probeGatewayModuleLoader = createLazyImportLoader(() => import("../gateway/probe.js"));
-const gatewayCallModuleLoader = createLazyImportLoader(() => import("../gateway/call.js"));
-const gatewayReadinessModuleLoader = createLazyImportLoader(
-  () => import("../cli/daemon-cli/diagnostic-readiness.js"),
-);
 const memoryPresenceModuleLoader = createLazyImportLoader(async () => {
   const { loadBundledPluginPublicArtifactModuleSync } =
     await import("../plugins/public-surface-loader.js");
@@ -134,8 +128,7 @@ async function applyLocalStatusRpcFallback(params: {
     return params.gatewayProbe;
   }
   // The fallback uses the gateway status RPC because it can succeed after probe handshake ambiguity.
-  const status = await gatewayCallModuleLoader
-    .load()
+  const status = await import("../gateway/call.js")
     .then(({ callGateway }) => {
       const timeoutMs = Math.min(2000, resolveStatusGatewayProbeTimeoutMs(params));
       if (timeoutMs === 0) {
@@ -196,9 +189,6 @@ export async function resolveGatewayProbeSnapshot(params: {
     all?: boolean;
     skipProbe?: boolean;
     detailLevel?: "none" | "presence" | "full";
-    probeWhenRemoteUrlMissing?: boolean;
-    resolveAuthWhenRemoteUrlMissing?: boolean;
-    mergeAuthWarningIntoProbeError?: boolean;
     localStatusRpcFallback?: boolean;
     onProgress?: (phase: string) => void;
   };
@@ -210,31 +200,25 @@ export async function resolveGatewayProbeSnapshot(params: {
   const { gatewayMode, mode, remoteUrlMissing } = resolveGatewayProbeTarget(params.cfg);
   const originScopedDeviceAuth =
     mode === "remote" || Boolean(process.env.OPENCLAW_GATEWAY_URL?.trim());
-  const shouldResolveAuth =
-    params.opts.skipProbe !== true &&
-    (!remoteUrlMissing || params.opts.resolveAuthWhenRemoteUrlMissing === true);
-  const shouldProbe =
-    params.opts.skipProbe !== true &&
-    (!remoteUrlMissing || params.opts.probeWhenRemoteUrlMissing === true);
-  const gatewayProbeAuthResolution = shouldResolveAuth
-    ? await gatewayProbeModuleLoader
-        .load()
-        .then(({ resolveGatewayProbeAuthResolution }) =>
-          resolveGatewayProbeAuthResolution(params.cfg, params.env),
-        )
+  const shouldProbe = params.opts.skipProbe !== true && !remoteUrlMissing;
+  const gatewayProbeAuthResolution = shouldProbe
+    ? await import("./status.gateway-probe.js").then(({ resolveGatewayProbeAuthResolution }) =>
+        resolveGatewayProbeAuthResolution(params.cfg, params.env),
+      )
     : { auth: {}, warning: undefined };
   let gatewayProbeAuthWarning = gatewayProbeAuthResolution.warning;
   const remainingTimeoutMs = () => resolveStatusGatewayProbeTimeoutMs(params.opts);
   const readiness =
     shouldProbe && remainingTimeoutMs() > 0
-      ? await gatewayReadinessModuleLoader.load().then(({ waitForGatewayDiagnosticReadiness }) =>
-          waitForGatewayDiagnosticReadiness({
-            config: params.cfg,
-            timeoutMs: remainingTimeoutMs(),
-            deadlineMs: params.opts.gatewayProbeDeadlineMs,
-            onProgress: params.opts.onProgress,
-            ...gatewayProbeAuthResolution.auth,
-          }),
+      ? await import("../cli/daemon-cli/diagnostic-readiness.js").then(
+          ({ waitForGatewayDiagnosticReadiness }) =>
+            waitForGatewayDiagnosticReadiness({
+              config: params.cfg,
+              timeoutMs: remainingTimeoutMs(),
+              deadlineMs: params.opts.gatewayProbeDeadlineMs,
+              onProgress: params.opts.onProgress,
+              ...gatewayProbeAuthResolution.auth,
+            }),
         )
       : undefined;
   const canDiagnose =
@@ -266,8 +250,7 @@ export async function resolveGatewayProbeSnapshot(params: {
     (readiness && !canDiagnose) || (shouldProbe && remainingTimeoutMs() === 0)
       ? unavailableProbe()
       : shouldProbe
-        ? await probeGatewayModuleLoader
-            .load()
+        ? await import("../gateway/probe.js")
             .then(({ probeGateway }) => {
               const timeoutMs = remainingTimeoutMs();
               return timeoutMs === 0
@@ -300,12 +283,7 @@ export async function resolveGatewayProbeSnapshot(params: {
       remainingTimeoutMs() > 0 &&
       (!readiness || canDiagnose),
   });
-  if (
-    (params.opts.mergeAuthWarningIntoProbeError ?? true) &&
-    gatewayProbeAuthWarning &&
-    gatewayProbe?.ok === false &&
-    !gatewayProbe.startupPhase
-  ) {
+  if (gatewayProbeAuthWarning && gatewayProbe?.ok === false && !gatewayProbe.startupPhase) {
     gatewayProbe.error = gatewayProbe.error
       ? `${gatewayProbe.error}; ${gatewayProbeAuthWarning}`
       : gatewayProbeAuthWarning;

@@ -361,8 +361,9 @@ vi.mock("../../sessions/index.js", () => {
   };
 });
 
+// mock-isolation: Keep session storage and provider runtime outside the attempt fixture.
 vi.mock("../../sessions/sdk.js", () => ({
-  createAgentSessionForEmbeddedRunner: (options: CreateAgentSessionOptions) =>
+  createAgentSession: (options: CreateAgentSessionOptions) =>
     hoisted.createAgentSessionMock(options),
 }));
 
@@ -541,15 +542,11 @@ vi.mock("../../system-prompt-report.js", () => ({
   buildSystemPromptReport: () => undefined,
 }));
 
-vi.mock("../system-prompt.js", async () => {
-  const actual = await vi.importActual<typeof import("../system-prompt.js")>("../system-prompt.js");
+vi.mock("../../system-prompt-config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../system-prompt-config.js")>();
   return {
     ...actual,
-    applySystemPromptToSession: (session: MutableSession, systemPrompt: string) => {
-      hoisted.systemPromptTexts.push(systemPrompt);
-      session.setBaseSystemPrompt(systemPrompt);
-    },
-    buildEmbeddedSystemPrompt: (params: unknown) => {
+    buildConfiguredAgentSystemPrompt: (params: unknown) => {
       hoisted.embeddedSystemPromptInputs.push(params);
       return "system prompt";
     },
@@ -597,9 +594,9 @@ vi.mock("../../cache-trace.js", () => ({
   createCacheTrace: () => undefined,
 }));
 
+// mock-isolation: Exercise attempt workspace routing without constructing unrelated tools.
 vi.mock("../../agent-tools.js", () => ({
-  createOpenClawCodingTools: hoisted.createOpenClawCodingToolsMock,
-  createOpenClawCodingToolsInternal: hoisted.createOpenClawCodingToolsMock,
+  createOpenClawCodingToolsInternalAsync: hoisted.createOpenClawCodingToolsMock,
   resolveToolLoopDetectionConfig: () => undefined,
 }));
 
@@ -1028,6 +1025,7 @@ export function createDefaultEmbeddedSession(params?: {
       activeToolNames = [...toolNames];
     },
     setBaseSystemPrompt: (systemPrompt) => {
+      hoisted.systemPromptTexts.push(systemPrompt);
       session.agent.state.systemPrompt = systemPrompt;
     },
     prompt: async (prompt, options) => {

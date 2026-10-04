@@ -13,6 +13,7 @@ import { resolveProviderTextTransforms } from "../../../plugins/provider-runtime
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
+import { resolveSelectedModelCredential } from "../../model-auth-selected-credential.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -643,24 +644,43 @@ export async function prepareEmbeddedAttemptTransport(input: {
   const runtime = attempt.preparedModelRuntime;
   const profileId = attempt.authProfileId;
   const credential = profileId ? attempt.authProfileStore?.profiles[profileId] : undefined;
+  const selectedCredential =
+    runtime &&
+    resolveSelectedModelCredential({
+      provider: attempt.model.provider,
+      profileId,
+      mode: credential?.type ?? attempt.runtimePlan?.auth.selectedAuthMode,
+    });
   if (
     runtime?.accountCatalog &&
-    profileId &&
-    credential?.type === "api_key" &&
+    selectedCredential &&
+    selectedCredential.source !== "harness" &&
+    selectedCredential.requirement === "api-key" &&
     attempt.model.provider === "openai" &&
     attempt.model.api === "openai-responses"
   ) {
-    const record = runtime.accountCatalog.prepareServiceTierObserver({ profileId, credential });
+    const record = runtime.accountCatalog.prepareServiceTierObserver({
+      selectedCredential,
+      credential,
+    });
     session.agent.streamFn = createOpenAIServiceTierObservationWrapper(
       session.agent.streamFn,
-      (model) =>
+      (model, serviceTiers) =>
         !input.abortSignal.aborted &&
         record({
           modelId: model.id,
           runtimeId: "openclaw",
           api: model.api,
           baseUrl: model.baseUrl,
-          serviceTiers: ["priority"],
+          serviceTiers,
+        }),
+      (model) =>
+        runtime.accountCatalog?.readServiceTiers({
+          identityKey: selectedCredential.identityKey,
+          modelId: model.id,
+          runtimeId: "openclaw",
+          api: model.api,
+          baseUrl: model.baseUrl,
         }),
     );
   }

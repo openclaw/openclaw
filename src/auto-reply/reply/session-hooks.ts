@@ -37,19 +37,14 @@ export function createReplySessionResetBoundary(params: {
     params.previousReason === "idle" || params.previousReason === "daily"
       ? params.previousReason
       : "reset";
-  return params.resetTriggered
-    ? {
-        boundaryId: createSessionResetBoundaryId(),
-        context: "clear",
-        cwd: params.cwd,
-        reason: params.explicitReason,
-      }
-    : {
-        boundaryId: createSessionResetBoundaryId(),
-        context: "preserve-tail",
-        cwd: params.cwd,
-        reason: continuityReason,
-      };
+  const request: SessionResetBoundaryRequest = params.resetTriggered
+    ? { context: "clear", reason: params.explicitReason }
+    : { context: "preserve-tail", reason: continuityReason };
+  return {
+    boundaryId: createSessionResetBoundaryId(),
+    cwd: params.cwd,
+    ...request,
+  };
 }
 
 type SessionHookContext = {
@@ -139,8 +134,6 @@ export function emitReplySessionEndHook(params: {
   agentId: string;
   storePath: string;
   reason?: PluginHookSessionEndReason;
-  sessionFile?: string;
-  transcriptArchived?: boolean;
   nextSessionId?: string;
   resetBoundaryId?: string;
 }): void {

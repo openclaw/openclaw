@@ -7,6 +7,8 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import * as userProfileList from "../state/user-profile-list.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import { execCompletionSchema } from "./bash-tools.schemas.js";
+import { createCodeModeTools } from "./code-mode.js";
 import { resolveCoreToolFactoryFamily } from "./core-tool-factory-descriptors.js";
 import {
   createCronCreatorAuthorityCapability,
@@ -29,7 +31,7 @@ type CreateOpenClawToolsOptions = NonNullable<Parameters<typeof createOpenClawTo
 function withDefaultRoster(config: OpenClawConfig | undefined): OpenClawConfig {
   return {
     ...config,
-    agents: config?.agents ?? { entries: { main: { default: true } } },
+    agents: config?.agents ?? { entries: { main: {} } },
   };
 }
 
@@ -67,6 +69,41 @@ function expectToolNamed(
   return tool;
 }
 
+it("keeps top-level tool argument names distinct from the required schema keyword", () => {
+  const config: OpenClawConfig = {
+    agents: { entries: { main: {} } },
+    tools: { swarm: true },
+  };
+  const directTools = createOpenClawCodingTools({
+    config,
+    sessionKey: "agent:main:main",
+    wrapBeforeToolCallHook: false,
+    toolConstructionPlan: {
+      includeBaseCodingTools: true,
+      includeShellTools: true,
+      includeChannelTools: false,
+      includeOpenClawTools: true,
+      includePluginTools: false,
+    },
+  });
+  const codeModeTools = createCodeModeTools({ config, agentId: "main" });
+  expect(toolNames(directTools)).toEqual(expect.arrayContaining(["exec", "agents_wait"]));
+  expect(toolNames(codeModeTools)).toEqual(["exec", "wait"]);
+  const surfaces = {
+    direct: directTools,
+    codeMode: codeModeTools,
+    completion: [{ name: "exec", parameters: execCompletionSchema }],
+  };
+  // Kimi confuses a top-level argument named required with JSON Schema's keyword.
+  for (const [surface, tools] of Object.entries(surfaces)) {
+    for (const tool of tools) {
+      expect
+        .soft(tool.parameters, `${surface}:${tool.name}`)
+        .not.toHaveProperty(["properties", "required"]);
+    }
+  }
+});
+
 describe("openclaw-tools progress_card gating", () => {
   afterEach(() => {
     setEmbeddedMode(false);
@@ -84,7 +121,7 @@ describe("openclaw-tools progress_card gating", () => {
         cwd: "/project/worktree",
         workspaceDir: "/project/worktree",
         config: {
-          agents: { entries: { main: { default: true, workspace: "/agent/workspace" } } },
+          agents: { entries: { main: { workspace: "/agent/workspace" } } },
           tools: { allow: ["personal_instructions"], fs: { workspaceOnly: true } },
         },
         disableMessageTool: true,

@@ -54,12 +54,15 @@ export function registerYieldFollowupAdoptionTests({
         task: "wait for the remote job",
       });
       expect(
-        await getRegistry().markSubagentMessageWait({
+        await getRegistry().claimSubagentYield({
           runId: PAUSED_RUN_ID,
           sessionKey: CHILD_SESSION_KEY,
+          agentId: "main",
+          waitForMessage: true,
+          hasPendingWork: () => false,
           acknowledgment: "Paused awaiting continuation.",
         }),
-      ).toBe(true);
+      ).toEqual({ messageWaitRegistered: true });
       return expectDefined(findRequesterRun(PAUSED_RUN_ID, ORIGINAL_REQUESTER), "yielding run");
     };
 

@@ -36,7 +36,7 @@ it.each(
   "checks $sessionKey against its heartbeat owner, with an event for $queuedAgentId",
   async ({ sessionKey, queuedAgentId }) => {
     const config: OpenClawConfig = {
-      agents: { entries: { main: { default: true }, research: {} } },
+      agents: { entries: { main: {}, research: {} } },
       session: { scope: "global" },
       plugins: { entries: { "memory-core": { config: { dreaming: { enabled: false } } } } },
     };

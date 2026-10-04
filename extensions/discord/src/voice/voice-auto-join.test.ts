@@ -314,7 +314,7 @@ defineDiscordVoiceTests(
           realtime: { provider: "openai" },
         }),
         undefined,
-        { agents: { list: [{ id: "helper" }, { id: "molty" }] } },
+        { agents: { entries: { helper: {}, molty: {} } } },
       );
 
       await manager.autoJoin();

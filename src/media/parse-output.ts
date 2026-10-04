@@ -72,15 +72,9 @@ const HAS_FILE_EXT = /\.\w{1,10}$/;
 // Matches ".." as a standalone path segment (start, middle, or end).
 const TRAVERSAL_SEGMENT_RE = /(?:^|[/\\])\.\.(?:[/\\]|$)/;
 
-function isSupportedHomeRelativePath(candidate: string): boolean {
-  return candidate.startsWith("~/") || candidate.startsWith("~\\");
-}
-
 function hasTraversalOrUnsupportedHomeDirPrefix(candidate: string): boolean {
   return (
-    candidate.startsWith("../") ||
-    candidate === ".." ||
-    (candidate.startsWith("~") && !isSupportedHomeRelativePath(candidate)) ||
+    (candidate.startsWith("~") && !/^~[/\\]/.test(candidate)) ||
     TRAVERSAL_SEGMENT_RE.test(candidate)
   );
 }
@@ -115,20 +109,6 @@ function isBlockedRemoteMediaHostname(hostname: string): boolean {
   if (!normalized) {
     return true;
   }
-  if (!normalized.includes(".")) {
-    return true;
-  }
-  if (
-    normalized === "localhost" ||
-    normalized === "localhost.localdomain" ||
-    normalized === "metadata.google.internal" ||
-    normalized.endsWith(".localhost") ||
-    normalized.endsWith(".local") ||
-    normalized.endsWith(".internal")
-  ) {
-    return true;
-  }
-
   const strictIp = parseCanonicalIpAddress(normalized);
   if (strictIp) {
     if (isIpv4Address(strictIp)) {
@@ -139,6 +119,17 @@ function isBlockedRemoteMediaHostname(hostname: string): boolean {
     }
     const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(strictIp);
     return embeddedIpv4 ? isBlockedSpecialUseIpv4Address(embeddedIpv4) : false;
+  }
+  if (!normalized.includes(".")) {
+    return true;
+  }
+  if (
+    normalized === "localhost.localdomain" ||
+    normalized.endsWith(".localhost") ||
+    normalized.endsWith(".local") ||
+    normalized.endsWith(".internal")
+  ) {
+    return true;
   }
 
   if (normalized.includes(":") && !parseLooseIpAddress(normalized)) {
@@ -198,11 +189,9 @@ function isValidMedia(
 
   // Accept bare filenames (e.g. "image.png") only when the caller opts in.
   // This avoids treating space-split path fragments as separate media items.
-  if (opts?.allowBareFilename && !SCHEME_RE.test(candidate) && HAS_FILE_EXT.test(candidate)) {
-    return true;
-  }
-
-  return false;
+  return Boolean(
+    opts?.allowBareFilename && !SCHEME_RE.test(candidate) && HAS_FILE_EXT.test(candidate),
+  );
 }
 
 function beginsIndependentMediaSource(raw: string): boolean {
@@ -309,12 +298,8 @@ function unwrapQuoted(value: string): string | undefined {
   if (trimmed.length < 2) {
     return undefined;
   }
-  const first = trimmed[0];
-  const last = trimmed[trimmed.length - 1];
-  if (first !== last) {
-    return undefined;
-  }
-  if (first !== `"` && first !== "'" && first !== "`") {
+  const first = trimmed.charAt(0);
+  if (first !== trimmed.at(-1) || !QUOTE_CHARS.has(first)) {
     return undefined;
   }
   return trimmed.slice(1, -1).trim();

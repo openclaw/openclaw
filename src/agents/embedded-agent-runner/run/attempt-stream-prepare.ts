@@ -90,6 +90,7 @@ type PrepareEmbeddedAttemptStreamInput = {
     | "coreBuiltinToolNames"
     | "replaySafeToolNames"
     | "codeModeExecToolNames"
+    | "sourceReplyCapableToolNames"
     | "sideEffectToolOwners"
     | "trustedLocalMediaToolNames"
   >;
@@ -420,6 +421,7 @@ function prepareStream(
     coreBuiltinToolNames: agentSession.coreBuiltinToolNames,
     replaySafeToolNames: agentSession.replaySafeToolNames,
     codeModeExecToolNames: agentSession.codeModeExecToolNames,
+    sourceReplyCapableToolNames: agentSession.sourceReplyCapableToolNames,
     sideEffectToolOwners: agentSession.sideEffectToolOwners,
     trustedLocalMediaToolNames: agentSession.trustedLocalMediaToolNames,
     internalEvents: attempt.internalEvents,

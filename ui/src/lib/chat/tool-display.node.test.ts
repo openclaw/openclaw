@@ -10,11 +10,26 @@ describe("tool display", () => {
       { name: " EXEC ", icon: "squareTerminal" },
       { name: "web_search", icon: "search" },
       { name: "read", icon: "fileText" },
+      { name: "message", icon: "mail" },
+      { name: "image_generate", icon: "image" },
       { name: "unknown_tool", icon: "puzzle" },
       { name: "constructor", icon: "puzzle" },
     ]) {
       expect(resolveToolDisplayIcon(name)).toBe(icon);
       expect(resolveToolDisplay({ name }).icon).toBe(icon);
+    }
+  });
+
+  it("preserves foreign tool aliases in previews and rows without classifiable arguments", () => {
+    for (const [name, icon] of [
+      [" SHELL ", "squareTerminal"],
+      ["search", "search"],
+      ["grep", "search"],
+      ["find", "search"],
+      ["glob", "search"],
+    ] as const) {
+      expect(resolveToolDisplayIcon(name)).toBe(icon);
+      expect(resolveToolDisplay({ name, args: {} }).icon).toBe(icon);
     }
   });
 

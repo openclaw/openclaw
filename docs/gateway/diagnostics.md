@@ -169,15 +169,20 @@ The `cpuCoreRatio` in phase and liveness events is measured in core equivalents
 and can exceed `1`. See
 [CPU pressure and event-loop delay](/gateway/health#cpu-pressure-and-event-loop-delay).
 
-With diagnostics enabled, `sessions.patch` and `sessions.patchMany` calls lasting
-at least one second add an info-level `slow session patch` file-log record. Its
-`elapsedMs`, `phaseDurationsMs`, and `phaseCounts` distinguish lifecycle admission,
-snapshot reads, catalog preparation, projection, commit, runtime acknowledgements,
-effects, and response work. Records inherit the request's diagnostic trace when
-available and contain fixed phase names and numbers, not patch values or session
-keys. Repeated stage visits contribute to the counts and totals. Parallel and
-nested stages can overlap, so their totals are neither an exclusive breakdown
-of request time nor CPU measurements.
+`sessions.patch` and `sessions.patchMany` calls lasting at least one second add
+an info-level `slow session patch` record even when diagnostics are disabled.
+The message includes total elapsed milliseconds, the method, and fixed phase
+durations, for example `slow session patch 1176ms method=sessions.patch catalog=1100ms response=20ms`.
+Replacement snapshots use the metadata reader for bounded exact-key selections
+and the maintenance reader for larger or label-owner selections, independently of
+the transcript-history reader. Snapshot time includes worker preparation and reads.
+Phases distinguish lifecycle admission, snapshot reads, catalog preparation,
+projection, commit, runtime acknowledgements, effects, and response work. Keeping
+timings in the message makes them visible in transports that omit structured
+fields. Records inherit the request's diagnostic trace when available and contain
+no patch values or session keys. Repeated stage visits add to each phase's total.
+Parallel and nested stages can overlap, so their totals are neither an exclusive
+breakdown of request time nor CPU measurements.
 
 Session collaboration reads emit queued `diagnostic.phase.completed` events to
 interested diagnostic listeners. `session.members.list` and
@@ -515,17 +520,29 @@ diagnostic event collection:
 Disabling diagnostics reduces bug-report detail; it does not affect normal
 Gateway logging.
 
-Memory pressure events record RSS, heap, threshold, and growth facts
-(`rss_threshold`, `heap_threshold`, `rss_growth`) without performing a
-file-system scan or writing a pre-OOM snapshot.
+Memory pressure warnings start at 80% of a measured limit; critical pressure starts
+at 90%. The main thread's V8 `heap_size_limit` is the primary signal
+(`heap_threshold`). Each fresh worker sample is compared with that worker's own V8
+limit (`worker_heap_threshold`), including process-wide heap flag overrides. RSS
+includes every worker and native allocation, so `rss_threshold` uses the smaller of
+physical RAM and the process/cgroup memory constraint, independently of V8 heap
+limits. Unknown limits are omitted; Bun's compatibility heap metadata is not treated
+as a V8 limit. RSS growth alone does not indicate pressure.
 
-On Node, persistent database workers collect garbage after a completed operation
-when their used heap has grown by 32 MiB since the last idle collection. SQLite,
+Warning and critical journal lines and diagnostic events retain the measured
+`usedBytes`, `limitBytes`, and `thresholdBytes`; worker pressure also identifies
+`workerThreadId`. The detector performs no file-system scan, forced main-thread GC,
+or pre-OOM snapshot. `openclaw_memory_bytes` remains unchanged.
+
+Persistent database workers collect garbage after a completed operation when their
+used heap has grown by 32 MiB since the last idle collection. This uses the runtime's
+local inspector collection support; runtimes that report the method as unavailable
+skip idle collection. On Node, SQLite,
 history, transcript, and reclamation workers request a 512 MiB V8 old-generation
 limit; an explicit process-wide `--max-old-space-size` overrides Node's worker
 resource limit. These limits do not cover native allocations or transferred buffers.
 Memory diagnostics report each sampled direct worker by script and thread ID,
-including its heap and external memory. Task workers also publish ArrayBuffer
+including its heap, measured heap limit, and external memory. Task workers also publish ArrayBuffer
 bytes from inside their isolate; ArrayBuffers are already included in external
 memory, so do not add those values together. Other direct workers use native heap
 statistics and leave ArrayBuffer bytes unavailable. Nested workers are outside
@@ -543,8 +560,10 @@ until the worker responds. Memory pressure warnings include these counters and t
 limit caveat; Node does not provide a worker limit for external/native allocations.
 
 Critical memory pressure retires idle workers through their existing cleanup owners,
-including when diagnostic event collection is disabled. Active operations keep
-their custody and the usual 30-minute database retention window resumes after use.
+including when diagnostic event collection is disabled. Warnings do not retire
+workers. Retirement requests are asynchronous, skip active work, and keep native
+close/checkpoint operations off the main thread. Active operations keep their
+custody and the usual 30-minute database retention window resumes after use.
 No stored data, database schema, or update procedure changes.
 
 When a task pool recreates an idle-retired Worker within five minutes, it keeps
@@ -563,6 +582,13 @@ by the WebSocket sender (UTF-8 bytes, excluding transport framing/compression),
 with power-of-two buckets from 1 KiB to 64 MiB. Slow-response journal lines include
 `bytes=` for the same frame; it always means encoded response bytes, never heap
 allocation or an exclusive-window sample.
+
+For `sessions.list`, response journal lines and `slow session list` records also
+include `source`, `rowMode` (`compact` or `full`), `limit`, `offset`, and
+`filterKind`. The caller source is a bounded Control UI tag or `unspecified`;
+filter kinds contain parameter names, never search text, identities, or paths.
+The optimized WebSocket journal also records fast `sessions.list` responses of
+at least 200 KiB. Metric labels remain unchanged.
 
 `openclaw_gateway_rpc_handler_heap_delta_bytes` samples main-thread
 `process.memoryUsage().heapUsed` immediately around handler execution. A sample

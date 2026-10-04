@@ -16,10 +16,7 @@ import {
   type RuntimeToolSchemaDiagnostic,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
-import {
-  resolveCodexScheduledToolProjectionFactory,
-  runWithCronCreatorAuthorityCapabilityResolver,
-} from "openclaw/plugin-sdk/codex-mcp-projection";
+import { resolveCodexScheduledToolProjectionFactory } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
 import {
   createStageTimingTracker,
@@ -32,7 +29,10 @@ import {
   readCodexPluginConfig,
   type CodexPluginConfig,
 } from "./config.js";
-import { resolveCodexToolConstructionPlan } from "./dynamic-tool-construction-plan.js";
+import {
+  createCodexHostToolSurface,
+  resolveCodexToolConstructionPlan,
+} from "./dynamic-tool-construction-plan.js";
 import {
   filterCodexDynamicTools,
   filterCodexDynamicToolsForDisabledNativeSurface,
@@ -67,13 +67,15 @@ import { filterCodexVisionTools } from "./vision-tools.js";
 import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
 
 type OpenClawCodingToolsOptions = NonNullable<
-  Parameters<(typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"]>[0]
+  Parameters<
+    (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingToolsAsync"]
+  >[0]
 >;
 
 /** Factory seam for constructing OpenClaw runtime tools without eagerly loading agent-harness. */
 type OpenClawCodingToolsFactory =
-  (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"];
-type OpenClawDynamicTool = ReturnType<OpenClawCodingToolsFactory>[number];
+  (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingToolsAsync"];
+type OpenClawDynamicTool = Awaited<ReturnType<OpenClawCodingToolsFactory>>[number];
 type OpenClawSandboxContext = Awaited<ReturnType<typeof resolveSandboxContext>>;
 type CodexDynamicToolBuildEvent = Parameters<
   NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>
@@ -110,9 +112,7 @@ type DynamicToolBuildParams = {
   profilerEnabled?: boolean;
   cronCreatorToolAllowlistRef?: OpenClawCodingToolsOptions["cronCreatorToolAllowlistRef"];
   cronCreatorToolAllowlistCaptureRef?: OpenClawCodingToolsOptions["cronCreatorToolAllowlistCaptureRef"];
-  resolveCronCreatorToolAuthority?: Parameters<
-    typeof runWithCronCreatorAuthorityCapabilityResolver
-  >[0]["resolve"];
+  resolveCronCreatorToolAuthority?: Parameters<typeof createCodexHostToolSurface>[3];
   cronCreatorAuthorityUnavailableReason?: OpenClawCodingToolsOptions["cronCreatorAuthorityUnavailableReason"];
   forceHeartbeatTool?: boolean;
   ignoreDisableMessageTool?: boolean;
@@ -310,22 +310,12 @@ export async function buildDynamicTools(
   };
 
   input.onMessageToolTargetResolved?.(options.requireExplicitMessageTarget === true);
-  const buildOpenClawCodingTools = () => {
-    const bindingOptions = { cwd: input.effectiveCwd ?? input.effectiveWorkspace };
-    const createToolSurface = params.hostCapabilities.createToolSurface;
-    if (!createToolSurface) {
-      throw new Error("Codex tool construction requires a current host capability");
-    }
-    return createToolSurface(options, bindingOptions);
-  };
-  const allTools = input.resolveCronCreatorToolAuthority
-    ? runWithCronCreatorAuthorityCapabilityResolver({
-        capability: params.cronCreatorAuthorityCapability,
-        runId: params.runId,
-        resolve: input.resolveCronCreatorToolAuthority,
-        run: buildOpenClawCodingTools,
-      })
-    : buildOpenClawCodingTools();
+  const allTools = await createCodexHostToolSurface(
+    params,
+    options,
+    { cwd: input.effectiveCwd ?? input.effectiveWorkspace },
+    input.resolveCronCreatorToolAuthority,
+  );
   toolBuildStages.mark("create-openclaw-coding-tools");
   const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [];
   const readableAllToolProjection = filterProviderNormalizableTools(allTools);

@@ -552,9 +552,8 @@ describe("createOpenClawCodingTools", () => {
               localModelLean: true,
             },
           },
-          list: [
-            {
-              id: "artist",
+          entries: {
+            artist: {
               tools: {
                 alsoAllow: ["video_generate"],
                 byProvider: {
@@ -564,7 +563,7 @@ describe("createOpenClawCodingTools", () => {
                 },
               },
             },
-          ],
+          },
         },
         tools: {
           alsoAllow: ["pdf"],

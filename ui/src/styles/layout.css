@@ -1836,10 +1836,6 @@ openclaw-settings-save-indicator:empty {
     color var(--duration-fast) ease;
 }
 
-.sidebar-session-person-filter {
-  position: relative;
-}
-
 .sidebar-recent-sessions__head:where(:hover, :has(:focus-visible)) .sidebar-session-group-actions,
 .sidebar-session-group-actions[aria-expanded="true"],
 .sidebar-session-group-actions.sidebar-session-sort--filtered {
@@ -2085,6 +2081,12 @@ openclaw-settings-save-indicator:empty {
   padding: 4px 10px 10px var(--sidebar-text-offset);
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
+}
+
+.sidebar-session-empty-hint--startup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .sidebar-session--archived {
@@ -3271,6 +3273,16 @@ a:is(
     background var(--duration-fast) ease,
     color var(--duration-fast) ease,
     transform var(--duration-fast) ease;
+}
+
+.nav-item__children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.nav-item--child {
+  padding-inline-start: calc(var(--space-2) + var(--space-4));
 }
 
 .nav-item__icon {
@@ -4837,35 +4849,6 @@ html.openclaw-native-macos:not(.openclaw-native-nav):not(.openclaw-native-web-ch
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.content--chat .content-header {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) max-content;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  min-height: 44px;
-  padding: 4px 8px;
-  overflow: visible;
-  max-height: 44px;
-}
-
-.content--chat .content-header > div:first-child {
-  display: grid;
-  align-items: center;
-  position: relative;
-  text-align: left;
-  min-width: 0;
-}
-
-.content--chat .page-meta {
-  align-self: center;
-  justify-content: flex-end;
-  height: 36px;
-  align-items: center;
-  min-width: max-content;
-  overflow: visible;
 }
 
 .grid {

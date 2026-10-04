@@ -153,16 +153,19 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +4: legacy AgentHarness, attempt, embedded-run, and side-question contracts remain
   // deprecated while external harnesses migrate to required-capability V2 contracts.
   // +1: bounded structured-input compiler/executor for native harness protocol adapters.
-  "agent-harness": 2,
+  // +1: owner-approved async tool construction retains the deprecated synchronous factory.
+  "agent-harness": 3,
   // +1: owner-approved synchronous watched-session compatibility during async migration.
-  "agent-harness-runtime": 11,
+  // +1: owner-approved synchronous agent-end compatibility during async migration.
+  "agent-harness-runtime": 12,
   // +4: deprecated media projection type, builder, and turn aliases.
   "channel-inbound": 18,
   // +2: Slack progress-draft render bridge (function + mode type).
   "channel-outbound": 2,
   // +2: WhatsApp ack-policy bridge (function + mode type).
   "channel-feedback": 2,
-  "channel-pairing": 0,
+  // Released synchronous allowlist compatibility during the approved worker-read migration.
+  "channel-pairing": 1,
   "channel-policy": 7,
   "channel-send-result": 1,
   "reply-runtime": 1,
@@ -188,7 +191,12 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +4: owner-approved replay V2 types on core and plugin-entry (2026-10-01).
       // +11: ten service-lifetime type exports and the owner-bound scheduler resolver.
       // +1: owner-approved async watched-session preparation with retained sync compatibility.
-      3643,
+      // +1: captureToolAuthoredSourceReply lets the Codex harness deliver canDeliverSourceReply tool replies.
+      // +1: owner-approved async agent-end preparation with retained sync compatibility.
+      // +1: owner-approved async coding-tool construction with retained sync compatibility.
+      // +4: executor controller, binding, context, and resolver.
+      // +1: required session cleanup failure preserves native ownership before host reset.
+      3652,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -197,7 +205,11 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: createSessionHeaderLink shares plugin-owned conversation navigation (PR #158742).
       // +1: resolvePluginServiceScheduler borrows an existing service/account/CLI owner.
       // +1: owner-approved async watched-session preparation with retained sync compatibility.
-      2109,
+      // +1: captureToolAuthoredSourceReply lets the Codex harness deliver canDeliverSourceReply tool replies.
+      // +1: owner-approved async agent-end preparation with retained sync compatibility.
+      // +1: owner-approved async coding-tool construction with retained sync compatibility.
+      // +1: resolve the controller from the current invocation registry.
+      2113,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

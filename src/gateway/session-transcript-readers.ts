@@ -6,11 +6,6 @@ import {
 import { withCurrentProjectionSnapshot } from "../config/sessions/session-accessor.sqlite-active-projection.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
 import type { SessionTranscriptBoundedMessageTailOptions } from "../config/sessions/session-accessor.sqlite-projection-read.js";
-import {
-  prepareSqliteTranscriptReadScope,
-  toDatabaseOptions,
-} from "../config/sessions/session-accessor.sqlite-scope.js";
-import { readSessionTranscriptWatermark } from "../config/sessions/session-accessor.sqlite-transcript-watermark.js";
 import { bindSessionTranscriptStoreScope } from "../config/sessions/session-accessor.transcript-target.js";
 import { readRestoredSessionTranscript } from "../config/sessions/session-cold-storage-read.js";
 import { readSessionTranscriptAccountingFromProjection } from "../config/sessions/session-transcript-accounting.js";
@@ -33,7 +28,7 @@ import type {
   SessionTranscriptSummaryResult,
 } from "./session-transcript-summary.js";
 
-export type { SessionTranscriptReadScope } from "./session-transcript-read-kernel.js";
+export type { SessionTranscriptReadScope } from "./session-transcript-read.types.js";
 export { capArrayByJsonBytes } from "./session-utils.fs.js";
 export { attachOpenClawTranscriptMeta } from "./session-transcript-entry-message.js";
 export { readSessionTranscriptVisibleMessageDeltaCore } from "../config/sessions/session-accessor.sqlite-active-events.js";
@@ -198,7 +193,7 @@ export async function readSessionMessageByIdAsync(
   if (usesProcessHeldTranscript(target)) {
     return sessionTranscriptReader.readSessionMessageByIdAsync(target, messageId, options);
   }
-  const capturedOptions = options ? { ...options } : undefined;
+  const capturedOptions = options ? structuredClone(options) : undefined;
   const { readSessionHistoryPageInWorker } =
     await import("../config/sessions/session-history-worker-runtime.js");
   return readSessionHistoryPageInWorker({
@@ -207,25 +202,9 @@ export async function readSessionMessageByIdAsync(
   });
 }
 
-export async function readSessionTranscriptWatermarkAsync(
-  scope: SessionTranscriptReadScope & { agentId: string; storePath: string },
-) {
-  const target = {
-    ...scope,
-    env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
-  };
-  if (usesProcessHeldTranscript(target)) {
-    return readSessionTranscriptWatermark(target);
-  }
-  const { withSessionHistoryWorkerDatabase } =
-    await import("../config/sessions/session-transcript-worker-runtime.js");
-  return withSessionHistoryWorkerDatabase(
-    toDatabaseOptions(await prepareSqliteTranscriptReadScope(target)),
-    (owner) => owner.readWatermark({ scope: target }),
-  );
-}
+export { readSessionTranscriptWatermarkAsync } from "../config/sessions/session-transcript-watermark.js";
 
-/** Keep exact membership and its full-history validation in the admitted history worker. */
+/** Keep exact membership and selected payload reads in the admitted history worker. */
 export const readSessionMessagesMatchingIdAsync = createHistoryPageReader(
   sessionTranscriptReader.readSessionMessagesMatchingIdAsync,
   (read, target, messageId) => read({ kind: "message-lookup", params: { target, messageId } }),

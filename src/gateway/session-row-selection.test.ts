@@ -384,7 +384,7 @@ it.each([false, true])(
 
 it("rejects duplicate ordinary keys introduced after store admission before filtering or pagination", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const primary = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     const secondary = state.statePath("secondary.sqlite");
     const key = "agent:main:original";

@@ -35,6 +35,7 @@ import {
   releaseClaimIfOwned,
   requireActivePlacement,
   resolvePlacementIdentity,
+  resolveWorkerPlacementRuntimeOverride,
   waitForPendingWorkerResult,
   waitForInitialWorkerPlacement,
   waitForWorkerRuntimeRefresh,
@@ -98,16 +99,8 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       workspaceDir: string;
     }): Promise<SandboxContext | null>;
   } = {
-    resolveRuntimeOverride(identity) {
-      const placement = options.placements.get(identity.sessionId);
-      return placement &&
-        placement.state !== "local" &&
-        placement.executionMode === "worker-turn" &&
-        (identity.agentId === undefined || placement.agentId === identity.agentId) &&
-        (identity.sessionKey === undefined || placement.sessionKey === identity.sessionKey)
-        ? "openclaw"
-        : undefined;
-    },
+    resolveRuntimeOverride: (identity) =>
+      resolveWorkerPlacementRuntimeOverride(options.placements, identity),
     assertCompactionSuccessorAllowed({ currentTarget }) {
       const placement = options.placements.get(currentTarget.sessionId);
       // Remote-exec has a local turn claim but still owns remote workspace state.
@@ -204,7 +197,16 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             assertRunCurrent?.();
           },
         });
-      const current = options.placements.get(claim.sessionId);
+      const prepared = await options.placements.prepareRuntimeRefresh(claim.sessionId);
+      let current: WorkerSessionPlacementRecord | undefined;
+      try {
+        inputTurn.abortSignal?.throwIfAborted();
+        assertRunCurrent?.();
+        prepared.assertCurrent();
+        current = prepared.placement;
+      } finally {
+        prepared.release();
+      }
       if (!current && inputTurn.modelRun === true && !claim.sessionKey?.trim()) {
         return await runLocal();
       }

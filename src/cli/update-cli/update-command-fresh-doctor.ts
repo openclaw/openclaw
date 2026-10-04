@@ -509,7 +509,6 @@ export async function completePostCorePluginUpdate(
     "phase" | "workspaceSuggestions" | "entryPath" | "onAuthorityRefused"
   > & {
     pluginUpdate: PostCorePluginUpdateResult;
-    freshDoctorRequired: boolean;
     beforeDoctor?: () => Promise<void>;
   },
 ): Promise<{
@@ -538,7 +537,7 @@ export async function completePostCorePluginUpdate(
         throw new Error("Updated OpenClaw entrypoint not found for post-plugin doctor");
       }
       const freshDoctorRequired =
-        params.freshDoctorRequired ||
+        pluginUpdate.changed ||
         hasDeferredUpdateModelRetirement() ||
         (await readDeferredPluginMigrationsAsync()).length > 0;
       assertCurrent();

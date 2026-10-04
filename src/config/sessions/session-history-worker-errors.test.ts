@@ -11,7 +11,10 @@ import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
 import * as sqliteScope from "./session-accessor.sqlite-scope.js";
-import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-row.js";
+import {
+  canonicalSessionKeyMigrationRequiredError,
+  SessionCanonicalKeyMigrationRequiredError,
+} from "./session-canonical-row.js";
 import { readSessionHistoryPageInWorker } from "./session-history-worker-runtime.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import {
@@ -57,7 +60,7 @@ function installWorkerTransport() {
       taskId: 7,
       interactive: Boolean(options.onRequest),
       nativeSections: new SharedArrayBuffer(4),
-      deletedAgentDatabaseFences: [],
+      taskContext: [],
     });
     const reply = await posted.promise;
     assert(reply && typeof reply === "object" && "status" in reply);
@@ -251,6 +254,7 @@ it("rejects primary revocation between delta acquisition and consumption", async
 
 const readFailures: Array<{ error: Error; reply?: (typeof typedFailures)[number]["reply"] }> = [
   { error: new Error("read failed") },
+  { error: canonicalSessionKeyMigrationRequiredError("invalid source metadata") },
   ...typedFailures,
   {
     error: new SessionMetadataUnavailableError(
@@ -284,7 +288,11 @@ it.each(
     }
     const failure: unknown = await readThroughWorker().catch((caught: unknown) => caught);
     const primary: unknown = failure instanceof AggregateError ? failure.errors[0] : failure;
-    if (!fails || error instanceof SessionMetadataUnavailableError) {
+    if (
+      !fails ||
+      error instanceof SessionMetadataUnavailableError ||
+      error instanceof SessionCanonicalKeyMigrationRequiredError
+    ) {
       expect(primary).toBeInstanceOf(error.constructor);
     }
     expect(primary).toMatchObject({ name: error.name, message: error.message });

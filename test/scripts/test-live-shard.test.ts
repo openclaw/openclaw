@@ -44,10 +44,12 @@ describe("scripts/test-live-shard", () => {
       "src/gateway/gateway-codex-harness.live.test.ts",
       "test/gateway-subagent-restart.live.test.ts",
     ];
-    expect(withoutReleaseWaivedLiveFiles(files, "2026.9.8")).toEqual([
-      "src/gateway/gateway-codex-harness.live.test.ts",
-    ]);
-    expect(withoutReleaseWaivedLiveFiles(files, "2026.9.9")).toEqual(files);
+    for (const version of ["2026.9.8", "2026.9.9"]) {
+      expect(withoutReleaseWaivedLiveFiles(files, version)).toEqual([
+        "src/gateway/gateway-codex-harness.live.test.ts",
+      ]);
+    }
+    expect(withoutReleaseWaivedLiveFiles(files, "2026.9.10")).toEqual(files);
     expect(withoutReleaseWaivedLiveFiles(files, undefined)).toEqual(files);
   });
 
@@ -440,7 +442,15 @@ describe("scripts/test-live-shard", () => {
       "OPENCLAW_LIVE_SUBAGENT_E2E",
     ],
     [
+      "src/agents/subagents/announce/subagent-followup-yield.live.test.ts",
+      "OPENCLAW_LIVE_SUBAGENT_E2E",
+    ],
+    [
       "src/agents/subagents/announce/subagent-late-reply.live.test.ts",
+      "OPENCLAW_LIVE_SUBAGENT_STRESS",
+    ],
+    [
+      "src/agents/subagents/announce/subagent-yield-pause.live.test.ts",
       "OPENCLAW_LIVE_SUBAGENT_STRESS",
     ],
     [

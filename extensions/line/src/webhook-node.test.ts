@@ -251,7 +251,6 @@ describe("createLineNodeWebhookHandler", () => {
       getTargets: () => [{ channelSecret: "secret", bot }],
       runtime,
       readBody,
-      maxBodyBytes: 1024 * 1024,
     });
 
     const { res } = createRes();

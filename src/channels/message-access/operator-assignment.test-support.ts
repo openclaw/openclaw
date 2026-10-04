@@ -82,14 +82,16 @@ async function prepareAssignment(fixture: Fixture, turn: MsgContext, nativeAgent
     ctx: turn,
     commandAuthorized: true,
   });
-  const tools = resolveGatewayScopedTools({
-    cfg,
-    sessionKey,
-    messageProvider: turn.Provider,
-    senderIsOwner,
-    surface: "loopback",
-    admittedRunContext: admitted,
-  }).tools;
+  const tools = (
+    await resolveGatewayScopedTools({
+      cfg,
+      sessionKey,
+      messageProvider: turn.Provider,
+      senderIsOwner,
+      surface: "loopback",
+      admittedRunContext: admitted,
+    })
+  ).tools;
   const run = <T>(action: () => Promise<T>) =>
     withPluginRuntimeGatewayRequestScope(
       {

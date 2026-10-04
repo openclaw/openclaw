@@ -1,10 +1,6 @@
 import type { Agent as HttpAgent } from "node:http";
 import type { Agent as HttpsAgent, AgentOptions as HttpsAgentOptions } from "node:https";
-import type { LogRecord } from "@opentelemetry/api-logs";
-import type {
-  DiagnosticEventPayload,
-  DiagnosticTraceContext,
-} from "openclaw/plugin-sdk/diagnostic-runtime";
+import type { DiagnosticEventPayload } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-entry";
 
 export type OtelLogsExporter = "otlp" | "stdout" | "both";
@@ -15,11 +11,6 @@ export type OtelHttpAgentOptions = HttpsAgentOptions & {
   keepAlive: true;
 };
 export type OtelLogger = OpenClawPluginServiceContext["logger"];
-
-export type BuiltOtelLogRecord = {
-  logRecord: LogRecord;
-  traceContext?: DiagnosticTraceContext;
-};
 
 export type MessageDeliveryDiagnosticEvent = Extract<
   DiagnosticEventPayload,

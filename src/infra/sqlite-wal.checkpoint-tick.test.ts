@@ -20,29 +20,8 @@ describe("sqlite WAL checkpoint tick", () => {
     vi.useRealTimers();
   });
 
-  it("raises the inline autocheckpoint threshold to the WAL recycling limit", () => {
-    const sqlite = requireNodeSqlite();
-    const dir = tempDirs.make("openclaw-sqlite-wal-autocheckpoint-");
-    const dbPath = path.join(dir, "openclaw.sqlite");
-    const db = new sqlite.DatabaseSync(dbPath);
-    let maintenance: ReturnType<typeof configureSqliteWalMaintenance> | undefined;
-    try {
-      maintenance = configureSqliteWalMaintenance(db, {
-        checkpointIntervalMs: 0,
-        databaseLabel: "wal-autocheckpoint",
-        databasePath: dbPath,
-      });
-      const row = db.prepare("PRAGMA wal_autocheckpoint;").get() as {
-        wal_autocheckpoint: number | bigint;
-      };
-      expect(Number(row.wal_autocheckpoint)).toBe(16 * 1024);
-    } finally {
-      maintenance?.close();
-      db.close();
-    }
-  });
-
-  it("disables inline checkpoints on a worker-maintained writer", () => {
+  it("delegates checkpoints while worker maintenance is registered and restores the inline fallback", async () => {
+    vi.useFakeTimers();
     const sqlite = requireNodeSqlite();
     const dir = tempDirs.make("openclaw-sqlite-wal-worker-writer-");
     const dbPath = path.join(dir, "openclaw.sqlite");
@@ -55,21 +34,30 @@ describe("sqlite WAL checkpoint tick", () => {
     let maintenance: ReturnType<typeof configureSqliteWalMaintenance> | undefined;
     try {
       maintenance = configureSqliteWalMaintenance(db, {
-        checkpointIntervalMs: 0,
+        checkpointIntervalMs: 60_000,
         databaseLabel: "wal-worker-writer",
         databasePath: dbPath,
       });
       expect(autocheckpoint()).toBe(16 * 1024);
 
       let cancelled = 0;
+      const requests: number[] = [];
       registerSqliteWalWorkerMaintenance(
         db,
-        async () => undefined,
+        async (request) => {
+          requests.push(request.maxPages);
+          return undefined;
+        },
         () => {
           cancelled += 1;
         },
       );
       expect(autocheckpoint()).toBe(0);
+
+      await vi.advanceTimersByTimeAsync(50_000);
+      expect(requests).toEqual([]);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(requests).toEqual([512]);
 
       // Without its worker the writer falls back to the bounded inline valve.
       void cancelSqliteWalWriteAdmission(db);
@@ -78,37 +66,6 @@ describe("sqlite WAL checkpoint tick", () => {
     } finally {
       maintenance?.close();
       db.close();
-    }
-  });
-
-  it("skips checkpoint-only ticks on a worker-maintained writer", async () => {
-    vi.useFakeTimers();
-    const sqlite = requireNodeSqlite();
-    const dir = tempDirs.make("openclaw-sqlite-wal-delegated-tick-");
-    const dbPath = path.join(dir, "openclaw.sqlite");
-    const db = new sqlite.DatabaseSync(dbPath);
-    let maintenance: ReturnType<typeof configureSqliteWalMaintenance> | undefined;
-    try {
-      maintenance = configureSqliteWalMaintenance(db, {
-        checkpointIntervalMs: 60_000,
-        databaseLabel: "wal-delegated-tick",
-        databasePath: dbPath,
-      });
-      const requests: number[] = [];
-      registerSqliteWalWorkerMaintenance(db, async (request) => {
-        requests.push(request.maxPages);
-        return undefined;
-      });
-
-      // Ticks never round-trip through the worker; the periodic pass still does.
-      await vi.advanceTimersByTimeAsync(50_000);
-      expect(requests).toEqual([]);
-      await vi.advanceTimersByTimeAsync(10_000);
-      expect(requests).toEqual([512]);
-    } finally {
-      maintenance?.close();
-      db.close();
-      vi.useRealTimers();
     }
   });
 

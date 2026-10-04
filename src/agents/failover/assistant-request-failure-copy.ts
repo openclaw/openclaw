@@ -1,10 +1,13 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
+import { redactSensitiveText } from "../../logging/redact.js";
 import {
   extractErrorHttpStatus,
   formatTransportErrorCopy,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
+import { escapeMarkdownText } from "../../shared/text/escape-markdown.js";
 import { classifyFailoverSignalCore } from "./classify-core.js";
 import { isContextOverflowErrorFromTables } from "./context-overflow-tables.js";
 import {
@@ -121,46 +124,89 @@ export function renderRuntimeCoordinationFailureCopy(code: string | undefined): 
   return copy ? `⚠️ ${copy}` : undefined;
 }
 
-/** Surface bounded rejection facts without arbitrary provider-controlled text. */
+/** Preserve the rejection diagnostic without publishing the surrounding response body. */
 export function renderFormatErrorCopy(raw: string): string {
   const trimmed = raw.trim();
   const normalized =
     extractErrorHttpStatus(trimmed)?.rest ?? trimmed.replace(ERROR_PREFIX_RE, "").trim();
-  const candidate = extractErrorHttpStatus(normalized)?.rest ?? normalized;
+  let candidate = extractErrorHttpStatus(normalized)?.rest ?? normalized;
+  // Some proxies serialize the upstream error inside their own error.message.
+  for (let depth = 0; depth < 4; depth++) {
+    // HTTP reason phrases can precede a body, including inside a proxy's message.
+    candidate = (extractErrorHttpStatus(candidate)?.rest ?? candidate).replace(
+      /^(?:bad request|unprocessable (?:entity|content))\s*:?\s*(?=[{[<])/iu,
+      "",
+    );
+    const parsedMessage = parseApiErrorInfo(candidate)?.message?.trim();
+    if (!parsedMessage || parsedMessage === candidate) {
+      break;
+    }
+    candidate = parsedMessage;
+  }
   if (isSessionTranscriptValidationErrorMessage(candidate)) {
     return GATEWAY_SESSION_TRANSCRIPT_VALIDATION_USER_TEXT;
   }
-  const cacheLimit = candidate.match(PROVIDER_CACHE_CONTROL_LIMIT_RE);
-  if (cacheLimit) {
+  if (PROVIDER_CACHE_CONTROL_LIMIT_RE.test(candidate)) {
     return "The AI service couldn't accept this conversation. Start a new conversation with /new, or choose another model in the Control UI.";
   }
-  const match = candidate.length <= 300 ? candidate.match(PROVIDER_OUTPUT_TOKEN_LIMIT_RE) : null;
-  const [, value, maximum] = match ?? [];
-  if (!value || !maximum) {
-    return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
+  if (candidate.length > 300 || !PROVIDER_OUTPUT_TOKEN_LIMIT_RE.test(candidate)) {
+    if (!candidate || /^[{<]/u.test(candidate)) {
+      return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
+    }
+    if (candidate.startsWith("[")) {
+      try {
+        JSON.parse(candidate);
+        return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
+      } catch {
+        // Preserve field-path diagnostics, not truncated or suffixed JSON arrays.
+        if (!/^\[[a-z_$][\w$.-]*\](?:\s|:|$)/iu.test(candidate)) {
+          return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
+        }
+      }
+    }
+    // Redact before truncation so a clipped credential cannot escape matching.
+    const detail = redactSensitiveText(candidate, { mode: "tools" })
+      .replace(/[\p{Cc}\p{Cf}\s]+/gu, " ")
+      .trim();
+    if (!detail) {
+      return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
+    }
+    const bounded = detail.length > 600 ? `${truncateUtf16Safe(detail, 600)}…` : detail;
+    return `LLM request rejected: ${escapeMarkdownText(bounded)}`;
   }
   return "The reply length is set too high for this model. Lower its reply limit in the Control UI settings, or choose another model.";
 }
 
 /** Share bounded request-limit facts between live failures and persisted chat history. */
-export function renderAssistantFormatFailureCopy(message: {
-  errorMessage?: unknown;
-  errorBody?: unknown;
-}): string | undefined {
-  for (const raw of [message.errorMessage, message.errorBody]) {
+export function renderAssistantFormatFailureCopy(
+  message: { errorMessage?: unknown; errorBody?: unknown; errorType?: unknown },
+  reason?: FailoverReason | null,
+): string | undefined {
+  for (const [isBody, raw] of [
+    [true, message.errorBody],
+    [false, message.errorMessage],
+  ] as const) {
     if (typeof raw !== "string") {
       continue;
     }
     const info = parseApiErrorInfo(raw);
+    if (isBody && !info?.message) {
+      continue;
+    }
     const status = extractErrorHttpStatus(raw)?.code;
     if (
+      reason !== "format" &&
+      !(
+        typeof message.errorType === "string" &&
+        message.errorType.toLowerCase().includes("invalid_request")
+      ) &&
       !info?.type?.toLowerCase().includes("invalid_request") &&
       status !== 400 &&
       status !== 422
     ) {
       continue;
     }
-    const copy = renderFormatErrorCopy(info?.message ?? raw);
+    const copy = renderFormatErrorCopy(raw);
     if (copy !== PROVIDER_SCHEMA_REJECTION_USER_TEXT) {
       return copy;
     }
@@ -180,10 +226,6 @@ export function renderRecordedAssistantFailureCopy(message: {
   );
   if (approvalMessage) {
     return `⚠️ ${approvalMessage}`;
-  }
-  const formatCopy = renderAssistantFormatFailureCopy(message);
-  if (formatCopy) {
-    return formatCopy;
   }
   const raw = typeof message.errorMessage === "string" ? message.errorMessage.trim() : "";
   if (raw === "Worker inference result exceeds the transcript message limit.") {
@@ -215,6 +257,13 @@ export function renderRecordedAssistantFailureCopy(message: {
     )
   ) {
     return "This conversation is too long for the model. Try /compact, or start a new conversation with /new.";
+  }
+  const formatCopy =
+    !classification?.reason || classification.reason === "format"
+      ? renderAssistantFormatFailureCopy(message, classification?.reason)
+      : undefined;
+  if (formatCopy) {
+    return formatCopy;
   }
   const classifiedCopy = renderAssistantRequestFailureCopy({
     code,

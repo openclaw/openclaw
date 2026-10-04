@@ -41,6 +41,7 @@ import type { AgentExecutionAuthBinding } from "../execution-auth-binding.js";
 import type { FailoverReason } from "../failover/signal.js";
 import type { PreparedQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import type { AgentHarnessIsolatedCompletionParamsV2 } from "../harness/types.js";
+import type { RuntimeContextFragment } from "../internal-runtime-context.js";
 import type { ReplyExpectation } from "../reply-completion.js";
 import type { RootedExecutionRequest } from "../rooted-run-params.js";
 import type { EmbeddedRunTrigger } from "../run-trigger.js";
@@ -64,6 +65,7 @@ type CliSessionRetryParams = {
 
 /** Input contract for one CLI-backed agent run. */
 export type RunCliAgentParams = {
+  preparedTtsPreferences?: import("../../tts/tts-preferences.js").PreparedTtsPreferences;
   /** Verified in-process completion authority; never supplied by native CLI input. */
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   /** Core lifecycle owner; never forwarded to the plugin execution context. */
@@ -73,6 +75,8 @@ export type RunCliAgentParams = {
   runtimePolicySessionKey?: string;
   sessionEntry?: SessionEntry;
   trigger?: EmbeddedRunTrigger;
+  /** Heartbeat-transported turn that continues a conversation (its own command completion). */
+  continuesConversation?: boolean;
   sessionFile: string;
   /** Host-owned task root; preparation must mediate all tools through its filesystem policy. */
   rootedExecution?: RootedExecutionRequest;
@@ -106,6 +110,7 @@ export type RunCliAgentParams = {
   /** Exact admitted run allowed to append to the durable transcript. */
   expectedWriterRunId?: string;
   currentInboundContext?: CurrentInboundPromptContext;
+  runtimeContextFragments?: RuntimeContextFragment[];
   /** Selected model provider used for tool policy; distinct from a CLI runtime id. */
   modelProvider?: string;
   /** Resolved logical model selected by this run's owner, before CLI transport mapping. */

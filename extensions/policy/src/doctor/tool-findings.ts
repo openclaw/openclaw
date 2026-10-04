@@ -18,14 +18,13 @@ export function toolPostureFindings(
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
   const findings: HealthFinding[] = [];
+  const entries = evidence.toolPosture ?? [];
   if (
     isRecord(policy) &&
     isRecord(policy.tools) &&
     posturePolicyShapeFinding("tools", policy.tools, { policyDocName, policyPath }) === undefined
   ) {
-    findings.push(
-      ...toolPostureFindingsForRule(policy.tools, policyDocName, "tools", evidence, () => true),
-    );
+    findings.push(...toolPostureFindingsForRule(policy.tools, policyDocName, "tools", entries));
   }
   if (!hasValidScopedPolicy(policy, policyPath, policyDocName)) {
     return findings;
@@ -40,8 +39,7 @@ export function toolPostureFindings(
         target.overlay.tools,
         policyDocName,
         requirementBase,
-        evidence,
-        (entry) => scopedToolAgentMatches(entry, target.agentId, evidence.toolPosture ?? []),
+        entries.filter((entry) => scopedToolAgentMatches(entry, target.agentId, entries)),
       ),
     );
   }
@@ -52,10 +50,8 @@ function toolPostureFindingsForRule(
   toolsPolicy: Record<string, unknown>,
   policyDocName: string,
   requirementBase: string,
-  evidence: PolicyEvidence,
-  evidenceFilter: (entry: PolicyToolPostureEvidence) => boolean,
+  entries: readonly PolicyToolPostureEvidence[],
 ): readonly HealthFinding[] {
-  const entries = (evidence.toolPosture ?? []).filter(evidenceFilter);
   return [
     ...toolValuePostureFindings(toolsPolicy, policyDocName, requirementBase, entries),
     ...toolAlsoAllowExpectedFindings(toolsPolicy, policyDocName, requirementBase, entries),

@@ -386,7 +386,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
             codeMode: { enabled: false },
           },
           agents: {
-            list: [{ id: "ops", tools: { codeMode: true } }],
+            entries: { ops: { tools: { codeMode: true } } },
           },
         } as OpenClawConfig,
         model: {
@@ -954,15 +954,13 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       });
 
       if (runtimeOnly) {
-        expect(seen.prompt).toContain("Continue the OpenClaw runtime event.");
-        expect(seen.prompt).toContain("Reply target of current user message:");
-        expect(seen.prompt).toContain("WT daily plan - Sat May 2");
+        expect(seen.prompt).toBe("Continue the OpenClaw runtime event.");
       } else {
         expect(seen.prompt).toBe("what does this mean?");
       }
       expect(result.finalPromptText).toBe(seen.prompt);
       const runtimeContext = runtimeContextMessage(seen.messages);
-      const inboundContext = runtimeOnly ? seen.prompt : runtimeContext.content;
+      const inboundContext = runtimeContext.content;
       expect(inboundContext).toContain("Reply target of current user message:");
       expect(inboundContext).toContain('"sender_label": "Mike"');
       expect(inboundContext).toContain("WT daily plan - Sat May 2");
@@ -984,7 +982,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       expect(contextCompiled?.data?.systemPrompt).not.toContain("secret runtime context");
       if (runtimeOnly) {
         expect(JSON.stringify(seen.modelMessages)).toContain("secret runtime context");
-        expect(promptSubmitted?.data?.prompt).toContain("WT daily plan - Sat May 2");
+        expect(promptSubmitted?.data?.prompt).not.toContain("WT daily plan - Sat May 2");
         expect(promptSubmitted?.data?.prompt).toContain("secret runtime context");
         expect(
           requireRecords(result.messagesSnapshot, "messages snapshot").some(

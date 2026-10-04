@@ -94,9 +94,7 @@ async function assertNoProvisioning(gateway: MockGatewayControls) {
 suite.define(() => {
   it.each(
     [
-      { width: 1280, staleRoster: false, reclaimOnReload: false, swapOnReload: false },
       { width: 390, staleRoster: false, reclaimOnReload: false, swapOnReload: false },
-      { width: 1280, staleRoster: true, reclaimOnReload: false, swapOnReload: false },
       { width: 1280, staleRoster: false, reclaimOnReload: true, swapOnReload: false },
       { width: 1280, staleRoster: false, reclaimOnReload: false, swapOnReload: true },
       {

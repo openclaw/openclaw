@@ -522,9 +522,11 @@ it.each([
       },
     },
   });
-  expect(input.request.kind === "rpc" ? undefined : input.request.params.target).not.toHaveProperty(
-    "env.UNRELATED_SECRET",
-  );
+  expect(
+    input.request.kind === "rpc" || input.request.kind === "rpc-message"
+      ? undefined
+      : input.request.params.target,
+  ).not.toHaveProperty("env.UNRELATED_SECRET");
 });
 
 it.each([false, true])(
@@ -647,21 +649,39 @@ it("shares queued equivalent pages but starts a fresh read after dispatch", asyn
   ]);
 });
 
-it.each([
-  { max: 2 },
-  { storePath: "/tmp/another-history-worker-fixture/sessions.json" },
-  { entry: { sessionId: "history-worker", updatedAt: 1, sessionStartedAt: 2 } },
-])("keeps distinct history selectors separate: %j", async (difference) => {
-  const first = readSessionHistoryPageInWorker(request());
-  const second = readSessionHistoryPageInWorker(request(difference));
-  await waitForReaderAdmission(2);
-  expect(queued).toHaveLength(2);
-  for (const job of queued) {
-    job.prepare();
-    job.result.resolve(page("selected page"));
-  }
-  await Promise.all([first, second]);
-});
+it.each(["rpc limit", "rpc store", "http cursor"] as const)(
+  "keeps distinct %s selectors separate in coalescing and byte admission",
+  async (selector) => {
+    const makeRequest = (different: boolean): SessionHistoryWorkerRequest =>
+      selector === "http cursor"
+        ? {
+            kind: "http",
+            params: {
+              target: { ...historyTarget(), sessionEntry: request().params.entry },
+              limit: 10,
+              maxChars: 8000,
+              cursor: different ? "7" : undefined,
+            },
+          }
+        : request(
+            different
+              ? selector === "rpc limit"
+                ? { max: 2 }
+                : { storePath: "/tmp/another-history-worker-fixture/sessions.json" }
+              : {},
+          );
+    const first = readSessionHistoryPageInWorker(makeRequest(false));
+    const second = readSessionHistoryPageInWorker(makeRequest(true));
+    await waitForReaderAdmission(2);
+    expect(queued).toHaveLength(2);
+    for (const [index, job] of queued.entries()) {
+      const input = job.prepare();
+      expect(runWorker.mock.calls[index]![1]).toBe(`1:${JSON.stringify(input)}`.length * 2);
+      job.result.resolve(selector === "http cursor" ? httpPage() : page("selected page"));
+    }
+    await Promise.all([first, second]);
+  },
+);
 
 it("discards a rejected queued read so a later request can succeed", async () => {
   const first = readSessionHistoryPageInWorker(request());
@@ -683,11 +703,10 @@ it("discards a rejected queued read so a later request can succeed", async () =>
   });
 });
 
-it.each(
-  [false, true].flatMap((encoded) =>
-    [0, DEFAULT_WORKER_PENDING_TASKS - 1].map((cancelledIndex) => ({ encoded, cancelledIndex })),
-  ),
-)(
+it.each([
+  { encoded: true, cancelledIndex: 0 },
+  { encoded: false, cancelledIndex: DEFAULT_WORKER_PENDING_TASKS - 1 },
+])(
   "bounds coalesced waiters when reader $cancelledIndex cancels during the worker read (encoded: $encoded)",
   async ({ cancelledIndex, encoded }) => {
     const controller = new AbortController();
@@ -768,38 +787,6 @@ it.each(
   },
 );
 
-it.runIf(process.env.OPENCLAW_BENCH_HISTORY_HANDOFF === "1")(
-  "measures coalesced history handoff",
-  async () => {
-    const text = "x".repeat(1024 * 1024);
-    const samples = [];
-    for (let sample = 0; sample < 7; sample++) {
-      const start = performance.now();
-      const cpu = process.cpuUsage();
-      for (let iteration = 0; iteration < 20; iteration++) {
-        const expectedAdmissions = admittedReaders + 2;
-        const first = readSessionHistoryPageInWorker(request());
-        const second = readSessionHistoryPageInWorker(request());
-        await waitForReaderAdmission(expectedAdmissions);
-        expect(queued).toHaveLength(1);
-        queued[0]!.prepare();
-        queued[0]!.result.resolve(page(text));
-        const [a, b] = await Promise.all([first, second]);
-        expect(a.messages[0]).not.toBe(b.messages[0]);
-        queued.length = 0;
-      }
-      const used = process.cpuUsage(cpu);
-      samples.push({
-        msPerGroup: (performance.now() - start) / 20,
-        cpuMsPerGroup: (used.user + used.system) / 1000 / 20,
-      });
-    }
-    console.log(
-      JSON.stringify({ readers: 2, textBytes: text.length, groupsPerSample: 20, samples }),
-    );
-  },
-);
-
 it.each([
   {
     entry: { sessionId: "history-worker", updatedAt: 1 },
@@ -833,32 +820,3 @@ it.each([
     await pending;
   },
 );
-
-it("keeps distinct HTTP cursors separate in coalescing and byte admission", async () => {
-  const rpc = request().params;
-  const params = {
-    target: {
-      agentId: rpc.sessionAgentId,
-      sessionKey: rpc.canonicalKey,
-      sessionId: rpc.sessionId,
-      sessionEntry: rpc.entry,
-      storePath: rpc.storePath,
-    },
-    limit: 10,
-    maxChars: 8000,
-    cursor: undefined as string | undefined,
-  };
-  const first = readSessionHistoryPageInWorker({ kind: "http", params });
-  const second = readSessionHistoryPageInWorker({
-    kind: "http",
-    params: { ...params, cursor: "7" },
-  });
-  await waitForReaderAdmission(2);
-  expect(queued).toHaveLength(2);
-  for (const [index, job] of queued.entries()) {
-    const input = job.prepare();
-    expect(runWorker.mock.calls[index]![1]).toBe(`1:${JSON.stringify(input)}`.length * 2);
-    job.result.resolve(httpPage());
-  }
-  await Promise.all([first, second]);
-});

@@ -56,19 +56,15 @@ import {
 
 const SESSION_TRANSCRIPTS_CHECK_ID = "core/doctor/session-transcripts";
 
-type TranscriptRepairResult = {
+type SessionTranscriptHealthIssue = {
   filePath: string;
   broken: boolean;
-  repaired: boolean;
   originalEntries: number;
   activeEntries: number;
   legacyOpenAICodexEntries: number;
-  backupPath?: string;
   reason?: string;
   deferred?: boolean;
 };
-
-type SessionTranscriptHealthIssue = TranscriptRepairResult;
 
 function parseTranscriptEntries(raw: string): TranscriptEntry[] {
   const entries: TranscriptEntry[] = [];
@@ -89,24 +85,23 @@ function parseTranscriptEntries(raw: string): TranscriptEntry[] {
 }
 
 /** Classifies one legacy transcript without changing its contents. */
-async function inspectSessionTranscriptFile(params: {
-  filePath: string;
-}): Promise<TranscriptRepairResult> {
-  const result: TranscriptRepairResult = {
-    filePath: params.filePath,
+async function inspectSessionTranscriptFile(
+  filePath: string,
+): Promise<SessionTranscriptHealthIssue> {
+  const result: SessionTranscriptHealthIssue = {
+    filePath,
     broken: false,
-    repaired: false,
     originalEntries: 0,
     activeEntries: 0,
     legacyOpenAICodexEntries: 0,
   };
   try {
-    if ((await fs.stat(params.filePath)).size > 1024 * 1024) {
+    if ((await fs.stat(filePath)).size > 1024 * 1024) {
       result.deferred = true;
       result.reason = "Detailed branch/provider classification deferred to offline staged import.";
       return result;
     }
-    const raw = await fs.readFile(params.filePath, "utf-8");
+    const raw = await fs.readFile(filePath, "utf-8");
     const entries = parseTranscriptEntries(raw);
     result.originalEntries = entries.length;
     result.legacyOpenAICodexEntries = normalizeLegacyOpenAICodexTranscriptMetadata(entries);
@@ -116,11 +111,8 @@ async function inspectSessionTranscriptFile(params: {
       ? hasBrokenPromptRewriteBranch(entries, activePath.entries)
       : false;
     result.broken = brokenBranch || result.legacyOpenAICodexEntries > 0;
-    if (!activePath) {
-      result.reason = "no active branch";
-    }
-  } catch (err) {
-    result.reason = String(err);
+  } catch {
+    // Unreadable or unclassifiable transcripts do not establish a health issue.
   }
   return result;
 }
@@ -152,7 +144,7 @@ export async function detectSessionTranscriptHealthIssues(params?: {
   const files = await listSessionTranscriptFiles(sessionDirs);
   const issues: SessionTranscriptHealthIssue[] = [];
   for (const filePath of files) {
-    const result = await inspectSessionTranscriptFile({ filePath });
+    const result = await inspectSessionTranscriptFile(filePath);
     if (result.broken || result.deferred) {
       issues.push(result);
     }
@@ -316,7 +308,7 @@ export async function noteSessionTranscriptHealth(options?: {
     deliveryReport = repairCanonicalSessionDeliveryStates(rowRepairParams);
     repairLegacySessionExecPolicy(rowRepairParams);
     acpKeyReport = await repairAcpSessionMetaKeysForDoctor({
-      ...repairParams,
+      ...rowRepairParams,
       authority: maintenanceAuthority,
     });
     titleReport = await repairLegacySessionTitles({
@@ -442,11 +434,13 @@ export async function noteSessionTranscriptHealth(options?: {
     );
   }
   if (acpKeyReport.found > 0 || acpKeyReport.warnings.length > 0) {
+    params.onWarnings?.(acpKeyReport.warnings);
     note(
       [
         params.shouldRepair
-          ? `- Repaired ${acpKeyReport.repaired} of ${acpKeyReport.found} legacy ACP metadata key(s).`
-          : `- Found ${acpKeyReport.found} legacy ACP metadata key(s). Run "openclaw doctor --fix" to repair them.`,
+          ? `- Repaired ${acpKeyReport.repaired} of ${acpKeyReport.found} legacy ACP metadata record(s).`
+          : `- Found ${acpKeyReport.found} legacy ACP metadata record(s). Run "openclaw doctor --fix" to repair them.`,
+        ...(acpKeyReport.backups ?? []).map((backup) => `- Saved ACP metadata backup: ${backup}`),
         ...acpKeyReport.warnings,
       ].join("\n"),
       "ACP session keys",

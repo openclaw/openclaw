@@ -1,123 +1,134 @@
-import { directorySizeBytes } from "./capacity.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { indexWorktreeEvictionDependencies } from "./gc-dependencies.js";
 import type { WorktreeGcProgress } from "./gc-progress.js";
+import type {
+  WorktreeEvictionCandidate,
+  WorktreeEvictionReason,
+} from "./git-worktree-operations.js";
 import { readLiveRegistryWorktreeIds, readRegistryWorktrees } from "./registry-read.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
+const log = createSubsystemLogger("agents/worktrees");
+
 type EnforceWorktreeCleanupLimitsParams = {
   env: NodeJS.ProcessEnv;
-  limits: { maxCount?: number; maxTotalSizeBytes?: number };
+  maxCount: number;
   progress: WorktreeGcProgress;
-  protect: (record: ManagedWorktreeRecord) => Promise<string | undefined>;
-  remove: (record: ManagedWorktreeRecord) => Promise<void>;
+  hasLiveLease: (record: ManagedWorktreeRecord) => boolean | Promise<boolean>;
+  repositories: (
+    records: ManagedWorktreeRecord[],
+  ) => Promise<Array<{ repoRoot: string; commonDir?: string }>>;
+  classify: (records: ManagedWorktreeRecord[]) => Promise<WorktreeEvictionCandidate[]>;
+  evict: (record: ManagedWorktreeRecord, reason: WorktreeEvictionReason) => Promise<void>;
   onError: (record: ManagedWorktreeRecord, error: unknown) => Promise<void>;
+  shouldYield?: () => boolean;
 };
 
-/** Enforces retention caps without retrying a record already handled by idle cleanup. */
+/** Call under the allocation lease shared by create, restore and background maintenance. */
 export async function enforceWorktreeCleanupLimits(
   params: EnforceWorktreeCleanupLimitsParams,
 ): Promise<string[]> {
-  const { limits, progress } = params;
-  if (limits.maxCount === undefined && limits.maxTotalSizeBytes === undefined) {
+  const { maxCount, progress } = params;
+  const records = await readRegistryWorktrees(params.env, { liveOnly: true });
+  const refresh = async () => {
+    const liveIds = new Set(await readLiveRegistryWorktreeIds(params.env));
+    return { liveIds, exceeded: liveIds.size > maxCount };
+  };
+  let state = await refresh();
+  if (!state.exceeded) {
     progress.recordLimitState(true);
     return [];
   }
-  const live = await readRegistryWorktrees(params.env, { liveOnly: true });
-  const sizes = new Map<string, number>();
-  let totalBytes = 0;
-  let inventoryComplete = true;
-  if (limits.maxTotalSizeBytes !== undefined) {
-    for (const record of live) {
-      try {
-        const bytes = await directorySizeBytes(record.path);
-        sizes.set(record.id, bytes);
-        totalBytes += bytes;
-      } catch (error) {
-        inventoryComplete = false;
-        progress.error("size", error, record.id);
+  const idle: ManagedWorktreeRecord[] = [];
+  const leased = new Set<string>();
+  for (const record of records) {
+    if (await params.hasLiveLease(record)) {
+      leased.add(record.id);
+      if (progress.start(record.id)) {
+        const owner = `${record.ownerKind}:${record.ownerId ?? record.id}`;
+        progress.protect("limits", record.id, "live-refused", `${owner} has an active run lease`);
+        log.info(`Worktree eviction live-refused: ${record.id}; owner ${owner}`);
       }
+    } else {
+      idle.push(record);
     }
   }
-  let liveCount = live.length;
-  const overLimit = () =>
-    (limits.maxCount !== undefined && liveCount > limits.maxCount) ||
-    (limits.maxTotalSizeBytes !== undefined && totalBytes > limits.maxTotalSizeBytes);
-  // Concurrent changes must affect every destructive decision and the final
-  // result. New records stay unmeasured rather than receiving a false size.
-  const refreshTotals = async () => {
-    const liveIds = new Set(await readLiveRegistryWorktreeIds(params.env));
-    liveCount = liveIds.size;
-    if (limits.maxTotalSizeBytes !== undefined) {
-      totalBytes = 0;
-      inventoryComplete = true;
-      for (const id of liveIds) {
-        const bytes = sizes.get(id);
-        if (bytes === undefined) {
-          inventoryComplete = false;
-        } else {
-          totalBytes += bytes;
-        }
+  const commonDirs = new Map(
+    (idle.length ? await params.repositories(records) : []).map(({ repoRoot, commonDir }) => [
+      repoRoot,
+      commonDir,
+    ]),
+  );
+  const { dependents, sourceContainers, unresolved } = indexWorktreeEvictionDependencies(
+    records,
+    commonDirs,
+  );
+  const unknownLive = [...unresolved.keys()].some((id) => leased.has(id));
+  const blocked = (id: string) => {
+    if (unknownLive) {
+      return true;
+    }
+    for (const child of dependents.get(id) ?? []) {
+      if (state.liveIds.has(child)) {
+        return true;
       }
     }
-    return { liveIds, inventoryComplete };
+    return false;
   };
-  const inventoriedIds = new Set(live.map((record) => record.id));
-  const recordNewIds = (liveIds: Set<string>) => {
-    for (const id of liveIds) {
-      if (!inventoriedIds.has(id)) {
-        progress.record("limits", "deferred", "created during cleanup; run cleanup again", id);
-      }
-    }
+  const reasons = new Map((await params.classify(idle)).map(({ id, reason }) => [id, reason]));
+  const rank = (record: ManagedWorktreeRecord) => {
+    const reason = reasons.get(record.id);
+    return reason === "merged" ? 0 : reason === "squashed" ? 1 : 2;
   };
-  // Count-only inventory has not yielded since its registry read.
-  const initialRefresh =
-    limits.maxTotalSizeBytes === undefined
-      ? { liveIds: inventoriedIds, inventoryComplete }
-      : await refreshTotals();
-  if (!overLimit()) {
-    progress.recordLimitState(true, inventoryComplete);
-    if (progress.result.limitsSatisfied !== true) {
-      recordNewIds(initialRefresh.liveIds);
-    }
-    return [];
-  }
+  idle.sort(
+    (a, b) => rank(a) - rank(b) || a.lastActiveAt - b.lastActiveAt || a.id.localeCompare(b.id),
+  );
   const removed: string[] = [];
-  const candidates = live
-    .filter((record) => record.ownerKind === "workboard" || record.ownerKind === "session")
-    .toSorted((a, b) => a.lastActiveAt - b.lastActiveAt);
-  for (const record of candidates) {
-    const { liveIds } = await refreshTotals();
-    if (!overLimit()) {
+  for (const record of idle) {
+    if (!state.exceeded || params.shouldYield?.()) {
       break;
     }
-    if (!liveIds.has(record.id) || !progress.start(record.id)) {
+    // Allocation owns checkout and repository dependencies. An external checkout
+    // may keep its source or shared Git metadata inside this candidate.
+    // This is a dependency, not a failed attempt: revisit after a child retires.
+    if (blocked(record.id)) {
       continue;
     }
-    try {
-      const protection = await params.protect(record);
-      if (protection !== undefined) {
-        progress.protect("limits", record.id, protection);
-        continue;
-      }
-      await params.remove(record);
-    } catch (error) {
-      await params.onError(record, error);
-      continue;
-    }
-    removed.push(record.id);
-  }
-  const { liveIds: remainingIds, inventoryComplete: finalInventoryComplete } =
-    await refreshTotals();
-  progress.recordLimitState(!overLimit(), finalInventoryComplete);
-  if (progress.result.limitsSatisfied !== true) {
-    for (const record of live) {
-      if (!remainingIds.has(record.id) || !progress.start(record.id)) {
-        continue;
-      }
-      if (record.ownerKind !== "workboard" && record.ownerKind !== "session") {
-        progress.protect("limits", record.id, "manual worktrees require explicit removal");
+    if (state.liveIds.has(record.id) && progress.start(record.id)) {
+      try {
+        // Selection is advisory. The host claims removal atomically against run
+        // admission, then revalidates its claim immediately before worker writes.
+        await params.evict(record, reasons.get(record.id) ?? "idle-age");
+        removed.push(record.id);
+        const containers = [...(sourceContainers.get(record.id) ?? [])].filter((id) =>
+          state.liveIds.has(id),
+        );
+        if (containers.length > 0) {
+          log.warn(
+            `Worktree ${record.id} recovery remains inside managed checkout(s) ${containers.join(", ")}; evicting them can also remove its recovery snapshot`,
+          );
+        }
+      } catch (error) {
+        await params.onError(record, error);
       }
     }
-    recordNewIds(remainingIds);
+    state = await refresh();
   }
+  progress.recordLimitState(!state.exceeded);
   return removed;
+}
+
+export function worktreeCapacityError(
+  maxCount: number,
+  liveOwners: ManagedWorktreeRecord[],
+): Error {
+  const owners = liveOwners
+    .map((record) => `${record.ownerKind}:${record.ownerId ?? record.id}`)
+    .join(", ");
+  const nextStep = owners
+    ? "Wait for active runs to finish or raise worktreeMaxCount in the Gateway configuration."
+    : "Run openclaw worktrees gc to continue cleanup or raise worktreeMaxCount in the Gateway configuration.";
+  return new Error(
+    `Managed worktree cap ${maxCount} reached${owners ? `; live owners: ${owners}` : ""}. ${nextStep}`,
+  );
 }

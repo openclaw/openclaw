@@ -176,7 +176,7 @@ with the moved item, and the order uses the same saved preferences or Gateway
 group order as dragging. Home and sections derived from people, projects, or
 agents keep their existing fixed order.
 
-To inspect Home’s subagents, open **Home** and use `/subagents list`. Use `/subagents info <id|#>` for run metadata or `/subagents log <id|#>` for recent messages. See [Sub-agent slash command](/tools/subagents/slash-command).
+To inspect Home’s subagents, open **Home** and select **Subagents**. The side panel lists ordinary child runs and opens their view-only transcripts without replacing Home. Swarm members remain in the parallel-tasks view. You can also use `/subagents list`, `/subagents info <id|#>`, or `/subagents log <id|#>`. See [Sub-agent slash command](/tools/subagents/slash-command).
 
 Follow-up turns in an existing subagent session keep the parent’s activity ring running, even after the original task has finished. Opening the parent refreshes its hidden subagent activity without adding subagent rows to the sidebar. The ring clears when no work remains active.
 
@@ -348,7 +348,7 @@ During the initial handoff, the chat placement menu and stop confirmation use th
 
 Choose **Icon & color** from a single session's context menu to give its sidebar row a persistent emoji, monochrome icon, or custom SVG. The picker includes common emoji and six named icons: `braces`, `book`, `monitor`, `bot`, `kanban`, and `coins`. Choose **Custom icon…** to enter a single emoji, paste SVG markup, or paste an SVG data URL (percent encoded or base64). SVGs must be self-contained and at most 16 KiB decoded; scripts, embedded documents, and external references are rejected. Include `xmlns="http://www.w3.org/2000/svg"` and a `viewBox`. Custom SVGs render as images, preserving their own colors. For emoji, press Control-Command-Space on macOS or Windows-period on Windows to open the system picker. The `sessions` agent tool can set the same `icon` field. An empty value removes it. This decoration replaces the owner avatar in the leading glyph slot, but temporary attention state always takes precedence so an operator request cannot be hidden.
 
-With **Person** grouping, hover or focus a person’s header and choose **Show only {name}** to filter to that owner, including yourself. Choose **Show everyone** on the active header to clear the owner filter. Active owner, **Involving me**, and non-default status filters appear beside **Sessions** in the toolbar. Click that summary to clear all filters and return to active sessions.
+With **Person** grouping, use **Filter & sort → Owners** in the **Sessions** toolbar to filter to one owner, including yourself. Choose **All owners** to clear the owner filter. Active owner, **Involving me**, and non-default status filters appear beside **Sessions** in the toolbar. Click that summary to clear all filters and return to active sessions.
 
 ## Session colors
 

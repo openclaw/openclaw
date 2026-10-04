@@ -1,8 +1,9 @@
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, onTestFinished, test } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -10,7 +11,7 @@ import {
 import type { ControlUiSessionPreview } from "./control-ui-contract.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
-import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
+import * as sessionRows from "./session-row-projection-record.js";
 import { readSessionPreviewItemsFromTranscriptAsync } from "./session-transcript-preview.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
@@ -71,27 +72,46 @@ test("lists and previews the selected aggregate global owner over WebSocket", as
   const { workStorePath } = await createSelectedGlobalSessionStore();
   testState.agentsConfig = {
     entries: {
-      main: { default: true, model: { primary: "openai/gpt-5.4" } },
+      main: { model: { primary: "openai/gpt-5.4" } },
       work: { model: { primary: "openai/gpt-5.5" } },
     },
   };
   const sessionId = "aggregate-work-global";
-  const backfilled = observeSessionRowBackfill(["global"]);
+  const workSqlitePath = resolveUnsuffixedSqliteTargetFromSessionStorePath(workStorePath).path;
+  const backfilled = Promise.withResolvers<void>();
+  const publishTranscriptFields = sessionRows.publishTranscriptFields;
+  const publication = vi
+    .spyOn(sessionRows, "publishTranscriptFields")
+    .mockImplementation((row, ...args) => {
+      const changed = publishTranscriptFields(row, ...args);
+      if (
+        row.key === "global" &&
+        row.agentId === "work" &&
+        row.storeTarget.storePath === workSqlitePath &&
+        row.entry.sessionId === sessionId &&
+        row.lastMessagePreview === "Work global conversation"
+      ) {
+        backfilled.resolve();
+      }
+      return changed;
+    });
+  onTestFinished(() => publication.mockRestore());
   await writeSessionStore({
     agentId: "work",
     storePath: workStorePath,
     entries: { global: sessionStoreEntry(sessionId, { label: "Work global conversation" }) },
   });
-  await seedSessionTranscript({
-    agentId: "work",
-    sessionId,
-    sessionKey: "global",
-    storePath: workStorePath,
-    messages: [{ role: "user", content: "Work global conversation" }],
-  });
+  // The suite Gateway is already running, so publish the transcript to its projection.
+  await sessionAccessor.persistSessionTranscriptTurn(
+    { agentId: "work", sessionId, sessionKey: "global", storePath: workStorePath },
+    {
+      updateMode: "file-only",
+      messages: [{ message: { role: "user", content: "Work global conversation" } }],
+    },
+  );
   const { ws } = await openClient();
   try {
-    await backfilled;
+    await backfilled.promise;
     for (const search of [undefined, "gpt-5.5"]) {
       const listed = await rpcReq<SessionsListResult>(ws, "sessions.list", {
         includeGlobal: true,

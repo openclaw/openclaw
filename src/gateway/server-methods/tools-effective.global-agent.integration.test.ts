@@ -4,13 +4,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installGatewayTestHooks, testState, writeSessionStore } from "../test-helpers.js";
 import { getGatewayConfigModule, sessionStoreEntry } from "../test/server-sessions.test-helpers.js";
-import { createToolsEffectiveHandlers, testing } from "./tools-effective.js";
-import {
-  toolsEffectiveInventoryMocks as inventoryMocks,
-  toolsEffectiveTestDependencies,
-} from "./tools-effective.test-support.js";
+import { toolsEffectiveInventoryMocks as inventoryMocks } from "./tools-effective.test-support.js";
 
-const toolsEffectiveHandlers = createToolsEffectiveHandlers(toolsEffectiveTestDependencies);
+const { toolsEffectiveHandlers, testing } = await import("./tools-effective.js");
 
 installGatewayTestHooks();
 
@@ -29,7 +25,7 @@ describe("tools.effective global agent integration", () => {
     testState.sessionStorePath = storeTemplate;
     testState.sessionConfig = { scope: "global" };
     testState.agentConfig = undefined;
-    testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+    testState.agentsConfig = { entries: { main: {}, work: {} } };
     mainStorePath = storeTemplate.replace("{agentId}", "main");
     workStorePath = storeTemplate.replace("{agentId}", "work");
     const configModule = await getGatewayConfigModule();
@@ -196,7 +192,7 @@ describe("tools.effective global agent integration", () => {
     const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
     testState.sessionStorePath = storeTemplate;
     testState.sessionConfig = undefined;
-    testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+    testState.agentsConfig = { entries: { main: {}, work: {} } };
     mainStorePath = storeTemplate.replace("{agentId}", "main");
     const configModule = await getGatewayConfigModule();
     configModule.clearRuntimeConfigSnapshot();

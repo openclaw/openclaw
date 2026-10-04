@@ -113,7 +113,7 @@ describe("sessions.files host read boundary", () => {
     { label: "global filesystem policy", cfg: { tools: { fs: { workspaceOnly: true } } } },
     {
       label: "agent filesystem policy",
-      cfg: { agents: { list: [{ id: "main", tools: { fs: { workspaceOnly: true } } }] } },
+      cfg: { agents: { entries: { main: { tools: { fs: { workspaceOnly: true } } } } } },
     },
     {
       label: "required sandbox in full mode",

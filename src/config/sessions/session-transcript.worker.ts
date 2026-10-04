@@ -50,10 +50,7 @@ serveOwnedWorkerTasks(
         await import("../../gateway/cli-session-history.process-held.js");
       return {
         ok: true,
-        value: {
-          kind: "rpc",
-          page: await readProcessHeldCliHistoryInWorker(request.params, channel),
-        },
+        value: await readProcessHeldCliHistoryInWorker(request.request, channel),
       };
     }
     if (request.kind === "sqlite-target") {
@@ -329,6 +326,10 @@ serveOwnedWorkerTasks(
           kind: "session-entry-list" as const,
           entries: readSessionEntryList(request),
         };
+      }
+      if (request.kind === "session-store-projection") {
+        const { readSessionStoreProjection } = await import("./session-entry-read.worker.js");
+        return readSessionStoreProjection(request);
       }
       if (request.kind === "session-store-summary") {
         const { readSessionStoreSummaryReadOnly } =

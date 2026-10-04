@@ -691,7 +691,6 @@ class ChatPositionRailDirective extends AsyncDirective {
       assistant,
       markers,
       renderedIndexes: this.renderedIndexes,
-      markerHeight: MARKER_HEIGHT,
       activeId: this.activeId,
       visibleIds: this.visibleIds,
       rovingId,

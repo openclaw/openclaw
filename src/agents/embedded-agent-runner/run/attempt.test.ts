@@ -369,14 +369,13 @@ describe("resolveAttemptFsWorkspaceOnly", () => {
         fs: { workspaceOnly: true },
       },
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             tools: {
               fs: { workspaceOnly: false },
             },
           },
-        ],
+        },
       },
     };
 

@@ -99,7 +99,6 @@ export async function textToSpeechCore(
     target: synthesis.target,
     audioBuffer: synthesis.audioBuffer,
     fileExtension: synthesis.fileExtension,
-    outputFormat: synthesis.outputFormat,
   });
   const audioBuffer = transcoded ? transcoded.audioBuffer : synthesis.audioBuffer;
   const fileExtension = transcoded ? transcoded.fileExtension : synthesis.fileExtension;
@@ -152,7 +151,6 @@ async function maybePreTranscodeForVoiceDelivery(params: {
   target: "audio-file" | "voice-note" | undefined;
   audioBuffer: Buffer;
   fileExtension: string;
-  outputFormat?: string;
 }): Promise<{ audioBuffer: Buffer; fileExtension: string; outputFormat?: string } | undefined> {
   if (params.target !== "audio-file") {
     return undefined;

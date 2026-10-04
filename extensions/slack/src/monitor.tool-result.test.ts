@@ -428,8 +428,6 @@ it.each([false, true])(
     }
     const resolver = createSlackThreadTsResolver({
       client: { conversations: { history } } as never,
-      cacheTtlMs: 60_000,
-      maxSize: 5,
     });
     const message = event({ ts: "456", parent_user_id: "U2", channel_type: "channel" });
     const expected = fails

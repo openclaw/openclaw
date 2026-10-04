@@ -80,8 +80,8 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
-import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { truncateUtf16WithEllipsis } from "../shared/text-truncate.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";

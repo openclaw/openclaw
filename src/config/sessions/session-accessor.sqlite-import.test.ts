@@ -20,11 +20,9 @@ import {
   importSqliteSessionRows,
   seedUnindexedTranscriptForTest,
 } from "./session-accessor.sqlite-import.test-support.js";
-import {
-  hasSessionTranscriptMessage,
-  loadTranscriptEventsSync,
-} from "./session-accessor.sqlite-read.js";
+import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
 import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
+import { hasSessionTranscriptMessage } from "./session-transcript-message-presence.js";
 
 function target(state: OpenClawTestState, id: string) {
   return {
@@ -190,7 +188,7 @@ it("refuses imports into archived history without replacing its owner or saved b
     await expect(
       runSessionColdStorageMaintenance({
         config: {
-          agents: { list: [{ id: "main" }] },
+          agents: { entries: { main: {} } },
           session: {
             store: database.path,
             maintenance: { coldStorage: { enabled: true, afterDays: 30 } },

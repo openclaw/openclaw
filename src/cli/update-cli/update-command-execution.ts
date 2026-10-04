@@ -8,12 +8,10 @@ import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalizat
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
-import { defaultRuntime } from "../../runtime.js";
 import {
   parsePackageOpenClawSchemaVersions,
   type OpenClawSchemaVersions,
 } from "../../state/openclaw-schema-versions.js";
-import { isCandidateAdmissionContextCovered } from "./schema-preflight.js";
 import {
   normalizeTag,
   readPackageVersion,
@@ -24,6 +22,7 @@ import {
   assertUpdateCandidateExecutor,
   assertUpdateCandidateSteps,
   createUpdateCandidateConfigRefresh,
+  preflightUpdateCandidatePlugins,
   validateUpdateCandidateWithProgress,
 } from "./update-command-candidate-validation.js";
 import {
@@ -136,32 +135,26 @@ export async function executeMutableUpdate(
   let gitContextPrepared = false;
   let admittedTargetSchemaVersions = params.packageTargetSchemaVersions;
   const recheckSchemas = async (versions: OpenClawSchemaVersions | undefined) => {
-    admission = await revalidateUpdateDatabaseContexts(databaseContextOptions, admission, versions);
+    admission = await revalidateUpdateDatabaseContexts(
+      {
+        ...databaseContextOptions,
+        // A stopped systemd unit may need metadata loading under the retained executor.
+        assertCurrent: preManagedServiceStop?.stopped ? assertExecutionCurrent : undefined,
+      },
+      admission,
+      versions,
+    );
     admittedTargetSchemaVersions = versions;
   };
-  const preflightPlugins = async (targetVersion: string | null) => {
-    await recheckSchemas(admittedTargetSchemaVersions);
-    const context = admission!.foreground ? admission!.contexts[0]! : admission!.contexts.at(-1)!;
-    if (
-      candidateAdmissionChecks?.includes("plugin-availability") &&
-      isCandidateAdmissionContextCovered(context.env)
-    ) {
-      return;
-    }
-    const { preflightConfiguredNpmPluginTargets } =
-      await import("./update-command-plugin-preflight.js");
-    const warnings = await preflightConfiguredNpmPluginTargets({
-      config: context.configSnapshot.sourceConfig,
-      env: context.env,
+  const preflightPlugins = (targetVersion: string | null) =>
+    preflightUpdateCandidatePlugins(params, {
       targetVersion,
-      channel: params.channel,
-      timeoutMs: params.updateStepTimeoutMs,
+      candidateAdmissionChecks,
+      readAdmission: async () => {
+        await recheckSchemas(admittedTargetSchemaVersions);
+        return admission!;
+      },
     });
-    await recheckSchemas(admittedTargetSchemaVersions);
-    for (const warning of warnings) {
-      defaultRuntime[opts.json ? "error" : "log"](warning.message);
-    }
-  };
   let recoveryEnv: NodeJS.ProcessEnv | undefined;
   let packageTransaction: PackageUpdateTransaction | undefined;
   let databaseCapture: Awaited<ReturnType<typeof captureUpdateDatabases>> | undefined;

@@ -52,12 +52,17 @@ function expectedHarnessSparseCheckoutArgs(linux: boolean) {
       ? [
           "/scripts/lib/release-upgrade-baseline.mjs",
           "/scripts/lib/release-version.mjs",
+          "/scripts/lib/canonical-json.mjs",
+          "/scripts/lib/upgrade-survivor-policy.mjs",
+          "/scripts/lib/upgrade-survivor-scenarios.json",
           "/scripts/ci-npm-lock-admission.mjs",
           "/scripts/generate-npm-package-lock.mjs",
           "/scripts/generate-npm-package-lock.mts",
           "/scripts/changed-lanes.mts",
           "/scripts/lib/merge-head-diff-base.mjs",
           "/scripts/ci-additional-checks.sh",
+          "/scripts/stage-openclaw-bun.sh",
+          "/scripts/lib/openclaw-bun.json",
         ]
       : [
           "/scripts/lib/swift-toolchain.sh",
@@ -430,6 +435,9 @@ it.concurrent.for([
         "scripts/lib/release-context.mjs",
         "scripts/lib/release-version.mjs",
         "scripts/lib/release-upgrade-baseline.mjs",
+        "scripts/lib/canonical-json.mjs",
+        "scripts/lib/upgrade-survivor-policy.mjs",
+        "scripts/lib/upgrade-survivor-scenarios.json",
       ].map((name) => [name, readFileSync(name, "utf8")]),
     );
     const candidateFiles = {
@@ -699,7 +707,12 @@ it.concurrent.for([
         }
         for (const [name, contents] of Object.entries(releasePolicy)) {
           const ownsPolicy = preflight
-            ? name !== "scripts/lib/release-upgrade-baseline.mjs"
+            ? ![
+                "scripts/lib/release-upgrade-baseline.mjs",
+                "scripts/lib/canonical-json.mjs",
+                "scripts/lib/upgrade-survivor-policy.mjs",
+                "scripts/lib/upgrade-survivor-scenarios.json",
+              ].includes(name)
             : kind === "linux-node" && name !== "scripts/lib/release-context.mjs";
           expect(existsSync(path.join(harness, name))).toBe(ownsPolicy);
           if (ownsPolicy) {

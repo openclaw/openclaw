@@ -185,6 +185,11 @@ agent-to-agent restrictions, incognito denial, and sandbox spawned-session clamp
 still apply. Same-agent visibility and requester-owned native/ACP child access
 are unchanged. See [send-only configuration](/gateway/config-tools/sessions-and-subagents#per-agent-send-only-access).
 
+The current send policy is checked again before target input is accepted, including
+when configuration changes during session resolution or dispatch preparation.
+Withdrawing access does not cancel input the target already accepted or remove
+its obligation to deliver the corresponding result.
+
 A send-only caller can receive the authorized sent turn's reply, inline or through
 normal delayed delivery. This is the run-owned result, not permission to retrieve
 arbitrary target history. The target can still disclose data or act on the

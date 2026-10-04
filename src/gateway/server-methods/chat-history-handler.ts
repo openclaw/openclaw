@@ -4,6 +4,7 @@ import {
   errorShape,
   validateChatHistoryParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { findModelCatalogEntry } from "../../agents/model-catalog.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
@@ -141,13 +142,16 @@ export async function handleChatHistoryRequest({
         },
         signal,
       );
-      return Boolean(
-        transcript &&
-        scopeLegacySessionKeyToAgent({
-          sessionKey: transcript.sessionKey,
-          agentId: sessionAgentId,
-        }) === scopeLegacySessionKeyToAgent({ sessionKey: canonicalKey, agentId: sessionAgentId }),
-      );
+      if (!transcript) {
+        return false;
+      }
+      const storedKey = transcript.sessionKey;
+      // Literal stored owners must not acquire the scope of a legacy alias.
+      const ownerKey =
+        storedKey === "global" || storedKey === "unknown"
+          ? storedKey
+          : scopeLegacySessionKeyToAgent({ sessionKey: storedKey, agentId: sessionAgentId });
+      return ownerKey === canonicalKey;
     };
     if (!(await readTranscriptOwner())) {
       if (retainedTranscript) {
@@ -321,6 +325,12 @@ export async function handleChatHistoryRequest({
       agentId: sessionAgentId,
       storePath,
     };
+    const [unsavedAcpMeta] = entry
+      ? []
+      : await readAcpSessionMetaForEntries({
+          cfg,
+          entries: [{ agentId: sessionAgentId, sessionKey: canonicalKey, entry: undefined }],
+        });
     const publishDelta = await withReadySessionRows(rowProjection, queries, (read) => {
       const currentSharing = readCurrentSharing(read);
       if (!currentSharing) {
@@ -335,6 +345,7 @@ export async function handleChatHistoryRequest({
             : buildGatewaySessionRow({
                 ...selectedSession,
                 key: canonicalKey,
+                preparedAcpMeta: unsavedAcpMeta ?? null,
                 modelCatalog: sessionModelCatalog,
                 rowContext: rowProjection.state.rowContext,
               })),
@@ -600,7 +611,6 @@ export async function handleChatHistoryRequest({
 
 export const chatHistoryHandlers: GatewayRequestHandlers = {
   "chat.history": (opts) => handleChatHistoryRequest({ ...opts, method: "chat.history" }),
-  "chat.startup": (opts) =>
-    handleChatStartupRequest(opts, handleChatHistoryRequest, respondChatHistoryUnavailable),
+  "chat.startup": (opts) => handleChatStartupRequest(opts, handleChatHistoryRequest),
   "chat.metadata": handleChatMetadataRequest,
 };

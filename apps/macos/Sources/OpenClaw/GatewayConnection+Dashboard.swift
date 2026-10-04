@@ -8,9 +8,18 @@ extension GatewayConnection {
         if capturedLease == nil {
             let route = try await self.captureRequiredRoute()
             guard route.matches(config: config) else { throw CancellationError() }
-            _ = try await self.request(method: Method.health.rawValue, params: nil, ifCurrentRoute: route)
-            capturedLease = await self.captureServerLease()
-            guard await self.isCurrentRoute(route) else { throw CancellationError() }
+            // Discover on a fresh connection before binding browser authentication
+            // to a route. This read-only preflight owns ordinary TLS renewal; route-
+            // and socket-bound mutations must never gain recovery or retargeting.
+            let lease = try await self.acquireServerLease(
+                timeoutMs: 15000, retryTransportFailures: false, preflightRoute: route)
+            guard lease.route.matches(config: config),
+                  lease.route.authority == route.authority,
+                  lease.route.deviceAuthGatewayID == route.deviceAuthGatewayID,
+                  lease.route.browserSession == route.browserSession,
+                  GatewayTLSRoute.hasSameTrustPolicy(lease.route.tls, route.tls)
+            else { throw CancellationError() }
+            capturedLease = lease
         }
         guard let lease = capturedLease,
               lease.route.matches(config: config),

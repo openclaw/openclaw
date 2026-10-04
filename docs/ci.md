@@ -44,8 +44,8 @@ self-upgrade job gives first-hop lanes weight two at npm limit five, admitting a
 most two concurrently. It allows 210 minutes for three waves of six source versions,
 the survivor, and setup.
 Authenticated update restart uses a 2,280-second container budget, a 43-minute lane
-budget, and a lane-specific 1,500-second command timeout. Its OpenAI/recovery chunk
-allows 160 minutes for the npm-serialized lanes plus setup; see
+budget, and a lane-specific 1,500-second command timeout. Its dedicated recovery
+chunk allows 55 minutes; the remaining OpenAI package chunk allows 60 minutes. See
 [release-path chunks](/ci/release-validation/install-smoke-and-docker-e2e#release-path-chunks).
 
 For the published-upgrade regression gate, see [selection and routing](/ci/scope-and-routing#scope-and-routing), [runner budgets](/ci/capacity#runner-registration-budget), and [Package Acceptance baselines](/ci/release-validation#suite-profiles). Weekly validation is listed under [Update Migration](/ci/scheduled-workflows#update-migration).
@@ -62,6 +62,11 @@ Current iOS Debug builds log CPU count, memory, machine model, booted simulators
 
 iOS screenshot shards, release qualification, Store Release, and its screenshot-only operation use [larger hosted capacity](/ci/runners). Screenshot capture uses stock simulators and creates and cleans up one at a time; the screenshot-only operation can validate a selected branch without signing or uploading a release. The pairing, chat, and native Overview tests retain their existing assertions and deadlines.
 
+Android screenshot-input PRs and ordinary full manual CI run the existing phone
+and Wear store capture script in one hosted Ubuntu job. The final CI gate requires
+capture to succeed; unit-test-only and documentation changes omit it. See
+[the job graph](/ci/pipeline#pipeline-overview) for capture evidence and scope details.
+
 Eligible core-source and core-test PRs use targeted type checks when every selected path exists in the checkout. GitHub and hybrid profiles distribute the selected consumers across their existing core stripes; the Blacksmith profile checks them in the central row. Ambiguous ownership and deleted core tests keep the full type-check coverage.
 
 Preflight passes the complete changed-path manifest between steps as a local JSON
@@ -70,6 +75,11 @@ size limits. Frozen targets that predate this transport retain their bounded JSO
 output contract. Missing or invalid inputs still reject current PR Node planning.
 
 The [Testbox check workflow](/ci/local-proof#testbox-validation) requests the Blacksmith 16-class for routine dispatched proof, with a 60-minute total-job deadline including hydration. The explicit high-memory 32-class workflow retains 240 minutes for memory-heavy full-suite gates. The outer GitHub deadline can terminate active SSH commands; the separate 15-minute idle limit does not extend it. PR hydration checks stay on hosted Ubuntu; individual test deadlines remain unchanged.
+
+All five lease workflows allow up to 60 minutes from dispatch to admission and
+runner startup, then reject expired requests before checkout and hydration. This
+queue allowance does not extend running-job or idle deadlines; see
+[Testbox spending limits](/ci/runners#testbox-spending-limits).
 
 Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. The last four rows then each run one root-test partition serially, leaving extension tests and scripts in the central row. Narrow plans reuse four already-selected rows when available; smaller selections retain central root checking. This adds no jobs or compiler overlap. Current hybrid full runs use three hosted extension-lint jobs; targeted layouts retain six stripe identities. Trusted hybrid first attempts place both packed core-lint rows on the Blacksmith 16-class and the final gate on the 4-class to avoid serial hosted assignment delays. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
 

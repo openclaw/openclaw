@@ -9,6 +9,7 @@ import {
   resolveModelExtraParamSources,
 } from "../../../agents/model-extra-params.js";
 import { resolveModelRuntimePolicy } from "../../../agents/model-runtime-policy.js";
+import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { detectWindowsSpawnCommandInlineArgs } from "../../../plugin-sdk/windows-spawn.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
@@ -350,7 +351,7 @@ function collectCodexComputerUseWarnings(cfg: OpenClawConfig): string[] {
 
 /** Collect doctor warnings for legacy Codex model refs and compaction overrides. */
 export function collectCodexRouteWarnings(params: {
-  cfg: OpenClawConfig;
+  cfg: OpenClawConfigWithLegacyRoster;
   env?: NodeJS.ProcessEnv;
   blockedProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
 }): string[] {
@@ -453,12 +454,11 @@ export function collectCodexRouteWarnings(params: {
 
 /** Rewrite legacy Codex config routes to OpenAI refs and explicit runtime policy when allowed. */
 export function maybeRepairCodexRoutes(params: {
-  cfg: OpenClawConfig;
+  cfg: OpenClawConfigWithLegacyRoster;
   env?: NodeJS.ProcessEnv;
   shouldRepair: boolean;
-  codexRuntimeReady?: boolean;
   blockedProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
-}): { cfg: OpenClawConfig; warnings: string[]; changes: string[] } {
+}): { cfg: OpenClawConfigWithLegacyRoster; warnings: string[]; changes: string[] } {
   const env = params.env ?? process.env;
   const blockedProviderPlan =
     params.blockedProviderPlan ?? collectBlockedLegacyOpenAICodexProviderPlan(params.cfg);

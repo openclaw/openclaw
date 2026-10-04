@@ -15,8 +15,6 @@ import { STORAGE_FIELD_LABELS } from "./zod-schema.storage.js";
 import { TELEMETRY_FIELD_LABELS } from "./zod-schema.telemetry.js";
 
 export const FIELD_LABELS: Record<string, string> = {
-  worktreeRoot: "Worktree Root",
-  worktreeAcceleration: "Worktree Acceleration",
   ...META_FIELD_LABELS,
   ...BROWSER_FIELD_LABELS,
   env: "Environment",

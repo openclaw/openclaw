@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
@@ -721,7 +722,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
       name: "keyed",
       agents: {
         entries: {
-          main: { default: true },
+          main: {},
           ops: { heartbeat: { target: "last" as const } },
         },
       },
@@ -730,7 +731,8 @@ describe("noteSecurityWarnings gateway exposure", () => {
   ])(
     "warns at the $name agent config path for implicit heartbeat directPolicy",
     async (testCase) => {
-      await noteSecurityWarnings({ agents: testCase.agents } as OpenClawConfig);
+      const cfg: OpenClawConfigWithLegacyRoster = { agents: testCase.agents };
+      await noteSecurityWarnings(cfg);
 
       const message = lastMessage();
       expect(message).toContain('Heartbeat agent "ops"');
@@ -866,15 +868,14 @@ describe("noteSecurityWarnings gateway exposure", () => {
             target: "none",
           },
         },
-        list: [
-          {
-            id: "ops",
+        entries: {
+          ops: {
             heartbeat: {
               target: "last",
               directPolicy: "block",
             },
           },
-        ],
+        },
       },
     } as OpenClawConfig;
     await noteSecurityWarnings(cfg);

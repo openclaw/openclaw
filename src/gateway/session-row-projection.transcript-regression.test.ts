@@ -19,7 +19,7 @@ afterEach(() => vi.restoreAllMocks());
 
 it("serves describe during a 2,048-session drain without transcript reads in row materialization", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const count = seedSessionRowProjectionTranscriptFixture();
     for (const index of [0, count - 1]) {

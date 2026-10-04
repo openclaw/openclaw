@@ -4,6 +4,7 @@
  * session retention, and process cleanup for reconnect/poll flows.
  */
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import type {
@@ -63,6 +64,7 @@ export interface ProcessSession {
   /** Start-time routing policy for detached exec system events. */
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
+  notifyFromConversationTurn?: boolean;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   exitNotified?: boolean;
@@ -119,6 +121,7 @@ const finishedSessions = new Map<string, ProcessSession & { endedAt: number; exp
 // Display uses start chronology; retained records are evicted in completion order.
 let processSessionStartOrders = new WeakMap<object, number>();
 let nextProcessSessionStartOrder = 0;
+const processInstanceIds = new WeakMap<ProcessSession, string>();
 // Promotion stays live when process removal clears its presentation state.
 const activeExecSessions = new Map<
   string,
@@ -136,6 +139,7 @@ export function isProcessSessionIdTaken(id: string): boolean {
 /** Adds a running session; retention starts only after background completion. */
 export function addSession(session: ProcessSession) {
   processSessionStartOrders.set(session, nextProcessSessionStartOrder++);
+  processInstanceIds.set(session, randomUUID());
   runningSessions.set(session.id, session);
   activeExecSessions.set(session.id, { session, promoted: session.backgrounded });
 }
@@ -149,6 +153,15 @@ export function compareProcessSessionStartOrder(
     right.startedAt - left.startedAt ||
     processSessionStartOrders.get(right)! - processSessionStartOrders.get(left)!
   );
+}
+
+/** Stable while this exact process is retained, including after its friendly ID is reused. */
+export function processSessionInstanceId(session: ProcessSession): string {
+  const id = processInstanceIds.get(session);
+  if (!id) {
+    throw new Error("Process is not registered");
+  }
+  return id;
 }
 
 /** Returns a running session by id. */
@@ -208,7 +221,9 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
     session.pendingMaxOutputChars ?? DEFAULT_PENDING_OUTPUT_CHARS,
     session.maxOutputChars,
   );
-  session.pendingOutput.push({ stream, text: chunk });
+  // Producer chunks may themselves be slices of a much larger decoded callback.
+  const ownedChunk = copyOutputText(chunk);
+  session.pendingOutput.push({ stream, text: ownedChunk });
   let pendingChars = streamChars + chunk.length;
   if (pendingChars > pendingCap) {
     session.truncated = true;
@@ -221,7 +236,7 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
     session.pendingStderrChars = pendingChars;
   }
   session.totalOutputChars += chunk.length;
-  const aggregated = tail(session.aggregated + chunk, session.maxOutputChars);
+  const aggregated = tail(session.aggregated + ownedChunk, session.maxOutputChars);
   session.truncated =
     session.truncated || aggregated.length < session.aggregated.length + chunk.length;
   session.aggregated = aggregated;
@@ -418,12 +433,17 @@ function moveToFinished(session: ProcessSession) {
   scheduleSweeper();
 }
 
+function copyOutputText(text: string): string {
+  // Own code units without replacing lone surrogates as UTF-8 would.
+  return Buffer.from(text, "utf16le").toString("utf16le");
+}
+
 /** Returns the last `max` characters of text without adding ellipses. */
 export function tail(text: string, max = 2000) {
   if (text.length <= max) {
     return text;
   }
-  return sliceUtf16Safe(text, text.length - max);
+  return copyOutputText(sliceUtf16Safe(text, text.length - max));
 }
 
 function capPendingStream(
@@ -450,7 +470,7 @@ function capPendingStream(
       pendingChars -= chunk.text.length;
       continue;
     }
-    const trimmed = sliceUtf16Safe(chunk.text, overflow);
+    const trimmed = tail(chunk.text, chunk.text.length - overflow);
     const removedChars = chunk.text.length - trimmed.length;
     pendingChars -= removedChars;
     chunk.text = trimmed;

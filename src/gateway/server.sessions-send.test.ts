@@ -69,7 +69,10 @@ function expectSessionsSendDetails(
   result: { details?: unknown },
   expected: { reply: string; sessionKey: string },
 ): void {
-  expect(result.details).toMatchObject({ status: "ok", ...expected });
+  expect(result.details, JSON.stringify(result.details)).toMatchObject({
+    status: "ok",
+    ...expected,
+  });
 }
 
 async function writeConfig(config: OpenClawConfig) {
@@ -402,6 +405,10 @@ describe("sessions_send agent targeting", () => {
         ...(tools ? { tools } : {}),
         agents: {
           ownership: "explicit",
+          defaults: {
+            systemAgent: { agentId: "main" },
+            sessionStore: { agentId: "main" },
+          },
           entries: {
             main: send ? { tools: { agentToAgent: { send } } } : {},
             orion: {},

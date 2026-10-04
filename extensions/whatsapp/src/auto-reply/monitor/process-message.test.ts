@@ -345,7 +345,7 @@ describe("processMessage group system prompt wiring", () => {
       expectedContext: {
         command: {
           kind: "text-slash",
-          authorization: { kind: "authorized" },
+          authorized: true,
           body: "/status",
         },
         rawBody: "/status",
@@ -363,7 +363,7 @@ describe("processMessage group system prompt wiring", () => {
         bodyForAgent: "/reset\n\n[whatsapp attachment unavailable]",
         command: {
           kind: "text-slash",
-          authorization: { kind: "authorized" },
+          authorized: true,
           body: "/reset",
         },
         rawBody: "/reset",
@@ -377,7 +377,7 @@ describe("processMessage group system prompt wiring", () => {
       expectedContext: {
         command: {
           kind: "normal",
-          authorization: { kind: "authorized" },
+          authorized: true,
           body: "please inspect `/tmp/foo`",
         },
         rawBody: "please inspect `/tmp/foo`",

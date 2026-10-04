@@ -84,7 +84,13 @@ function readChangedSessions(
   return asNullableRecord(sessions) as ControlUiSessionPullRequestsChanged["sessions"] | null;
 }
 
-function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotStore {
+export function sessionPullRequestsForGateway(
+  gateway: ApplicationGateway,
+): SessionPullRequestSnapshotStore {
+  const existing = stores.get(gateway);
+  if (existing) {
+    return existing;
+  }
   const watchedByOwner = new Map<
     object,
     { keys: Set<string>; foreground: boolean; passive: boolean }
@@ -533,7 +539,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     return true;
   }
 
-  return {
+  const store: SessionPullRequestSnapshotStore = {
     watch,
     unwatch: (owner) => {
       loadTokens.delete(owner);
@@ -600,16 +606,6 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       };
     },
   };
-}
-
-export function sessionPullRequestsForGateway(
-  gateway: ApplicationGateway,
-): SessionPullRequestSnapshotStore {
-  const existing = stores.get(gateway);
-  if (existing) {
-    return existing;
-  }
-  const store = createStore(gateway);
   stores.set(gateway, store);
   return store;
 }

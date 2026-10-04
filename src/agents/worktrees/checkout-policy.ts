@@ -27,7 +27,7 @@ export async function usesSourceOnlyWorktreeGit(
     import("../sandbox/runtime-status.js"),
     import("../../gateway/worker-environments/local-workspace-store.js"),
   ]);
-  if (localWorkspaceStore(env).get(record.id)) {
+  if (localWorkspaceStore(env).revision(record.id) !== undefined) {
     return true;
   }
   const cfg = getConfig();

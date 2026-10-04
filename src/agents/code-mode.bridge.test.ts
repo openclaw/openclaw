@@ -2,9 +2,11 @@ import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { buildBlockedToolResult } from "./agent-tools.before-tool-call.js";
+import { execSchema } from "./bash-tools.schemas.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   createCodeModeHarness,
+  fakeTool,
   pluginTool,
   pluginToolWithExecute,
   resetCodeModeTestState,
@@ -13,11 +15,11 @@ import {
 } from "./code-mode.test-support.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
-function bridge(targets: AnyAgentTool[], timeoutMs = 10_000) {
+function bridge(targets: AnyAgentTool[], timeoutMs = 10_000, awaitResults?: boolean) {
   const h = createCodeModeHarness({ codeMode: { timeoutMs } });
   applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, ...targets] });
   return async (code: string, signal?: AbortSignal) =>
-    resultDetails(await h.tools[0]!.execute("bridge", { code }, signal));
+    resultDetails(await h.tools[0]!.execute("bridge", { code, awaitResults }, signal));
 }
 
 afterEach(async () => {
@@ -90,33 +92,32 @@ describe("Code Mode bridge settlement and cancellation", () => {
     },
   );
 
-  it("uses the fresh exec budget while preserving explicit timing", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-    const shell = pluginToolWithExecute("exec", "Run shell", async (_id, input) =>
-      jsonResult(input),
-    );
-    shell.parameters = Type.Object({
-      command: Type.String(),
-      yieldMs: Type.Optional(Type.Number()),
-      background: Type.Optional(Type.Boolean()),
-    });
-    const details = await bridge(
-      [shell],
-      10_000,
-    )(`return [
+  it.each([false, true])(
+    "preserves shell timing and detachment (awaitResults=%s)",
+    async (awaitResults) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+      const shell = fakeTool("exec", "Run shell");
+      shell.execute = async (_id, input) => jsonResult(input);
+      shell.parameters = execSchema;
+      const details = await bridge(
+        [shell],
+        10_000,
+        awaitResults,
+      )(`return [
       await exec({ command: "default" }),
       await exec({ command: "explicit", yieldMs: 4_000 }),
       await exec({ command: "background", background: true }),
     ];`);
-    expect(details).toMatchObject({
-      status: "completed",
-      value: [
-        { command: "default", yieldMs: 9_500 },
-        { command: "explicit", yieldMs: 4_000 },
-        { command: "background", background: true },
-      ],
-    });
-  });
+      expect(details).toMatchObject({
+        status: "completed",
+        value: [
+          { command: "default", ...(awaitResults ? { awaitResults: true } : { yieldMs: 9_500 }) },
+          { command: "explicit", yieldMs: 4_000, ...(awaitResults ? { awaitResults: true } : {}) },
+          { command: "background", background: true },
+        ],
+      });
+    },
+  );
 
   it("bounds nested exec yield by the shared remaining deadline", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });

@@ -18,6 +18,10 @@ import {
   startQaMockOpenAiServer,
 } from "../../../../extensions/qa-lab/api.js";
 import {
+  normalizeResponsesInput,
+  resolveMockSubagentTurn,
+} from "../../../../extensions/qa-lab/test-api.js";
+import {
   listSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
   updateSessionEntry,
@@ -34,10 +38,10 @@ const FINAL_MARKER = "TOOL-PROGRESS-FINAL";
 const HEADLINE = "Checking the requested work";
 // Draft progress uses compact tool rows; the Slack Block Kit card uses plain
 // "Exec — detail" rows; native Slack uses task_update chunks.
-const toolRow = /🛠️ (?:Exec|Bash)\b/u;
+const toolRow = /\b(?:Exec|Bash)\b/u;
 const slackCardToolRow = /\b(?:Exec|Bash) — /u;
 const nativeToolTitle = /^(?:Exec|Bash)\b/u;
-const failedToolRow = /🛠️ (?:Exec|Bash): failed\b/u;
+const failedToolRow = /\b(?:Exec|Bash): failed\b/u;
 type WireWrite = {
   at: number;
   method: string;
@@ -364,39 +368,6 @@ async function startPresentationApi(
       });
     },
   };
-}
-
-function isCompletionUserText(text: string): boolean {
-  return (
-    text.includes("Internal task completion event") ||
-    text.includes("[Subagent Context] Every subagent in this batch has now settled")
-  );
-}
-
-function readCurrentProviderUserText(body: Record<string, unknown>): string {
-  // Ignore trailing context carriers, but a protected task completion is
-  // itself a new request. Older prompts cannot override a newer user turn.
-  const userTexts = Array.isArray(body.input)
-    ? body.input
-        .map(asRecord)
-        .filter((item) => item.role === "user")
-        .map((item) =>
-          Array.isArray(item.content)
-            ? item.content.map((part) => readStringValue(asRecord(part).text) ?? "").join("\n")
-            : (readStringValue(item.content) ?? ""),
-        )
-    : [];
-  const currentText =
-    userTexts.findLast(
-      (text) =>
-        text.trim() &&
-        (isCompletionUserText(text) ||
-          !(
-            text.includes("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>") &&
-            text.trimEnd().endsWith("<<<END_OPENCLAW_INTERNAL_CONTEXT>>>")
-          )),
-    ) ?? "";
-  return currentText;
 }
 
 function sendCompletionResponse(response: ServerResponse, marker: string, sequence: number) {
@@ -900,8 +871,9 @@ describe("channel progress presentation through an isolated Gateway", () => {
         }
         const raw = Buffer.concat(buffers).toString("utf8");
         const body = parseBody(raw);
-        const currentText = readCurrentProviderUserText(body);
-        const completion = isCompletionUserText(currentText);
+        const turn = resolveMockSubagentTurn(normalizeResponsesInput(body.input));
+        const currentText = turn?.text ?? "";
+        const completion = turn?.kind === "completion" || turn?.kind === "settled";
         providerRequests.push({
           model: body.model,
           requester: currentText.includes("Subagent terminal reply QA check:"),
@@ -1289,8 +1261,9 @@ describe("channel progress presentation through an isolated Gateway", () => {
           buffers.push(Buffer.from(chunk));
         }
         const raw = Buffer.concat(buffers).toString("utf8");
-        const currentText = readCurrentProviderUserText(parseBody(raw));
-        const completion = isCompletionUserText(currentText);
+        const turn = resolveMockSubagentTurn(normalizeResponsesInput(parseBody(raw).input));
+        const currentText = turn?.text ?? "";
+        const completion = turn?.kind === "completion" || turn?.kind === "settled";
         const worker =
           !completion && /Subagent terminal reply QA worker:\s*visible/i.test(currentText);
         const requester =

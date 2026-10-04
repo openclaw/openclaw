@@ -335,6 +335,7 @@ export async function restoreRetiredExactWorktree<T>(params: {
   metadata: ExactStateSnapshot;
   options: GitOptions;
   assertCurrent: () => void;
+  admitCapacity: (requiredPaths: readonly string[]) => Promise<void>;
   finalize: () => Promise<T>;
 }): Promise<T | undefined> {
   const { record, metadata, options, assertCurrent } = params;
@@ -400,6 +401,7 @@ export async function restoreRetiredExactWorktree<T>(params: {
       assertCurrent();
       assertExactStateSourceIdentity(sourcePath, metadata);
     };
+    await params.admitCapacity([record.repoRoot, record.path, sourcePath]);
     beforeMove();
     // Native move never overlays a recreated live path. Once admitted, join it;
     // cancellation must not strand a partially completed filesystem rename.

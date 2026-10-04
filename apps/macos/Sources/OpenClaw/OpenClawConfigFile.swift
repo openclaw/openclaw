@@ -487,11 +487,8 @@ extension OpenClawConfigFile {
     }
 
     private static func isUpdateChannelOnlyRoot(_ root: [String: Any]) -> Bool {
-        let keys = Array(root.keys)
-        guard keys.count == 1, keys.first == "update" else { return false }
-        guard let update = root["update"] as? [String: Any] else { return false }
-        let updateKeys = Array(update.keys)
-        return updateKeys.count == 1 && update["channel"] is String
+        guard root.count == 1, let update = root["update"] as? [String: Any] else { return false }
+        return update.count == 1 && update["channel"] is String
     }
 
     private static func fileTimestampMs(_ value: Any?) -> Double? {
@@ -500,23 +497,11 @@ extension OpenClawConfigFile {
     }
 
     private static func fileAttributeInt(_ value: Any?) -> Int? {
-        if let number = value as? NSNumber {
-            return number.intValue
-        }
-        if let number = value as? Int {
-            return number
-        }
-        return nil
+        (value as? NSNumber)?.intValue
     }
 
     private static func fileSystemNumber(_ value: Any?) -> String? {
-        if let number = value as? NSNumber {
-            return number.stringValue
-        }
-        if let number = value as? Int {
-            return String(number)
-        }
-        return nil
+        (value as? NSNumber)?.stringValue
     }
 
     private static func posixMode(_ value: Any?) -> Int? {
@@ -667,7 +652,7 @@ extension OpenClawConfigFile {
             configURL: configURL,
             observedAt: observedAt)
         self.logger.warning("config observe anomaly (\(suspicious.joined(separator: ", "))) at \(configURL.path)")
-        self.appendConfigAudit(event: "config.observe", fields: [
+        var fields: [String: Any] = [
             "phase": "read",
             "configPath": configURL.path,
             "exists": true,
@@ -685,30 +670,16 @@ extension OpenClawConfigFile {
             "hasMeta": current["hasMeta"] ?? false,
             "gatewayMode": current["gatewayMode"] ?? NSNull(),
             "suspicious": suspicious,
-            "lastKnownGoodHash": lastKnownGood?["hash"] ?? NSNull(),
-            "lastKnownGoodBytes": lastKnownGood?["bytes"] ?? NSNull(),
-            "lastKnownGoodMtimeMs": lastKnownGood?["mtimeMs"] ?? NSNull(),
-            "lastKnownGoodCtimeMs": lastKnownGood?["ctimeMs"] ?? NSNull(),
-            "lastKnownGoodDev": lastKnownGood?["dev"] ?? NSNull(),
-            "lastKnownGoodIno": lastKnownGood?["ino"] ?? NSNull(),
-            "lastKnownGoodMode": lastKnownGood?["mode"] ?? NSNull(),
-            "lastKnownGoodNlink": lastKnownGood?["nlink"] ?? NSNull(),
-            "lastKnownGoodUid": lastKnownGood?["uid"] ?? NSNull(),
-            "lastKnownGoodGid": lastKnownGood?["gid"] ?? NSNull(),
-            "lastKnownGoodGatewayMode": lastKnownGood?["gatewayMode"] ?? NSNull(),
-            "backupHash": backup?["hash"] ?? NSNull(),
-            "backupBytes": backup?["bytes"] ?? NSNull(),
-            "backupMtimeMs": backup?["mtimeMs"] ?? NSNull(),
-            "backupCtimeMs": backup?["ctimeMs"] ?? NSNull(),
-            "backupDev": backup?["dev"] ?? NSNull(),
-            "backupIno": backup?["ino"] ?? NSNull(),
-            "backupMode": backup?["mode"] ?? NSNull(),
-            "backupNlink": backup?["nlink"] ?? NSNull(),
-            "backupUid": backup?["uid"] ?? NSNull(),
-            "backupGid": backup?["gid"] ?? NSNull(),
-            "backupGatewayMode": backup?["gatewayMode"] ?? NSNull(),
             "clobberedPath": clobberedPath ?? NSNull(),
-        ])
+        ]
+        for (prefix, fingerprint) in [("lastKnownGood", lastKnownGood), ("backup", backup)] {
+            for key in [
+                "hash", "bytes", "mtimeMs", "ctimeMs", "dev", "ino", "mode", "nlink", "uid", "gid", "gatewayMode",
+            ] {
+                fields[prefix + key.prefix(1).uppercased() + key.dropFirst()] = fingerprint?[key] ?? NSNull()
+            }
+        }
+        self.appendConfigAudit(event: "config.observe", fields: fields)
         self.configHealthEntries[configURL.path]?.lastObservedSuspiciousSignature = signature
     }
 

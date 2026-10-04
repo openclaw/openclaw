@@ -727,6 +727,7 @@ describe("TTS runtime provider fallback and delivery behavior", () => {
       const result = await maybeApplyTtsToPayload({
         payload: { text: `${"a".repeat(7)}😀tail long enough for TTS` },
         cfg,
+        preparedTtsPreferences: { machinePrefsPath: prefsPath },
         channel: "telegram",
         kind: "final",
       });

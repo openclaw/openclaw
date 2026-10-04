@@ -176,14 +176,6 @@ private final class CoordinatorRetrySleeperProbe: @unchecked Sendable {
     }
 }
 
-private struct CoordinatorWaitTimeout: Error, CustomStringConvertible {
-    let operation: String
-
-    var description: String {
-        "timed out waiting for \(self.operation)"
-    }
-}
-
 struct MacNodeModeCoordinatorDeviceAuthTests {
     @Test
     @MainActor
@@ -219,23 +211,6 @@ struct MacNodeModeCoordinatorTests {
         return MacNodeModeCoordinator.nodeDeviceAuthBinding(for: endpoint)
     }
 
-    private func waitUntil(
-        _ description: String,
-        condition: @escaping @Sendable () async -> Bool) async throws
-    {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(2))
-        while clock.now < deadline {
-            if await condition() { return }
-            // Some callers run on MainActor; a real suspension lets the
-            // notification task make progress instead of polling it out.
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        // Completion can arrive during the final suspension.
-        if await condition() { return }
-        throw CoordinatorWaitTimeout(operation: description)
-    }
-
     @MainActor
     private func cleanupRevocationTest(
         lifecycleInvalidationGate: AsyncTestGate,
@@ -252,24 +227,6 @@ struct MacNodeModeCoordinatorTests {
         }
         await gateway.disconnect()
         await coordinator.stopAndWait()
-    }
-
-    @Test func `waiter rechecks a completed async snapshot after its deadline`() async throws {
-        let probe = CoordinatorDrainSnapshotProbe()
-
-        try await self.waitUntil("completed async snapshot") {
-            let captured = await probe.hasCaptured()
-            if captured { return captured }
-            do {
-                try await Task.sleep(for: .seconds(2))
-            } catch {
-                return captured
-            }
-            await probe.recordCapture()
-            return captured
-        }
-
-        #expect(await probe.hasCaptured())
     }
 
     @Test @MainActor func `config and CLI changes restart startup scoped node host worker`() async {
@@ -823,7 +780,9 @@ struct MacNodeModeCoordinatorTests {
     }
 
     @Test @MainActor func `fresh node uses durable dedicated identity for local auto approval`() throws {
-        let defaults = try #require(UserDefaults(suiteName: "MacNodeModeCoordinatorTests.fresh.\(UUID().uuidString)"))
+        let suite = "MacNodeModeCoordinatorTests.fresh.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
 
         #expect(MacNodeModeCoordinator.resolveNodeIdentityProfile(
             defaults: defaults,
@@ -834,7 +793,9 @@ struct MacNodeModeCoordinatorTests {
     }
 
     @Test @MainActor func `upgraded node durably preserves its shipped primary identity`() throws {
-        let defaults = try #require(UserDefaults(suiteName: "MacNodeModeCoordinatorTests.upgrade.\(UUID().uuidString)"))
+        let suite = "MacNodeModeCoordinatorTests.upgrade.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
 
         #expect(MacNodeModeCoordinator.resolveNodeIdentityProfile(
             defaults: defaults,
@@ -1342,8 +1303,18 @@ struct MacNodeModeCoordinatorTests {
             systemTrustOk: true,
             port: 8443)
 
+        let otherStore = GatewayTLSValidationFailure(
+            kind: .pinMismatch,
+            host: "gateway.example.ts.net",
+            storeKey: "another-profile",
+            expectedFingerprint: "old",
+            observedFingerprint: "new",
+            systemTrustOk: true,
+            port: 443)
+
         #expect(!route.permitsTrustedPinReplacement(url: url, failure: redirectedHost))
         #expect(!route.permitsTrustedPinReplacement(url: url, failure: redirectedPort))
+        #expect(!route.permitsTrustedPinReplacement(url: url, failure: otherStore))
     }
 
     @Test func `does not auto repair untrusted remote pin mismatch`() throws {
@@ -1354,7 +1325,7 @@ struct MacNodeModeCoordinatorTests {
             storeKey: "gateway.example.com:443",
             expectedFingerprint: "old",
             observedFingerprint: "new",
-            systemTrustOk: true,
+            systemTrustOk: false,
             port: 443)
         let route = try #require(GatewayTLSRoute.resolve(
             url: url,
@@ -1384,7 +1355,7 @@ struct MacNodeModeCoordinatorTests {
         #expect(!route.permitsTrustedPinReplacement(url: url, failure: failure))
     }
 
-    @Test(.gatewayTLSStoreIsolated) func `stale repair cannot replace a newer stored pin`() async throws {
+    @Test(.gatewayTLSStoreIsolated) func `stale repair cannot replace a newer stored pin`() throws {
         let url = try #require(URL(string: "wss://gateway.example.ts.net"))
         let storeKey = "test-stale-repair"
         GatewayTLSStore.saveFingerprint("old", stableID: storeKey)
@@ -1411,11 +1382,11 @@ struct MacNodeModeCoordinatorTests {
             systemTrustOk: true,
             port: 443)
 
-        let firstRepaired = await GatewayTLSRepairCoordinator.shared.repair(
+        let firstRepaired = GatewayTLSRepairCoordinator.repairOnCurrentExecutor(
             route: route,
             url: url,
             failure: firstFailure)
-        let staleRepaired = await GatewayTLSRepairCoordinator.shared.repair(
+        let staleRepaired = GatewayTLSRepairCoordinator.repairOnCurrentExecutor(
             route: route,
             url: url,
             failure: staleFailure)

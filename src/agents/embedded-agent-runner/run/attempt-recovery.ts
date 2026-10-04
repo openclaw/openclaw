@@ -263,7 +263,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     recordRecoveryDecision("rejected", "hook_block");
     return completeBlocked("hook_block", formatErrorMessage(promptError));
   }
-  const requestedSelection = shouldSwitchToLiveModel({
+  const requestedSelection = await shouldSwitchToLiveModel({
     cfg: params.config,
     sessionPersistence: params.sessionPersistence,
     sessionKey: runInput.resolvedSessionKey,

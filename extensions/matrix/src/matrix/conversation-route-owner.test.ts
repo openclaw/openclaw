@@ -154,7 +154,7 @@ describe.each(["per-user", "per-room"] as const)(
         agents: {
           ownership: "explicit",
           entries: {
-            main: { default: true },
+            main: {},
             "ops-agent": {},
             "sender-agent": {},
             "room-agent": {},

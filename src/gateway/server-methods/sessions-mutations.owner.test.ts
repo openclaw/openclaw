@@ -32,6 +32,7 @@ import {
   resolveSessionSharingRole,
   resolveSessionSharingTarget,
 } from "../session-sharing.js";
+import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import {
   createSessionMutationTestClient as client,
@@ -115,6 +116,8 @@ describe("sessions.patch", () => {
             presentation: "expanded",
           });
           expect(saved.details).toEqual({ ok: true, sessionKey, defaultPresentation: "expanded" });
+          // Finish the saved row's publication before the durability probe closes storage.
+          await flushPendingSessionsChangedEvents(requestContext);
           const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
           expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
           expect(loadSessionEntry(scope)).toMatchObject({
@@ -648,7 +651,7 @@ describe("sessions.assignOwner", () => {
           },
         );
         const cfg = {
-          agents: { list: [{ id: "main", default: true }, { id: "research" }] },
+          agents: { ownership: "explicit", entries: { main: {}, research: {} } },
         } as OpenClawConfig;
         const target = resolveSessionSharingTarget({ cfg, sessionKey, agentId: "main" });
         if (!target) {
@@ -734,10 +737,10 @@ describe("sessions.assignOwner", () => {
       );
       const cfg = {
         agents: {
-          list: [
-            { id: "main", default: true },
-            { id: "research", identity: { name: "Research" } },
-          ],
+          entries: {
+            main: {},
+            research: { identity: { name: "Research" } },
+          },
         },
       } as OpenClawConfig;
       const requestContext = context(cfg);
@@ -796,10 +799,10 @@ describe("sessions.assignOwner", () => {
         );
         const cfg = {
           agents: {
-            list: [
-              { id: "main", default: true },
-              { id: "research", identity: { name: "Research" } },
-            ],
+            entries: {
+              main: {},
+              research: { identity: { name: "Research" } },
+            },
           },
         } as OpenClawConfig;
         vi.spyOn(Date, "now").mockReturnValue(4242);
@@ -881,7 +884,7 @@ describe("sessions.assignOwner", () => {
         },
       );
       const cfg = {
-        agents: { list: [{ id: "main", default: true }, { id: "research" }] },
+        agents: { entries: { main: {}, research: {} } },
       } as OpenClawConfig;
       const request = { key: sessionKey, owner: { type: "agent", id: "research" } };
       const hidden = await invoke({ cfg, client: client("profile-viewer"), request });

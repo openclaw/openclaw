@@ -2,6 +2,53 @@ import type { PluginCompatRecord } from "./types.js";
 
 export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
   {
+    code: "reply-run-start-unprepared-transcript",
+    status: "deprecated",
+    owner: "agent-runtime",
+    introduced: "2026-10-04",
+    deprecated: "2026-10-04",
+    warningStarts: "2026-10-04",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Forward every onAgentRunStart argument and its synchronous return value through the current runtime helper. Bundled producers supply prepared transcript facts in the optional fourth argument; retain the released three-argument callback and synchronous transcript-read fallback until the next Plugin SDK major and explicit breaking-release approval.",
+    docsPath: "/plugins/sdk-migration/compatibility-policy#reply-run-start-transcript-facts",
+    surfaces: [
+      "openclaw/plugin-sdk/reply-runtime.GetReplyOptions.onAgentRunStart",
+      "PluginHookReplyDispatchContext.onAgentRunStart",
+    ],
+    diagnostics: ["plugin compatibility registry and migration documentation; no runtime warnings"],
+    tests: [
+      "src/plugin-sdk/reply-runtime.contract.test.ts",
+      "src/gateway/server-methods/chat-send-reply-dispatch.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Reply runtimes can pass prepared transcript boundaries without Gateway-thread reads. Released plugin callbacks keep their arguments and synchronous completion acknowledgment; stored data and update behavior are unchanged.",
+  },
+  {
+    code: "agent-end-sync-side-effects",
+    status: "deprecated",
+    owner: "agent-runtime",
+    introduced: "2026-05-30",
+    deprecated: "2026-10-04",
+    warningStarts: "2026-10-04",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Await runAgentEndSideEffectsAsync before releasing the turn lease. The released runAgentEndSideEffects helper retains its synchronous void result and scheduling behavior until the next Plugin SDK major and explicit breaking-release approval.",
+    docsPath: "/plugins/sdk-agent-harness/attempt-runtime#agent-end-side-effects",
+    surfaces: ["openclaw/plugin-sdk/agent-harness-runtime.runAgentEndSideEffects"],
+    diagnostics: [
+      "TypeScript @deprecated annotation and migration documentation; no runtime warnings",
+    ],
+    tests: [
+      "src/plugin-sdk/agent-harness-runtime.test.ts",
+      "src/agents/harness/agent-end-side-effects.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Harness plugins can await transcript-anchor preparation before releasing turn authority. The synchronous agent-end helper remains compatible for published plugins; stored data and update behavior are unchanged.",
+  },
+  {
     code: "native-session-generation-sync-authority",
     status: "deprecated",
     owner: "agent-runtime",
@@ -131,5 +178,28 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     ],
     releaseNote:
       "Provider replay hooks can await committed transcript metadata through additive V2 context types. Legacy hooks, context types, and the synchronous Gemini helper remain available for third-party migration through the next Plugin SDK major.",
+  },
+  {
+    code: "acp-session-metadata-released-signatures",
+    status: "active",
+    owner: "sdk",
+    introduced: "2026-10-04",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Keep the released one-argument ACP reader and manager read/write injection signatures. Internal actor bindings are not plugin arguments; actor activation must preserve these callable contracts. The APIs remain supported and are not deprecated.",
+    docsPath: "/plugins/sdk-migration/compatibility-policy#acp-metadata-binding-compatibility",
+    surfaces: [
+      "openclaw/plugin-sdk/acp-runtime.readAcpSessionEntryAsync",
+      "AcpSessionManagerDeps.loadSessionEntryAsync",
+      "AcpSessionManagerDeps.upsertSessionMeta",
+    ],
+    diagnostics: ["SDK type assertions and compatibility documentation; no runtime warnings"],
+    tests: [
+      "src/plugin-sdk/acp-runtime.test.ts",
+      "src/acp/runtime/session-meta-read.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Released ACP readers and manager injection callbacks keep their one-argument contracts while incognito actor composition remains internal and inactive.",
   },
 ] as const satisfies readonly PluginCompatRecord[];

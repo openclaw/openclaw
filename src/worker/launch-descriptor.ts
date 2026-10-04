@@ -15,6 +15,7 @@ import {
   type SkillResourceDelivery,
 } from "../../packages/gateway-protocol/src/schema/skill-resources.js";
 import {
+  WorkerRuntimeContextFragmentsSchema,
   type WorkerConnectParams,
   type WorkerConnectRequestFrame,
   WorkerConnectRequestFrameSchema,
@@ -33,6 +34,7 @@ import {
   WorkerInferenceOptionsSchema,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
 import {
   ComputerUseCapabilityDescriptorSchema,
   type ComputerUseCapabilityDescriptor,
@@ -225,6 +227,13 @@ const AssignmentSchema = workerProtocolObject({
     Value.Check(WorkerInferenceOptionsSchema, value),
   ),
   systemPrompt: z.string().optional(),
+  inHistorySystemUpdates: z.boolean().optional(),
+  includeEmptySnapshots: z.boolean().optional(),
+  runtimeContext: z
+    .custom<RuntimeContextFragment[]>((value) =>
+      Value.Check(WorkerRuntimeContextFragmentsSchema, value),
+    )
+    .optional(),
   initialMessages: z.custom<WorkerTranscriptMessage[]>(
     (value) =>
       Array.isArray(value) &&

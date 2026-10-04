@@ -400,7 +400,7 @@ describe("transactional setup migration import", () => {
         ).toEqual(credential);
         // Exercise the real first runner boundary: an in-memory transcript alone must not
         // let admission create a final agent database before staged promotion.
-        assertAgentHarnessRunAdmission(params);
+        await assertAgentHarnessRunAdmission(params);
         admitted = true;
         if (!providerSucceeds) {
           throw new Error("provider unavailable");

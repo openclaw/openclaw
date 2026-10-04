@@ -68,7 +68,7 @@ describe("spawnSubagentDirect thread binding", () => {
     installAcceptedSubagentGatewayMock(callGatewayMock);
     installSessionStoreCaptureMock(updateSessionStoreMock);
     config = createSubagentSpawnTestConfig(os.tmpdir(), {
-      agents: { list: [{ id: "main", workspace: "/tmp/workspace-main" }] },
+      agents: { entries: { main: { workspace: "/tmp/workspace-main" } } },
       session: { threadBindings: { defaultSpawnContext: "isolated" } },
     });
     bindingService = makeBindingService(async (request) => ({
@@ -170,10 +170,10 @@ describe("spawnSubagentDirect thread binding", () => {
         config = createSubagentSpawnTestConfig(os.tmpdir(), {
           agents: {
             defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["bot-alpha"] } },
-            list: [
-              { id: "main", workspace: "/tmp/workspace-main" },
-              { id: "bot-alpha", workspace: "/tmp/workspace-bot-alpha" },
-            ],
+            entries: {
+              main: { workspace: "/tmp/workspace-main" },
+              "bot-alpha": { workspace: "/tmp/workspace-bot-alpha" },
+            },
           },
           bindings: [
             {

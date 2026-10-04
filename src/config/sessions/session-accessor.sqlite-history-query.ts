@@ -25,6 +25,7 @@ import {
   readDisplayableActiveEventById,
   readDisplayableActiveResetMetadataById,
   readHistoricalHistoryAnchorPage,
+  readHistoricalHistoryPrecedingEvent,
   resolveHistoricalHistoryEvent,
 } from "./session-accessor.sqlite-history-interval.js";
 import {
@@ -48,7 +49,6 @@ import {
   readTranscriptRawDeltaFromProjection,
 } from "./session-accessor.sqlite-raw-delta-read.js";
 import {
-  assertVisibleMessageRangeJson,
   hasUnindexedVisibleMessages,
   iterateVisibleMessageRange,
   iterateVisibleMessageMetadata,
@@ -544,7 +544,8 @@ export function readSessionTranscriptHistoryEventByIdFromProjection(
   projection: CurrentTranscriptProjection,
   eventId: string,
   options: SessionTranscriptMessageByIdOptions = {},
-): SessionTranscriptMessageById | undefined {
+  needsPreceding?: (event: SessionTranscriptMessageEvent) => boolean,
+): (SessionTranscriptMessageById & { preceding?: SessionTranscriptMessageEvent }) | undefined {
   const history = resolveVisibleHistoryProjection(projection);
   const resolved = resolveHistoryEventById(projection, eventId, history, options.maxBytes);
   const event: SessionTranscriptMessageById | undefined =
@@ -557,10 +558,17 @@ export function readSessionTranscriptHistoryEventByIdFromProjection(
   if (!event) {
     return undefined;
   }
-  return positionTranscriptDisplayEvents(projection, history.displaySource, [event])[0];
+  const preceding = needsPreceding?.(event)
+    ? resolved && "historical" in resolved
+      ? readHistoricalHistoryPrecedingEvent(projection, resolved.historical, event)
+      : readVisibleHistoryRange(projection, Math.max(0, event.seq - 2), event.seq - 1, history)[0]
+    : undefined;
+  return positionTranscriptDisplayEvents(projection, history.displaySource, [
+    { ...event, ...(preceding ? { preceding } : {}) },
+  ])[0];
 }
 
-/** Select ID candidates and projected-history presence from one validated snapshot. */
+/** Select ID candidates and projected-history presence from one admitted snapshot. */
 export function readSessionTranscriptHistoryEventLookupFromProjection(
   projection: CurrentTranscriptProjection,
   eventId: string,
@@ -579,7 +587,6 @@ export function readSessionTranscriptHistoryEventLookupFromProjection(
       hasDisplayMessages: events.some((row) => isVisibleTranscriptRecord(row.event)),
     };
   }
-  assertVisibleMessageRangeJson(projection, range.messageStart, range.messageEnd);
   const boundaryEvents = readBoundaryEvents(projection, range.boundaries.values());
   let first: SessionTranscriptMessageEvent | undefined;
   let hasDisplayMessages = false;

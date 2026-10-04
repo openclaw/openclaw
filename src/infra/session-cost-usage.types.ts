@@ -22,7 +22,6 @@ export type UsageCostTranscriptFile = {
 };
 
 export type ParsedTranscriptEntry = {
-  message: Record<string, unknown>;
   role?: "user" | "assistant";
   timestamp?: Date;
   durationMs?: number;

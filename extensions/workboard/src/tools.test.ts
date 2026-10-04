@@ -102,9 +102,15 @@ describe("workboard tools", () => {
         board: { id: "sessions", kind: "sessions" },
         sessions: [],
       });
-      await update.execute("update-one", { scope: { includeArchived: true } });
+      const scope = { includeArchived: true, includeAutomation: true, includeHome: true };
+      expect(Value.Check(update.parameters, { scope })).toBe(true);
+      for (const field of ["includeAutomation", "includeHome"]) {
+        expect(Value.Check(update.parameters, { scope: { [field]: false } })).toBe(true);
+        expect(Value.Check(update.parameters, { scope: { [field]: "true" } })).toBe(false);
+      }
+      await update.execute("update-one", { scope });
       await expect(store.getSessionsBoard("sessions")).resolves.toMatchObject({
-        sessions: { scope: { includeArchived: true } },
+        sessions: { scope },
       });
       const columns = [
         {
@@ -123,7 +129,7 @@ describe("workboard tools", () => {
       ).toBe(false);
       await update.execute("update-any-of", { columns });
       await expect(store.getSessionsBoard("sessions")).resolves.toMatchObject({
-        sessions: { columns, scope: { includeArchived: true } },
+        sessions: { columns, scope },
       });
       await store.upsertBoard({ id: "another", kind: "sessions" });
       for (const [tool, input] of [
@@ -144,7 +150,7 @@ describe("workboard tools", () => {
       );
       await expect(read.execute("invalid", { boardId: 42 })).rejects.toThrow();
       await expect(store.getSessionsBoard("sessions")).resolves.toMatchObject({
-        sessions: { scope: { includeArchived: true } },
+        sessions: { scope },
       });
     } finally {
       await sessionsBoard.stop();
@@ -239,7 +245,7 @@ describe("workboard tools", () => {
       config: {
         agents: {
           defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } },
-          list: [{ id: "main", default: true, workspace: "/workspace" }],
+          entries: { main: { workspace: "/workspace" } },
         },
       },
     };

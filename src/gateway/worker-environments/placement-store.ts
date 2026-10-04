@@ -17,7 +17,14 @@ import {
   type WorkerSessionPlacementRecord,
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
-import { find, fromRow, getRequired, query, updateTransition } from "./placement-row-codec.js";
+import {
+  find,
+  fromRow,
+  getRequired,
+  query,
+  readWorkerPlacementsForReconcileInDatabase,
+  updateTransition,
+} from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import { createPlacementSessionToolOperationOps } from "./placement-session-tool-operations.js";
 import {
@@ -133,21 +140,33 @@ export function createWorkerSessionPlacementStore(
       const sessionId = required(sessionIdInput, "session id");
       const observation = observePlacementAuthority(path, sessionId);
       try {
-        const result = await executeExistingOpenClawStateRead(
-          { path },
-          { type: "workers.placementProjection", sessionIds: [sessionId], conflictBindings: [] },
-          { current: true },
-        );
-        if (!result?.ok || result.type !== "workers.placementProjection") {
-          throw new Error("Worker placement projection source is unavailable");
-        }
+        const projection = await store.readProjection([sessionId], { current: true });
         observation.assertCurrent();
         return {
-          placement: result.result.projection.placements.get(sessionId),
-          move: result.result.projection.moves.get(sessionId),
-          pendingResult: result.result.projection.pendingResults.get(sessionId),
+          placement: projection.placements.get(sessionId),
+          move: projection.moves.get(sessionId),
+          pendingResult: projection.pendingResults.get(sessionId),
           ...observation,
         };
+      } catch (error) {
+        observation.release();
+        throw error;
+      }
+    },
+
+    async prepareMaintenancePlacements() {
+      const observation = observePlacementAuthority(path);
+      try {
+        const result = await executeExistingOpenClawStateRead(
+          { path },
+          { type: "workers.placementPreservation" },
+          { current: true },
+        );
+        observation.assertCurrent();
+        if (!result || !result.ok || result.type !== "workers.placementPreservation") {
+          throw new Error("Worker placement preservation source is unavailable");
+        }
+        return { placements: result.placements, ...observation };
       } catch (error) {
         observation.release();
         throw error;
@@ -362,18 +381,9 @@ export function createWorkerSessionPlacementStore(
     },
 
     listForReconcile(sessionKey?: string): WorkerSessionPlacementRecord[] {
-      const db = read();
-      let select = query(db)
-        .selectFrom("worker_session_placements")
-        .selectAll()
-        .where("state", "not in", ["local", "reclaimed"]);
-      if (sessionKey !== undefined) {
-        select = select.where("session_key", "=", sessionKey);
-      }
-      return executeSqliteQuerySync(
-        db,
-        select.orderBy("updated_at_ms").orderBy("session_id"),
-      ).rows.map((row) => withWorkspaceResultConflict(fromRow(row))!);
+      return readWorkerPlacementsForReconcileInDatabase(read(), sessionKey).map((record) =>
+        withWorkspaceResultConflict(record)!,
+      );
     },
 
     list(): WorkerSessionPlacementRecord[] {

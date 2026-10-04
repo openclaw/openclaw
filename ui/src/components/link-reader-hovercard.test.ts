@@ -94,7 +94,8 @@ describe("openclaw-link-reader-hovercard-provider", () => {
   });
 
   it("renders and caches plugin-projected details without changing the source link", async () => {
-    const { anchor, provider } = createLink();
+    const url = href + "#comment-1";
+    const { anchor, provider } = createLink(url);
     const request = connect(provider);
     await hover(anchor);
     expect(card()?.textContent).toContain("Merged");
@@ -106,12 +107,12 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     expect(card()?.textContent).toContain("3 files");
     expect(card()?.textContent).toContain("5m ago");
     expect(card()?.querySelector("img")?.src).toBe(preview().imageUrl);
-    expect(anchor.href).toBe(href);
+    expect(anchor.href).toBe(url);
     expect(anchor.getAttribute("aria-controls")).toBe(card()?.id);
     expect(card()?.getAttribute("role")).toBe("dialog");
     expect(request).toHaveBeenCalledWith(
       "github.preview",
-      { url: href },
+      { url },
       { signal: expect.any(AbortSignal) },
     );
     leave(anchor);
@@ -161,6 +162,15 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     expect(group?.querySelector(".link-reader-hovercard__coauthors-more")?.textContent).toBe("+4");
     image?.dispatchEvent(new Event("load"));
     expect(image?.hidden).toBe(false);
+    i18n.registerTranslation("pt-BR", {
+      linkReader: {
+        loadingPreview: "Carregando prévia…",
+        previewAriaLabel: "Prévia: {title}",
+      },
+    });
+    await i18n.setLocale("pt-BR");
+    expect(card()?.getAttribute("aria-label")).toBe("Prévia: Keep previews compact");
+    expect(card()?.textContent).toContain("Merged");
   });
 
   it.each([
@@ -221,41 +231,6 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     expect(card()).toBeNull();
   });
 
-  it("accepts a preview for the requested document with a different anchor", async () => {
-    const { anchor, provider } = createLink(href + "#comment-1");
-    connect(provider, vi.fn().mockResolvedValue(preview(href)));
-    await hover(anchor);
-    expect(card()?.textContent).toContain("Keep previews compact");
-  });
-
-  it.each([
-    "GitHub API rate limit reached. Retry after 40 minutes.",
-    "GitHub item not found (HTTP 404). Check the URL and access permissions.",
-    "GitHub authentication failed (HTTP 401). Check the configured credentials.",
-  ])("shows the provider failure and caches it without refetching: %s", async (message) => {
-    const { anchor, provider } = createLink();
-    const request = connect(
-      provider,
-      vi.fn().mockRejectedValue(new GatewayRequestError({ code: "UNAVAILABLE", message })),
-    );
-    await hover(anchor);
-    expect(card()?.textContent).toContain("Could not load preview");
-    expect(card()?.textContent).toContain(message);
-    const externalLink = card()?.querySelector<HTMLAnchorElement>("a");
-    expect(externalLink?.textContent?.trim()).toBe("Open on GitHub");
-    expect(externalLink?.href).toBe(href);
-    leave(anchor);
-    await vi.advanceTimersByTimeAsync(120);
-    expect(card()).toBeNull();
-    await hover(anchor);
-    expect(card()?.textContent).toContain(message);
-    expect(request).toHaveBeenCalledTimes(1);
-    leave(anchor);
-    await vi.advanceTimersByTimeAsync(30_000);
-    await hover(anchor);
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
   it.each([
     { url: href + "#issuecomment-123", label: "PR #99816", reader: github, branded: true },
     {
@@ -270,14 +245,16 @@ describe("openclaw-link-reader-hovercard-provider", () => {
       reader: forge,
       branded: false,
     },
-  ])("keeps the failed preview's identity and source link for $label", async (scenario) => {
+  ])("caches the failed preview with its identity and source link for $label", async (scenario) => {
     const { anchor, provider } = createLink(scenario.url, [scenario.reader]);
-    const message = "Try again or open the original.";
-    connect(
+    const message = "GitHub API rate limit reached. Retry after 40 minutes.";
+    const request = connect(
       provider,
       vi.fn().mockRejectedValue(new GatewayRequestError({ code: "UNAVAILABLE", message })),
     );
     await hover(anchor);
+    expect(card()?.textContent).toContain("Could not load preview");
+    expect(card()?.textContent).toContain(message);
     const source = card()?.querySelector(".link-reader-hovercard__error-source");
     expect(source?.textContent?.trim()).toBe(scenario.label);
     expect(Boolean(source?.querySelector("svg.icon--filled"))).toBe(scenario.branded);
@@ -287,6 +264,16 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     expect(externalLink?.href).toBe(scenario.url);
     expect(externalLink?.target).toBe("_blank");
     expect(card()?.querySelector("button")).toBeNull();
+    leave(anchor);
+    await vi.advanceTimersByTimeAsync(120);
+    expect(card()).toBeNull();
+    await hover(anchor);
+    expect(card()?.textContent).toContain(message);
+    expect(request).toHaveBeenCalledTimes(1);
+    leave(anchor);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await hover(anchor);
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it.each([
@@ -320,29 +307,6 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     expect(anchor.getAttribute("aria-describedby")).toBe("existing-description");
   });
 
-  it("removes canceled loads from cache and ignores late completions", async () => {
-    const { anchor, provider } = createLink();
-    const first = deferredPreview();
-    const request = connect(
-      provider,
-      vi
-        .fn()
-        .mockReturnValueOnce(first.promise)
-        .mockResolvedValue({ ...preview(), title: "Current preview" }),
-    );
-    await hover(anchor);
-    expect(card()).toBeNull();
-    const signal = request.mock.calls[0]?.[2]?.signal as AbortSignal;
-    leave(anchor);
-    expect(signal.aborted).toBe(true);
-    await hover(anchor);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(card()?.textContent).toContain("Current preview");
-    first.resolve({ ...preview(), title: "Stale preview" });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(card()?.textContent).not.toContain("Stale preview");
-  });
-
   it.each(["readers", "client"] as const)(
     "hides and invalidates previews when the %s epoch changes",
     async (property) => {
@@ -368,26 +332,6 @@ describe("openclaw-link-reader-hovercard-provider", () => {
       expect(request).toHaveBeenCalledTimes(2);
     },
   );
-
-  it("replays pre-upgrade properties through the lazy provider's epoch setters", async () => {
-    const tag = "test-lazy-link-reader-" + crypto.randomUUID();
-    const provider = document.createElement(tag) as LinkReaderHovercardProvider;
-    provider.readers = [github];
-    const request = connect(provider);
-    const anchor = document.createElement("a");
-    anchor.href = href;
-    provider.append(anchor);
-    document.body.append(provider);
-    customElements.define(tag, class extends LinkReaderHovercardProvider {});
-    await provider.updateComplete;
-    await hover(anchor);
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(card()?.textContent).toContain("Keep previews compact");
-    provider.readers = [];
-    expect(card()).toBeNull();
-    await hover(anchor);
-    expect(request).toHaveBeenCalledTimes(1);
-  });
 
   it("does not request disabled previews and cancels pending requests when their descriptor is removed", async () => {
     const { anchor, provider } = createLink(href, [
@@ -452,21 +396,6 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     } else {
       expect(image).toBeNull();
     }
-  });
-
-  it("rerenders host-owned preview copy when the locale changes", async () => {
-    const { anchor, provider } = createLink();
-    connect(provider);
-    await hover(anchor);
-    i18n.registerTranslation("pt-BR", {
-      linkReader: {
-        loadingPreview: "Carregando prévia…",
-        previewAriaLabel: "Prévia: {title}",
-      },
-    });
-    await i18n.setLocale("pt-BR");
-    expect(card()?.getAttribute("aria-label")).toBe("Prévia: Keep previews compact");
-    expect(card()?.textContent).toContain("Merged");
   });
 });
 

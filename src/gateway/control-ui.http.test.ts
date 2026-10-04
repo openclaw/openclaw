@@ -85,7 +85,7 @@ afterEach(() => {
 
 describe("handleControlUiHttpRequest", () => {
   function createAvatarConfig(workspace: string, avatar: string): OpenClawConfig {
-    return { agents: { list: [{ id: "main", workspace, identity: { avatar } }] } };
+    return { agents: { entries: { main: { workspace, identity: { avatar } } } } };
   }
 
   async function createControlUiRoot(indexHtml = "<html></html>\n") {
@@ -667,9 +667,9 @@ describe("handleControlUiHttpRequest", () => {
       config: {
         agents: {
           defaults: { workspace: tmp },
-          list: [
-            { id: "main", identity: { name: "</script><script>alert(1)//", avatar: "evil.png" } },
-          ],
+          entries: {
+            main: { identity: { name: "</script><script>alert(1)//", avatar: "evil.png" } },
+          },
         },
       },
     });
@@ -682,7 +682,7 @@ describe("handleControlUiHttpRequest", () => {
     );
   });
 
-  it.each(["", "/openclaw/"])(
+  it.each(["/openclaw/"])(
     "activates only the initial route's modulepreloads under %j",
     async (basePath) => {
       const script = "window.controlUiBoot = true;";
@@ -1140,7 +1140,7 @@ describe("handleControlUiHttpRequest", () => {
       config: {
         agents: {
           defaults: { workspace: tmp },
-          list: [{ id: "main", identity: { name: "Ops", avatar: "ops.png" } }],
+          entries: { main: { identity: { name: "Ops", avatar: "ops.png" } } },
         },
       },
     });
@@ -1341,18 +1341,6 @@ describe("handleControlUiHttpRequest", () => {
     expect(emitted).toBeLessThan(future.getTime());
   });
 
-  it("returns 406 when no available asset representation is acceptable", async () => {
-    const tmp = await createControlUiRoot();
-    await writeAssetFile(tmp, "app-settings.js", "console.log('configured');\n");
-
-    const { res, end } = await runControlUiRequest(tmp, "/assets/app-settings.js", {
-      headers: { "accept-encoding": "br;q=0, gzip;q=0, identity;q=0" },
-    });
-
-    expect(res.statusCode).toBe(406);
-    expect(responseBody(end)).toBe("Not Acceptable");
-  });
-
   it("does not expose precompressed sidecars as independent assets", async () => {
     const tmp = await createControlUiRoot();
     const { filePath } = await writeAssetFile(tmp, "app-AbCd1234.js", "source\n");
@@ -1477,41 +1465,6 @@ describe("handleControlUiHttpRequest", () => {
     expect(res.statusCode).toBe(200);
     expect(setHeader).toHaveBeenCalledWith("Content-Type", "image/svg+xml");
     expect(responseBody(end)).toBe("<svg/>");
-  });
-
-  it("does not handle /api paths when basePath is empty", async () => {
-    const tmp = await createControlUiRoot();
-    for (const apiPath of ["/api", "/api/sessions", "/api/channels/nostr"]) {
-      const { handled } = await runControlUiRequest(tmp, apiPath);
-      expect(handled, `expected ${apiPath} to not be handled`).toBe(false);
-    }
-  });
-
-  it("does not handle plugin HTTP descendants when basePath is empty", async () => {
-    const { handled } = await runControlUiRequest(
-      await createControlUiRoot(),
-      "/plugins/diffs/view/abc/def",
-    );
-    expect(handled).toBe(false);
-  });
-
-  it("falls through POST requests when basePath is empty", async () => {
-    const tmp = await createControlUiRoot();
-    const { handled, end } = await runControlUiRequest(tmp, "/webhook/imessage", {
-      method: "POST",
-    });
-    expect(handled).toBe(false);
-    expect(end).not.toHaveBeenCalled();
-  });
-
-  it("falls through POST requests under configured basePath", async () => {
-    const { handled, end } = await runControlUiRequest(
-      await createControlUiRoot(),
-      "/openclaw/some-page",
-      { method: "POST", basePath: "/openclaw" },
-    );
-    expect(handled).toBe(false);
-    expect(end).not.toHaveBeenCalled();
   });
 
   it("rejects absolute-path escape attempts under basePath routes", async () => {

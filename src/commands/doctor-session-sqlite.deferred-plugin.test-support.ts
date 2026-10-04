@@ -124,7 +124,7 @@ export async function seedDeferredPluginSessionSource(
   );
   fs.writeFileSync(storePath, JSON.stringify(records));
   const cfg: OpenClawConfig = {
-    agents: { entries: { main: { default: true } } },
+    agents: { entries: { main: {} } },
     ...(layout === "external" ? { session: { store: storePath } } : {}),
   };
   await recordDeferredPluginMigrations({

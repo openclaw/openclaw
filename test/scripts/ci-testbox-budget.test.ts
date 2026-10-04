@@ -94,6 +94,18 @@ describe("Testbox spending admission", () => {
     );
   });
 
+  it.each(["check", "check-memory", "arm", "build", "windows"])(
+    "admits a saturated %s queue without resetting the dispatch deadline",
+    (profile) => {
+      const created = Date.parse(request.createdAt);
+      const plan = planTestboxAdmission({ ...request, profile }, created + 35 * 60_000);
+      expect(plan.expires_at).toBe(created + 60 * 60_000);
+      expect(() => planTestboxAdmission({ ...request, profile }, created + 60 * 60_000)).toThrow(
+        /expired/,
+      );
+    },
+  );
+
   it("caps idle requests while retaining shorter provider deadlines", () => {
     expect(boundedTestboxIdleMinutes("90\n")).toBe(15);
     expect(boundedTestboxIdleMinutes("5\n")).toBe(5);
@@ -163,6 +175,30 @@ describe("Testbox spending admission", () => {
         names.indexOf("Setup Node environment"),
       );
       expect(names).toContain("Close Testbox SSH sessions");
+    }
+    const expiry = job.steps.find(
+      (step: { name: string }) => step.name === "Reject expired Testbox admission",
+    );
+    const plan = planTestboxAdmission({ ...request, profile }, now);
+    const created = Date.parse(request.createdAt);
+    for (const minutes of [35, 59, 60]) {
+      const result = spawnSync(
+        "bash",
+        ["-c", `date() { printf '%s\\n' "$TESTBOX_NOW_SECONDS"; }\n${expiry.run}`],
+        {
+          encoding: "utf8",
+          env: {
+            TESTBOX_EXPIRES_AT: String(plan.expires_at),
+            TESTBOX_NOW_SECONDS: String(created / 1000 + minutes * 60),
+          },
+        },
+      );
+      expect(result.status, `${file} at ${minutes} minutes: ${result.stderr}`).toBe(
+        minutes < 60 ? 0 : 1,
+      );
+      if (minutes === 60) {
+        expect(result.stderr).toContain("stop this lease and request a fresh one");
+      }
     }
   });
 });

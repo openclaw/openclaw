@@ -393,7 +393,7 @@ export class TwilioProvider implements VoiceCallProvider {
     const callSid = params.get("CallSid") || undefined;
     const storedTwiml = callId ? this.twimlStorage.get(callId) : undefined;
     // Preserve eager URL validation even for callbacks that return non-streaming TwiML.
-    const canStream = Boolean(callSid && this.getStreamUrl());
+    const streamUrl = callSid ? this.getStreamUrl() : null;
 
     if (callId && !isStatusCallback && storedTwiml) {
       this.twimlStorage.delete(callId);
@@ -410,8 +410,12 @@ export class TwilioProvider implements VoiceCallProvider {
       return TwilioProvider.EMPTY_TWIML;
     }
 
-    const streamUrl = canStream && callSid ? this.getStreamUrlForCall(callSid) : null;
-    return streamUrl ? this.getStreamConnectXml(streamUrl) : TwilioProvider.PAUSE_TWIML;
+    if (!streamUrl || !callSid) {
+      return TwilioProvider.PAUSE_TWIML;
+    }
+    const url = new URL(streamUrl);
+    url.searchParams.set("token", this.getStreamAuthToken(callSid));
+    return this.getStreamConnectXml(url.toString());
   }
 
   consumeInitialTwiML(ctx: WebhookContext): string | null {
@@ -458,17 +462,6 @@ export class TwilioProvider implements VoiceCallProvider {
     const token = crypto.randomBytes(16).toString("base64url");
     this.streamAuthTokens.set(callSid, token);
     return token;
-  }
-
-  private getStreamUrlForCall(callSid: string): string | null {
-    const baseUrl = this.getStreamUrl();
-    if (!baseUrl) {
-      return null;
-    }
-    const token = this.getStreamAuthToken(callSid);
-    const url = new URL(baseUrl);
-    url.searchParams.set("token", token);
-    return url.toString();
   }
 
   getStreamConnectXml(streamUrl: string): string {

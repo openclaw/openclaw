@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   copyIsolatedVitestSource,
   prepareIsolatedVitestDependencies,
+  prepareIsolatedVitestScratch,
 } from "../../scripts/lib/vitest-isolated-source.mts";
 import * as isolatedVitest from "../../scripts/lib/vitest-isolated.mts";
 import {
@@ -70,28 +71,35 @@ describe("isolated Vitest admission", () => {
       run.mockRestore();
     }
   });
-  it("consumes only the opt-in and preserves argv tokens exactly", () => {
-    const args = ["run", file, "--config", config, "-t", "literal shell ; $()", "--maxWorkers=1"];
-    expect(parseIsolatedVitestArgs(["--isolated-image", image, ...args])).toEqual({ image, args });
-    expect(parseIsolatedVitestArgs(["run", `--isolated-image=repo@sha256:${image}`, file])).toEqual(
-      { image: `repo@sha256:${image}`, args: ["run", file] },
-    );
-    expect(parseIsolatedVitestArgs(args)).toBeNull();
-    expect(parseIsolatedVitestArgs(["run", "--", "--isolated-image", image])).toBeNull();
-    expect(parseIsolatedVitestArgs(["run", "-t", `--isolated-image=${image}`])).toEqual({
-      image,
-      args: ["run", "-t"],
-    });
-  });
-  it.each(["repo:tag", "sha256:1234", ""])("refuses ambiguous image %s", (value) => {
-    expect(() => parseIsolatedVitestArgs(["--isolated-image", value, "run", file])).toThrow(
-      "full local sha256",
-    );
-  });
-  it("refuses duplicate image selectors", () => {
-    expect(() =>
-      parseIsolatedVitestArgs(["--isolated-image", image, "--isolated-image", image]),
-    ).toThrow("once");
+  const originalArgs = [
+    "run",
+    file,
+    "--config",
+    config,
+    "-t",
+    "literal shell ; $()",
+    "--maxWorkers=1",
+  ];
+  it.each([
+    { args: ["--isolated-image", image, ...originalArgs], expected: { image, args: originalArgs } },
+    {
+      args: ["run", `--isolated-image=repo@sha256:${image}`, file],
+      expected: { image: `repo@sha256:${image}`, args: ["run", file] },
+    },
+    { args: originalArgs, expected: null },
+    { args: ["run", "--", "--isolated-image", image], expected: null },
+    { args: ["run", "-t", `--isolated-image=${image}`], expected: { image, args: ["run", "-t"] } },
+    ...["repo:tag", "sha256:1234", ""].map((value) => ({
+      args: ["--isolated-image", value, "run", file],
+      error: "full local sha256",
+    })),
+    { args: ["--isolated-image", image, "--isolated-image", image], error: "once" },
+  ])("parses only an unambiguous image selector: $args", (scenario) => {
+    if ("error" in scenario) {
+      expect(() => parseIsolatedVitestArgs(scenario.args)).toThrow(scenario.error);
+    } else {
+      expect(parseIsolatedVitestArgs(scenario.args)).toEqual(scenario.expected);
+    }
   });
   it("admits tracked exact files and config but not old/untracked or alternate inputs", () => {
     const tracked = new Set([file, config]);
@@ -133,6 +141,9 @@ describe("isolated Vitest admission", () => {
         "--memory=8g",
         "--pids-limit=512",
         "--shm-size=512m",
+        "/tmp:rw,nosuid,nodev,size=2g,mode=1777",
+        "TMPDIR=/workspace/.openclaw/tmp",
+        "HOME=/tmp/home",
         "--unsetenv-all",
         "RAYON_NUM_THREADS=4",
         "TOKIO_WORKER_THREADS=4",
@@ -209,6 +220,26 @@ describe("isolated Vitest admission", () => {
 });
 
 describe("isolated working-tree source", () => {
+  it.each(["fresh", "symlink"])("owns only fresh private scratch: %s", (kind) => {
+    const snapshot = temp.make("isolated-scratch-");
+    const outside = temp.make("isolated-scratch-outside-");
+    if (kind === "symlink") {
+      fs.symlinkSync(outside, path.join(snapshot, ".openclaw"), "dir");
+    } else {
+      prepareIsolatedVitestScratch(snapshot);
+      for (const relative of [".openclaw", ".openclaw/tmp"]) {
+        const directory = path.join(snapshot, relative);
+        expect(fs.realpathSync(directory)).toBe(directory);
+        if (process.platform !== "win32") {
+          expect(fs.statSync(directory).mode & 0o777).toBe(0o700);
+        }
+      }
+    }
+    expect(() => prepareIsolatedVitestScratch(snapshot)).toThrow(/EEXIST/u);
+    if (kind === "symlink") {
+      expect(fs.readdirSync(outside)).toEqual([]);
+    }
+  });
   it("copies current staged-path bytes, preserves deletions, excludes private state and does not copy untracked files", () => {
     const root = temp.make("isolated-source-");
     const snapshot = temp.make("isolated-copy-");
@@ -413,36 +444,40 @@ describe("isolated container lifecycle", () => {
     },
   );
   it.each([
-    { options: { failCreate: true }, error: "create failed" },
-    { options: { failVerify: true }, error: "unexpected mounts" },
-  ])("reconciles $error without starting the container", async ({ options, error }) => {
+    { options: { failCreate: true }, error: "create failed", absent: true },
+    { options: { failVerify: true }, error: "unexpected mounts", absent: true },
+    { options: { failStart: true }, error: "attach interrupted", absent: true },
+    { options: { failRemove: true }, error: "cleanup failed", absent: false },
+    {
+      options: { failCreate: true, label: "another-invocation" },
+      error: "cleanup failed",
+      absent: false,
+    },
+  ])("reconciles $options with $error", async ({ options, error, absent }) => {
     const fixture = lifecycle(options);
-    await expect(fixture.run()).rejects.toThrow(error);
-    expect(fixture.calls.some((args) => args[0] === "start")).toBe(false);
-    expect(fixture.onAbsent).toHaveBeenCalledOnce();
-  });
-  it("stops and joins the container after an interrupted attach", async () => {
-    const fixture = lifecycle({ failStart: true });
-    await expect(fixture.run()).rejects.toThrow("attach interrupted");
-    expect(fixture.calls).toContainEqual(["stop", "--time", "5", name]);
-    expect(fixture.calls).toContainEqual(["wait", name]);
-    expect(fixture.onAbsent).toHaveBeenCalledOnce();
-  });
-  it("fails closed and retains the snapshot when cleanup cannot be established", async () => {
-    const fixture = lifecycle({ failRemove: true });
-    await expect(fixture.run()).rejects.toThrow("cleanup failed");
-    expect(fixture.onAbsent).not.toHaveBeenCalled();
-  });
-  it("never removes a container with a different owner label", async () => {
-    const fixture = lifecycle({ failCreate: true, label: "another-invocation" });
-    await expect(fixture.run()).rejects.toMatchObject({
-      message: expect.stringContaining("cleanup failed"),
-      errors: [
-        expect.any(Error),
-        expect.objectContaining({ message: expect.stringContaining("ownership") }),
-      ],
-    });
-    expect(fixture.calls.some((args) => args[0] === "rm")).toBe(false);
-    expect(fixture.onAbsent).not.toHaveBeenCalled();
+    const result = fixture.run();
+    if ("label" in options) {
+      await expect(result).rejects.toMatchObject({
+        message: expect.stringContaining("cleanup failed"),
+        errors: [
+          expect.any(Error),
+          expect.objectContaining({ message: expect.stringContaining("ownership") }),
+        ],
+      });
+      expect(fixture.calls.some((args) => args[0] === "rm")).toBe(false);
+    } else {
+      await expect(result).rejects.toThrow(error);
+      if ("failStart" in options) {
+        expect(fixture.calls).toContainEqual(["stop", "--time", "5", name]);
+        expect(fixture.calls).toContainEqual(["wait", name]);
+      } else if (!("failRemove" in options)) {
+        expect(fixture.calls.some((args) => args[0] === "start")).toBe(false);
+      }
+    }
+    if (absent) {
+      expect(fixture.onAbsent).toHaveBeenCalledOnce();
+    } else {
+      expect(fixture.onAbsent).not.toHaveBeenCalled();
+    }
   });
 });

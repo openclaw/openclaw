@@ -487,7 +487,7 @@ export async function terminateScheduledTaskNodeHost(
   if (!matched) {
     return [];
   }
-  await terminateGatewayProcessTree(matched.pid, 300, assertCurrent);
+  await terminateGatewayProcessTree(matched.pid, assertCurrent);
   return [matched.pid];
 }
 
@@ -562,7 +562,7 @@ export async function terminateScheduledTaskGatewayListeners(
           continue;
         }
         await retryScheduledTaskLeaseRead(() => ownership.assertOwnerCurrent(pid));
-        await terminateGatewayProcessTree(pid, 300, () => {
+        await terminateGatewayProcessTree(pid, () => {
           assertCurrent?.();
           ownership.assertOwnerCurrent(pid);
         });
@@ -669,9 +669,9 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boole
 
 export async function terminateGatewayProcessTree(
   pid: number,
-  graceMs: number,
   assertCurrent?: () => void,
 ): Promise<void> {
+  const graceMs = 300;
   assertGatewayServiceUpdateCurrent();
   assertCurrent?.();
   if (process.platform !== "win32") {
@@ -711,15 +711,11 @@ export async function terminateGatewayProcessTree(
 
 export async function waitForGatewayPortRelease(
   port: number,
-  timeoutMs = 5_000,
-  options?: { probeHosts?: readonly string[] },
+  probeHosts: readonly string[],
 ): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
-    const diagnostics = await inspectPortUsage(
-      port,
-      options?.probeHosts ? { probeHosts: options.probeHosts } : undefined,
-    ).catch(() => null);
+    const diagnostics = await inspectPortUsage(port, { probeHosts }).catch(() => null);
     if (diagnostics?.status === "free") {
       return true;
     }

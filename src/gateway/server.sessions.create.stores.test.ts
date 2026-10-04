@@ -97,7 +97,7 @@ test.each(["generated key", "explicit key", "junction"])(
 test("sessions.create scopes main to the selected agent while preserving sentinel keys", async () => {
   const { storePath } = await createSessionStoreDir();
   const agentId = "longmemeval";
-  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: agentId }] };
+  testState.agentsConfig = { ownership: "explicit", entries: { main: {}, [agentId]: {} } };
   testState.agentConfig = { sessionStore: { agentId } };
   const sessionIds = new Map<string, string | undefined>();
   for (const key of ["main", "global", "unknown"]) {
@@ -127,7 +127,7 @@ test("sessions.create scopes main to the selected agent while preserving sentine
 
 test("sessions.create replaces a dead main entry with a fresh session id", async () => {
   const { storePath } = await createSessionStoreDir();
-  testState.agentsConfig = { list: [{ id: "ops", default: true }] };
+  testState.agentsConfig = { entries: { ops: {} } };
   try {
     await writeSessionStore({
       agentId: "ops",

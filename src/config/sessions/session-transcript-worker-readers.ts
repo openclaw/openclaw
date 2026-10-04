@@ -53,6 +53,18 @@ export function createSessionHistoryWorkerReaders(
       );
   }
   return {
+    readMessagePresence: reader(
+      "transcript-message-presence",
+      "message presence",
+      (input) => ({ kind: "transcript-message-presence", ...input }),
+      (value) => value.present,
+    ),
+    readAnchors: reader(
+      "transcript-anchors",
+      "transcript anchors",
+      (input) => ({ kind: "transcript-anchors", ...input }),
+      (value) => value.facts,
+    ),
     readRuntimeTarget: reader(
       "session-runtime-target",
       "runtime transcript target",
@@ -225,6 +237,7 @@ export function createSessionHistoryWorkerReaders(
             value.kind !== "source-messages" &&
             value.kind !== "recent-page" &&
             value.kind !== "rpc" &&
+            value.kind !== "rpc-message" &&
             value.kind !== "http" &&
             value.kind !== "delta" &&
             value.kind !== "inline-visibility" &&
@@ -447,6 +460,12 @@ export function createSessionHistoryWorkerReaders(
           return value.entries;
         },
       ),
+    readStoreProjection: reader(
+      "session-store-projection",
+      "store projection admission",
+      (input) => ({ kind: "session-store-projection", ...input }),
+      (value) => value,
+    ),
     readStoreSummary: reader(
       "session-store-summary",
       "a store summary",

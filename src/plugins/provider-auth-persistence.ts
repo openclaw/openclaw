@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { ProviderAuthPersistenceError } from "@openclaw/normalization-core/error-coercion";
 import { persistAuthProfileBatch } from "../agents/auth-profiles.js";
 import { OAUTH_REFRESH_LOCK_OPTIONS } from "../agents/auth-profiles/constants.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -44,6 +45,46 @@ type ProviderAuthProtectedProfilesReceipt = {
   commit: () => Promise<void>;
   rollback: (retainProfileIds?: ReadonlySet<string>) => Promise<void>;
 };
+
+/** Own commit fencing and one-shot compensation for both persistence stages. */
+function createProviderAuthPersistenceReceipt(
+  profiles: ProviderAuthProfile[],
+  commit: () => Promise<void>,
+  rollback: ProviderAuthProtectedProfilesReceipt["rollback"],
+): ProviderAuthProtectedProfilesReceipt {
+  let outcome: "pending" | "committed" | "rolled-back" | "rollback-failed" = "pending";
+  let rollbackPromise: Promise<void> | undefined;
+  return {
+    profiles,
+    commit: async () => {
+      // A concurrent commit cannot release locks while compensation is still running.
+      if (rollbackPromise) {
+        await rollbackPromise.catch(() => undefined);
+      }
+      if (outcome === "rolled-back") {
+        throw new Error("Cannot commit rolled-back provider auth persistence.");
+      }
+      if (outcome === "rollback-failed") {
+        throw new Error("Cannot commit provider auth persistence after rollback failed.");
+      }
+      outcome = "committed";
+      await commit();
+    },
+    rollback: (retainProfileIds) =>
+      (rollbackPromise ??=
+        outcome === "committed"
+          ? commit()
+          : rollback(retainProfileIds).then(
+              () => {
+                outcome = "rolled-back";
+              },
+              (error: unknown) => {
+                outcome = "rollback-failed";
+                throw error;
+              },
+            )),
+  };
+}
 
 function resolveProfileDigest(profile: ProviderAuthProfile): string {
   return createHash("sha256")
@@ -126,17 +167,8 @@ async function materializeProviderAuthProfiles(params: {
 }> {
   const database = { env: params.env };
   const writes: StoreRollback[] = [];
-  let rollbackPromise: Promise<void> | undefined;
-  const rollback = (retainProfileIds: ReadonlySet<string> = new Set()) => {
-    rollbackPromise ??= (async () => {
-      try {
-        await rollbackStoreWrites(writes, retainProfileIds);
-      } catch (error) {
-        throw toErrorObject(error, "Protected credential rollback failed");
-      }
-    })();
-    return rollbackPromise;
-  };
+  const rollback = (retainProfileIds: ReadonlySet<string> = new Set()) =>
+    rollbackStoreWrites(writes, retainProfileIds);
 
   try {
     const profiles: ProviderAuthProfile[] = [];
@@ -195,11 +227,10 @@ async function materializeProviderAuthProfiles(params: {
     try {
       await rollback();
     } catch (rollbackError) {
-      // oxlint-disable-next-line preserve-caught-error -- AggregateError.errors retains rollbackError; cause remains the initiating persistence failure.
-      throw new AggregateError(
-        [error, rollbackError],
+      throw new ProviderAuthPersistenceError(
         "Provider credential persistence failed and protected-store rollback could not be confirmed.",
-        { cause: error },
+        error,
+        { cause: rollbackError },
       );
     }
     throw error;
@@ -275,26 +306,6 @@ async function releaseProviderAuthLocks(locks: readonly FileLockHandle[]): Promi
   }
 }
 
-async function throwAfterStageFailure(params: {
-  error: unknown;
-  locks: readonly FileLockHandle[];
-}): Promise<never> {
-  const errors = [params.error];
-  try {
-    await releaseProviderAuthLocks(params.locks);
-  } catch (error) {
-    errors.push(error);
-  }
-  if (errors.length > 1) {
-    throw new AggregateError(
-      errors,
-      "Provider auth persistence failed and staged state could not be fully released.",
-      { cause: params.error },
-    );
-  }
-  throw params.error;
-}
-
 /** Stages protected provider credentials while retaining their per-profile writer locks. */
 async function stageProviderAuthProfilesForPersistence(params: {
   profiles: readonly ProviderAuthProfile[];
@@ -315,83 +326,47 @@ async function stageProviderAuthProfilesForPersistence(params: {
       beforeWrite: params.beforeWrite,
     });
   } catch (error) {
-    return await throwAfterStageFailure({ error, locks });
+    try {
+      await releaseProviderAuthLocks(locks);
+    } catch (releaseError) {
+      throw new ProviderAuthPersistenceError(
+        "Provider auth persistence failed and staged state could not be fully released.",
+        error,
+        { cause: releaseError },
+      );
+    }
+    throw error;
   }
 
-  let outcome: "pending" | "committed" | "rolled-back" | "rollback-failed" = "pending";
-  let rollbackFailure: Error | undefined;
-  let rollbackPromise: Promise<void> | undefined;
   let releasePromise: Promise<void> | undefined;
-  const release = () => {
-    releasePromise ??= releaseProviderAuthLocks(locks).catch((error: unknown) => {
-      throw toErrorObject(error, "Provider auth persistence lock release failed");
-    });
-    return releasePromise;
-  };
-  const receipt: ProviderAuthProtectedProfilesReceipt = {
-    profiles: prepared.profiles,
-    commit: async () => {
-      // A concurrent commit cannot release locks while compensation is still running.
-      if (rollbackPromise) {
-        await rollbackPromise.catch(() => undefined);
+  const release = () => (releasePromise ??= releaseProviderAuthLocks(locks));
+  return createProviderAuthPersistenceReceipt(
+    prepared.profiles,
+    release,
+    async (retainProfileIds) => {
+      let rollbackError: unknown;
+      try {
+        await prepared.rollback(retainProfileIds);
+      } catch (error) {
+        rollbackError = error;
       }
-      if (outcome === "rolled-back") {
-        throw new Error("Cannot commit rolled-back provider auth persistence.");
-      }
-      if (outcome === "rollback-failed") {
-        throw new Error("Cannot commit provider auth persistence after rollback failed.");
-      }
-      outcome = "committed";
-      await release();
-    },
-    rollback: async (retainProfileIds = new Set()) => {
-      if (outcome === "committed") {
+      let releaseError: unknown;
+      try {
         await release();
-        return;
+      } catch (error) {
+        releaseError = error;
       }
-      if (outcome === "rollback-failed") {
-        if (rollbackFailure) {
-          throw rollbackFailure;
-        }
-        throw new Error("Provider auth rollback failed without a recorded error.");
+      if (rollbackError || releaseError) {
+        throw rollbackError && releaseError
+          ? new AggregateError(
+              [rollbackError, releaseError],
+              "Protected provider auth rollback failed and its locks could not all be released.",
+              { cause: rollbackError },
+            )
+          : toErrorObject(rollbackError ?? releaseError, "Protected provider auth rollback failed");
       }
-      if (outcome === "pending") {
-        let rollbackError: unknown;
-        try {
-          await prepared.rollback(retainProfileIds);
-        } catch (error) {
-          rollbackError = error;
-        }
-        let releaseError: unknown;
-        try {
-          await release();
-        } catch (error) {
-          releaseError = error;
-        }
-        if (rollbackError || releaseError) {
-          rollbackFailure =
-            rollbackError && releaseError
-              ? new AggregateError(
-                  [rollbackError, releaseError],
-                  "Protected provider auth rollback failed and its locks could not all be released.",
-                  { cause: rollbackError },
-                )
-              : toErrorObject(
-                  rollbackError ?? releaseError,
-                  "Protected provider auth rollback failed",
-                );
-          outcome = "rollback-failed";
-          throw rollbackFailure;
-        }
-        outcome = "rolled-back";
-        return;
-      }
-      await release();
     },
-  };
-  const rollbackOnce = receipt.rollback;
-  receipt.rollback = (retainProfileIds) => (rollbackPromise ??= rollbackOnce(retainProfileIds));
-  return receipt;
+  );
 }
 
 async function stageProviderAuthProfileBatchCore(
@@ -414,88 +389,45 @@ async function stageProviderAuthProfileBatchCore(
     try {
       await prepared.rollback();
     } catch (rollbackError) {
-      // oxlint-disable-next-line preserve-caught-error -- AggregateError.errors retains rollbackError; cause remains the initiating persistence failure.
-      throw new AggregateError(
-        [error, rollbackError],
+      throw new ProviderAuthPersistenceError(
         "Provider auth persistence failed and staged state could not be fully released.",
-        { cause: error },
+        error,
+        { cause: rollbackError },
       );
     }
     throw error;
   }
 
-  let outcome: "pending" | "committed" | "rolled-back" | "rollback-failed" = "pending";
-  let rollbackFailure: Error | undefined;
-  let rollbackPromise: Promise<void> | undefined;
-  const receipt: ProviderAuthPersistenceReceipt = {
-    profiles: prepared.profiles,
-    commit: async () => {
-      if (rollbackPromise) {
-        await rollbackPromise.catch(() => undefined);
-      }
-      if (outcome === "rolled-back") {
-        throw new Error("Cannot commit rolled-back provider auth persistence.");
-      }
-      if (outcome === "rollback-failed") {
-        throw new Error("Cannot commit provider auth persistence after rollback failed.");
-      }
-      outcome = "committed";
-      await prepared.commit();
-    },
-    rollback: async () => {
-      if (outcome === "committed") {
+  return createProviderAuthPersistenceReceipt(prepared.profiles, prepared.commit, async () => {
+    let profileRollbackError: unknown;
+    let rollbackResult: ReturnType<typeof persisted.rollback> | undefined;
+    try {
+      rollbackResult = persisted.rollback();
+    } catch (error) {
+      profileRollbackError = error;
+    }
+    let protectedRollbackError: unknown;
+    try {
+      if (rollbackResult) {
+        await prepared.rollback(rollbackResult.unrevertedProfileIds);
+      } else {
         await prepared.commit();
-        return;
       }
-      if (outcome === "rollback-failed") {
-        if (rollbackFailure) {
-          throw rollbackFailure;
-        }
-        throw new Error("Provider auth rollback failed without a recorded error.");
-      }
-      if (outcome === "pending") {
-        let profileRollbackError: unknown;
-        let rollbackResult: ReturnType<typeof persisted.rollback> | undefined;
-        try {
-          rollbackResult = persisted.rollback();
-        } catch (error) {
-          profileRollbackError = error;
-        }
-        let protectedRollbackError: unknown;
-        try {
-          if (rollbackResult) {
-            await prepared.rollback(rollbackResult.unrevertedProfileIds);
-          } else {
-            await prepared.commit();
-          }
-        } catch (error) {
-          protectedRollbackError = error;
-        }
-        if (profileRollbackError && protectedRollbackError) {
-          rollbackFailure = new AggregateError(
-            [profileRollbackError, protectedRollbackError],
-            "Provider auth profile rollback failed and its protected persistence could not be released.",
-            { cause: profileRollbackError },
-          );
-        } else {
-          const failure = profileRollbackError ?? protectedRollbackError;
-          rollbackFailure = failure
-            ? toErrorObject(failure, "Provider auth rollback failed")
-            : undefined;
-        }
-        if (rollbackFailure) {
-          outcome = "rollback-failed";
-          throw rollbackFailure;
-        }
-        outcome = "rolled-back";
-        return;
-      }
-      await prepared.rollback();
-    },
-  };
-  const rollbackOnce = receipt.rollback;
-  receipt.rollback = () => (rollbackPromise ??= rollbackOnce());
-  return receipt;
+    } catch (error) {
+      protectedRollbackError = error;
+    }
+    if (profileRollbackError && protectedRollbackError) {
+      throw new AggregateError(
+        [profileRollbackError, protectedRollbackError],
+        "Provider auth profile rollback failed and its protected persistence could not be released.",
+        { cause: profileRollbackError },
+      );
+    }
+    const failure = profileRollbackError ?? protectedRollbackError;
+    if (failure) {
+      throw toErrorObject(failure, "Provider auth rollback failed");
+    }
+  });
 }
 
 /** Stages provider auth until its owning config publication commits or rolls back. */

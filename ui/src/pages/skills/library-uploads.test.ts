@@ -99,31 +99,6 @@ function savedReceipt(read: SkillsLibraryReadResult): SkillsLibraryReceipt {
 afterEach(() => document.body.replaceChildren());
 
 describe("skill library upload policy", () => {
-  it("saves SKILL.md edits with uploads disabled using only retained support-file paths", async () => {
-    const { library, config, request } = harness();
-    const read = existingSkill();
-    request.mockResolvedValueOnce(read);
-    await library.open(read.entry.skillId);
-    const draft = library.draft!;
-    expect(draft.baseFiles[0]).not.toBe(draft.files[0]);
-    config.current.uploadsEnabled = false;
-    draft.content = "# Edited skill";
-    request.mockResolvedValueOnce(savedReceipt(read)).mockResolvedValueOnce(library.list);
-    await library.save();
-    expect(library.error).toBeNull();
-    expect(request).toHaveBeenNthCalledWith(2, "skills.library.save", {
-      skillId: read.entry.skillId,
-      expectedRevision: read.entry.revision,
-      slug: read.entry.slug,
-      content: "# Edited skill",
-      files: [],
-      retainFiles: ["assets/image.png"],
-    });
-    expect(draft.files).toEqual(read.files);
-    expect(draft.baseFiles[0]).not.toBe(draft.files[0]);
-    expect(draft.entry?.revision).toBe("b".repeat(64));
-  });
-
   it.each([
     ["content", { content: "changed" }],
     ["encoding", { encoding: "utf8" }],
@@ -155,6 +130,7 @@ describe("skill library upload policy", () => {
     request.mockResolvedValueOnce(read);
     await library.open(read.entry.skillId);
     const draft = library.draft!;
+    expect(draft.baseFiles[0]).not.toBe(draft.files[0]);
     draft.files[1]!.content = "Updated notes";
     const newFile = { path: "new.txt", content: "New notes", encoding: "utf8" as const };
     draft.files.push(newFile);
@@ -183,16 +159,14 @@ describe("skill library upload policy", () => {
     request.mockResolvedValueOnce(savedReceipt(read)).mockResolvedValueOnce(library.list);
     await library.save();
     expect(library.error).toBeNull();
-    expect(request).toHaveBeenNthCalledWith(
-      4,
-      "skills.library.save",
-      expect.objectContaining({
-        expectedRevision: "b".repeat(64),
-        content: "# Next edit",
-        retainFiles: ["assets/image.png", "notes.txt", "new.txt"],
-        files: [],
-      }),
-    );
+    expect(request).toHaveBeenNthCalledWith(4, "skills.library.save", {
+      skillId: read.entry.skillId,
+      slug: read.entry.slug,
+      expectedRevision: "b".repeat(64),
+      content: "# Next edit",
+      retainFiles: ["assets/image.png", "notes.txt", "new.txt"],
+      files: [],
+    });
   });
 
   it("hides pickers and prevents file reads while leaving manual editing available", async () => {
@@ -218,29 +192,26 @@ describe("skill library upload policy", () => {
     );
   });
 
-  it.each(["SKILL.md", "skill.zip"])(
-    "rejects %s read completion after policy changes",
-    async (name) => {
-      const { library, config, request } = harness();
-      const read = createDeferred<ArrayBuffer>();
-      const reading = library.importFiles([fileWithReader(name, () => read.promise)]);
-      config.current.uploadsEnabled = false;
-      read.resolve(new TextEncoder().encode("# Skill").buffer);
-      await reading;
-      expect(request).not.toHaveBeenCalled();
-      expect(library.draft).toBeNull();
-      expect(library.error).toBe(uploadsDisabledMessage());
-    },
-  );
-
-  it("does not save a file draft staged before uploads were disabled", async () => {
+  it.each([
+    { name: "SKILL.md", phase: "read" },
+    { name: "skill.zip", phase: "read" },
+    { name: "SKILL.md", phase: "save" },
+  ])("rejects $name after uploads are disabled during $phase", async ({ name, phase }) => {
     const { library, config, request } = harness();
-    await library.importFiles([
-      fileWithReader("SKILL.md", async () => new TextEncoder().encode("# Skill").buffer),
-    ]);
-    expect(library.draft?.content).toBe("# Skill");
-    config.current.uploadsEnabled = false;
-    await library.save();
+    const read = createDeferred<ArrayBuffer>();
+    const reading = library.importFiles([fileWithReader(name, () => read.promise)]);
+    if (phase === "read") {
+      config.current.uploadsEnabled = false;
+    }
+    read.resolve(new TextEncoder().encode("# Skill").buffer);
+    await reading;
+    if (phase === "save") {
+      expect(library.draft?.content).toBe("# Skill");
+      config.current.uploadsEnabled = false;
+      await library.save();
+    } else {
+      expect(library.draft).toBeNull();
+    }
     expect(request).not.toHaveBeenCalled();
     expect(library.error).toBe(uploadsDisabledMessage());
   });

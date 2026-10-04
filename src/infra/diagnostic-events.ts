@@ -25,6 +25,7 @@ import { consumeHostPluginUsageDiagnosticEvent } from "./diagnostic-plugin-usage
 import type {
   DiagnosticMemoryUsage,
   DiagnosticChildProcessSpawnFields,
+  DiagnosticMemoryPressureFields,
 } from "./diagnostic-process-types.js";
 import type { DiagnosticGatewayRpcFields } from "./diagnostic-rpc-types.js";
 import type {
@@ -715,15 +716,7 @@ type DiagnosticMemorySampleEvent = DiagnosticBaseEvent & {
   uptimeMs?: number;
 };
 
-export type DiagnosticMemoryPressureEvent = DiagnosticBaseEvent & {
-  type: "diagnostic.memory.pressure";
-  level: "warning" | "critical";
-  reason: "rss_threshold" | "heap_threshold" | "rss_growth";
-  memory: DiagnosticMemoryUsage;
-  thresholdBytes?: number;
-  rssGrowthBytes?: number;
-  windowMs?: number;
-};
+export type DiagnosticMemoryPressureEvent = DiagnosticBaseEvent & DiagnosticMemoryPressureFields;
 
 type DiagnosticPayloadLargeEvent = DiagnosticBaseEvent & {
   type: "payload.large";
@@ -993,25 +986,6 @@ const PRIORITY_ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["ty
   "harness.run.error",
 ]);
 
-function createDiagnosticEventsState(): DiagnosticEventsGlobalState {
-  return {
-    marker: DIAGNOSTIC_EVENTS_STATE_KEY,
-    enabled: true,
-    seq: 0,
-    listeners: new Map(),
-    trustedListeners: new Map(),
-    toolExecutionListeners: new Set<TrustedToolExecutionEventListener>(),
-    toolExecutionSeq: 0,
-    dispatchDepth: 0,
-    asyncQueue: [],
-    asyncDrainScheduled: false,
-    asyncDroppedEvents: 0,
-    asyncDroppedTrustedEvents: 0,
-    asyncDroppedUntrustedEvents: 0,
-    asyncDroppedPriorityEvents: 0,
-  };
-}
-
 function isDiagnosticEventsState(value: unknown): value is DiagnosticEventsGlobalState {
   if (!value || typeof value !== "object") {
     return false;
@@ -1043,7 +1017,22 @@ function getDiagnosticEventsState(): DiagnosticEventsGlobalState {
     existing.toolExecutionSeq ??= 0;
     return existing;
   }
-  const state = createDiagnosticEventsState();
+  const state: DiagnosticEventsGlobalState = {
+    marker: DIAGNOSTIC_EVENTS_STATE_KEY,
+    enabled: true,
+    seq: 0,
+    listeners: new Map(),
+    trustedListeners: new Map(),
+    toolExecutionListeners: new Set<TrustedToolExecutionEventListener>(),
+    toolExecutionSeq: 0,
+    dispatchDepth: 0,
+    asyncQueue: [],
+    asyncDrainScheduled: false,
+    asyncDroppedEvents: 0,
+    asyncDroppedTrustedEvents: 0,
+    asyncDroppedUntrustedEvents: 0,
+    asyncDroppedPriorityEvents: 0,
+  };
   Object.defineProperty(globalThis, DIAGNOSTIC_EVENTS_STATE_KEY, {
     configurable: true,
     enumerable: false,

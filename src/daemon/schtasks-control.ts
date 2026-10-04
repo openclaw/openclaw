@@ -463,7 +463,7 @@ async function stopRegisteredScheduledTask({
   }
   if (terminated !== null && stopPort) {
     const probeHosts = stopContext?.probeHosts ?? [];
-    if (!(await waitForGatewayPortRelease(stopPort, 5_000, { probeHosts }))) {
+    if (!(await waitForGatewayPortRelease(stopPort, probeHosts))) {
       const listenerDetails = await describeUnverifiedPortListeners(stopPort, probeHosts);
       throw new Error(
         `gateway port ${stopPort} is still busy ${restart ? "before restart" : "after stop"}; remaining listener ownership could not be verified.${listenerDetails}`,
@@ -626,9 +626,9 @@ export async function restartRegisteredScheduledTask(params: {
       );
     }
     if (replacementRuntime.status === "running" && replacementRuntime.pid) {
-      await terminateGatewayProcessTree(replacementRuntime.pid, 300, params.assertCurrent);
+      await terminateGatewayProcessTree(replacementRuntime.pid, params.assertCurrent);
     }
-    if (port && !(await waitForGatewayPortRelease(port, 5_000, { probeHosts }))) {
+    if (port && !(await waitForGatewayPortRelease(port, probeHosts))) {
       throw new Error(`replacement gateway port ${port} is occupied by an unverified process`);
     }
   }
@@ -665,7 +665,7 @@ export async function restartRegisteredScheduledTask(params: {
         () => null,
       );
       if (failedRuntime?.status === "running" && failedRuntime.pid) {
-        await terminateGatewayProcessTree(failedRuntime.pid, 300, params.assertCurrent);
+        await terminateGatewayProcessTree(failedRuntime.pid, params.assertCurrent);
       }
       throw new Error("Replacement Windows Scheduled Task did not produce running evidence.");
     }

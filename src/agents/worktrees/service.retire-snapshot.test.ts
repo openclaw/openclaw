@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { StatementSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,14 +17,11 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import * as worktreeGit from "./git.js";
-import {
-  getRegistryWorktree,
-  getRegistryWorktreeProvisionedChunk,
-  insertRegistryWorktree,
-  insertRegistryWorktreeProvisionedChunk,
-  updateRegistryWorktree,
-} from "./registry.js";
+import { insertRegistryWorktreeProvisionedChunk } from "./provisioned-snapshot.test-support.js";
+import { getRegistryWorktreeProvisionedChunk } from "./registry-read.js";
+import { getRegistryWorktree, insertRegistryWorktree, updateRegistryWorktree } from "./registry.js";
 import { resolveRepository } from "./service-preparation.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 import { retireManagedWorktreeSnapshotById } from "./snapshot-host.js";
@@ -329,9 +327,9 @@ describe("Exact removed worktree snapshot retirement", () => {
         updateRegistryWorktree(env, record.id, {
           provisionedState: [{ path: chunk.path, mode: 0o600, chunks: 1 }],
         });
-        insertRegistryWorktreeProvisionedChunk(env, { ...chunk, data: bytes });
+        await insertRegistryWorktreeProvisionedChunk(env, { ...chunk, data: bytes });
       } else {
-        insertRegistryWorktreeProvisionedChunk(env, { ...chunk, data: bytes });
+        await insertRegistryWorktreeProvisionedChunk(env, { ...chunk, data: bytes });
       }
       await expect(retireManagedWorktreeSnapshotById(request)).rejects.toThrow(
         /retains provisioned data/,
@@ -391,18 +389,34 @@ describe("Exact removed worktree snapshot retirement", () => {
         projection_path: projection,
         base_commit: source,
         source_paths_json: JSON.stringify(["README.md"]),
-        baseline_json: null,
-        baseline_ref: null,
+        baseline_json: JSON.stringify({ synthetic: "x".repeat(3 * 1024 * 1024) }),
+        baseline_ref: "sha256:" + "a".repeat(64),
         pending_ref: null,
         pending_target: null,
-        journal_json: null,
-        journal_pack: null,
+        journal_json: JSON.stringify({ synthetic: "j".repeat(3 * 1024 * 1024) }),
+        journal_pack: Buffer.from("synthetic recovery pack"),
         paused_runtimes_json: null,
         created_at_ms: removedAt - 1,
       },
       () => undefined,
     );
-    await expect(retireManagedWorktreeSnapshotById(request)).rejects.toThrow(/projection custody/);
+    expect(row.revision).toBe(0);
+    const reads = observeMainThreadReads();
+    try {
+      reads.calibrate();
+      await expect(retireManagedWorktreeSnapshotById(request)).rejects.toThrow(
+        /projection custody/,
+      );
+      const projections = reads.calls
+        .flatMap((call) => call.mock.contexts)
+        .filter((statement): statement is StatementSync => statement instanceof StatementSync)
+        .filter((statement) => statement.sourceSQL.includes('"local_workspace_projections"'));
+      expect(
+        projections.map((statement) => statement.columns().map((column) => column.name)),
+      ).toEqual([["revision"]]);
+    } finally {
+      reads.restore();
+    }
     await expectPreserved(record);
     expect(store.get(record.id)).toEqual(row);
     expect(await fs.readFile(payload, "utf8")).toBe("projection-only content");

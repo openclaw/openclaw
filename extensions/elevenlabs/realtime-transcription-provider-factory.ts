@@ -17,19 +17,9 @@ import {
 import { resolveElevenLabsApiKeyWithProfileFallback } from "./config-api.js";
 import { normalizeElevenLabsRealtimeBaseUrl } from "./shared.js";
 
-type ElevenLabsRealtimeTranscriptionProviderConfig = {
-  apiKey?: string;
-  baseUrl?: string;
-  modelId?: string;
-  audioFormat?: string;
-  sampleRate?: number;
-  languageCode?: string;
-  commitStrategy?: "manual" | "vad";
-  vadSilenceThresholdSecs?: number;
-  vadThreshold?: number;
-  minSpeechDurationMs?: number;
-  minSilenceDurationMs?: number;
-};
+type ElevenLabsRealtimeTranscriptionProviderConfig = Partial<
+  ReturnType<typeof normalizeProviderConfig>
+>;
 
 type ElevenLabsRealtimeTranscriptionSessionConfig = RealtimeTranscriptionSessionCreateRequest & {
   apiKey: string;
@@ -90,9 +80,7 @@ function normalizeIntegerRange(value: unknown, min: number, max: number): number
   return asSafeIntegerInRange(parsed, { min, max });
 }
 
-function normalizeProviderConfig(
-  config: RealtimeTranscriptionProviderConfig,
-): ElevenLabsRealtimeTranscriptionProviderConfig {
+function normalizeProviderConfig(config: RealtimeTranscriptionProviderConfig) {
   const raw = readNestedElevenLabsConfig(config);
   return {
     apiKey: normalizeResolvedSecretInputString({

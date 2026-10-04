@@ -395,7 +395,6 @@ async function resumePostCoreUpdateInternal(
             root: params.root,
             opts: params.opts,
             pluginUpdate,
-            freshDoctorRequired: pluginUpdate.changed,
             assertCurrent,
             yes: params.opts.yes === true,
             json: params.opts.json === true,

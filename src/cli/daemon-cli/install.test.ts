@@ -1,14 +1,19 @@
 import "./install.test-support.js";
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { createInstallPlanFixture, nodeProbeOutput } from "./install.test-helpers.js";
+import type { DaemonInstallOptions } from "./types.js";
 
 const {
   actionState,
   buildGatewayInstallPlanMock,
   expectFields,
   expectLastEmittedResult,
+  ensureConfigReadyMock,
   installDaemonServiceAndEmitMock,
   isGatewayDaemonRuntimeMock,
   pinSnapshotMock,
@@ -27,6 +32,267 @@ const {
 
 describe("runDaemonInstall", () => {
   setupInstallTests();
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  describe("restore service CLI", () => {
+    const expected = { revision: "observed", definition: "failed-app-service", stored: true };
+    const expectedRuntimePin = JSON.stringify({
+      revision: expected.revision,
+      definition: expected.definition,
+    });
+    function recoveryFixture(runtime: "node" | "bun" = "node") {
+      const root = tempDirs.make("openclaw-restore-cli-");
+      const executable = path.join(
+        root,
+        runtime === "node" && process.platform === "win32" ? "node.exe" : runtime,
+      );
+      const entrypoint = path.join(root, "openclaw.mjs");
+      const sqliteLibrary = path.join(root, "libsqlite3.dylib");
+      for (const file of [executable, entrypoint, sqliteLibrary]) {
+        fs.writeFileSync(file, "", { mode: 0o755 });
+      }
+      pinSnapshotMock.mockReturnValue(expected);
+      return { executable, entrypoint, sqliteLibrary };
+    }
+    function expectNoPreparation() {
+      expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+      expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+      expect(replaceConfigFileMock).not.toHaveBeenCalled();
+      expect(service.install).not.toHaveBeenCalled();
+    }
+
+    it.each<{
+      name: string;
+      options?: Partial<DaemonInstallOptions>;
+      inheritedWrapper?: boolean;
+      update?: boolean;
+      message: string;
+    }>([
+      {
+        name: "missing fence",
+        options: { expectedRuntimePin: undefined },
+        message: "requires --expected-runtime-pin",
+      },
+      {
+        name: "malformed JSON",
+        options: { restoreServiceCli: "{" },
+        message: "Invalid restore service CLI.",
+      },
+      {
+        name: "missing JSON keys",
+        options: { restoreServiceCli: "{}" },
+        message: "Invalid restore service CLI.",
+      },
+      {
+        name: "extra JSON key",
+        options: {
+          restoreServiceCli:
+            '{"executable":"/node","entrypoint":"/openclaw.mjs","sqliteLibrary":null,"extra":true}',
+        },
+        message: "Invalid restore service CLI.",
+      },
+      {
+        name: "missing runtime",
+        options: { runtime: undefined },
+        message: "requires an explicit --runtime",
+      },
+      {
+        name: "invalid runtime",
+        options: { runtime: "deno" },
+        message: "requires an explicit --runtime",
+      },
+      { name: "mismatched pin", options: { runtimePath: "/another/node" }, message: "must match" },
+      {
+        name: "explicit wrapper",
+        options: { wrapper: "/wrapper" },
+        message: "cannot be combined with a wrapper",
+      },
+      {
+        name: "inherited wrapper",
+        inheritedWrapper: true,
+        message: "cannot be combined with a wrapper",
+      },
+      { name: "update reconciliation", update: true, message: "update-owned reconciliation" },
+    ])(
+      "refuses $name before preparation",
+      async ({ options, inheritedWrapper, update, message }) => {
+        const cli = recoveryFixture();
+        if (inheritedWrapper) {
+          service.readCommand.mockResolvedValue({
+            programArguments: [cli.executable, cli.entrypoint],
+            environment: { OPENCLAW_WRAPPER: "/wrapper" },
+          });
+        }
+        if (update) {
+          process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+        }
+        await runDaemonInstall({
+          json: true,
+          force: true,
+          runtime: "node",
+          expectedRuntimePin,
+          restoreServiceCli: JSON.stringify(cli),
+          ...options,
+        });
+        expect(actionState.failed[0]?.message).toContain(message);
+        expectNoPreparation();
+      },
+    );
+
+    it.each(["entrypoint", "sqliteLibrary", "executable"] as const)(
+      "refuses an invalid %s before preparation",
+      async (key) => {
+        const cli = recoveryFixture();
+        cli[key] = "relative/path";
+        await runDaemonInstall({
+          json: true,
+          force: true,
+          runtime: "node",
+          expectedRuntimePin,
+          restoreServiceCli: JSON.stringify(cli),
+        });
+        expect(actionState.failed[0]?.message).toContain(
+          key === "executable" ? "--restore-service-cli" : "Invalid restore service CLI.",
+        );
+        expectNoPreparation();
+      },
+    );
+
+    it("preserves an operator change after the caller's observation", async () => {
+      const cli = recoveryFixture();
+      pinSnapshotMock.mockReturnValue({ ...expected, revision: "operator-repin" });
+      await runDaemonInstall({
+        json: true,
+        force: true,
+        runtime: "node",
+        expectedRuntimePin,
+        restoreServiceCli: JSON.stringify(cli),
+      });
+      expect(actionState.failed[0]?.message).toBe(
+        "Gateway service or runtime pin changed before installation. The newer selection was preserved; inspect it before retrying.",
+      );
+      expectNoPreparation();
+    });
+
+    it.each([
+      { runtime: "node", library: false },
+      { runtime: "bun", library: true },
+      { runtime: "bun", library: false },
+    ] as const)(
+      "restores $runtime with retained library=$library and definition custody",
+      async ({ runtime, library }) => {
+        const files = recoveryFixture(runtime);
+        const cli = { ...files, sqliteLibrary: library ? files.sqliteLibrary : null };
+        process.env.OPENCLAW_SQLITE_LIBRARY = "/installer/libsqlite3.dylib";
+        if (runtime === "bun") {
+          const probe = nodeProbeOutput("26.8.1");
+          runExecMock.mockResolvedValue({
+            ...probe,
+            stdout: JSON.stringify({ ...JSON.parse(probe.stdout), bunVersion: "1.4.0" }),
+          });
+        }
+        installDaemonServiceAndEmitMock.mockImplementationOnce(async (params) => {
+          await (params as { install: () => Promise<void> }).install();
+        });
+        await runDaemonInstall({
+          json: true,
+          force: true,
+          runtime,
+          expectedRuntimePin,
+          restoreServiceCli: JSON.stringify(cli),
+          ...(runtime === "bun" ? { runtimePath: cli.executable } : {}),
+        });
+        expect(actionState.failed).toEqual([]);
+        const plan = readFirstInstallPlanArg();
+        expect(plan).toMatchObject({
+          serviceCli: { executable: cli.executable, entrypoint: cli.entrypoint },
+          runtimePath: cli.executable,
+        });
+        expect(plan.pinnedRuntimePath).toBe(runtime === "bun" ? cli.executable : undefined);
+        expect(service.install).toHaveBeenCalledWith(
+          expect.objectContaining({
+            runtimePinUpdate: {
+              expected,
+              pin: runtime === "bun" ? { runtime, path: cli.executable } : undefined,
+              requireDefinitionMatch: true,
+            },
+            env: plan.env,
+          }),
+        );
+        for (const call of runExecMock.mock.calls) {
+          expect(call[2].baseEnv.OPENCLAW_SQLITE_LIBRARY).toBe(
+            library ? cli.sqliteLibrary : undefined,
+          );
+        }
+        if (library) {
+          expect(plan.env).toHaveProperty("OPENCLAW_SQLITE_LIBRARY", cli.sqliteLibrary);
+        } else {
+          expect(plan.env).not.toHaveProperty("OPENCLAW_SQLITE_LIBRARY");
+        }
+        expect(process.env.OPENCLAW_SQLITE_LIBRARY).toBe("/installer/libsqlite3.dylib");
+      },
+    );
+  });
+
+  it.each([
+    { change: "operator pin", revision: "previous-pin", definition: "current-service" },
+    { change: "service definition", revision: "current-pin", definition: "previous-service" },
+    { change: "new service", revision: "current-pin", definition: null },
+    { change: "none", revision: "current-pin", definition: "current-service" },
+    { change: "none-absent", revision: "current-pin", definition: null },
+  ])(
+    "checks caller custody before config preparation when change is $change",
+    async ({ change, revision, definition }) => {
+      // The operator's change completed before this install subprocess captured its own snapshot.
+      const current = {
+        revision: "current-pin",
+        definition: change === "none-absent" ? undefined : "current-service",
+        stored: true,
+      };
+      pinSnapshotMock.mockReturnValue(current);
+      installDaemonServiceAndEmitMock.mockImplementationOnce(async (params) => {
+        await (params as { install: () => Promise<void> }).install();
+      });
+      await runDaemonInstall({
+        json: true,
+        force: true,
+        runtime: "node",
+        expectedRuntimePin: JSON.stringify({ revision, definition }),
+      });
+      if (!change.startsWith("none")) {
+        expect(actionState.failed[0]?.message).toContain("newer selection was preserved");
+        expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+        expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+        expect(replaceConfigFileMock).not.toHaveBeenCalled();
+        expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+        expect(service.install).not.toHaveBeenCalled();
+        return;
+      }
+      expect(actionState.failed).toEqual([]);
+      expect(ensureConfigReadyMock).toHaveBeenCalledOnce();
+      expect(service.install).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtimePinUpdate: {
+            expected: current,
+            pin: undefined,
+            requireDefinitionMatch: true,
+            ...(definition !== null ? { requireRunning: true } : {}),
+          },
+        }),
+      );
+    },
+  );
+
+  it.each(["invalid JSON", "{}", '{"revision":"current-pin"}'])(
+    "rejects malformed runtime custody before preparation: %s",
+    async (expectedRuntimePin) => {
+      await runDaemonInstall({ json: true, force: true, expectedRuntimePin });
+      expect(actionState.failed[0]?.message).toContain("Invalid expected runtime pin snapshot");
+      expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+      expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+      expect(service.install).not.toHaveBeenCalled();
+    },
+  );
 
   it("refuses update-owned gateway defaults when authority expires during write preparation", async () => {
     const snapshot = await readConfigFileSnapshotMock();

@@ -49,6 +49,7 @@ const MAX_STARTS_PER_TURN = 64;
 const START_WORK_BUDGET_MS = 12;
 const MAX_CONCURRENT_PREPARATIONS = 4;
 const preparations = new Set<Promise<void>>();
+let notifyPreparationSettled: (() => void) | undefined;
 let active = false;
 
 async function grantStarts(first: StartWork): Promise<void> {
@@ -61,9 +62,10 @@ async function grantStarts(first: StartWork): Promise<void> {
     await new Promise<void>(queueMicrotask);
     if (current.preparation) {
       while (preparations.size >= MAX_CONCURRENT_PREPARATIONS && !current.signal?.aborted) {
-        await racePromiseWithAbortSignal(Promise.race(preparations), current.signal).catch(
-          () => {},
-        );
+        const changed = createDeferredCore();
+        notifyPreparationSettled = changed.resolve;
+        await racePromiseWithAbortSignal(changed.promise, current.signal).catch(() => {});
+        notifyPreparationSettled = undefined;
       }
     }
     if (
@@ -79,7 +81,10 @@ async function grantStarts(first: StartWork): Promise<void> {
     if (current.preparation && !current.signal?.aborted) {
       const settled = current.settled;
       preparations.add(settled);
-      void settled.then(() => preparations.delete(settled));
+      void settled.then(() => {
+        preparations.delete(settled);
+        notifyPreparationSettled?.();
+      });
     }
     current.grant();
     const next = pending.shift();

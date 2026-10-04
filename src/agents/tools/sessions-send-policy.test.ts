@@ -10,6 +10,7 @@ import {
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import * as sessionStateEvents from "../../sessions/session-state-events.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -175,6 +176,53 @@ describe("sessions_send directed policy at the tool boundary", () => {
         throw new Error("Unexpected Gateway method: " + request.method);
       },
     );
+  });
+
+  it.each([
+    ["agent ID", { agentId: "worker" }, configFor({ send: [] }), true],
+    ["key", { sessionKey: workerKey }, configFor({ send: [] }), true],
+    ["label", { label: "delegation-worker", agentId: "worker" }, configFor({ send: [] }), true],
+    ["session ID", { sessionKey: workerSessionId }, configFor({ send: [] }), true],
+    [
+      "global disable",
+      { sessionKey: workerKey },
+      configFor({ send: ["worker"], global: { enabled: false } }),
+      true,
+    ],
+    [
+      "unrelated reload",
+      { sessionKey: workerKey },
+      { ...configFor({ send: ["worker"] }), gateway: { port: 19870 } },
+      false,
+    ],
+  ] as const)("rechecks current policy after resolving %s", async (_name, target, next, denied) => {
+    const resolving = createDeferredCore();
+    const resume = createDeferredCore();
+    const resolve = callGateway.getMockImplementation()!;
+    callGateway.mockImplementation(
+      async (request: Parameters<AgentToolGatewayRequestCaller>[0]) => {
+        if (request.method === "sessions.resolve") {
+          resolving.resolve();
+          await resume.promise;
+        }
+        return await resolve(request);
+      },
+    );
+    const pending = send(configFor({ send: ["worker"] }), target);
+    try {
+      await resolving.promise;
+      setRuntimeConfigSnapshot(next);
+      resume.resolve();
+      expect((await pending).details).toMatchObject({ status: denied ? "forbidden" : "ok" });
+      if (denied) {
+        expectNoDispatch();
+      } else {
+        expect(gatewayMethods()).toContain("agent");
+      }
+    } finally {
+      resume.resolve();
+      await Promise.allSettled([pending]);
+    }
   });
 
   afterEach(() => {

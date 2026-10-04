@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { observeReplyDelivery } from "../../agents/reply-completion.js";
+import { sessionManagerReadTranscriptStart } from "../../agents/sessions/session-manager-current-turn.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../../agents/stream-message-shared.js";
 import {
   copyReplyPayloadMetadata,
@@ -201,6 +203,79 @@ describe("buildTranscriptReplyTextFromInputs", () => {
 });
 
 describe("chat delivery watermark preparation", () => {
+  it("consumes the committed manager boundary without caller transcript SQL", async () => {
+    await withOpenClawTestState({ label: "chat-prepared-start" }, async () => {
+      const { dispatch, append, scope, runId } = await createReplyTranscriptFixture();
+      await append("prior-answer", { role: "assistant", content: "Earlier answer." });
+      const manager = await SessionManager.openAsync(scope);
+      const observed = observeHostDataSql();
+      try {
+        const start = manager[sessionManagerReadTranscriptStart]();
+        expect(observed.queries).toEqual([]);
+        expect(dispatch.captureAgentTranscriptStart(runId, start)).toBe(true);
+        expect(
+          observed.queries.filter((sql) =>
+            /transcript_events|transcript_rewrite_watermarks|session_transcript_cold_archives/i.test(
+              sql,
+            ),
+          ),
+        ).toEqual([]);
+      } finally {
+        observed.restore();
+      }
+      expect(await dispatch.resolveReplyDelivery()).toBe("missing");
+      await append("current-answer", { role: "assistant", content: "Current answer." });
+      expect(await dispatch.resolveReplyDelivery()).toBe("delivered");
+      expect(
+        dispatch.captureAgentTranscriptStart(runId, {
+          ...scope,
+          sessionKey: `${scope.sessionKey}:bound`,
+          generation: null,
+          maxSeq: 0,
+        }),
+      ).toBe(false);
+      expect(await dispatch.resolveReplyDelivery()).toBe("missing");
+    });
+  });
+
+  it("refuses a final anchor snapshot changed by an unpublished native append", async () => {
+    await withOpenClawTestState({ label: "chat-anchor-delay" }, async () => {
+      const { dispatch, append, scope } = await createReplyTranscriptFixture();
+      dispatch.captureAgentTranscriptStart();
+      await append("answer", { role: "assistant", content: "Committed answer." });
+      const createReaders = historyReaders.createSessionHistoryWorkerReaders;
+      let changed = false;
+      const readerSpy = vi
+        .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
+        .mockImplementation((runRequest) => {
+          const readers = createReaders(runRequest);
+          return {
+            ...readers,
+            readAnchors: async (input, signal) => {
+              const facts = await readers.readAnchors(input, signal);
+              if (!changed && input.selection.entryIds.includes("answer")) {
+                changed = true;
+                expect(
+                  appendTranscriptMessageSync(scope, {
+                    eventId: "late-user",
+                    message: { role: "user", content: "A newly admitted question." },
+                  }).ok,
+                ).toBe(true);
+              }
+              return facts;
+            },
+          };
+        });
+      try {
+        expect(await dispatch.resolveReplyDelivery()).toBe("pending");
+        expect(changed).toBe(true);
+      } finally {
+        readerSpy.mockRestore();
+      }
+      expect(await dispatch.resolveReplyDelivery()).toBe("missing");
+    });
+  });
+
   it("retires a shared-store watermark with its physical owner", async () => {
     await withOpenClawTestState({ label: "chat-watermark-shared" }, async (state) => {
       const storePath = state.statePath("shared.sqlite");

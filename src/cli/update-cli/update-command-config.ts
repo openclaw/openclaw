@@ -537,16 +537,13 @@ function resolvePreUpdateSourceConfigFromAuthored(
 async function isFreshPreUpdateConfigSnapshot(params: {
   currentConfigPath: string;
   snapshotPath: string;
-  updateStartedAtMs?: number;
+  updateStartedAtMs: number;
 }): Promise<boolean> {
   const snapshotStat = await fs.stat(params.snapshotPath).catch(() => null);
   if (!snapshotStat) {
     return false;
   }
-  if (
-    params.updateStartedAtMs !== undefined &&
-    snapshotStat.mtimeMs + 1000 < params.updateStartedAtMs
-  ) {
+  if (snapshotStat.mtimeMs + 1000 < params.updateStartedAtMs) {
     return false;
   }
   if (Date.now() - snapshotStat.mtimeMs > PRE_UPDATE_CONFIG_SNAPSHOT_MAX_AGE_MS) {

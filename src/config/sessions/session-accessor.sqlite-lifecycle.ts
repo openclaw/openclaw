@@ -43,15 +43,15 @@ import {
 import { readLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-store.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import { publishCommittedSessionEntryRemoval } from "./session-accessor.sqlite-identity.js";
+import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   runSessionDeletionPlanning,
   runSqliteSessionReclamation,
 } from "./session-accessor.sqlite-reclamation-run.js";
 import {
-  createHistoricalGenerationReclamationPlan,
-  createSessionEntryReclamationPlan,
   expectedEntryMismatchResult,
   prepareHistoricalGenerationDeletions,
+  prepareReclamationDeleteParams,
   runExclusiveSqliteSessionReclamation,
   resolveSessionReclamationDatabaseOptions,
 } from "./session-accessor.sqlite-reclamation.js";
@@ -67,6 +67,7 @@ import {
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
+import { deleteIncognitoSessionLifecycle } from "./session-incognito-lifecycle-operations.js";
 import { resetSessionEntryInWorker } from "./session-reset.js";
 import { applySessionResetInDatabase } from "./session-reset.kernel.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
@@ -420,20 +421,20 @@ async function deleteSqliteSessionEntryLifecycleLocked(
               if (checked.value.kind === "expected-entry-mismatch") {
                 return DELETE_EXPECTED_ENTRY_MISMATCH;
               }
-              const reclamationPlan = createHistoricalGenerationReclamationPlan({
-                databaseOptions,
-                deleteParams: generation.deleteParams,
+              const reclamationPlan: SqliteSessionReclamationPlan = {
+                descendantRunBasis: generation.deleteParams.descendantRunBasis,
+                databaseOptions: resolveSessionReclamationDatabaseOptions(databaseOptions),
+                deleteParams: prepareReclamationDeleteParams(generation.deleteParams),
+                kind: "historical-generation",
                 materializedPlans: materializedGeneration,
                 preparedTargetSnapshot: prepared.targetSnapshot,
-                protectedSessionIds: new Set(checked.value.protectedSessionIds),
+                protectedSessionIds: [...new Set(checked.value.protectedSessionIds)],
                 sessionId,
-              });
+              };
               const reclaimed = await runSqliteSessionReclamation({
                 diagnostics,
                 assertCommitAllowed: assertDeletionCurrent,
-                forceInProcess:
-                  typeof params.expectedDatabaseIdentity === "symbol" ||
-                  hasPreparedNativeSessionDeletion(),
+                forceInProcess: typeof params.expectedDatabaseIdentity === "symbol",
                 onInProcessCommit: recordCommit,
                 plan: reclamationPlan,
               });
@@ -471,12 +472,14 @@ async function deleteSqliteSessionEntryLifecycleLocked(
             const materializedPlans = await materializeSessionStateDeletePlans(prepared.entryPlans);
             const diagnostics: SqliteSessionReclamationDiagnostics = {};
             // The reclamation transaction rereads the exact target immediately before mutation.
-            const reclamationPlan = createSessionEntryReclamationPlan({
-              databaseOptions,
-              deleteParams: params,
+            const reclamationPlan: SqliteSessionReclamationPlan = {
+              descendantRunBasis: params.descendantRunBasis,
+              databaseOptions: resolveSessionReclamationDatabaseOptions(databaseOptions),
+              deleteParams: prepareReclamationDeleteParams(params),
+              kind: "entry",
               materializedPlans,
               preparedTargetSnapshot: prepared.targetSnapshot,
-            });
+            };
             const reclaimed = await runSqliteSessionReclamation({
               diagnostics,
               assertCommitAllowed: assertDeletionCurrent,
@@ -533,8 +536,13 @@ async function deleteSqliteSessionEntryLifecycleLocked(
 
 /** Deletes one persisted session entry using SQLite session rows. */
 export async function deleteSessionEntryLifecycle(
-  params: DeleteSessionEntryLifecycleParams,
+  params:
+    | DeleteSessionEntryLifecycleParams
+    | ({ kind: "incognito" } & Parameters<typeof deleteIncognitoSessionLifecycle>[0]),
 ): Promise<DeleteSessionEntryLifecycleResult> {
+  if ("kind" in params) {
+    return deleteIncognitoSessionLifecycle(params);
+  }
   return await deleteSqliteSessionEntryLifecycleInternal(params, false);
 }
 

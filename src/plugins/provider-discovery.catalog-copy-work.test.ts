@@ -158,7 +158,9 @@ it("copies a workspace catalog once across configured and implicit agent reads",
       },
     };
   });
-  const config: OpenClawConfig = { agents: { list: agents } };
+  const config: OpenClawConfig = {
+    agents: { entries: Object.fromEntries(agents.map(({ id, ...entry }) => [id, entry])) },
+  };
   const prepared = await prepareImplicitProviderStaticCatalog({
     config,
     env: {},

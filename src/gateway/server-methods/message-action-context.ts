@@ -104,7 +104,15 @@ export function createMessageActionRuntimeAuthority(
     isFencedProviderReadAction(params.request.action)
       ? undefined
       : params.authorization?.deliveryAttempt?.beforeAttempt();
+  const prepareUse = params.authorization?.scheduled?.prepareUse;
   return {
+    prepareEffect: prepareUse
+      ? () =>
+          prepareUse(
+            Boolean(assertReadCurrent || assertScheduledWriteCurrent),
+            assertDirectAdapterHandoff,
+          )
+      : undefined,
     assertReadCurrent,
     assertScheduledWriteCurrent,
     beforeDeliveryAttempt,

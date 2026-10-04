@@ -68,7 +68,6 @@ import {
   getSessionBindingService,
   type SessionBindingRecord,
 } from "../../infra/outbound/session-binding-service.js";
-import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding-metadata.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -963,24 +962,9 @@ async function initSessionStateAttemptLocked(
       : undefined,
     activeSessionKey: sessionKey,
     agentId,
-    archivePreviousTranscript: false,
     expectedRevision: initializationSnapshot.revision,
     relatedSessionKeys,
     maintenanceConfig,
-    onArchiveError: (error, sourcePath) => {
-      log.warn(
-        `failed to archive previous session transcript ${sourcePath} for session ${previousSessionEntry?.sessionId}`,
-        { error: String(error) },
-      );
-    },
-    onMaintenanceWarning: (warning) =>
-      deliverSessionMaintenanceWarning({
-        cfg,
-        agentId,
-        sessionKey,
-        entry: sessionEntry,
-        warning,
-      }),
     prepareSessionEntry: async ({ readEntry, sessionEntry: entryToCommit }) => {
       if (params.signal?.aborted === true) {
         throw new Error("reply session initialization aborted");
@@ -1002,6 +986,13 @@ async function initSessionStateAttemptLocked(
       if (!previousSessionEntry || !currentEntry) {
         return;
       }
+      await resetRegisteredAgentHarnessSessions({
+        agentId,
+        sessionId: currentEntry.sessionId,
+        sessionKey,
+        sessionFile: sessionKey,
+        reason: previousSessionEndReason ?? "unknown",
+      });
       const memoryEvent = resetTriggered ? "command" : "session";
       const memoryAction = resetTriggered ? (previousSessionEndReason ?? "new") : "auto-reset";
       if (hasInternalHookListeners(memoryEvent, memoryAction)) {
@@ -1100,15 +1091,12 @@ async function initSessionStateAttemptLocked(
     sessionKey,
     sessionStore,
   });
-  const previousSessionTranscript = committed.previousSessionTranscript;
   if (previousSessionEntry?.sessionId) {
     emitSessionAutoResetHook({
       cfg,
       sessionId: previousSessionEntry.sessionId,
       sessionKey,
       reason: previousSessionEndReason,
-      sessionFile: previousSessionTranscript.sessionFile,
-      transcriptArchived: previousSessionTranscript.transcriptArchived,
       nextSessionId: sessionId,
       nextSessionKey: sessionKey,
       agentId,
@@ -1124,13 +1112,6 @@ async function initSessionStateAttemptLocked(
           error: String(error),
         });
       },
-    });
-    await resetRegisteredAgentHarnessSessions({
-      agentId,
-      sessionId: previousSessionEntry.sessionId,
-      sessionKey,
-      sessionFile: sessionKey,
-      reason: previousSessionEndReason ?? "unknown",
     });
     // Direct-message browser tabs use a peer-scoped runtime identity even when
     // their transcript aliases main; cleanup must carry both exact keys.
@@ -1177,8 +1158,6 @@ async function initSessionStateAttemptLocked(
           agentId,
           storePath,
           reason: previousSessionEndReason,
-          sessionFile: previousSessionTranscript.sessionFile,
-          transcriptArchived: previousSessionTranscript.transcriptArchived,
           nextSessionId: effectiveSessionId,
           resetBoundaryId: resetBoundary?.boundaryId,
         });

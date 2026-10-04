@@ -6,6 +6,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta-readonly.js";
 import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
+import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import { shouldResumeParentSubagent } from "../../gateway/session-subagent-resume.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "../../gateway/session-utils-store-lookup.js";
@@ -39,10 +40,13 @@ import {
 } from "../tool-description-presets.js";
 import { ToolInputError } from "../tool-input-error.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readNonNegativeIntegerParam, readToolStringParam } from "./common.js";
+import { jsonResult, readToolStringParam } from "./common.js";
 import { wrapGatewayPersonalToolExecution } from "./gateway-caller-context.js";
 import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
-import { runWithScopedSessionAccess } from "./scoped-session-access.js";
+import {
+  resolveSessionToolTargetAgentId,
+  runWithScopedSessionAccess,
+} from "./scoped-session-access.js";
 import {
   createSessionVisibilityRowChecker,
   formatSessionToolAccessDenial,
@@ -59,21 +63,25 @@ import {
   PLACED_SESSIONS_SEND_DESCRIPTION,
 } from "./sessions-placement-tool-contract.js";
 import { dispatchSessionsSendFollowup } from "./sessions-send-followup.js";
-import { sendFailure } from "./sessions-send-helpers.js";
+import { sendFailure, sendReplyResult } from "./sessions-send-helpers.js";
 import { startSessionsSendReplyFlow } from "./sessions-send-reply-flow.js";
 import { captureSessionsSendResumeCaller, resumeSessionsSendTask } from "./sessions-send-resume.js";
 import {
+  callSessionsSendGateway,
   createConfiguredAgentMainSession,
   isConfiguredAgentMainSessionKey,
   notifySessionsSendSession,
   resolveConfiguredAgentMainSessionKey,
 } from "./sessions-send-tool.delivery.js";
+import {
+  readSessionsSendMessage,
+  readSessionsSendMode,
+  readSessionsSendTimeout,
+} from "./sessions-send-tool.input.js";
 import { SessionsSendToolSchema, SessionsSendOutputSchema } from "./sessions-send-tool.schema.js";
 import type { SessionsSendToolOptions } from "./sessions-send-tool.types.js";
 
 const log = createSubsystemLogger("agents/sessions-send");
-
-const NO_REPLY_MESSAGE = "No visible reply or pending delivery. Continue or retry if needed.";
 
 export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgentTool {
   const requesterOrigin = normalizeDeliveryContext(opts?.requesterOrigin);
@@ -91,37 +99,15 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       const params = isRecord(args) ? args : {};
       const promptedAt = Date.now();
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
-      const message = readToolStringParam(params, "message", { required: true, trim: false });
-      if (!message.trim()) {
-        throw new ToolInputError("message required");
-      }
-      const mode = readToolStringParam(params, "mode");
-      if (
-        mode !== undefined &&
-        mode !== "notify" &&
-        mode !== "steer" &&
-        mode !== "followup" &&
-        mode !== "resume"
-      ) {
-        throw new ToolInputError("mode must be notify, steer, followup, or resume");
-      }
+      const sendGatewayCall = opts?.callGateway ?? callSessionsSendGateway;
+      const message = readSessionsSendMessage(params);
+      const mode = readSessionsSendMode(params);
       const resumeCaller =
         mode === undefined || mode === "resume" ? captureSessionsSendResumeCaller() : undefined;
       if (mode === "resume" && !resumeCaller) {
         return sendFailure("forbidden", "Task resume requires an admitted parent tool caller.");
       }
-      if (
-        mode === "resume" &&
-        (params.watch === true || (readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 0) > 0)
-      ) {
-        throw new ToolInputError(
-          "mode=resume returns admission only; omit watch and timeoutSeconds or set timeoutSeconds=0. The task owner delivers completion.",
-        );
-      }
-      const timeoutSeconds =
-        mode === "steer" || mode === "resume"
-          ? 0
-          : (readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30);
+      const timeoutSeconds = readSessionsSendTimeout(params, mode);
       const {
         cfg,
         mainKey,
@@ -132,6 +118,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         sessionVisibility,
         a2aPolicy,
       } = resolveSessionToolContext(opts);
+      const readConfig = createRuntimeConfigReader(cfg);
       let requesterAgentId: string;
       try {
         requesterAgentId = resolveSessionAgentId({
@@ -286,9 +273,12 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       }
       const resolutionAccess = createSessionVisibilityRowChecker({
         action: "send",
-        defaultAgentId:
-          resolvedSession.agentId ??
-          resolveSessionAgentId({ config: cfg, sessionKey: resolvedSession.key }),
+        defaultAgentId: resolveSessionToolTargetAgentId({
+          cfg,
+          targetSessionKey: resolvedSession.key,
+          resolvedAgentId: resolvedSession.agentId,
+          requesterAgentId,
+        }),
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
         mainSessionKey,
@@ -433,6 +423,8 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       const access = await resolveSessionToolAccess({
         action: "send",
         watch: params.watch === true,
+        readConfig,
+        sandboxed: opts?.sandboxed,
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
         mainSessionKey,
@@ -482,11 +474,12 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
               );
             }
             const createdSession = await createConfiguredAgentMainSession({
-              callGateway: gatewayCall,
+              callGateway: sendGatewayCall,
               agentId: targetAgentId,
               sessionKey: resolvedKey,
               requesterSessionKey,
               useTrustedInProcessCreation: opts?.callGateway === undefined,
+              assertCurrent: access.assertCurrent,
             });
             if (!createdSession.ok) {
               return sendFailure("error", createdSession.error, displayKey);
@@ -532,6 +525,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
               idempotencyKey,
               runId,
               displayKey,
+              assertCurrent: access.assertCurrent,
             });
           }
           const sendParams = {
@@ -562,13 +556,14 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             return await resumeSessionsSendTask({
               cfg,
               caller: resumeCaller,
+              assertCurrent: access.assertCurrent,
               targetAgentId,
               sessionKey: resolvedKey,
               displayKey,
               runId,
               expectedSessionId,
               sendParams,
-              callGateway: gatewayCall,
+              callGateway: sendGatewayCall,
             });
           }
           // ACP background tasks already report to their parent through task completion.
@@ -587,7 +582,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           const ownChild = targetSessionEntry?.spawnedBy === effectiveRequesterKey;
           const startParams: Parameters<typeof dispatchSessionsSendFollowup>[0] = {
             cfg,
-            callGateway: gatewayCall,
+            callGateway: sendGatewayCall,
             runId,
             mode,
             sendParams,
@@ -597,6 +592,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             deliveryTimeoutMs: replyTimeoutMs,
             allowActiveRunQueueDelivery: timeoutSeconds === 0,
             expectedSessionId,
+            assertSendCurrent: access.assertCurrent,
           };
           const replyContext: Parameters<typeof dispatchSessionsSendFollowup>[1] = {
             callGateway: gatewayCall,
@@ -730,16 +726,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
               ...watchField,
             });
           }
-          const reply = result.replyText;
-          const response = reply
-            ? { status: "ok" as const, delivery: { status: "skipped" as const }, reply }
-            : {
-                status: "no_reply" as const,
-                message: result.sourceReplyDelivered
-                  ? "The target delivered its final reply directly to its source conversation. Do not resend."
-                  : NO_REPLY_MESSAGE,
-              };
-          return jsonResult({ runId, sessionKey: displayKey, ...response, ...watchField });
+          return sendReplyResult({ runId, sessionKey: displayKey, ...watchField }, result);
         },
       });
     }),

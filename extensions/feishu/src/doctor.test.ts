@@ -334,7 +334,7 @@ describe("Feishu doctor state repair", () => {
       const cfg: OpenClawConfig = custom
         ? {
             ...feishuConfig(),
-            agents: { list: [{ id: agentId, default: true }] },
+            agents: { entries: { [agentId]: {} } },
             session: { store: target },
           }
         : feishuConfig();

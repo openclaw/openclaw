@@ -196,13 +196,10 @@ export async function setupChannels(
   const loadScopedChannelPlugin = async (
     channel: ChannelChoice,
     pluginId?: string,
-    setup?: {
-      forceReload?: boolean;
-      forceSetupOnlyChannelPlugins?: boolean;
-    },
+    forceReload = false,
   ): Promise<ChannelSetupPlugin | undefined> => {
     const existing = getVisibleChannelPlugin(channel);
-    if (existing && setup?.forceReload !== true) {
+    if (existing && !forceReload) {
       return existing;
     }
     const snapshot = loadChannelSetupPluginRegistrySnapshotForChannel({
@@ -211,7 +208,7 @@ export async function setupChannels(
       channel,
       ...(pluginId ? { pluginId } : {}),
       workspaceDir: resolveWorkspaceDir(),
-      forceSetupOnlyChannelPlugins: setup?.forceSetupOnlyChannelPlugins ?? true,
+      forceSetupOnlyChannelPlugins: true,
     });
     const plugin =
       snapshot.channelSetups.find((entry) => entry.plugin.id === channel)?.plugin ??
@@ -505,10 +502,7 @@ export async function setupChannels(
     setupOptions: SetupChannelsOptions,
   ) => {
     if (scopedPluginsById.has(channel)) {
-      await loadScopedChannelPlugin(channel, undefined, {
-        forceReload: true,
-        forceSetupOnlyChannelPlugins: true,
-      });
+      await loadScopedChannelPlugin(channel, undefined, true);
     }
     const adapter = getVisibleSetupFlowAdapter(channel);
     if (!adapter) {

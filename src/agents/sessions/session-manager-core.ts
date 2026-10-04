@@ -11,7 +11,6 @@ import {
   resolveOpaqueSessionFirstKeptEntryId,
   SessionEntryNavigation,
 } from "../../config/sessions/session-entry-navigation.js";
-import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
@@ -23,6 +22,7 @@ import {
   partitionSessionFileEntries,
 } from "./session-manager-codec.js";
 import { createManagedSessionId, generateSessionEntryId } from "./session-manager-id.js";
+import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
 import type {
   FileEntry,
   NewSessionOptions,
@@ -135,7 +135,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     complete = false,
   ): Promise<void> {
     this.assertTranscriptViewAvailable();
-    const hydration = prepareSessionTranscriptHydration(
+    const hydration = prepareSessionManagerHydration(
       target,
       complete ? undefined : this.boundedContextLimits,
       signal,

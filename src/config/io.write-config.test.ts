@@ -1441,7 +1441,7 @@ describe("config io write", () => {
     const persisted = await readPersistedConfig(configPath);
     expect(persisted.agents?.defaults?.model).toBe("claude-cli/claude-opus-4-8");
     expect(persisted.agents?.entries).toBeUndefined();
-    expect(persisted.agents?.list).toBeUndefined();
+    expect(persisted.agents).not.toHaveProperty("list");
   });
 
   itWithHome("persists an explicitly authored bootstrap roster on first write", async (home) => {
@@ -1456,7 +1456,7 @@ describe("config io write", () => {
 
     const persisted = await readPersistedConfig(configPath);
     expect(persisted.agents?.entries).toEqual({ main: {} });
-    expect(persisted.agents?.list).toBeUndefined();
+    expect(persisted.agents).not.toHaveProperty("list");
   });
 
   itWithHome("forwards explicitly authorized agent roster removals", async (home) => {

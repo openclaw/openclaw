@@ -8,11 +8,11 @@ import {
 import { migrateSessionCostUsageRollupStorage } from "../infra/session-cost-usage-cache-migration.js";
 import {
   repairCanonicalSqliteIndexes,
-  verifyAndRepairCanonicalSqliteIndexes,
   verifyAndRepairCanonicalSqliteIndexSteps,
 } from "../infra/sqlite-index-schema.js";
 import {
   assertSqliteIntegrity,
+  canDeferSqliteIntegrityAfterProcessDeath,
   runSqliteIntegrityOperationSync,
   sqliteIntegrityCheckSteps,
   type SqliteIntegrityDiagnostics,
@@ -76,10 +76,7 @@ import {
   isPersistentOpenClawAgentDatabasePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
-import {
-  migrateSessionParticipantsSchema,
-  withLegacySessionParticipantsSchema,
-} from "./openclaw-agent-participants-migration.js";
+import { migrateSessionParticipantsSchema } from "./openclaw-agent-participants-migration.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { migrateSessionEntrySnapshotsInTransaction } from "./openclaw-agent-session-snapshots-migration.js";
 import {
@@ -113,7 +110,7 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
   diagnostics?: SqliteIntegrityDiagnostics,
   verification?: OpenClawAgentIntegrityVerification,
   reuseRuntimeIntegrity = false,
-  runtimeAdmission = false,
+  processDeath = false,
 ): SqliteIntegrityOperation<boolean> {
   database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
   const userVersion = readSqliteUserVersion(database);
@@ -135,7 +132,9 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
     hasPendingCurrentVersionAgentDatabaseMigration(database);
   if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
     const startedAt = performance.now();
+    const deferred = processDeath && canDeferSqliteIntegrityAfterProcessDeath(database, pathname);
     const reuseIntegrity =
+      deferred ||
       reuseRuntimeIntegrity ||
       canReuseOpenClawAgentIntegrityVerification(
         pathname,
@@ -151,19 +150,6 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
         validateAfterRepair: () =>
           assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname }),
         diagnostics,
-        // Include sqlite_schema for the freelist check and every discovered shadow/extension table.
-        integrityTables:
-          runtimeAdmission && !reuseIntegrity
-            ? [
-                { name: "sqlite_schema" },
-                ...database
-                  .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name")
-                  .all(),
-              ].map(({ name }) => ({
-                table: String(name),
-                check: name === "transcript_events" ? "quick_check" : "integrity_check",
-              }))
-            : undefined,
         reuseIntegrity,
       },
     );
@@ -179,6 +165,12 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
       );
     }
     assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname });
+    if (deferred && diagnostics) {
+      diagnostics.integrityGateReason = "process-death";
+      diagnostics.integrityGateMode = "deferred";
+      diagnostics.integrityGateOutcome = "pending";
+      diagnostics.integrityGateMs = Math.floor(performance.now() - startedAt);
+    }
   } else if (
     userVersion === 0 &&
     !hasApplicationSchema &&
@@ -393,19 +385,10 @@ function ensureAgentSchema(
         return;
       }
       if (previousVersion === AGENT_MEDIA_SCHEMA_VERSION) {
-        const legacySql = withLegacySessionParticipantsSchema(
-          withLegacyAgentStorageSchema(OPENCLAW_AGENT_SCHEMA_SQL),
-        );
         ensureSessionAdditiveColumns(db);
-        verifyAndRepairCanonicalSqliteIndexes(db, pathname, legacySql, {
-          validateAfterRepair: () => {
-            assertAgentSchemaVersion(
-              db,
-              { agentId, pathname, version: AGENT_MEDIA_SCHEMA_VERSION },
-              legacySql,
-            );
-          },
-        });
+        assertSqliteIntegrity(db, pathname);
+        // Index repair and whole-schema validation run in finishAgentSchemaMigration
+        // after legacy memory and participant shapes converge, in this transaction.
       }
       migrateRetiredAgentStateLeaseSchema(db, pathname, targetVersion);
       if (previousVersion === targetVersion) {

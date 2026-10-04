@@ -30,8 +30,6 @@ export async function createBrowserRuntimeState(
 
 type StopBrowserRuntimeParams = {
   current: BrowserServerState | null;
-  /** Public API compatibility; cleanup is intentionally pinned to `current`. */
-  getState: () => BrowserServerState | null;
   clearState: () => void;
   closeServer?: boolean;
   onWarn: (message: string) => void;

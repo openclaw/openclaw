@@ -18,6 +18,11 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  "apps/linux/scripts/test-runtime-boundary.mjs!",
+  "apps/linux/scripts/stage-runtime.mjs!",
+  "apps/linux/scripts/test-stage-runtime.mjs!",
+  // The Python onboarding driver installs this synthetic CLI by path.
+  "apps/linux/tests/fixtures/onboarding-cli.mjs!",
   // apps/linux/README.md invokes this live Windows native-browser proof driver by path.
   "apps/linux/scripts/test-inline-browser.mjs!",
   // Linux App CI executes the injected native-auth bridge tests through Node.
@@ -212,10 +217,6 @@ const repositoryScriptEntries = [
   "scripts/openclaw-release-clawhub-runtime-state.ts!",
   // Protected preparation/button workflows invoke this coordinator by path.
   "scripts/openclaw-release-ready.mjs!",
-  // Plugin Prerelease builds immutable package artifacts, then scans them in a bounded child.
-  "scripts/plugin-npm-security-prepare.mts!",
-  "scripts/plugin-npm-security-scan-runner.mjs!",
-  "scripts/plugin-npm-security-scan.mts!",
   // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
   "scripts/oxlint-boundary-guards.mjs!",
   "scripts/plugin-prerelease-liveish-matrix.mts!",
@@ -402,6 +403,7 @@ const rootEntries = [
   "src/worker/worker-deploy-file-tool-planning.ts!",
   "src/worker/worker-deploy-image-processor.ts!",
   "src/worker/worker-deploy-sqlite-store.ts!",
+  "src/worker/worker-deploy-state-read.ts!",
   "src/worker/workspace-rsync-receiver.ts!",
   // v2026.9.1 Gateways lazy-import this stable dist entry after an in-place update.
   "src/gateway/plugin-channel-reload-targets.ts!",
@@ -421,6 +423,8 @@ const rootEntries = [
   "scripts/openclaw-cross-os-release-checks.ts!",
   "scripts/release-plan-producer-core.mts!",
   "scripts/release-plan-producer.mts!",
+  // The producer verifies committed bytes, then launches this module through node -e.
+  "scripts/lib/release-plan-child-runner.mjs!",
   "scripts/full-release-publication-observations.mts!",
   "scripts/release-verify-publish.ts!",
   // Spawned by the agent concurrency benchmark; no static import edge exists.
@@ -876,6 +880,7 @@ const config = {
     "packages/acp-core": workspacePackage("acp-core"),
     "packages/terminal-core": workspacePackage("terminal-core"),
     "packages/retry": workspacePackage("retry"),
+    "packages/worker-runtime": workspacePackage("worker-runtime"),
     "packages/media-generation-core": workspacePackage("media-generation-core"),
     "packages/media-understanding-common": workspacePackage("media-understanding-common"),
     "packages/memory-host-sdk": {

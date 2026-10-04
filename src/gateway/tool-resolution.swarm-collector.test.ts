@@ -38,7 +38,7 @@ const schema = {
 function buildConfig(tools?: OpenClawConfig["tools"]): OpenClawConfig {
   return {
     plugins: { enabled: false },
-    agents: { entries: { main: { default: true } } },
+    agents: { entries: { main: {} } },
     tools: { swarm: true, ...tools },
   } as OpenClawConfig;
 }
@@ -56,7 +56,7 @@ const admittedRunIdBySessionKey: Record<string, string> = {
  * models the session-scoped `openclaw attach` client, whose request context
  * carries no run id at all.
  */
-function resolveLoopbackTools(
+async function resolveLoopbackTools(
   sessionKey: string,
   options?: {
     tools?: OpenClawConfig["tools"];
@@ -68,24 +68,28 @@ function resolveLoopbackTools(
     options?.admittedRunId === undefined
       ? admittedRunIdBySessionKey[sessionKey]
       : (options.admittedRunId ?? undefined);
-  return resolveGatewayScopedTools({
-    cfg: buildConfig(options?.tools),
-    sessionKey,
-    surface: "loopback",
-    runId: admittedRunId,
-    isGrantCurrent: options?.isGrantCurrent,
-  }).tools;
+  return (
+    await resolveGatewayScopedTools({
+      cfg: buildConfig(options?.tools),
+      sessionKey,
+      surface: "loopback",
+      runId: admittedRunId,
+      isGrantCurrent: options?.isGrantCurrent,
+    })
+  ).tools;
 }
 
 /** Mirrors the only non-loopback caller, `tools-invoke-shared.ts`. */
-function resolveHttpToolNames(sessionKey: string, tools?: OpenClawConfig["tools"]) {
-  return resolveGatewayScopedTools({
-    cfg: buildConfig(tools),
-    sessionKey,
-    senderIsOwner: true,
-    allowGatewaySubagentBinding: true,
-    surface: "http",
-  }).tools.map((tool) => tool.name);
+async function resolveHttpToolNames(sessionKey: string, tools?: OpenClawConfig["tools"]) {
+  return (
+    await resolveGatewayScopedTools({
+      cfg: buildConfig(tools),
+      sessionKey,
+      senderIsOwner: true,
+      allowGatewaySubagentBinding: true,
+      surface: "http",
+    })
+  ).tools.map((tool) => tool.name);
 }
 
 function resolveLoopbackGrantToolNames(toolsAllow: string[], admittedRunId: string | null = runId) {
@@ -112,7 +116,7 @@ beforeEach(async () => {
 
 describe("resolveGatewayScopedTools swarm collectors", () => {
   it("serves structured_output to a collector child resolved through the gateway", async () => {
-    const tools = resolveLoopbackTools(collectorSessionKey);
+    const tools = await resolveLoopbackTools(collectorSessionKey);
 
     const structuredOutput = expectDefined(
       tools.find((tool) => tool.name === "structured_output"),
@@ -129,19 +133,23 @@ describe("resolveGatewayScopedTools swarm collectors", () => {
     });
   });
 
-  it("keeps structured_output through a restrictive gateway tool policy", () => {
-    const names = resolveLoopbackTools(collectorSessionKey, {
-      tools: { allow: ["sessions_list"] },
-    }).map((tool) => tool.name);
+  it("keeps structured_output through a restrictive gateway tool policy", async () => {
+    const names = (
+      await resolveLoopbackTools(collectorSessionKey, {
+        tools: { allow: ["sessions_list"] },
+      })
+    ).map((tool) => tool.name);
 
     expect(names).toContain("sessions_list");
     expect(names).toContain("structured_output");
     expect(names).not.toContain("sessions_search");
   });
 
-  it("omits interactive and pausing tools for a gateway collector child", () => {
-    const collectorNames = resolveLoopbackTools(collectorSessionKey).map((tool) => tool.name);
-    const plainNames = resolveLoopbackTools(plainSessionKey).map((tool) => tool.name);
+  it("omits interactive and pausing tools for a gateway collector child", async () => {
+    const collectorNames = (await resolveLoopbackTools(collectorSessionKey)).map(
+      (tool) => tool.name,
+    );
+    const plainNames = (await resolveLoopbackTools(plainSessionKey)).map((tool) => tool.name);
 
     for (const forbidden of ["ask_user", "sessions_send", "sessions_yield"]) {
       expect(collectorNames).not.toContain(forbidden);
@@ -149,8 +157,8 @@ describe("resolveGatewayScopedTools swarm collectors", () => {
     expect(plainNames).toContain("sessions_yield");
   });
 
-  it("leaves non-collector sessions without the collector transport", () => {
-    const names = resolveLoopbackTools(plainSessionKey).map((tool) => tool.name);
+  it("leaves non-collector sessions without the collector transport", async () => {
+    const names = (await resolveLoopbackTools(plainSessionKey)).map((tool) => tool.name);
 
     expect(names).not.toContain("structured_output");
     expect(names).toContain("sessions_yield");
@@ -173,7 +181,7 @@ describe("resolveGatewayScopedTools swarm collectors", () => {
       };
     });
 
-    const names = resolveLoopbackTools(collectorSessionKey).map((tool) => tool.name);
+    const names = (await resolveLoopbackTools(collectorSessionKey)).map((tool) => tool.name);
 
     expect(names).not.toContain("structured_output");
     // Collector identity outlives the captured result, as it does on the embedded
@@ -181,8 +189,10 @@ describe("resolveGatewayScopedTools swarm collectors", () => {
     expect(names).not.toContain("sessions_yield");
   });
 
-  it("withholds requester-only tools from a collector child that requested no schema", () => {
-    const names = resolveLoopbackTools(schemalessCollectorSessionKey).map((tool) => tool.name);
+  it("withholds requester-only tools from a collector child that requested no schema", async () => {
+    const names = (await resolveLoopbackTools(schemalessCollectorSessionKey)).map(
+      (tool) => tool.name,
+    );
 
     // A schema-less collector is still collected by an explicit wait, so it has no
     // requester continuation to yield into and no interactive surface to ask on.
@@ -196,7 +206,7 @@ describe("resolveGatewayScopedTools swarm collectors", () => {
 
   it("passes collector identity into tool construction for a schema-less collector", async () => {
     const spawn = expectDefined(
-      resolveLoopbackTools(schemalessCollectorSessionKey).find(
+      (await resolveLoopbackTools(schemalessCollectorSessionKey)).find(
         (tool) => tool.name === "sessions_spawn",
       ),
       "collector sessions_spawn",
@@ -209,11 +219,13 @@ describe("resolveGatewayScopedTools swarm collectors", () => {
     );
   });
 
-  it("resolves a plain surface for a subagent session the registry has no record of", () => {
+  it("resolves a plain surface for a subagent session the registry has no record of", async () => {
     // The state a gateway restart leaves behind before the registry reloads.
     // Restart recovery of collector runs belongs to the registry restart
     // recovery path, so this resolver behaves exactly as it does on main.
-    const names = resolveLoopbackTools(unregisteredCollectorSessionKey).map((tool) => tool.name);
+    const names = (await resolveLoopbackTools(unregisteredCollectorSessionKey)).map(
+      (tool) => tool.name,
+    );
 
     expect(names).not.toContain("structured_output");
     expect(names).toContain("sessions_yield");
@@ -221,26 +233,32 @@ describe("resolveGatewayScopedTools swarm collectors", () => {
 });
 
 describe("collector contract is bound to the admitted collector run", () => {
-  it("serves the plain surface to a session-scoped attach client on the same session", () => {
+  it("serves the plain surface to a session-scoped attach client on the same session", async () => {
     // `openclaw attach` mints a session-scoped bearer and shares this loopback
     // server, but `resolveMcpRequestContext` gives that client no run id, so it
     // never presents the collector's admitted run. It must see exactly what main
     // gives it today: no result writer, and its ordinary requester tools.
-    const names = resolveLoopbackTools(collectorSessionKey, {
-      admittedRunId: null,
-    }).map((tool) => tool.name);
+    const names = (
+      await resolveLoopbackTools(collectorSessionKey, {
+        admittedRunId: null,
+      })
+    ).map((tool) => tool.name);
 
     expect(names).not.toContain("structured_output");
     expect(names).toContain("sessions_yield");
     expect(names).toEqual(
-      resolveLoopbackTools(plainSessionKey, { admittedRunId: null }).map((tool) => tool.name),
+      (await resolveLoopbackTools(plainSessionKey, { admittedRunId: null })).map(
+        (tool) => tool.name,
+      ),
     );
   });
 
-  it("writes nothing for an attach client, because the result tool is never listed", () => {
-    const attachNames = resolveLoopbackTools(collectorSessionKey, {
-      admittedRunId: null,
-    }).map((tool) => tool.name);
+  it("writes nothing for an attach client, because the result tool is never listed", async () => {
+    const attachNames = (
+      await resolveLoopbackTools(collectorSessionKey, {
+        admittedRunId: null,
+      })
+    ).map((tool) => tool.name);
 
     // `tools/call` resolves by name out of this exact list, so an attach client
     // naming the tool gets "Tool not available" and reaches no writer.
@@ -249,10 +267,12 @@ describe("collector contract is bound to the admitted collector run", () => {
     expect(getSubagentRunByRunId(runId)?.collectorCompletion).toBeUndefined();
   });
 
-  it("withholds the contract from a run-bound grant for a different run", () => {
-    const names = resolveLoopbackTools(collectorSessionKey, {
-      admittedRunId: "some-other-cli-run",
-    }).map((tool) => tool.name);
+  it("withholds the contract from a run-bound grant for a different run", async () => {
+    const names = (
+      await resolveLoopbackTools(collectorSessionKey, {
+        admittedRunId: "some-other-cli-run",
+      })
+    ).map((tool) => tool.name);
 
     expect(names).not.toContain("structured_output");
     expect(names).toContain("sessions_yield");
@@ -274,42 +294,44 @@ describe("collector contract is bound to the admitted collector run", () => {
     });
 
     for (const admittedRunId of [runId, "cli-collector-relaunched"]) {
-      const names = resolveLoopbackTools(collectorSessionKey, {
-        admittedRunId,
-      }).map((tool) => tool.name);
+      const names = (
+        await resolveLoopbackTools(collectorSessionKey, {
+          admittedRunId,
+        })
+      ).map((tool) => tool.name);
       expect(names).toContain("structured_output");
     }
   });
 
-  it("leaves the http surface exactly as it is without a collector session", () => {
+  it("leaves the http surface exactly as it is without a collector session", async () => {
     // The `http` surface is reachable by any authorized gateway caller against
     // any session key, so it must not gain a direct writer into a collector's
     // durable result. Compare a collector child against a plain child: the two
     // http surfaces are identical.
-    const collectorNames = resolveHttpToolNames(collectorSessionKey);
-    const plainNames = resolveHttpToolNames(plainSessionKey);
+    const collectorNames = await resolveHttpToolNames(collectorSessionKey);
+    const plainNames = await resolveHttpToolNames(plainSessionKey);
 
     expect(collectorNames).not.toContain("structured_output");
     expect(collectorNames).toEqual(plainNames);
   });
 
-  it("does not withhold requester-only tools from a collector session on the http surface", () => {
-    const names = resolveHttpToolNames(collectorSessionKey);
+  it("does not withhold requester-only tools from a collector session on the http surface", async () => {
+    const names = await resolveHttpToolNames(collectorSessionKey);
 
     expect(names).toContain("sessions_yield");
-    expect(names).toEqual(resolveHttpToolNames(schemalessCollectorSessionKey));
+    expect(names).toEqual(await resolveHttpToolNames(schemalessCollectorSessionKey));
   });
 
-  it("keeps operator tool policy authoritative for a collector session on the http surface", () => {
-    const names = resolveHttpToolNames(collectorSessionKey, {
+  it("keeps operator tool policy authoritative for a collector session on the http surface", async () => {
+    const names = await resolveHttpToolNames(collectorSessionKey, {
       allow: ["sessions_list"],
     });
 
     expect(names).toEqual(["sessions_list"]);
   });
 
-  it("still applies the full contract on the loopback surface", () => {
-    const names = resolveLoopbackTools(collectorSessionKey).map((tool) => tool.name);
+  it("still applies the full contract on the loopback surface", async () => {
+    const names = (await resolveLoopbackTools(collectorSessionKey)).map((tool) => tool.name);
 
     expect(names).toContain("structured_output");
     expect(names).not.toContain("sessions_yield");
@@ -322,7 +344,7 @@ describe("collector write authority is re-checked before persistence", () => {
     // the tool list is cached per grant, so revocation has to be re-read at the
     // write itself rather than trusted from resolve time.
     let grantCurrent = true;
-    const tools = resolveLoopbackTools(collectorSessionKey, {
+    const tools = await resolveLoopbackTools(collectorSessionKey, {
       isGrantCurrent: () => grantCurrent,
     });
     const structuredOutput = expectDefined(
@@ -342,7 +364,7 @@ describe("collector write authority is re-checked before persistence", () => {
   });
 
   it("rejects the result when the caller stops owning the admitted collector run", async () => {
-    const tools = resolveLoopbackTools(collectorSessionKey);
+    const tools = await resolveLoopbackTools(collectorSessionKey);
     const structuredOutput = expectDefined(
       tools.find((tool) => tool.name === "structured_output"),
       "collector output transport",
@@ -371,7 +393,7 @@ describe("collector write authority is re-checked before persistence", () => {
   });
 
   it("records the result while the grant is still current", async () => {
-    const tools = resolveLoopbackTools(collectorSessionKey, {
+    const tools = await resolveLoopbackTools(collectorSessionKey, {
       isGrantCurrent: () => true,
     });
     const structuredOutput = expectDefined(

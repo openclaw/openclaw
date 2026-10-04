@@ -2,14 +2,18 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-session-recovery.runtime.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
+import { sessionByKeyReadHandlers } from "../server-methods/sessions-read-by-key.js";
+import { requestContext } from "../server-methods/sessions-read-cache.test-support.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import { createSessionRowProjection } from "../session-row-projection.js";
 import { placementTurnOwner } from "./placement-record.js";
 import {
   WorkerRunnerCapacityError,
@@ -32,6 +36,7 @@ import {
   openSessionManager,
   placements,
   root,
+  sessionTarget,
   seedActivePlacement,
   setupWorkerTurnLauncherTest,
   turn,
@@ -211,7 +216,7 @@ describe("worker turn launcher failure recovery", () => {
     }
   });
 
-  it("persists launch context and cancellation diagnosis when failure details exceed the display bound", async () => {
+  it("publishes bounded launch and cancellation diagnostics after held cleanup", async () => {
     await seedActivePlacement();
     const active = placements.get(SESSION_ID);
     if (active?.state !== "active") {
@@ -229,10 +234,40 @@ describe("worker turn launcher failure recovery", () => {
     const launchDiagnosis = "node worker supervisor worker.launch.v1 failed: invalid descriptor";
     const cancellationDiagnosis =
       "node worker cancellation did not produce a terminal receipt before its deadline";
-    await failHandedOffTurn({
+    const cfg = {
+      session: { store: sessionTarget.storePath },
+      agents: {
+        entries: { main: {} },
+        defaults: { model: "unit-test/model", utilityModel: "" },
+      },
+    };
+    const projection = await createSessionRowProjection({
+      cfg,
+      modelCatalog: [],
+      placementFactsReader: placements,
+    });
+    const context = bindSessionRowProjection(requestContext(cfg), () => projection);
+    const respond = vi.fn();
+    const describeSession = async () => {
+      respond.mockClear();
+      await sessionByKeyReadHandlers["sessions.describe"]!({
+        req: { type: "req", id: "failed-worker-placement", method: "sessions.describe" },
+        params: { key: SESSION_KEY },
+        client: null,
+        context,
+        isWebchatConnect: () => false,
+        respond,
+      });
+    };
+    const teardownStarted = createDeferred();
+    const finishTeardown = createDeferred();
+    const cleanup = failHandedOffTurn({
       environments: {
         ...unusedEnvironments(),
-        stopTunnel: async () => {},
+        stopTunnel: async () => {
+          teardownStarted.resolve();
+          await finishTeardown.promise;
+        },
         destroy: async () => attachedEnvironment(),
       },
       placements,
@@ -247,14 +282,43 @@ describe("worker turn launcher failure recovery", () => {
       ),
     });
 
-    const failed = placements.get(SESSION_ID);
-    expect(failed).toMatchObject({ state: "failed", turnClaim: null });
-    expect(failed?.recoveryError).toContain(launchDiagnosis);
-    expect(failed?.recoveryError).toContain(cancellationDiagnosis);
-    expect(failed?.recoveryError).not.toContain(secret);
-    expect(failed?.recoveryError).not.toContain("\n");
-    expect(failed?.recoveryError?.length).toBeLessThanOrEqual(1_024);
-    expect(failed?.terminalReason).toBe(failed?.recoveryError);
+    try {
+      await awaitGateBeforeSettlement(
+        teardownStarted.promise,
+        cleanup,
+        "Failed worker did not enter teardown",
+      );
+      await describeSession();
+      expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
+        session: expect.objectContaining({
+          placement: expect.objectContaining({ state: "draining" }),
+        }),
+      });
+      finishTeardown.resolve();
+      await cleanup;
+
+      const failed = placements.get(SESSION_ID);
+      expect(failed).toMatchObject({ state: "failed", turnClaim: null });
+      expect(failed?.recoveryError).toContain(launchDiagnosis);
+      expect(failed?.recoveryError).toContain(cancellationDiagnosis);
+      expect(failed?.recoveryError).not.toContain(secret);
+      expect(failed?.recoveryError).not.toContain("\n");
+      expect(failed?.recoveryError?.length).toBeLessThanOrEqual(1_024);
+      expect(failed?.terminalReason).toBe(failed?.recoveryError);
+      await describeSession();
+      expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
+        session: expect.objectContaining({
+          placement: expect.objectContaining({
+            state: "failed",
+            recoveryError: failed?.recoveryError,
+          }),
+        }),
+      });
+    } finally {
+      finishTeardown.resolve();
+      await cleanup;
+      projection.dispose();
+    }
   });
 
   it.each(["worker-turn", "remote-exec"] as const)(
@@ -348,14 +412,14 @@ describe("worker turn launcher failure recovery", () => {
     await manager.appendMessageAsync(
       makeAgentAssistantMessage({
         content: [{ type: "toolCall", id: "call-replay", name: "read", arguments: {} }],
-        model: "gpt-test",
+        model: "gpt-5.6-luna",
         providerReplay: {
           v: 1,
           type: "openai-responses-compaction",
-          data: "gAAAAlauncherReplayCiphertext",
+          data: "x".repeat(WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES + 1),
           provider: "openai",
           api: "openai-responses",
-          model: "gpt-test",
+          model: "gpt-5.6-luna",
           baseUrlHash: "ozhevd1smnk8s",
         },
         stopReason: "toolUse",
@@ -367,7 +431,6 @@ describe("worker turn launcher failure recovery", () => {
       toolCallId: "call-replay",
       toolName: "read",
       content: [{ type: "text", text: "result" }],
-      details: { payload: "x".repeat(WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES) },
       isError: false,
       timestamp: 2,
     });

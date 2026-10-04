@@ -17,6 +17,7 @@ const processGatewayAllowlistMock = vi.hoisted(() =>
     }): Promise<{
       allowWithoutEnforcedCommand: boolean;
       revalidateBeforeExecution?: () => Promise<AgentToolResult<ExecToolDetails> | undefined>;
+      releaseSpawn?: () => void;
     }> => ({ allowWithoutEnforcedCommand: true }),
   ),
 );
@@ -77,6 +78,23 @@ it("blocks interactive channel login commands from exec", async () => {
 });
 
 describeNonWin("exec script preflight", () => {
+  it("releases prepared launch authority when approval preparation finishes after cancellation", async () => {
+    const controller = new AbortController();
+    const releaseSpawn = vi.fn();
+    processGatewayAllowlistMock.mockImplementationOnce(async () => {
+      controller.abort(new Error("cancelled during approval preparation"));
+      return { allowWithoutEnforcedCommand: true, releaseSpawn };
+    });
+    await expect(
+      createPreflightTool().execute(
+        "cancelled-preparation",
+        { command: "echo must-not-launch" },
+        controller.signal,
+      ),
+    ).rejects.toThrow("cancelled during approval preparation");
+    expect(releaseSpawn).toHaveBeenCalledOnce();
+  });
+
   it.each([true, false])("revalidates approved bytes before spawn (changed=%s)", async (mutate) => {
     await withScripts({ "script.sh": "#!/bin/sh\necho approved\n" }, async (workdir) => {
       const prepared = await prepareSystemRunMutableFileApproval({

@@ -371,7 +371,7 @@ describe("prepareCodexAttemptConnection", () => {
   ])("handles an installation target for %s execution before native startup", async (placement) => {
     const sessionFile = path.join(tempDir, "installation-target.jsonl");
     const params = createParams(sessionFile, path.join(tempDir, "workspace-installation-target"));
-    const createToolSurface = vi.fn(params.hostCapabilities.createToolSurface);
+    const createToolSurfaceAsync = vi.fn(params.hostCapabilities.createToolSurfaceAsync);
     const localProcessEnv = Object.freeze({
       OPENCLAW_STATE_DIR: "/fixture/diagnosed",
       OPENCLAW_CONFIG_PATH: "/fixture/custom.json",
@@ -379,7 +379,7 @@ describe("prepareCodexAttemptConnection", () => {
     });
     params.hostCapabilities = Object.freeze({
       ...params.hostCapabilities,
-      createToolSurface,
+      createToolSurfaceAsync,
       preparedEnvironment: () => ({
         credentialScrubEnv: {},
         localIdentityEnv: {},
@@ -430,7 +430,7 @@ describe("prepareCodexAttemptConnection", () => {
         /owned local Codex stdio.*saved prompt/,
       );
       expect(clientFactory).not.toHaveBeenCalled();
-      expect(createToolSurface).not.toHaveBeenCalled();
+      expect(createToolSurfaceAsync).not.toHaveBeenCalled();
       return;
     }
     const connection = await pending;

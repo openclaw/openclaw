@@ -169,8 +169,8 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
       modelId: params.model,
     });
     try {
-      return acquired.run((runtimeModelContext) => {
-        const result = resolveEffectiveToolInventory({
+      return await acquired.run(async (runtimeModelContext) => {
+        const result = await resolveEffectiveToolInventory({
           cfg: params.cfg,
           agentId: params.agentId,
           sessionKey: params.sessionKey,

@@ -48,7 +48,6 @@ export class DiscordComponentModal extends Modal {
       componentLabel: "form",
       unauthorizedReply,
       allowedUsers: modalEntry.allowedUsers,
-      defer: false,
     });
     if (!authorized) {
       return;

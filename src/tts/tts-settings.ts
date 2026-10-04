@@ -29,6 +29,7 @@ import {
   type TtsConfigResolutionContext,
   type TtsUserPrefs,
 } from "./tts-config.js";
+import type { PreparedTtsPreferences } from "./tts-preferences.js";
 import type { ResolvedTtsConfig, ResolvedTtsModelOverrides } from "./tts-types.js";
 
 export type { ResolvedTtsConfig, ResolvedTtsModelOverrides };
@@ -184,8 +185,16 @@ export function resolveTtsConfig(
   };
 }
 
-export function resolveTtsPrefsPath(config: ResolvedTtsConfig): string {
-  return resolveTtsPrefsPathValue(config.prefsPath, machinePrefsPathResolver);
+export function resolveTtsPrefsPath(
+  config: ResolvedTtsConfig,
+  preparedTtsPreferences?: PreparedTtsPreferences,
+): string {
+  return resolveTtsPrefsPathValue(
+    config.prefsPath,
+    preparedTtsPreferences
+      ? () => preparedTtsPreferences.machinePrefsPath
+      : machinePrefsPathResolver,
+  );
 }
 
 export function resolveTtsAutoMode(params: {
@@ -237,6 +246,7 @@ type ResolvedTtsSettingsSnapshot = {
 
 export function resolveTtsSettingsSnapshot(params: {
   cfg: OpenClawConfig;
+  preparedTtsPreferences?: PreparedTtsPreferences;
   sessionAuto?: string;
   agentId?: string;
   channelId?: string;
@@ -247,7 +257,7 @@ export function resolveTtsSettingsSnapshot(params: {
     channelId: params.channelId,
     accountId: params.accountId,
   });
-  const prefsPath = resolveTtsPrefsPath(config);
+  const prefsPath = resolveTtsPrefsPath(config, params.preparedTtsPreferences);
   const prefs = readTtsPrefs(prefsPath);
   const personaId = resolveTtsPersonaIdFromPrefs(config, prefs);
   const persona = personaId ? config.personas[personaId] : undefined;
@@ -282,9 +292,13 @@ export function resolveTtsSettingsSnapshot(params: {
 export function buildTtsSystemPromptHint(
   cfg: OpenClawConfig,
   agentId?: string,
-  options?: { messageToolOnly?: boolean },
+  options?: { messageToolOnly?: boolean; preparedTtsPreferences?: PreparedTtsPreferences },
 ): string | undefined {
-  const settings = resolveTtsSettingsSnapshot({ cfg, agentId });
+  const settings = resolveTtsSettingsSnapshot({
+    cfg,
+    agentId,
+    preparedTtsPreferences: options?.preparedTtsPreferences,
+  });
   if (settings.autoMode === "off") {
     return undefined;
   }

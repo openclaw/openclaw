@@ -3,11 +3,9 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, onTestFinished, test } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
-import { getContextWindowCaches } from "../agents/context-cache.js";
-import {
-  applyDiscoveredContextWindows,
-  resetContextWindowCacheForTest,
-} from "../agents/context.js";
+import { prepareDiscoveredContextTokenCache } from "../agents/context-cache-projection.js";
+import { replaceDiscoveredContextTokenCache } from "../agents/context-cache.js";
+import { resetContextWindowCacheForTest } from "../agents/context.test-support.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import {
@@ -183,9 +181,10 @@ test.each([
   "sessions.create rejects invalid child intent: $message",
   async ({ params, message }) => {
     await createSessionStoreDir();
-    testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "ops" }] };
+    testState.agentsConfig = { ownership: "explicit", entries: { main: {}, ops: {} } };
+    testState.agentConfig = { sessionStore: { agentId: "main" } };
     await writeSessionStore({ entries: { main: sessionStoreEntry("sess-parent-task") } });
-    const created = await directSessionReq("sessions.create", params);
+    const created = await directSessionReq("sessions.create", { agentId: "main", ...params });
     expect(created).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST", message } });
   },
 );
@@ -401,10 +400,13 @@ test.each([
     });
     const selectable = model === "gpt-selectable";
     if (!window) {
-      applyDiscoveredContextWindows({
-        cache: getContextWindowCaches().discoveredTokenCache,
-        models: [{ id: model, provider: "other-provider", contextTokens: 300_000 }],
-      });
+      replaceDiscoveredContextTokenCache(
+        await prepareDiscoveredContextTokenCache({
+          modelCatalog: {
+            entries: [{ id: model, provider: "other-provider", contextTokens: 300_000 }],
+          },
+        }),
+      );
     } else {
       agentDiscoveryMock.models = [
         {
@@ -545,7 +547,7 @@ test("sessions.create resolves an agent-qualified fork from the parent store", a
   const workDir = path.dirname(workStorePath);
   testState.sessionStorePath = storeTemplate;
   testState.sessionConfig = { scope: "per-sender" };
-  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+  testState.agentsConfig = { entries: { main: {}, work: {} } };
   try {
     await fs.mkdir(workDir, { recursive: true });
     const parent = await createCompactedSessionFixture(workDir);
@@ -577,6 +579,7 @@ test("sessions.create resolves an agent-qualified fork from the parent store", a
         forkedFromParent?: boolean;
       };
     }>("sessions.create", {
+      agentId: "main",
       parentSessionKey: "agent:work:main",
       fork: true,
     });

@@ -284,7 +284,12 @@ export async function settlePendingFinalDelivery(
         ...(terminalEvidence ? { restartRecoveryTerminalDeliveryEvidence: terminalEvidence } : {}),
       };
     },
-    { skipMaintenance: true, takeCacheOwnership: true, preserveActivity: options.preserveActivity },
+    {
+      skipMaintenance: true,
+      takeCacheOwnership: true,
+      preserveActivity: options.preserveActivity,
+      workerGuard: {},
+    },
   );
   if (wakeRecovery) {
     const { scheduleMainSessionRecoveryPendingTarget } =

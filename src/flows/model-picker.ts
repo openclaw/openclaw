@@ -50,8 +50,6 @@ import {
   resolveProviderPluginSetupOptions,
 } from "./model-picker-provider-setup.js";
 
-export { applyPrimaryModel } from "../plugins/provider-model-primary.js";
-
 const KEEP_VALUE = "__keep__";
 const MANUAL_VALUE = "__manual__";
 const BROWSE_VALUE = "__browse__";
@@ -97,7 +95,6 @@ type PromptDefaultModelParams = {
   prompter: WizardPrompter;
   allowKeep?: boolean;
   includeProviderPluginSetups?: boolean;
-  ignoreAllowlist?: boolean;
   loadCatalog?: boolean;
   browseCatalogOnDemand?: boolean;
   preferredProvider?: string;
@@ -153,11 +150,8 @@ async function resolvePickerLogicalCatalog(params: {
   cfg: OpenClawConfig;
   catalog: ModelCatalogEntry[];
   routeVariants: readonly ModelCatalogEntry[];
-  defaultProvider: string;
-  defaultModel?: ReturnType<typeof resolveConfiguredModelRef>;
-  agentId?: string;
+  defaultModel: ReturnType<typeof resolveConfiguredModelRef>;
   workspaceDir?: string;
-  view?: "default" | "configured" | "all";
   hasAuth: ProviderModelAuthChecker;
 }): Promise<ModelCatalogEntry[]> {
   const sourceOrder = new Map<string, number>();
@@ -171,11 +165,10 @@ async function resolvePickerLogicalCatalog(params: {
   const catalog = await resolveLogicalVisibleModelCatalog({
     cfg: params.cfg,
     catalog: params.catalog,
-    defaultProvider: params.defaultProvider,
-    ...(params.defaultModel ? { defaultModel: params.defaultModel } : {}),
-    ...(params.agentId ? { agentId: params.agentId } : {}),
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: params.defaultModel,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    ...(params.view ? { view: params.view } : {}),
+    view: "all",
     routePolicy: openAIModelCatalogRoutePolicy,
     routeVariants: params.routeVariants,
     evaluateEntry: async (entry, routeVariants) => {
@@ -509,7 +502,6 @@ export async function promptDefaultModel(
   const includeProviderPluginSetups = params.includeProviderPluginSetups ?? false;
   const loadCatalog = params.loadCatalog ?? true;
   const browseCatalogOnDemand = params.browseCatalogOnDemand ?? false;
-  const ignoreAllowlist = params.ignoreAllowlist ?? false;
   const preferredProviderRaw = normalizeOptionalString(params.preferredProvider);
   const preferredProvider = preferredProviderRaw
     ? normalizeProviderId(preferredProviderRaw)
@@ -651,10 +643,8 @@ export async function promptDefaultModel(
     cfg: pickerConfig,
     catalog,
     routeVariants: catalogSnapshot.routeVariants,
-    defaultProvider: DEFAULT_PROVIDER,
     defaultModel: resolved,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    ...(ignoreAllowlist ? { view: "all" as const } : {}),
     hasAuth,
   });
   if (models.length === 0) {
@@ -966,10 +956,8 @@ export async function promptModelAllowlist(params: {
     cfg,
     catalog,
     routeVariants: catalogSnapshot.routeVariants,
-    defaultProvider: DEFAULT_PROVIDER,
     defaultModel: resolved,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    view: "all",
     hasAuth,
   });
   if (catalog.length === 0) {

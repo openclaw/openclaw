@@ -9,6 +9,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
+import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createWorkerInferenceCancellationService } from "../worker-environments/inference-control.test-helpers.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
@@ -105,10 +106,11 @@ function stop(
 
 function globalContext(overrides: Parameters<typeof createChatAbortContext>[0] = {}) {
   return createChatAbortContext({
-    getRuntimeConfig: () => ({
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
-      session: { scope: "global" },
-    }),
+    getRuntimeConfig: () =>
+      createCanonicalAgentConfigFixture({
+        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        session: { scope: "global" },
+      }).config,
     ...overrides,
   });
 }
@@ -648,16 +650,16 @@ describe("chat abort transcript persistence", () => {
 
   it.each([
     ["scopes global stop commands to the selected agent", "work"],
-    ["scopes bare global stop commands to the default agent", "main"],
+    ["scopes bare global stop commands to the migrated default agent", "main"],
   ])("%s", async (_name, selectedAgentId) => {
     const { sessionId, transcriptPath } = await createTranscriptFixture({
       agentId: selectedAgentId,
       sessionKey: "global",
     });
-    const cfg = {
+    const cfg = createCanonicalAgentConfigFixture({
       agents: { list: [{ id: "main", default: true }, { id: "work" }] },
-      session: { scope: "global" as const },
-    };
+      session: { scope: "global" },
+    }).config;
     sessionEntryState.canonicalKey = "global";
     sessionEntryState.cfg = cfg;
     const respond = vi.fn();
@@ -719,7 +721,12 @@ describe("chat abort transcript persistence", () => {
 
   it.each([
     ["scopes global chat.abort requests to the selected agent", "global", "work", false],
-    ["scopes bare global chat.abort requests to the default agent", "global", undefined, true],
+    [
+      "scopes bare global chat.abort requests to the migrated default agent",
+      "global",
+      undefined,
+      true,
+    ],
     [
       "infers selected global chat.abort scope from agent-prefixed aliases",
       "agent:work:main",
@@ -728,10 +735,10 @@ describe("chat abort transcript persistence", () => {
     ],
   ])("%s", async (_name, sessionKey, agentId, needsGlobalConfig) => {
     const expectedAgentId = agentId ?? (sessionKey.startsWith("agent:work:") ? "work" : "main");
-    const cfg = {
+    const cfg = createCanonicalAgentConfigFixture({
       agents: { list: [{ id: "main", default: true }, { id: "work" }] },
-      session: { scope: "global" as const },
-    };
+      session: { scope: "global" },
+    }).config;
     const respond = vi.fn();
     const mainActive = createActiveRun("global", {
       sessionId: "sess-main-global",
@@ -944,7 +951,7 @@ describe("chat abort transcript persistence", () => {
       sessionId: "sess-work-global",
     });
     const context = createChatAbortContext({
-      getRuntimeConfig: () => ({ agents: { list: [{ id: "work", default: true }] } }),
+      getRuntimeConfig: () => ({ agents: { entries: { work: {} } } }),
       chatAbortControllers: new Map([["run-work-global", active]]),
     });
 

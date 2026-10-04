@@ -62,7 +62,15 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
     ["OPENCLAW_LIVE_SUBAGENT_E2E"],
   ],
   [
+    "src/agents/subagents/announce/subagent-followup-yield.live.test.ts",
+    ["OPENCLAW_LIVE_SUBAGENT_E2E"],
+  ],
+  [
     "src/agents/subagents/announce/subagent-late-reply.live.test.ts",
+    ["OPENCLAW_LIVE_SUBAGENT_STRESS"],
+  ],
+  [
+    "src/agents/subagents/announce/subagent-yield-pause.live.test.ts",
     ["OPENCLAW_LIVE_SUBAGENT_STRESS"],
   ],
   [
@@ -317,16 +325,17 @@ function isMoonshotLiveTest(file: string) {
   return file.startsWith("extensions/moonshot/");
 }
 
-// The frozen 2026.9.8 candidate retains three intentionally skipped single-case
+// The frozen 2026.9.8 and 2026.9.9 candidates retain three intentionally skipped single-case
 // live files. The trusted tooling checkout owns shard selection, so omit those
 // candidate files here rather than weakening the per-file passing-assertion guard.
-const RELEASE_2026_9_8_WAIVED_LIVE_FILES = new Set([
+const RELEASE_2026_9_8_AND_9_WAIVED_LIVE_FILES = new Set([
   "src/gateway/gateway-progress-refresh.live.test.ts",
   "src/agents/embedded-agent-runner.responses-output-limit.live.test.ts",
   "test/gateway-subagent-restart.live.test.ts",
 ]);
 const RELEASE_WAIVED_LIVE_FILES = new Map<string, ReadonlySet<string>>([
-  ["2026.9.8", RELEASE_2026_9_8_WAIVED_LIVE_FILES],
+  ["2026.9.8", RELEASE_2026_9_8_AND_9_WAIVED_LIVE_FILES],
+  ["2026.9.9", RELEASE_2026_9_8_AND_9_WAIVED_LIVE_FILES],
 ]);
 
 export function withoutReleaseWaivedLiveFiles(

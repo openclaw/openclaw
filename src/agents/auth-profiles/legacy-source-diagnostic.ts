@@ -89,8 +89,11 @@ function resolveAuthProfileOwnerPath(agentDir?: string, env?: NodeJS.ProcessEnv)
   return agentDir ? resolveAuthProfileDatabasePath(agentDir) : resolveSharedAuthStorePath(env);
 }
 
-export function hasLegacyAuthProfileCredentialSource(agentDir?: string): boolean {
-  return listLegacyAuthProfileSources({ agentDir }).some(isCredentialSource);
+export function hasLegacyAuthProfileCredentialSource(
+  agentDir?: string,
+  env?: NodeJS.ProcessEnv,
+): boolean {
+  return listLegacyAuthProfileSources({ agentDir, env }).some(isCredentialSource);
 }
 
 /**

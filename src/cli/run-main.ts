@@ -187,15 +187,6 @@ async function tryRunGatewayRunFastPath(
   return true;
 }
 
-export async function shouldStartOnboardingForFreshInstall(argv: string[]): Promise<boolean> {
-  if (!shouldHandleBareRoot(argv)) {
-    return false;
-  }
-  const { readConfigFileSnapshot } = await import("../config/config.js");
-  const snapshot = await readConfigFileSnapshot();
-  return shouldStartLocalOnboarding(snapshot);
-}
-
 async function resolveBareRootLaunchTarget(argv: string[]): Promise<BareRootLaunchTarget | null> {
   if (!shouldHandleBareRoot(argv)) {
     return null;

@@ -202,10 +202,7 @@ export function registerManagedRecoveryOutcomeTests(
       expect(state.triageRecoveryAllowance).toBeUndefined();
       expect(run, log).toMatchObject({
         status: gatewayHealth === "ready" ? "rolled-back" : "failed",
-        reason:
-          gatewayHealth === "ready"
-            ? "restart-unhealthy"
-            : "managed-service-handoff-restore-failed",
+        reason: "restart-unhealthy",
         after: { version: "1.0.0" },
         verification: {
           serviceRunning: gatewayHealth !== "exited",

@@ -24,6 +24,10 @@ type ConfigAgentOption = {
 export function resolveConfigAgents(config: Record<string, unknown> | null): ConfigAgentOption[] {
   const agentsNode = isRecord(config?.agents) ? config.agents : null;
   const entries = isRecord(agentsNode?.entries) ? agentsNode.entries : {};
+  const defaults = isRecord(agentsNode?.defaults) ? agentsNode.defaults : null;
+  const systemAgent = isRecord(defaults?.systemAgent) ? defaults.systemAgent : null;
+  const ownerId = normalizeOptionalString(systemAgent?.agentId);
+  const soleAgentId = Object.keys(entries).length === 1 ? Object.keys(entries)[0] : undefined;
   const agents: ConfigAgentOption[] = [];
 
   for (const [id, entry] of Object.entries(entries)) {
@@ -31,7 +35,7 @@ export function resolveConfigAgents(config: Record<string, unknown> | null): Con
       continue;
     }
     const name = normalizeOptionalString(entry.name);
-    const isDefault = entry.default === true;
+    const isDefault = id === (ownerId ?? soleAgentId);
     agents.push({ id, name, isDefault, record: entry });
   }
 

@@ -172,9 +172,14 @@ it.each([
   },
 );
 
-it.each(["local", "worker-turn", "remote-exec"] as const)(
-  "retains prepared %s claims across compatible transitions and metadata",
-  async (mode) => {
+it.each([
+  { mode: "local", failed: false },
+  { mode: "worker-turn", failed: false },
+  { mode: "remote-exec", failed: false },
+  { mode: "remote-exec", failed: true },
+] as const)(
+  "retains prepared $mode claims across compatible transitions (persisted failed: $failed)",
+  async ({ mode, failed }) => {
     const active = mode === "local" ? undefined : await advanceToActive(mode);
     const claim = await store.claimTurn({
       ...SESSION,
@@ -182,9 +187,23 @@ it.each(["local", "worker-turn", "remote-exec"] as const)(
       runId: "run-prepared-continuity",
       owner: active ? placementTurnOwner(active) : { kind: "local" },
     });
+    if (failed) {
+      // The decoder accepts this persisted shape; a new drain requires reconciliation first.
+      runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          db.prepare(`UPDATE worker_session_placements SET state = 'failed',
+          recovery_error = 'previous worker failure', terminal_reason = 'previous worker failure',
+          terminal_at_ms = 1 WHERE session_id = ?`).run(claim.sessionId);
+        },
+        { database },
+      );
+    }
     const authority = await store.prepareTurnClaimAuthority(claim);
     try {
-      if (active) {
+      if (failed) {
+        expect(authority.isCurrent()).toBe(true);
+        await store.fail({ sessionId: claim.sessionId, recoveryError: "cleanup is still pending" });
+      } else if (active) {
         if (claim.owner.kind === "worker") {
           await store.updateAckCursors({ claim, liveEvent: 2 });
           expect(authority.isCurrent()).toBe(true);
@@ -206,36 +225,15 @@ it.each(["local", "worker-turn", "remote-exec"] as const)(
         });
       }
       expect(authority.isCurrent()).toBe(true);
+      if (failed) {
+        await store.releaseTurn(claim);
+        expect(authority.isCurrent()).toBe(false);
+      }
     } finally {
       authority.release();
     }
   },
 );
-
-it("prepares a persisted failed remote-exec local claim without changing its release contract", async () => {
-  const active = await advanceToActive("remote-exec");
-  const claim = await store.claimTurn(workerClaimInput("failed-remote-exec", active));
-  // This persisted shape is accepted by the existing decoder, even though a new drain
-  // must pass through reconciliation before failure.
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      db.prepare(`UPDATE worker_session_placements SET state = 'failed',
-      recovery_error = 'previous worker failure', terminal_reason = 'previous worker failure',
-      terminal_at_ms = 1 WHERE session_id = ?`).run(claim.sessionId);
-    },
-    { database },
-  );
-  const authority = await store.prepareTurnClaimAuthority(claim);
-  try {
-    expect(authority.isCurrent()).toBe(true);
-    await store.fail({ sessionId: claim.sessionId, recoveryError: "cleanup is still pending" });
-    expect(authority.isCurrent()).toBe(true);
-    await store.releaseTurn(claim);
-    expect(authority.isCurrent()).toBe(false);
-  } finally {
-    authority.release();
-  }
-});
 
 it("rolls back claim fencing and never revives a retained approval after same-ID readmission", async () => {
   const active = await advanceToActive();
@@ -349,35 +347,21 @@ it("rejects a prepared reader reply after an identical claim was released and re
   }
 });
 
-it("does not publish an execution owner when its final authority check fails", async () => {
-  const active = await advanceToActive();
-  const claim = await store.claimTurn(workerClaimInput("failed-binding", active));
-  const instance = createOperationalRunInstanceRef(claim.runId);
-  const delegated = claimAgentRunDelegatedAuthority(instance);
-  const assertActive = vi
-    .fn()
-    .mockImplementationOnce(() => {})
-    .mockImplementation(() => {
-      throw new Error("run closed during binding");
-    });
-  try {
-    await expect(
-      bindWorkerTurnOwner(store, claim, undefined, instance, sessionTarget, assertActive),
-    ).rejects.toThrow("run closed during binding");
-    expect(getWorkerTurnExecutionIdentityCapability(store, claim)).toBeUndefined();
-  } finally {
-    releaseAgentRunDelegatedAuthority(delegated);
-  }
-});
-
-it.each(["preparing", "bound"] as const)(
-  "rejects a closed %s claim before consulting its original source",
+it.each(["preparing", "bound", "final source check"] as const)(
+  "rejects revoked execution-owner authority during %s",
   async (phase) => {
     const active = await advanceToActive();
     const claim = await store.claimTurn(workerClaimInput("source-read-order", active));
     const instance = createOperationalRunInstanceRef(claim.runId);
     const delegated = claimAgentRunDelegatedAuthority(instance);
     const assertSourceCurrent = vi.fn();
+    if (phase === "final source check") {
+      assertSourceCurrent
+        .mockImplementationOnce(() => {})
+        .mockImplementation(() => {
+          throw new Error("run closed during binding");
+        });
+    }
     const prepare = store.prepareTurnClaimAuthority.bind(store);
     const preparation =
       phase === "preparing"
@@ -396,9 +380,7 @@ it.each(["preparing", "bound"] as const)(
         sessionTarget,
         assertSourceCurrent,
       );
-      if (phase === "preparing") {
-        await expect(binding).rejects.toThrow("worker turn authority changed");
-      } else {
+      if (phase === "bound") {
         const { capability, takeFinishingOutcome } = await binding;
         await store.releaseTurn(claim);
         assertSourceCurrent.mockClear();
@@ -406,8 +388,16 @@ it.each(["preparing", "bound"] as const)(
         expect(() => takeFinishingOutcome("synthetic-credential")).toThrow(
           "worker turn authority changed",
         );
+      } else {
+        await expect(binding).rejects.toThrow(
+          phase === "preparing" ? "worker turn authority changed" : "run closed during binding",
+        );
       }
-      expect(assertSourceCurrent).not.toHaveBeenCalled();
+      if (phase === "final source check") {
+        expect(getWorkerTurnExecutionIdentityCapability(store, claim)).toBeUndefined();
+      } else {
+        expect(assertSourceCurrent).not.toHaveBeenCalled();
+      }
     } finally {
       preparation?.mockRestore();
       releaseAgentRunDelegatedAuthority(delegated);
@@ -493,106 +483,84 @@ it("retains the original transcript and prompt cache facts while claim authority
   }
 });
 
-it("does not adopt a same-claim successor while execution identity preparation returns", async () => {
-  const active = await advanceToActive();
-  const claim = await store.claimTurn(workerClaimInput("owner-replacement", active));
-  const admission = prepareAgentRunAdmission({
-    cfg: {},
-    operationalRunInstance: createOperationalRunInstanceRef(claim.runId),
-    facts: {
-      runId: claim.runId,
-      agentId: SESSION.agentId,
-      ingress: { kind: "worker", boundary: "test.worker-owner-replacement", state: "present" },
-    },
-  });
-  const bind = bindWorkerTurnOwner;
-  const binding = vi
-    .spyOn(workerTurnOwners, "bindWorkerTurnOwner")
-    .mockImplementationOnce(async (...args) => {
-      const original = await bind(...args);
-      // Replace the owner before the awaiting caller can capture its receipt guard.
-      await bind(...args);
-      return original;
+it.each(["binding replacement", "run admission"] as const)(
+  "rejects execution identity after authority changes during %s",
+  async (phase) => {
+    const active = await advanceToActive();
+    const claim = await store.claimTurn(workerClaimInput("identity-authority", active));
+    const admission = prepareAgentRunAdmission({
+      cfg: {},
+      operationalRunInstance: createOperationalRunInstanceRef(claim.runId),
+      facts: {
+        runId: claim.runId,
+        agentId: SESSION.agentId,
+        ingress: { kind: "worker", boundary: "test.worker-identity-authority", state: "present" },
+      },
+      ...(phase === "run admission"
+        ? {
+            onAdmitted: async () => {
+              await store.releaseTurn(claim);
+            },
+          }
+        : {}),
     });
-  try {
-    await expect(
-      prepareWorkerAgentRuntimeIdentity({
-        agentId: SESSION.agentId,
-        sessionKey: SESSION.sessionKey,
-        sessionTarget,
-        promptCacheContext: { boundaryCount: 0 },
-        assertSourceCurrent: () => {},
-        runtimeInstanceId: active.environmentId,
-        placements: store,
-        turnClaim: claim,
-        turn: {
-          ...SESSION,
-          sessionFile: path.join(root, "transcript.jsonl"),
-          workspaceDir: root,
-          prompt: "synthetic worker turn",
-          timeoutMs: 5_000,
-          runId: claim.runId,
-          preparedRunAdmission: admission,
-        },
-      }),
-    ).rejects.toThrow("worker turn authority changed");
-    const successor = getWorkerTurnExecutionIdentityCapability(store, claim);
-    if (!successor) {
-      throw new Error("expected the same-claim successor to remain current");
+    const bind = bindWorkerTurnOwner;
+    const binding =
+      phase === "binding replacement"
+        ? vi
+            .spyOn(workerTurnOwners, "bindWorkerTurnOwner")
+            .mockImplementationOnce(async (...args) => {
+              const original = await bind(...args);
+              // Replace the owner before the awaiting caller can capture its receipt guard.
+              await bind(...args);
+              return original;
+            })
+        : undefined;
+    const assertSourceCurrent = vi.fn();
+    try {
+      await expect(
+        prepareWorkerAgentRuntimeIdentity({
+          agentId: SESSION.agentId,
+          sessionKey: SESSION.sessionKey,
+          sessionTarget,
+          promptCacheContext: { boundaryCount: 0 },
+          assertSourceCurrent,
+          runtimeInstanceId: active.environmentId,
+          placements: store,
+          turnClaim: claim,
+          turn: {
+            ...SESSION,
+            sessionFile: path.join(root, "transcript.jsonl"),
+            workspaceDir: root,
+            prompt: "synthetic worker turn",
+            timeoutMs: 5_000,
+            runId: claim.runId,
+            preparedRunAdmission: admission,
+          },
+        }),
+      ).rejects.toThrow(
+        phase === "run admission"
+          ? "turn claim authority changed"
+          : "worker turn authority changed",
+      );
+      if (phase === "binding replacement") {
+        const successor = getWorkerTurnExecutionIdentityCapability(store, claim);
+        if (!successor) {
+          throw new Error("expected the same-claim successor to remain current");
+        }
+        expect(successor.receiptAuthority).not.toThrow();
+      } else {
+        expect(assertSourceCurrent).not.toHaveBeenCalled();
+      }
+    } finally {
+      binding?.mockRestore();
+      if (store.validateTurnClaim(claim)) {
+        await store.releaseTurn(claim);
+      }
+      admission.close();
     }
-    expect(successor.receiptAuthority).not.toThrow();
-  } finally {
-    binding.mockRestore();
-    if (store.validateTurnClaim(claim)) {
-      await store.releaseTurn(claim);
-    }
-    admission.close();
-  }
-});
-
-it("does not read the worker source when its claim closes during run admission", async () => {
-  const active = await advanceToActive();
-  const claim = await store.claimTurn(workerClaimInput("admission-source-order", active));
-  const admission = prepareAgentRunAdmission({
-    cfg: {},
-    operationalRunInstance: createOperationalRunInstanceRef(claim.runId),
-    facts: {
-      runId: claim.runId,
-      agentId: SESSION.agentId,
-      ingress: { kind: "worker", boundary: "test.worker-admission-source", state: "present" },
-    },
-    onAdmitted: async () => {
-      await store.releaseTurn(claim);
-    },
-  });
-  const assertSourceCurrent = vi.fn();
-  try {
-    await expect(
-      prepareWorkerAgentRuntimeIdentity({
-        agentId: SESSION.agentId,
-        sessionKey: SESSION.sessionKey,
-        sessionTarget,
-        promptCacheContext: { boundaryCount: 0 },
-        assertSourceCurrent,
-        runtimeInstanceId: active.environmentId,
-        placements: store,
-        turnClaim: claim,
-        turn: {
-          ...SESSION,
-          sessionFile: path.join(root, "transcript.jsonl"),
-          workspaceDir: root,
-          prompt: "synthetic worker turn",
-          timeoutMs: 5_000,
-          runId: claim.runId,
-          preparedRunAdmission: admission,
-        },
-      }),
-    ).rejects.toThrow("turn claim authority changed");
-    expect(assertSourceCurrent).not.toHaveBeenCalled();
-  } finally {
-    admission.close();
-  }
-});
+  },
+);
 
 it("keeps authority revoked when COMMIT succeeds but its outcome is lost", async () => {
   const active = await advanceToActive();

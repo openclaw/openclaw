@@ -244,6 +244,86 @@ it("bounds repeated foreign conflicts and leaves the latest authoritative row pu
   expect(loadSubagentRegistryFromSqlite().get("contended")?.cleanupCompletedAt).toBeUndefined();
 });
 
+it.each(["payload bytes", "indexed field", "removed", "inserted", "undecodable"] as const)(
+  "rejects an entire cohort before companion events when one selected row is foreign %s",
+  async (conflict) => {
+    const kept = entry("cohort-kept");
+    const deleted = entry("cohort-deleted");
+    const guarded = entry("cohort-guarded");
+    await register(kept, deleted, ...(conflict === "inserted" ? [] : [guarded]));
+    const { db } = openOpenClawStateDatabase();
+    const rows = () => db.prepare("SELECT * FROM subagent_runs ORDER BY run_id").all();
+    let foreignRows: ReturnType<typeof rows> = [];
+    let injected = false;
+    const intercept = interceptWrites((phase) => {
+      if (phase !== "before" || injected) {
+        return;
+      }
+      injected = true;
+      if (conflict === "inserted" || conflict === "removed") {
+        saveSubagentRegistryChangesToSqlite(
+          new Map(conflict === "inserted" ? [[guarded.runId, guarded]] : []),
+          [guarded.runId],
+        );
+      } else if (conflict === "indexed field") {
+        db.prepare("UPDATE subagent_runs SET created_at = created_at + 1 WHERE run_id = ?").run(
+          guarded.runId,
+        );
+      } else {
+        const original = db
+          .prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
+          .get(guarded.runId);
+        db.prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?").run(
+          conflict === "undecodable" ? "{" : `${String(original?.payload_json)} `,
+          guarded.runId,
+        );
+      }
+      foreignRows = rows();
+    });
+    const plan = vi.fn(() => {
+      if (injected) {
+        throw new SubagentRegistryMutationRejectedError("Cohort changed after planning");
+      }
+      return {
+        value: undefined,
+        postimages: new Map<string, SubagentRunRecord | null>([
+          [kept.runId, { ...kept, label: "must not be written" }],
+          [deleted.runId, null],
+        ]),
+        terminalEvents: [
+          {
+            input: {
+              event: {
+                sessionKey: kept.childSessionKey,
+                agentId: "main",
+                kind: "run_completed" as const,
+                actorType: "agent" as const,
+                runId: kept.runId,
+                summary: "must not be recorded",
+              },
+              now: 10,
+            },
+          },
+        ],
+      };
+    });
+    try {
+      await expect(
+        mutateSubagentRuns([kept.runId, deleted.runId, guarded.runId], plan),
+      ).rejects.toBeInstanceOf(SubagentRegistryMutationRejectedError);
+      expect(plan).toHaveBeenCalledTimes(conflict === "undecodable" ? 1 : 2);
+      expect(rows()).toEqual(foreignRows);
+      expect(
+        db.prepare("SELECT * FROM session_state_events WHERE run_id = ?").all(kept.runId),
+      ).toEqual([]);
+    } finally {
+      intercept.mockRestore();
+      // An undecodable foreign row is intentionally absent from the canonical cleanup reader.
+      saveSubagentRegistryChangesToSqlite(new Map(), [guarded.runId]);
+    }
+  },
+);
+
 it("fences an uncertain row through source close until canonical restoration", async () => {
   await register(entry("uncertain"));
   const failure = new SqliteWorkerError("synthetic lost transport outcome", "outcome-unknown");

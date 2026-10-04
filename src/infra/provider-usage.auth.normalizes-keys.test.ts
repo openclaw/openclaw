@@ -24,10 +24,11 @@ const authProfileMocks = vi.hoisted(() => {
   };
 });
 
+// mock-isolation: Normalization fixtures require their prepared credential map and reject real auth-store reads.
 vi.mock("../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore: authProfileMocks.unexpectedStoreRead,
   ensureAuthProfileStoreWithoutExternalProfiles: authProfileMocks.unexpectedStoreRead,
-  hasAnyAuthProfileStoreSource: authProfileMocks.unexpectedStoreRead,
+  hasAnyAuthProfileStoreSourceAsync: authProfileMocks.unexpectedStoreRead,
   dedupeProfileIds: (profileIds: string[]) => [...new Set(profileIds)],
   listProfilesForProvider: (_store: unknown, provider: string) =>
     authProfileMocks.orders[provider] ?? [],

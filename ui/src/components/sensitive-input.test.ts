@@ -2,6 +2,7 @@
 
 import { nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { t } from "../i18n/index.ts";
 import { renderSensitiveInput } from "./sensitive-input.ts";
 
 describe("renderSensitiveInput", () => {
@@ -19,11 +20,8 @@ describe("renderSensitiveInput", () => {
     render(
       renderSensitiveInput({
         id: "secret",
-        name: "secret",
         value: "secret",
         revealed: false,
-        revealLabel: "Show API key",
-        hideLabel: "Hide API key",
         onInput,
         onToggle: vi.fn(),
       }),
@@ -38,7 +36,7 @@ describe("renderSensitiveInput", () => {
     expect(mask?.hidden).toBe(false);
     expect(maskText?.textContent).toBe("******");
     expect(toggle?.dataset.sensitiveIcon).toBe("eye");
-    expect(toggle?.getAttribute("aria-label")).toBe("Show API key");
+    expect(toggle?.getAttribute("aria-label")).toBe(t("configForm.revealValue"));
     expect(toggle?.getAttribute("aria-pressed")).toBe("false");
 
     if (input) {
@@ -67,8 +65,6 @@ describe("renderSensitiveInput", () => {
         id: "secret",
         value: "secret",
         revealed: true,
-        revealLabel: "Show API key",
-        hideLabel: "Hide API key",
         disabled: false,
         onInput: vi.fn(),
         onToggle,
@@ -83,7 +79,7 @@ describe("renderSensitiveInput", () => {
     expect(input?.value).toBe("secret");
     expect(mask?.hidden).toBe(true);
     expect(toggle?.dataset.sensitiveIcon).toBe("eye-off");
-    expect(toggle?.getAttribute("aria-label")).toBe("Hide API key");
+    expect(toggle?.getAttribute("aria-label")).toBe(t("configForm.hideValue"));
     expect(toggle?.getAttribute("aria-pressed")).toBe("true");
 
     toggle?.click();

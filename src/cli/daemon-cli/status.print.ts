@@ -405,6 +405,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     spacer();
   }
 
+  const disabledTask = process.platform === "win32" && service.runtime?.state === "Disabled";
   if (service.runtime?.missingUnit) {
     if (serviceTargetsProbe) {
       printError("Service unit not found.");
@@ -417,24 +418,26 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     }
   } else if (
     service.runtime?.missingGuiSession ||
-    (serviceLoaded && service.runtime?.status === "stopped")
+    (serviceLoaded && (disabledTask || service.runtime?.status === "stopped"))
   ) {
-    const missingGuiSession = service.runtime.missingGuiSession;
+    const missingGuiSession = service.runtime?.missingGuiSession;
     const startLimitHit = process.platform === "linux" && isSystemdStartLimitHit(service.runtime);
-    printError(
-      missingGuiSession
-        ? "LaunchAgent plist exists, but macOS has no usable GUI session for this user."
-        : startLimitHit
-          ? // systemd gave up restarting after repeated crashes; sending the operator
-            // to restart (which now clears the failed latch) beats "exited immediately".
-            `systemd stopped restarting the gateway after repeated crashes; run ${formatCliCommand(
-              "openclaw gateway restart",
-            )} or inspect logs.`
-          : "Service is loaded but not running (likely exited immediately).",
-    );
+    if (!disabledTask) {
+      printError(
+        missingGuiSession
+          ? "LaunchAgent plist exists, but macOS has no usable GUI session for this user."
+          : startLimitHit
+            ? // systemd gave up restarting after repeated crashes; sending the operator
+              // to restart (which now clears the failed latch) beats "exited immediately".
+              `systemd stopped restarting the gateway after repeated crashes; run ${formatCliCommand(
+                "openclaw gateway restart",
+              )} or inspect logs.`
+            : "Service is loaded but not running (likely exited immediately).",
+      );
+    }
     const env = service.command?.environment ?? process.env;
     for (const hint of buildGatewayRuntimeRecoveryHints({
-      kind: missingGuiSession ? "gui-session" : "stopped",
+      kind: missingGuiSession ? "gui-session" : disabledTask ? "disabled-task" : "stopped",
       restartCommand: formatCliCommand("openclaw gateway restart", env),
       env,
       logFile: status.logFile,
@@ -541,7 +544,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       const scope = service.runtime?.systemd?.scope === "system" ? "--system" : "--user";
       printError(`Logs: journalctl ${scope} -u ${quoteCliArg(unit)} -n 200 --no-pager`);
     } else if (process.platform === "darwin") {
-      const logs = resolveGatewaySupervisorLogPaths(serviceEnv, { platform: "darwin" });
+      const logs = resolveGatewaySupervisorLogPaths(serviceEnv);
       // The plist points both launchd handles at this file, so startup crashes that
       // never reached the logger land here too; do not advertise a separate stderr.
       defaultRuntime.error(

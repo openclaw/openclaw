@@ -4,6 +4,7 @@ import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js"
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
+import type { AgentExecutorController } from "./agent-executor-controller.types.js";
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareRuntime,
@@ -439,6 +440,10 @@ export type PluginRegistry = {
   agentToolResultMiddlewareOwners: PluginAgentToolResultMiddlewareOwner[];
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
   agentHarnesses: PluginAgentHarnessRegistration[];
+  agentExecutorControllers: Map<
+    string,
+    PluginRegistrationOwner & { controller: AgentExecutorController }
+  >;
   pluginRuntimeArtifacts: Map<string, ResolvedPluginRuntimeArtifact>;
   compactionProviders: RegisteredCompactionProvider[];
   decisionProviders: Array<{

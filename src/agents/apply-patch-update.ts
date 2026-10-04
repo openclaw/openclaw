@@ -9,7 +9,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 const DASH_PUNCTUATION = /[\u2010-\u2015\u2212]/g;
 const SINGLE_QUOTE_PUNCTUATION = /[\u2018-\u201B]/g;
 const DOUBLE_QUOTE_PUNCTUATION = /[\u201C-\u201F]/g;
-const SPACE_PUNCTUATION = /[\u00A0\u2002-\u200A\u202F\u205F\u3000]/g;
+const SPACE_PUNCTUATION = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 
 export type UpdateFileChunk = {
   changeContext?: string;
@@ -35,17 +35,13 @@ type SourceFile = {
 
 type Replacement = [number, number, SourceLine[]];
 
-async function defaultReadFile(filePath: string): Promise<string> {
-  return fs.readFile(filePath, "utf8");
-}
-
 /** Apply parsed update chunks to one file and return the new file contents. */
 export async function applyUpdateHunk(
   filePath: string,
   chunks: UpdateFileChunk[],
   options?: { readFile?: (filePath: string) => Promise<string> },
 ): Promise<string> {
-  const reader = options?.readFile ?? defaultReadFile;
+  const reader = options?.readFile ?? ((target: string) => fs.readFile(target, "utf8"));
   const originalContents = await reader(filePath).catch((err: unknown) => {
     throw new Error(`Failed to read file to update ${filePath}: ${formatErrorMessage(err)}`);
   });

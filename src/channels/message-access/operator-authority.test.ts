@@ -243,13 +243,15 @@ it("exposes a verified linked requester in trusted metadata without widening own
           });
           expect(transcript.entries[0]?.origin).toBe("operator");
         }
-        const tools = resolveGatewayScopedTools({
-          cfg,
-          sessionKey: ctx.SessionKey!,
-          messageProvider: "discord",
-          senderIsOwner,
-          surface: "loopback",
-        }).tools;
+        const tools = (
+          await resolveGatewayScopedTools({
+            cfg,
+            sessionKey: ctx.SessionKey!,
+            messageProvider: "discord",
+            senderIsOwner,
+            surface: "loopback",
+          })
+        ).tools;
         expect(tools.some((tool) => tool.name === "sessions")).toBe(owner);
       }
     } finally {
@@ -783,7 +785,7 @@ it("carries native Slack requester authority through preparation and keeps repla
       { cfg, runtime, stateDir: state.stateDir },
       async ({ contexts, receiveSocket, receiveHttp }) => {
         expect(contexts).toHaveLength(1);
-        const check = (index: number, linked: boolean, isOwner: boolean) => {
+        const check = async (index: number, linked: boolean, isOwner: boolean) => {
           const turn = contexts[index]!;
           const prompt = buildInboundUserContextPrefix(turn);
           const metadata = JSON.parse(prompt.match(/```json\n([\s\S]*?)\n```/)![1]!);
@@ -796,7 +798,7 @@ it("carries native Slack requester authority through preparation and keeps repla
             commandAuthorized: true,
           });
           expect.soft(senderIsOwner).toBe(isOwner);
-          const { tools } = resolveGatewayScopedTools({
+          const { tools } = await resolveGatewayScopedTools({
             cfg,
             sessionKey: turn.SessionKey!,
             messageProvider: "slack",
@@ -805,7 +807,7 @@ it("carries native Slack requester authority through preparation and keeps repla
           });
           expect.soft(tools.some((tool) => tool.name === "sessions")).toBe(isOwner);
         };
-        check(0, false, false);
+        await check(0, false, false);
         for (const [index, user, role, linked, isOwner] of [
           [1, "U123", "admin", true, true],
           [2, "U_UNLINKED", "admin", false, false],
@@ -814,14 +816,14 @@ it("carries native Slack requester authority through preparation and keeps repla
           setUserProfileRole(profile.id, role);
           await receiveSocket(user);
           expect(contexts).toHaveLength(index + 1);
-          check(index, linked, isOwner);
+          await check(index, linked, isOwner);
         }
         setUserProfileRole(profile.id, "admin");
         expect(await receiveHttp(false)).toBe(401);
         expect(contexts).toHaveLength(4);
         expect(await receiveHttp(true)).toBe(200);
         expect(contexts).toHaveLength(5);
-        check(4, true, true);
+        await check(4, true, true);
       },
     );
   });

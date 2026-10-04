@@ -403,7 +403,7 @@ export async function appendStatusAllDiagnosis(params: {
     try {
       // macOS supervised installs write stdout/stderr differently than node-managed gateway logs.
       return process.platform === "darwin"
-        ? resolveGatewaySupervisorLogPaths(process.env, { platform: "darwin" })
+        ? resolveGatewaySupervisorLogPaths(process.env)
         : resolveGatewayLogPaths(process.env);
     } catch {
       return null;
