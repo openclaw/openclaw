@@ -129,24 +129,24 @@ describe("Claude CLI output validation", () => {
     });
   });
 
-  it.each(["call", "Bash"])(
-    "rejects the upstream-observed %s prefix when the protocol block is truncated",
-    (prefix) => {
-      expect(
-        parseResult(
-          [
-            "I will inspect it.",
-            prefix,
-            '<invoke name="Bash">',
-            '<parameter name="command">wc -l /tmp/mock-report.md',
-          ].join("\n"),
-        ),
-      ).toEqual({
-        kind: "result",
-        errorText: expect.stringContaining("raw tool protocol appeared as assistant text"),
-      });
-    },
-  );
+  it.each([
+    { name: "observed call prefix", prefix: ["I will inspect it.", "call"] },
+    { name: "tool-name prefix", prefix: ["I will inspect it.", "Bash"] },
+    { name: "bare opening tag", prefix: [] },
+  ])("rejects a truncated raw invocation with $name", ({ prefix }) => {
+    expect(
+      parseResult(
+        [
+          ...prefix,
+          '<invoke name="Bash">',
+          '<parameter name="command">wc -l /tmp/mock-report.md',
+        ].join("\n"),
+      ),
+    ).toEqual({
+      kind: "result",
+      errorText: expect.stringContaining("raw tool protocol appeared as assistant text"),
+    });
+  });
 
   it("does not let a later inline close token mask an observed truncated leak", () => {
     expect(

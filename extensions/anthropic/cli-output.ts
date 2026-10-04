@@ -157,10 +157,10 @@ export function hasClaudeRawToolInvocation(text: string): boolean {
       continue;
     }
     if (
-      // Upstream shows both complete blocks and prefix-led truncated blocks. Requiring a close
-      // misses the latter; requiring a prefix misses the complete leak reproduced in this PR.
-      // Complete unfenced examples remain the accepted false positive and surface as format errors.
+      // Bare protocol may stop before its closing tag even in a completed result.
+      // Explanatory incomplete examples and code regions retain their existing treatment.
       completeInvokeCloseIndex !== null ||
+      text.slice(0, index).trim().length === 0 ||
       hasObservedTruncatedLeakPrefix(text, index, toolName)
     ) {
       return true;

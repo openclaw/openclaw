@@ -187,6 +187,11 @@ A changed model, system prompt, or tool policy starts a
 new subprocess. Persisted Claude session IDs still provide
 conversation continuity when the Gateway or subprocess restarts.
 
+Claude tool-protocol markup returned as reply text is reported as a format
+failure. This includes bare invocation fragments without a closing tag. Use
+fenced code blocks for protocol examples; explanatory incomplete examples remain
+supported.
+
 For local plugin-managed turns, prompt-build hook context stays private: Claude
 receives it as a native hook attachment, while OpenClaw history preserves the original user message. The
 native session retains the context for resume. Imported visible history and
