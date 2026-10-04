@@ -927,14 +927,18 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           });
           // Recovery can replace a timed-out task before the old promise settles.
           // Only the task that still owns the store slot may write lifecycle state.
-          const trackedPromise = task
-            .finally(async () => {
+          const settledTask = async () => {
+            try {
+              await task;
+            } finally {
               try {
                 await scheduler.stop();
               } finally {
                 capabilityLease.revoke();
               }
-            })
+            }
+          };
+          const trackedPromise = settledTask()
             .then(() => {
               if (
                 abort.signal.aborted ||

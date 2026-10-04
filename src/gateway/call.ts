@@ -727,7 +727,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     }
   }
   await ensureGatewayCallCanAuthenticate({
-    opts: opts,
+    opts,
     context,
     token,
     password,
