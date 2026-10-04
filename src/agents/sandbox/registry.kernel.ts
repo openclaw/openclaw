@@ -183,7 +183,7 @@ export function containerEntryToRow(
   } satisfies SandboxRegistryInsert;
 }
 
-export function browserEntryToRow(
+function browserEntryToRow(
   entry: SandboxBrowserRegistryEntry,
   existing?: SandboxBrowserRegistryEntry | null,
 ) {
