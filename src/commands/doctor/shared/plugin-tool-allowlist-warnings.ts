@@ -10,6 +10,11 @@ import { listAgentEntriesWithSource } from "../../../agents/agent-scope-config.j
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../../../agents/glob-pattern.js";
 import { resolveProviderToolPolicy } from "../../../agents/provider-tool-policy.js";
 import {
+  isToolAllowed,
+  resolveSandboxToolPolicyForAgent,
+} from "../../../agents/sandbox/tool-policy.js";
+import { isKnownCoreToolId } from "../../../agents/tool-catalog.js";
+import {
   mergeAlsoAllowPolicy,
   normalizeToolPolicyName,
   resolveToolProfilePolicy,
@@ -369,6 +374,65 @@ function collectSandboxMcpAllowlistWarnings(cfg: OpenClawConfig): string[] {
   ];
 }
 
+/**
+ * Warns when a sandboxed agent explicitly allows a core tool (via
+ * `tools.allow` / `agents.*.tools.allow`) that the sandbox tool policy
+ * (`tools.sandbox.tools` / `agents.*.tools.sandbox.tools`) does not also
+ * allow. The agent-level allow entry alone does not make the tool visible to
+ * a sandboxed agent; it is silently dropped before the provider ever sees it,
+ * with no other diagnostic surfacing the mismatch.
+ */
+function collectSandboxCoreToolAllowlistWarnings(cfg: OpenClawConfig): string[] {
+  const defaultSandboxActive = isSandboxModeActive(cfg.agents?.defaults?.sandbox?.mode);
+  const warnings: string[] = [];
+
+  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
+    const agentSandbox = hasRecord(agent.sandbox) ? agent.sandbox : undefined;
+    const explicitMode = agentSandbox?.mode;
+    const agentSandboxActive =
+      explicitMode === undefined ? defaultSandboxActive : isSandboxModeActive(explicitMode);
+    if (!agentSandboxActive) {
+      continue;
+    }
+
+    const agentTools = hasRecord(agent.tools) ? agent.tools : undefined;
+    const agentAllow = getList(agentTools, "allow");
+    if (!agentAllow || agentAllow.length === 0) {
+      continue;
+    }
+
+    // Resolve the exact same effective sandbox tool policy the runtime uses
+    // (allow/alsoAllow layered over DEFAULT_TOOL_ALLOW, with deny applied),
+    // instead of re-deriving the gating rules here. This keeps the warning
+    // in lockstep with the real enforcement path and avoids false positives
+    // for tools the sandbox already allows by default (e.g. "exec").
+    const resolvedPolicy = resolveSandboxToolPolicyForAgent(cfg, agent.id);
+    const label =
+      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list[${source.index}]`;
+    const missingEntries = agentAllow
+      .map(normalizeToolPolicyName)
+      .filter(Boolean)
+      .filter((entry) => entry !== "*" && isKnownCoreToolId(entry))
+      .filter((entry) => !isToolAllowed(resolvedPolicy, entry));
+    if (missingEntries.length === 0) {
+      continue;
+    }
+    const uniqueMissing = [...new Set(missingEntries)].toSorted((left, right) =>
+      left.localeCompare(right),
+    );
+    const entryNoun = uniqueMissing.length === 1 ? "tool" : "tools";
+    const agentToolsSandbox = hasRecord(agentTools?.sandbox) ? agentTools.sandbox : undefined;
+    const sandboxLabel = hasRecord(agentToolsSandbox?.tools)
+      ? `${label}.tools.sandbox.tools.alsoAllow`
+      : "tools.sandbox.tools.alsoAllow";
+    warnings.push(
+      `- ${label}.tools.allow includes ${entryNoun} ${uniqueMissing.map((entry) => `"${entry}"`).join(", ")}, but this agent is sandboxed and ${sandboxLabel} does not include ${uniqueMissing.length === 1 ? "it" : "them"}. Sandboxed agents filter tools against the sandbox allowlist before the provider sees them, so ${uniqueMissing.length === 1 ? "this tool stays" : "these tools stay"} unavailable even though ${label}.tools.allow permits it. Add ${uniqueMissing.map((entry) => `"${entry}"`).join(", ")} to ${sandboxLabel}.`,
+    );
+  }
+
+  return warnings;
+}
+
 function formatPluginList(pluginIds: readonly string[]): string {
   return pluginIds.map((pluginId) => `"${pluginId}"`).join(", ");
 }
@@ -385,10 +449,13 @@ export function collectPluginToolAllowlistWarnings(params: {
   env?: NodeJS.ProcessEnv;
   manifestRegistry?: PluginManifestRegistry;
 }): string[] {
+  // Sandbox core-tool gating applies regardless of the plugin system, so this
+  // check runs even when `plugins.enabled` is false.
+  const coreToolWarnings = collectSandboxCoreToolAllowlistWarnings(params.cfg);
   if (params.cfg.plugins?.enabled === false) {
-    return [];
+    return coreToolWarnings;
   }
-  const warnings = collectSandboxMcpAllowlistWarnings(params.cfg);
+  const warnings = [...coreToolWarnings, ...collectSandboxMcpAllowlistWarnings(params.cfg)];
   const allowedPluginIds = (params.cfg.plugins?.allow ?? [])
     .map(normalizePluginIdMaybe)
     .filter((pluginId): pluginId is string => Boolean(pluginId));
