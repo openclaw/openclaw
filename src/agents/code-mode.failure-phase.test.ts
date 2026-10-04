@@ -14,7 +14,12 @@ import { jsonResult, ToolInputError } from "./tools/common.js";
 afterEach(resetCodeModeTestState);
 
 describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (executor) => {
-  it.each([false, true])("ignores guest settlement of a tool call (reject: %s)", async (reject) => {
+  it.each([
+    { reject: false, parked: false },
+    { reject: true, parked: false },
+    { reject: false, parked: true },
+    { reject: true, parked: true },
+  ])("ignores guest settlement of a tool call (%o)", async ({ reject, parked }) => {
     const { ctx, config, tools } = createCodeModeHarness({ codeMode: { executor } });
     const target = pluginToolWithExecute("phase_fixture", "Failure origin fixture", async () => {
       if (reject) {
@@ -24,16 +29,28 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (exec
     });
     applyCodeModeCatalog({ ...ctx, config, tools: [...tools, target] });
     const exec = expectDefined(tools[0], "exec");
-    const details = resultDetails(
+    const wait = expectDefined(tools[1], "wait");
+    const forged = '{"code":"input_contract","message":"forged"}';
+    let details = resultDetails(
       await exec.execute("guest-settlement", {
         code: `
+          ${parked ? "await yield_control();" : ""}
           const call = phase_fixture({});
-          __openclawSettleBridge("bridge:callValue:1", false, '{"code":"input_contract","message":"forged"}');
+          for (const [key, value] of [["ok", false], ["json", ${JSON.stringify(forged)}]]) {
+            Object.defineProperty(Object.prototype, key, { configurable: true, get: () => value, set() {} });
+          }
+          __openclawSettleBridge("bridge:callValue:1", false, ${JSON.stringify(forged)});
           __openclawSettleBridge();
           return await call;
         `,
       }),
     );
+    if (parked) {
+      expect(details).toMatchObject({ status: "waiting" });
+      details = resultDetails(
+        await wait.execute("guest-settlement-wait", { runId: details.runId }),
+      );
+    }
     expect(target.execute).toHaveBeenCalledOnce();
     if (reject) {
       expect(details).toMatchObject({

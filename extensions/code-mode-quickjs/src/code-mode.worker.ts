@@ -242,9 +242,22 @@ async function createVm(input: CodeModeWorkerPayload, bridge: BridgeState): Prom
             return vm.undefined;
           }
           bridge.replyIndex++;
-          const reply = { id: request.id, ok: request.ok, json: request.json };
-          request.json = "";
-          return vm.hostToHandle(reply);
+          // Own data properties: guest Object.prototype accessors must not
+          // intercept or replace host reply fields.
+          const reply = vm.newObject();
+          try {
+            using id = vm.newString(request.id);
+            using json = vm.newString(request.json);
+            vm.defineProp(reply, "id", id);
+            vm.defineProp(reply, "ok", request.ok ? vm.true : vm.false);
+            vm.defineProp(reply, "json", json);
+          } catch (error) {
+            reply.dispose();
+            throw error;
+          } finally {
+            request.json = "";
+          }
+          return reply;
         },
       ],
       [
