@@ -1,7 +1,7 @@
 /** Final persistence, telemetry, and delivery for an isolated cron run. */
 import { asPositiveFiniteNumber as resolvePositiveContextTokens } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
+import { hasUncollectedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import {
   buildAgentRunTerminalReplySnapshot,
   normalizeAgentRunTerminalReplySnapshot,
@@ -290,7 +290,8 @@ export async function finalizeCronRun(params: {
       ...telemetry,
     });
   };
-  const acceptedSessionSpawn = hasAcceptedSessionSpawn(finalRunResult.acceptedSessionSpawns);
+  // A child this run already collected owns no later delivery to wait for.
+  const acceptedSessionSpawn = hasUncollectedSessionSpawn(finalRunResult.acceptedSessionSpawns);
   const heartbeatOnlyResponse =
     prepared.deliveryRequested && !hasFatalErrorPayload && deliveryDisposition.kind !== "visible";
   const heartbeatControlOnlyResponse =

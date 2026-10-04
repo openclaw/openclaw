@@ -13,6 +13,8 @@ export type AcceptedSessionSpawn = {
   label?: string;
   /** True only when this child owns a terminal completion for its requester. */
   expectsCompletionMessage?: boolean;
+  /** Host-recorded: this run's agents_wait returned the collector's result as done. */
+  collected?: true;
 };
 
 // Accounting follows the exact admission through provider fallback and plugin
@@ -33,8 +35,14 @@ export function mergeAcceptedSessionSpawnsForRun(
   }
   for (const spawn of accepted) {
     // Acceptance is immutable for this run; later harness projections cannot
-    // erase the producer's completion obligation.
-    receipts?.set(spawn.runId, receipts.get(spawn.runId) ?? spawn);
+    // erase the producer's completion obligation. Collection only adds evidence.
+    const receipt = receipts?.get(spawn.runId);
+    receipts?.set(
+      spawn.runId,
+      receipt && spawn.collected && !receipt.collected
+        ? { ...receipt, collected: true }
+        : (receipt ?? spawn),
+    );
   }
   return receipts ? [...receipts.values()] : [];
 }
@@ -68,6 +76,45 @@ export function hasAcceptedSessionSpawn(
   acceptedSessionSpawns?: readonly AcceptedSessionSpawn[],
 ): boolean {
   return Boolean(acceptedSessionSpawns?.length);
+}
+
+/** Read the collector run IDs an agents_wait result returned as done. */
+export function readCollectedRunIds(result: unknown): string[] {
+  const completed = asOptionalRecord(asOptionalRecord(result)?.details)?.completed;
+  if (!Array.isArray(completed)) {
+    return [];
+  }
+  return completed.flatMap((entry) => {
+    const record = asOptionalRecord(entry);
+    const runId = normalizeOptionalString(record?.runId);
+    return record?.status === "done" && runId ? [runId] : [];
+  });
+}
+
+/** Mark accepted collectors whose results agents_wait returned as done. */
+export function markCollectedSessionSpawns(
+  acceptedSessionSpawns: AcceptedSessionSpawn[],
+  collectedRunIds: readonly string[],
+): void {
+  for (const [index, spawn] of acceptedSessionSpawns.entries()) {
+    if (collectedRunIds.includes(spawn.runId)) {
+      acceptedSessionSpawns[index] = { ...spawn, collected: true };
+    }
+  }
+}
+
+/** Return true when an accepted child still owns work this run has not collected. */
+export function hasUncollectedSessionSpawn(
+  acceptedSessionSpawns?: readonly AcceptedSessionSpawn[],
+): boolean {
+  const collected = new Set(
+    acceptedSessionSpawns?.filter((spawn) => spawn.collected).map((spawn) => spawn.runId),
+  );
+  return (
+    acceptedSessionSpawns?.some(
+      (spawn) => spawn.expectsCompletionMessage === true || !collected.has(spawn.runId),
+    ) === true
+  );
 }
 
 /** Return true when an accepted child owns the requester's terminal completion. */
