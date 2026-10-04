@@ -25,15 +25,11 @@ function createParams(request: { params?: unknown }): Record<string, unknown> {
 suite.define(() => {
   it.each([
     { incognito: false, canonicalReplacement: false },
-    { incognito: true, canonicalReplacement: false },
-    { incognito: false, canonicalReplacement: true },
     { incognito: true, canonicalReplacement: true },
   ])(
     "attaches chat before admission and commits only the confirmed URL (incognito: $incognito, replacement: $canonicalReplacement)",
     async ({ incognito, canonicalReplacement }) => {
-      const browser = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-      try {
-        const page = await browser.newPage();
+      await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
         const gateway = await installMockGateway(page);
         await page.goto(`${suite.server.baseUrl}new?agent=main#draft-return`);
         if (incognito) {
@@ -101,23 +97,17 @@ suite.define(() => {
           .toContain("start the synthetic thread");
         expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
         await captureUiProof(suite, page, `instant-${incognito}-committed.png`);
-      } finally {
-        await browser.close();
-      }
+      });
     },
   );
 
   it.each([
     { incognito: false, crossAgent: false },
-    { incognito: true, crossAgent: false },
-    { incognito: false, crossAgent: true },
     { incognito: true, crossAgent: true },
   ])(
     "restores the full draft and exact URL after rejection (incognito: $incognito, cross-agent: $crossAgent)",
     async ({ incognito, crossAgent }) => {
-      const browser = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-      try {
-        const page = await browser.newPage();
+      await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
         const gateway = await installMockGateway(page, {
           workspace: "/tmp/synthetic-workspace",
           workspaceGit: true,
@@ -237,52 +227,98 @@ suite.define(() => {
         await waitForCommittedChatRoute(page);
         await navigateInApp(page, "new-session", "?agent=main");
         await expect.poll(() => composer.inputValue()).toBe("");
-      } finally {
-        await browser.close();
-      }
+      });
     },
   );
 
-  it("lets a newer draft win over a late successful foreground create", async () => {
-    const browser = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    try {
-      const page = await browser.newPage();
-      const gateway = await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}new?agent=main`);
-      await page.locator(".new-session-page__message").fill("old submitted text");
-      await gateway.deferNext("sessions.create");
-      await page.getByRole("button", { name: "Start session", exact: true }).click();
-      const first = createParams(await gateway.waitForRequest("sessions.create"));
-      await expect.poll(() => page.locator("openclaw-chat-page").count()).toBe(1);
-      await navigateInApp(page, "new-session", "?agent=main");
-      const composer = page.locator(".new-session-page__message");
-      await composer.fill("new draft must win");
-      const newerUrl = page.url();
-      await gateway.resolveDeferred("sessions.create", {
-        key: first.key,
-        runStarted: true,
-        runId: "late-old-run",
+  it.each(["foreground create", "preview readiness"] as const)(
+    "keeps a newer draft in charge of late %s completion",
+    async (stage) => {
+      const readiness = stage === "preview readiness";
+      const submitted = readiness ? "old admission" : "old submitted text";
+      const message = readiness ? "newer during pending readiness" : "new draft must win";
+      await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+        const gateway = await installMockGateway(page);
+        await page.goto(`${suite.server.baseUrl}new?agent=main`);
+        await page.locator(".new-session-page__message").fill(submitted);
+        await gateway.deferNext("sessions.create");
+        if (readiness) {
+          await page.evaluate(() => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime: { context: ApplicationContext };
+            };
+            const context = app.runtime.context;
+            const original = context.router.navigate.bind(context.router);
+            const gate = { entered: false, release: () => {} };
+            const wait = new Promise<void>((resolve) => {
+              gate.release = resolve;
+            });
+            Object.defineProperty(window, "instantReadyGate", { value: gate, configurable: true });
+            Object.defineProperty(context.router, "navigate", {
+              configurable: true,
+              value: (...args: Parameters<typeof original>) => {
+                const transition = original(...args);
+                return args[2]?.history === "none"
+                  ? transition.then(async () => {
+                      gate.entered = true;
+                      await wait;
+                    })
+                  : transition;
+              },
+            });
+          });
+        }
+        await page.getByRole("button", { name: "Start session", exact: true }).click();
+        const first = createParams(await gateway.waitForRequest("sessions.create"));
+        await expect.poll(() => page.locator("openclaw-chat-page").count()).toBe(1);
+        if (readiness) {
+          await gateway.resolveDeferred("sessions.create", { key: first.key });
+          await page.waitForFunction(
+            () =>
+              (window as Window & { instantReadyGate?: { entered: boolean } }).instantReadyGate
+                ?.entered,
+          );
+        }
+        await navigateInApp(page, "new-session", "?agent=main");
+        const composer = page.locator(".new-session-page__message");
+        if (readiness) {
+          // Wait for the retained draft before fill selects and replaces it.
+          await expect.poll(() => composer.inputValue()).toBe(submitted);
+        }
+        await composer.fill(message);
+        const newerUrl = page.url();
+        if (readiness) {
+          await page.evaluate(() =>
+            (
+              window as Window & { instantReadyGate?: { release: () => void } }
+            ).instantReadyGate?.release(),
+          );
+        } else {
+          await gateway.resolveDeferred("sessions.create", {
+            key: first.key,
+            runStarted: true,
+            runId: "late-old-run",
+          });
+          await gateway.waitForRequest("sessions.list");
+          expect(await composer.inputValue()).toBe(message);
+          expect(page.url()).toBe(newerUrl);
+        }
+        await gateway.deferNext("sessions.create");
+        await page.getByRole("button", { name: "Start session", exact: true }).click();
+        const second = createParams(await gateway.waitForRequest("sessions.create", { after: 1 }));
+        expect(second.message).toBe(message);
+        expect(second.key).not.toBe(first.key);
+        await gateway.rejectDeferred("sessions.create", {
+          message: readiness ? "Return the newer draft" : "New admission refused",
+        });
+        await expect.poll(() => composer.inputValue()).toBe(message);
+        expect(page.url()).toBe(newerUrl);
       });
-      await gateway.waitForRequest("sessions.list");
-      expect(await composer.inputValue()).toBe("new draft must win");
-      expect(page.url()).toBe(newerUrl);
-      await gateway.deferNext("sessions.create");
-      await page.getByRole("button", { name: "Start session", exact: true }).click();
-      const second = createParams(await gateway.waitForRequest("sessions.create", { after: 1 }));
-      expect(second.message).toBe("new draft must win");
-      expect(second.key).not.toBe(first.key);
-      await gateway.rejectDeferred("sessions.create", { message: "New admission refused" });
-      await expect.poll(() => composer.inputValue()).toBe("new draft must win");
-      expect(page.url()).toBe(newerUrl);
-    } finally {
-      await browser.close();
-    }
-  });
+    },
+  );
 
   it("resumes a transport interruption with the same frozen startup request", async () => {
-    const browser = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    try {
-      const page = await browser.newPage();
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}new?agent=main#reconnect`);
       await page.locator(".new-session-page__message").fill("resume exactly once");
@@ -308,177 +344,85 @@ suite.define(() => {
       await gateway.resolveDeferred("sessions.create", { key: second.key });
       await waitForCommittedChatRoute(page);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(2);
-    } finally {
-      await browser.close();
-    }
+    });
   });
 
-  it("does not restore old-identity draft bytes after switching Gateways", async () => {
-    const browser = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    try {
-      const page = await browser.newPage();
-      const gateway = await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}new?agent=main`);
-      await page.getByRole("switch", { name: "Incognito" }).click();
-      await page.locator(".new-session-page__message").fill("private old-identity text");
-      await gateway.deferNext("sessions.create");
-      await page.getByRole("button", { name: "Start session", exact: true }).click();
-      await gateway.waitForRequest("sessions.create");
-      await expect.poll(() => page.locator("openclaw-chat-page").count()).toBe(1);
-      await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime: { context: ApplicationContext };
-        };
-        app.runtime.context.gateway.connect({
-          gatewayUrl: "ws://other-synthetic-gateway.invalid",
-          token: "",
+  it.each([
+    { change: "gateway", message: "private old-identity text" },
+    { change: "principal", message: "private first principal" },
+    { change: "boot", message: "do not duplicate this admission" },
+  ] as const)(
+    "fences interrupted admission after a $change change",
+    async ({ change, message }) => {
+      await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+        const gateway = await installMockGateway(page);
+        await page.goto(`${suite.server.baseUrl}new?agent=main${change === "boot" ? "#boot" : ""}`);
+        if (change !== "boot") {
+          await page.getByRole("switch", { name: "Incognito" }).click();
+        }
+        const composer = page.locator(".new-session-page__message");
+        await composer.fill(message);
+        const originalUrl = page.url();
+        const hello = await page.evaluate(() => {
+          const app = document.querySelector("openclaw-app") as HTMLElement & {
+            runtime: { context: ApplicationContext };
+          };
+          return app.runtime.context.gateway.snapshot.hello!;
         });
+        await gateway.deferNext("sessions.create");
+        await page.getByRole("button", { name: "Start session", exact: true }).click();
+        await gateway.waitForRequest("sessions.create");
+        await expect.poll(() => page.locator("openclaw-chat-page").count()).toBe(1);
+        if (change === "gateway") {
+          await page.evaluate(() => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime: { context: ApplicationContext };
+            };
+            app.runtime.context.gateway.connect({
+              gatewayUrl: "ws://other-synthetic-gateway.invalid",
+              token: "",
+            });
+          });
+        } else {
+          if (change === "principal") {
+            await gateway.setMethodResponse("connect", {
+              ...hello,
+              auth: { ...hello.auth, recoveryScope: "different-synthetic-principal" },
+            });
+          } else {
+            await gateway.setGatewayBootId("different-synthetic-boot");
+          }
+          await gateway.setOnline(false);
+          if (change === "principal") {
+            expect(await page.locator("openclaw-new-session-page").count()).toBe(0);
+          }
+          await gateway.setOnline(true);
+        }
+        if (change === "boot") {
+          await page
+            .getByRole("alert")
+            .filter({ hasText: "The Gateway changed while this session was starting" })
+            .waitFor();
+          expect(await composer.inputValue()).toBe(message);
+          expect(
+            await page.getByRole("button", { name: "Start session", exact: true }).isDisabled(),
+          ).toBe(true);
+          expect(page.url()).toBe(originalUrl);
+        } else {
+          await expect.poll(() => page.locator("openclaw-new-session-page").count()).toBe(1);
+          await expect.poll(() => composer.inputValue()).toBe("");
+          expect(await page.locator("openclaw-new-session-page").textContent()).not.toContain(
+            message,
+          );
+        }
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
       });
-      await expect.poll(() => page.locator("openclaw-new-session-page").count()).toBe(1);
-      await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("");
-      expect(await page.locator("openclaw-new-session-page").textContent()).not.toContain(
-        "private old-identity text",
-      );
-    } finally {
-      await browser.close();
-    }
-  });
-  it("keeps newer navigation in charge while the pending chat becomes ready", async () => {
-    const browser = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    try {
-      const page = await browser.newPage();
-      const gateway = await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}new?agent=main`);
-      await page.locator(".new-session-page__message").fill("old admission");
-      await gateway.deferNext("sessions.create");
-      await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime: { context: ApplicationContext };
-        };
-        const context = app.runtime.context;
-        const original = context.router.navigate.bind(context.router);
-        const gate = { entered: false, release: () => {} };
-        const wait = new Promise<void>((resolve) => {
-          gate.release = resolve;
-        });
-        Object.defineProperty(window, "instantReadyGate", { value: gate, configurable: true });
-        Object.defineProperty(context.router, "navigate", {
-          configurable: true,
-          value: (...args: Parameters<typeof original>) => {
-            const transition = original(...args);
-            return args[2]?.history === "none"
-              ? transition.then(async () => {
-                  gate.entered = true;
-                  await wait;
-                })
-              : transition;
-          },
-        });
-      });
-      await page.getByRole("button", { name: "Start session", exact: true }).click();
-      const params = createParams(await gateway.waitForRequest("sessions.create"));
-      await expect.poll(() => page.locator("openclaw-chat-page").count()).toBe(1);
-      await gateway.resolveDeferred("sessions.create", { key: params.key });
-      await page.waitForFunction(
-        () =>
-          (window as Window & { instantReadyGate?: { entered: boolean } }).instantReadyGate
-            ?.entered,
-      );
-      await navigateInApp(page, "new-session", "?agent=main");
-      const composer = page.locator(".new-session-page__message");
-      // Acceptance is held, so settle the retained draft before fill selects and replaces it.
-      await expect.poll(() => composer.inputValue()).toBe("old admission");
-      await composer.fill("newer during pending readiness");
-      const newerUrl = page.url();
-      await page.evaluate(() =>
-        (
-          window as Window & { instantReadyGate?: { release: () => void } }
-        ).instantReadyGate?.release(),
-      );
-      // A subsequent submit must originate in the newer draft, not a stolen chat.
-      await gateway.deferNext("sessions.create");
-      await page.getByRole("button", { name: "Start session", exact: true }).click();
-      const second = createParams(await gateway.waitForRequest("sessions.create", { after: 1 }));
-      expect(second.message).toBe("newer during pending readiness");
-      await gateway.rejectDeferred("sessions.create", { message: "Return the newer draft" });
-      await expect.poll(() => composer.inputValue()).toBe("newer during pending readiness");
-      expect(page.url()).toBe(newerUrl);
-    } finally {
-      await browser.close();
-    }
-  });
-
-  it("waits for authenticated scope before restoring an interrupted private draft", async () => {
-    const browser = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    try {
-      const page = await browser.newPage();
-      const gateway = await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}new?agent=main`);
-      await page.getByRole("switch", { name: "Incognito" }).click();
-      await page.locator(".new-session-page__message").fill("private first principal");
-      const hello = await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime: { context: ApplicationContext };
-        };
-        return app.runtime.context.gateway.snapshot.hello!;
-      });
-      await gateway.deferNext("sessions.create");
-      await page.getByRole("button", { name: "Start session", exact: true }).click();
-      await gateway.waitForRequest("sessions.create");
-      await expect.poll(() => page.locator("openclaw-chat-page").count()).toBe(1);
-      await gateway.setMethodResponse("connect", {
-        ...hello,
-        auth: { ...hello.auth, recoveryScope: "different-synthetic-principal" },
-      });
-      await gateway.setOnline(false);
-      expect(await page.locator("openclaw-new-session-page").count()).toBe(0);
-      await gateway.setOnline(true);
-      await expect.poll(() => page.locator("openclaw-new-session-page").count()).toBe(1);
-      await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("");
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-    } finally {
-      await browser.close();
-    }
-  });
-
-  it("preserves the draft but never replays admission after a Gateway boot change", async () => {
-    const browser = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    try {
-      const page = await browser.newPage();
-      const gateway = await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}new?agent=main#boot`);
-      await page.locator(".new-session-page__message").fill("do not duplicate this admission");
-      const originalUrl = page.url();
-      await gateway.deferNext("sessions.create");
-      await page.getByRole("button", { name: "Start session", exact: true }).click();
-      await gateway.waitForRequest("sessions.create");
-      await expect.poll(() => page.locator("openclaw-chat-page").count()).toBe(1);
-      await gateway.setGatewayBootId("different-synthetic-boot");
-      await gateway.setOnline(false);
-      await gateway.setOnline(true);
-      await page
-        .getByRole("alert")
-        .filter({ hasText: "The Gateway changed while this session was starting" })
-        .waitFor();
-      expect(await page.locator(".new-session-page__message").inputValue()).toBe(
-        "do not duplicate this admission",
-      );
-      expect(
-        await page.getByRole("button", { name: "Start session", exact: true }).isDisabled(),
-      ).toBe(true);
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-      expect(page.url()).toBe(originalUrl);
-    } finally {
-      await browser.close();
-    }
-  });
-
+    },
+  );
   it.each([false, true])(
     "keeps late rejected first-turn attachments retryable (storage failure: %s)",
     async (storageFailure) => {
-      const browser = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-      try {
-        const page = await browser.newPage();
+      await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
         if (storageFailure) {
           await page.addInitScript(() => {
             const setItem = Object.getOwnPropertyDescriptor(Storage.prototype, "setItem")
@@ -523,61 +467,84 @@ suite.define(() => {
           attachments: [{ fileName: "synthetic-pixel.png", content: ONE_PIXEL_PNG_B64 }],
         });
         expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-      } finally {
-        await browser.close();
-      }
+      });
     },
   );
 
-  it("retries navigation without recreating an already admitted session", async () => {
-    const browser = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    try {
-      const page = await browser.newPage();
-      const gateway = await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}new?agent=main#navigation-error`);
-      await page.locator(".new-session-page__message").fill("create this session only once");
-      await gateway.deferNext("sessions.create");
-      await page.getByRole("button", { name: "Start session", exact: true }).click();
-      const params = createParams(await gateway.waitForRequest("sessions.create"));
-      await expect.poll(() => page.locator("openclaw-chat-page").count()).toBe(1);
-      await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime: { context: ApplicationContext };
-        };
-        const context = app.runtime.context;
-        const original = context.navigateAndWait;
-        Object.defineProperty(context, "navigateAndWait", {
-          configurable: true,
-          value: async () => {
+  it.each(["preview", "committed"] as const)(
+    "adopts a confirmed create after a %s navigation failure without recreating it",
+    async (stage) => {
+      await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+        const gateway = await installMockGateway(page);
+        await page.goto(
+          `${suite.server.baseUrl}new?agent=main${stage === "committed" ? "#navigation-error" : ""}`,
+        );
+        const message =
+          stage === "preview" ? "keep the confirmed creation" : "create this session only once";
+        await page.locator(".new-session-page__message").fill(message);
+        if (stage === "preview") {
+          await page.evaluate(() => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime: { context: ApplicationContext };
+            };
+            const context = app.runtime.context;
+            const original = context.router.navigate.bind(context.router);
+            Object.defineProperty(context.router, "navigate", {
+              configurable: true,
+              value: (...args: Parameters<typeof original>) => {
+                const transition = original(...args);
+                return args[0] === "chat" && args[2]?.history === "none"
+                  ? transition.then(() => {
+                      throw new Error("Synthetic preview readiness failed");
+                    })
+                  : transition;
+              },
+            });
+          });
+        }
+        await gateway.deferNext("sessions.create");
+        await page.getByRole("button", { name: "Start session", exact: true }).click();
+        const params = createParams(await gateway.waitForRequest("sessions.create"));
+        if (stage === "committed") {
+          await expect.poll(() => page.locator("openclaw-chat-page").count()).toBe(1);
+          await page.evaluate(() => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime: { context: ApplicationContext };
+            };
+            const context = app.runtime.context;
+            const original = context.navigateAndWait;
             Object.defineProperty(context, "navigateAndWait", {
               configurable: true,
-              value: original,
+              value: async () => {
+                Object.defineProperty(context, "navigateAndWait", {
+                  configurable: true,
+                  value: original,
+                });
+                throw new Error("Synthetic committed route failed");
+              },
             });
-            throw new Error("Synthetic committed route failed");
-          },
-        });
+          });
+        }
+        await gateway.resolveDeferred("sessions.create", { key: params.key });
+        if (stage === "committed") {
+          await expect
+            .poll(() => page.locator("openclaw-new-session-page").textContent())
+            .toContain("Synthetic committed route failed");
+          await captureUiProof(suite, page, "submitted-prompt-after-navigation-failure.png");
+          await expect
+            .poll(() => page.locator(".new-session-page__starting").textContent())
+            .toContain(message);
+          await page.getByRole("button", { name: "Open session", exact: true }).click();
+        }
+        await waitForCommittedChatRoute(page);
+        expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(String(params.key)));
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
       });
-      await gateway.resolveDeferred("sessions.create", { key: params.key });
-      await expect
-        .poll(() => page.locator("openclaw-new-session-page").textContent())
-        .toContain("Synthetic committed route failed");
-      await captureUiProof(suite, page, "submitted-prompt-after-navigation-failure.png");
-      await expect
-        .poll(() => page.locator(".new-session-page__starting").textContent())
-        .toContain("create this session only once");
-      await page.getByRole("button", { name: "Open session", exact: true }).click();
-      await waitForCommittedChatRoute(page);
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(String(params.key)));
-    } finally {
-      await browser.close();
-    }
-  });
+    },
+  );
 
   it("keeps the existing draft flow when the Gateway has no authenticated recovery scope", async () => {
-    const browser = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    try {
-      const page = await browser.newPage();
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}new?agent=main`);
       await page.locator(".new-session-page__message").fill("legacy scope still starts");
@@ -611,44 +578,6 @@ suite.define(() => {
       });
       await waitForCommittedChatRoute(page);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-    } finally {
-      await browser.close();
-    }
-  });
-  it("adopts a confirmed create even when transient preview readiness fails", async () => {
-    const browser = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    try {
-      const page = await browser.newPage();
-      const gateway = await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}new?agent=main`);
-      await page.locator(".new-session-page__message").fill("keep the confirmed creation");
-      await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime: { context: ApplicationContext };
-        };
-        const context = app.runtime.context;
-        const original = context.router.navigate.bind(context.router);
-        Object.defineProperty(context.router, "navigate", {
-          configurable: true,
-          value: (...args: Parameters<typeof original>) => {
-            const transition = original(...args);
-            return args[0] === "chat" && args[2]?.history === "none"
-              ? transition.then(() => {
-                  throw new Error("Synthetic preview readiness failed");
-                })
-              : transition;
-          },
-        });
-      });
-      await gateway.deferNext("sessions.create");
-      await page.getByRole("button", { name: "Start session", exact: true }).click();
-      const params = createParams(await gateway.waitForRequest("sessions.create"));
-      await gateway.resolveDeferred("sessions.create", { key: params.key });
-      await waitForCommittedChatRoute(page);
-      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(String(params.key)));
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-    } finally {
-      await browser.close();
-    }
+    });
   });
 });

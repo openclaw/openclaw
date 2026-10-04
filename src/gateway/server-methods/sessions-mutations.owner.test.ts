@@ -32,6 +32,7 @@ import {
   resolveSessionSharingRole,
   resolveSessionSharingTarget,
 } from "../session-sharing.js";
+import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import {
   createSessionMutationTestClient as client,
@@ -115,6 +116,8 @@ describe("sessions.patch", () => {
             presentation: "expanded",
           });
           expect(saved.details).toEqual({ ok: true, sessionKey, defaultPresentation: "expanded" });
+          // Finish the saved row's publication before the durability probe closes storage.
+          await flushPendingSessionsChangedEvents(requestContext);
           const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
           expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
           expect(loadSessionEntry(scope)).toMatchObject({

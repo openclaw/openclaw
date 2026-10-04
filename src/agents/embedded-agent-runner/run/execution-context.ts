@@ -22,7 +22,7 @@ export type PreparedEmbeddedRunInput = {
   onInitialWriterPrepared: (resource: AsyncDisposable) => void;
   preReplyGeneration?: Awaited<ReturnType<typeof prepareCronRootSessionGeneration>>;
   runParams: RunEmbeddedAgentParamsWithSessionFile;
-  sessionAdmission?: ReturnType<typeof assertAgentHarnessRunAdmission>;
+  sessionAdmission?: Awaited<ReturnType<typeof assertAgentHarnessRunAdmission>>;
   contextEngineAgentId?: string;
   provider: string;
   modelId: string;

@@ -23,13 +23,13 @@ export function readReleasedPackageActivationReceipt(installKey: string) {
   if (!fs.lstatSync(journal, { throwIfNoEntry: false })) {
     return undefined;
   }
-  const anchorIdentity = privatePackageActivationIdentity(anchor, true);
-  const journalIdentity = privatePackageActivationIdentity(journal, false);
+  const anchorIdentity = privatePackageActivationIdentity(anchor, "anchor");
+  const journalIdentity = privatePackageActivationIdentity(journal, "journal");
   const parentIdentity = packageActivationIdentity(path.dirname(anchor), "parent");
   const assertIdentity = () => {
     if (
-      privatePackageActivationIdentity(anchor, true) !== anchorIdentity ||
-      privatePackageActivationIdentity(journal, false) !== journalIdentity ||
+      privatePackageActivationIdentity(anchor, "anchor") !== anchorIdentity ||
+      privatePackageActivationIdentity(journal, "journal") !== journalIdentity ||
       packageActivationIdentity(path.dirname(anchor), "parent") !== parentIdentity ||
       fs.realpathSync(anchor) !== anchor
     ) {

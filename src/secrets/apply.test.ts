@@ -1444,71 +1444,7 @@ describe("secrets apply", () => {
     ).rejects.toThrow(`Cannot apply plugin-managed SecretRef provider "vault" because ${reason}`);
   });
 
-  it("scrubs .env in legacy .clawdbot state directory via automatic fallback", async () => {
-    // Do NOT set OPENCLAW_STATE_DIR — rely on resolveStateDir's automatic
-    // legacy-directory fallback. A controlled HOME that contains only
-    // .clawdbot (no .openclaw) exercises the scrub path so the old
-    // resolveConfigDir call (which always returns $HOME/.openclaw) would
-    // miss the .env inside .clawdbot.
-    const homeDir = tempDirs.make("openclaw-secrets-apply-legacy-");
-    const legacyStateDir = path.join(homeDir, ".clawdbot");
-    const configPath = path.join(legacyStateDir, "openclaw.json");
-    const agentDir = path.join(legacyStateDir, "agents", "main", "agent");
-    const envPath = path.join(legacyStateDir, ".env");
-    const authStorePath = resolveAuthProfileDatabasePath(agentDir);
-
-    await fs.mkdir(agentDir, { recursive: true });
-
-    const env = {
-      HOME: homeDir,
-      OPENAI_API_KEY: "sk-openai-plaintext", // pragma: allowlist secret
-    };
-
-    await writeJsonFile(configPath, {
-      models: {
-        providers: {
-          openai: createOpenAiProviderConfig(),
-        },
-      },
-    });
-    await writeJsonFile(authStorePath, createAuthProfileStoreFixture({}));
-    await fs.writeFile(
-      envPath,
-      "OPENAI_API_KEY=sk-openai-plaintext\nUNRELATED=value\n", // pragma: allowlist secret
-      "utf8",
-    );
-
-    try {
-      const plan = createPlan({
-        targets: [createOpenAiProviderTarget()],
-        options: createOneWayScrubOptions(),
-      });
-
-      const applied = await runSecretsApply({ plan, env, write: true });
-      expect(applied.mode).toBe("write");
-      expect(applied.changed).toBe(true);
-
-      const nextEnv = await fs.readFile(envPath, "utf8");
-      expect(nextEnv).not.toContain("sk-openai-plaintext");
-      expect(nextEnv).toContain("UNRELATED=value");
-    } finally {
-      clearSecretsRuntimeSnapshot();
-      closeOpenClawAgentDatabasesForTest();
-      await fs.rm(homeDir, { recursive: true, force: true });
-    }
-  });
-
-  it("uses the same resolved stateDir for .env scrubbing as for auth stores", async () => {
-    // Regression: projectPlanState resolves stateDir once (line 296) and
-    // must pass it into scrubEnvFiles so the same root is used for auth
-    // stores (auth-profiles.json, auth.json) and .env. If scrubEnvFiles
-    // re-resolves stateDir independently, a legacy/canonical directory
-    // appearing or disappearing during the operation could direct .env
-    // scrubbing at a different file.
-    //
-    // Set up a HOME where both .openclaw and .clawdbot exist.
-    // resolveStateDir returns .openclaw when both exist because it checks
-    // .openclaw first. The apply must use that same root for .env.
+  it("scrubs canonical state without touching an existing legacy directory", async () => {
     const homeDir = tempDirs.make("openclaw-secrets-apply-root-");
     const openclawDir = path.join(homeDir, ".openclaw");
     const clawdbotDir = path.join(homeDir, ".clawdbot");

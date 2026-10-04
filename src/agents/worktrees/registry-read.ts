@@ -2,7 +2,23 @@ import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { WorktreeRegistryListOptions } from "./registry-read.kernel.js";
-import type { ManagedWorktreeRecord, ProvisionedFileState } from "./types.js";
+import type {
+  ManagedWorktreeOwnerKind,
+  ManagedWorktreeRecord,
+  ProvisionedFileState,
+} from "./types.js";
+
+export async function readLiveRegistryWorktreeByOwner(
+  context: OpenClawStateWorkerContext,
+  ownerKind: ManagedWorktreeOwnerKind,
+  ownerId: string,
+): Promise<ManagedWorktreeRecord | undefined> {
+  const { executeOpenClawStateWorker } = await import("../../state/openclaw-state-worker-store.js");
+  return await executeOpenClawStateWorker(context, {
+    type: "worktrees.findLiveByOwner",
+    input: { ownerKind, ownerId },
+  });
+}
 
 export async function readRegistryWorktree(
   context: OpenClawStateWorkerContext,

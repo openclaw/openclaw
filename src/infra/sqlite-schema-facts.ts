@@ -258,10 +258,21 @@ function trackSchemaChanges(
           owner.mutationDepth += 1;
         }
         try {
-          yield* callStatement(
+          const rows = callStatement(
             iterate ?? native.StatementSync.prototype.iterate.bind(statement),
             bindings,
           );
+          try {
+            yield* rows;
+          } catch (error) {
+            // Delegation does not close the native iterator when next() throws.
+            try {
+              rows.return?.();
+            } catch {
+              // Preserve the statement failure over a failed native reset.
+            }
+            throw error;
+          }
         } finally {
           if (dataChange) {
             owner.mutationDepth -= 1;

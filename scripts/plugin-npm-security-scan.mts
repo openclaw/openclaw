@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -38,17 +39,17 @@ const REVIEWED_CRITICAL_FINDING_LIMITS = new Map<string, number>([
   ["source:@openclaw/codex:dangerous-exec:src/node-cli-sessions.ts", 1],
   ["setup:@openclaw/discord:dangerous-exec:dist/.setup/receive-recovery-<hash>.mjs", 1],
   ["source:@openclaw/discord:dangerous-exec:src/voice/audio.ts", 1],
-  ["setup:@openclaw/diffs:env-harvesting:dist/assets/viewer-runtime.js", 1],
+  ["dist:@openclaw/diffs:env-harvesting:dist/assets/viewer-runtime.js", 1],
   ["dist:@openclaw/diffs-language-pack:env-harvesting:dist/assets/viewer-runtime.js", 1],
-  ["setup:@openclaw/facetime:dangerous-exec:dist/runtime-api.js", 1],
-  ["setup:@openclaw/facetime:dangerous-exec:src/audio-pump.ts", 1],
+  ["dist:@openclaw/facetime:dangerous-exec:dist/runtime-api.js", 1],
   ["source:@openclaw/facetime:dangerous-exec:src/audio-pump.ts", 1],
-  ["setup:@openclaw/google-meet:dangerous-exec:dist/index.js", 1],
+  ["dist:@openclaw/google-meet:dangerous-exec:dist/index.js", 1],
   ["source:@openclaw/google-meet:dangerous-exec:src/node-host.ts", 3],
   ["source:@openclaw/google-meet:dangerous-exec:src/realtime.ts", 2],
   ["setup:@openclaw/imessage:dangerous-exec:dist/.setup/client-<hash>.mjs", 1],
+  ["setup:@openclaw/imessage:dangerous-exec:dist/.setup/sanitize-outbound-<hash>.mjs", 1],
   ["source:@openclaw/imessage:dangerous-exec:src/client.ts", 1],
-  ["setup:@openclaw/llama-cpp-provider:dangerous-exec:dist/index.js", 3],
+  ["dist:@openclaw/llama-cpp-provider:dangerous-exec:dist/index.js", 3],
   ["source:@openclaw/llama-cpp-provider:dangerous-exec:src/hardware.ts", 1],
   ["source:@openclaw/llama-cpp-provider:dangerous-exec:src/llama-server-install.ts", 1],
   ["source:@openclaw/llama-cpp-provider:dangerous-exec:src/llama-server-vc-runtime.ts", 1],
@@ -59,7 +60,7 @@ const REVIEWED_CRITICAL_FINDING_LIMITS = new Map<string, number>([
   ["source:@openclaw/mxc-sandbox:dangerous-exec:src/readiness.ts", 2],
   ["setup:@openclaw/onnx:dangerous-exec:dist/.setup/worker-client-<hash>.mjs", 1],
   ["source:@openclaw/onnx:dangerous-exec:src/worker-client.ts", 1],
-  ["setup:@openclaw/raft:dangerous-exec:dist/channel-plugin-api.js", 1],
+  ["dist:@openclaw/raft:dangerous-exec:dist/channel-plugin-api.js", 1],
   ["source:@openclaw/raft:dangerous-exec:src/gateway.ts", 1],
   ["setup:@openclaw/signal:dangerous-exec:dist/.setup/monitor-<hash>.mjs", 1],
   ["source:@openclaw/signal:dangerous-exec:src/daemon.ts", 1],
@@ -67,6 +68,13 @@ const REVIEWED_CRITICAL_FINDING_LIMITS = new Map<string, number>([
   ["dist:@openclaw/voice-call:dangerous-exec:dist/runtime-entry-<hash>.js", 1],
   ["source:@openclaw/voice-call:dangerous-exec:src/tunnel.ts", 4],
   ["source:@openclaw/voice-call:dangerous-exec:src/webhook/tailscale.ts", 1],
+]);
+
+const REVIEWED_CRITICAL_FINDING_CONTENT_SHA256 = new Map<string, string>([
+  [
+    "setup:@openclaw/imessage:dangerous-exec:dist/.setup/sanitize-outbound-<hash>.mjs",
+    "34833261f1e012015e6e28f35903d78f77efcfdac68f924310b8a3761264878b",
+  ],
 ]);
 
 // Vendored runtime findings are owned by dependency path instead of every plugin
@@ -119,7 +127,10 @@ const REVIEWED_DEPENDENCY_FINDING_LIMITS = new Map<string, number>([
   ["env-harvesting:node_modules/@tybys/wasm-util/dist/wasm-util.min.js", 1],
 ]);
 
-type CriticalFinding = Pick<SkillScanFinding, "line" | "ruleId"> & { path: string };
+type CriticalFinding = Pick<SkillScanFinding, "line" | "ruleId"> & {
+  contentSha256: string;
+  path: string;
+};
 
 function normalizeFindingPath(file: string): string {
   const name = path.posix.basename(file);
@@ -131,6 +142,7 @@ function normalizeFindingPath(file: string): string {
     "monitor",
     "receive-recovery",
     "runtime-entry",
+    "sanitize-outbound",
     "service",
     "session-catalog",
     "transport-stdio",
@@ -250,11 +262,6 @@ export function scanPluginNpmArtifactSecurity(params: {
     );
   }
   const executables = declaredExecutablePaths(initial.packageManifest, packedFiles);
-  const layout = packedFiles.some((file) => file.startsWith("dist/.setup/"))
-    ? "setup"
-    : packedFiles.some((file) => file.startsWith("dist/"))
-      ? "dist"
-      : "source";
   const critical: CriticalFinding[] = [];
   let scannedFiles = 0;
   let scannedBytes = 0;
@@ -283,6 +290,7 @@ export function scanPluginNpmArtifactSecurity(params: {
       for (const finding of scanSource(Buffer.from(content).toString("utf8"), packedPath)) {
         if (finding.severity === "critical") {
           critical.push({
+            contentSha256: createHash("sha256").update(content).digest("hex"),
             line: finding.line,
             path: normalizeFindingPath(packedPath),
             ruleId: finding.ruleId,
@@ -295,6 +303,11 @@ export function scanPluginNpmArtifactSecurity(params: {
   const unexpected: CriticalFinding[] = [];
   for (const finding of critical) {
     const dependencyPath = dependencyFindingPath(finding.path);
+    const layout = finding.path.startsWith("dist/.setup/")
+      ? "setup"
+      : finding.path.startsWith("dist/")
+        ? "dist"
+        : "source";
     const key = dependencyPath
       ? `${finding.ruleId}:${dependencyPath}`
       : `${layout}:${params.packageName}:${finding.ruleId}:${finding.path}`;
@@ -303,7 +316,13 @@ export function scanPluginNpmArtifactSecurity(params: {
     const reviewedLimit = dependencyPath
       ? REVIEWED_DEPENDENCY_FINDING_LIMITS.get(key)
       : REVIEWED_CRITICAL_FINDING_LIMITS.get(key);
-    if (count > (reviewedLimit ?? 0)) {
+    const reviewedContentSha256 = dependencyPath
+      ? undefined
+      : REVIEWED_CRITICAL_FINDING_CONTENT_SHA256.get(key);
+    if (
+      count > (reviewedLimit ?? 0) ||
+      (reviewedContentSha256 !== undefined && finding.contentSha256 !== reviewedContentSha256)
+    ) {
       unexpected.push(finding);
     }
   }

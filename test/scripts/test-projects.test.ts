@@ -2183,12 +2183,16 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(plans.every((plan) => plan.includePatterns === null)).toBe(true);
   });
 
-  it("routes the plugin contracts directory to the plugin contracts lane", () => {
+  it("routes the plugin contracts directory across contract and database worker lanes", () => {
     const plans = buildVitestRunPlans(["src/plugins/contracts"]);
 
-    expectSingleVitestRunPlan(plans, {
-      config: "test/vitest/vitest.contracts-plugin.config.ts",
-    });
+    expect(plans).toEqual([
+      runPlan("contracts-plugin"),
+      runPlan("infra", [
+        "src/plugins/contracts/host-hook-state.identity.test.ts",
+        "src/plugins/contracts/host-hooks.contract.test.ts",
+      ]),
+    ]);
   });
 
   it.each([

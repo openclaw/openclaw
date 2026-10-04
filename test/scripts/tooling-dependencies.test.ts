@@ -51,30 +51,34 @@ console.log(copyFileDescriptorSync, watch);
   expect(existsSync(join(fixture.checkout, "node_modules"))).toBe(false);
 });
 
-it.each(["tsx", "fixture-pkg"])("rejects stale %s before executing its source", (name) => {
-  const fixture = createToolingDependencyFixture(tempDirs.make("openclaw-tooling-version-"), true);
-  fixture.writePackage(name, 'console.log("STALE PACKAGE EXECUTED");', "0.0.0-stale");
-  const result = fixture.run();
-  expect(result.status).toBe(1);
-  expect(result.stderr).toContain(`'${name}' has version 0.0.0-stale`);
-  expect(result.stderr).toContain("requires 1.0.0");
-  expect(result.stderr.trimEnd()).toMatch(/\[crabbox\] FAILED \(exit 1\)$/);
-  expect(result.stdout + result.stderr).not.toContain("STALE PACKAGE EXECUTED");
-  expect(existsSync(join(fixture.checkout, "node_modules"))).toBe(false);
-});
-
-it.each(["tsx", "fixture-pkg"])("refuses %s linked to another checkout's source", (name) => {
+it.each([
+  { name: "tsx", invalid: "version" },
+  { name: "fixture-pkg", invalid: "version" },
+  { name: "tsx", invalid: "owner" },
+  { name: "fixture-pkg", invalid: "owner" },
+])("rejects $name with an invalid $invalid before executing it", ({ name, invalid }) => {
   const root = tempDirs.make("openclaw-tooling-workspace-");
   const fixture = createToolingDependencyFixture(root, true);
-  const workspace = join(root, "workspace");
-  mkdirSync(workspace);
-  const installed = join(fixture.tooling, "node_modules", name);
-  const external = join(workspace, name);
-  renameSync(installed, external);
-  symlinkSync(external, installed, process.platform === "win32" ? "junction" : "dir");
+  if (invalid === "version") {
+    fixture.writePackage(name, 'console.log("STALE PACKAGE EXECUTED");', "0.0.0-stale");
+  } else {
+    const workspace = join(root, "workspace");
+    mkdirSync(workspace);
+    const installed = join(fixture.tooling, "node_modules", name);
+    const external = join(workspace, name);
+    renameSync(installed, external);
+    symlinkSync(external, installed, process.platform === "win32" ? "junction" : "dir");
+  }
   const result = fixture.run();
   expect(result.status).toBe(1);
-  expect(result.stderr).toContain("Tooling package escapes its installed dependency owner");
-  expect(result.stdout).toBe("");
+  if (invalid === "version") {
+    expect(result.stderr).toContain(`'${name}' has version 0.0.0-stale`);
+    expect(result.stderr).toContain("requires 1.0.0");
+    expect(result.stderr.trimEnd()).toMatch(/\[crabbox\] FAILED \(exit 1\)$/);
+    expect(result.stdout + result.stderr).not.toContain("STALE PACKAGE EXECUTED");
+  } else {
+    expect(result.stderr).toContain("Tooling package escapes its installed dependency owner");
+    expect(result.stdout).toBe("");
+  }
   expect(existsSync(join(fixture.checkout, "node_modules"))).toBe(false);
 });
