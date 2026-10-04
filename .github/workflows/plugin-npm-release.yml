@@ -196,7 +196,8 @@ jobs:
             --repository "$GITHUB_REPOSITORY" \
             --workflow-ref "$WORKFLOW_REF" \
             --workflow-full-ref "$WORKFLOW_FULL_REF" \
-            --workflow-sha "$WORKFLOW_SHA"
+            --workflow-sha "$WORKFLOW_SHA" \
+            --allow-prevalidated-ref
 
       - name: Validate ref is on a trusted publish branch
         env:
