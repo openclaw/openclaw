@@ -7,6 +7,7 @@ import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/
 import {
   capCompactionSummary,
   fitCompactionSummary,
+  formatRequiredAskContext,
   MAX_COMPACTION_SUMMARY_CHARS,
   SUMMARY_TRUNCATED_MARKER,
 } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
@@ -84,8 +85,6 @@ const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
 const MAX_RECENT_TURNS_PRESERVE = 12;
 const MAX_QUALITY_GUARD_MAX_RETRIES = 3;
 const MAX_RECENT_TURN_TEXT_CHARS = 600;
-const MAX_REQUIRED_ASK_CONTEXT_CHARS = 2_000;
-const REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER = "\n[... split-turn ask context truncated ...]\n";
 const PREVIOUS_SUMMARY_REDISTILL_PREFIX =
   "Previous compaction summary to re-distill with the current conversation. " +
   "Prune stale, duplicate, or superseded details instead of preserving it verbatim.";
@@ -766,18 +765,6 @@ function formatGeneratedSplitTurnSection(summary: string, onTruncated: () => voi
     onTruncated();
   }
   return `${heading}${cappedSummary}`;
-}
-
-function formatRequiredAskContext(rawAsk: string): string {
-  const source = rawAsk.trim();
-  if (source.length <= MAX_REQUIRED_ASK_CONTEXT_CHARS) {
-    return source;
-  }
-  const contentBudget =
-    MAX_REQUIRED_ASK_CONTEXT_CHARS - REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER.length;
-  const headBudget = Math.floor(contentBudget / 2);
-  const tailBudget = contentBudget - headBudget;
-  return `${truncateUtf16Safe(source, headBudget)}${REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER}${sliceUtf16Safe(source, -tailBudget)}`;
 }
 
 function extractLatestUserAsk(messages: AgentMessage[]): string | null {

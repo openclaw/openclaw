@@ -326,9 +326,13 @@ describe("projects vitest config", () => {
     expect(sharedVitestConfig.envDir).toBe(false);
   });
 
-  it("uses absolute force-rerun triggers for discovered vitest lane files", () => {
-    expect(sharedVitestConfig.test.forceRerunTriggers.map(normalizeConfigPath)).toContain(
+  it("uses absolute force-rerun triggers for discovered vitest lane and preload files", () => {
+    const triggers = sharedVitestConfig.test.forceRerunTriggers.map(normalizeConfigPath);
+    expect(triggers).toContain(
       normalizeConfigPath(`${process.cwd()}/test/vitest/vitest.config.ts`),
+    );
+    expect(triggers).toContain(
+      normalizeConfigPath(`${process.cwd()}/test/vitest/vitest.sqlite-preload.mts`),
     );
   });
 

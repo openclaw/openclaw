@@ -34,6 +34,7 @@ import {
   coreGatewayHandlers,
   gatewayRouterUploadPolicyError,
 } from "./server-methods/core-handlers.js";
+import { isGatewayClientProfilePending } from "./server-methods/gateway-client-identity.js";
 import { prepareGatewayRequestHandler } from "./server-methods/lazy-core-handlers.js";
 import { authorizeGatewayRequestPreDispatch } from "./server-methods/request-authorization.js";
 import { isTargetedNonSafeGatewayRestartRequest } from "./server-methods/restart-request.js";
@@ -289,7 +290,7 @@ export async function handleGatewayRequest(
         : await createExpectedProfileBinding(
             req.expectedProfileId,
             client,
-            readGatewayRequestMutationAuthority(opts).assertLifetimeCurrent,
+            readGatewayRequestMutationAuthority(opts).assertPreparationCurrent,
           ));
     // WS publication already owns the shared guard, including policy-close responses.
     const profileRespond =
@@ -326,6 +327,13 @@ export async function handleGatewayRequest(
     try {
       entry?.assertOpen();
       const requestMutationAuthority = readGatewayRequestMutationAuthority(opts);
+      // Post-hello hydration may supply the first profile. Once selected, the same
+      // caller must survive every awaited row read and authorization retry.
+      let capturedOperatorGuard = isGatewayClientProfilePending(client)
+        ? undefined
+        : captureGatewayRequestOperatorGuard(opts);
+      const assertOperatorCurrent = () =>
+        (capturedOperatorGuard ??= captureGatewayRequestOperatorGuard(opts))();
       const requestFacts = { method: req.method, requestParams: req.params, client, context };
       const authorization = await authorizeGatewayRequestPreDispatch({
         ...requestFacts,
@@ -336,9 +344,14 @@ export async function handleGatewayRequest(
         assertInvocationCurrent: () => {
           runtimeParticipant?.assertCurrent();
           profileBinding?.assertCurrent();
-          // Profile hydration binds the operator guard later; retain the original request lifetime.
-          readGatewayRequestMutationAuthority(opts).assertOperatorCurrent?.();
+          assertOperatorCurrent();
           requestMutationAuthority.assertCurrent();
+        },
+        assertPreparationCurrent: () => {
+          runtimeParticipant?.assertCurrent();
+          profileBinding?.assertCurrent();
+          assertOperatorCurrent();
+          requestMutationAuthority.assertPreparationCurrent();
         },
       });
       sessionAccessAuthority = authorization.sessionAccessAuthority;
@@ -355,7 +368,6 @@ export async function handleGatewayRequest(
       }
       // Every session mutation owner uses these pre-commit assertions. Compose the
       // host lifetime here so individual handlers cannot lose it across an await.
-      const assertOperatorCurrent = captureGatewayRequestOperatorGuard(opts);
       async function withSessionTurnAuthority<T>(
         target: { sessionKey: string; agentId?: string; sessionId: string },
         consume: (sessionEntry: InternalSessionEntry) => T,
@@ -373,6 +385,11 @@ export async function handleGatewayRequest(
             runtimeParticipant?.assertCurrent();
             assertOperatorCurrent();
             requestMutationAuthority.assertCurrent();
+          },
+          assertPreparationCurrent: () => {
+            runtimeParticipant?.assertCurrent();
+            assertOperatorCurrent();
+            requestMutationAuthority.assertPreparationCurrent();
           },
           consumeSessionTurn: {
             target: { ...target },

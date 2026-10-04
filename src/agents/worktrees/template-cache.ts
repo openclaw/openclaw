@@ -92,7 +92,7 @@ export async function prepareWorktreeTemplate(params: {
   sourceCommit: string;
   backend: string;
   reuseOnly?: boolean;
-  requireSpace: () => void;
+  requireSpace: () => Promise<void>;
   validate: (record: WorktreeTemplateRecord) => Promise<boolean>;
   prepare: (record: WorktreeTemplateRecord) => Promise<void>;
 }): Promise<WorktreeTemplateRecord | undefined> {
@@ -115,7 +115,7 @@ export async function prepareWorktreeTemplate(params: {
   if (params.reuseOnly) {
     return undefined;
   }
-  params.requireSpace();
+  await params.requireSpace();
   if (existing) {
     await retireWorktreeTemplate(params.env, existing, params.options);
   }

@@ -43,7 +43,7 @@ type CheckoutOptions = WorktreeFilesystemOptions & {
   /** This source is consumed by a sandboxed session, never host filter programs. */
   sourceOnly?: boolean;
   checkoutBudget?: Pick<GitCommandOptions, "timeoutMs" | "killGraceMs">;
-  requireSpace: (cloneBytes?: number) => void;
+  requireSpace: (cloneBytes?: number) => Promise<void>;
 };
 
 type CheckoutResult = GitResult & { templateCloned?: true };
@@ -64,9 +64,11 @@ function gitOptions(options: WorktreeFilesystemOptions) {
 function checkoutGitOptions(options: CheckoutOptions, cloneBytes?: number): GitCommandOptions {
   return {
     ...gitOptions(options),
-    beforeRun: () => {
+    startRun: async <T>(run: () => T): Promise<Awaited<T>> => {
       assertOwned(options);
-      options.requireSpace(cloneBytes);
+      await options.requireSpace(cloneBytes);
+      assertOwned(options);
+      return await run();
     },
     timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
     ...options.checkoutBudget,
@@ -230,7 +232,7 @@ async function prepareTemplate(options: CheckoutOptions) {
       );
     },
     prepare: async (preparing) => {
-      options.requireSpace();
+      await options.requireSpace();
       await backend.createTemplate(preparing.path, options);
       await requireGit(
         options.repoRoot,
@@ -390,13 +392,13 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
     }
     assertOwned(options);
     try {
-      options.requireSpace(cloneBytes);
+      await options.requireSpace(cloneBytes);
     } catch (error) {
       if (!template) {
         throw error;
       }
       // Tiny trees can need less space than the conservative clone metadata allowance.
-      options.requireSpace();
+      await options.requireSpace();
       template = undefined;
       cloneBytes = undefined;
     }
@@ -441,7 +443,7 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
       await fs.rmdir(options.destination);
       destinationRemoved = true;
       materializationStarted = true;
-      options.requireSpace(cloneBytes);
+      await options.requireSpace(cloneBytes);
       await template.backend.cloneTemplate(template.record.path, options.destination, options);
       const cloneCompletedAtMs = Date.now();
       await assertRegistration();
@@ -499,7 +501,7 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
       assertOwned(options);
       log.warn(`worktree snapshot failed; using Git checkout: ${String(error)}`);
       if (options.deferGitCheckout) {
-        options.requireSpace();
+        await options.requireSpace();
         return added;
       }
       return await checkout();

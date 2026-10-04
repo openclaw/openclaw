@@ -403,7 +403,7 @@ describe("openai transport stream", () => {
     const onCompactionRejected = vi.fn();
 
     await expect(
-      testing.createResponsesStreamWithEncryptedContentRetry({
+      testing.createResponsesStreamWithRecovery({
         client: { responses: { create } } as never,
         request: request as never,
         requestOptions: undefined,
@@ -441,7 +441,7 @@ describe("openai transport stream", () => {
     const onCompactionRejected = vi.fn();
 
     await expect(
-      testing.createResponsesStreamWithEncryptedContentRetry({
+      testing.createResponsesStreamWithRecovery({
         client: { responses: { create } } as never,
         request: {
           model: "gpt-5.5",
@@ -476,7 +476,7 @@ describe("openai transport stream", () => {
     const onCompactionRejected = vi.fn();
 
     await expect(
-      testing.createResponsesStreamWithEncryptedContentRetry({
+      testing.createResponsesStreamWithRecovery({
         client: { responses: { create } } as never,
         request: {
           model: "gpt-5.5",
@@ -509,7 +509,7 @@ describe("openai transport stream", () => {
         response: new Response(null, { status: 200 }),
       }),
     });
-    const result = await testing.createResponsesStreamWithEncryptedContentRetry({
+    const result = await testing.createResponsesStreamWithRecovery({
       client: { responses: { create } } as never,
       request: {
         model: "gpt-5.5",

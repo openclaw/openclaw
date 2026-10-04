@@ -4479,7 +4479,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(onBlockReply).toHaveBeenCalledOnce();
       expect(onBlockReply).toHaveBeenCalledWith(
         expect.objectContaining({
-          text: "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.",
+          text: "LLM request rejected: Synthetic provider failure for delivery proof\\.",
           isError: true,
         }),
       );

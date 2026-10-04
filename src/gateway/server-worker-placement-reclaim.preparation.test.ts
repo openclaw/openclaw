@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -25,7 +26,10 @@ import { prepareSessionWorkerPlacementStop } from "./worker-environments/session
 const lookup = vi.hoisted(() => ({
   value: undefined as ReturnType<typeof import("./session-utils.js").loadSessionEntry> | undefined,
 }));
-vi.mock("./session-utils.js", () => ({ loadSessionEntry: () => lookup.value }));
+vi.mock("./session-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils.js")>()),
+  loadSessionEntry: () => lookup.value,
+}));
 vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
   getRuntimeConfig: () => ({}),
@@ -114,8 +118,7 @@ it("one failed Stop cannot reopen ingress while another Stop still owns its clos
     release.resolve();
     await first;
   }
-  const fresh = await f.admit();
-  fresh.release();
+  (await f.admit()).release();
 });
 
 it.each(["authorization", "incarnation"] as const)(
@@ -156,8 +159,7 @@ it.each(["authorization", "incarnation"] as const)(
       await rejected;
       expect(interrupted).not.toHaveBeenCalled();
       expect(f.run).not.toHaveBeenCalled();
-      const fresh = await f.admit();
-      fresh.release();
+      (await f.admit()).release();
     } finally {
       release.resolve();
       acquired.release();
@@ -214,8 +216,7 @@ it("auto-suspend eligibility rejects before closing admission or signalling canc
   ).rejects.toThrow("session is busy");
   expect(f.cancel).not.toHaveBeenCalled();
   expect(f.run).not.toHaveBeenCalled();
-  const fresh = await f.admit();
-  fresh.release();
+  (await f.admit()).release();
 });
 
 it("keeps admissions closed while serialized teardown is queued, then revalidates the incarnation", async () => {
@@ -307,6 +308,7 @@ async function cancellationLoadFixture(
     resolveCanonicalSessionEntryFromStoreKeys: () => entry,
   };
   lookup.value = { ...target, cfg: {}, entry, legacyKey: undefined };
+  await replaceSessionEntry({ ...target, sessionKey: REQUEST.sessionKey }, entry);
   const context = createWorkerStopChatContext();
   let delayCancellation = false;
   const loading = createDeferredCore();

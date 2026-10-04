@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
 
 const websocketState = vi.hoisted(() => ({
   instances: [] as Array<{
@@ -65,10 +66,7 @@ import {
   runWithAiTransportHost,
 } from "../host.js";
 import { cleanupSessionResources } from "../session-resources.js";
-import {
-  createOpenAIResponsesWebSocketStream,
-  supportsNativeOpenAIResponsesEndpoint,
-} from "./openai-responses-websocket.js";
+import { createOpenAIResponsesWebSocketStream } from "./openai-responses-websocket.js";
 
 const initialHost = getAiTransportHost();
 const clientFixture = {

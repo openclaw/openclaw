@@ -23,6 +23,12 @@ A transcript writer ownership error means the run lost its session write claim. 
 
 Use `openclaw logs --follow` to correlate the run with storage activity. SQLite can contend between connections or worker threads in one Gateway process; seeing only one process with the database open does not rule out contention. See [database concurrency notes](/reference/database-schemas#integrity-checks). Avoid full database compaction while runs are active.
 
+## Provider rejected the request
+
+A reply beginning with `LLM request rejected:` includes the provider's request-validation message. OpenClaw redacts credentials, bounds the diagnostic, and displays it as literal text rather than exposing the full response body. Known context, token-limit, and storage failures retain their specific recovery guidance.
+
+For `Invalid service_tier argument`, check the selected model and speed setting. A provider or account supporting Fast or Ultrafast does not mean every model supports that tier. Retry with Standard (`/fast off`) or select a model that supports the requested tier. This error alone does not mean the conversation is corrupt. See [OpenAI Fast mode](/providers/openai/advanced#fast-mode).
+
 ## No replies
 
 If channels are up but nothing answers, check routing and policy before reconnecting anything.

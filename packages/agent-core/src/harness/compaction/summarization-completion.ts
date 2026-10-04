@@ -18,6 +18,7 @@ import {
   InvalidSummaryOutputError,
   ok,
   SummaryOutputBudgetError,
+  SummaryProviderError,
   type Result,
 } from "../types.js";
 import { SUMMARIZATION_SYSTEM_PROMPT } from "./summarization-prompts.js";
@@ -83,9 +84,9 @@ export async function runSummarizationCompletion(
   }
   if (response.stopReason === "error") {
     return err(
-      new CompactionError(
-        "summarization_failed",
+      new SummaryProviderError(
         `${params.errorLabel} failed: ${response.errorMessage || "Unknown error"}`,
+        response,
       ),
     );
   }

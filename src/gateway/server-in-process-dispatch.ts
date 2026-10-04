@@ -11,7 +11,7 @@ import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import type { GatewayMethodRegistry } from "./methods/registry.js";
 import type { GatewayMethodDispatchResponse } from "./server-in-process-dispatch.types.js";
-import { bindCreatedInputMutationAuthority } from "./server-methods/session-mutation-guards.js";
+import { bindInProcessRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 
 export type { GatewayMethodDispatchResponse } from "./server-in-process-dispatch.types.js";
@@ -28,6 +28,7 @@ type InProcessGatewayDispatchOptions = {
   onSignalAbort?: () => Promise<void> | void;
   requestIdPrefix?: string;
   prepareDispatchCurrent?: () => Promise<void>;
+  assertPreparationCurrent?: () => void;
   sessionMutationCommitGuard?: () => void;
   assertCreatedInputSourceCurrent?: () => void;
   timeoutMs?: number;
@@ -198,7 +199,7 @@ export async function dispatchGatewayRequestInProcessRaw(
     const execution = options.context
       .trackExecution(() =>
         handleGatewayRequest(
-          bindCreatedInputMutationAuthority(
+          bindInProcessRequestMutationAuthority(
             {
               req,
               requestEntry: entry,
@@ -226,6 +227,7 @@ export async function dispatchGatewayRequestInProcessRaw(
               ...(options.signal ? { signal: options.signal } : {}),
             },
             options.assertCreatedInputSourceCurrent,
+            options.assertPreparationCurrent,
           ),
         )
           .then(() => {

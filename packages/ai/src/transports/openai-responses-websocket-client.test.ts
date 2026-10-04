@@ -4,6 +4,7 @@ import {
   type Context,
   type Model,
 } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { WebSocketError } from "openai/resources/responses/internal-base.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -384,6 +385,73 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     expect(transportState.websocketRequests[0]?.service_tier).toBe("ultrafast");
     expect(observations).toEqual([{ requestedTier: "ultrafast", responseTier: "default" }]);
   });
+
+  it.each(["wrapped", "failed", "after-output", "registered-hook", "active-hook"] as const)(
+    "recovers tier rejection only before output: %s",
+    async (shape) => {
+      const onActiveResponse = vi.fn();
+      const rejection = {
+        code: "invalid_request_error",
+        type: "invalid_request_error",
+        param: "service_tier",
+        message: "Invalid service_tier argument",
+      };
+      transportState.responseBatches.push(
+        shape === "wrapped"
+          ? [{ type: "error", error: wrappedSdkServerError({ ...rejection, status: 400 }) }]
+          : [
+              ...(shape === "active-hook"
+                ? [message({ type: "response.created", response: { id: "resp_active" } })]
+                : []),
+              ...(shape === "after-output"
+                ? [
+                    message({
+                      type: "response.output_item.added",
+                      output_index: 0,
+                      item: { type: "web_search_call", id: "ws_started", status: "in_progress" },
+                    }),
+                  ]
+                : []),
+              message({
+                type: "response.failed",
+                response: { id: "resp_tier_error", status: "failed", error: rejection, output: [] },
+              }),
+            ],
+      );
+      transportState.sdkOutcomes.push(sdkCompletion("resp_tier_recovered"));
+      const observations: ResponsesServiceTierObservation[] = [];
+      const options = {
+        apiKey: "synthetic-key",
+        transport: "websocket-cached" as const,
+        sessionId: "tier-recovery-session",
+        ...(shape.endsWith("hook") ? { onActiveResponse } : {}),
+        onPayload: (payload: unknown) => {
+          if (!isRecord(payload)) {
+            throw new Error("Expected a request object");
+          }
+          payload.service_tier = "ultrafast";
+        },
+      };
+      responsesServiceTierObserver.set(options, (observation) => observations.push(observation));
+      const stream = await createOpenAIResponsesTransportStreamFn()(
+        { ...model, id: "gpt-6-astra" },
+        { messages: [userMessage("hello", 1)], tools: [] },
+        options,
+      );
+      const result = await stream.result();
+      expect(onActiveResponse).toHaveBeenCalledTimes(shape === "active-hook" ? 1 : 0);
+      if (shape === "after-output" || shape === "active-hook") {
+        expect(result.stopReason).toBe("error");
+        expect(transportState.sdkRequests).toHaveLength(0);
+        expect(observations).not.toContainEqual({ requestedTier: "ultrafast", rejected: true });
+      } else {
+        expect(result.stopReason).toBe("stop");
+        expect(transportState.sdkRequests).toHaveLength(1);
+        expect(transportState.sdkRequests[0]?.service_tier).toBe("priority");
+        expect(observations).toContainEqual({ requestedTier: "ultrafast", rejected: true });
+      }
+    },
+  );
 
   it.each([undefined, "short", "none"] as const)(
     "preserves affinity policy and WebSocket acceptance with %s retention",

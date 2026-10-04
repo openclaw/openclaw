@@ -6,42 +6,50 @@ import { buildMultiResult, buildProps } from "./view.test-support.ts";
 import { renderSessions } from "./view.ts";
 
 describe("sessions transcript search view", () => {
-  it("keeps transcript search distinct from the loaded-roster filter", async () => {
-    const container = document.createElement("div");
-    const onTranscriptSearchChange = vi.fn();
-    const onTranscriptSearch = vi.fn();
-    render(
-      renderSessions({
-        ...buildProps(buildMultiResult([])),
-        searchQuery: "agent label",
-        transcriptSearchQuery: "  exact phrase  ",
-        onTranscriptSearchChange,
-        onTranscriptSearch,
-      }),
-      container,
-    );
-    await Promise.resolve();
+  it.each([true, false])(
+    "keeps transcript submission separate from roster filtering (available=%s)",
+    async (available) => {
+      const container = document.createElement("div");
+      const onTranscriptSearchChange = vi.fn();
+      const onTranscriptSearch = vi.fn();
+      render(
+        renderSessions({
+          ...buildProps(buildMultiResult([])),
+          searchQuery: "agent label",
+          transcriptSearchAvailable: available,
+          transcriptSearchQuery: available ? "  exact phrase  " : "hidden",
+          onTranscriptSearchChange,
+          onTranscriptSearch,
+        }),
+        container,
+      );
+      await Promise.resolve();
 
-    const rosterFilter = container.querySelector<HTMLInputElement>(
-      '.sessions-filter-bar input[type="text"]',
-    );
-    const transcriptInput = container.querySelector<HTMLInputElement>(
-      '.sessions-transcript-search input[type="search"]',
-    );
-    expect(rosterFilter?.value).toBe("agent label");
-    expect(rosterFilter?.getAttribute("aria-label")).toBe("Filter by key, agent, label, kind…");
-    expect(transcriptInput?.value).toBe("  exact phrase  ");
+      const rosterFilter = container.querySelector<HTMLInputElement>(
+        '.sessions-filter-bar input[type="text"]',
+      );
+      const transcriptInput = container.querySelector<HTMLInputElement>(
+        '.sessions-transcript-search input[type="search"]',
+      );
+      expect(rosterFilter?.value).toBe("agent label");
+      expect(rosterFilter?.getAttribute("aria-label")).toBe("Filter by key, agent, label, kind…");
+      expect(transcriptInput?.value).toBe(available ? "  exact phrase  " : "hidden");
+      expect(transcriptInput?.disabled).toBe(!available);
+      if (available) {
+        transcriptInput!.value = "different words";
+        transcriptInput!.dispatchEvent(new Event("input", { bubbles: true }));
+        expect(onTranscriptSearchChange).toHaveBeenCalledWith("different words");
+        expect(onTranscriptSearch).not.toHaveBeenCalled();
+      } else {
+        expect(container.textContent).toContain("Transcript search requires a newer Gateway.");
+      }
 
-    transcriptInput!.value = "different words";
-    transcriptInput!.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onTranscriptSearchChange).toHaveBeenCalledWith("different words");
-    expect(onTranscriptSearch).not.toHaveBeenCalled();
-
-    container
-      .querySelector(".sessions-transcript-search__form")
-      ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-    expect(onTranscriptSearch).toHaveBeenCalledOnce();
-  });
+      container
+        .querySelector(".sessions-transcript-search__form")
+        ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      expect(onTranscriptSearch).toHaveBeenCalledTimes(available ? 1 : 0);
+    },
+  );
 
   it("renders transcript provenance and opens the matching session", async () => {
     const container = document.createElement("div");
@@ -95,30 +103,5 @@ describe("sessions transcript search view", () => {
 
     result?.click();
     expect(onNavigateToChat).toHaveBeenCalledWith("agent:main:launch");
-  });
-
-  it("disables transcript search when the Gateway does not advertise it", async () => {
-    const container = document.createElement("div");
-    const onTranscriptSearch = vi.fn();
-    render(
-      renderSessions({
-        ...buildProps(buildMultiResult([])),
-        transcriptSearchAvailable: false,
-        transcriptSearchQuery: "hidden",
-        onTranscriptSearch,
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    expect(
-      container.querySelector<HTMLInputElement>('.sessions-transcript-search input[type="search"]')
-        ?.disabled,
-    ).toBe(true);
-    expect(container.textContent).toContain("Transcript search requires a newer Gateway.");
-    container
-      .querySelector(".sessions-transcript-search__form")
-      ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-    expect(onTranscriptSearch).not.toHaveBeenCalled();
   });
 });

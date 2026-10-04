@@ -33,10 +33,8 @@ import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { deriveSessionTitle, type SessionChildLink } from "./session-utils-core.js";
 import { materializeSessionRow, readSessionRowInputs } from "./session-utils-row.js";
-import {
-  createGatewaySessionEntryReader,
-  resolveGatewaySessionStoreTargetWithStore,
-} from "./session-utils-store-lookup.js";
+import { createGatewaySessionEntryReader } from "./session-utils-store-lineage.js";
+import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store-lookup.js";
 
 /** Apply committed metadata before observers without reacquiring it from SQLite. */
 export function createSessionRowPublication(owner: {

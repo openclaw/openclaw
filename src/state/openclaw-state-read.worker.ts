@@ -44,7 +44,10 @@ import {
   readWorkerPlacementRecoveryCandidatesInDatabase,
   readWorkerSessionPlacementProjectionInDatabase,
 } from "../gateway/worker-environments/placement-read-projection.js";
-import { readWorkerPlacementChangeSnapshotInDatabase } from "../gateway/worker-environments/placement-row-codec.js";
+import {
+  readWorkerPlacementChangeSnapshotInDatabase,
+  readWorkerPlacementsForReconcileInDatabase,
+} from "../gateway/worker-environments/placement-row-codec.js";
 import { readWorkspaceJournalInDatabase } from "../gateway/worker-environments/placement-workspace-journal.js";
 import { isWorkspaceJournalReadCommand } from "../gateway/worker-environments/placement-workspace-journal.types.js";
 import { listPendingWorkerWorkspaceResultsInDatabase } from "../gateway/worker-environments/placement-workspace-result.js";
@@ -623,6 +626,12 @@ serveOwnedWorkerTasks(
               return {
                 type: command.type,
                 candidates: readWorkerPlacementRecoveryCandidatesInDatabase(db),
+              };
+            }
+            if (command.type === "workers.placementPreservation") {
+              return {
+                type: command.type,
+                placements: readWorkerPlacementsForReconcileInDatabase(db),
               };
             }
             if (command.type === "workers.placementPendingResults") {

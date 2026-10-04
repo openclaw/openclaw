@@ -22,7 +22,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadOrCreateProcessDeviceIdentity } from "../../infra/device-identity.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { findRestartRecoveryUnsafeChatAdmissionHook } from "../../plugins/restart-recovery-hook-safety.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
@@ -89,12 +89,12 @@ function hasRestartUnsafeMessageSemantics(rawMessage: string, cfg: OpenClawConfi
   return directives.hasAudioTag || directives.hasReplyTag;
 }
 
-function fingerprintRestartSafeChatRequest(params: {
+async function fingerprintRestartSafeChatRequest(params: {
   message: string;
   mentions?: readonly HumanMention[];
   senderIsOwner: boolean;
-}): string {
-  const identity = loadOrCreateProcessDeviceIdentity();
+}): Promise<string> {
+  const identity = await loadOrCreateProcessDeviceIdentityAsync();
   const digest = createHmac("sha256", identity.privateKeyPem)
     .update(
       JSON.stringify([
@@ -112,14 +112,14 @@ function fingerprintRestartSafeChatRequest(params: {
   return `hmac-sha256:v1:${identity.deviceId}:${digest}`;
 }
 
-export function createRestartSafeChatRequest(params: {
+export async function createRestartSafeChatRequest(params: {
   goalRequestFingerprint?: string;
   eligible: boolean;
   message: string;
   mentions?: readonly HumanMention[];
   senderIsOwner: boolean;
   cfg: OpenClawConfig;
-}): RestartSafeChatRequest | undefined {
+}): Promise<RestartSafeChatRequest | undefined> {
   if (params.goalRequestFingerprint) {
     // Goal admission owns literal intent; slash-looking objectives are not commands.
     // Its receipt fingerprints attachments, routing, and every immutable run option.
@@ -129,7 +129,7 @@ export function createRestartSafeChatRequest(params: {
     return undefined;
   }
   return {
-    fingerprint: fingerprintRestartSafeChatRequest(params),
+    fingerprint: await fingerprintRestartSafeChatRequest(params),
   };
 }
 
