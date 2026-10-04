@@ -85,6 +85,7 @@ describe("Codex tool-authored source replies", () => {
 
     expect(result.success).toBe(true);
     expect(result.terminate).toBe(true);
+    expect(result.toolAuthoredFinalReply).toBe(true);
     expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([
       {
         text: "Pedido SO1 creado. 18 botellas · total 459,85 €.",
@@ -161,6 +162,7 @@ describe("Codex tool-authored source replies", () => {
 
       expect(result.success).toBe(true);
       expect(result.terminate).toBeUndefined();
+      expect(result.toolAuthoredFinalReply).toBeUndefined();
       expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([]);
     },
   );

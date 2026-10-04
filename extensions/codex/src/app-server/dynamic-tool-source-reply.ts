@@ -9,6 +9,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { CodexDynamicToolRuntimeResponse } from "./dynamic-tool-response-state.js";
 import { CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE } from "./protocol.js";
 
 type ToolAuthoredSourceReplyPayload = NonNullable<
@@ -25,7 +26,8 @@ export type CodexToolResultSourceReply = {
 };
 
 /**
- * Resolves the source-reply facts of one Codex dynamic tool result. A final reply
+ * Resolves the source-reply facts of one Codex dynamic tool result and records whether
+ * it ends the Codex turn on `response`. A final reply
  * authored by a `canDeliverSourceReply` tool, read from the result after middleware and
  * extensions, is appended to `payloads`; the host delivers it and writes its transcript
  * row after the send. Only calls in the model-only namespace qualify: Codex never
@@ -44,6 +46,7 @@ export function resolveCodexToolResultSourceReply(params: {
   executedArgs: Record<string, unknown>;
   runId: string | undefined;
   payloads: ToolAuthoredSourceReplyPayload[];
+  response: CodexDynamicToolRuntimeResponse;
 }): CodexToolResultSourceReply {
   const messageToolOnly =
     params.sourceReplyDeliveryMode === "message_tool_only" && params.toolName === "message";
@@ -65,6 +68,10 @@ export function resolveCodexToolResultSourceReply(params: {
     isToolResultYield(params.result) ||
     (confirmed && final === true) ||
     undefined;
+  params.response.terminate = terminate;
+  if (toolAuthoredFinal === true) {
+    params.response.toolAuthoredFinalReply = true;
+  }
   return { toolConfirmed, final, terminate };
 }
 

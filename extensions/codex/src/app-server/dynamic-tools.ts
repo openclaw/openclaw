@@ -646,6 +646,7 @@ export function createCodexDynamicToolBridge(params: {
             executedArgs,
             runId: toolResultHookContext.runId,
             payloads: telemetry.messagingToolSourceReplyPayloads,
+            response,
           });
           const autoDeliveryTtsMediaUrls = getCoreTtsToolResultMediaUrls(rawResult);
           recordAgentHarnessToolResultTelemetry({
@@ -671,7 +672,6 @@ export function createCodexDynamicToolBridge(params: {
           if (deliveredSourceReply || sourceReply.toolConfirmed) {
             telemetry.didDeliverSourceReplyViaMessageTool = true;
           }
-          response.terminate = sourceReply.terminate;
           const asyncStarted =
             isAsyncStartedToolResult(rawResult) || isAsyncStartedToolResult(result);
           response.asyncStarted = asyncStarted || undefined;
