@@ -331,7 +331,9 @@ compaction settings from `agents.defaults.compaction`.
 `mediaModels.image`, `mediaModels.video`, and `mediaModels.music`, `userTimezone` with
 built-in envelope and time formatting, `plugins.entries.openai.config.personality`,
 and per-model `models[ref].agentRuntime`. This is a type-only SDK change; run
-`openclaw doctor --fix` to migrate stored configs.
+`openclaw doctor --fix` to migrate stored configs. A stored `agents.defaults.agentRuntime`
+is a retired format that current Doctor refuses;
+[upgrade through OpenClaw 2026.9.5](/install/updating#upgrading-very-old-versions) first.
 
 Plugins built against stable SDK releases through 2026.9.x may still read the
 deprecated, non-enumerable runtime `agents.list` projection introduced in
