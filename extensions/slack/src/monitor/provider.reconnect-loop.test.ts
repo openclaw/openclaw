@@ -147,4 +147,130 @@ describe("slack socket reconnect loop", () => {
     controller.abort();
     await expect(run).resolves.toBeUndefined();
   });
+
+  it("retries a transient identity failure while the socket stays connected", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    getSlackClient()
+      .auth.test.mockRejectedValueOnce(new Error("request_timeout"))
+      .mockRejectedValueOnce(new Error("request_timeout"))
+      .mockResolvedValueOnce({
+        user_id: "UBOT",
+        bot_id: "BBOT",
+        team_id: "T1",
+        is_enterprise_install: false,
+      });
+    let resolveStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    slackTestState.appStartMock.mockImplementation(async () => {
+      resolveStarted?.();
+    });
+
+    const run = start();
+
+    await started;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(setStatus).toHaveBeenLastCalledWith({
+      connected: true,
+      lastConnectedAt: expect.any(Number),
+      terminalDisconnect: true,
+      lifecycle: "blocked",
+      lastError: "request_timeout",
+    });
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(getSlackClient().auth.test).toHaveBeenCalledTimes(3);
+    expect(setStatus).toHaveBeenLastCalledWith({
+      running: true,
+      connected: true,
+      lastConnectedAt: expect.any(Number),
+      terminalDisconnect: undefined,
+      lifecycle: "ready",
+      lastError: null,
+    });
+    expect(slackTestState.appStartMock).toHaveBeenCalledTimes(1);
+    controller.abort();
+    await expect(run).resolves.toBeUndefined();
+  });
+
+  async function holdScheduledIdentityRecoveryAcrossDisconnect() {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    let settleAuth:
+      | { resolve: (value: Record<string, unknown>) => void; reject: (err: Error) => void }
+      | undefined;
+    getSlackClient()
+      .auth.test.mockRejectedValueOnce(new Error("request_timeout"))
+      .mockRejectedValueOnce(new Error("request_timeout"))
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve, reject) => {
+            settleAuth = { resolve, reject };
+          }),
+      );
+    let resolveStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    slackTestState.appStartMock
+      .mockImplementationOnce(async () => {
+        resolveStarted?.();
+      })
+      .mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            controller.signal.addEventListener("abort", () => resolve(), { once: true });
+          }),
+      );
+
+    const run = start();
+    await started;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(getSlackClient().auth.test).toHaveBeenCalledTimes(3);
+
+    const receiver = slackTestState.appConstructorArgs?.receiver as {
+      client: { emit: (event: string) => boolean };
+    };
+    receiver.client.emit("disconnected");
+    await vi.advanceTimersByTimeAsync(0);
+    const disconnectedStatus = {
+      connected: false,
+      lifecycle: "recovering",
+      lastDisconnect: { at: expect.any(Number) },
+      lastError: null,
+    };
+    expect(setStatus).toHaveBeenLastCalledWith(disconnectedStatus);
+    return { run, settleAuth: settleAuth!, disconnectedStatus };
+  }
+
+  it("keeps a disconnected socket disconnected when in-flight identity recovery succeeds", async () => {
+    const { run, settleAuth, disconnectedStatus } =
+      await holdScheduledIdentityRecoveryAcrossDisconnect();
+
+    settleAuth.resolve({
+      user_id: "UBOT",
+      bot_id: "BBOT",
+      team_id: "T1",
+      is_enterprise_install: false,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(setStatus).toHaveBeenLastCalledWith(disconnectedStatus);
+    controller.abort();
+    await expect(run).resolves.toBeUndefined();
+  });
+
+  it("does not rearm identity recovery when an in-flight attempt fails after disconnect", async () => {
+    const { run, settleAuth, disconnectedStatus } =
+      await holdScheduledIdentityRecoveryAcrossDisconnect();
+
+    settleAuth.reject(new Error("request_timeout"));
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(getSlackClient().auth.test).toHaveBeenCalledTimes(3);
+    expect(setStatus).toHaveBeenLastCalledWith(disconnectedStatus);
+    controller.abort();
+    await expect(run).resolves.toBeUndefined();
+  });
 });

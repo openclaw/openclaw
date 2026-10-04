@@ -609,6 +609,38 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
     }
   }
 
+  // Recovery otherwise runs only on socket start or inbound events, so a stable socket
+  // with no traffic would keep a transient auth.test failure forever.
+  const identityRecoveryScheduler = scheduler.scope();
+  let identityRecoveryAttempts = 0;
+  let identityRecoveryRetry: { cancel: () => void } | undefined;
+  // Cancel only stops future dispatch, so an auth.test already in flight must recheck
+  // this after it settles before publishing or rearming.
+  let transportConnected = false;
+  function scheduleSlackIdentityRecovery(err: unknown) {
+    if (
+      !transportConnected ||
+      isNonRecoverableSlackAuthError(err) ||
+      identityRecoveryScheduler.signal.aborted
+    ) {
+      return;
+    }
+    identityRecoveryAttempts += 1;
+    identityRecoveryRetry = identityRecoveryScheduler.schedule({
+      id: "identity-recovery",
+      delayMs: computeBackoff(SLACK_SOCKET_RECONNECT_POLICY, identityRecoveryAttempts),
+      run: async () => {
+        if ((await recoverSlackIdentity()) && transportConnected) {
+          publishSlackConnectedStatus(opts.setStatus, ctx.identityHealth);
+        }
+      },
+    });
+  }
+  function cancelSlackIdentityRecovery() {
+    identityRecoveryRetry?.cancel();
+    identityRecoveryRetry = undefined;
+  }
+
   let identityRecoveryPromise: Promise<boolean> | undefined;
   async function recoverSlackIdentity() {
     if (ctx.identityHealth.lifecycle !== "blocked") {
@@ -642,12 +674,15 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
             : undefined,
         );
         await installSlackRuntimeForIdentity(recoveredInstallationIdentity);
+        identityRecoveryAttempts = 0;
+        cancelSlackIdentityRecovery();
         return true;
       } catch (err) {
         ctx.identityHealth = {
           lifecycle: "blocked",
           lastError: formatSlackError(err),
         };
+        scheduleSlackIdentityRecovery(err);
         return false;
       }
     })();
@@ -685,6 +720,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
         log: runtime.log,
         accountId: account.accountId,
       });
+      transportConnected = true;
       publishSlackConnectedStatus(opts.setStatus, ctx.identityHealth);
     }
 
@@ -698,6 +734,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
             abortSignal: opts.abortSignal,
             onStarted: async () => {
               reconnectAttempts = 0;
+              transportConnected = true;
               await recoverSlackIdentity();
               publishSlackConnectedStatus(opts.setStatus, ctx.identityHealth);
               if (!hasLoggedSocketConnected) {
@@ -716,6 +753,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
           if (opts.abortSignal?.aborted) {
             break;
           }
+          transportConnected = false;
+          cancelSlackIdentityRecovery();
           publishSlackDisconnectedStatus(opts.setStatus, disconnect.error);
 
           // Permanent account and credential failures need operator action.
@@ -804,6 +843,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
   } finally {
     installationState.release();
     runtimeStarted = false;
+    transportConnected = false;
+    await identityRecoveryScheduler.stop();
     presenceRequestAbort?.abort();
     await presenceMonitor?.stop();
     if (slackMode === "relay") {
