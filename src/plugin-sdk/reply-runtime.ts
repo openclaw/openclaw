@@ -8,10 +8,6 @@ import {
 } from "../auto-reply/dispatch.js";
 import { getReplyFromConfigInternal } from "../auto-reply/reply/get-reply.js";
 import {
-  dispatchReplyWithBufferedBlockDispatcherCore,
-  dispatchReplyWithDispatcherCore,
-} from "../auto-reply/reply/provider-dispatcher.js";
-import {
   publicReplyOptions,
   type GetReplyOptions,
   type PublicReplyParams,
@@ -73,22 +69,10 @@ export {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../auto-reply/inbound-debounce.js";
-export function dispatchReplyWithBufferedBlockDispatcher(
-  params: PublicReplyParams<Parameters<typeof dispatchReplyWithBufferedBlockDispatcherCore>[0]>,
-) {
-  return dispatchReplyWithBufferedBlockDispatcherCore({
-    ...params,
-    replyOptions: publicReplyOptions(params.replyOptions),
-  });
-}
-export function dispatchReplyWithDispatcher(
-  params: PublicReplyParams<Parameters<typeof dispatchReplyWithDispatcherCore>[0]>,
-) {
-  return dispatchReplyWithDispatcherCore({
-    ...params,
-    replyOptions: publicReplyOptions(params.replyOptions),
-  });
-}
+export {
+  dispatchReplyWithBufferedBlockDispatcher,
+  dispatchReplyWithDispatcher,
+} from "./reply-dispatch-runtime.js";
 export {
   createReplyDispatcher,
   createReplyDispatcherWithTyping,

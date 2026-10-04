@@ -14,10 +14,13 @@ const fixture = vi.hoisted(() => ({
   hasHooks: true,
   readReceipts: vi.fn(),
 }));
+// mock-isolation: Bind receipt selection to the fixture main agent without loading runtime session and workspace scope.
 vi.mock("../agents/agent-scope.js", () => ({ listAgentIds: () => ["main"] }));
+// mock-isolation: Use controlled completed or missing receipts without opening the shared-state database reader.
 vi.mock("../cron/proactive-job-receipt.js", () => ({
   readDefaultProactiveJobReceiptsAsync: fixture.readReceipts,
 }));
+// mock-isolation: Use the fixture hook runner without attaching to process-global plugin registry state.
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => ({
     hasHooks: () => fixture.hasHooks,

@@ -45,7 +45,7 @@ it.each(["runtime open", "doctor repair"] as const)(
     ).toEqual([
       { receipt_id: "legacy-receipt", status: "running", delivery_attempt_state: "unknown" },
     ]);
-    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 20 });
+    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 21 });
     expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
     db.exec("UPDATE cron_run_receipts SET delivery_attempt_state = 'started'");
     closeOpenClawStateDatabaseForTest();
@@ -61,7 +61,7 @@ it.each(["runtime open", "doctor repair"] as const)(
       supportedVersions: { state: 19, agent: 23 },
     });
     expect(preflight.incompatible).toEqual([
-      expect.objectContaining({ kind: "state", foundVersion: 20, supportedVersion: 19 }),
+      expect.objectContaining({ kind: "state", foundVersion: 21, supportedVersion: 19 }),
     ]);
   },
 );

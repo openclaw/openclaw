@@ -238,6 +238,7 @@ vi.mock("../agents/prepared-model-runtime.js", () => ({
   refreshPreparedModelRuntimeSnapshots: hoisted.refreshPreparedModelRuntimeSnapshots,
 }));
 
+// mock-isolation: Observe prewarm admission without loading the config-driven agent execution runtime.
 vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => ({
   getReplyFromConfigInternal: vi.fn(),
   prewarmConfigDrivenReplyRuntime: hoisted.prewarmConfigDrivenReplyRuntime,

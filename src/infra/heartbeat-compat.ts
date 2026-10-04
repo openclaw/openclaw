@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readDefaultProactiveJobReceiptsAsync } from "../cron/proactive-job-receipt.js";
 import type { CronServiceContract } from "../cron/service-contract.js";
 
-export async function getLegacyHeartbeatJobIds(cfg: OpenClawConfig): Promise<string[]> {
+async function getLegacyHeartbeatJobIds(cfg: OpenClawConfig): Promise<string[]> {
   const receipts = await readDefaultProactiveJobReceiptsAsync(undefined, listAgentIds(cfg));
   const ids: string[] = [];
   for (const receipt of Object.values(receipts)) {

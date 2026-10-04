@@ -65,7 +65,12 @@ describe("wake (cron timer)", () => {
       job,
     ]);
     expect(wake(state, { mode: "next-heartbeat", text: "ping" })).toEqual({ ok: true });
-    expect(deferSessionEvent).toHaveBeenCalledExactlyOnceWith("ping", job, undefined);
+    expect(deferSessionEvent).toHaveBeenCalledExactlyOnceWith(
+      "ping",
+      job,
+      undefined,
+      expect.any(Function),
+    );
     expect(enqueueSessionEvent).not.toHaveBeenCalled();
   });
 

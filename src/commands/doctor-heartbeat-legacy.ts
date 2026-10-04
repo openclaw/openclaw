@@ -17,6 +17,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import {
   LegacyHeartbeatVisibilitySchema,
   migrateHeartbeatVisibility,
+  selectLegacyHeartbeatVisibility,
 } from "./doctor-heartbeat-visibility.js";
 
 export type HeartbeatConfig = LegacyHeartbeatConfig;
@@ -187,11 +188,13 @@ export function validateLegacyHeartbeatConfig(cfg: OpenClawConfig): void {
     if (id === "modelByChannel" || !isRecord(channel)) {
       continue;
     }
-    LegacyHeartbeatVisibilitySchema.parse(channel.heartbeatVisibility);
+    LegacyHeartbeatVisibilitySchema.parse(selectLegacyHeartbeatVisibility(id, channel)?.value);
     if (isRecord(channel.accounts)) {
       for (const account of Object.values(channel.accounts)) {
         if (isRecord(account)) {
-          LegacyHeartbeatVisibilitySchema.parse(account.heartbeatVisibility);
+          LegacyHeartbeatVisibilitySchema.parse(
+            selectLegacyHeartbeatVisibility(id, account)?.value,
+          );
         }
       }
     }
@@ -216,13 +219,19 @@ export function projectRetiredHeartbeatConfig(cfg: OpenClawConfigWithLegacyRoste
     if (channel === "modelByChannel" || !isRecord(value)) {
       continue;
     }
-    delete value.heartbeatVisibility;
+    const visibility = selectLegacyHeartbeatVisibility(channel, value);
+    if (visibility) {
+      delete value[visibility.key];
+    }
     if (isRecord(value.accounts)) {
       for (const account of Object.values(value.accounts)) {
         if (!isRecord(account)) {
           continue;
         }
-        delete account.heartbeatVisibility;
+        const visibility = selectLegacyHeartbeatVisibility(channel, account);
+        if (visibility) {
+          delete account[visibility.key];
+        }
       }
     }
   }

@@ -2,6 +2,7 @@ import type { SessionEventTarget } from "../../auto-reply/reply/session-event-co
 /** Manual cron wake helper for queueing system events into sessions. */
 import { isSubagentSessionKey, normalizeOptionalAgentId } from "../../routing/session-key.js";
 import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../agent-id.js";
+import { resolveCronJobConfigRevision } from "../config-revision.js";
 import {
   resolveCronNotificationQueueOwner,
   type CronNotificationJob,
@@ -44,6 +45,7 @@ export function wake(
   opts: {
     mode: "now" | "next-heartbeat";
     expectedTarget?: SessionEventTarget;
+    commitGuard?: () => void;
     text: string;
     /**
      * Internal session key to enqueue the system event against. When omitted,
@@ -58,6 +60,7 @@ export function wake(
     agentId?: string;
   },
 ) {
+  opts.commitGuard?.();
   const text = opts.text.trim();
   if (!text) {
     return { ok: false } as const;
@@ -93,6 +96,7 @@ export function wake(
         reason: "Session event execution is unavailable; restart the Gateway",
       } as const;
     }
+    opts.commitGuard?.();
     state.deps.enqueueSessionEvent(text, enqueueOpts);
     return { ok: true } as const;
   }
@@ -103,7 +107,8 @@ export function wake(
       !target.sessionKey ||
       !candidate.enabled ||
       candidate.state.autoDisabled ||
-      !["agentTurn", "systemEvent"].includes(candidate.payload.kind) ||
+      (candidate.payload.kind !== "agentTurn" &&
+        !(candidate.sessionTarget === "main" && candidate.payload.kind === "systemEvent")) ||
       !(candidate.sessionTarget === "main" || candidate.sessionTarget.startsWith("session:")) ||
       !Number.isFinite(candidate.state.nextRunAtMs)
     ) {
@@ -124,6 +129,39 @@ export function wake(
         "No enabled ordinary scheduled session job can receive this wake. Choose mode now or create an automation with a scheduled session turn.",
     } as const;
   }
-  state.deps.deferSessionEvent(text, job, opts.expectedTarget);
-  return { ok: true } as const;
+  const generation = state.lifecycleGeneration;
+  const revision = resolveCronJobConfigRevision(job);
+  const assertCurrent = () => {
+    opts.commitGuard?.();
+    const currentJob = state.store?.jobs.find((candidate) => candidate.id === job.id);
+    if (
+      state.lifecycleGeneration !== generation ||
+      !state.deps.cronEnabled ||
+      state.stopped ||
+      !currentJob?.enabled ||
+      currentJob.state.autoDisabled ||
+      !Number.isFinite(currentJob.state.nextRunAtMs) ||
+      resolveCronJobConfigRevision(currentJob) !== revision
+    ) {
+      throw new Error("Scheduled wake receiver changed during admission; retry the wake");
+    }
+    const currentTarget = state.deps.resolveSessionEventTarget?.({ agentId });
+    const receiverTarget = state.deps.resolveSessionEventTarget?.({
+      agentId: currentJob.agentId,
+      sessionKey: currentJob.sessionTarget.startsWith("session:")
+        ? currentJob.sessionTarget.slice(8)
+        : undefined,
+    });
+    if (
+      currentTarget?.agentId !== target?.agentId ||
+      currentTarget?.sessionKey !== target?.sessionKey ||
+      receiverTarget?.agentId !== target?.agentId ||
+      receiverTarget?.sessionKey !== target?.sessionKey
+    ) {
+      throw new Error("Scheduled wake destination changed during admission; retry the wake");
+    }
+  };
+  assertCurrent();
+  const pending = state.deps.deferSessionEvent(text, job, opts.expectedTarget, assertCurrent);
+  return pending ? pending.then(() => ({ ok: true }) as const) : ({ ok: true } as const);
 }

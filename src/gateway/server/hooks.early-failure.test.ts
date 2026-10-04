@@ -49,10 +49,12 @@ vi.mock("../../config/io.js", () => ({
 vi.mock("../../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: mocks.runCronIsolatedAgentTurn,
 }));
+// mock-isolation: Control recovery wake receipts while testing hook runner failures and lane admission.
 vi.mock("../../auto-reply/reply/session-event-handoff.js", () => ({
   captureSessionEventTargetForHost: mocks.captureSessionEventTarget,
   enqueueSessionEventForHost: mocks.enqueueSessionEvent,
 }));
+// mock-isolation: Keep failure notices out of the process-wide queue while inspecting hook recovery.
 vi.mock("../../infra/system-events.js", () => ({ enqueueSystemEvent: vi.fn() }));
 
 const { createGatewayHookDispatcher, createGatewayHooksRequestHandler } =
@@ -708,7 +710,7 @@ describe("gateway hook early-failure recovery", () => {
     { name: "missing agent ownership", override: { agentId: "  " }, reason: "agentId is required" },
     {
       name: "non-hook session",
-      override: expect.objectContaining({ sessionKey: "agent:hooks:main" }),
+      override: { sessionKey: "agent:hooks:main" },
     },
     { name: "empty hook session", override: { sessionKey: "hook:" } },
     { name: "session whitespace", override: { sessionKey: "hook:imap:bad value" } },

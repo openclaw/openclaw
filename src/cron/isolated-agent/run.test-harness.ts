@@ -84,10 +84,13 @@ export const hasUsableWebSearchProviderMock = vi.fn();
 export const readSessionMessagesAsyncMock = vi.fn();
 export const readCronScratchSnapshotMock = vi.fn();
 export const appendSessionRuntimeContextMock = vi.fn();
+// mock-isolation: Use fixture scratch snapshots instead of opening the shared-state database worker.
 vi.mock("../scratch-read.js", () => ({ readCronScratchSnapshot: readCronScratchSnapshotMock }));
+// mock-isolation: Capture context appends without persisting transcripts for synthetic /tmp/store.json sessions.
 vi.mock("../../sessions/runtime-context.js", () => ({
   appendSessionRuntimeContext: appendSessionRuntimeContextMock,
 }));
+// mock-isolation: Use synthetic target generations instead of capturing live sessions or admitting follow-up turns.
 vi.mock("../../auto-reply/reply/session-event-handoff.js", () => ({
   captureSessionEventTargetForHost: vi.fn(async (agentId: string, sessionKey: string) => ({
     agentId,
@@ -98,6 +101,7 @@ vi.mock("../../auto-reply/reply/session-event-handoff.js", () => ({
   })),
   assertSessionEventTargetCurrent: vi.fn(),
 }));
+// mock-isolation: Keep delivery leases synthetic instead of subscribing to session and database lifecycles.
 vi.mock("../../config/sessions/session-delivery-generation.js", () => ({
   prepareSessionGenerationFacts: vi.fn(async () => ({ assertCurrent: vi.fn(), release: vi.fn() })),
 }));

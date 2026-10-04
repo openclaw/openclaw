@@ -322,6 +322,7 @@ describe("claws lifecycle cli e2e", () => {
     });
     await runQaGatewayFixture(
       async () => {
+        await instance.startGateway();
         const run = async (args: string[]) => {
           const result = await instance.cli(args);
           expect(result.code, `${result.stdout}\n${result.stderr}`).toBe(0);
@@ -344,7 +345,6 @@ describe("claws lifecycle cli e2e", () => {
           addPlan.planIntegrity,
           "--json",
         ]);
-        await instance.startGateway();
         const status = await run(["claws", "status", "workspace-agent", "--json"]);
         expect(parseJson(status.stdout)).toMatchObject({
           schemaVersion: "openclaw.clawStatus.v1",
@@ -390,83 +390,101 @@ describe("claws lifecycle cli e2e", () => {
   });
 
   it("exports an installed agent as a self-contained grouped package", async () => {
-    const source = "src/claws/fixtures/workspace-agent.claw.json";
-    const addPreview = await runOpenClaw(["claws", "add", source, "--dry-run", "--json"]);
-    const addPlan = parseJson(addPreview.stdout) as { planIntegrity: string };
-    const added = await runOpenClaw(
-      ["claws", "add", source, "--yes", "--plan-integrity", addPlan.planIntegrity, "--json"],
-      { stateDir: addPreview.stateDir },
-    );
-    const outputDirectory = join(added.stateDir, "exported-claw");
-    const exported = await runOpenClaw(
-      ["claws", "export", "workspace-agent", "--out", outputDirectory, "--json"],
-      { stateDir: added.stateDir },
-    );
-    expect(parseJson(exported.stdout)).toMatchObject({
-      schemaVersion: "openclaw.clawExportResult.v1",
-      stability: "experimental",
-      agentId: "workspace-agent",
-      outputDirectory,
-      manifest: {
-        schemaVersion: 1,
-        agent: { id: "workspace-agent" },
-        workspace: {
-          bootstrapFiles: {
-            "HEARTBEAT.md": { source: "workspace/HEARTBEAT.md" },
-          },
-          files: [
-            {
-              source: "workspace/reference/policy.md",
-              path: "reference/policy.md",
+    const instance = await createOpenClawTestInstance({
+      name: "claws-lifecycle-export",
+      env: {
+        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        OPENCLAW_EXPERIMENTAL_CLAWS: "1",
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      },
+    });
+    await runQaGatewayFixture(
+      async () => {
+        await instance.startGateway();
+        const run = async (args: string[]) => {
+          const result = await instance.cli(args);
+          expect(result.code, `${result.stdout}\n${result.stderr}`).toBe(0);
+          return result;
+        };
+        const source = "src/claws/fixtures/workspace-agent.claw.json";
+        const addPreview = await run(["claws", "add", source, "--dry-run", "--json"]);
+        const addPlan = parseJson(addPreview.stdout) as { planIntegrity: string };
+        await run([
+          "claws",
+          "add",
+          source,
+          "--yes",
+          "--plan-integrity",
+          addPlan.planIntegrity,
+          "--json",
+        ]);
+        const outputDirectory = join(instance.stateDir, "exported-claw");
+        const exported = await run([
+          "claws",
+          "export",
+          "workspace-agent",
+          "--out",
+          outputDirectory,
+          "--json",
+        ]);
+        expect(parseJson(exported.stdout)).toMatchObject({
+          schemaVersion: "openclaw.clawExportResult.v1",
+          stability: "experimental",
+          agentId: "workspace-agent",
+          outputDirectory,
+          manifest: {
+            schemaVersion: 1,
+            agent: { id: "workspace-agent" },
+            workspace: {
+              bootstrapFiles: {
+                "HEARTBEAT.md": { source: "workspace/HEARTBEAT.md" },
+              },
+              files: [
+                {
+                  source: "workspace/reference/policy.md",
+                  path: "reference/policy.md",
+                },
+              ],
             },
+          },
+        });
+        expect(
+          JSON.parse(await readFile(join(outputDirectory, "package.json"), "utf8")),
+        ).toMatchObject({
+          name: "openclaw-claw-workspace-agent",
+          version: expect.stringMatching(/^0\.0\.0-export\.[0-9a-f]{64}$/),
+          type: "module",
+        });
+        await expect(readFile(join(outputDirectory, "CLAW.md"), "utf8")).resolves.toContain(
+          "Incident Response",
+        );
+        const inspected = await run(["claws", "inspect", outputDirectory, "--json"]);
+        expect(parseJson(inspected.stdout)).toMatchObject({
+          valid: true,
+          source: { kind: "package" },
+          manifest: { agent: { id: "workspace-agent" } },
+        });
+        const roundTripArgs = ["claws", "add", outputDirectory, "--agent-id", "workspace-copy"];
+        const roundTripPreview = await run([...roundTripArgs, "--dry-run", "--json"]);
+        const roundTripPlan = parseJson(roundTripPreview.stdout) as { planIntegrity: string };
+        const roundTrip = await run([
+          ...roundTripArgs,
+          "--yes",
+          "--plan-integrity",
+          roundTripPlan.planIntegrity,
+          "--json",
+        ]);
+        expect(parseJson(roundTrip.stdout)).toMatchObject({
+          status: "complete",
+          claw: { kind: "package" },
+          agent: { finalId: "workspace-copy" },
+          workspaceFiles: [
+            expect.objectContaining({ path: "SOUL.md" }),
+            expect.objectContaining({ path: "reference/policy.md" }),
           ],
-        },
+        });
       },
-    });
-    expect(JSON.parse(await readFile(join(outputDirectory, "package.json"), "utf8"))).toMatchObject(
-      {
-        name: "openclaw-claw-workspace-agent",
-        version: expect.stringMatching(/^0\.0\.0-export\.[0-9a-f]{64}$/),
-        type: "module",
-      },
+      () => instance.cleanup(),
     );
-    await expect(readFile(join(outputDirectory, "CLAW.md"), "utf8")).resolves.toContain(
-      "Incident Response",
-    );
-    const inspected = await runOpenClaw(["claws", "inspect", outputDirectory, "--json"]);
-    expect(parseJson(inspected.stdout)).toMatchObject({
-      valid: true,
-      source: { kind: "package" },
-      manifest: { agent: { id: "workspace-agent" } },
-    });
-    const roundTripPreview = await runOpenClaw([
-      "claws",
-      "add",
-      outputDirectory,
-      "--dry-run",
-      "--json",
-    ]);
-    const roundTripPlan = parseJson(roundTripPreview.stdout) as { planIntegrity: string };
-    const roundTrip = await runOpenClaw(
-      [
-        "claws",
-        "add",
-        outputDirectory,
-        "--yes",
-        "--plan-integrity",
-        roundTripPlan.planIntegrity,
-        "--json",
-      ],
-      { stateDir: roundTripPreview.stateDir },
-    );
-    expect(parseJson(roundTrip.stdout)).toMatchObject({
-      status: "complete",
-      claw: { kind: "package" },
-      agent: { finalId: "workspace-agent" },
-      workspaceFiles: [
-        expect.objectContaining({ path: "SOUL.md" }),
-        expect.objectContaining({ path: "reference/policy.md" }),
-      ],
-    });
   });
 });

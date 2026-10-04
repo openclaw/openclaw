@@ -4,6 +4,7 @@ import { isCronWithinActiveHours } from "../active-hours.js";
 import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { readDefaultProactiveJobReceiptsAsync } from "../proactive-job-receipt.js";
+import { resolveCronRunAdmissionSource } from "../run-authority.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { resolveCronToolsAllowExecTargetRecoveryError } from "../scheduled-tool-policy.js";
 import { isCronScratchEffectivelyEmpty } from "../scratch-contract.js";
@@ -307,6 +308,7 @@ async function executeMainSessionCronJob(
   await options?.assertRunCurrent?.();
   assertCurrent();
   return await state.deps.runSessionEvent({
+    admissionSource: resolveCronRunAdmissionSource(job),
     sessionPreparation,
     deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
     onExecutionStarted: options?.onExecutionStarted,
@@ -401,15 +403,7 @@ async function executeDetachedCronJob(
   const res = await state.deps.runIsolatedAgentJob({
     deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
     job,
-    admissionSource:
-      job.owner?.sessionKey ||
-      job.owner?.accountId ||
-      job.scheduledToolPolicy?.mode === "account" ||
-      job.payload.externalContentSource ||
-      job.toolsAllowProvenance?.channelRequester ||
-      (job.toolsAllowProvenance && job.toolsAllowProvenance.callerOrigin?.kind !== "local")
-        ? "requester-schedule"
-        : "operator-schedule",
+    admissionSource: resolveCronRunAdmissionSource(job),
     message: job.payload.message,
     abortSignal,
     onExecutionStarted: options?.onExecutionStarted,
@@ -538,7 +532,7 @@ async function executeScriptCronJob(
             "Script follow-up has no original session target; inspect its result and request a fresh follow-up",
         };
       }
-      const wakeResult = wake(state, {
+      const wakeResult = await wake(state, {
         mode: result.wake,
         text: notify ?? `script job ${job.name} completed`,
         agentId,

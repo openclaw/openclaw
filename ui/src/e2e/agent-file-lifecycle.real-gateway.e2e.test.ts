@@ -472,12 +472,12 @@ suite.define(() => {
         }
         signal.throwIfAborted();
         await state.writeConfig({
+          cron: { enabled: false },
           agents: {
             ownership: "explicit",
             defaults: {
               workspace: mainWorkspace,
               systemAgent: { agentId: "main" },
-              heartbeat: { agentId: "main" },
               sessionStore: { agentId: "main" },
             },
             entries: {

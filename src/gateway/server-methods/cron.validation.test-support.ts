@@ -5,7 +5,7 @@ import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import type { CronService } from "../../cron/service.js";
-import type { CronJob } from "../../cron/types.js";
+import type { CronDelivery, CronJob } from "../../cron/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -251,6 +251,23 @@ export function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
     payload: { kind: "agentTurn", message: "hello", toolsAllow: ["*"] },
     delivery: { mode: "none" },
     state: {},
+    ...overrides,
+  };
+}
+
+export function telegramDeliveryWithSlackFailure(
+  overrides: Partial<CronDelivery> = {},
+): CronDelivery {
+  return {
+    mode: "announce",
+    channel: "telegram",
+    to: "telegram:123",
+    failureDestination: {
+      mode: "announce",
+      channel: "slack",
+      to: "C123",
+      accountId: "bot-b",
+    },
     ...overrides,
   };
 }

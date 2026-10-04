@@ -200,6 +200,7 @@ vi.mock("../infra/device-pairing.js", async (importOriginal) => ({
   updatePairedDevicePresence: updatePairedDevicePresenceMock,
 }));
 
+// mock-isolation: Node event tests observe routing and admission without executing session replies.
 vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
   captureSessionEventTargetForHost: runtimeMocks.captureSessionEventTarget,
   enqueueSessionEventForHost: runtimeMocks.enqueueSessionEvent,
@@ -245,6 +246,7 @@ vi.mock("./session-utils.js", async (importOriginal) => ({
   resolveSessionModelRef: runtimeMocks.resolveSessionModelRef,
 }));
 
+// mock-isolation: Node fixtures supply session ownership without discovery or SQLite readers.
 vi.mock("./session-utils-store-worker.js", () => ({
   resolveGatewaySessionStoreTargetInWorker: runtimeMocks.resolveGatewaySessionStoreTargetInWorker,
 }));

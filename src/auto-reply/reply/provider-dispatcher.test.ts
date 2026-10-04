@@ -14,7 +14,7 @@ const hoisted = vi.hoisted(() => ({
   bufferedDispatchMock: vi.fn(),
   plainDispatchMock: vi.fn(),
 }));
-
+// mock-isolation: Test wrapper forwarding without reply execution or foreground lease state.
 vi.mock("../dispatch.js", () => ({
   dispatchInboundMessageWithBufferedDispatcherInternal: (...args: Parameters<BufferedDispatchFn>) =>
     hoisted.bufferedDispatchMock(...args),

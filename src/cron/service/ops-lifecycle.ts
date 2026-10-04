@@ -1,5 +1,5 @@
 import { isAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
-import { runInDetachedAsyncContext } from "../../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { subscribeCronJobsStoreMutations } from "../store.js";
 import type { CronRunRecoveryProposal } from "../store/run-recovery-read.types.js";
 import type { CronRunRecoveryResult, InterruptedStartupRun } from "../store/run-recovery.types.js";

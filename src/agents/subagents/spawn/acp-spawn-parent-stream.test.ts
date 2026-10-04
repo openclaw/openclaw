@@ -12,7 +12,7 @@ const { enqueueSessionEventMock, recordAcpParentStreamEventsMock } = vi.hoisted(
   })),
   recordAcpParentStreamEventsMock: vi.fn(),
 }));
-
+// mock-isolation: Capture parent relay events without starting reply turns or session lookups.
 vi.mock("../../../auto-reply/reply/session-event-handoff.js", () => ({
   enqueueSessionEventForHost: enqueueSessionEventMock,
 }));

@@ -97,11 +97,12 @@ describe("cron wake() origin delivery-context carry", () => {
       () => TOPIC_DELIVERY_CONTEXT,
     );
 
-    wake(state, {
+    const result = wake(state, {
       mode: "now",
       text: "check the queue",
       sessionKey: "agent:main:telegram:8661849123:topic:4052",
     });
+    expect(result).toEqual({ ok: true });
 
     expect(resolveOriginDeliveryContext).toHaveBeenCalledExactlyOnceWith({
       sessionKey: "agent:main:telegram:8661849123:topic:4052",
@@ -116,11 +117,12 @@ describe("cron wake() origin delivery-context carry", () => {
   it("omits deliveryContext when no origin context resolves (unchanged default routing)", () => {
     const { state, enqueueSessionEvent } = makeStateWithMocks(() => undefined);
 
-    wake(state, {
+    const result = wake(state, {
       mode: "now",
       text: "check the queue",
       sessionKey: "agent:main:telegram:8661849123:topic:4052",
     });
+    expect(result).toEqual({ ok: true });
 
     expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith("check the queue", {
       sessionKey: "agent:main:telegram:8661849123:topic:4052",
@@ -134,7 +136,8 @@ describe("cron wake() origin delivery-context carry", () => {
       () => TOPIC_DELIVERY_CONTEXT,
     );
 
-    wake(state, { mode: "now", text: "no origin" });
+    const result = wake(state, { mode: "now", text: "no origin" });
+    expect(result).toEqual({ ok: true });
 
     expect(resolveOriginDeliveryContext).not.toHaveBeenCalled();
     expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith("no origin", undefined);

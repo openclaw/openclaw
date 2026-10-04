@@ -38,10 +38,12 @@ vi.mock("./session-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-utils.js")>()),
   loadSessionEntry: mocks.loadSessionEntry,
 }));
+// mock-isolation: Queued-owner cases use supplied session rows instead of real store discovery.
 vi.mock("./session-utils-store-worker.js", () => ({
   resolveGatewaySessionStoreTargetInWorker: mocks.resolveSessionTarget,
 }));
 
+// mock-isolation: Drive adoption and settlement gates without admitting an actual session turn.
 vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
   captureSessionEventTargetForHost: mocks.captureSessionEventTarget,
   enqueueSessionEventForHost: mocks.enqueueSessionEvent,

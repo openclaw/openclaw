@@ -429,6 +429,11 @@ describe("gateway server hooks", () => {
             sessionKey: "agent:main:hook:wake:direct",
             source: "hook",
             occurrence: directEvents[0],
+            expectedTarget: expect.objectContaining({
+              agentId: "main",
+              sessionKey: "agent:main:hook:wake:direct",
+              generation: expect.any(String),
+            }),
           });
         } else {
           expect(enqueueSessionEvent).not.toHaveBeenCalled();
@@ -450,6 +455,11 @@ describe("gateway server hooks", () => {
             sessionKey: "agent:hooks:hook:wake:fixed",
             source: "hook",
             occurrence: mappedEvents[0],
+            expectedTarget: expect.objectContaining({
+              agentId: "hooks",
+              sessionKey: "agent:hooks:hook:wake:fixed",
+              generation: expect.any(String),
+            }),
           });
         } else {
           expect(enqueueSessionEvent).not.toHaveBeenCalled();
@@ -468,6 +478,11 @@ describe("gateway server hooks", () => {
         sessionKey: "global",
         source: "hook",
         occurrence: peekSystemEventEntries("agent:hooks:global")[0],
+        expectedTarget: expect.objectContaining({
+          agentId: "hooks",
+          sessionKey: "global",
+          generation: expect.any(String),
+        }),
       });
     });
   });

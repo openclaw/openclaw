@@ -4,8 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as terminalNote from "../../packages/terminal-core/src/note.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as clawHeartbeatMigration from "../claws/heartbeat-migration.js";
-import type { LegacyHeartbeatConfig } from "../config/types.agent-defaults.js";
+import { findLegacyConfigIssues } from "../config/legacy.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
+import type { LegacyHeartbeatConfig } from "../config/types.agent-defaults.js";
 import { readDefaultProactiveJobReceiptInDatabase } from "../cron/proactive-job-receipt.js";
 import { readScratchStateFromDatabase } from "../cron/scratch-read.kernel.js";
 import { writeCronJobScratchInDatabase } from "../cron/scratch-write.kernel.js";
@@ -405,6 +406,51 @@ describe("heartbeat cadence Doctor cutover", () => {
         },
         delivery,
       });
+    },
+  );
+
+  it.each([false, true])(
+    "preserves Feishu-owned visibility while migrating shared controls=%s",
+    async (sharedControls) => {
+      const f = fixture({ every: "15m", target: "feishu", to: "synthetic-chat", accountId: "ops" });
+      const feishu = {
+        heartbeatVisibility: { visibility: "hidden", intervalMs: 30_000 },
+        accounts: { ops: { heartbeatVisibility: { visibility: "visible", intervalMs: 10_000 } } },
+      };
+      f.cfg.channels = {
+        defaults: { heartbeatVisibility: { showAlerts: true } },
+        feishu: {
+          ...feishu,
+          ...(sharedControls ? { heartbeat: { showAlerts: true } } : {}),
+          accounts: {
+            ops: {
+              ...feishu.accounts.ops,
+              ...(sharedControls ? { heartbeat: { showAlerts: false } } : {}),
+            },
+          },
+        },
+      };
+      const original = structuredClone(f.cfg);
+      const monitor = seedLegacyMonitor(f);
+      const retired = await retireHeartbeatWithDoctor(f.cfg, f.env);
+      expect(retired.channels?.feishu).toEqual(feishu);
+      expect(retired.channels?.defaults?.heartbeatVisibility).toBeUndefined();
+      expect(findLegacyConfigIssues({ channels: retired.channels })).toEqual([]);
+      expect(f.cfg).toEqual(original);
+      const migrated = readState(f)!.jobs;
+      expect(migrated).toEqual([
+        expect.objectContaining({
+          id: monitor.id,
+          delivery: {
+            mode: sharedControls ? "none" : "announce",
+            channel: "feishu",
+            to: "synthetic-chat",
+            accountId: "ops",
+          },
+        }),
+      ]);
+      await retireHeartbeatWithDoctor(retired, f.env);
+      expect(readState(f)!.jobs).toEqual(migrated);
     },
   );
 

@@ -49,6 +49,7 @@ describe("Claw migration planning", () => {
   it("builds a stable read-only plan without creating a package or state database", async () => {
     const { workspace, env, build } = await fixture({
       name: "Existing worker",
+      tools: { profile: "full", allow: ["read"] },
     });
     const first = await build();
     const second = await build();
@@ -71,6 +72,7 @@ describe("Claw migration planning", () => {
       ],
     });
     expect(first.plan.planIntegrity).toBe(second.plan.planIntegrity);
+    expect(first.profile?.agent.tools).toEqual({ profile: "full", allow: ["read"] });
     await expect(access(first.plan.packageRoot)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(access(resolveOpenClawStateSqlitePath(env))).rejects.toMatchObject({
       code: "ENOENT",

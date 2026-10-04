@@ -39,7 +39,9 @@ function collectModelConsumers(cfg: OpenClawConfig): ModelConsumer[] {
   );
   const consumers: ModelConsumer[] = refs;
   const heartbeatAgents = new Map(
-    resolveHeartbeatAgents(cfg).map((entry) => [entry.agentId, entry.heartbeat]),
+    resolveHeartbeatAgents(cfg)
+      .filter((entry) => entry.heartbeat !== undefined)
+      .map((entry) => [entry.agentId, entry.heartbeat]),
   );
   for (const agentId of listAgentIds(cfg)) {
     const entry = agents.find((agent) => agent.id === agentId);

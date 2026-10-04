@@ -39,7 +39,7 @@ const enqueueSystemEventWithReceiptMock = vi.hoisted(() => vi.fn());
 const supervisorMock = vi.hoisted(() => ({
   spawn: vi.fn(),
 }));
-
+// mock-isolation: Control completion receipts without starting session turns in process tests.
 vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
   captureSessionEventTargetForHost: async (agentId: string, sessionKey: string) => ({
     agentId,

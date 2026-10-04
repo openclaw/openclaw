@@ -7,7 +7,6 @@ import { waitForExecScope } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { createProcessTool } from "./bash-tools.process.js";
-
 const readSessionEntriesMock = vi.hoisted(() => vi.fn());
 vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
   readSessionEntriesFromStoreInWorker: readSessionEntriesMock,
@@ -19,6 +18,7 @@ const enqueueSessionEventMock = vi.hoisted(() =>
     settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
   })),
 );
+// mock-isolation: Keep session lookup and reply turns outside unavailable-worker process cases.
 vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
   captureSessionEventTargetForHost: async (agentId: string, sessionKey: string) => ({
     agentId,

@@ -36,7 +36,7 @@ export async function createCodeModeToolApiFile(
     : undefined;
   let declarations = specialized;
   if (!declarations) {
-    const output = trusted ? toolSchemaDeclaration(entry.outputSchema) : "unknown";
+    const output = trusted ? toolSchemaDeclaration(entry.outputSchema, "output") : "unknown";
     declarations = [
       ...(variants
         ? [
@@ -89,7 +89,7 @@ function createVariantDeclarations(params: {
   for (const [index, schema] of variants.variants.entries()) {
     const name = `${prefix}Output${index}`;
     // Preserve root shape constraints; unsupported types stay unknown.
-    const output = toolSchemaDeclaration({ ...outputSchema, anyOf: [schema] });
+    const output = toolSchemaDeclaration({ ...outputSchema, anyOf: [schema] }, "output");
     if (!append(`type ${name} = ${output};`)) {
       return undefined;
     }

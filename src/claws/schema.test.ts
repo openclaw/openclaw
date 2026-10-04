@@ -845,14 +845,14 @@ describe("buildClawAddPlan", () => {
         requirements: [{ kind: "environment", mcpServer: "github", name: "GITHUB_TOKEN" }],
       },
       summary: {
-        totalActions: 8,
+        totalActions: 9,
         agentActions: 1,
         workspaceActions: 3,
         packageActions: 2,
         mcpServerActions: 1,
-        cronJobActions: 1,
+        cronJobActions: 2,
         blockedActions: 2,
-        capabilityEscalations: 5,
+        capabilityEscalations: 6,
       },
     });
     expect(plan.capabilityChanges).toEqual(
@@ -861,8 +861,15 @@ describe("buildClawAddPlan", () => {
         expect.objectContaining({ kind: "package", id: "plugin:@acme/github" }),
         expect.objectContaining({ kind: "mcpServer", id: "github" }),
         expect.objectContaining({ kind: "cronJob", id: "weekday-triage" }),
+        expect.objectContaining({
+          kind: "cronJob",
+          path: "agent.heartbeat",
+          requiresDistinctConsent: true,
+          effect: expect.objectContaining({ heartbeat: { every: "30m", lightContext: true } }),
+        }),
       ]),
     );
+    expect(plan.agent.config).not.toHaveProperty("heartbeat");
     expect(plan.actions).toContainEqual(
       expect.objectContaining({
         kind: "workspaceFile",

@@ -18,10 +18,10 @@ import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "./tools/gateway-caller-context.js";
-
 const enqueueSessionEventMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventWithReceiptMock = vi.hoisted(() => vi.fn());
 const supervisorMock = vi.hoisted(() => ({ spawn: vi.fn() }));
+// mock-isolation: Control completion receipts while testing process cancellation and cleanup.
 vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
   captureSessionEventTargetForHost: async (agentId: string, sessionKey: string) => ({
     agentId,

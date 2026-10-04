@@ -42,7 +42,7 @@ export function createPluginSystemRuntime(params: {
       registration: true,
       admittedRuntime: true,
     });
-    const resolveGatewayContext = getGatewayContextResolver(registryParams.runtime.subagent);
+    const resolveGatewayContext = getGatewayContextResolver(registryParams.runtime);
     const context = resolveGatewayContext?.();
     const assertCurrent = () => {
       if (!authority?.()) {

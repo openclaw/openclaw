@@ -167,11 +167,14 @@ export async function buildHealthAgentSummaries(
       resolveSessionStorePathCore(cfg.session?.store, { agentId: entry.id }),
       entry.id,
     );
+    const { deliveryPolicy: _deliveryPolicy, ...heartbeat } = projectHeartbeatSummary(
+      heartbeatByAgent.get(entry.id),
+    );
     agents.push({
       agentId: entry.id,
       name: entry.name,
       isDefault: entry.id === defaultAgentId,
-      heartbeat: projectHeartbeatSummary(heartbeatByAgent.get(entry.id)),
+      heartbeat,
       sessions: projectHealthSessions(store.path, store),
     });
   }

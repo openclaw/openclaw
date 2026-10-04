@@ -22,12 +22,12 @@ import * as supervisorExit from "./bash-tools.exec-runtime.test-support.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
 import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import { getBashShellConfig } from "./shell-utils.js";
-
 vi.mock("../auto-reply/reply/session-event-handoff.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../auto-reply/reply/session-event-handoff.js")>();
   return { ...actual, enqueueSessionEventForHost: vi.fn(actual.enqueueSessionEventForHost) };
 });
+// mock-isolation: Defer reply execution while testing real process notifications and polling.
 vi.mock("../auto-reply/dispatch.js", () => ({
   dispatchInboundMessageWithRoutedChannelDispatcher: vi.fn(async (params) => {
     params.replyOptions.turnAdoptionLifecycle.onDeferred();

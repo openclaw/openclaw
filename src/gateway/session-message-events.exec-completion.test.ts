@@ -3,6 +3,7 @@ import { json } from "node:stream/consumers";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
@@ -25,101 +26,108 @@ import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.
 let state: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
 let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
 let providerServer: Server | undefined;
+let startup: Promise<void> | undefined;
+const fixture = createFixtureLifetime();
 const token = "exec-completion-test";
 const providerRequests: string[] = [];
 const providerErrors: unknown[] = [];
 
-beforeAll(async () => {
-  state = await createOpenClawTestState({
-    label: "exec-completion-publication",
-    env: {
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_GATEWAY_PASSWORD: undefined,
-    },
-  });
-  providerServer = createServer((request, response) => {
-    void (async () => {
-      const body = JSON.stringify(await json(request));
-      const title = body.includes("Generate a concise session title");
-      const marker = body.match(/EXEC_NOTIFICATION_(?:false|true|silent)/)?.[0];
-      if (!title) {
-        providerRequests.push(body);
-      }
-      writeOpenAiResponsesText(response, {
-        text: title
-          ? "Exec completion proof"
-          : marker === "EXEC_NOTIFICATION_silent"
-            ? "NO_REPLY"
-            : (marker ?? "Unexpected request"),
-        messageId: `message-${providerRequests.length}`,
-        responseId: `response-${providerRequests.length}`,
-      });
-    })().catch((error: unknown) => {
-      providerErrors.push(error);
-      if (!response.headersSent) {
-        response.writeHead(500);
-      }
-      response.end();
+beforeAll(() => {
+  startup = fixture.run(async () => {
+    state = await createOpenClawTestState({
+      label: "exec-completion-publication",
+      env: {
+        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+        OPENCLAW_SKIP_CRON: "1",
+        OPENCLAW_SKIP_CANVAS_HOST: "1",
+        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+        OPENCLAW_SKIP_PROVIDERS: "1",
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+        OPENCLAW_GATEWAY_PASSWORD: undefined,
+      },
     });
-  });
-  const server = providerServer;
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Mock provider did not bind");
-  }
-  const provider = buildMockOpenAiResponsesProvider(
-    `http://127.0.0.1:${address.port}/v1`,
-    "exec-completion",
-  );
-  const cfg = {
-    agents: {
-      defaults: {
-        workspace: state.workspaceDir,
-        skipBootstrap: true,
-        model: { primary: provider.modelRef },
-        models: {
-          [provider.modelRef]: {
-            agentRuntime: { id: "openclaw" },
-            params: { transport: "sse", openaiWsWarmup: false },
+    providerServer = createServer((request, response) => {
+      void (async () => {
+        const body = JSON.stringify(await json(request));
+        const title = body.includes("Generate a concise session title");
+        const marker = body.match(/EXEC_NOTIFICATION_(?:false|true|silent)/)?.[0];
+        if (!title) {
+          providerRequests.push(body);
+        }
+        writeOpenAiResponsesText(response, {
+          text: title
+            ? "Exec completion proof"
+            : marker === "EXEC_NOTIFICATION_silent"
+              ? "NO_REPLY"
+              : (marker ?? "Unexpected request"),
+          messageId: `message-${providerRequests.length}`,
+          responseId: `response-${providerRequests.length}`,
+        });
+      })().catch((error: unknown) => {
+        providerErrors.push(error);
+        if (!response.headersSent) {
+          response.writeHead(500);
+        }
+        response.end();
+      });
+    });
+    const server = providerServer;
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Mock provider did not bind");
+    }
+    const provider = buildMockOpenAiResponsesProvider(
+      `http://127.0.0.1:${address.port}/v1`,
+      "exec-completion",
+    );
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: state.workspaceDir,
+          skipBootstrap: true,
+          model: { primary: provider.modelRef },
+          models: {
+            [provider.modelRef]: {
+              agentRuntime: { id: "openclaw" },
+              params: { transport: "sse", openaiWsWarmup: false },
+            },
           },
         },
       },
-    },
-    models: {
-      mode: "replace",
-      providers: {
-        [provider.providerId]: { ...provider.config, request: { allowPrivateNetwork: true } },
+      models: {
+        mode: "replace",
+        providers: {
+          [provider.providerId]: { ...provider.config, request: { allowPrivateNetwork: true } },
+        },
       },
-    },
-    plugins: { slots: { memory: "none" } },
-    messages: { visibleReplies: "message_tool" },
-    tools: { profile: "minimal" },
-    gateway: { auth: { mode: "token", token } },
-  } satisfies OpenClawConfig;
-  gateway = await startGatewayWithClient({
-    cfg,
-    configPath: state.configPath,
-    token,
-    scopes: ["operator.admin", "operator.read", "operator.write"],
+      plugins: { slots: { memory: "none" } },
+      messages: { visibleReplies: "message_tool" },
+      tools: { profile: "minimal" },
+      gateway: { auth: { mode: "token", token } },
+    } satisfies OpenClawConfig;
+    gateway = await startGatewayWithClient({
+      cfg,
+      configPath: state.configPath,
+      token,
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+    });
+    await gateway.server.startupSettled;
   });
-  await gateway.server.startupSettled;
+  return startup;
 });
 
 afterAll(async () => {
   await runQaGatewayFixture(
-    async () => {},
+    async () => {
+      await startup;
+    },
     () => gateway && disconnectGatewayClient(gateway.client),
     () => gateway?.server.close({ reason: "exec completion proof complete" }),
     async () => {
@@ -132,6 +140,7 @@ afterAll(async () => {
       }
     },
     () => state?.cleanup(),
+    () => fixture.cleanup(),
   );
 });
 

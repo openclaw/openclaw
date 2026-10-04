@@ -30,7 +30,7 @@ export async function reconcileSkillCollectionReviewJobs(params: {
 
   const { deviceId } = await loadOrCreateProcessDeviceIdentityAsync();
   params.commitGuard?.();
-  const specs = await resolveSkillCollectionReviewMonitorSpecs(params.cfg, jobs, {
+  const specs = resolveSkillCollectionReviewMonitorSpecs(params.cfg, jobs, {
     schedulerSeed: deviceId,
   });
   params.commitGuard?.();
@@ -62,7 +62,7 @@ export async function reconcileSkillCollectionReviewJobs(params: {
       }),
     );
   }
-  for (const spec of specs) {
+  for await (const spec of specs) {
     await runMutation(spec.agentId, "cron-skill-review: monitor convergence failed", () => {
       retained.delete(spec.agentId);
       return params.cron.add(spec.input, {

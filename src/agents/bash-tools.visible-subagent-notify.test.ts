@@ -26,7 +26,6 @@ import { createProcessTool } from "./bash-tools.process.js";
 import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import { createSubagentRunRecord } from "./subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "./subagents/registry/subagent-registry-memory.js";
-
 const dispatchMock = vi.hoisted(() =>
   vi.fn<typeof dispatchInboundMessageWithRoutedChannelDispatcher>(),
 );
@@ -37,6 +36,7 @@ const sendTextMock = vi.hoisted(() =>
     chatId: "100123",
   })),
 );
+// mock-isolation: Use synthetic model dispatch with real event admission and outbound delivery.
 vi.mock("../auto-reply/dispatch.js", () => ({
   dispatchInboundMessageWithRoutedChannelDispatcher: dispatchMock,
 }));

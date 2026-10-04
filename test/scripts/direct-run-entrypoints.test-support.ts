@@ -105,6 +105,11 @@ export async function withShimFixture<T>(
   try {
     mkdirSync(path.dirname(wrapperPath), { recursive: true });
     mkdirSync(path.join(checkoutRoot, "scripts", "lib"), { recursive: true });
+    mkdirSync(path.join(checkoutRoot, "src", "infra"), { recursive: true });
+    copyFileSync(
+      "src/infra/node-compiler-policy.mjs",
+      path.join(checkoutRoot, "src", "infra", "node-compiler-policy.mjs"),
+    );
     copyFileSync(wrapper, wrapperPath);
     copyFileSync("scripts/tsx.mjs", path.join(checkoutRoot, "scripts", "tsx.mjs"));
     copyFileSync(

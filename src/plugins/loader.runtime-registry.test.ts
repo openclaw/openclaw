@@ -278,7 +278,32 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
           expect(Reflect.set(runtime, key, {})).toBe(false);
           expect(runtime[key]).toBe(facade);
         }
-        expect(runtime.channel.reply.dispatchReplyFromConfig).toBe(dispatchReplyFromConfig);
+        const { dispatcher } = runtime.channel.reply.createReplyDispatcherWithTyping({
+          deliver: async () => {},
+        });
+        try {
+          const onReplyStart = vi.fn();
+          const replyOptions = { onReplyStart, operatorAuthority: { assertCurrent: vi.fn() } };
+          const dispatchParams = {
+            ctx: { Body: "host dispatch probe", CommandAuthorized: false },
+            cfg: config,
+            dispatcher,
+            replyOptions,
+          };
+          const dispatched = { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+          dispatchReplyFromConfig.mockResolvedValueOnce(dispatched);
+
+          await expect(runtime.channel.reply.dispatchReplyFromConfig(dispatchParams)).resolves.toBe(
+            dispatched,
+          );
+          expect(dispatchReplyFromConfig).toHaveBeenCalledExactlyOnceWith({
+            ...dispatchParams,
+            replyOptions: { onReplyStart },
+          });
+          expect(replyOptions.operatorAuthority.assertCurrent).not.toHaveBeenCalled();
+        } finally {
+          await runtime.channel.reply.settleReplyDispatcher({ dispatcher });
+        }
         for (const key of [
           "gateway",
           "subagent",

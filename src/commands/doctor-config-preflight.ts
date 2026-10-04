@@ -367,9 +367,22 @@ async function runDoctorConfigPreflightOperation(
   if (automaticConfigRepair && !skipLegacyParentConfigWrite) {
     modelBillingRouteMigrationSource ??=
       snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig;
+    const repair = automaticConfigRepair;
     await measurePreflightStep("automatic-config-repair", () =>
-      pluginMetadata.run({ config: automaticConfigRepair.config }, () =>
-        commitAutomaticConfigRepair(automaticConfigRepair, snapshot),
+      pluginMetadata.run({ config: repair.config }, () =>
+        commitAutomaticConfigRepair(
+          repair,
+          snapshot,
+          options.doctorOnlyStateMigrations === true
+            ? async () => {
+                // Roster promotion must see canonical jobs, including implicit monitors
+                // written by a published Gateway without authored heartbeat settings.
+                const { retireHeartbeatWithDoctor } =
+                  await import("./doctor-heartbeat-retirement.js");
+                await retireHeartbeatWithDoctor(repair.config);
+              }
+            : undefined,
+        ),
       ),
     );
     note(

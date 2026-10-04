@@ -59,10 +59,19 @@ const resolveQuestionOverGatewayMock = vi.hoisted(() =>
 
 let registerSlackInteractionEvents: typeof import("./interactions.js").registerSlackInteractionEvents;
 
-vi.mock("../../runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../runtime.js")>()),
-  getSlackRuntime: () => ({ system: { enqueueSessionEvent: enqueueSessionEventMock } }),
-}));
+vi.mock("../../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../runtime.js")>();
+  return {
+    ...actual,
+    getSlackRuntime: () => {
+      const runtime = actual.getSlackRuntime();
+      return {
+        ...runtime,
+        system: { ...runtime.system, enqueueSessionEvent: enqueueSessionEventMock },
+      };
+    },
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway: (arg: unknown) => resolveApprovalOverGatewayMock(arg),

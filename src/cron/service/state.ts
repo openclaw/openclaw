@@ -141,6 +141,7 @@ export type CronServiceDeps = {
   /** Resident admission facts; normal reply admission owns recovery barriers. */
   isExecutionIdle?: (job: CronJob) => boolean;
   runSessionEvent?: (params: {
+    admissionSource: NonNullable<AdmittedRunContext["admissionSource"]>;
     sessionPreparation?: CronSessionRunPreparation;
     deliveryAttemptFence: CronCompletionDeliveryFence | null;
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
@@ -231,7 +232,12 @@ export type CronServiceDeps = {
       expectedTarget?: SessionEventTarget;
     },
   ) => void;
-  deferSessionEvent?: (text: string, job: CronJob, expectedTarget?: SessionEventTarget) => void;
+  deferSessionEvent?: (
+    text: string,
+    job: CronJob,
+    expectedTarget: SessionEventTarget | undefined,
+    assertCurrent: () => void,
+  ) => void | Promise<void>;
   captureSessionEventTarget?: (job: CronJob) => Promise<SessionEventTarget | undefined>;
   resolveSessionEventTarget?: (opts?: { agentId?: string; sessionKey?: string }) => {
     agentId?: string;

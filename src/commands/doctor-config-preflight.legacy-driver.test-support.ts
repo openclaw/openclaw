@@ -410,12 +410,14 @@ export function registerLegacyHeartbeatDriverTests() {
   afterAll(() => dirs.cleanup());
 
   it.each([
-    { version: "2026.9.2", explicitConfig: true },
-    { version: "2026.9.7", explicitConfig: true },
-    { version: "2026.9.7", explicitConfig: false },
+    { version: "2026.9.2", explicitConfig: true, repair: false },
+    { version: "2026.9.7", explicitConfig: true, repair: false },
+    { version: "2026.9.7", explicitConfig: false, repair: false },
+    { version: "2026.9.8", explicitConfig: false, repair: true },
+    { version: "2026.9.8", explicitConfig: true, repair: true },
   ])(
-    "migrates heartbeat through published $version doctor --non-interactive (config=$explicitConfig)",
-    async ({ version, explicitConfig }) => {
+    "migrates heartbeat through published $version Doctor (config=$explicitConfig, fix=$repair)",
+    async ({ version, explicitConfig, repair }) => {
       await withOpenClawTestState(
         {
           scenario: "minimal",
@@ -442,21 +444,30 @@ export function registerLegacyHeartbeatDriverTests() {
                 ? {
                     defaults: {
                       heartbeat: {
-                        every: "30m",
+                        every: repair ? "17m" : "30m",
+                        ...(repair ? { model: "openai/gpt-5.6-luna" } : {}),
                         target: "none",
+                        ...(repair ? { directPolicy: "block" } : {}),
                         prompt: "Check the synthetic migration fixture.",
                         activeHours: { start: "09:00", end: "17:00", timezone: "UTC" },
                       },
                     },
                   }
                 : {}),
-              entries: { main: { workspace: state.workspaceDir } },
+              ...(repair
+                ? {
+                    list: [
+                      { id: "main", default: true, workspace: state.workspaceDir },
+                      { id: "second" },
+                    ],
+                  }
+                : { entries: { main: { workspace: state.workspaceDir } } }),
             },
             gateway: { mode: "local", auth: { mode: "none" } },
           });
           const original = fs.readFileSync(state.configPath, "utf8");
           const databasePath = openOpenClawStateDatabase().path;
-          if (!explicitConfig) {
+          if (!explicitConfig || repair) {
             const monitor = makeCronJob({
               id: "published-monitor",
               agentId: "main",
@@ -497,19 +508,39 @@ export function registerLegacyHeartbeatDriverTests() {
               VITEST_POOL_ID: undefined,
               VITEST_WORKER_ID: undefined,
             }),
-            ["doctor", "--non-interactive", "--no-workspace-suggestions"],
+            [
+              "doctor",
+              ...(repair ? ["--fix"] : []),
+              "--non-interactive",
+              "--no-workspace-suggestions",
+            ],
             60_000,
           );
           const output = `${result.stdout}\n${result.stderr}`;
           expect(result.signal, output).toBeNull();
           expect(result.code, output).toBe(0);
-          expect(output).toContain(
-            "Retired heartbeat configuration after ordinary automation data was verified.",
-          );
+          if (!repair) {
+            expect(output).toContain(
+              "Retired heartbeat configuration after ordinary automation data was verified.",
+            );
+          }
+          expect(output).toContain("Heartbeat delivery changed");
           expect(output).not.toContain("Gateway restarted");
           const saved = JSON.parse(fs.readFileSync(state.configPath, "utf8"));
           expect(saved.agents.defaults?.heartbeat).toBeUndefined();
-          expect(fs.readFileSync(`${state.configPath}.bak`, "utf8")).toBe(original);
+          if (repair) {
+            const backups = fs
+              .readdirSync(path.dirname(state.configPath))
+              .filter((name) => name.startsWith(`${path.basename(state.configPath)}.bak`))
+              .map((name) =>
+                fs.readFileSync(path.join(path.dirname(state.configPath), name), "utf8"),
+              );
+            expect(backups).toContain(original);
+            expect(saved.agents.list).toBeUndefined();
+            expect(Object.keys(saved.agents.entries)).toEqual(["main", "second"]);
+          } else {
+            expect(fs.readFileSync(`${state.configPath}.bak`, "utf8")).toBe(original);
+          }
           const db = new DatabaseSync(databasePath, { readOnly: true });
           try {
             const jobs = db
@@ -519,18 +550,26 @@ export function registerLegacyHeartbeatDriverTests() {
             expect(jobs).toContainEqual(
               expect.objectContaining({
                 agentId: "main",
-                schedule: expect.objectContaining({ kind: "every", everyMs: 1_800_000 }),
+                schedule: expect.objectContaining({
+                  kind: "every",
+                  everyMs: explicitConfig && repair ? 1_020_000 : 1_800_000,
+                }),
                 payload: expect.objectContaining({ kind: "agentTurn" }),
+                ...(!explicitConfig || repair ? { id: "published-monitor" } : {}),
                 ...(explicitConfig
                   ? {
                       payload: expect.objectContaining({
                         kind: "agentTurn",
                         message: "Check the synthetic migration fixture.",
+                        ...(repair ? { model: "openai/gpt-5.6-luna" } : {}),
                       }),
-                      delivery: expect.objectContaining({ mode: "none" }),
+                      delivery: expect.objectContaining({
+                        mode: "none",
+                        ...(repair ? { directPolicy: "block" } : {}),
+                      }),
                       activeHours: { start: "09:00", end: "17:00", timezone: "UTC" },
                     }
-                  : { id: "published-monitor" }),
+                  : {}),
               }),
             );
           } finally {

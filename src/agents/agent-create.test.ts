@@ -55,7 +55,7 @@ vi.mock("../state/agent-deletion-journal.js", () => ({
 vi.mock("../state/agent-provenance.js", () => ({
   recordAgentProvenance: mocks.recordAgentProvenance,
 }));
-
+// mock-isolation: Keep automation provisioning outside the config fixture's synthetic stores.
 vi.mock("../cron/default-proactive-job.js", () => ({
   provisionDefaultProactiveJob: mocks.provisionDefaultProactiveJob,
 }));

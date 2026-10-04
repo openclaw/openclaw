@@ -40,6 +40,10 @@ it("admits real producer plugin host, dependency and basename links without trav
     await fs.symlink(candidate, path.join(modules, "openclaw"), "dir");
     await fs.symlink(modules, path.join(plugin, "node_modules"), "dir");
     const config: OpenClawConfig = {
+      agents: {
+        defaults: { heartbeat: { every: "37m", target: "none" } },
+        entries: { main: { heartbeat: { every: "17m" } }, other: {} },
+      },
       plugins: {
         installs: { example: { source: "path", sourcePath: locator, installPath: locator } },
       },
@@ -60,6 +64,13 @@ it("admits real producer plugin host, dependency and basename links without trav
       };
       const raw = await fs.readFile(rehearsal.configPath, "utf8");
       const copied: OpenClawConfig = JSON.parse(raw);
+      expect(copied.agents?.defaults?.heartbeat).toEqual(config.agents?.defaults?.heartbeat);
+      expect(copied.agents?.entries?.main?.heartbeat).toEqual(
+        config.agents?.entries?.main?.heartbeat,
+      );
+      expect(copied.agents?.entries?.other?.heartbeat).toBeUndefined();
+      expect(copied.cron).toMatchObject({ enabled: false, triggers: { enabled: false } });
+      expect(rehearsal.env.OPENCLAW_SKIP_CRON).toBe("1");
       const alias = copied.plugins!.installs!.example!.installPath!;
       expect((await fs.lstat(alias)).isSymbolicLink()).toBe(true);
       expect(

@@ -55,6 +55,7 @@ it.each(["file", "sqlite"] as const)(
         role: "custom",
         customType: "openclaw.runtime-context",
         content: "obsolete runtime instructions",
+        details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
         display: false,
         timestamp: 6,
       },

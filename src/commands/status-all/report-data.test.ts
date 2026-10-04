@@ -82,6 +82,7 @@ vi.mock("../../skills/runtime/remote.js", () => ({ getRemoteSkillEligibility: ()
 vi.mock("../status-overview-rows.ts", () => ({
   buildStatusAllOverviewRows: mocks.buildStatusAllOverviewRows,
 }));
+// mock-isolation: Compose reports from synthetic Gateway probes without real service or provider credential inspection.
 vi.mock("../status-runtime-shared.ts", () => ({
   resolveStatusAutomations: mocks.resolveStatusAutomations,
   resolveStatusGatewayDiagnosticsSafe: mocks.resolveStatusGatewayDiagnosticsSafe,

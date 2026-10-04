@@ -15,12 +15,6 @@ async function main() {
     process.env.OPENAI_API_KEY?.trim() ||
     process.env.OPENCLAW_MCP_CODE_MODE_OPENAI_API_KEY?.trim() ||
     "sk-docker-smoke-test";
-  const agentDefaults = {
-    heartbeat: {
-      every: "0m",
-    },
-  };
-
   const cfg = applyDockerOpenAiProviderConfig(
     {
       gateway: {
@@ -35,11 +29,7 @@ async function main() {
           },
         },
       },
-      agents: {
-        defaults: {
-          ...agentDefaults,
-        },
-      },
+      cron: { enabled: false },
       memory: { search: { enabled: false } },
       plugins: {
         slots: {

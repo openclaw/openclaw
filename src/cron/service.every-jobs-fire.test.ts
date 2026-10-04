@@ -58,7 +58,6 @@ describe("CronService interval/cron jobs fire on time", () => {
     if (!matchingCall) {
       throw new Error(`missing system event ${expectedText}`);
     }
-    expect(matchingCall[0].job.agentId).toBe("main");
     expect(matchingCall[0].job.sessionTarget).toBe("main");
   };
 

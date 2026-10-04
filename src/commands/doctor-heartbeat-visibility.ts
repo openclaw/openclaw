@@ -13,6 +13,35 @@ export const LegacyHeartbeatVisibilitySchema = z
   .strict()
   .optional();
 
+/** Feishu owns visibility/intervalMs; only its shared heartbeat keys belong to retirement. */
+export function selectLegacyHeartbeatVisibility(
+  channel: string,
+  entry: Record<string, unknown> | undefined,
+) {
+  if (!entry) {
+    return undefined;
+  }
+  const keys =
+    channel === "feishu"
+      ? (["heartbeatVisibility", "heartbeat"] as const)
+      : (["heartbeatVisibility"] as const);
+  for (const key of keys) {
+    const value = entry[key];
+    if (value === undefined) {
+      continue;
+    }
+    if (
+      channel === "feishu" &&
+      (!isRecord(value) ||
+        !["showOk", "showAlerts", "useIndicator"].some((field) => Object.hasOwn(value, field)))
+    ) {
+      continue;
+    }
+    return { key, value };
+  }
+  return undefined;
+}
+
 /** Resolved heartbeat presentation toggles after defaults/channel/account precedence. */
 export type ResolvedHeartbeatVisibility = {
   /** Whether successful heartbeat content should be sent as visible chat text. */
@@ -52,12 +81,16 @@ export function resolveHeartbeatVisibility(params: {
 
   // Layer 2: Per-channel config (at channel root level)
   const channelCfg = asOptionalRecord(cfg.channels?.[channel]);
-  const perChannel = LegacyHeartbeatVisibilitySchema.parse(channelCfg?.heartbeatVisibility);
+  const perChannel = LegacyHeartbeatVisibilitySchema.parse(
+    selectLegacyHeartbeatVisibility(channel, channelCfg)?.value,
+  );
 
   // Layer 3: Per-account config (most specific)
   const accounts = asOptionalRecord(channelCfg?.accounts);
   const accountCfg = accountId ? asOptionalRecord(accounts?.[accountId]) : undefined;
-  const perAccount = LegacyHeartbeatVisibilitySchema.parse(accountCfg?.heartbeatVisibility);
+  const perAccount = LegacyHeartbeatVisibilitySchema.parse(
+    selectLegacyHeartbeatVisibility(channel, accountCfg)?.value,
+  );
 
   return {
     showOk:
@@ -94,6 +127,13 @@ export function migrateHeartbeatVisibility(raw: Record<string, unknown>, changes
       !heartbeat ||
       (preserveEmptyPluginBlock && keys.length === 0) ||
       keys.some((key) => key !== "showOk" && key !== "showAlerts" && key !== "useIndicator")
+    ) {
+      return;
+    }
+    if (
+      preserveEmptyPluginBlock &&
+      entry.heartbeatVisibility !== undefined &&
+      selectLegacyHeartbeatVisibility("feishu", entry)?.key !== "heartbeatVisibility"
     ) {
       return;
     }

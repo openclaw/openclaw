@@ -2,7 +2,17 @@ import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { resolveSkillCollectionReviewMonitorSpecs } from "./skill-collection-review-monitor.js";
+import { resolveSkillCollectionReviewMonitorSpecs as iterateSkillCollectionReviewMonitorSpecs } from "./skill-collection-review-monitor.js";
+
+async function resolveSkillCollectionReviewMonitorSpecs(
+  ...params: Parameters<typeof iterateSkillCollectionReviewMonitorSpecs>
+) {
+  const specs = [];
+  for await (const spec of iterateSkillCollectionReviewMonitorSpecs(...params)) {
+    specs.push(spec);
+  }
+  return specs;
+}
 
 describe("resolveSkillCollectionReviewMonitorSpecs", () => {
   it("creates one stable seven-day job for every agent", async () => {

@@ -597,26 +597,40 @@ describe("resolveFollowupDeliveryDecision", () => {
 });
 
 describe("deliverFollowupDecision", () => {
-  it("keeps internal occurrence delivery with its producer when the origin is routable", async () => {
-    const turn = createTurn();
-    const deliver = vi.fn(async () => {});
-    turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver };
-    turn.queued.run.internalEventExecution = { onStarted: () => {}, onTerminal: () => {} };
-    deliveryState.routeReply.mockClear();
+  it.each(["final", "block", "tool"] as const)(
+    "keeps internal occurrence %s delivery with its producer when the origin is routable",
+    async (kind) => {
+      const turn = createTurn();
+      const deliver = vi.fn(async () => {});
+      turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver };
+      turn.queued.run.internalEventExecution = { onStarted: () => {}, onTerminal: () => {} };
+      deliveryState.routeReply.mockClear();
 
-    await deliverFollowupDecision({
-      decision: { kind: "deliver", payloads: [{ text: "internal result" }] },
-      turn,
-      defaults: createDefaults(vi.fn()),
-      runId: "run-1",
-      runFollowup: vi.fn(),
-    });
+      const result = await deliverFollowupDecision({
+        decision: { kind: "deliver", payloads: [{ text: "internal result" }] },
+        turn,
+        defaults: createDefaults(vi.fn()),
+        runId: "run-1",
+        runFollowup: vi.fn(),
+        kind,
+      });
 
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({ payloads: [{ text: "internal result" }] }),
-    );
-    expect(deliveryState.routeReply).not.toHaveBeenCalled();
-  });
+      expect(result).toEqual({ kind: "completed", payloads: [{ text: "internal result" }] });
+      if (kind === "final") {
+        // The follow-up runner delivers terminal payloads with the completion, once.
+        expect(deliver).not.toHaveBeenCalled();
+      } else {
+        expect(deliver).toHaveBeenCalledExactlyOnceWith({
+          kind: "queued-followup",
+          runId: "run-1",
+          originatingChannel: "discord",
+          payloads: [{ text: "internal result" }],
+          completion: { kind: "progress" },
+        });
+      }
+      expect(deliveryState.routeReply).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps dispatcher-only delivery out of a routable origin", async () => {
     const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});

@@ -3655,7 +3655,7 @@ describe("runReplyAgent typing and silence", () => {
   it.each(["NO_REPLY", "HEARTBEAT_OK"])(
     "does not persist %s from a silent turn as pending delivery",
     async (text) => {
-      const dir = await mkdtemp(join(tmpdir(), "openclaw-silent-pending-"));
+      const dir = tempDirs.make("openclaw-silent-pending-");
       const storePath = join(dir, "sessions.json");
       await replaceSessionEntry(
         { storePath, sessionKey: "main" },

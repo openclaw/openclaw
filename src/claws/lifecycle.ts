@@ -149,7 +149,7 @@ export async function buildClawAddPlan(params: {
     details: { ...agentConfig, expectedState: "absent" },
     blocked: agentBlocked || !AGENT_ID_PATTERN.test(finalId),
   });
-  const agentCapability = clawAgentCapabilityChange(finalId, runtimeAgentSettings);
+  const agentCapability = clawAgentCapabilityChange(finalId, openClawAgentSettings);
   if (agentCapability) {
     capabilityChanges.push(agentCapability);
   }

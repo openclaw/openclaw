@@ -553,6 +553,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note(sanitizeDoctorNote(mutableAllowlistWarnings.join("\n")), "Doctor warnings");
   }
 
+  const modelBillingRouteConfig = state.candidate;
   if (shouldRepair) {
     const { retireHeartbeatWithDoctor } = await import("./doctor-heartbeat-retirement.js");
     const retiredConfig = await retireHeartbeatWithDoctor(state.candidate);
@@ -631,6 +632,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   const migrationResult = await finalizeMigrationResult({
     cfg,
+    modelBillingRouteConfig,
     shouldWriteConfig,
     pluginInventoryChanged: pluginMetadataSnapshotState.inventoryChanged,
     metadataSnapshot: pluginMetadataSnapshotState.current,

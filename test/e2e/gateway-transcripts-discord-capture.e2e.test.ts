@@ -483,6 +483,7 @@ describe("Gateway admitted Discord transcript capture", () => {
       resetConfigOverrides();
       const token = "synthetic-gateway-capture-token";
       const cfg: OpenClawConfig = {
+        cron: { enabled: false },
         skills: { load: { watch: false } },
         agents: {
           ownership: "explicit",
@@ -495,7 +496,6 @@ describe("Gateway admitted Discord transcript capture", () => {
             skipBootstrap: true,
             systemAgent: { agentId: "main" },
             sessionStore: { agentId: "main" },
-            heartbeat: { every: "0m" },
             model: { primary: provider.modelRef, fallbacks: [] },
             models: {
               [provider.modelRef]: {

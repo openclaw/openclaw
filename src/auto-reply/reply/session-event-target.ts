@@ -1,6 +1,7 @@
 /** Captured destination identity and live generation facts for ordinary session events. */
 import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
+import { intersectSessionPermissionModes } from "../../agents/session-permission-exec-mode.js";
 import {
   getGatewayToolCallerIdentity,
   prepareGatewayToolCallerAssertion,
@@ -8,6 +9,10 @@ import {
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import {
+  intersectSessionToolOverrides,
+  sessionToolOverridesEqual,
+} from "../../config/sessions/session-tool-overrides.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   getAgentEventLifecycleGeneration,
@@ -194,4 +199,34 @@ export function readSessionEventTargetEnvironment(
   target: SessionEventTarget,
 ): NodeJS.ProcessEnv | undefined {
   return targetScopes.get(target)?.env;
+}
+
+/** A delayed producer can retain restrictions, never replace current session authority. */
+export function narrowSessionEventSettings(
+  retained: SessionEventTarget["settings"],
+  current: SessionEventTarget["settings"],
+): NonNullable<SessionEventTarget["settings"]> {
+  return {
+    permissionMode: intersectSessionPermissionModes(
+      retained?.permissionMode,
+      current?.permissionMode,
+    ),
+    toolOverrides: intersectSessionToolOverrides(retained?.toolOverrides, current?.toolOverrides),
+  };
+}
+
+/** Frozen tools may continue only while the current session still covers their admitted policy. */
+export function assertSessionEventSettingsCurrent(
+  admitted: SessionEventTarget["settings"],
+  current: SessionEventTarget["settings"],
+): void {
+  const narrowed = narrowSessionEventSettings(admitted, current);
+  if (
+    admitted?.permissionMode !== narrowed.permissionMode ||
+    !sessionToolOverridesEqual(admitted?.toolOverrides, narrowed.toolOverrides)
+  ) {
+    throw new Error(
+      "Session event permissions were restricted; start a new turn under the current policy.",
+    );
+  }
 }

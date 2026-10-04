@@ -148,7 +148,7 @@ export async function resolveStatusAutomations(params: {
   if (timeoutMs === 0) {
     return { ok: false, error: "Gateway probe budget exhausted before automation status." };
   }
-  const { callGateway } = await gatewayCallModuleLoader.load();
+  const { callGateway } = await import("../gateway/call.js");
   return callGateway<CronStatusSummary>({
     method: "cron.status",
     params: {},

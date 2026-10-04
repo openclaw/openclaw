@@ -182,6 +182,7 @@ vi.mock("../infra/system-events.js", async (importOriginal) => ({
   enqueueSystemEventWithReceipt,
 }));
 
+// mock-isolation: Cron wiring uses controlled receipts without admitting or executing real session turns.
 vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
   enqueueSessionEventForHost: enqueueSessionEventMock,
   captureSessionEventTargetForHost: async (agentId: string, sessionKey: string) => ({
@@ -192,6 +193,7 @@ vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
   }),
   assertSessionEventTargetCurrent: () => {},
 }));
+// mock-isolation: Exercise Gateway cron wiring without running a shared-session agent turn.
 vi.mock("../cron/session-run.js", () => ({ runCronSessionTurn: runSessionEventMock }));
 
 vi.mock("../infra/restart-coordinator.js", async () => {
@@ -589,9 +591,13 @@ describe("buildGatewayCronService", () => {
       skills: { workshop: { autonomous: { mode: "auto" } } },
     } satisfies OpenClawConfig;
     const state = loadCronService(cfg);
-    const [spec] = await resolveSkillCollectionReviewMonitorSpecs(cfg, [], {
+    const specs = [];
+    for await (const spec of resolveSkillCollectionReviewMonitorSpecs(cfg, [], {
       schedulerSeed: "test-seed",
-    });
+    })) {
+      specs.push(spec);
+    }
+    const [spec] = specs;
 
     if (!spec) {
       throw new Error("expected the skill collection review monitor spec");

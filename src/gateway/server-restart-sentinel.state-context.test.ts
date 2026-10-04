@@ -89,7 +89,8 @@ vi.mock("./session-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-utils.js")>()),
   loadSessionEntry: mocks.loadSessionEntry,
 }));
-vi.mock("./session-utils-store-worker.js", () => ({
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
   resolveGatewaySessionStoreTargetInWorker: mocks.resolveSessionTarget,
 }));
 

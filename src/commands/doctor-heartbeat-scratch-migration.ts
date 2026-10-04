@@ -443,7 +443,16 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
 
   let monitors: Map<string, CronJob>;
   try {
-    monitors = await ensureHeartbeatMonitorJobs(params.cfg, storePath, env);
+    const findings = await collectHeartbeatScratchMigrationFindings(params.cfg, env);
+    if (findings.length === 0) {
+      return { changes, warnings };
+    }
+    monitors = await ensureHeartbeatMonitorJobs(
+      params.cfg,
+      storePath,
+      env,
+      findings.flatMap((finding) => (finding.target ? [finding.target] : [])),
+    );
   } catch (error) {
     return {
       changes,

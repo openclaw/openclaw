@@ -44,7 +44,7 @@ import {
   resolveHeartbeatPhaseMs,
   resolveHeartbeatSchedulerSeed,
 } from "./doctor-heartbeat-schedule.js";
-import { resolveHeartbeatSessionKey } from "./doctor-heartbeat-session.js";
+import { resolveLegacyHeartbeatSessionKey } from "./doctor-heartbeat-session.js";
 import { isHeartbeatTaskCronJob } from "./doctor-heartbeat-task-identity.js";
 import { resolveHeartbeatVisibility } from "./doctor-heartbeat-visibility.js";
 
@@ -137,7 +137,7 @@ function convertMonitor(
         payload: { kind: "agentTurn", message: DEFAULT_PROACTIVE_PROMPT },
       }
     : createDefaultProactiveJob(cfg, agentId, nowMs);
-  const session = resolveHeartbeatSessionKey(cfg, agentId, heartbeat, undefined, env);
+  const session = resolveLegacyHeartbeatSessionKey(cfg, agentId, heartbeat, undefined, env);
   const target = heartbeat?.target?.trim() || "owner";
   job.payload = {
     kind: "agentTurn",
@@ -222,12 +222,17 @@ export async function ensureHeartbeatMonitorJobs(
   cfg: OpenClawConfig,
   storePath: string,
   env: NodeJS.ProcessEnv = process.env,
+  legacyFileAgentIds: readonly string[] = [],
 ): Promise<Map<string, CronJob>> {
   validateLegacyHeartbeatConfig(cfg);
-  const schedulerSeed = resolveHeartbeatSchedulerSeed(undefined, { env });
   const loaded = readDoctorHeartbeatJobs(storePath, env);
   const configuredAgentIds = new Set(listAgentIds(cfg));
-  const enrolledAgentIds = new Set(resolveHeartbeatAgents(cfg).map((agent) => agent.agentId));
+  const enrolledAgentIds = new Set([
+    ...resolveHeartbeatAgents(cfg)
+      .filter((agent) => agent.heartbeat !== undefined)
+      .map((agent) => agent.agentId),
+    ...legacyFileAgentIds,
+  ]);
   const agentIds = new Set(enrolledAgentIds);
   for (const job of loaded) {
     if (job.payload.kind === "heartbeat" || isHeartbeatTaskCronJob(job)) {
@@ -262,6 +267,10 @@ export async function ensureHeartbeatMonitorJobs(
       agentIds.add(agentId);
     }
   }
+  if (agentIds.size === 0 && !loaded.some(isPendingLegacyHeartbeatRetry)) {
+    return new Map();
+  }
+  const schedulerSeed = resolveHeartbeatSchedulerSeed(undefined, { env, readOnly: true });
   const nowMs = Date.now();
   const planned = [...agentIds].toSorted().flatMap((agentId) => {
     const legacyJobs = loaded.filter(
@@ -435,13 +444,18 @@ export async function collectHeartbeatCadenceMigrationFindings(
   const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
   try {
     const loaded = readDoctorHeartbeatJobs(storePath, env);
-    const pending = resolveHeartbeatAgents(cfg).filter(
-      (agent) =>
-        withExistingOpenClawStateDatabaseReadOnly(
-          ({ db }) => readDefaultProactiveJobReceiptInDatabase(db, storePath, agent.agentId),
-          { env },
-        )?.phase !== "complete",
+    const configured = new Set(
+      resolveHeartbeatAgents(cfg)
+        .filter((agent) => agent.heartbeat !== undefined)
+        .map((agent) => agent.agentId),
     );
+    const pending = listAgentIds(cfg).filter((agentId) => {
+      const receipt = withExistingOpenClawStateDatabaseReadOnly(
+        ({ db }) => readDefaultProactiveJobReceiptInDatabase(db, storePath, agentId),
+        { env },
+      );
+      return receipt?.phase === "pending" || (configured.has(agentId) && !receipt);
+    });
     if (
       !pending.length &&
       !loaded.some(

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { AsyncLocalStorage, createHook } from "node:async_hooks";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { enqueueCommandInLane, getQueueSize } from "../process/command-queue.js";
@@ -91,17 +91,19 @@ async function queueFixture(): Promise<Fixture> {
 async function timerFixture(): Promise<Fixture> {
   const timers: WeakRef<object>[] = [];
   let noticeTimerCreated: (() => void) | undefined;
-  const hook = createHook({
-    init(_id, type, _trigger, value) {
-      if (type === "Timeout") {
-        const noticeTimer = (value as { _idleTimeout: number })._idleTimeout === 20_000;
-        if (resource !== "session-notice" || noticeTimer) {
-          timers.push(new WeakRef(value));
-        }
-        if (noticeTimer) {
-          noticeTimerCreated?.();
-        }
+  const nativeSetTimeout = globalThis.setTimeout;
+  // Observe the real handle without changing the native timer's caller context.
+  const observeSetTimeout = new Proxy(nativeSetTimeout, {
+    apply(schedule, _receiver, args: Parameters<typeof setTimeout>) {
+      const timer = schedule(...args);
+      const noticeTimer = args[1] === 20_000;
+      if (resource !== "session-notice" || noticeTimer) {
+        timers.push(new WeakRef(timer));
       }
+      if (noticeTimer) {
+        noticeTimerCreated?.();
+      }
+      return timer;
     },
   });
   const assertAlive = () => {
@@ -112,7 +114,7 @@ async function timerFixture(): Promise<Fixture> {
   };
   if (resource === "terminal") {
     let uploadedPath = "";
-    hook.enable();
+    globalThis.setTimeout = observeSetTimeout;
     let references: WeakRef<object>[];
     try {
       references = await completedCaller(async () => {
@@ -127,7 +129,7 @@ async function timerFixture(): Promise<Fixture> {
         uploadedPath = uploaded.path;
       });
     } finally {
-      hook.disable();
+      globalThis.setTimeout = nativeSetTimeout;
     }
     return {
       references,
@@ -172,13 +174,13 @@ async function timerFixture(): Promise<Fixture> {
     });
   const queued = createDeferredCore();
   noticeTimerCreated = () => queued.resolve();
-  hook.enable();
+  globalThis.setTimeout = observeSetTimeout;
   let references: WeakRef<object>[];
   try {
     references = await completedCaller(() => enqueue(1));
     await queued.promise;
   } finally {
-    hook.disable();
+    globalThis.setTimeout = nativeSetTimeout;
   }
   return {
     references,
@@ -186,13 +188,13 @@ async function timerFixture(): Promise<Fixture> {
     reuse: async () => {
       const requeued = createDeferredCore();
       noticeTimerCreated = () => requeued.resolve();
-      hook.enable();
+      globalThis.setTimeout = observeSetTimeout;
       try {
         enqueue(2);
         await requeued.promise;
         assert.equal(peekSystemEventEntries(sessionKey).length, 2);
       } finally {
-        hook.disable();
+        globalThis.setTimeout = nativeSetTimeout;
       }
     },
     close: async () => {

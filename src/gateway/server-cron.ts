@@ -5,6 +5,7 @@ import { listAgentIds, tryResolveAmbientOwnerAgentId } from "../agents/agent-sco
 import { isEmbeddedAgentSessionHeldByOtherRun } from "../agents/embedded-agent-runner/runs.js";
 import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { loadPreparedInboundPluginRegistry } from "../agents/prepared-model-runtime.inbound-registry.js";
+import type { SessionEventTarget } from "../auto-reply/reply/session-event-contract.js";
 import {
   assertSessionEventTargetCurrent,
   captureSessionEventTargetForHost,
@@ -496,20 +497,35 @@ export function buildGatewayCronService(params: {
         }
       });
     },
-    deferSessionEvent: (text, job, target) => {
-      if (!target?.agentId || !target.sessionKey) {
-        throw new Error("Deferred automation has no captured session destination");
+    deferSessionEvent: (text, job, expectedTarget, assertCurrent) => {
+      const { agentId, sessionKey } = resolveCronTarget({
+        agentId: job.agentId,
+        sessionKey: resolveCronSessionTargetSessionKey(job.sessionTarget),
+      });
+      if (!agentId || !sessionKey) {
+        throw new Error("Deferred automation has no configured session destination");
       }
-      assertSessionEventTargetCurrent(target);
-      enqueueAutomationSystemEvent(
-        text,
-        withSystemEventOwner({ sessionKey: target.sessionKey }, target.agentId),
-        {
-          jobId: job.id,
-          assertCurrent: () => assertSessionEventTargetCurrent(target),
-          prepare: () => prepareSessionEventTargetForHost(target),
-        },
-      );
+      const enqueue = (target: SessionEventTarget) => {
+        assertCurrent();
+        if (target.agentId !== agentId || target.sessionKey !== sessionKey) {
+          throw new Error("Deferred automation target does not match its scheduled receiver");
+        }
+        assertSessionEventTargetCurrent(target);
+        enqueueAutomationSystemEvent(
+          text,
+          withSystemEventOwner({ sessionKey: target.sessionKey }, target.agentId),
+          {
+            jobId: job.id,
+            assertCurrent: () => assertSessionEventTargetCurrent(target),
+            prepare: () => prepareSessionEventTargetForHost(target),
+          },
+        );
+      };
+      if (expectedTarget) {
+        enqueue(expectedTarget);
+        return undefined;
+      }
+      return captureSessionEventTargetForHost(agentId, sessionKey, { env }).then(enqueue);
     },
     runIsolatedAgentJob: async (request) => {
       const { job } = request;

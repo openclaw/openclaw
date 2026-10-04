@@ -29,10 +29,12 @@ vi.mock("../../config/io.js", () => ({
 vi.mock("../../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: mocks.runCronIsolatedAgentTurn,
 }));
+// mock-isolation: Keep wake turns synthetic while testing background hook admission deadlines.
 vi.mock("../../auto-reply/reply/session-event-handoff.js", () => ({
   captureSessionEventTargetForHost: mocks.captureSessionEventTarget,
   enqueueSessionEventForHost: mocks.enqueueSessionEvent,
 }));
+// mock-isolation: Background admission tests must not publish into the process-wide event queue.
 vi.mock("../../infra/system-events.js", () => ({ enqueueSystemEvent: vi.fn() }));
 
 const { createGatewayHooksRequestHandler } = await import("./hooks.js");

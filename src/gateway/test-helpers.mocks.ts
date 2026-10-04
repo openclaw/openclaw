@@ -306,6 +306,7 @@ vi.mock("/src/auto-reply/dispatch.js", async () => {
   );
   return createDispatchInboundMessageMockExports(actual);
 });
+// mock-isolation: Gateway fixtures supply replies without agent runtime initialization or prewarming.
 vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => ({
   getReplyFromConfigInternal: (...args: Parameters<GetReplyFromConfigFn>) =>
     gatewayTestHoisted.getReplyFromConfig(...args),

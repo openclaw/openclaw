@@ -29,6 +29,7 @@ vi.mock("../infra/update-check-package-target.js", () => ({
 }));
 vi.mock("./node-runtime-diagnostics.js", () => ({ collectNodeRuntimeFindings: async () => [] }));
 vi.mock("./status.node-mode.js", () => ({ resolveNodeOnlyGatewayInfo: async () => null }));
+// mock-isolation: Isolate Gateway, service, security, and provider probes from the real Git-probe command boundary.
 vi.mock("./status-runtime-shared.ts", () => ({
   resolveStatusAutomations: async () => ({
     ok: true,

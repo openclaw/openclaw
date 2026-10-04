@@ -291,6 +291,7 @@ vi.mock("../session-utils-store-worker.js", async () => {
 
 const dispatchInboundMessageMock = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Keep dispatcher draining real while isolating agent execution and foreground leases.
 vi.mock("../../auto-reply/dispatch.js", async () => {
   const { createReplyDispatcher } = await vi.importActual<
     typeof import("../../auto-reply/reply/reply-dispatcher.js")

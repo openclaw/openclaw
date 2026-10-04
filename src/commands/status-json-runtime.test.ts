@@ -27,6 +27,7 @@ vi.mock("./status-json-payload.ts", () => ({
   buildStatusJsonPayload: mocks.buildStatusJsonPayload,
 }));
 
+// mock-isolation: Compose the supplied status snapshot without Gateway RPCs, service discovery, or provider credential probes.
 vi.mock("./status-runtime-shared.ts", () => ({
   resolveStatusRuntimeSnapshot: mocks.resolveStatusRuntimeSnapshot,
   resolveStatusLastHeartbeat: mocks.resolveStatusLastHeartbeat,

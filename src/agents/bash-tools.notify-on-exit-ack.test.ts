@@ -21,12 +21,12 @@ import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 
 const supervisorSpawnMock = vi.hoisted(() => vi.fn());
 const randomMock = vi.hoisted(() => vi.fn(() => 0));
-
 vi.mock("../auto-reply/reply/session-event-handoff.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../auto-reply/reply/session-event-handoff.js")>();
   return { ...actual, enqueueSessionEventForHost: vi.fn(actual.enqueueSessionEventForHost) };
 });
+// mock-isolation: Force deferred dispatch to test occurrence acknowledgment without model turns.
 vi.mock("../auto-reply/dispatch.js", () => ({
   dispatchInboundMessageWithRoutedChannelDispatcher: vi.fn(async (params) => {
     params.replyOptions.turnAdoptionLifecycle.onDeferred();

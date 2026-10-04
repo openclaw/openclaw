@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { LegacyConfigRule } from "../../../config/legacy.shared.js";
+import { selectLegacyHeartbeatVisibility } from "../../doctor-heartbeat-visibility.js";
 // Top-level legacy config migration registry and rule inventory used by doctor.
 import { LEGACY_CONFIG_MIGRATIONS_AUDIO } from "./legacy-config-migrations.audio.js";
 import { LEGACY_CONFIG_MIGRATIONS_CHANNELS } from "./legacy-config-migrations.channels.js";
@@ -52,7 +53,7 @@ const LEGACY_HEARTBEAT_CONFIG_RULES: LegacyConfigRule[] = [
       Object.entries(value).some(([id, channel]) => {
         const hasVisibility = (owner: unknown, allowEmpty = false): boolean =>
           isRecord(owner) &&
-          (owner.heartbeatVisibility !== undefined ||
+          (selectLegacyHeartbeatVisibility(id, owner) !== undefined ||
             (isRecord(owner.heartbeat) &&
               (allowEmpty || Object.keys(owner.heartbeat).length > 0) &&
               Object.keys(owner.heartbeat).every((key) =>

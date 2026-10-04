@@ -120,10 +120,10 @@ describe("embedded transcript cursor settlement", () => {
 
 function createTestConfig(baseUrl: string): OpenClawConfig {
   return {
+    cron: { enabled: false },
     plugins: { slots: { memory: "none" } },
     agents: {
       defaults: {
-        heartbeat: { every: "0m" },
         model: { primary: MODEL_REF },
         models: { [MODEL_REF]: { agentRuntime: { id: "openclaw" } } },
         skipBootstrap: true,

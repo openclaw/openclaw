@@ -63,6 +63,7 @@ const noticeHandoff = vi.hoisted(() => ({
       typeof import("../auto-reply/reply/session-event-handoff.js").enqueueSessionEventForHost
     >(),
 }));
+// mock-isolation: Exercise persisted notice custody against controlled handoff outcomes without dispatching model turns.
 vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
   assertSessionEventTargetCurrent: (target: { assertCurrent?: () => void }) =>
     target.assertCurrent?.(),

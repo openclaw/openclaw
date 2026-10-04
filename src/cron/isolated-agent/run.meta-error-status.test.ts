@@ -137,7 +137,7 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
       mockRunCronFallbackPassthrough();
       runEmbeddedAgentMock.mockImplementationOnce(async (request) => {
         clock.mockReturnValue(Date.parse("2026-10-02T11:00:00Z"));
-        request.onExecutionStarted?.();
+        await request.onExecutionStarted?.();
         throw new Error("a deferred run must not continue");
       });
       const result = await runTurn({

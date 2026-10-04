@@ -125,7 +125,11 @@ describe("gateway cron stop-and-drain automation ownership", () => {
       cancelAllMock.mockClear();
       const cfg: OpenClawConfig = {
         ...original.cfg,
-        agents: { entries: { main: { default: true }, reviewer: {} } },
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, reviewer: {} },
+        },
       };
       getRuntimeConfigMock.mockReturnValue(cfg);
       const entered = createDeferred();

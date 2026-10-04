@@ -219,13 +219,12 @@ async function hasStoredExecutionPreference(
 }
 
 /** One system-owned review job per configured agent and its Workshop directory. */
-export async function resolveSkillCollectionReviewMonitorSpecs(
+export async function* resolveSkillCollectionReviewMonitorSpecs(
   cfg: OpenClawConfig,
   jobs: readonly CronJob[],
   options: { schedulerSeed: string },
-): Promise<Array<{ agentId: string; input: CronJobCreate }>> {
+): AsyncGenerator<{ agentId: string; input: CronJobCreate }, void> {
   const { schedulerSeed } = options;
-  const specs: Array<{ agentId: string; input: CronJobCreate }> = [];
   const { retained } = partitionSystemMonitors(jobs, skillCollectionReviewMonitorAgentId);
   const workshopEnabled = resolveSkillWorkshopConfig(cfg).autonomous.mode === "auto";
   // Static projection consumes the selected generation, never provider load planning.
@@ -247,7 +246,7 @@ export async function resolveSkillCollectionReviewMonitorSpecs(
         ? undefined
         : configuredEligibility;
     const enabled = workshopEnabled && hasEligibleRuntime !== false;
-    specs.push({
+    yield {
       agentId,
       input: {
         declarationKey: `${SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX}${agentId}`,
@@ -276,7 +275,6 @@ export async function resolveSkillCollectionReviewMonitorSpecs(
         delivery: { mode: "none" },
         wakeMode: "now",
       },
-    });
+    };
   }
-  return specs;
 }

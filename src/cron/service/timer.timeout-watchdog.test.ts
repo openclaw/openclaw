@@ -380,22 +380,32 @@ describe("cron execution watchdogs", () => {
       sessionTarget: "session:customCronSession",
       payload: { kind: "agentTurn", message: "work", timeoutSeconds: 120 },
     });
-    const runner = pendingRunner();
+    const started = createDeferred();
+    const release = createDeferred<{ status: "ok"; summary: string }>();
     const onIsolatedAgentSetupTimeout = vi.fn();
     const { state, advance } = await fixture(job, {
       cleanupTimedOutAgentRun: vi.fn(async () => {}),
       onIsolatedAgentSetupTimeout,
-      runIsolatedAgentJob: runner.run,
+      runSessionEvent: vi.fn(async () => {
+        started.resolve();
+        return await release.promise;
+      }),
     });
     const timer = onTimer(state);
-    await runner.started.promise;
-    await advance(60_100);
-    await timer;
-    expect(requireJob(state, job.id).state.lastStatus).toBe("error");
-    expect(requireJob(state, job.id).state.lastError).toContain(
-      "setup timed out before runner start",
-    );
-    expect(onIsolatedAgentSetupTimeout).not.toHaveBeenCalled();
+    try {
+      await started.promise;
+      await advance(60_100);
+      await timer;
+      expect(requireJob(state, job.id).state.lastStatus).toBe("error");
+      expect(requireJob(state, job.id).state.lastError).toContain(
+        "setup timed out before runner start",
+      );
+      expect(onIsolatedAgentSetupTimeout).not.toHaveBeenCalled();
+    } finally {
+      stop(state);
+      release.resolve({ status: "ok", summary: "late" });
+      await drain(timer, release.promise);
+    }
   });
 
   it("gives setup progress the full configured timeout and cleans up an abort-ignoring runner (#93912, #29774)", async () => {
@@ -430,29 +440,35 @@ describe("cron execution watchdogs", () => {
       runIsolatedAgentJob: runner.run,
     });
     const timer = onTimer(state);
-    const signal = await runner.started.promise;
-    await advance(60_100);
-    expect(signal?.aborted).toBe(false);
-    expect(cleanupTimedOutAgentRun).not.toHaveBeenCalled();
-    await advance(539_900);
-    expect(signal?.aborted).toBe(false);
-    expect(cleanupTimedOutAgentRun).not.toHaveBeenCalled();
-    await advance(600_000);
-    await timer;
-    expect(signal?.aborted).toBe(true);
-    expect(signal?.reason).toMatchObject({
-      name: "TimeoutError",
-      message: expect.stringContaining("job execution timed out"),
-    });
-    expect(requireJob(state, job.id).state.lastStatus).toBe("error");
-    expect(requireJob(state, job.id).state.lastError).toContain("job execution timed out");
-    expect(requireJob(state, job.id).state.lastError).toContain("context-engine");
-    expect(cleanupTimedOutAgentRun).toHaveBeenCalledExactlyOnceWith({
-      job: expect.objectContaining({ id: job.id }),
-      timeoutMs: 1_200_000,
-      execution: { ...execution, phase: "context_engine" },
-    });
-    expect(onIsolatedAgentSetupTimeout).not.toHaveBeenCalled();
+    try {
+      const signal = await runner.started.promise;
+      await advance(60_100);
+      expect(signal?.aborted).toBe(false);
+      expect(cleanupTimedOutAgentRun).not.toHaveBeenCalled();
+      await advance(539_900);
+      expect(signal?.aborted).toBe(false);
+      expect(cleanupTimedOutAgentRun).not.toHaveBeenCalled();
+      await advance(600_000);
+      await timer;
+      expect(signal?.aborted).toBe(true);
+      expect(signal?.reason).toMatchObject({
+        name: "TimeoutError",
+        message: expect.stringContaining("job execution timed out"),
+      });
+      expect(requireJob(state, job.id).state.lastStatus).toBe("error");
+      expect(requireJob(state, job.id).state.lastError).toContain("job execution timed out");
+      expect(requireJob(state, job.id).state.lastError).toContain("context-engine");
+      expect(cleanupTimedOutAgentRun).toHaveBeenCalledExactlyOnceWith({
+        job: expect.objectContaining({ id: job.id }),
+        timeoutMs: 1_200_000,
+        execution: { ...execution, phase: "context_engine" },
+      });
+      expect(onIsolatedAgentSetupTimeout).not.toHaveBeenCalled();
+    } finally {
+      stop(state);
+      runner.result.resolve({ status: "ok", summary: "late" });
+      await drain(timer, runner.result.promise);
+    }
   });
 
   it("re-arms the pre-execution watchdog when a fallback runner returns to setup (#82811)", async () => {
@@ -483,36 +499,44 @@ describe("cron execution watchdogs", () => {
       runIsolatedAgentJob: runner.run,
     });
     const timer = onTimer(state);
-    const signal = await runner.started.promise;
-    await advance(60_100);
-    await timer;
-    const diagnostic =
-      "cron: isolated agent run stalled before execution start (last phase: runtime-plugins)";
-    const result = requireJob(state, job.id);
-    expect(signal?.aborted).toBe(true);
-    expect(result.state.lastStatus).toBe("error");
-    expect(result.state.lastError).toBe(diagnostic);
-    expect(result.state.lastDiagnosticSummary).toBe(diagnostic);
-    expect(result.state.lastDiagnostics).toEqual({
-      summary: diagnostic,
-      entries: [{ source: "cron-setup", severity: "error", message: diagnostic, ts: SCHEDULED_AT }],
-    });
-    expect(cleanupTimedOutAgentRun).toHaveBeenCalledOnce();
-    expect(sendCronFailureAlert).toHaveBeenCalledExactlyOnceWith({
-      job: expect.objectContaining({ id: job.id }),
-      routing: { defaultAgentId: "main" },
-      payload: {
-        text: 'Automation "before agent reply unhandled regression" failed 1 times\nCheck automation history for details.',
-      },
-      runAtMs: expect.any(Number),
-      channel: "telegram",
-      to: "12345",
-      mode: "announce",
-      accountId: undefined,
-      threadId: undefined,
-      inheritSessionThread: false,
-      onDeliverySettled: expect.any(Function),
-    });
+    try {
+      const signal = await runner.started.promise;
+      await advance(60_100);
+      await timer;
+      const diagnostic =
+        "cron: isolated agent run stalled before execution start (last phase: runtime-plugins)";
+      const result = requireJob(state, job.id);
+      expect(signal?.aborted).toBe(true);
+      expect(result.state.lastStatus).toBe("error");
+      expect(result.state.lastError).toBe(diagnostic);
+      expect(result.state.lastDiagnosticSummary).toBe(diagnostic);
+      expect(result.state.lastDiagnostics).toEqual({
+        summary: diagnostic,
+        entries: [
+          { source: "cron-setup", severity: "error", message: diagnostic, ts: SCHEDULED_AT },
+        ],
+      });
+      expect(cleanupTimedOutAgentRun).toHaveBeenCalledOnce();
+      expect(sendCronFailureAlert).toHaveBeenCalledExactlyOnceWith({
+        job: expect.objectContaining({ id: job.id }),
+        routing: { defaultAgentId: "main" },
+        payload: {
+          text: 'Automation "before agent reply unhandled regression" failed 1 times\nCheck automation history for details.',
+        },
+        runAtMs: expect.any(Number),
+        channel: "telegram",
+        to: "12345",
+        mode: "announce",
+        accountId: undefined,
+        threadId: undefined,
+        inheritSessionThread: false,
+        onDeliverySettled: expect.any(Function),
+      });
+    } finally {
+      stop(state);
+      runner.result.resolve({ status: "ok", summary: "late" });
+      await drain(timer, runner.result.promise);
+    }
   });
 
   it("keeps an explicitly unlimited main agent turn running", async () => {

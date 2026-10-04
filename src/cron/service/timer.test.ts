@@ -187,7 +187,11 @@ describe("cron service timer seam coverage", () => {
       fire: true;
       state: { revision: number };
     }>();
-    const evaluateCronTrigger = vi.fn(() => evaluation.promise);
+    const evaluationStarted = createDeferred();
+    const evaluateCronTrigger = vi.fn(() => {
+      evaluationStarted.resolve();
+      return evaluation.promise;
+    });
     const enqueueSystemEvent = vi.fn();
     const runSessionEvent = vi.fn();
     const runCommandJob = vi.fn(() => Promise.resolve({ status: "ok" as const }));
@@ -211,6 +215,7 @@ describe("cron service timer seam coverage", () => {
 
     const result = executeJobCore(state, job, controller.signal);
     try {
+      await evaluationStarted.promise;
       expect(evaluateCronTrigger).toHaveBeenCalledOnce();
       controller.abort(new Error("operator cancelled the scheduled run"));
       evaluation.resolve({ kind: "evaluated", fire: true, state: { revision: 2 } });

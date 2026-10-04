@@ -1,4 +1,5 @@
 /** Scheduled shared-session turns use the normal reply admission and delivery owners. */
+import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import { sliceToolResultTextToBudget } from "../agents/embedded-agent-runner/tool-result-text-budget.js";
 import {
   captureSessionEventTargetForHost as captureSessionEventTarget,
@@ -37,6 +38,7 @@ import type {
 } from "./types.js";
 
 export async function runCronSessionTurn(params: {
+  admissionSource: NonNullable<AdmittedRunContext["admissionSource"]>;
   sessionPreparation?: CronSessionRunPreparation;
   deliveryAttemptFence: CronCompletionDeliveryFence | null;
   executionIdentity?: CronExecutionIdentityAdmission;
@@ -202,6 +204,7 @@ export async function runCronSessionTurn(params: {
       abortSignal: params.abortSignal,
       scheduledAutomation: {
         job,
+        admissionSource: params.admissionSource,
         prepare: params.prepare,
         executionIdentity: params.executionIdentity,
         deliveryAttemptFence: params.deliveryAttemptFence,

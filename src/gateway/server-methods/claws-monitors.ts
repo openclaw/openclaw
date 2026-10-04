@@ -78,9 +78,12 @@ async function inspectMonitors(
   schedulerSeed: string,
   snapshot: ClawMonitorCleanupSnapshot | undefined,
 ): Promise<ClawMonitorSnapshot[]> {
-  const specs = (await resolveSkillCollectionReviewMonitorSpecs(cfg, jobs, { schedulerSeed }))
-    .filter((spec) => spec.agentId === agentId)
-    .map((spec) => spec.input);
+  const specs: CronJobCreate[] = [];
+  for await (const spec of resolveSkillCollectionReviewMonitorSpecs(cfg, jobs, { schedulerSeed })) {
+    if (spec.agentId === agentId) {
+      specs.push(spec.input);
+    }
+  }
   const storeKey = cronStoreKey(context.cronStorePath);
   return (snapshot?.attached ?? []).flatMap((row) => {
     if (

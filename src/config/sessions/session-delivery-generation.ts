@@ -19,6 +19,7 @@ import {
   projectSessionSharingEntry,
   retainPreparedSessionGenerationFacts,
 } from "./session-accessor.sqlite-entry-cache.js";
+import type { SessionSharingEntry } from "./session-accessor.sqlite-entry-cache.types.js";
 import { loadSessionEntryReadOnlyResultInScope } from "./session-accessor.sqlite-entry.js";
 import { readCommittedIncognitoSessionSharing } from "./session-accessor.sqlite-incognito-sharing.js";
 import type { SessionDeliveryGeneration } from "./session-delivery-generation.types.js";
@@ -50,6 +51,11 @@ export const isSessionDeliveryGenerationRevokedError = (error: unknown) =>
 const isSessionDeliveryGenerationUnavailableError = (error: unknown) =>
   isRecord(error) && error.code === "SESSION_DELIVERY_GENERATION_UNAVAILABLE";
 
+type SessionGenerationEntry = Pick<
+  SessionSharingEntry,
+  "sessionId" | "lifecycleRevision" | "permissionMode" | "toolOverrides"
+>;
+
 type SessionGenerationFacts = Omit<SessionDeliveryGeneration, "sessionId"> & {
   sessionId: string | null;
 };
@@ -78,6 +84,7 @@ async function prepareSessionGenerationLease(
 ): Promise<{
   assertCurrent: () => void;
   assertDeliveryCurrent: () => void;
+  readSessionSettings: () => Pick<SessionSharingEntry, "permissionMode" | "toolOverrides">;
   prepareRead: () => Promise<void> | undefined;
   release: () => void;
 }> {
@@ -114,9 +121,7 @@ async function prepareSessionGenerationLease(
       throw new SessionDeliveryGenerationUnavailableError();
     }
   };
-  const checkEntry = (
-    entry: { sessionId: string; lifecycleRevision?: string } | null | undefined,
-  ) => {
+  const checkEntry = (entry: SessionGenerationEntry | null | undefined) => {
     if (entry === undefined) {
       throw new SessionDeliveryGenerationUnavailableError();
     }
@@ -127,6 +132,7 @@ async function prepareSessionGenerationLease(
       revoked = true;
       throw new SessionDeliveryGenerationRevokedError();
     }
+    return entry;
   };
   const changed = (change: SessionRowChange) => {
     if ("all" in change) {
@@ -193,7 +199,7 @@ async function prepareSessionGenerationLease(
   };
   releases.push(sessionChanges.subscribeFacts(changed));
   try {
-    let readCurrent: () => void;
+    let readCurrent: () => SessionGenerationEntry | null;
     let prepareRead: () => Promise<void> | undefined = () => {
       assertActive();
       return undefined;
@@ -216,8 +222,7 @@ async function prepareSessionGenerationLease(
           throw new SessionDeliveryGenerationUnavailableError();
         }
         if (!database) {
-          checkEntry(null);
-          return;
+          return checkEntry(null);
         }
         const committed = readCommittedIncognitoSessionSharing(database.db, generation.sessionKey);
         if (committed === undefined && generation.sessionId === null) {
@@ -231,10 +236,9 @@ async function prepareSessionGenerationLease(
           if (!read.ok) {
             throw read.error;
           }
-          checkEntry(read.value ?? null);
-        } else {
-          checkEntry(committed?.entry ?? (committed ? null : undefined));
+          return checkEntry(read.value ?? null);
         }
+        return checkEntry(committed?.entry ?? (committed ? null : undefined));
       };
       observeIncognito = readCurrent;
     } else {
@@ -318,7 +322,7 @@ async function prepareSessionGenerationLease(
       };
       readCurrent = () => {
         assertSourceCurrent();
-        checkEntry(retained?.readCurrent());
+        return checkEntry(retained?.readCurrent());
       };
       prepareRead = () => {
         assertSourceCurrent();
@@ -341,7 +345,7 @@ async function prepareSessionGenerationLease(
         ) {
           throw new SessionDeliveryGenerationUnavailableError();
         }
-        readCurrent();
+        return readCurrent();
       } catch (error) {
         const failure =
           isSessionDeliveryGenerationRevokedError(error) ||
@@ -376,6 +380,13 @@ async function prepareSessionGenerationLease(
     return {
       assertCurrent,
       assertDeliveryCurrent: () => assertCurrent(true),
+      readSessionSettings: () => {
+        const entry = assertCurrent();
+        return {
+          permissionMode: entry?.permissionMode,
+          toolOverrides: entry?.toolOverrides,
+        };
+      },
       prepareRead,
       release,
     };
@@ -393,8 +404,9 @@ async function prepareSessionGenerationLease(
 
 /** Session lifecycle owners compose these facts with their own admitted mutation authority. */
 export async function prepareSessionGenerationFacts(input: SessionGenerationFacts) {
-  const { assertCurrent, prepareRead, release } = await prepareSessionGenerationLease(input);
-  return { assertCurrent, prepareRead, release };
+  const { assertCurrent, prepareRead, readSessionSettings, release } =
+    await prepareSessionGenerationLease(input);
+  return { assertCurrent, prepareRead, readSessionSettings, release };
 }
 
 /** Stable cron roots retain their admitted run; exact-run keys already name one generation. */

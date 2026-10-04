@@ -8,6 +8,7 @@ import { makeCronJob } from "./delivery.test-helpers.js";
 import { isCronExecutionIdle } from "./execution-idle.js";
 
 const embedded = vi.hoisted(() => ({ keys: [] as string[] }));
+// mock-isolation: Keep embedded-run registrations synthetic while real reply and cron owners drive idle admission.
 vi.mock("../agents/embedded-agent-runner/active-run-projections.js", () => ({
   listActiveEmbeddedRunSessionKeys: () => embedded.keys,
 }));

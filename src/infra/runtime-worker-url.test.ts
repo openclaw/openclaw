@@ -110,19 +110,39 @@ describe("resolveRuntimeWorkerArgv", () => {
     { runtime: "/opt/homebrew/bin/bun", typescriptLoader: false },
     { runtime: "C:\\Program Files\\Bun\\bun.exe", typescriptLoader: false },
   ])("uses the source loader appropriate for $runtime", ({ runtime, typescriptLoader }) => {
-    for (const extension of ["ts", "mts", "cts", "js", "mjs"]) {
-      const url = pathToFileURL(path.resolve(`worker fixture.${extension}`));
-      const tsxUrl = pathToFileURL(requireFromHere.resolve("tsx")).href;
-      const loader = typescriptLoader && extension.endsWith("ts") ? ["--import", tsxUrl] : [];
-      expect(resolveRuntimeWorkerArgv(url, runtime)).toEqual([
-        ...(typescriptLoader ? loader : ["--no-install"]),
-        fileURLToPath(url),
-      ]);
-      expect(resolveRuntimeWorkerThreadExecArgv(url, runtime)).toEqual(
-        typescriptLoader && extension.endsWith("ts")
-          ? ["--import", import.meta.resolve("tsx/esm")]
-          : [],
-      );
+    const originalArgs = process.execArgv;
+    const compilerArgs = [
+      "--no-maglev",
+      "--maglev",
+      "--concurrent-sparkplug",
+      "--no-concurrent-sparkplug",
+    ];
+    process.execArgv = [
+      "--import",
+      "file:///parent-loader.mjs",
+      ...compilerArgs,
+      "--eval",
+      "void 0",
+      "--inspect=127.0.0.1:9229",
+      "--title=--no-maglev",
+    ];
+    try {
+      for (const extension of ["ts", "mts", "cts", "js", "mjs"]) {
+        const url = pathToFileURL(path.resolve(`worker fixture.${extension}`));
+        const tsxUrl = pathToFileURL(requireFromHere.resolve("tsx")).href;
+        const loader = typescriptLoader && extension.endsWith("ts") ? ["--import", tsxUrl] : [];
+        expect(resolveRuntimeWorkerArgv(url, runtime)).toEqual([
+          ...(typescriptLoader ? [...compilerArgs, ...loader] : ["--no-install"]),
+          fileURLToPath(url),
+        ]);
+        expect(resolveRuntimeWorkerThreadExecArgv(url, runtime)).toEqual(
+          typescriptLoader && extension.endsWith("ts")
+            ? ["--import", import.meta.resolve("tsx/esm")]
+            : [],
+        );
+      }
+    } finally {
+      process.execArgv = originalArgs;
     }
   });
 
@@ -135,6 +155,7 @@ describe("resolveRuntimeWorkerArgv", () => {
     try {
       Object.defineProperties(process, {
         execPath: { configurable: true, value: currentExecutable },
+        execArgv: { configurable: true, value: ["--no-concurrent-sparkplug"] },
         versions: { configurable: true, value: { ...process.versions, bun } },
       });
       for (const extension of ["ts", "mts", "cts", "js", "mjs"]) {
@@ -147,7 +168,7 @@ describe("resolveRuntimeWorkerArgv", () => {
         ]) {
           const needsLoader = typescriptLoader && extension.endsWith("ts");
           expect(resolveRuntimeWorkerArgv(url, selected)).toEqual([
-            ...(typescriptLoader ? [] : ["--no-install"]),
+            ...(typescriptLoader ? ["--no-concurrent-sparkplug"] : ["--no-install"]),
             ...(needsLoader ? ["--import", import.meta.resolve("tsx")] : []),
             fileURLToPath(url),
           ]);
@@ -160,6 +181,7 @@ describe("resolveRuntimeWorkerArgv", () => {
     } finally {
       Object.defineProperties(process, {
         execPath: descriptors.execPath,
+        execArgv: descriptors.execArgv,
         versions: descriptors.versions,
       });
     }

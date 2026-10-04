@@ -103,6 +103,7 @@ vi.mock("../infra/heartbeat-summary-snapshot.js", async (original) => ({
   readHeartbeatSummarySnapshot: statusSummaryMocks.readHeartbeatSummarySnapshot,
 }));
 
+// mock-isolation: Serve the synthetic session row corpus without acquiring SQLite worker readers or lifecycle owners.
 vi.mock("../config/sessions/session-entry-read-runtime.js", async () => {
   const { createSessionStoreSummaryReaderStub } =
     await import("../config/sessions/session-store-summary.test-support.js");

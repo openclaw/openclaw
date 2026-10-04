@@ -77,7 +77,7 @@ import { withReplySystemEventContext } from "./system-event-session-key.js";
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
   resolveSessionAuthSelection: vi.fn().mockResolvedValue(undefined),
 }));
-
+// mock-isolation: Keep active-run and model runtime state outside prepared-reply policy cases.
 vi.mock("../../agents/embedded-agent.runtime.js", () => ({
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
@@ -237,9 +237,9 @@ vi.mock("../../config/sessions/paths.js", () => ({
   resolveSessionFilePathOptions: vi.fn().mockReturnValue({}),
   resolveSessionStorePathCore: vi.fn().mockReturnValue("/tmp/session-store"),
 }));
-
 const loadSessionEntryMock = vi.hoisted(() => vi.fn());
 const readSessionEntryInWorkerMock = vi.hoisted(() => vi.fn());
+// mock-isolation: Read fixture-owned session entries without admitting real SQLite workers.
 vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
   readSessionEntryInWorker: readSessionEntryInWorkerMock,
 }));

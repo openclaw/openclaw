@@ -192,7 +192,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: owner-approved async watched-session preparation with retained sync compatibility.
       // +1: captureToolAuthoredSourceReply lets the Codex harness deliver canDeliverSourceReply tool replies.
       // +1: owner-approved async agent-end preparation with retained sync compatibility.
-      3646,
+      // -9: remove the retired heartbeat SDK exports.
+      3637,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -203,7 +204,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: owner-approved async watched-session preparation with retained sync compatibility.
       // +1: captureToolAuthoredSourceReply lets the Codex harness deliver canDeliverSourceReply tool replies.
       // +1: owner-approved async agent-end preparation with retained sync compatibility.
-      2111,
+      // -4: remove the retired heartbeat SDK callables.
+      2107,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

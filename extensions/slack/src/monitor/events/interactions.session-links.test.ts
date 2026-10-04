@@ -11,10 +11,19 @@ const enqueueSessionEventMock = vi.hoisted(() =>
 const dispatchPluginInteractiveHandlerMock = vi.hoisted(() =>
   vi.fn(async () => ({ matched: false, handled: false, duplicate: false })),
 );
-vi.mock("../../runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../runtime.js")>()),
-  getSlackRuntime: () => ({ system: { enqueueSessionEvent: enqueueSessionEventMock } }),
-}));
+vi.mock("../../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../runtime.js")>();
+  return {
+    ...actual,
+    getSlackRuntime: () => {
+      const runtime = actual.getSlackRuntime();
+      return {
+        ...runtime,
+        system: { ...runtime.system, enqueueSessionEvent: enqueueSessionEventMock },
+      };
+    },
+  };
+});
 vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>()),
   createChannelInteractiveDispatcher: () => dispatchPluginInteractiveHandlerMock,

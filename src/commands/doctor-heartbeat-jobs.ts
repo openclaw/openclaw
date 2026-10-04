@@ -23,10 +23,17 @@ export type DoctorCronJob = CronStoredJob | LegacyHeartbeatJob;
 
 /** Decode retired payloads only inside Doctor; runtime jobs never admit heartbeat. */
 export function decodeDoctorHeartbeatJobRows(rows: readonly CronJobReadRow[]): DoctorCronJob[] {
-  return rows.map((row) => {
+  return rows.flatMap((row): DoctorCronJob[] => {
+    const legacyRow =
+      row.payload_kind === "heartbeat" || row.declaration_key?.startsWith("heartbeat-task:");
     const definition = safeParseJsonRecord(row.job_json);
     if (!definition) {
-      throw new Error(`Automation ${row.job_id} has invalid stored JSON; its source was retained.`);
+      if (legacyRow) {
+        throw new Error(
+          `Automation ${row.job_id} has invalid stored JSON; its source was retained.`,
+        );
+      }
+      return [];
     }
     const payload = definition.payload;
     if (isRecord(payload) && payload.kind === "heartbeat") {
@@ -40,19 +47,22 @@ export function decodeDoctorHeartbeatJobRows(rows: readonly CronJobReadRow[]): D
       if (!decoded) {
         throw new Error(`Legacy automation ${row.job_id} is invalid; its source was retained.`);
       }
-      return {
-        ...decoded,
-        payload: {
-          ...legacyPayload,
-          ...(decoded.payload.toolsAllow ? { toolsAllow: decoded.payload.toolsAllow } : {}),
+      return [
+        {
+          ...decoded,
+          payload: {
+            ...legacyPayload,
+            ...(decoded.payload.toolsAllow ? { toolsAllow: decoded.payload.toolsAllow } : {}),
+          },
         },
-      };
+      ];
     }
     const decoded = rowToCronJob(row, definition);
-    if (!decoded) {
+    if (!decoded && legacyRow) {
       throw new Error(`Automation ${row.job_id} is invalid; its source was retained.`);
     }
-    return decoded;
+    // Ordinary invalid rows belong to Doctor's backed-up cron repair/quarantine.
+    return decoded ? [decoded] : [];
   });
 }
 

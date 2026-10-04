@@ -52,6 +52,7 @@ export function registerBackgroundDispatchAdmissionTests(): void {
       dispatcher,
       replyOptions: {
         scheduledAutomation: {
+          admissionSource: "operator-schedule",
           job: { ...makeCronJob({}), idleOnly: true },
           assertCurrent: () => {},
         },

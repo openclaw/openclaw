@@ -22,6 +22,18 @@ export function prepareReplyTurnExecution(params: AgentTurnParams, runId: string
     readChannelContextGatewayContextResolver(params.sessionCtx) ??
     getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
   const automation = params.followupRun.run.scheduledAutomation;
+  const assertEventCurrent = params.followupRun.run.internalEventExecution?.assertCurrent;
+  const assertCommandCurrent =
+    params.followupRun.run.senderIsOwner === true
+      ? captureCommandOwnerAssertion(params.followupRun.run)
+      : undefined;
+  const assertSourceCurrent =
+    assertEventCurrent || assertCommandCurrent
+      ? () => {
+          assertEventCurrent?.();
+          assertCommandCurrent?.();
+        }
+      : undefined;
   const sessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
   if (automation && !sessionKey) {
     throw new Error("A scheduled session turn requires its admitted session key");
@@ -34,6 +46,8 @@ export function prepareReplyTurnExecution(params: AgentTurnParams, runId: string
   const cronAdmission =
     automation && sessionKey
       ? prepareCronRunAdmission({
+          admissionSource: automation.admissionSource,
+          assertSourceCurrent,
           cfg: resolveQueuedReplyRuntimeConfig(params.followupRun.run.config),
           agentId: params.followupRun.run.agentId,
           runId,
@@ -64,10 +78,7 @@ export function prepareReplyTurnExecution(params: AgentTurnParams, runId: string
       operatorAuthority: params.followupRun.operatorAuthority,
       evidence: params.followupRun.channelAdmissionEvidence,
       gatewayLocalUserIngress: params.followupRun.gatewayLocalUserIngress,
-      assertSourceCurrent:
-        params.followupRun.run.senderIsOwner === true
-          ? captureCommandOwnerAssertion(params.followupRun.run)
-          : undefined,
+      assertSourceCurrent,
       onAdmitted,
     });
   const deferredLifecycle = createDeferredEmbeddedRunLifecycleManager({

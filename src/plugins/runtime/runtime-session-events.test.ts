@@ -13,6 +13,7 @@ const host = vi.hoisted(() => ({
   })),
   enqueue: vi.fn(),
 }));
+// mock-isolation: Inspect SDK fields and captured handles without reading live sessions or admitting model work.
 vi.mock("../../auto-reply/reply/session-event-handoff.js", () => ({
   captureSessionEventTargetForHost: host.capture,
   enqueueSessionEventForHost: host.enqueue,

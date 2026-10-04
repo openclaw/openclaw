@@ -371,6 +371,7 @@ src/cli/program/command-descriptor-utils.ts
 src/cli/quote-cli-arg.ts
 src/cli/signal-exit-barrier.ts
 src/cli/wait.ts
+src/commands/doctor-heartbeat-visibility.ts
 src/commands/doctor/shared/channel-legacy-config-migrate.ts
 src/commands/doctor/shared/codex-route-agent-entries.ts
 src/commands/doctor/shared/codex-route-model-ref.ts
@@ -888,6 +889,7 @@ src/infra/net/undici-family-policy.ts
 src/infra/net/undici-global-dispatcher.ts
 src/infra/net/undici-runtime.ts
 src/infra/node-compile-cache-env.ts
+src/infra/node-compiler-policy.mjs
 src/infra/node-options.ts
 src/infra/node-runner-inventory.ts
 src/infra/node-runtime-executable.ts

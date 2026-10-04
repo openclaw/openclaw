@@ -135,7 +135,7 @@ vi.mock("../../../config/config.js", () => ({
 vi.mock("../../../gateway/call.js", () => ({
   callGateway: hoisted.callGatewayMock,
 }));
-
+// mock-isolation: Use the synthetic requester generation with the fixture's mocked session stores.
 vi.mock("../../../auto-reply/reply/session-event-handoff.js", () => ({
   captureSessionEventTargetForHost: async (agentId: string, sessionKey: string) => ({
     agentId,

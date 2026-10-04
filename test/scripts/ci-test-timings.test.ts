@@ -462,10 +462,13 @@ describe("runtime placement observations", () => {
       );
     onTestFinished(() => spy.mockRestore());
   }
-  function mockRuntimePlacementCosts() {
+  function mockRuntimePlacementCosts(subagentSeconds = 20) {
     // Keep spare capacity independent of growing production prices; observations supply overload.
     const costs = new Proxy<Record<string, number>>(
-      { "agentic-gateway-server-isolated": 30, "agentic-agents-core-subagents": 20 },
+      {
+        "agentic-gateway-server-isolated": 30,
+        "agentic-agents-core-subagents": subagentSeconds,
+      },
       {
         get: (target, key) =>
           typeof key === "string" ? (target[key] ?? 39) : Reflect.get(target, key),
@@ -754,7 +757,8 @@ describe("runtime placement observations", () => {
         infrastructure,
         ...(gatewayRecipient ? [] : ["test/vitest/vitest.gateway-database-workers.config.ts"]),
       ]);
-      const compactSpy = mockRuntimePlacementCosts();
+      // Pack the synthetic companion before ordinary siblings, leaving Gateway donation room.
+      const compactSpy = mockRuntimePlacementCosts(gatewayRecipient ? 80 : 20);
       const spy = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
       const options = {
         compactMode,
@@ -905,10 +909,7 @@ describe("runtime placement observations", () => {
         );
         expect(crossing.length).toBeGreaterThan(0);
         for (const group of crossing) {
-          const measuredGateway = gatewayRecipient && group.configs.includes(gatewayFixtureConfig);
-          expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS, group.shard_name).toBe(
-            measuredGateway ? "8" : "2",
-          );
+          expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS, group.shard_name).toBe("2");
         }
         spy.mockImplementation((profile) =>
           profile === "blacksmith"

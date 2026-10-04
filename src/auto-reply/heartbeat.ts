@@ -1,9 +1,9 @@
-/** Historical transcript/token recognition and deprecated SDK prompt constants. */
+/** Historical transcript and token recognition. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { escapeRegExp } from "../shared/regexp.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN, isSilentReplyPayloadText } from "./tokens.js";
 
-// Historical prompt bytes are retained for SDK consumers and saved transcript recognition.
+// Historical prompt bytes are retained for saved transcript recognition.
 // Keep it tight and avoid encouraging the model to invent/rehash "open loops" from prior chat context.
 const HEARTBEAT_CRON_TASK_GUIDANCE =
   "Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch.";
@@ -24,11 +24,6 @@ export const INTERNAL_WAKE_TRANSCRIPT_PROMPTS = {
   event: "[OpenClaw session event]",
 } as const;
 export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
-
-/** @deprecated Historical SDK prompt resolver; never authors an ordinary turn. */
-export function resolveHeartbeatPromptCore(raw?: string): string {
-  return normalizeOptionalString(raw) || HEARTBEAT_PROMPT;
-}
 
 /** Reconstructs historical response-tool prompts for saved transcript recognition. */
 export function resolveHeartbeatPromptForResponseTool(raw?: string): string {

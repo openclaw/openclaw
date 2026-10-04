@@ -670,7 +670,6 @@ describe("config cli roster integration", () => {
         ...(explicitFleet || changedStore ? { sessionStore: { agentId: ownerId } } : {}),
         ...(explicitFleet
           ? {
-              heartbeat: { agentId: ownerId },
               systemAgent: { agentId: ownerId },
               authInheritance: { agentId: ownerId },
             }
@@ -751,7 +750,6 @@ describe("config cli roster integration", () => {
       expect(after.agents).toMatchObject({
         ownership: "explicit",
         defaults: {
-          heartbeat: { agentId: ownerId },
           systemAgent: { agentId: ownerId },
         },
       });
@@ -760,6 +758,7 @@ describe("config cli roster integration", () => {
         work: { name: "new-worker" },
       });
       expect(after.agents).not.toHaveProperty("list");
+      expect(after.agents.defaults).not.toHaveProperty("heartbeat");
       expect(after.talk.agentId).toBe(ownerId);
       expect(after.bindings).toEqual([
         { agentId: ownerId, match: { channel: "discord", accountId: "*" } },

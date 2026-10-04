@@ -258,10 +258,12 @@ vi.mock("../infra/session-delivery-queue-recovery.js", async (importOriginal) =>
   };
 });
 
+// mock-isolation: Observe continuation cleanup without deleting session rows or descendant state.
 vi.mock("../cron/run-continuation-cleanup.js", () => ({
   removeCronRunContinuationSessionIfIdle: mocks.removeCronRunContinuationSessionIfIdle,
 }));
 
+// mock-isolation: Control transcript publication outcomes without writing real session transcripts.
 vi.mock("../config/sessions/transcript.js", () => ({
   appendAssistantMessageToSessionTranscript: mocks.appendAssistantMessageToSessionTranscript,
 }));
@@ -282,6 +284,7 @@ vi.mock("../config/sessions/main-session.js", async (importOriginal) => ({
   resolveSystemMainSessionTarget: mocks.resolveSystemMainSessionTarget,
 }));
 
+// mock-isolation: Sentinel cases own their config snapshot without config I/O or runtime cache mutation.
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: mocks.getRuntimeConfig }));
 
 vi.mock("../channels/plugins/session-conversation.js", async (importOriginal) => ({
@@ -289,6 +292,7 @@ vi.mock("../channels/plugins/session-conversation.js", async (importOriginal) =>
   resolveSessionThreadInfo: mocks.parseSessionThreadInfo,
 }));
 
+// mock-isolation: Sentinel fixtures supply thread metadata independently of the loaded plugin registry.
 vi.mock("../channels/plugins/session-thread-info-loaded.js", () => ({
   resolveLoadedSessionThreadInfo: mocks.parseSessionThreadInfo,
 }));
@@ -297,6 +301,7 @@ vi.mock("./session-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-utils.js")>()),
   loadSessionEntry: mocks.loadSessionEntry,
 }));
+// mock-isolation: Use the harness session rows without starting store discovery or worker reads.
 vi.mock("./session-utils-store-worker.js", () => ({
   resolveGatewaySessionStoreTargetInWorker: mocks.resolveSessionTarget,
 }));
@@ -328,6 +333,7 @@ vi.mock("../channels/plugins/index.js", async () => {
   };
 });
 
+// mock-isolation: Drive reply and delivery callbacks without recording inbound state or executing agents.
 vi.mock("../channels/turn/lifecycle.js", () => ({
   dispatchAssembledChannelTurn: async (params: {
     delivery: {
@@ -360,15 +366,18 @@ vi.mock("./server-recovery-runtime-context.js", async () => ({
   dispatchGatewayLifecycleMethod: mocks.dispatchGatewayMethodInProcess,
 }));
 
+// mock-isolation: Sentinel cases control route success and failure without resolving channel plugins.
 vi.mock("../infra/outbound/targets.js", () => ({
   resolveOutboundTarget: mocks.resolveOutboundTarget,
 }));
 
+// mock-isolation: Keep platform sends synthetic while exercising sentinel delivery settlement.
 vi.mock("../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
   deliverOutboundPayloadsInternal: mocks.deliverOutboundPayloads,
 }));
 
+// mock-isolation: Outbound custody and attempts use fixture state instead of the shared SQLite queue.
 vi.mock("../infra/outbound/delivery-queue-storage.js", () => ({
   ackDelivery: mocks.ackDelivery,
   failDelivery: mocks.failDelivery,
@@ -383,15 +392,18 @@ vi.mock("../infra/outbound/delivery-queue-ack.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/outbound/delivery-queue-ack.js")>()),
   failPendingDelivery: mocks.failPendingDelivery,
 }));
+// mock-isolation: Control replay claims and drain outcomes without the real recovery coordinator.
 vi.mock("../infra/outbound/delivery-queue-recovery.js", () => ({
   drainPendingDeliveriesCore: mocks.drainPendingDeliveries,
   withActiveDeliveryClaim: mocks.withActiveDeliveryClaim,
 }));
 
+// mock-isolation: Control preparation ownership without SQLite leases or renewal timers.
 vi.mock("../infra/outbound/delivery-queue-preparation.js", () => ({
   withStableDeliveryPreparation: mocks.withStableDeliveryPreparation,
 }));
 
+// mock-isolation: Supply prepared payloads without channel adapters or global modifying hooks.
 vi.mock("../infra/outbound/deliver-prepare.js", () => ({
   prepareOutboundPayloadBatch: vi.fn(async (params: { payloads: unknown[] }) => ({
     schemaVersion: 1,
@@ -408,6 +420,7 @@ vi.mock("../infra/outbound/deliver-prepare.js", () => ({
   })),
 }));
 
+// mock-isolation: Keep outbound admission in fixture custody without staging media or writing queue rows.
 vi.mock("../infra/outbound/deliver-queue-admission.js", () => ({
   stageAndEnqueueOutboundDelivery: vi.fn(
     async (
@@ -430,6 +443,7 @@ vi.mock("../infra/outbound/deliver-queue-admission.js", () => ({
   ),
 }));
 
+// mock-isolation: Control durable send outcomes without the channel transport and queue runtime.
 vi.mock("../channels/message/runtime.js", () => ({
   sendDurableMessageBatchCore: vi.fn(async (params: Record<string, unknown>) => {
     try {
@@ -448,6 +462,7 @@ vi.mock("./server-restart-update-run.js", async () => {
   return { ...actual, finalizeRestartUpdateRun: vi.fn(actual.finalizeRestartUpdateRun) };
 });
 
+// mock-isolation: Control restart adoption receipts without admitting real session reply work.
 vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
   captureSessionEventTargetForHost: mocks.captureSessionEventTarget,
   enqueueSessionEventForHost: mocks.enqueueSessionEvent,

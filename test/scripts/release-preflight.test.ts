@@ -166,6 +166,7 @@ function makeIsolatedPreflightFixture(params: Parameters<typeof makeReleaseFixtu
     "scripts/lib/vitest-resource-ownership.mts",
     "scripts/lib/release-version.mjs",
     "scripts/lib/tsx-cli-shim.mjs",
+    "src/infra/node-compiler-policy.mjs",
     "scripts/lib/windows-taskkill.mjs",
   ];
   for (const file of files) {

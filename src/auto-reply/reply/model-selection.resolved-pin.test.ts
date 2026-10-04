@@ -54,54 +54,6 @@ test("keeps thinking defaults separate for distinct literal model IDs", async ()
   });
 });
 
-test.each(["origin", "notice"])(
-  "resets an automatic fallback whose %s names another literal model",
-  async (source) => {
-    await withStateDirEnv("reply-fallback-origin-", async () => {
-      const entry: SessionEntry = {
-        sessionId: "fallback",
-        updatedAt: 1,
-        providerOverride: "custom",
-        modelOverride: "fallback",
-        modelOverrideSource: "auto",
-        modelOverrideRouteResolution: "resolved",
-        ...(source === "origin"
-          ? {
-              modelOverrideFallbackOriginProvider: "custom",
-              modelOverrideFallbackOriginModel: "model",
-            }
-          : {
-              fallbackNotice: {
-                kind: "active",
-                selectedModel: "custom/model",
-                activeModel: "custom/fallback",
-              },
-            }),
-      };
-      const selection = await createModelSelectionState({
-        agentId: "main",
-        cfg: { plugins: { enabled: false } },
-        agentCfg: undefined,
-        sessionEntry: entry,
-        sessionStore: { fallback: entry },
-        sessionKey: "fallback",
-        defaultProvider: "custom",
-        defaultModel: "custom/model",
-        provider: "custom",
-        model: "fallback",
-        hasModelDirective: false,
-      });
-      expect(selection).toMatchObject({
-        provider: "custom",
-        model: "custom/model",
-        resetModelOverride: true,
-        resetModelOverrideReason: "stale",
-      });
-      expect(entry.modelOverride).toBeUndefined();
-    });
-  },
-);
-
 const metadataSnapshot = createPluginMetadataSnapshotFixture({
   plugins: [
     {

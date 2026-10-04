@@ -54,7 +54,7 @@ describe("#16156: cron.list() must not silently advance past-due recurring jobs"
     expect(runSessionEvent).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         text: "cron-tick",
-        job: expect.objectContaining({ agentId: "main" }),
+        job: expect.objectContaining({ id: job.id, sessionTarget: "main" }),
       }),
     );
     expect(updated?.state.lastStatus).toBe("ok");

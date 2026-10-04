@@ -174,10 +174,12 @@ vi.mock("../flows/doctor-startup-channel-maintenance.js", () => ({
   maybeRunDoctorStartupChannelMaintenance: vi.fn().mockResolvedValue(undefined),
 }));
 
+// mock-isolation: Keep updater admission from reading config files and migration receipts in the fast-path harness.
 vi.mock("./doctor-automatic-heartbeat-repair.js", () => ({
   prepareAutomaticHeartbeatRepair: vi.fn().mockResolvedValue(undefined),
 }));
 
+// mock-isolation: Keep SQLite, workspace-file, and Claw provenance migrations outside these Doctor routing tests.
 vi.mock("./doctor-heartbeat-retirement.js", () => ({
   retireHeartbeatWithDoctor: vi.fn(async (config: unknown) => config),
 }));

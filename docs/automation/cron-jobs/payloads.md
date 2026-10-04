@@ -17,7 +17,7 @@ Every job carries exactly one payload kind, chosen by flag:
 
 | Payload       | Flag                                           | Runs                                                       |
 | ------------- | ---------------------------------------------- | ---------------------------------------------------------- |
-| System event  | `--system-event <text>`                        | Enqueued into the main session, no model call by itself    |
+| System event  | `--system-event <text>`                        | An ordinary agent turn in the owning agent's main session  |
 | Agent message | `--message <text>`                             | A model-backed agent turn                                  |
 | Command       | `--command <shell>` or `--command-argv <json>` | A shell/process on the Gateway host, no model call         |
 | Script        | `--script <file\|->`                           | A headless code-mode script using the owning agent's tools |

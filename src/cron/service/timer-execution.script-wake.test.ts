@@ -5,6 +5,7 @@ import type { CronStoredJob } from "../types.js";
 import { createCronServiceState } from "./state.js";
 import { executeJobCore } from "./timer-execution.js";
 
+// mock-isolation: Exercise script wake routing against fixture jobs without reading persistent provisioning receipts.
 vi.mock("../proactive-job-receipt.js", () => ({
   readDefaultProactiveJobReceiptsAsync: async () => ({}),
 }));
@@ -88,6 +89,7 @@ describe("script follow-up handoff", () => {
       "Review the result.",
       receiver,
       target,
+      expect.any(Function),
     );
     expect(fixture.enqueueSessionEvent).not.toHaveBeenCalled();
     receiver.enabled = false;

@@ -19,6 +19,7 @@ const logHooksWarnMock = vi.fn();
 vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: enqueueSystemEventMock,
 }));
+// mock-isolation: Observe the terminal wake destination without admitting a real follow-up turn.
 vi.mock("../../auto-reply/reply/session-event-handoff.js", () => ({
   captureSessionEventTargetForHost: captureSessionEventTargetMock,
   enqueueSessionEventForHost: enqueueSessionEventMock,

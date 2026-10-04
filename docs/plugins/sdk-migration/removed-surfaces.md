@@ -65,6 +65,8 @@ explicit maintainer approval on October 3, 2026:
 - The `GetReplyOptions` fields `isHeartbeat`, `useHeartbeatFailureCopy`,
   `heartbeatModelOverride`, `enableHeartbeatTool`, and `forceHeartbeatTool`, plus
   the `typingPolicy: "heartbeat"` value.
+- The `isHeartbeat` input on `ContextEngine.ingest`, `ingestBatch`, `afterTurn`,
+  and `commitTurn`.
 
 This is a breaking plugin-SDK change. Plugins importing removed names must be
 updated before upgrading the host; deprecated aliases are not retained.

@@ -15,7 +15,7 @@ import {
 } from "../routing/session-key.js";
 import type { HeartbeatConfig } from "./doctor-heartbeat-legacy.js";
 
-export function resolveHeartbeatSessionKey(
+export function resolveLegacyHeartbeatSessionKey(
   cfg: OpenClawConfig,
   agentId: string,
   heartbeat?: HeartbeatConfig,
@@ -124,7 +124,7 @@ export function resolveHeartbeatSession(
   forcedSessionKey?: string,
   env: NodeJS.ProcessEnv = process.env,
 ) {
-  const resolved = resolveHeartbeatSessionKey(cfg, agentId, heartbeat, forcedSessionKey, env);
+  const resolved = resolveLegacyHeartbeatSessionKey(cfg, agentId, heartbeat, forcedSessionKey, env);
   return {
     ...resolved,
     entry: loadSessionEntryReadOnly({

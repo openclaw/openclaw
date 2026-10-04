@@ -37,8 +37,10 @@ import type {
 } from "./session-event-contract.js";
 import {
   assertSessionEventTargetCurrent,
+  assertSessionEventSettingsCurrent,
   captureSessionEventTargetForHost,
   getSessionEventRuntimeConfig,
+  narrowSessionEventSettings,
   prepareSessionEventTargetForHost,
   readSessionEventTargetEnvironment,
   resolveSessionEventKey,
@@ -166,6 +168,7 @@ export function enqueueSessionEventForHost(
   let finished = false;
   let settling = false;
   let settings = options.expectedTarget?.settings;
+  let settingsAdmitted = false;
   const jobTools = options.scheduledAutomation?.job.payload.toolsAllow;
   const producerTools = options.expectedTarget?.toolsAllow;
   const toolsAllow =
@@ -201,6 +204,9 @@ export function enqueueSessionEventForHost(
   const assertCurrent = () => {
     assertOwnerCurrent();
     generationLease?.assertCurrent();
+    if (settingsAdmitted && generationLease) {
+      assertSessionEventSettingsCurrent(settings, generationLease.readSessionSettings());
+    }
   };
   const prepareCurrent = async () => {
     assertOwnerCurrent();
@@ -354,6 +360,9 @@ export function enqueueSessionEventForHost(
       settings ??= target.settings;
       route ??= structuredClone(target.deliveryContext);
       await prepareCurrent();
+      settings = narrowSessionEventSettings(settings, generationLease.readSessionSettings());
+      settingsAdmitted = true;
+      assertCurrent();
       dispatchStarted = true;
       const result = await dispatchInboundMessageWithRoutedChannelDispatcher({
         cfg: { ...cfg, session: { ...cfg.session, store: storePath } },
@@ -425,6 +434,7 @@ export function enqueueSessionEventForHost(
           suppressTyping: true,
           typingPolicy: "system_event",
           internalEventExecution: {
+            assertCurrent,
             onFailed: (error) => {
               failure ??= String(error);
             },

@@ -2,10 +2,14 @@
 import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as modelThinkingDefault from "../agents/model-thinking-default.js";
 import { SessionManager } from "../agents/sessions/index.js";
 import * as thinking from "../auto-reply/thinking.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
@@ -103,6 +107,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
     runEmbeddedAgentMock.mockClear();
     mockRunCronFallbackPassthrough();
   });
+  afterEach(clearRuntimeConfigSnapshot);
 
   it.each([
     {
@@ -135,6 +140,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
           },
         },
       );
+      setRuntimeConfigSnapshot(cfg);
 
       const res = await runCronIsolatedAgentTurn({
         deliveryAttemptFence: null,

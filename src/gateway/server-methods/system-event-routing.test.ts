@@ -29,10 +29,12 @@ const mocks = vi.hoisted(() => ({
   readReceipts: vi.fn(),
 }));
 
+// mock-isolation: Control target-capture gates and receipts without admitting real reply work.
 vi.mock("../../auto-reply/reply/session-event-handoff.js", () => ({
   captureSessionEventTargetForHost: mocks.captureTarget,
   enqueueSessionEventForHost: mocks.enqueueEvent,
 }));
+// mock-isolation: Use controlled migration receipts for requester revocation without shared-state reads.
 vi.mock("../../cron/proactive-job-receipt.js", () => ({
   readDefaultProactiveJobReceiptsAsync: mocks.readReceipts,
 }));

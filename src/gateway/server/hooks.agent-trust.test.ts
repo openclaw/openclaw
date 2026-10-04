@@ -45,11 +45,13 @@ const validateExplicitMessageAccountSelectionMock = vi.fn(
 const resolveOutboundChannelPluginMock = vi.fn(() => ({ id: "telegram" }));
 const resolveChannelDefaultAccountIdMock = vi.fn(() => "default");
 
+// mock-isolation: Inspect hook event ownership without mutating the process-wide system event queue.
 vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: enqueueSystemEventMock,
   enqueueSystemEventEntry: enqueueSystemEventEntryMock,
   consumeSelectedSystemEventEntries: consumeSelectedSystemEventEntriesMock,
 }));
+// mock-isolation: Verify hook trust and target propagation without admitting real session execution.
 vi.mock("../../auto-reply/reply/session-event-handoff.js", () => ({
   captureSessionEventTargetForHost: captureSessionEventTargetMock,
   enqueueSessionEventForHost: enqueueSessionEventMock,

@@ -252,9 +252,9 @@ describe("CronService declarative jobs", () => {
       skills: { workshop: { autonomous: { mode: "auto" } } },
     };
     const project = async () => {
-      const [spec] = await resolveSkillCollectionReviewMonitorSpecs(cfg, [], {
+      const { value: spec } = await resolveSkillCollectionReviewMonitorSpecs(cfg, [], {
         schedulerSeed: "test-seed",
-      });
+      }).next();
       return spec!.input;
     };
     const created = await add(cron, await project(), { enabledExplicit: true, systemOwned: true });

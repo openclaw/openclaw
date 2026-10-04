@@ -22,6 +22,7 @@ const fixture = vi.hoisted(() => ({
   scratch: vi.fn(),
   config: {},
 }));
+// mock-isolation: Control admission and settlement receipts without dispatching real session or model turns.
 vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
   captureSessionEventTargetForHost: (_agent: string, sessionKey: string) => ({
     sessionId: "session",
@@ -31,13 +32,18 @@ vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
   }),
   enqueueSessionEventForHost: fixture.enqueue,
 }));
+// mock-isolation: Recheck the fixture config instead of process-wide config IO and runtime snapshots.
 vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => fixture.config }));
+// mock-isolation: Control route-policy transitions without resolving the channel and plugin delivery runtime.
 vi.mock("./isolated-agent/run-delivery-trace.js", () => ({
   resolveCronDeliveryContext: fixture.delivery,
   buildCronDeliveryTrace: (input: unknown) => input,
 }));
+// mock-isolation: Exercise scratch gating with fixture snapshots without entering shared-state database workers.
 vi.mock("./scratch-read.js", () => ({ readCronScratchSnapshot: fixture.scratch }));
+// mock-isolation: Keep the synthetic /unused cron store detached from SQLite and store-mutation observers.
 vi.mock("./store.js", () => ({ resolveCronJobsStorePathFromConfig: () => "/unused" }));
+// mock-isolation: Exercise session execution without invoking receipt-backed global plugin prompt hooks.
 vi.mock("../infra/heartbeat-compat.js", () => ({
   applyLegacyHeartbeatPromptContribution: ({ prompt }: { prompt: string }) => prompt,
 }));
@@ -58,6 +64,7 @@ afterEach(() => {
 });
 
 const params = () => ({
+  admissionSource: "operator-schedule" as const,
   cfg: fixture.config,
   agentId: "main",
   sessionKey: "agent:main:main",

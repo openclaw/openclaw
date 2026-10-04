@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import {
@@ -14,7 +15,10 @@ import { publishCronJobsStoreMutation, resolveCronJobsStorePathFromConfig } from
 import { cronStoreKey } from "../cron/store/key.js";
 import { loadCronRows } from "../cron/store/row-codec.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { ensureHeartbeatMonitorJobs } from "./doctor-heartbeat-cadence-migration.js";
+import {
+  collectHeartbeatCadenceMigrationFindings,
+  ensureHeartbeatMonitorJobs,
+} from "./doctor-heartbeat-cadence-migration.js";
 import { decodeDoctorHeartbeatJobRows } from "./doctor-heartbeat-jobs.js";
 import {
   migrateHeartbeatPrompt,
@@ -23,7 +27,10 @@ import {
   validateLegacyHeartbeatConfig,
 } from "./doctor-heartbeat-legacy.js";
 import { migrateHeartbeatOutcomes } from "./doctor-heartbeat-outcome-migration.js";
-import { maybeMigrateHeartbeatFilesToScratch } from "./doctor-heartbeat-scratch-migration.js";
+import {
+  collectHeartbeatScratchMigrationFindings,
+  maybeMigrateHeartbeatFilesToScratch,
+} from "./doctor-heartbeat-scratch-migration.js";
 import { isHeartbeatTaskCronJob } from "./doctor-heartbeat-task-identity.js";
 import {
   maybeMigrateHeartbeatTasksToCron,
@@ -39,9 +46,23 @@ export async function retireHeartbeatWithDoctor(
   const cfg = inheritLegacyDefaultAgentId(sourceConfig, structuredClone(sourceConfig));
   migrateHeartbeatVisibility(cfg, []);
   validateLegacyHeartbeatConfig(cfg);
+  const next = projectRetiredHeartbeatConfig(cfg);
+  const [cadenceFindings, scratchFindings] = await Promise.all([
+    collectHeartbeatCadenceMigrationFindings(cfg, env),
+    collectHeartbeatScratchMigrationFindings(cfg, env),
+  ]);
+  if (isDeepStrictEqual(next, cfg) && !cadenceFindings.length && !scratchFindings.length) {
+    await migrateHeartbeatOutcomes(cfg, env);
+    return next;
+  }
   const clawHandoff = await prepareClawHeartbeatMigration(cfg, { env });
   const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
-  const monitors = await ensureHeartbeatMonitorJobs(cfg, storePath, env);
+  const monitors = await ensureHeartbeatMonitorJobs(
+    cfg,
+    storePath,
+    env,
+    scratchFindings.flatMap((finding) => (finding.target ? [finding.target] : [])),
+  );
   const scratch = await maybeMigrateHeartbeatFilesToScratch({ cfg, env, shouldRepair: true });
   if (scratch.warnings.length) {
     throw new Error(scratch.warnings.join("\n"));
@@ -52,7 +73,6 @@ export async function retireHeartbeatWithDoctor(
   }
   await migrateStoredHeartbeatTaskJobs(cfg, env);
   await migrateHeartbeatOutcomes(cfg, env);
-  const next = projectRetiredHeartbeatConfig(cfg);
   await finishClawHeartbeatMigration(clawHandoff, next, { env }, monitors);
   const completedCutover = runOpenClawStateWriteTransaction(
     ({ db }) => {

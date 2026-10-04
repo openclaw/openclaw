@@ -56,12 +56,13 @@ describe("cron service wake() origin capture", () => {
 
   it("drops whitespace-only sessionKey / agentId rather than routing to a meaningless lane", () => {
     const { state, enqueueSessionEvent } = makeStateWithMocks();
-    wake(state, {
+    const result = wake(state, {
       mode: "now",
       text: "x",
       sessionKey: "   ",
       agentId: "\t",
     });
+    expect(result).toEqual({ ok: true });
     expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith("x", undefined);
   });
 });

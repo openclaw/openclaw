@@ -114,6 +114,7 @@ describe("Canvas agent tool over a paired macOS node", () => {
       let unstartedPortClaim: typeof portClaim | undefined = portClaim;
       const gatewayToken = "qa-canvas-agent-node-token";
       const config: OpenClawConfig = {
+        cron: { enabled: false },
         gateway: {
           mode: "local",
           port,
@@ -122,7 +123,7 @@ describe("Canvas agent tool over a paired macOS node", () => {
           controlUi: { enabled: false },
         },
         agents: {
-          defaults: { heartbeat: { every: "0m" }, skipBootstrap: true },
+          defaults: { skipBootstrap: true },
           entries: { main: { tools: { allow: ["canvas"] } } },
         },
         plugins: {
