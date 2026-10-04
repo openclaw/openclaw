@@ -40,7 +40,11 @@ vi.mock("../state/agent-deletion-journal.read.js", () => ({
 }));
 // mock-isolation: A controlled migration proves scheduling without scanning a database.
 vi.mock("./server-startup-session-migration.js", () => ({
-  runStartupSessionMigration: mocks.migrate,
+  prepareGatewayStartupSessions: async (params: unknown) => {
+    await mocks.migrate(params);
+    return [];
+  },
+  runGatewaySessionStartupMaintenance: async () => {},
 }));
 // mock-isolation: Model preparation stays observable without loading provider plugins.
 vi.mock("../agents/prepared-model-runtime.js", () => ({

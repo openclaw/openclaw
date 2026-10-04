@@ -190,7 +190,7 @@ it.each([
   });
 });
 
-it("reads discovery policy and index from one generation, then releases it before readiness guards", async () => {
+it("shares startup validation and discovery reads, then releases them before readiness guards", async () => {
   await withDoctorConfigPreflightHome(async (home) => {
     const stateDir = process.env.OPENCLAW_STATE_DIR ?? path.join(home, ".openclaw");
     const configPath = process.env.OPENCLAW_CONFIG_PATH ?? path.join(stateDir, "openclaw.json");
@@ -218,8 +218,13 @@ it("reads discovery policy and index from one generation, then releases it befor
       insert.run("plugins.installedIndex", '{"generation":"before"}');
       const before = family();
       let afterWrite: ReturnType<typeof family> | undefined;
+      const validations: Array<string | undefined> = [];
       const result = await readAdmittedConfigSnapshot({
         env: process.env,
+        validateConfig: () => {
+          validations.push(readIndex());
+          expect(readBundledDiscoveryMode(options)).toBe("compat");
+        },
         readSnapshot: async () => {
           const snapshot = await readConfigFileSnapshot({
             observe: false,
@@ -246,6 +251,7 @@ it("reads discovery policy and index from one generation, then releases it befor
         },
       });
       expect(result.snapshot.valid).toBe(true);
+      expect(validations).toEqual(['{"generation":"before"}', '{"generation":"before"}']);
       expect(family()).toEqual(afterWrite);
     } finally {
       writer.close();

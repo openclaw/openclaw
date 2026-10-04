@@ -172,6 +172,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/state/openclaw-state-db.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["withOpenClawStateStartupMigrationCheckpointDatabase"],
+        evidence:
+          "Startup checkpoint callers only: startup-migration-checkpoint.ts:84,157 serves CLI startup-config-preflight.ts admission/heartbeat/release; gateway-owner-lease.ts:253,282 claims/releases the process lock, whose runtime heartbeat already uses openclaw-state-lease-heartbeat.ts. Other shared-state writes remain T1.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-reset.ts",
     [
       {

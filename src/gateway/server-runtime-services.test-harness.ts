@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { scheduleGatewayPostReadyMaintenance } from "./server-runtime-services.js";
 
 type StartSessionDeliveryRuntime =
@@ -111,6 +112,7 @@ export function waitForFast<T>(
 export function createLog() {
   return {
     child: vi.fn(() => createInfoWarnErrorLogger()),
+    info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
   };
@@ -144,6 +146,11 @@ export function createPostReadyMaintenanceScheduleParams(
     signal: new AbortController().signal,
     delayMs: 1,
     isClosing: () => false,
+    waitForPostReadyWork: async () => {},
+    startupMaintenance: {
+      startupSessionDatabases: [],
+      pluginRuntime: { registry: createEmptyPluginRegistry() },
+    },
     startMaintenance: vi.fn(async () => null),
     applyMaintenance: vi.fn(),
     shouldStartCron: () => true,

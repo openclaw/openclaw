@@ -5,6 +5,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import * as sqliteSessionScope from "../config/sessions/session-accessor.sqlite-scope.js";
+import { historyLane } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
@@ -249,7 +250,27 @@ describe("session transcript runtime SDK", () => {
     const steps: string[] = [];
     const firstRead = createDeferredCore();
     const releaseFirst = createDeferredCore();
+    const secondTargetRead = createDeferredCore();
     const secondQueued = createDeferredCore();
+    const read = historyLane.pool.run.bind(historyLane.pool);
+    let targetReads = 0;
+    vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+      const reply = await read(...args);
+      if (
+        reply.ok &&
+        typeof reply.value !== "boolean" &&
+        !Array.isArray(reply.value) &&
+        reply.value.kind === "session-runtime-target"
+      ) {
+        if (++targetReads === 1) {
+          await secondTargetRead.promise;
+        } else if (targetReads === 2) {
+          secondTargetRead.resolve();
+          await firstRead.promise;
+        }
+      }
+      return reply;
+    });
     const enqueueWrite = sqliteSessionScope.runExclusiveSqliteSessionWrite;
     let queuedWrites = 0;
     vi.spyOn(sqliteSessionScope, "runExclusiveSqliteSessionWrite").mockImplementation((...args) => {
@@ -296,11 +317,14 @@ describe("session transcript runtime SDK", () => {
       await Promise.race([Promise.all([firstRead.promise, secondQueued.promise]), writes]);
       expect(steps).toEqual(["first:read"]);
     } finally {
+      secondTargetRead.resolve();
+      firstRead.resolve();
       releaseFirst.resolve();
       await Promise.allSettled([first, second]);
     }
     await writes;
 
+    expect(targetReads).toBe(2);
     expect(steps).toEqual(["first:read", "first:done", "second:read", "second:done"]);
     const assistantMessages = (await readSessionTranscriptEvents(scope)).filter((event) => {
       const message = (event as { message?: { role?: unknown } }).message;
