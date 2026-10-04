@@ -7,6 +7,7 @@ import {
   searchInstalledSkills,
   type InstalledSkill,
 } from "../installed-skill-catalog.js";
+import { getTextLexicalIndex } from "../tool-search-index.js";
 import * as ranking from "../tool-search-ranking.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -23,6 +24,103 @@ function skill(name: string, description: string, content = "Whole instructions"
 }
 
 describe("installed skill catalog", () => {
+  it("shares body postings across runs while binding results, readers, and permissions per run", async () => {
+    const build = vi.spyOn(ranking, "buildLexicalIndex");
+    const catalogs = Array.from({ length: 20 }, (_, run) => {
+      const guide = skill("shared-guide", "Shared catalog metadata");
+      guide.location = `/run-${run}/guide`;
+      guide.source.readContent = undefined;
+      guide.readSearchContent = vi.fn(async () => "Nebular spectroscopy instructions");
+      return [guide];
+    });
+    const results = await Promise.all(
+      catalogs.map((catalog) =>
+        searchInstalledSkills(catalog, "spectroscopy", 5, undefined, () => true),
+      ),
+    );
+    for (const [run, result] of results.entries()) {
+      expect(result.skills).toEqual([
+        {
+          name: "shared-guide",
+          description: "Shared catalog metadata",
+          location: `/run-${run}/guide`,
+        },
+      ]);
+      expect(catalogs[run]![0]!.readSearchContent).toHaveBeenCalledOnce();
+    }
+    expect(build).toHaveBeenCalledTimes(2);
+    const denied = [
+      skill("shared-guide", "Shared catalog metadata", "Nebular spectroscopy instructions"),
+    ];
+    expect((await searchInstalledSkills(denied, "spectroscopy")).skills).toEqual([]);
+    catalogs[0]![0]!.assertCurrent = () => {
+      throw new Error("Run retired");
+    };
+    await expect(
+      searchInstalledSkills(catalogs[0]!, "spectroscopy", 5, undefined, () => true),
+    ).rejects.toThrow("Run retired");
+    expect(
+      (await searchInstalledSkills(catalogs[1]!, "spectroscopy", 5, undefined, () => true))
+        .skills[0]?.location,
+    ).toBe("/run-1/guide");
+    expect(build).toHaveBeenCalledTimes(2);
+  });
+
+  it("revisions body content and eligible membership without retaining another run's mapping", async () => {
+    const first = [
+      skill("revision-a", "Revision metadata", "Pulsar timing"),
+      skill("revision-b", "Revision metadata", "Volcanic geology"),
+    ];
+    expect(
+      (await searchInstalledSkills(first, "pulsar", 5, undefined, () => true)).skills.map(
+        ({ name }) => name,
+      ),
+    ).toEqual(["revision-a"]);
+    const revised = [
+      skill("revision-b", "Revision metadata", "Pulsar timing"),
+      skill("revision-a", "Revision metadata", "Volcanic geology"),
+    ];
+    expect(
+      (await searchInstalledSkills(revised, "pulsar", 5, undefined, () => true)).skills.map(
+        ({ name }) => name,
+      ),
+    ).toEqual(["revision-b"]);
+    const filtered = [skill("revision-a", "Revision metadata", "Volcanic geology")];
+    expect(
+      (await searchInstalledSkills(filtered, "pulsar", 5, undefined, () => true)).skills,
+    ).toEqual([]);
+    const unreadable = skill("revision-0", "Revision metadata");
+    unreadable.source.readContent = undefined;
+    unreadable.reader = async () => "Opaque reader must not be indexed";
+    expect(
+      await searchInstalledSkills([unreadable, ...revised], "pulsar", 5, undefined, () => true),
+    ).toMatchObject({
+      skills: [{ name: "revision-b" }],
+      coverage: { bodyIndexed: 2, metadataOnly: 1, truncatedBodies: 0 },
+    });
+  });
+
+  it("reuses a live body revision after idle-cache eviction", async () => {
+    const build = vi.spyOn(ranking, "buildLexicalIndex");
+    const first = [skill("retained-guide", "Retained metadata", "Astrometric calibration")];
+    await searchInstalledSkills(first, "astrometric", 5, undefined, () => true);
+    for (let revision = 0; revision < 33; revision += 1) {
+      getTextLexicalIndex([`Eviction pressure ${revision}`]);
+    }
+    const before = build.mock.calls.length;
+    const second = [skill("retained-guide", "Retained metadata", "Astrometric calibration")];
+    const result = await searchInstalledSkills(second, "astrometric", 5, undefined, () => true);
+    expect(result.skills[0]?.name).toBe("retained-guide");
+    // Metadata has no run-held reference; body postings do.
+    const bodyBuilds = build.mock.calls
+      .slice(before)
+      .filter(([documents]) => documents.some(({ terms }) => terms.includes("astrometric")));
+    expect(bodyBuilds).toHaveLength(0);
+    expect(
+      (await searchInstalledSkills(first, "astrometric", 5, undefined, () => true)).skills[0]?.name,
+    ).toBe("retained-guide");
+  });
+
   it("ranks an exact identity first and searches the entire prepared catalog", async () => {
     const build = vi.spyOn(ranking, "buildLexicalIndex");
     const skills = [

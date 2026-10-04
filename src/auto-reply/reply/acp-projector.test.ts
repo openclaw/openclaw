@@ -464,7 +464,10 @@ describe("createAcpReplyProjector", () => {
     });
 
     expect(deliveries.length).toBe(2);
-    expectToolCallSummary(deliveries[0]);
+    expect(deliveries[0]).toEqual({
+      kind: "tool",
+      text: "Tool Call: List files · status=in_progress",
+    });
     expectToolCallSummary(deliveries[1]);
   });
 

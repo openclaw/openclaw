@@ -27,6 +27,7 @@ export class WorkboardStoreRuntime {
   private closePromise: Promise<void> | undefined;
   private sealed = false;
   protected cardsRevision: WorkboardChange = { epoch: randomUUID(), revision: 1 };
+  sessionsRevision: WorkboardChange = { epoch: this.cardsRevision.epoch, revision: 1 };
   private revision = 0;
   private externalDataVersion: number | undefined;
   private readonly listeners = new Set<(change: WorkboardChange) => void>();
@@ -89,19 +90,24 @@ export class WorkboardStoreRuntime {
 
   protected track<T>(
     store: WorkboardKeyedStore<T>,
-    { notifyChanges = true }: { notifyChanges?: boolean } = {},
+    {
+      notifyChanges = true,
+      sessions = false,
+    }: { notifyChanges?: boolean; sessions?: boolean } = {},
   ): WorkboardKeyedStore<T> {
     return {
       register: (key, value) =>
         this.trackMutation(
           () => store.register(key, value),
           () => notifyChanges,
+          sessions,
         ),
       lookup: (key) => this.runOperation(() => store.lookup(key)),
       delete: (key) =>
         this.trackMutation(
           () => store.delete(key),
           (deleted) => deleted && notifyChanges,
+          sessions,
         ),
       entries: () => this.runOperation(() => store.entries()),
     };
@@ -132,11 +138,15 @@ export class WorkboardStoreRuntime {
   protected trackMutation<T>(
     run: () => Promise<T>,
     changed: (result: T) => boolean = Boolean,
+    sessions = false,
   ): Promise<T> {
     return this.runOperation(async () => {
       const result = await run();
       if (changed(result)) {
         this.invalidateCards();
+        if (sessions) {
+          this.invalidateSessionBoards();
+        }
       }
       return result;
     });
@@ -145,6 +155,13 @@ export class WorkboardStoreRuntime {
   subscribeChanges(listener: (change: WorkboardChange) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  invalidateSessionBoards(): void {
+    this.sessionsRevision = {
+      ...this.sessionsRevision,
+      revision: this.sessionsRevision.revision + 1,
+    };
   }
 
   announceChangeEpoch(): void {
@@ -162,6 +179,7 @@ export class WorkboardStoreRuntime {
       }
       this.externalDataVersion = current;
       this.invalidateCards();
+      this.invalidateSessionBoards();
       this.emit();
       return true;
     });
@@ -219,6 +237,7 @@ export class WorkboardStoreRuntime {
       epoch: this.cardsRevision.epoch,
       revision: ++this.revision,
       cardsRevision: this.cardsRevision.revision,
+      sessionsRevision: this.sessionsRevision.revision,
     };
     for (const listener of this.listeners) {
       try {

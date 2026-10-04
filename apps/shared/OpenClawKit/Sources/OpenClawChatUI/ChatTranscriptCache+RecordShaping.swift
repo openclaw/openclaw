@@ -18,7 +18,7 @@ extension OpenClawChatSQLiteTranscriptCache {
                 cached.content = nil
                 cached.preview = nil
                 cached.runId = nil
-                cached.arguments = self.cacheablePatchArguments(item)
+                cached.arguments = self.cacheableToolArguments(item)
                 cached.details = self.cacheableDetails(item.details)
                 return cached
             }
@@ -33,12 +33,28 @@ extension OpenClawChatSQLiteTranscriptCache {
         return AnyCodable(["diff": AnyCodable(capped)])
     }
 
-    private static func cacheablePatchArguments(_ item: OpenClawChatMessageContent) -> AnyCodable? {
+    private static func cacheableToolArguments(_ item: OpenClawChatMessageContent) -> AnyCodable? {
         guard let type = item.type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
-              ["toolcall", "tool_call", "tooluse", "tool_use"].contains(type),
-              let name = item.name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              ["toolcall", "tool_call", "tooluse", "tool_use"].contains(type)
+        else { return nil }
+
+        if item.name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "tool_call",
+           let id = item.arguments?.dictionaryValue?["id"]?.stringValue?
+               .trimmingCharacters(in: .whitespacesAndNewlines),
+               !id.isEmpty
+        {
+            let call = ToolDisplayRegistry.displayCall(name: item.name, args: item.arguments)
+            var arguments = ["id": AnyCodable(id)]
+            arguments["args"] = self.cacheablePatchArguments(name: call.name, args: call.args)
+            return AnyCodable(arguments)
+        }
+        return self.cacheablePatchArguments(name: item.name, args: item.arguments)
+    }
+
+    private static func cacheablePatchArguments(name: String?, args: AnyCodable?) -> AnyCodable? {
+        guard let name = name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
               ["apply_patch", "applypatch", "patch"].contains(name),
-              let arguments = item.arguments?.dictionaryValue
+              let arguments = args?.dictionaryValue
         else { return nil }
 
         for key in ["input", "patch", "diff"] {

@@ -26,7 +26,6 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
 import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
@@ -38,6 +37,11 @@ import {
   findSessionRepositoryWorkspaces,
 } from "../../state/session-repository-workspaces.js";
 import { resolveSessionStorePathCore } from "./paths.js";
+import {
+  pinSqliteSessionReceiptDeletionDatabase,
+  prepareSqliteSessionReceiptDeletions,
+  type IncognitoDeletionSource,
+} from "./session-accessor.sqlite-deletion-receipts.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import {
   runExclusiveSqliteSessionWrite,
@@ -53,12 +57,6 @@ import type {
 import type { SessionEntry } from "./types.js";
 
 type DeletionEntry = { sessionKey: string; entry: SessionEntry };
-type IncognitoDeletionSource = Pick<
-  IncognitoAgentDatabaseExecution,
-  "agentId" | "path" | "assertCurrent"
-> & {
-  sessions: Pick<IncognitoAgentDatabaseExecution["sessions"], "captureSnapshot" | "readSharing">;
-};
 type SessionMutationRun<T> = (
   assertCurrent: () => void,
   captureSettlement: (
@@ -220,6 +218,7 @@ export async function withSqliteSessionDeletions<T>(
   run: SessionMutationRun<T>,
   options: {
     additionalIdentities?: readonly string[];
+    callerSettlesReceipts?: boolean;
     incognito?: IncognitoDeletionSource;
   } = {},
 ): Promise<T> {
@@ -241,6 +240,7 @@ async function withSqliteSessionMutations<T>(
   run: SessionMutationRun<T>,
   options: {
     additionalIdentities?: readonly string[];
+    callerSettlesReceipts?: boolean;
     contextReset?: boolean;
     incognito?: IncognitoDeletionSource;
   },
@@ -305,6 +305,10 @@ async function withSqliteSessionMutations<T>(
     ? captureOpenClawStateWorkerContext({ path: repositories.path, env: scope.env })
     : undefined;
   const databaseOptions = toDatabaseOptions(scope);
+  const receiptSource =
+    !options.contextReset && !options.callerSettlesReceipts && targets.length > 0
+      ? pinSqliteSessionReceiptDeletionDatabase(databaseOptions, actor)
+      : undefined;
   const execution =
     repositories && supportsOpenClawAgentDatabaseExecution(databaseOptions)
       ? captureOpenClawAgentDatabaseExecution(databaseOptions)
@@ -313,6 +317,13 @@ async function withSqliteSessionMutations<T>(
     const repositoryWorkspaces = repositories
       ? await findSessionRepositoryWorkspaces(targets, { path: repositories.path, env: scope.env })
       : [];
+    const receiptOnlyTargets =
+      !options.contextReset && !options.callerSettlesReceipts
+        ? targets.filter(
+            (target) =>
+              !repositoryWorkspaces.some((workspace) => workspace.sessionKey === target.sessionKey),
+          )
+        : [];
     const invoke = async (
       prepared: ReadonlyMap<string, readonly PreparedAgentHarnessSessionDeletion[]>,
     ) => {
@@ -431,6 +442,13 @@ async function withSqliteSessionMutations<T>(
           }),
         );
       }
+      const settleReceiptOnlyDeletions = receiptSource
+        ? await prepareSqliteSessionReceiptDeletions(receiptSource, receiptOnlyTargets, {
+            env: scope.env,
+            assertCurrent,
+            assertRepositoryCurrent: () => repositorySource?.admission.assertCurrent(),
+          })
+        : undefined;
       return await deletions.run(
         new Map(
           targets.map((target) => [
@@ -516,6 +534,7 @@ async function withSqliteSessionMutations<T>(
                 assertCurrent: assertSessionAbsent,
               });
             }
+            await settleReceiptOnlyDeletions?.();
           }
         },
       );
