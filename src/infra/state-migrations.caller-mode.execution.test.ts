@@ -469,7 +469,7 @@ describe("legacy state migration caller execution", () => {
       source: [{ kind: "path", path: legacyStateDir }],
       target: [{ kind: "path", path: stateDir }],
       outcome: "refused",
-      refusal: { code: "step-refused", message: expect.any(String) },
+      refusal: { code: "step-threw", message: expect.any(String) },
     });
     expect(result.stepReceipts.slice(1)).toEqual(
       result.stepReceipts.slice(1).map((receipt) =>
