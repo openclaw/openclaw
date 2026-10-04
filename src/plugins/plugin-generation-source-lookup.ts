@@ -103,7 +103,7 @@ export function createPluginGenerationSourceLookup({
       assertModuleAvailable(captured);
       return captured;
     },
-    captureRecoverySource() {
+    captureRecoverySource: () => {
       for (const captured of new Set(capturedPaths.values())) {
         assertModuleAvailable(captured);
       }
