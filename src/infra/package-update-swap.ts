@@ -130,7 +130,9 @@ export async function swapStagedPackageInstall(
     const messages: string[] = [];
     try {
       if (activation) {
-        packageBackedUp = await activation.disarmRollback();
+        const previous = await activation.disarmRollback();
+        packageBackedUp = previous !== false;
+        previousRoot = previous ? { kind: "directory", tree: previous } : previousRoot;
       }
       if (!native && (packageBackedUp || (!hadPackage && rollback.length > 0))) {
         // Refuse known-bad recovery material before touching the candidate or
@@ -607,7 +609,11 @@ export async function swapStagedPackageInstall(
       params.onLiveMutation?.();
       liveMutationStarted = true;
       packageRollbackVerified = false;
-      await activation.publish(false, async () => {
+      await activation.publish(false, async (previous, copied) => {
+        if (copied) {
+          warnings.push("EXDEV during package backup rename; using a verified rollback copy.");
+        }
+        previousRoot = { kind: "directory", tree: previous };
         packageBackedUp = true;
         activePackageRoot = null;
         activation!.assertCurrent();

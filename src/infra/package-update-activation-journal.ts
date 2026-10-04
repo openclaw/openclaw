@@ -225,8 +225,9 @@ export function openPackageActivationJournal(anchor: string) {
     intent: PackageActivationIntent,
     assertCurrent: () => void,
     publications = expected.publications,
+    descriptor = expected.descriptor,
   ): PackageActivationRecord => {
-    const descriptorJsonValue = descriptorJson(expected.descriptor);
+    const descriptorJsonValue = descriptorJson(descriptor);
     const intentJson = JSON.stringify(intentSchema.parse(intent));
     PackageActivationPhaseSchema.parse(phase);
     assertCurrent();
@@ -264,6 +265,31 @@ export function openPackageActivationJournal(anchor: string) {
   };
   return {
     read,
+    recordPreviousCopy(
+      expected: PackageActivationRecord,
+      previous: PackageActivationDescriptor["previous"],
+      assertCurrent: () => void,
+    ) {
+      if (
+        expected.phase !== "publishing" ||
+        expected.intent?.kind !== "copy-previous" ||
+        expected.intent.identity !== previous.identity
+      ) {
+        throw new Error("Package copy does not match its recorded custody.");
+      }
+      return transition(
+        expected,
+        "publishing",
+        {
+          kind: "displace-copy",
+          source: expected.descriptor.previous,
+          removing: false,
+        },
+        assertCurrent,
+        expected.publications,
+        { ...expected.descriptor, previous },
+      );
+    },
     readForRecovery() {
       return prepareSqliteRollbackRecovery({
         path: journalPath,
@@ -330,7 +356,15 @@ export function openPackageActivationJournal(anchor: string) {
     assertCurrent(expected: PackageActivationRecord) {
       assertRecord(expected, read());
     },
-    transition,
+    transition(
+      expected: PackageActivationRecord,
+      phase: PackageActivationPhase,
+      intent: PackageActivationIntent,
+      assertCurrent: () => void,
+      publications = expected.publications,
+    ) {
+      return transition(expected, phase, intent, assertCurrent, publications);
+    },
   };
 }
 export type PackageActivationJournal = ReturnType<typeof openPackageActivationJournal>;
