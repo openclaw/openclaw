@@ -246,7 +246,21 @@ describe("update-cli", () => {
       const result = JSON.parse(await fs.readFile(resultPath, "utf-8")) as {
         status?: string;
       };
-      expect(result.status).toBe("ok");
+      expect(result).toEqual({
+        status: "ok",
+        changed: false,
+        npm: { changed: false, outcomes: [] },
+        sync: {
+          changed: false,
+          switchedToNpm: [],
+          switchedToBundled: [],
+          warnings: [],
+          errors: [],
+        },
+        integrityDrifts: [],
+        warnings: [],
+        assessment: { kind: "no-payload-repair" },
+      });
       expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
       expectNoSideEffects(updateGitCheckout, spawn);
       expect(listUpdateRuns()).toEqual(runsBefore);

@@ -55,6 +55,7 @@ import {
   runCommandWithTimeout,
   runDaemonRestart,
   runExec,
+  runUtf8CommandWithTimeout,
   updateCommand,
   ExitError,
 } from "./update-cli-modules.test-support.js";
@@ -303,11 +304,33 @@ describe("update-cli", () => {
     expect(gatewayCommandCall(updatedEntrypoint, "install")).toBeDefined();
     expect(freshRestartCalls()).toHaveLength(1);
     expect(getLogOutput()).toContain("Gateway: restarted and verified.");
-    const freshCalls = vi
+    const freshDoctorCall = vi
+      .mocked(runUtf8CommandWithTimeout)
+      .mock.calls.find(
+        ([argv]) => argv[1] === updatedEntrypoint && argv[2] === "doctor" && argv[3] === "--repair",
+      );
+    expect(freshDoctorCall?.[0]).toEqual([
+      expect.any(String),
+      updatedEntrypoint,
+      "doctor",
+      "--repair",
+      "--non-interactive",
+      "--no-workspace-suggestions",
+      "--yes",
+    ]);
+    const freshDoctorOptions = freshDoctorCall?.[1];
+    const freshDoctorBaseEnv =
+      typeof freshDoctorOptions === "number" ? undefined : freshDoctorOptions?.baseEnv;
+    expect(freshDoctorBaseEnv).toMatchObject({
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_STATE_DIR: managedState,
+      OPENCLAW_GATEWAY_PORT: "19222",
+    });
+    const freshValidationCalls = vi
       .mocked(runExec)
-      .mock.calls.filter(([, args]) => ["doctor", "config"].includes(args[1] ?? ""));
-    expect(freshCalls).toHaveLength(2);
-    for (const call of freshCalls) {
+      .mock.calls.filter(([, args]) => args[1] === "config" && args[2] === "validate");
+    expect(freshValidationCalls).toHaveLength(1);
+    for (const call of freshValidationCalls) {
       expect(call[1][0]).toBe(updatedEntrypoint);
       const options = call[2];
       const baseEnv = typeof options === "number" ? undefined : options?.baseEnv;

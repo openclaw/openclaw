@@ -81,9 +81,10 @@ export function createUpdateCliFixture() {
   );
   const checkoutRoot = path.join(fixtureRoot, "checkout");
   fsSync.mkdirSync(checkoutRoot);
-  for (const directory of [".git", "src", "extensions"]) {
+  for (const directory of [".git", "src", "extensions", "dist"]) {
     fsSync.mkdirSync(path.join(checkoutRoot, directory));
   }
+  fsSync.writeFileSync(path.join(checkoutRoot, "dist", "index.js"), "export {};\n", "utf8");
   fsSync.writeFileSync(
     path.join(checkoutRoot, "package.json"),
     JSON.stringify({ name: "openclaw", version: VERSION }),
@@ -334,7 +335,8 @@ export function createUpdateCliFixture() {
     return { root, entrypoints };
   };
 
-  const FRESH_POST_UPDATE_ENTRYPOINT = "/tmp/openclaw-updated-entry.mjs";
+  const FRESH_POST_UPDATE_ENTRYPOINT = path.join(fixtureRoot, "openclaw-updated-entry.mjs");
+  fsSync.writeFileSync(FRESH_POST_UPDATE_ENTRYPOINT, "export {};\n", "utf8");
 
   const mockCurrentProcessFreshDoctor = createCurrentProcessFreshDoctorFixture(
     resolveGatewayInstallEntrypoint,
