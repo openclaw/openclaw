@@ -158,7 +158,7 @@ serveOwnedWorkerTasks(
           const lease = inspectGatewayOwnerLeaseForMaintenance(input, () => {
             sourceAdmitted = true;
           });
-          return { ok: true, type: command.type, sourceAdmitted, lease };
+          return { ok: true, type: command.type, sourceAdmitted: true, lease };
         }
         const locationArgs = [
           input.databasePath,
