@@ -276,6 +276,7 @@ export function prepareProjectedSessionSharing(params: {
             cfg,
             roleProfile?.githubLogin ?? null,
           );
+  let cacheKey: string | undefined;
   return {
     ...prepareSessionSharing(params, {
       aliases: profile?.aliases ?? new Set(),
@@ -283,6 +284,20 @@ export function prepareProjectedSessionSharing(params: {
       isMember,
     }),
     policy,
+    get cacheKey() {
+      return (cacheKey ??= JSON.stringify([
+        actor,
+        identity?.id,
+        client?.authenticatedUserProfile?.profileId,
+        client?.authenticatedUserId,
+        Boolean(client?.authenticatedGitHubIdentitySync),
+        client?.connect.scopes?.toSorted(),
+        profile?.profileId,
+        profile && [...profile.aliases].sort(),
+        policy,
+        Boolean(cfg.gateway?.roles),
+      ]));
+    },
   };
 }
 

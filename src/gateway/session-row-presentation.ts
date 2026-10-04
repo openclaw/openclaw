@@ -1,9 +1,11 @@
+import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { SESSION_ROW_DETAIL_FIELDS } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
+import { registerSerializedJsonArray } from "./serialized-json.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
 import type { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { GatewayClient } from "./server-methods/types.js";
@@ -12,6 +14,7 @@ import {
   projectSessionParticipant,
   projectSessionProfileInvolvement,
 } from "./session-identity-projection.js";
+import { matchesSessionArchiveFilter } from "./session-list-filters.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import type * as records from "./session-row-projection-record.js";
@@ -28,6 +31,7 @@ import {
   projectGatewaySessionActiveRun,
   projectGatewaySessionRunState,
 } from "./session-utils-display.js";
+import type { SessionEntrySelection } from "./session-utils-list.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 type PresentationOptions = Omit<
@@ -37,6 +41,7 @@ type PresentationOptions = Omit<
   includeActivitySummary?: boolean;
   rowMode?: "compact";
   omitSentinelChildren?: boolean;
+  childArchiveFilter?: SessionsListParams["archived"];
 };
 
 function toProjectedSessionSharingTarget(record: records.MaterializedRow): SessionSharingTarget {
@@ -58,15 +63,18 @@ type PublicationRows = WeakMap<
     target: SessionSharingTarget;
   }
 >;
-type PublicationView = (context: SessionRowReadView["state"]["rowContext"]) => PublicationRows;
+type Publication = {
+  rows: PublicationRows;
+  lists: Map<string, { rows?: GatewaySessionRow[]; selection?: SessionEntrySelection }>;
+};
+type PublicationView = (context: SessionRowReadView["state"]["rowContext"]) => Publication;
 
 const publications = new WeakMap<
   SessionRowProjection,
   {
     context: SessionRowReadView["state"]["rowContext"];
     revision: object | undefined;
-    rows: PublicationRows;
-  }
+  } & Publication
 >();
 const encodings = new WeakMap<GatewaySessionRow, string>();
 
@@ -95,10 +103,10 @@ export function prepareSessionRowPublication(
       publication.revision !== revision ||
       !revision
     ) {
-      publication = { context, revision, rows: new WeakMap() };
+      publication = { context, revision, rows: new WeakMap(), lists: new Map() };
       publications.set(projection, publication);
     }
-    return publication.rows;
+    return publication;
   };
   return (
     client?: GatewayClient | null,
@@ -120,7 +128,8 @@ export function prepareProjectedSessionPresentation(
     client === undefined
       ? undefined
       : prepareOperatorModelPresentation({ cfg, policyConfig, client });
-  const publicationRows = publication?.(rowContext);
+  const published = publication?.(rowContext);
+  const publicationRows = published?.rows;
   const subagentRuns = rowContext.subagentRuns.atTime(now);
   const active = (key: string, entry: records.MaterializedRow["entry"], agentId: string) =>
     projectRun?.({
@@ -151,6 +160,26 @@ export function prepareProjectedSessionPresentation(
   const profileId = profile
     ? projectSessionParticipant({ type: "profile", id: profile.id }, profiles).identity.id
     : undefined;
+  const listView = (opts: SessionsListParams) => {
+    const { source: _source, ...query } = opts;
+    const key = JSON.stringify([
+      client === undefined,
+      sharing.cacheKey,
+      presentFastMode("ultrafast"),
+      Object.entries(query).sort(([left], [right]) => left.localeCompare(right)),
+    ]);
+    const lists = published?.lists;
+    let view = lists?.get(key);
+    if (!view) {
+      view = {};
+      // A revision can receive arbitrary paging/search queries; retain bounded recent views.
+      if (lists && lists.size >= 32) {
+        lists.delete(lists.keys().next().value!);
+      }
+      lists?.set(key, view);
+    }
+    return view;
+  };
   const viewer = (value: SessionSharingTarget) => ({
     visibility: resolveSessionVisibility(value.entry),
     ...(profileId && !value.entry.incognito && !isIncognitoSessionKey(value.canonicalKey)
@@ -286,6 +315,7 @@ export function prepareProjectedSessionPresentation(
         options.includeActivitySummary,
         options.rowMode,
         options.omitSentinelChildren,
+        options.childArchiveFilter,
         excludedChildKeys?.size ? [...excludedChildKeys] : undefined,
         excludedSwarmKeys && [...excludedSwarmKeys],
         viewerFacts,
@@ -363,6 +393,21 @@ export function prepareProjectedSessionPresentation(
       row.childSessions = undefined;
       row.hasActiveSubagentRun = undefined;
     }
+    if (
+      row.childSessions?.length &&
+      options.childArchiveFilter !== undefined &&
+      options.childArchiveFilter !== "all"
+    ) {
+      let excluded: Set<string> | undefined;
+      for (const { key: childKey, entry } of record.materialized.source.childLinks ?? []) {
+        if (!matchesSessionArchiveFilter(entry, options.childArchiveFilter)) {
+          (excluded ??= new Set()).add(childKey);
+        }
+      }
+      if (excluded) {
+        row.childSessions = row.childSessions.filter((childKey) => !excluded.has(childKey));
+      }
+    }
     if (signature !== undefined) {
       const snapshot = freezeJsonSnapshot(structuredClone(row));
       views?.set(signature, snapshot);
@@ -376,6 +421,42 @@ export function prepareProjectedSessionPresentation(
     sharing,
     target,
     present,
+    select(opts: SessionsListParams, select: () => SessionEntrySelection) {
+      // These queries consume clock or transient run facts independently of row publications.
+      if (
+        opts.search ||
+        opts.spawnedBy ||
+        opts.activeMinutes !== undefined ||
+        opts.activeOnly ||
+        opts.includeOwnerSessionCounts ||
+        opts.activityPulseBoundaries
+      ) {
+        return select();
+      }
+      const view = listView(opts);
+      if (!view.selection) {
+        const { entries, ...facets } = select();
+        Object.freeze(entries);
+        view.selection = Object.freeze({
+          ...freezeJsonSnapshot(structuredClone(facets)),
+          entries,
+        });
+      }
+      return view.selection;
+    },
+    list(rows: GatewaySessionRow[], opts: SessionsListParams) {
+      // Current authorization and temporal presentation precede reuse. The retained vector
+      // owns bytes only; it never retains a connection or grants permission to a later read.
+      const view = listView(opts);
+      const previous = view.rows;
+      if (previous?.length === rows.length && rows.every((row, index) => row === previous[index])) {
+        return previous;
+      }
+      Object.freeze(rows);
+      registerSerializedJsonArray(rows, rows.map(serializeSessionRow));
+      view.rows = rows;
+      return rows;
+    },
     snapshot(query: records.Lookup, options: PresentationOptions = {}) {
       const record = projection.describe(query);
       return record
