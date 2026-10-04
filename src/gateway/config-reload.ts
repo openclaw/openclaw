@@ -1054,7 +1054,11 @@ export function startGatewayConfigReloader(
       } else if (pluginDrain.shouldReport(err)) {
         opts.log.error(`config reload failed: ${String(err)}`);
       } else {
-        opts.log.info("config reload deferred: retries when the failed plugin's work settles");
+        opts.log.info(
+          pluginDrain.retriesWhenIdle()
+            ? "config reload deferred: retries when the failed plugin's work settles"
+            : "config reload deferred: retry the failed plugin reload with --wait",
+        );
       }
     } finally {
       running = false;

@@ -25,12 +25,16 @@ import type { GatewayPluginReloadStatus } from "./server-plugin-runtime-generati
 const PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS = 60_000;
 
 export class PluginAdmittedWorkTimeoutError extends Error {
+  /** Plugins whose pre-stop drain expired; a subset of the operation's changed plugins. */
+  readonly pluginIds: readonly string[];
+
   constructor(pluginIds: ReadonlySet<string>, cause: PluginHostCleanupTimeoutError) {
-    const ids = [...pluginIds].join(", ");
+    const ids = [...pluginIds];
     super(
-      `plugin ${ids} admitted work did not settle within 60s; the previous plugin generation stays active. Use \`openclaw plugins reload ${[...pluginIds].join(" ")} --wait\` to wait until it finishes.`,
+      `plugin ${ids.join(", ")} admitted work did not settle within 60s; the previous plugin generation stays active. Use \`openclaw plugins reload ${ids.join(" ")} --wait\` to wait until it finishes.`,
       { cause },
     );
+    this.pluginIds = ids;
   }
 }
 

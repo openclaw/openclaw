@@ -32,6 +32,7 @@ export function createConfigPluginDrainTracker(params: {
         error: PluginRuntimeApplicationError;
         paths: readonly string[];
         observation: AbortController;
+        retriesWhenIdle: boolean;
         reported: boolean;
       }
     | undefined;
@@ -72,19 +73,22 @@ export function createConfigPluginDrainTracker(params: {
         !isConfigReloadSuperseded(error)
       ) {
         clear();
+        const timeout =
+          error.cause instanceof PluginAdmittedWorkTimeoutError ? error.cause : undefined;
         const current = {
           error,
           paths: plan.reloadPluginPaths ?? [],
           observation: new AbortController(),
+          retriesWhenIdle: timeout !== undefined,
           reported: false,
         };
         failure = current;
-        if (!(error.cause instanceof PluginAdmittedWorkTimeoutError)) {
+        if (!timeout) {
           return;
         }
         // The rolled-back generation keeps serving and accepting work. Retry a timed-out
         // drain when it would pass immediately; other drain failures need an operator.
-        const pluginIds = new Set(error.details.pluginIds);
+        const pluginIds = new Set(timeout.pluginIds);
         const signal = AbortSignal.any([params.signal, current.observation.signal]);
         void Promise.all(
           (getActivePluginRegistry()?.plugins ?? []).map((record) =>
@@ -114,6 +118,10 @@ export function createConfigPluginDrainTracker(params: {
       const report = !failure.reported;
       failure.reported = true;
       return report;
+    },
+    /** Whether the deferring failure clears itself once its timed-out work settles. */
+    retriesWhenIdle() {
+      return failure?.retriesWhenIdle ?? false;
     },
   };
 }
