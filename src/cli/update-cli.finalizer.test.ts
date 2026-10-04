@@ -107,7 +107,12 @@ describe("update-cli", () => {
           order: vi.mocked(runUtf8CommandWithTimeout).mock.invocationCallOrder[index] ?? 0,
           entrypoint: argv[1],
         }))
-        .filter((call) => call.entrypoint === entrypoint && call.commandArgs[0] === "doctor"),
+        .filter(
+          (call) =>
+            call.entrypoint === entrypoint &&
+            call.commandArgs[0] === "doctor" &&
+            !call.commandArgs.includes("--lint"),
+        ),
       ...vi
         .mocked(runExec)
         .mock.calls.map(([runner, args], index) => ({
