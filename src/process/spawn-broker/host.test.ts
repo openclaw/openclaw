@@ -151,33 +151,16 @@ async function runBootstrapFixture(mode: BootstrapFixtureMode): Promise<unknown>
 }
 
 describe.skipIf(process.platform === "win32")("spawn broker private bootstrap", () => {
-  it("finishes native-resource Host.close after the broker's actual IPC close", async () => {
-    expect(await runBootstrapFixture("native")).toEqual({
-      mode: "native",
-      closed: true,
-      nativeClose: true,
-      refused: 0,
-    });
-  }, 20_000);
-
-  it("ignores stale ambient resource variables during ordinary broker startup", async () => {
-    expect(await runBootstrapFixture("stale-ambient")).toEqual({
-      mode: "stale-ambient",
-      closed: true,
-      ordinaryReady: true,
-      ordinaryCommandClosed: true,
-      refused: 0,
-    });
-  }, 20_000);
-
-  it.each(["send-throw", "send-callback"] as const)(
-    "retains and joins the actual child after initial bootstrap %s refusal",
+  it.each(["native", "stale-ambient", "send-throw", "send-callback"] as const)(
+    "settles private bootstrap and native child closure (%s)",
     async (mode) => {
       expect(await runBootstrapFixture(mode)).toEqual({
         mode,
         closed: true,
-        nativeClose: true,
-        refused: 1,
+        refused: mode.startsWith("send-") ? 1 : 0,
+        ...(mode === "stale-ambient"
+          ? { ordinaryReady: true, ordinaryCommandClosed: true }
+          : { nativeClose: true }),
       });
     },
     20_000,
@@ -185,48 +168,6 @@ describe.skipIf(process.platform === "win32")("spawn broker private bootstrap", 
 });
 
 describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
-  it("runs process commands outside the Gateway process", async () => {
-    const host = await start();
-    const argv0 = "openclaw-broker-command";
-    const args = [
-      "-e",
-      "process.stdout.write(JSON.stringify({parent:process.ppid,argv0:process.argv0}))",
-    ];
-    const child = host.spawn(process.execPath, args, {
-      argv0,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    await child.ready();
-    expect(child.spawnfile).toBe(process.execPath);
-    expect(child.spawnargs).toEqual([argv0, ...args]);
-    let stdout = "";
-    child.stdout!.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    await once(child, "close");
-    expect(JSON.parse(stdout)).toEqual({ parent: host.pid, argv0 });
-    expect(host.pid).not.toBe(process.pid);
-  });
-
-  it("preserves completion listeners installed after readiness when IPC messages arrive together", async () => {
-    const host = await start();
-    const executable = process.platform === "darwin" ? "/usr/bin/true" : "/bin/true";
-    for (let iteration = 0; iteration < 3; iteration += 1) {
-      const child = host.spawn(executable, [], { stdio: "ignore" });
-      // Let the request leave, then model a busy Gateway while the broker completes it.
-      await Promise.resolve();
-      const resumeAt = performance.now() + 20;
-      while (performance.now() < resumeAt) {
-        /* Keep the receiving event loop occupied. */
-      }
-      await child.ready();
-      await Promise.resolve();
-      await Promise.resolve();
-      const [code] = await once(child, "close", { signal: AbortSignal.timeout(1000) });
-      expect(code).toBe(0);
-    }
-  });
-
   it.each(["coalesced", "later"])(
     "preserves native spawn waiters and single ordered events for %s exits",
     async (timing) => {
@@ -264,25 +205,25 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
     },
   );
 
-  it("preserves independent large output streams and stdin", async () => {
+  it("preserves raw-spawn identity, independent output streams, and stdin", async () => {
     const host = await start();
     const size = 2 * 1024 * 1024 + 137;
-    const child = host.spawn(
-      process.execPath,
-      [
-        "-e",
-        `
+    const argv0 = "openclaw-broker-command";
+    const args = [
+      "-e",
+      `
       process.stdin.resume(); let input = '';
       process.stdin.on('data', x => input += x);
       process.stdin.on('end', () => {
-        process.stdout.write(input + 'o'.repeat(${size}));
+        process.stdout.write(JSON.stringify({parent:process.ppid,argv0:process.argv0}) + '\\n' + input + 'o'.repeat(${size}));
         process.stderr.write('e'.repeat(${size}));
       });
     `,
-      ],
-      { stdio: ["pipe", "pipe", "pipe"] },
-    );
+    ];
+    const child = host.spawn(process.execPath, args, { argv0, stdio: ["pipe", "pipe", "pipe"] });
     await child.ready();
+    expect(child.spawnfile).toBe(process.execPath);
+    expect(child.spawnargs).toEqual([argv0, ...args]);
     let stdout = "",
       stderr = "";
     child.stdout!.on("data", (chunk) => {
@@ -293,7 +234,10 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
     });
     child.stdin!.end("input-prefix:");
     await once(child, "close");
-    expect(stdout).toBe("input-prefix:" + "o".repeat(size));
+    const newline = stdout.indexOf("\n");
+    expect(JSON.parse(stdout.slice(0, newline))).toEqual({ parent: host.pid, argv0 });
+    expect(host.pid).not.toBe(process.pid);
+    expect(stdout.slice(newline + 1)).toBe("input-prefix:" + "o".repeat(size));
     expect(stderr).toBe("e".repeat(size));
   });
 

@@ -31,6 +31,7 @@ import type { AgentHarness } from "../harness/types.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { getModelProviderLocalServiceReconciler } from "../provider-local-service-reconcile.js";
 import { createSessionMaintenanceOwner } from "../session-maintenance/coordinator.js";
+import { agentSessionAutomaticCompaction } from "../sessions/agent-session-compaction.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -58,7 +59,7 @@ import {
   attemptServerEndpointCompactionMock,
   applyExtraParamsToAgentMock,
   buildAgentRuntimePlanMock,
-  buildEmbeddedSystemPromptMock,
+  buildConfiguredAgentSystemPromptMock,
   resolveBootstrapContextForRunMock,
   contextEngineCompactMock,
   createAgentSessionMock,
@@ -110,6 +111,10 @@ import {
   type CompactHooksQueuedCompaction,
 } from "./compact.hooks.metadata.test-support.js";
 import {
+  mockPendingContextEngineCompaction,
+  mockPendingNativeCompaction,
+} from "./compact.hooks.pending.test-support.js";
+import {
   abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
   isEmbeddedAgentRunActive,
@@ -143,42 +148,6 @@ type PostCompactionSyncParams = {
   sessions?: Array<{ agentId: string; sessionId: string; sessionKey?: string }>;
 };
 type PostCompactionSync = (params?: unknown) => Promise<void>;
-function mockPendingContextEngineCompaction() {
-  const pending = {
-    signal: undefined as AbortSignal | undefined,
-    started: createDeferred(),
-    release: createDeferred(),
-  };
-  contextEngineCompactMock.mockImplementationOnce(async (...args: unknown[]) => {
-    const [params] = args;
-    pending.signal = (params as { abortSignal?: AbortSignal }).abortSignal;
-    pending.started.resolve(undefined);
-    await pending.release.promise;
-    return {
-      ok: true,
-      compacted: true,
-      reason: undefined,
-      result: { summary: "engine-summary", tokensBefore: 120, tokensAfter: 50 },
-    };
-  });
-  return pending;
-}
-
-function mockPendingNativeCompaction() {
-  const pending = {
-    signal: undefined as AbortSignal | undefined,
-    started: createDeferred(),
-    terminal: createDeferred<{ ok: false; compacted: false; reason: string }>(),
-  };
-  maybeCompactAgentHarnessSessionMock.mockImplementationOnce(async (...args: unknown[]) => {
-    const [params] = args;
-    pending.signal = (params as { abortSignal?: AbortSignal }).abortSignal;
-    pending.started.resolve(undefined);
-    return await pending.terminal.promise;
-  });
-  return pending;
-}
-
 function plannedCompactionPluginSelections(
   config: OpenClawConfig,
   metadataSnapshot = createPluginMetadataSnapshotFixture({ plugins: [] }),
@@ -404,11 +373,11 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         execute: vi.fn(),
       })),
     );
-    buildEmbeddedSystemPromptMock.mockImplementation((params) =>
+    buildConfiguredAgentSystemPromptMock.mockImplementation((params) =>
       JSON.stringify({
         promptMode: params.promptMode,
         skillsPrompt: params.skillsPrompt ?? null,
-        toolNames: params.tools.map((tool) => tool.name),
+        toolNames: params.tools?.map((tool) => tool.name),
       }),
     );
     let endpointSystemPrompt: string | undefined;
@@ -555,6 +524,45 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(compactionTimeoutReset).toHaveBeenCalledTimes(6);
   });
 
+  it("keeps a timeout after summary generation as a failure instead of discarding it", async () => {
+    const createAgentSession = createAgentSessionMock.getMockImplementation();
+    if (!createAgentSession) {
+      throw new Error("Expected a create-agent-session implementation");
+    }
+    const policies: unknown[] = [];
+    const entered = createDeferred();
+    createAgentSessionMock.mockImplementation(async (...args) => {
+      const created = await createAgentSession(...args);
+      // The summary is ready; persistence then outlives the watchdog.
+      created.session[agentSessionAutomaticCompaction] = vi.fn(
+        async (_instructions, _state, policy, options?: { onSummaryReady?: () => void }) => {
+          policies.push(policy);
+          options?.onSummaryReady?.();
+          entered.resolve(undefined);
+          return await createDeferred<never>().promise;
+        },
+      );
+      return created;
+    });
+    vi.useFakeTimers();
+    try {
+      const pending = compactEmbeddedAgentSessionDirect(
+        wrappedCompactionArgs({ trigger: "budget" }),
+      );
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(181_000);
+
+      await expect(pending).resolves.toMatchObject({
+        ok: false,
+        compacted: false,
+        reason: expect.stringContaining("timed out"),
+      });
+      expect(policies).toEqual([undefined]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fails closed before generic compaction for a model-locked native session", async () => {
     const params = await nativeCompactionArgs({
       provider: "openai",
@@ -691,7 +699,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
           workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
         }),
       );
-      expect(buildEmbeddedSystemPromptMock).toHaveBeenCalledWith(
+      expect(buildConfiguredAgentSystemPromptMock).toHaveBeenCalledWith(
         expect.objectContaining({
           runtimeInfo: expect.objectContaining({
             activeProcessSessions: [expect.objectContaining({ sessionId: owned.id })],
@@ -719,7 +727,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       expect(listRegisteredPluginAgentPromptGuidanceMock).toHaveBeenCalledWith({
         surface: promptSurface,
       });
-      expect(buildEmbeddedSystemPromptMock).toHaveBeenCalledWith(
+      expect(buildConfiguredAgentSystemPromptMock).toHaveBeenCalledWith(
         expect.objectContaining({
           promptMode,
           promptSurface,
@@ -754,9 +762,12 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
           : [file],
         contextFiles: [{ path: file.path, content: file.content }],
       });
-      const actual =
-        await vi.importActual<typeof import("./system-prompt.js")>("./system-prompt.js");
-      buildEmbeddedSystemPromptMock.mockImplementation(actual.buildEmbeddedSystemPrompt);
+      const actual = await vi.importActual<typeof import("../system-prompt-config.js")>(
+        "../system-prompt-config.js",
+      );
+      buildConfiguredAgentSystemPromptMock.mockImplementation(
+        actual.buildConfiguredAgentSystemPrompt,
+      );
       await compactEmbeddedAgentSessionDirect(directCompactionArgs());
       const created = (await createAgentSessionMock.mock.results[0]?.value) as {
         session: { agent: { state: { systemPrompt?: string } }; setBaseSystemPrompt: Mock };
@@ -1084,7 +1095,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
     it("returns a structured automatic retention skip without reporting compaction failure", async () => {
       const { isBenignCompactionSkipResult } = await import("./compact-reasons.js");
-      const { createAgentSessionForEmbeddedRunner } = await import("../sessions/sdk.js");
+      const { createAgentSession } = await import("../sessions/sdk.js");
       const { guardSessionManager } = await import("../session-tool-result-guard-wrapper.js");
       const { resolveEmbeddedAgentStream } = await import("./stream-resolution.js");
       const { attachCompactionAccountingRecorder } =
@@ -1113,7 +1124,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         streamFn: stream,
         strategy: "session-custom",
       });
-      vi.mocked(createAgentSessionForEmbeddedRunner).mockImplementation(async ({ model }) => {
+      vi.mocked(createAgentSession).mockImplementation(async ({ model }) => {
         if (!model) {
           throw new Error("Expected prepared compaction model");
         }
@@ -1149,6 +1160,10 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       ["provider rate limit", "429 rate limit exceeded", "fallback"],
       ["intentional quality rejection", undefined, "cancel"],
       ["explicit model timeout", "request timed out", "cancel"],
+      // A provider 408 is an actual summary timeout: commit without a summary, no model switch.
+      ["provider 408", "408", "reduce"],
+      // A failed corrective attempt stays a terminal quality cancellation, even on a 408.
+      ["corrective 408", "408", "cancel"],
       [
         "reasoning-mandatory rejection",
         "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
@@ -1158,7 +1173,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       "keeps model fallback boundaries for %s",
       async (scenario, errorMessage, outcome) => {
         const [
-          { createAgentSessionForEmbeddedRunner },
+          { createAgentSession },
           { guardSessionManager },
           { resolveEmbeddedAgentStream },
           { buildEmbeddedExtensionFactories },
@@ -1209,17 +1224,22 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         const stream = vi.fn<StreamFn>((activeModel, _context, options) => {
           requestedModels.push(activeModel.id);
           requestedThinking.push(options?.reasoning);
+          const corrective = scenario === "corrective 408";
           const rejected =
             activeModel.id === primary &&
             errorMessage &&
-            !(outcome === "thinking" && options?.reasoning === "minimal");
+            !(outcome === "thinking" && options?.reasoning === "minimal") &&
+            !(corrective && requestedModels.length === 1);
           return createAssistantResultStream(
             rejected
               ? { ...createAssistant(activeModel, [], "error"), errorMessage }
               : createAssistant(activeModel, [
                   {
                     type: "text",
-                    text: outcome === "cancel" ? "Missing required sections." : fallbackSummary,
+                    text:
+                      outcome === "cancel" || corrective
+                        ? "Missing required sections."
+                        : fallbackSummary,
                   },
                 ]),
           );
@@ -1238,30 +1258,28 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
             contextWindowTokens: 128_000,
             recentTurnsPreserve: 0,
             qualityGuardEnabled: true,
-            qualityGuardMaxRetries: 0,
+            qualityGuardMaxRetries: scenario === "corrective 408" ? 1 : 0,
           });
           return [];
         });
-        vi.mocked(createAgentSessionForEmbeddedRunner).mockImplementation(
-          async ({ model, thinkingLevel }) => {
-            if (!model) {
-              throw new Error("Expected the prepared compaction model");
-            }
-            const created = await createTestSession({
-              model: {
-                ...testModel,
-                ...model,
-                reasoning: outcome === "thinking",
-                maxTokens: 1_024,
-              },
-              sessionManager,
-              settingsManager,
-              resourceLoader: createResourceLoader(extension.handlers),
-            });
-            await created.session.setThinkingLevel(thinkingLevel ?? "off");
-            return created;
-          },
-        );
+        vi.mocked(createAgentSession).mockImplementation(async ({ model, thinkingLevel }) => {
+          if (!model) {
+            throw new Error("Expected the prepared compaction model");
+          }
+          const created = await createTestSession({
+            model: {
+              ...testModel,
+              ...model,
+              reasoning: outcome === "thinking",
+              maxTokens: 1_024,
+            },
+            sessionManager,
+            settingsManager,
+            resourceLoader: createResourceLoader(extension.handlers),
+          });
+          await created.session.setThinkingLevel(thinkingLevel ?? "off");
+          return created;
+        });
         const config = {
           agents: {
             defaults: {
@@ -1271,7 +1289,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
                 thinkingLevel: "off" as const,
                 ...(explicitModel ? { model: `openai/${primary}` } : {}),
                 recentTurnsPreserve: 0,
-                qualityGuard: { enabled: true, maxRetries: 0 },
+                qualityGuard: { enabled: true, maxRetries: scenario === "corrective 408" ? 1 : 0 },
               },
             },
           },
@@ -1291,7 +1309,12 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
           fallback ? [primary, backup] : [primary],
         );
         expect(config).toEqual(configBefore);
-        if (outcome !== "cancel") {
+        if (outcome === "reduce") {
+          expect(result).toMatchObject({ ok: true, compacted: true });
+          expect(
+            sessionManager.getBranch().findLast((entry) => entry.type === "compaction"),
+          ).toMatchObject({ summary: expect.stringContaining("removed without a summary") });
+        } else if (outcome !== "cancel") {
           if (outcome === "thinking") {
             expect([...new Set(requestedThinking)]).toEqual(["off", "minimal"]);
           }

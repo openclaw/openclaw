@@ -95,6 +95,7 @@ describe("effort bar colour and flow", () => {
             provider: "openai",
             available: true,
             supportsFastMode,
+            supportsServiceTierRecovery: true,
             serviceTiers: tiers,
           },
         ],

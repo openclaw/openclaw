@@ -177,7 +177,7 @@ enum ManagedNodeGatewayMigration {
         else { return nil }
         guard var captured = try await self.capture(profile: profile, retainedCLI: retainedCLI) else { return nil }
         if hasService, profile.isActive {
-            guard allowNamedServiceRetry, let retainedCLI, captured.matchesRetainedCLI(retainedCLI) else { return nil }
+            guard let retainedCLI, captured.matchesRetainedCLI(retainedCLI) else { return nil }
             captured.allowsNamedServiceRetry = true
         }
         if let coreRepairVerifiedCLI {
@@ -194,7 +194,7 @@ enum ManagedNodeGatewayMigration {
         installPolicy: String?,
         gatewayUpdateChannel: String?,
         hasService: Bool,
-        allowNamedServiceRetry: Bool = false) -> Bool
+        allowNamedServiceRetry: Bool) -> Bool
     {
         onboardingSeen && (installPolicy == "exact" ||
             (installPolicy == nil && (!hasService || allowNamedServiceRetry))) &&
@@ -411,8 +411,6 @@ enum ManagedNodeGatewayMigration {
         resolveLegacyCLI: @escaping @MainActor @Sendable () throws -> GatewayLaunchAgentManager.InstalledServiceCLI? = {
             nil
         },
-        allowNamedServiceRetry: Bool = false,
-        coreRepairVerifiedCLI: GatewayLaunchAgentManager.InstalledServiceCLI? = nil,
         verifyHealth: @escaping () async throws -> Void,
         setServiceHosting: @escaping (Candidate) -> Void,
         statusHandler: @escaping @MainActor @Sendable (String) async -> Void) -> Operations
@@ -469,8 +467,8 @@ enum ManagedNodeGatewayMigration {
                 }
                 return try await self.recaptureEligibleCandidate(
                     retainedCLI: retained,
-                    allowNamedServiceRetry: allowNamedServiceRetry,
-                    coreRepairVerifiedCLI: coreRepairVerifiedCLI)
+                    allowNamedServiceRetry: previous.allowsNamedServiceRetry,
+                    coreRepairVerifiedCLI: previous.hasVerifiedCoreRepair ? previous.cli : nil)
             },
             seed: { candidate in
                 let original = try await self.captureServiceCustody(requireService: candidate.snapshot != nil)

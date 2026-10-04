@@ -8,6 +8,7 @@ import type {
   IncognitoContextReadResult,
   IncognitoHistoryTarget,
 } from "./session-incognito-history-contract.js";
+import { prepareIncognitoSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence.js";
 
 async function readContextResult<Value>(
@@ -52,6 +53,18 @@ export function bindIncognitoSessionComputeReader(params: {
   const retain = <T>(operation: () => Promise<T>) =>
     actor.sessions.withCompute(authority, target, operation, signal);
   return {
+    prepareHydration(
+      limits?: Parameters<typeof prepareIncognitoSessionTranscriptHydration>[0]["limits"],
+    ) {
+      disclose();
+      return prepareIncognitoSessionTranscriptHydration({
+        actor,
+        authority,
+        target,
+        limits,
+        signal,
+      });
+    },
     memoryEntry(
       absPath: string,
       options: Omit<BuildSessionEntryOptions, "onTranscriptMessage"> = {},

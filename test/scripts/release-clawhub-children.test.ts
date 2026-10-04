@@ -171,31 +171,13 @@ describe("ClawHub child lifecycle", () => {
     }
   });
 
-  it.each(["plugin-clawhub-release.yml", "plugin-clawhub-new.yml"])(
-    "leaves another tag's waiting %s alone on the same tooling ref",
-    (workflow) => {
-      const result = fixture({ workflow, titleTag: "v2026.9.4", sameToolingRef: true }).run();
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.calls.some((args) => args[1] === "cancel")).toBe(false);
-    },
-  );
-
-  it("leaves same-tag validation on the same tooling ref independent", () => {
-    const result = fixture({
-      sameToolingRef: true,
-      validation: true,
-      childStatus: "in_progress",
-    }).run();
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.calls.some((args) => args[1] === "cancel")).toBe(false);
-  });
-
-  it("preserves bootstrap's existing independent slots for unidentified main runs", () => {
-    const result = fixture({
-      workflow: "plugin-clawhub-new.yml",
-      sameToolingRef: true,
-      legacyTitle: true,
-    }).run();
+  it.each([
+    { workflow: "plugin-clawhub-release.yml", titleTag: "v2026.9.4" },
+    { workflow: "plugin-clawhub-new.yml", titleTag: "v2026.9.4" },
+    { validation: true, childStatus: "in_progress" },
+    { workflow: "plugin-clawhub-new.yml", legacyTitle: true },
+  ])("preserves independent slots on the same tooling ref: %j", (options) => {
+    const result = fixture({ ...options, sameToolingRef: true }).run();
     expect(result.status, result.stderr).toBe(0);
     expect(result.calls.some((args) => args[1] === "cancel")).toBe(false);
   });

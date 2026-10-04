@@ -248,6 +248,10 @@ Use `--gateway-onboarding` in place of `--gateway-switch` to exercise local
 installation with a synthetic installer, leave Model Setup, and verify native
 window controls and Gateway actions under a non-root Gateway path. This scenario
 uses the same isolated fixtures and also runs in the Linux App workflow.
+Stage the verified runtime with `node apps/linux/scripts/stage-runtime.mjs`
+before `cargo build --locked`. The driver copies the compiled app's runtime
+resources into its private Cargo layout and exercises the real Bun launcher
+against a synthetic CLI/service, including explicit runtime activation.
 
 ## First-run setup
 

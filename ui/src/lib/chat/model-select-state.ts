@@ -432,13 +432,10 @@ export function resolveChatFastModeSelectState(
     selectedEntries.every(
       ({ runtime }) => runtime?.available === true && runtime.serviceTiers?.includes("ultrafast"),
     );
-  // Only native API requests recover rejected account tiers; other harnesses keep their wire preference.
+  // The transport owns recovery support; provider and runtime names do not identify the endpoint.
   const canRecoverRejectedTier =
-    isOpenAI &&
-    selectedEntries.every(
-      ({ runtime }) =>
-        (runtime?.agentRuntime?.id ?? activeRow?.agentRuntime?.id ?? "openclaw") === "openclaw",
-    );
+    selectedEntries.length > 0 &&
+    selectedEntries.every(({ runtime }) => runtime?.supportsServiceTierRecovery === true);
   const standardOnly =
     selectedEntries.length > 0 &&
     selectedEntries.every(({ runtime }) =>

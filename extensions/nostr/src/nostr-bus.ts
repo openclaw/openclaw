@@ -8,13 +8,7 @@ import {
 import { createFixedWindowRateLimiter } from "openclaw/plugin-sdk/webhook-ingress";
 import type { NostrProfile } from "./config-schema.js";
 import { DEFAULT_RELAYS } from "./default-relays.js";
-import {
-  createMetrics,
-  createNoopMetrics,
-  type NostrMetrics,
-  type MetricsSnapshot,
-  type MetricEvent,
-} from "./metrics.js";
+import { createMetrics, type NostrMetrics, type MetricEvent } from "./metrics.js";
 import { createNostrCursorStateWriter, createNostrDurableCursor } from "./nostr-cursor.js";
 import { NostrIngressPermanentError } from "./nostr-ingress-state.js";
 import {
@@ -83,7 +77,6 @@ export interface NostrBusHandle {
   close: () => Promise<void>;
   publicKey: string;
   sendDm: (toPubkey: string, text: string, options?: NostrDmSendOptions) => Promise<string>;
-  getMetrics: () => MetricsSnapshot;
   /** Publish a profile (kind:0) to all relays */
   publishProfile: (profile: NostrProfile) => Promise<ProfilePublishResult>;
   getProfileState: () => Promise<{
@@ -240,7 +233,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
   const gatewayStartedAt = Math.floor(Date.now() / 1000);
   const guardPolicy = createDirectDmPreCryptoGuardPolicy(options.guardPolicy);
 
-  const metrics = onMetric ? createMetrics(onMetric) : createNoopMetrics();
+  const metrics = createMetrics(onMetric);
 
   const circuitBreakers = new Map<string, CircuitBreaker>();
   const healthTracker = createRelayHealthTracker();
@@ -670,7 +663,6 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     close,
     publicKey: pk,
     sendDm: sendEncryptedDm,
-    getMetrics: () => metrics.getSnapshot(),
     publishProfile,
     getProfileState,
   };

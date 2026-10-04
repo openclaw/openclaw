@@ -14,10 +14,7 @@ import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
-import {
-  beginQueuedMessageEdit,
-  QUEUED_MESSAGE_EDIT_CONFLICT_ERROR,
-} from "./queued-message-edit.ts";
+import { QUEUED_MESSAGE_EDIT_CONFLICT_ERROR } from "./queued-message-edit.ts";
 
 const recovery = vi.hoisted(() => ({
   review: vi.fn<() => Promise<boolean>>(),
@@ -86,25 +83,17 @@ describe("queued edit page callbacks", () => {
 
         expect(state.chatQueuedEdit?.draftText).toBe("queued original");
         expect(state.chatMessage).toBe("separate composer draft");
+        state.chatMessage = "";
+        expect(canReloadControlUiDocument()).toBe(false);
         expect(state.lastError).toBe(expectedLastError);
         expect(state.chatError).toBe(expectedChatError);
       } finally {
         controller.hostDisconnected();
       }
+      expect(canReloadControlUiDocument()).toBe(true);
     },
   );
 
-  it("releases a queued correction reload hold when its pane is disposed", () => {
-    const { controller, state } = createControllerFixture(true);
-    try {
-      const queued = enqueueChatMessage(state, "queued original")!;
-      expect(beginQueuedMessageEdit(state, queued.id)).toBe("started");
-      expect(canReloadControlUiDocument()).toBe(false);
-    } finally {
-      controller.hostDisconnected();
-    }
-    expect(canReloadControlUiDocument()).toBe(true);
-  });
   it.each(["later edit", "another reload guard", "confirmed discard", "private fallback"] as const)(
     "keeps private-draft discard scoped during %s",
     async (scenario) => {

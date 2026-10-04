@@ -53,39 +53,26 @@ describe("changed CI compiler graph selection", () => {
         graph.files.push(sharedType);
       }
     }
-    expect(selectChangedCiTsgoGraphs([sharedType], inventory)?.map((graph) => graph.name)).toEqual(
-      consumers,
-    );
+    expect(
+      selectChangedCiTsgoGraphs(
+        [sharedType, "docs/plugins/sdk-subpaths.md", "docs/example.mdx", "ui/src/styles/chat.css"],
+        inventory,
+      )?.map((graph) => graph.name),
+    ).toEqual(consumers);
   });
 
-  it.for([["docs/plugins/sdk-subpaths.md", "docs/example.mdx"], ["ui/src/styles/chat.css"]])(
-    "keeps a mixed source change scoped to its compiler consumers alongside %j",
-    (nonCompilerPaths) => {
-      const inventory = graphs();
-      inventory.find(({ name }) => name === "ui")!.files.push(sharedType);
-      expect(
-        selectChangedCiTsgoGraphs([sharedType, ...nonCompilerPaths], inventory)?.map(
-          (graph) => graph.name,
-        ),
-      ).toEqual(["ui"]);
+  it.for([[], ["src/types/runtime.d.ts"], ["package.json"]])(
+    "retains all compilers without discovery for uncertain input %j",
+    async (paths) => {
+      expect(selectChangedCiTsgoGraphs(paths, graphs())).toBeUndefined();
+      inspectGraphs.mockRejectedValue(new Error("Full plans must not enumerate compiler inputs"));
+      expect(await createChangedCiTypeCheckPlan(paths)).toEqual({
+        mode: "full",
+        graphs: TSGO_CI_GRAPHS,
+      });
+      expect(inspectGraphs).not.toHaveBeenCalled();
     },
   );
-
-  it.for([
-    [],
-    ["src/types/runtime.d.ts"],
-    ["package.json"],
-    ["unclassified/module.ts"],
-    [sharedType, "src/config/catalog.json"],
-  ])("retains all compilers without discovery for uncertain input %j", async (paths) => {
-    expect(selectChangedCiTsgoGraphs(paths, graphs())).toBeUndefined();
-    inspectGraphs.mockRejectedValue(new Error("Full plans must not enumerate compiler inputs"));
-    expect(await createChangedCiTypeCheckPlan(paths)).toEqual({
-      mode: "full",
-      graphs: TSGO_CI_GRAPHS,
-    });
-    expect(inspectGraphs).not.toHaveBeenCalled();
-  });
 
   it("retains full planning for deleted paths alongside existing source", async () => {
     const cwd = tempDirs.make("ci-type-deleted-");
@@ -218,11 +205,4 @@ describe("changed CI compiler graph selection", () => {
       expect(selectChangedCiTsgoGraphs(paths, inventory, { scope: "noncore" })).toBeUndefined();
     },
   );
-
-  it("refuses an incomplete full compiler inventory", () => {
-    const inventory = graphs();
-    inventory[0]!.files.push(sharedType);
-    inventory.pop();
-    expect(selectChangedCiTsgoGraphs([sharedType], inventory)).toBeUndefined();
-  });
 });

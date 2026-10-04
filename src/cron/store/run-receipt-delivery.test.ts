@@ -45,15 +45,9 @@ it.each(["commit", "retired", "reply-lost", "evidence-lost"] as const)(
               const admission = createAdmission(...args);
               // The transaction and native owner still settle. Only this caller loses
               // both retained observations, so persisted bytes cannot authorize it.
-              return {
-                ...admission,
-                get committed() {
-                  return undefined;
-                },
-                get settlement() {
-                  return { kind: "unknown" as const };
-                },
-              };
+              vi.spyOn(admission, "committed", "get").mockReturnValue(undefined);
+              vi.spyOn(admission, "settlement", "get").mockReturnValue({ kind: "unknown" });
+              return admission;
             })
         : undefined;
     const published = vi.fn();

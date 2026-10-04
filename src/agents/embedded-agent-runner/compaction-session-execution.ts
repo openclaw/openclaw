@@ -23,7 +23,6 @@ import {
 import { createPreparedEmbeddedAgentSettingsManager } from "../agent-project-settings.js";
 import {
   applyAgentAutoCompactionGuard,
-  applyAgentCompactionSettingsFromConfig,
   isSilentOverflowProneModel,
   resolveEffectiveCompactionMode,
 } from "../agent-settings.js";
@@ -40,10 +39,10 @@ import {
 import { type AgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
 import { DefaultResourceLoader } from "../sessions/resource-loader.js";
-import { createAgentSessionForEmbeddedRunner } from "../sessions/sdk.js";
+import { createAgentSession } from "../sessions/sdk.js";
 import { setSessionModelUsageSink } from "../sessions/session-model-usage.js";
 import { normalizeUsage, type UsageLike } from "../usage.js";
-import { resolveCompactionFailure } from "./compact-reasons.js";
+import { isSummaryTimeoutFailure, resolveCompactionFailure } from "./compact-reasons.js";
 import {
   containsRealConversationMessages,
   summarizeCompactionMessages,
@@ -70,7 +69,6 @@ import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-d
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import { estimateLlmBoundaryTokenPressure } from "./run/preemptive-compaction.js";
 import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
-import { applySystemPromptToSession } from "./system-prompt.js";
 import { collectRegisteredToolNames, toSessionToolAllowlist } from "./tool-name-allowlist.js";
 import {
   mapThinkingLevel,
@@ -199,17 +197,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     const resourceLoader = new DefaultResourceLoader({
       cwd: effectiveCwd,
       agentDir,
-      settingsManager,
       extensionFactories,
     });
     await resourceLoader.reload();
-    // Reloading settings discards prepared compaction overrides and restores
-    // runtime auto-compaction, so reapply both guards after reload.
-    applyAgentCompactionSettingsFromConfig({
-      settingsManager,
-      cfg: params.config,
-      contextTokenBudget,
-    });
     // contextEngineInfo is intentionally omitted: this guard runs inside the
     // compaction LLM session, which is not the user-facing agent session and
     // has no associated context engine.
@@ -256,32 +246,26 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       let diagnosticOwner: DiagnosticEmbeddedRunOwner | undefined;
       let resetCompactionTimeout: (() => void) | undefined;
       try {
-        const createdSession = await createAgentSessionForEmbeddedRunner(
-          {
-            cwd: effectiveCwd,
-            agentDir,
-            authStorage,
-            modelRegistry,
-            model: effectiveModel,
-            thinkingLevel: mapThinkingLevel(
-              mapThinkingLevelForProvider(thinkLevel, effectiveModel),
-            ),
-            tools: sessionToolAllowlist,
-            customTools,
-            sessionManager,
-            settingsManager,
-            resourceLoader,
-          },
-          {},
-        );
+        const createdSession = await createAgentSession({
+          cleanupProviderSessionResourcesOnDispose: false,
+          systemPrompt: systemPromptText,
+          cwd: effectiveCwd,
+          modelRegistry,
+          model: effectiveModel,
+          thinkingLevel: mapThinkingLevel(mapThinkingLevelForProvider(thinkLevel, effectiveModel)),
+          tools: sessionToolAllowlist,
+          customTools,
+          sessionManager,
+          settingsManager,
+          resourceLoader,
+        });
         session = createdSession.session;
         session[agentSessionSetContextReplacementHook](
           (tokensAfter, tokensBefore) =>
             recordCompaction({ tokensBefore, tokensAfter, compactionKind: "context-engine" }),
           assertActive,
         );
-        session.setActiveToolsByName(sessionToolAllowlist);
-        applySystemPromptToSession(session, systemPromptText);
+        session.setBaseSystemPrompt(systemPromptText.trim());
         // Compaction builds the same embedded system prompt, so it must flow
         // through the same transport/payload shaping stack as normal turns.
         const { effectiveExtraParams, transportApiKey } = await prepareCompactionSessionAgent({
@@ -493,12 +477,15 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             });
         const activeSession = session;
         let clientResult: Awaited<ReturnType<typeof activeSession.compact>> | undefined;
+        let summaryTimedOut = false;
+        // A timeout after generation is persistence; recovery would discard a real summary.
+        let summaryReady = false;
         if (!serverResult) {
-          try {
-            // The client watchdog starts here; refresh the delegated host watchdog with it.
-            params.compactionTimeoutReset?.();
-            const outcome = await compactWithSafetyTimeout(
-              async (_signal, resetTimeout) => {
+          let summarySignal: AbortSignal | undefined;
+          const compactClient = (summaryOutputPolicy: "none" | "deterministic" | undefined) =>
+            compactWithSafetyTimeout(
+              async (signal, resetTimeout) => {
+                summarySignal = signal;
                 resetCompactionTimeout = resetTimeout;
                 setCompactionSafeguardCancellation(compactionSessionManager, undefined);
                 const requestState =
@@ -513,10 +500,13 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                 return activeSession[agentSessionAutomaticCompaction](
                   params.customInstructions,
                   requestState,
-                  resolveEffectiveCompactionMode(params.config) === "default" ? undefined : "none",
+                  summaryOutputPolicy,
                   {
                     requestBudget: accountingRecorder?.requestBudget,
                     pendingUserEntryId: accountingRecorder?.pendingUserEntryId,
+                    onSummaryReady: () => {
+                      summaryReady = true;
+                    },
                   },
                 );
               },
@@ -526,6 +516,41 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                 onCancel: () => activeSession.abortCompaction(),
               },
             );
+          try {
+            // The client watchdog starts here; refresh the delegated host watchdog with it.
+            params.compactionTimeoutReset?.();
+            const outcome = await compactClient(
+              resolveEffectiveCompactionMode(params.config) === "default" ? undefined : "none",
+            ).catch(async (error: unknown) => {
+              // Caller Stop, run timeout, and the outer host deadline abort params.abortSignal
+              // (#133260, #159105, #130993); manual /compact reports its own failure.
+              if (
+                trigger === "manual" ||
+                params.abortSignal?.aborted ||
+                summaryReady ||
+                !isSummaryTimeoutFailure({
+                  error,
+                  summarySignal,
+                  abortSignal: params.abortSignal,
+                  safeguardCancellation:
+                    getCompactionSafeguardRuntime(sessionManager)?.cancellation,
+                })
+              ) {
+                throw error;
+              }
+              // The timed-out request consumed the delegated window too. Rearm it
+              // synchronously, before its same-window timer fires behind the commit.
+              params.compactionTimeoutReset?.();
+              // The same summary would time out again next turn (#164220): commit the
+              // prepared cut without one.
+              summaryTimedOut = true;
+              log.warn(
+                `[compaction-diag] fallback runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
+                  `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
+                  `reason=timeout summary=deterministic`,
+              );
+              return await compactClient("deterministic");
+            });
             if (outcome.status === "skipped") {
               assertActive();
               return { ok: true, compacted: false, reason: outcome.reason };
@@ -573,7 +598,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           log.debug(
             `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
               `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
-              `attempt=${attempt} maxAttempts=${maxAttempts} outcome=compacted reason=none ` +
+              `attempt=${attempt} maxAttempts=${maxAttempts} outcome=compacted ` +
+              `reason=${summaryTimedOut ? "timeout summary=deterministic" : "none"} ` +
               `durationMs=${Date.now() - compactStartedAt} retrying=false ` +
               `post.messages=${postMetrics.messages} post.historyTextChars=${postMetrics.historyTextChars} ` +
               `post.toolResultChars=${postMetrics.toolResultChars} post.estTokens=${postMetrics.estTokens ?? "unknown"} ` +

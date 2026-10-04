@@ -29,6 +29,8 @@ export const AGENT_STORAGE_SCHEMA_VERSION = 23;
 export const TRANSCRIPT_FTS_ROW_SCHEMA_VERSION = 22;
 export const AGENT_MEDIA_SCHEMA_VERSION = 17;
 export const CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION = 21;
+// Bound the disk work shared by startup inspection, admission, and canonical preparation.
+export const AGENT_DATABASE_PREFLIGHT_CONCURRENCY = 2;
 
 /** Open per-agent SQLite database handle plus lifecycle maintenance. */
 export type OpenClawAgentDatabase = {

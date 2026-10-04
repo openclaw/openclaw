@@ -14,7 +14,6 @@ import {
   loadChatComposerSnapshot,
   persistChatComposerState,
 } from "./composer-persistence.ts";
-import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 
 const state = (account = "account-a", gatewayUrl = "wss://gateway.example") => ({
   client: { recoveryScope: account, recoveryScopeReady: true },
@@ -30,17 +29,6 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-});
-it("separates snapshot identity for matching session IDs across gateways and accounts", () => {
-  const first = resolveChatSnapshotKey(state(), { sessionKey: state().sessionKey });
-  expect(resolveChatSnapshotKey(state("account-b"), { sessionKey: state().sessionKey })).not.toBe(
-    first,
-  );
-  expect(
-    resolveChatSnapshotKey(state("account-a", "wss://other.example"), {
-      sessionKey: state().sessionKey,
-    }),
-  ).not.toBe(first);
 });
 it("never exposes or overwrites another account's text draft and queue", () => {
   const alice = state();

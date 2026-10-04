@@ -1129,12 +1129,10 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     const bootstrapCredential = personalProfile
       ? null
       : adapter.readBootstrapCredential({
-          store: params.store,
           profileId: params.profileId,
           credential: adoptedCredential,
         });
     const effectiveCredential = resolveEffectiveOAuthCredentialCore({
-      store: params.store,
       profileId: params.profileId,
       credential: adoptedCredential,
       readBootstrapCredential: () => bootstrapCredential,

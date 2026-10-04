@@ -397,6 +397,10 @@ export class GatewayProtocolClient<TPlan> {
             error: requestError,
             reconnectDelayMs: decision.reconnectDelayMs,
           };
+          if (decision.keepOpen) {
+            this.clearHandshakeTimer();
+            return;
+          }
           if (decision.stop) {
             this.stopped = true;
           }

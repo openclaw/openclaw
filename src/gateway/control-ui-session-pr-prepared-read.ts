@@ -1,5 +1,5 @@
 import { sessionChanges } from "../sessions/session-row-changes.js";
-import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import type { ControlUiSessionPullRequestSnapshot } from "./control-ui-contract.js";
 import {
   prepareControlUiSessionPrServiceTarget,

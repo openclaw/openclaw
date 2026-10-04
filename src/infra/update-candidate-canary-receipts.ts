@@ -26,7 +26,7 @@ export function createCanaryReceiptObserver(callbacks: CanaryReceiptCallbacks) {
   };
   return {
     onStep: observe(callbacks.onStep),
-    onInitialProgress: observe(callbacks.onProgress),
+    onProgress: observe(callbacks.onProgress),
     hasFailed: () => failed,
   };
 }

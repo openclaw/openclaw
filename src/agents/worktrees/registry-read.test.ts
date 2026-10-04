@@ -8,15 +8,20 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
-import { readLiveRegistryWorktreeIds, readRegistryWorktrees } from "./registry-read.js";
+import { insertRegistryWorktreeProvisionedChunk } from "./provisioned-snapshot.test-support.js";
+import {
+  getRegistryWorktreeProvisionedChunk,
+  readLiveRegistryWorktreeByOwner,
+  readLiveRegistryWorktreeIds,
+  readRegistryWorktrees,
+} from "./registry-read.js";
 import {
   getRegistryWorktree,
-  getRegistryWorktreeProvisionedChunk,
   getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
   insertRegistryWorktree,
-  insertRegistryWorktreeProvisionedChunk,
   updateRegistryWorktree,
 } from "./registry.js";
 import { ManagedWorktreeService } from "./service.js";
@@ -115,7 +120,7 @@ describe("managed worktree registry worker reads", () => {
     updateRegistryWorktree(env, older.id, { provisionedState });
     const chunks = [Uint8Array.from([0, 255, 10]), Uint8Array.from([127, 0, 1])];
     for (const [chunkIndex, data] of chunks.entries()) {
-      insertRegistryWorktreeProvisionedChunk(env, {
+      await insertRegistryWorktreeProvisionedChunk(env, {
         worktreeId: older.id,
         path: "synthetic.bin",
         chunkIndex,
@@ -186,6 +191,16 @@ describe("managed worktree registry worker reads", () => {
     const liveIds = readLiveRegistryWorktreeIds(env);
     env.OPENCLAW_STATE_DIR = path.join(stateDir, "unused-state");
     expect((await liveIds).toSorted()).toEqual([older.id, newer.id]);
+    sql.expectIdle();
+
+    env.OPENCLAW_STATE_DIR = stateDir;
+    const context = captureOpenClawStateWorkerContext({ env });
+    const owned = readLiveRegistryWorktreeByOwner(context, "session", older.ownerId!);
+    env.OPENCLAW_STATE_DIR = path.join(stateDir, "unused-state");
+    expect(await owned).toEqual(newer);
+    expect(
+      await readLiveRegistryWorktreeByOwner(context, "manual", older.ownerId!),
+    ).toBeUndefined();
     sql.expectIdle();
 
     env.OPENCLAW_STATE_DIR = stateDir;

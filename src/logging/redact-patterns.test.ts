@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { compileConfigRegex } from "../security/config-regex.js";
 import { parseRedactPatternSource } from "./redact-pattern-runtime.js";
 import { AWS_SECRET_ACCESS_KEY_MATCHER, DEFAULT_REDACT_PATTERNS } from "./redact-patterns.js";
-import { redactSensitiveText } from "./redact.js";
+import { redactSensitiveText, resolveRedactOptions } from "./redact.js";
 
 describe("default pattern table", () => {
   // A default pattern the safe-regex guard rejects is dropped silently at runtime, which disables
@@ -17,116 +17,82 @@ describe("default pattern table", () => {
     }
   });
 
-  describe("bare pass assignment boundary", () => {
-    it("keeps prose where pass: ends a clause but still masks pass as a config key", () => {
-      function expectRedaction(input: string, expected = input) {
-        expect(redactSensitiveText(input, { mode: "tools" })).toBe(expected);
-      }
-      const prose =
-        "The boundary tests now pass: older clients receive compatible speed values. All checks pass: lint, types.";
-      expectRedaction(prose);
-      const value = "opaque-pass-secret-1234567890";
-      expectRedaction(`smtp.pass: ${value}`, "smtp.pass: opaque…7890");
-      expectRedaction(`db-pass: ${value}`, "db-pass: opaque…7890");
-      expectRedaction(`pass: "${value}"`, 'pass: "opaque…7890"');
-      expectRedaction(`pass = ${value}`, "pass = opaque…7890");
-      expectRedaction(`pass= ${value}`, "pass= opaque…7890");
-      expectRedaction(`pass: ${value}`, "pass: opaque…7890");
-      expectRedaction(
-        `smtp:\n  pass: ${value}\n  user: bot`,
-        "smtp:\n  pass: opaque…7890\n  user: bot",
-      );
-      expectRedaction(`{ user: bot, pass: ${value} }`, "{ user: bot, pass: opaque…7890 }");
-      expectRedaction(
-        `accounts:\n  - pass: ${value}\n  - user: bot`,
-        "accounts:\n  - pass: opaque…7890\n  - user: bot",
-      );
-      expectRedaction(`user=bot; pass: ${value}`, "user=bot; pass: opaque…7890");
-      expectRedaction(`user: bot\rpass: ${value}`, "user: bot\rpass: opaque…7890");
-      expectRedaction(`user=bot pass: ${value}`, "user=bot pass: opaque…7890");
-      expectRedaction(`user = bot pass: ${value}`, "user = bot pass: opaque…7890");
-      expectRedaction(`user= bot pass: ${value}`, "user= bot pass: opaque…7890");
-      expectRedaction(`user =     bot pass: ${value}`, "user =     bot pass: opaque…7890");
-      const longValue = "v".repeat(300);
-      expectRedaction(`key=${longValue} pass: ${value}`, `key=${longValue} pass: opaque…7890`);
-      expectRedaction(`user\tpass: ${value}`, "user\tpass: opaque…7890");
-      expectRedaction(`pass: ${value} pass: ${value}`, "pass: opaque…7890 pass: opaque…7890");
-      expectRedaction(
-        "pass: opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
-        "pass: opaque…ghij pass: opaque…qrst",
-      );
-      expectRedaction(
-        "smtp.pass: opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
-        "smtp.pass: opaque…ghij pass: opaque…qrst",
-      );
-      expectRedaction(
-        "pass:\n  opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
-        "pass:\n  opaque…ghij pass: opaque…qrst",
-      );
-      expectRedaction(
-        "db_pass: opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
-        "db_pass: opaque…ghij pass: opaque…qrst",
-      );
-      expectRedaction(`bypass:\n  pass: ${value}`, "bypass:\n  pass: opaque…7890");
-      expectRedaction(
-        "smtp.pass:\n  opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
-        "smtp.pass:\n  opaque…ghij pass: opaque…qrst",
-      );
-      expectRedaction(
-        "password: opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
-        "password: opaque…ghij pass: opaque…qrst",
-      );
-      expectRedaction(
+  it("distinguishes bare pass assignments from prose across record and chunk boundaries", () => {
+    const value = "opaque-pass-secret-1234567890";
+    const token = "a".repeat(200_000);
+    // A chunk start must not turn mid-sentence prose into a record start.
+    const prefix = "prose ".repeat(4096).slice(0, 16_384 - "the tests now ".length);
+    const chunked = `${prefix}the tests now pass: older clients receive compatible speed values. ${"more prose ".repeat(2000)}`;
+    expect(chunked.length).toBeGreaterThan(32_768);
+    expect(chunked.indexOf("pass:")).toBe(16_384);
+    for (const input of [
+      "The boundary tests now pass: older clients receive compatible speed values. All checks pass: lint, types.",
+      "Use the bypass: it keeps the compass: north.",
+      "Release notes: all suites pass: nothing else changed. Both pass: done.",
+      "The boundary tests now pass:\nolder clients receive compatible values.",
+      "Suite result: 12 pass: 0 fail, 1 skipped.",
+      chunked,
+      `${token} pass: still prose`,
+    ]) {
+      expect(redactSensitiveText(input, { mode: "tools" })).toBe(input);
+    }
+    const assignments: [string, string][] = [
+      ["smtp.pass: ", ""],
+      ["db-pass: ", ""],
+      ['pass: "', '"'],
+      ["pass = ", ""],
+      ["pass= ", ""],
+      ["pass: ", ""],
+      ["smtp:\n  pass: ", "\n  user: bot"],
+      ["{ user: bot, pass: ", " }"],
+      ["accounts:\n  - pass: ", "\n  - user: bot"],
+      ["user=bot; pass: ", ""],
+      ["user: bot\rpass: ", ""],
+      ["user=bot pass: ", ""],
+      ["user = bot pass: ", ""],
+      ["user= bot pass: ", ""],
+      ["user =     bot pass: ", ""],
+      [`key=${"v".repeat(300)} pass: `, ""],
+      ["user\tpass: ", ""],
+      ["bypass:\n  pass: ", ""],
+      ["? pass\n: ", ""],
+      ["host:db.example.test pass: ", ""],
+      ["login (pass: ", ")"],
+      ["smtp:\n  pass:\n    ", "\n  user: bot"],
+      // JSC abandoned the old nested prefilter lookbehind on key runs above roughly 70k.
+      [`${token}=v pass: `, ""],
+    ];
+    const cases: [string, string][] = assignments.map(([start, end]) => [
+      `${start}${value}${end}`,
+      `${start}opaque…7890${end}`,
+    ]);
+    for (const start of [
+      "pass: ",
+      "smtp.pass: ",
+      "pass:\n  ",
+      "db_pass: ",
+      "smtp.pass:\n  ",
+      "password: ",
+    ]) {
+      cases.push([
+        `${start}opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst`,
+        `${start}opaque…ghij pass: opaque…qrst`,
+      ]);
+    }
+    cases.push(
+      [`pass: ${value} pass: ${value}`, "pass: opaque…7890 pass: opaque…7890"],
+      [
         "Authorization: Bearer opaque-bearer-token-value-1234567890 pass: opaque-second-value-klmnopqrst",
         "Authorization: Bearer opaque…7890 pass: opaque…qrst",
-      );
-      expectRedaction(
+      ],
+      [
         "pass: prefix/pass:embedded\npass: opaque-second-value-klmnopqrst",
         "pass: prefix…dded\npass: opaque…qrst",
-      );
-      expectRedaction(`? pass\n: ${value}`, "? pass\n: opaque…7890");
-      const wordProse = "Use the bypass: it keeps the compass: north.";
-      expectRedaction(wordProse);
-      expectRedaction(
-        `host:db.example.test pass: ${value}`,
-        "host:db.example.test pass: opaque…7890",
-      );
-      expectRedaction(`login (pass: ${value})`, "login (pass: opaque…7890)");
-      const moreProse = "Release notes: all suites pass: nothing else changed. Both pass: done.";
-      expectRedaction(moreProse);
-      expectRedaction(
-        `smtp:\n  pass:\n    ${value}\n  user: bot`,
-        "smtp:\n  pass:\n    opaque…7890\n  user: bot",
-      );
-      const wrappedProse = "The boundary tests now pass:\nolder clients receive compatible values.";
-      expectRedaction(wrappedProse);
-      const summaryProse = "Suite result: 12 pass: 0 fail, 1 skipped.";
-      expectRedaction(summaryProse);
-    });
-
-    it("keeps mid-sentence pass: prose when it lands on a bounded-replacement chunk start", () => {
-      // Inputs above 32 KiB are matched in 16 KiB chunks unless a pattern is registered as
-      // chunk-unsafe; a chunk start must not read as a record start for the `^` alternative.
-      const clause = "the tests now pass: older clients receive compatible speed values.";
-      const prefix = "prose ".repeat(4096).slice(0, 16_384 - "the tests now ".length);
-      const text = `${prefix}${clause} ${"more prose ".repeat(2000)}`;
-      expect(text.length).toBeGreaterThan(32_768);
-      expect(text.indexOf("pass:")).toBe(16_384);
-      expect(redactSensitiveText(text, { mode: "tools" })).toBe(text);
-    });
-
-    it("stays linear on a long unbroken token before pass:", () => {
-      // One forward pass classifies every occurrence, so the cost is linear in the text.
-      const token = "a".repeat(200_000);
-      const prose = `${token} pass: still prose`;
-      expect(redactSensitiveText(prose, { mode: "tools" })).toBe(prose);
-      // The `=` after a 200k key run also exercises the default prefilter's obfuscated-key lookbehind
-      // on every runtime: JSC abandoned the previous nested form above roughly 70k characters, which
-      // skipped default redaction for the whole text on Bun.
-      expect(
-        redactSensitiveText(`${token}=v pass: opaque-pass-secret-1234567890`, { mode: "tools" }),
-      ).toBe(`${token}=v pass: opaque…7890`);
-    });
+      ],
+    );
+    for (const [input, expected] of cases) {
+      expect(redactSensitiveText(input, { mode: "tools" }), input).toBe(expected);
+    }
   });
 });
 
@@ -171,5 +137,85 @@ describe("base64-safe vendor token patterns", () => {
     const started = performance.now();
     expect(redactSensitiveText(input, { mode: "tools" })).toBe(input);
     expect(performance.now() - started).toBeLessThan(1_000);
+  });
+});
+
+describe("owner-boundary counterexamples", () => {
+  it("keeps configured vendor regexes on their own path so data-URL content stays masked", () => {
+    // A configured expression that is not one of the exact guarded built-in sources must keep
+    // its original regex path: the data-URL exemption belongs to the guarded scanner, not to
+    // every expression that happens to match the same shape.
+    const configured = /(^|[^A-Za-z0-9])(AKIA[A-Z0-9]{16})/g;
+    const dataUrl = `data:text/plain;base64,AKIA${"A".repeat(16)}`;
+    const output = redactSensitiveText(dataUrl, { mode: "tools", patterns: [configured] });
+    expect(output).not.toBe(dataUrl);
+    // The guarded built-in scanner keeps its data-URL exemption on the exact guarded source.
+    const guarded = redactSensitiveText(dataUrl, { mode: "tools" });
+    expect(guarded).toBe(dataUrl);
+  });
+
+  it("masks a built-in token crossing the former chunk boundary under combined policies", () => {
+    // A custom logging.redactPatterns entry composes with the default arrays; the default
+    // glpat- rule keeps whole-text scanning, so a value straddling offset 16,384 still masks.
+    const prefix = "x".repeat(16_380);
+    const text = `${prefix} glpat-${"a".repeat(24)}`;
+    const output = redactSensitiveText(text, {
+      mode: "tools",
+      patterns: [...DEFAULT_REDACT_PATTERNS, /unrelated-config-key-[a-z]+/g],
+    });
+    // The mask keeps the glpat- prefix as a hint; the secret value itself must not survive.
+    expect(output).not.toContain("a".repeat(24));
+  });
+});
+
+describe("repeat rewrite atom boundaries", () => {
+  it("leaves non-unicode astral quantifiers unchanged so their language is preserved", () => {
+    // Without the u flag JavaScript quantifies only the trailing code unit of a literal
+    // astral character; rewriting it as a whole-code-point atom changes the language.
+    // Routed through the production boundary so the assertion covers the real rewriter.
+    const configured = "^(😀{1,})$";
+    const options = resolveRedactOptions({
+      mode: "tools",
+      patterns: [configured],
+    });
+    // Without the u flag JavaScript quantifies only the trailing code unit of a literal
+    // astral character. The configured string is resolved through parsePattern (the real
+    // rewriter), and the resolved pattern must still match the legacy-language input.
+    const resolved = options.patterns[0];
+    expect(resolved).toBeDefined();
+    expect(resolved instanceof RegExp).toBe(true);
+    expect((resolved as RegExp).test("😀")).toBe(true);
+  });
+});
+
+describe("configured source language preservation", () => {
+  it.each([
+    ["property identity escape", "^\\p{L}{1,}$"],
+    ["named backreference without captures", "^\\k<word>{1,}$"],
+    ["control escape", "^\\c1{1,}$"],
+    ["octal numeric escape", "^\\1234{1,}$"],
+    ["incomplete unicode escape", "^\\u12{1,}$"],
+  ])("preserves the legacy language of %s", (_name, configured) => {
+    // Operator-configured sources compile unmodified: the rewriter optimizes only canonical
+    // built-in sources, so the resolved pattern keeps the exact configured source string.
+    const resolved = resolveRedactOptions({ mode: "tools", patterns: [configured] });
+    const pattern = resolved.patterns[0];
+    expect(pattern instanceof RegExp).toBe(true);
+    expect((pattern as RegExp).source).toBe(configured);
+  });
+
+  it("preserves verified legacy matching semantics for escape-shaped sources", () => {
+    // Split from the source-equality cases above so each assertion is unconditional.
+    const matching: Array<[string, string]> = [
+      ["^\\p{L}{1,}$", "p{L}}"],
+      ["^\\k<word>{1,}$", "k<word>"],
+      ["^\\1234{1,}$", "S44"],
+      ["^\\u12{1,}$", "u122"],
+    ];
+    for (const [configured, input] of matching) {
+      const resolved = resolveRedactOptions({ mode: "tools", patterns: [configured] });
+      const pattern = resolved.patterns[0] as RegExp;
+      expect(pattern.test(input)).toBe(true);
+    }
   });
 });

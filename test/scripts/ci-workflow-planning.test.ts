@@ -7953,7 +7953,7 @@ describe("ci workflow guards", () => {
       'elif [[ "${{ needs.preflight.outputs.frozen_target }}" != "true" ]]; then',
     );
     expect(ratchetRun.run).toContain(
-      "for required_script in check:max-lines-ratchet check:assertion-safety check:test-timeout-race-ratchet config:docs:check plugins:inventory:check; do",
+      "for required_script in check:max-lines-ratchet check:assertion-safety check:test-timeout-race-ratchet check:test-mock-exports config:docs:check plugins:inventory:check; do",
     );
     expect(ratchetRun.run).toContain('has_package_script "$required_script"');
     expect(ratchetRun.env.RATCHET_PR_HEAD_SHA).toBe(
@@ -8017,6 +8017,7 @@ describe("ci workflow guards", () => {
     );
     expect(ratchetRun.run).toContain('pnpm check:assertion-safety --base "$base_ref"');
     expect(ratchetRun.run).toContain('pnpm check:test-timeout-race-ratchet --base "$base_ref"');
+    expect(ratchetRun.run).toContain('pnpm check:test-mock-exports --base "$base_ref"');
     const mainPushRatchets = workflow.jobs["security-fast"].steps.find(
       (step: WorkflowStep) => step.name === "Check main push ratchets and protocol additions",
     );

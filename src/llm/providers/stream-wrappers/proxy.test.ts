@@ -99,6 +99,13 @@ describe("proxy stream wrappers", () => {
     expect(calls[0]?.headers?.["X-OpenRouter-Cache-TTL"]).toBe("86400");
   });
 
+  it.each([Number.NaN, Infinity, -Infinity])("omits non-finite response cache TTL %s", (ttl) => {
+    const calls = captureHeaders({ responseCache: true, responseCacheTtlSeconds: ttl });
+
+    expect(calls[0]?.headers?.["X-OpenRouter-Cache"]).toBe("true");
+    expect(calls[0]?.headers).not.toHaveProperty("X-OpenRouter-Cache-TTL");
+  });
+
   it("does not add OpenRouter response caching headers to custom proxy routes", () => {
     const calls = captureHeaders(
       { responseCache: true },

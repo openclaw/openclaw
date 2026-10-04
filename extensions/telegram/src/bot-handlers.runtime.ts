@@ -28,8 +28,6 @@ export const createTelegramHandlers = (
         params,
         message,
         authorization,
-        registerMessages: () =>
-          registerTelegramInboundHandlers({ bot: params.bot, pipeline: inboundPipeline }),
       });
       eventBindings.registerChatMembership();
       eventBindings.registerReaction();
@@ -38,7 +36,7 @@ export const createTelegramHandlers = (
         await callbackRouter.route(ctx);
       });
       eventBindings.registerMigration();
-      eventBindings.registerMessages();
+      registerTelegramInboundHandlers({ bot: params.bot, pipeline: inboundPipeline });
     },
   };
 };

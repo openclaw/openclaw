@@ -519,8 +519,10 @@ Memory pressure events record RSS, heap, threshold, and growth facts
 (`rss_threshold`, `heap_threshold`, `rss_growth`) without performing a
 file-system scan or writing a pre-OOM snapshot.
 
-On Node, persistent database workers collect garbage after a completed operation
-when their used heap has grown by 32 MiB since the last idle collection. SQLite,
+Persistent database workers collect garbage after a completed operation when their
+used heap has grown by 32 MiB since the last idle collection. This uses the runtime's
+local inspector collection support; runtimes that report the method as unavailable
+skip idle collection. On Node, SQLite,
 history, transcript, and reclamation workers request a 512 MiB V8 old-generation
 limit; an explicit process-wide `--max-old-space-size` overrides Node's worker
 resource limit. These limits do not cover native allocations or transferred buffers.
@@ -563,6 +565,13 @@ by the WebSocket sender (UTF-8 bytes, excluding transport framing/compression),
 with power-of-two buckets from 1 KiB to 64 MiB. Slow-response journal lines include
 `bytes=` for the same frame; it always means encoded response bytes, never heap
 allocation or an exclusive-window sample.
+
+For `sessions.list`, response journal lines and `slow session list` records also
+include `source`, `rowMode` (`compact` or `full`), `limit`, `offset`, and
+`filterKind`. The caller source is a bounded Control UI tag or `unspecified`;
+filter kinds contain parameter names, never search text, identities, or paths.
+The optimized WebSocket journal also records fast `sessions.list` responses of
+at least 200 KiB. Metric labels remain unchanged.
 
 `openclaw_gateway_rpc_handler_heap_delta_bytes` samples main-thread
 `process.memoryUsage().heapUsed` immediately around handler execution. A sample

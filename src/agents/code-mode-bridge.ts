@@ -38,15 +38,7 @@ const loadSwarmHandlers = createLazyRuntimeNamedExport(
 
 export const CODE_MODE_NODES_TOOL_ID = "openclaw:core:nodes";
 
-type CodeModeNode = {
-  id: string;
-  name: string;
-  platform?: string;
-  connected: boolean;
-  commands: string[];
-};
-
-function projectCodeModeNode(node: NodeListNode): CodeModeNode {
+function projectCodeModeNode(node: NodeListNode) {
   return {
     id: node.nodeId,
     name: node.displayName?.trim() || node.nodeId,
@@ -58,36 +50,6 @@ function projectCodeModeNode(node: NodeListNode): CodeModeNode {
   };
 }
 
-async function callNodesTool(params: {
-  runtime: ToolSearchRuntime;
-  parentToolCallId: string;
-  signal?: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback;
-  input: Record<string, unknown>;
-}): Promise<unknown> {
-  return await params.runtime.callValue(CODE_MODE_NODES_TOOL_ID, params.input, {
-    includeMcp: false,
-    parentToolCallId: params.parentToolCallId,
-    signal: params.signal,
-    onUpdate: params.onUpdate,
-    recoverySurface: "catalog",
-  });
-}
-
-async function listCodeModeNodes(params: {
-  runtime: ToolSearchRuntime;
-  parentToolCallId: string;
-  signal?: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback;
-}): Promise<NodeListNode[]> {
-  return parseNodeList(
-    await callNodesTool({
-      ...params,
-      input: { action: "status" },
-    }),
-  );
-}
-
 async function runNodesBridge(params: {
   runtime: ToolSearchRuntime;
   parentToolCallId: string;
@@ -95,10 +57,18 @@ async function runNodesBridge(params: {
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
 }): Promise<unknown> {
+  const call = (input: Record<string, unknown>) =>
+    params.runtime.callValue(CODE_MODE_NODES_TOOL_ID, input, {
+      includeMcp: false,
+      parentToolCallId: params.parentToolCallId,
+      signal: params.signal,
+      onUpdate: params.onUpdate,
+      recoverySurface: "catalog",
+    });
   const values = params.request.args;
   const action = values[0];
   if (action === "list") {
-    return (await listCodeModeNodes(params))
+    return parseNodeList(await call({ action: "status" }))
       .filter((node) => node.paired === true)
       .map(projectCodeModeNode);
   }
@@ -108,7 +78,7 @@ async function runNodesBridge(params: {
       throw new ToolInputError("nodes.get id or name must be a non-empty string.");
     }
     const node = resolveEligibleNodeFromList(
-      await listCodeModeNodes(params),
+      parseNodeList(await call({ action: "status" })),
       query,
       (candidate) => candidate.paired === true,
       {
@@ -141,14 +111,11 @@ async function runNodesBridge(params: {
     if (typeof command !== "string" || !command.trim()) {
       throw new ToolInputError("nodes.invoke command must be a non-empty string.");
     }
-    return await callNodesTool({
-      ...params,
-      input: {
-        action: "invoke",
-        node,
-        invokeCommand: command,
-        invokeParamsJson: JSON.stringify(values[3] ?? {}),
-      },
+    return await call({
+      action: "invoke",
+      node,
+      invokeCommand: command,
+      invokeParamsJson: JSON.stringify(values[3] ?? {}),
     });
   }
   throw new ToolInputError("unsupported nodes bridge action.");

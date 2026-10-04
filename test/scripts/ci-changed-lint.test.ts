@@ -464,21 +464,24 @@ describe("CI changed lint", () => {
     }
   });
 
-  it("retains full semantic lint when lint configuration changes", () => {
-    const commands = createChangedCheckPlan(detectChangedLanes([".oxlintrc.json"]), {
+  it.each([
+    {
+      file: ".oxlintrc.json",
+      expected: [
+        ["format:check", "--no-error-on-unmatched-pattern", "--", ".oxlintrc.json"],
+        ["lint"],
+      ],
+      exact: true,
+    },
+    {
+      file: "extensions/telegram/deleted-ci-fixture.ts",
+      expected: [["lint:extensions"]],
+      exact: false,
+    },
+  ])("retains the full owning lint lane for $file", ({ file, expected, exact }) => {
+    const commands = createChangedCheckPlan(detectChangedLanes([file]), {
       lintOnly: true,
-    }).commands;
-    expect(commands.map(({ args }) => args)).toEqual([
-      ["format:check", "--no-error-on-unmatched-pattern", "--", ".oxlintrc.json"],
-      ["lint"],
-    ]);
-  });
-
-  it("retains the full owning lint lane for a deleted source", () => {
-    const commands = createChangedCheckPlan(
-      detectChangedLanes(["extensions/telegram/deleted-ci-fixture.ts"]),
-      { lintOnly: true },
-    ).commands;
-    expect(commands.map(({ args }) => args)).toContainEqual(["lint:extensions"]);
+    }).commands.map(({ args }) => args);
+    expect(commands).toEqual(exact ? expected : expect.arrayContaining(expected));
   });
 });

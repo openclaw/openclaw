@@ -56,9 +56,7 @@ function catalogProps(): PluginCatalogResultsProps {
     categoriesError: null,
     onRetryCategories: vi.fn(),
     featured: [],
-    featuredLoading: false,
     trending: [],
-    trendingLoading: false,
     loadingMore: false,
     loadMoreError: null,
     intent: "all",
@@ -131,66 +129,64 @@ it.each([263, 362])(
   },
 );
 
-it.each([40, 80])("fills icon tiles without cropping a %ipx-wide source", async (width) => {
-  const icon = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="40"><rect width="100%" height="100%" fill="red"/></svg>`)}`;
-  render(
-    html`
-      <span class="installed-plugins-card__art"
-        >${renderArtTile("demo", "Demo", { iconUrl: icon })}</span
-      >
-      ${renderPluginDetailShell({
-        id: "demo",
-        name: "Demo",
-        backHref: "/plugins",
-        backLabel: "Plugins",
-        onBack: vi.fn(),
-        identity: html``,
-        panel: html``,
-        icon: renderArtTile("demo", "Demo", { iconUrl: icon }),
-      })}
-    `,
-    container,
-  );
-  await Promise.all(
-    [...container.querySelectorAll<HTMLImageElement>(".plugins-icon")].map(
-      (image) =>
-        new Promise<void>((resolve, reject) => {
-          image.addEventListener("load", () => resolve(), { once: true });
-          image.addEventListener("error", reject, { once: true });
-        }),
-    ),
-  );
-  for (const selector of [".installed-plugins-card__art", ".plugin-catalog-detail__icon"]) {
-    const frame = container.querySelector<HTMLElement>(selector)!;
-    const image = frame.querySelector<HTMLImageElement>("img")!;
-    expect(image.naturalWidth).toBe(width);
-    const frameBounds = frame.getBoundingClientRect();
-    const imageBounds = image.getBoundingClientRect();
-    expect(imageBounds.width).toBe(frameBounds.width);
-    expect(imageBounds.height).toBe(frameBounds.height);
-    expect(getComputedStyle(image).padding).toBe("0px");
-    expect(getComputedStyle(image).objectFit).toBe("contain");
-    expect(getComputedStyle(image.parentElement!).borderWidth).toBe("0px");
-  }
-});
-
-it("renders the official icon background as opaque white", async () => {
-  const icon = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><circle cx="20" cy="20" r="15" fill="blue"/></svg>')}`;
-  render(
-    renderArtTile("official", "Official", { iconUrl: icon, whiteBackground: true }),
-    container,
-  );
-  const image = container.querySelector<HTMLImageElement>(".plugins-icon")!;
-  await new Promise<void>((resolve, reject) => {
-    image.addEventListener("load", () => resolve(), { once: true });
-    image.addEventListener("error", reject, { once: true });
-  });
-
-  const tile = image.parentElement!;
-  expect(tile.classList.contains("plugins-tile--white")).toBe(true);
-  expect(getComputedStyle(tile).backgroundColor).toBe("rgb(255, 255, 255)");
-  expect(getComputedStyle(image).padding).toBe("4px");
-});
+it.each([
+  { width: 40, whiteBackground: false },
+  { width: 80, whiteBackground: false },
+  { width: 40, whiteBackground: true },
+])(
+  "fits a $width-pixel icon with official background=$whiteBackground",
+  async ({ width, whiteBackground }) => {
+    const icon = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="40"><rect width="100%" height="100%" fill="red"/></svg>`)}`;
+    render(
+      whiteBackground
+        ? renderArtTile("official", "Official", { iconUrl: icon, whiteBackground })
+        : html`
+            <span class="installed-plugins-card__art"
+              >${renderArtTile("demo", "Demo", { iconUrl: icon, whiteBackground })}</span
+            >
+            ${renderPluginDetailShell({
+              id: "demo",
+              name: "Demo",
+              backHref: "/plugins",
+              backLabel: "Plugins",
+              onBack: vi.fn(),
+              identity: html``,
+              panel: html``,
+              icon: renderArtTile("demo", "Demo", { iconUrl: icon, whiteBackground }),
+            })}
+          `,
+      container,
+    );
+    await Promise.all(
+      [...container.querySelectorAll<HTMLImageElement>(".plugins-icon")].map(
+        (image) =>
+          new Promise<void>((resolve, reject) => {
+            image.addEventListener("load", () => resolve(), { once: true });
+            image.addEventListener("error", reject, { once: true });
+          }),
+      ),
+    );
+    if (whiteBackground) {
+      const image = container.querySelector<HTMLImageElement>(".plugins-icon")!;
+      expect(image.parentElement!.classList.contains("plugins-tile--white")).toBe(true);
+      expect(getComputedStyle(image.parentElement!).backgroundColor).toBe("rgb(255, 255, 255)");
+      expect(getComputedStyle(image).padding).toBe("4px");
+      return;
+    }
+    for (const selector of [".installed-plugins-card__art", ".plugin-catalog-detail__icon"]) {
+      const frame = container.querySelector<HTMLElement>(selector)!;
+      const image = frame.querySelector<HTMLImageElement>("img")!;
+      expect(image.naturalWidth).toBe(width);
+      const frameBounds = frame.getBoundingClientRect();
+      const imageBounds = image.getBoundingClientRect();
+      expect(imageBounds.width).toBe(frameBounds.width);
+      expect(imageBounds.height).toBe(frameBounds.height);
+      expect(getComputedStyle(image).padding).toBe("0px");
+      expect(getComputedStyle(image).objectFit).toBe("contain");
+      expect(getComputedStyle(image.parentElement!).borderWidth).toBe("0px");
+    }
+  },
+);
 
 it("fills the remaining viewport with card-sized placeholders across resizes", async () => {
   render(renderPluginCatalogResults({ ...catalogProps(), loading: true }), container);

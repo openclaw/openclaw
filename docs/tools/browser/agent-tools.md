@@ -36,9 +36,11 @@ How it maps:
 - `browser` accepts:
   - `profile` to choose a named browser profile (openclaw, chrome, or remote CDP).
   - `target` (`sandbox` | `host` | `node`) to select where the browser lives.
-  - In sandboxed sessions, `target: "host"` requires `agents.defaults.sandbox.browser.allowHostControl=true`.
-  - If `target` is omitted: sandboxed sessions default to `sandbox`, non-sandbox sessions default to `host`.
-  - Automatic routing prefers the host browser. If local browser capability is unavailable, it can use a single connected browser node. Explicit `target="node"`, a `node` selector, or a configured node pin overrides that preference; `target="host"` stays local.
+  - Omit `target` and `node` to use configured routing. When a sandbox browser bridge is available, managed profiles use it. Without a sandbox bridge, an enabled `gateway.nodes.browser.node` pin selects that node, including in manual routing mode; an unavailable pinned node fails rather than switching to the host.
+  - Without a pin, automatic routing prefers an available host browser and can select a single connected browser node when node routing is available. Manual routing without a pin and disabled node routing use the host. Standalone runs use the host unless a Gateway or node route is selected; see [Remote and hosted browsers](/tools/browser/remote#node-browser-proxy-zero-config-default).
+  - Explicit `target="host"` selects the Gateway host and bypasses configured node routing. Explicit `target="node"` or a `node` selector requests node routing; `gateway.nodes.browser.mode="off"` rejects it.
+  - In sandboxed sessions, both host and node control require `agents.defaults.sandbox.browser.allowHostControl=true`. Existing-session profiles cannot use the sandbox browser. When a bridge is available, they use the host unless a node is explicitly selected, subject to the same host-control policy.
+  - With an enabled node pin, no sandbox bridge, and host control allowed, the tool description identifies the configured node as the default. Other configurations retain the existing tool description; the guidance does not depend on live node connectivity.
 
 This keeps the agent deterministic and avoids brittle selectors.
 

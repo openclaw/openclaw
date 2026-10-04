@@ -98,13 +98,7 @@ function resolveEnvAgentDirOverride(env: NodeJS.ProcessEnv = process.env): strin
   const override = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
   return override ? resolveUserPath(override, env) : undefined;
 }
-const providerUsageRuntimeLoader = createLazyImportLoader(
-  () => import("../../infra/provider-usage.js"),
-);
-const progressRuntimeLoader = createLazyImportLoader(() => import("../../cli/progress.js"));
-const terminalTableRuntimeLoader = createLazyImportLoader(
-  () => import("../../../packages/terminal-core/src/table.js"),
-);
+
 const listProbeRuntimeLoader = createLazyImportLoader(() => import("./list.probe.js"));
 
 const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
@@ -826,7 +820,6 @@ export async function modelsStatusCommand(
         cfg,
         warnAfterMs: DEFAULT_OAUTH_WARN_MS,
         runtimeCredentialsByProvider,
-        allowKeychainPrompt: false,
       });
       const authProfileHealthById = new Map(
         authHealth.profiles.map((profile) => [profile.profileId, profile]),
@@ -1076,7 +1069,7 @@ export async function modelsStatusCommand(
       let probeSummary: AuthProbeSummary | undefined;
       if (opts.probe) {
         const [{ withProgressTotals }, { runAuthProbes }] = await Promise.all([
-          progressRuntimeLoader.load(),
+          import("../../cli/progress.js"),
           listProbeRuntimeLoader.load(),
         ]);
         probeSummary = await withProgressTotals(
@@ -1487,7 +1480,7 @@ export async function modelsStatusCommand(
         runtime.log(colorize(rich, theme.muted, "- none"));
       } else {
         const { formatUsageWindowSummary, loadProviderUsageSummary, resolveUsageProviderId } =
-          await providerUsageRuntimeLoader.load();
+          await import("../../infra/provider-usage.js");
         const usageByProvider = new Map<string, string>();
         const usageProviders = Array.from(
           new Set(
@@ -1570,7 +1563,10 @@ export async function modelsStatusCommand(
 
       if (probeSummary) {
         const [{ getTerminalTableWidth, renderTable }, { describeProbeSummary, sortProbeResults }] =
-          await Promise.all([terminalTableRuntimeLoader.load(), listProbeRuntimeLoader.load()]);
+          await Promise.all([
+            import("../../../packages/terminal-core/src/table.js"),
+            listProbeRuntimeLoader.load(),
+          ]);
         runtime.log("");
         runtime.log(colorize(rich, theme.heading, "Auth probes"));
         if (probeSummary.results.length === 0) {

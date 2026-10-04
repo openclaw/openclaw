@@ -7,6 +7,7 @@ import type {
 
 export function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCommand {
   if (
+    command.type === "pairing.allowFrom" ||
     command.type === "secrets.metadata" ||
     command.type === "secrets.execEnvironment" ||
     command.type === "secrets.value" ||
@@ -209,6 +210,7 @@ function stringBytes(values: readonly (string | undefined)[]): number {
 
 function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (
+    command.type === "pairing.allowFrom" ||
     command.type === "secrets.execEnvironment" ||
     command.type === "secrets.value" ||
     command.type === "sessionState.versions" ||
@@ -246,12 +248,7 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     return command.entries.reduce(
       (total, input) =>
         total +
-        stringBytes([
-          ...input.keys,
-          input.legacyKey,
-          input.entry?.lifecycleRevision,
-          input.entry?.sessionId,
-        ]) +
+        stringBytes([...input.keys, input.entry?.lifecycleRevision, input.entry?.sessionId]) +
         (input.entry?.sessionStartedAt === undefined ? 0 : 8),
       bytes,
     );

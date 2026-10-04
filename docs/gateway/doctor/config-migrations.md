@@ -40,8 +40,26 @@ written before the cutoff may be retired together with its Doctor checks.
 When Doctor refuses a retired input, it names an intermediate release to upgrade
 through before retrying. Retirement must leave persisted source data untouched.
 
-Legacy normalization belongs to Doctor and migration owners, with the existing
-backup and verification flow. Runtime readers consume canonical state.
+Except for the deferred readers recorded below, legacy normalization belongs to
+Doctor and migration owners, with the existing backup and verification flow.
+Runtime readers consume canonical state.
+
+### Deferred compaction checkpoints
+
+Keep the runtime readers for session-entry `compactionCheckpoints`, including
+their transcript retention references and historical token metrics. Replacing
+these supported readers with a durable migration would add more than 300 net
+production lines; retain the readers until the format leaves the support window.
+
+The last verified creating release is `v2026.9.3`. Preservation also counts as
+writing: `v2026.9.7` retains existing checkpoints during transcript rewind and
+branch operations. The scheduled retirement date is **January 1, 2027**, subject
+to verifying that no later shipped release writes or preserves the format.
+At that point, delete the readers directly instead of adding a temporary Doctor
+migration. Keep this record current if another preservation writer ships.
+
+Retained transcript nodes with empty entry metadata remain supported runtime
+state; this deferral does not require a Doctor rewrite of those nodes.
 
 ### Workspace setup
 
@@ -506,6 +524,28 @@ by a published updater that invokes Doctor without `--fix`.
 Voice Call-only settings remain valid configuration. Doctor detects this pending
 inheritance repair independently of schema errors; ordinary config reads never
 copy the settings into Talk.
+
+## ACP session metadata
+
+Doctor moves historical raw, agent-prefixed, and ownerless ACP metadata keys to
+canonical keys bound to the owning session. It also imports ACP metadata embedded
+in SQLite session entries. Before rewriting a source database, Doctor saves a
+verified private SQLite backup and reports its path. Rekeying preserves every
+metadata column except the key. Embedded imports keep the canonical ACP fields,
+including identity and runtime-options JSON, lifecycle binding, and last activity;
+the entry's update timestamp becomes the metadata update timestamp. Unknown
+embedded fields remain in the source backup. Embedded JSON follows the session
+decoder's last-value semantics for duplicate properties. Ambiguous ownership and conflicting
+payloads remain intact with a warning naming the affected session.
+
+Runtime reads and writes use canonical metadata only. Startup refuses unmigrated
+ACP state with offline repair instructions before handing session stores to
+runtime. Run `openclaw doctor --fix` after restoring older state; the update-time
+Doctor pass runs the same repair.
+Embedded metadata imports record durable receipts before removing the source
+field, so retrying interrupted cleanup cannot reopen a session after its canonical
+metadata was cleared. Legacy `sessions.json` imports retain their existing backups
+and source receipts.
 
 ## ACP agents' model precedence
 

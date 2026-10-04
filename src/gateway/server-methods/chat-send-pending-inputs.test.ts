@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
-import { StatementSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { seedCanonicalAcpSessionMeta } from "../../acp/runtime/session-meta-fixture.test-support.js";
+import * as acpReads from "../../acp/runtime/session-meta-readonly.js";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
@@ -143,25 +144,34 @@ describe("ordinary chat input admission", () => {
       );
       expect(await fixture.read()).toEqual([]);
       const recorder = await fixture.dispatchedRecorder;
-      const reads = vi.spyOn(StatementSync.prototype, "all");
-      const gets = vi.spyOn(StatementSync.prototype, "get");
-      const writes = vi.spyOn(StatementSync.prototype, "run");
-      const committed = await recorder.persistApproved();
-      await fixture.read();
-      const mentionStatements = [
-        ...reads.mock.calls,
-        ...gets.mock.calls,
-        ...writes.mock.calls,
-      ].filter((args) =>
-        args.some(
-          (value) => typeof value === "string" && value.startsWith("notifications.mentions."),
-        ),
-      );
-      reads.mockRestore();
-      gets.mockRestore();
-      writes.mockRestore();
-      expect(mentionStatements).toEqual([]);
+      const sql = observeHostDataSql();
+      let committed: Awaited<ReturnType<typeof recorder.persistApproved>>;
+      try {
+        committed = await recorder.persistApproved();
+        await fixture.read();
+        expect(
+          sql.calls
+            .flatMap((call) => call.mock.calls)
+            .filter((args) =>
+              args.some(
+                (value) => typeof value === "string" && value.startsWith("notifications.mentions."),
+              ),
+            ),
+        ).toEqual([]);
+        expect(
+          sql.queries.filter((query) =>
+            /\b(?:insert\s+into|update|delete\s+from)\s+["`]?session_nodes\b/i.test(query),
+          ),
+        ).toEqual([]);
+      } finally {
+        sql.restore();
+      }
       expect(committed?.appended).toBe(true);
+      expect(
+        loadSessionEntry(fixture.scope)?.profileInvolvement?.profiles[
+          fixture.bobClient.authenticatedUserProfile.profileId
+        ],
+      ).toMatchObject({ hidden: false, lastMention: { sequence: expect.any(Number) } });
       expect(await fixture.read()).toMatchObject([
         {
           messageId: committed?.messageId,
@@ -420,42 +430,94 @@ describe("ordinary chat input admission", () => {
     }
   });
 
-  it("commits an existing idle session input before ACK through restart-safe admission", async () => {
-    const fixture = await createBrowserFollowupFixture({ active: false });
-    const clone = vi.spyOn(globalThis, "structuredClone");
-    let transcriptAtAck: ReturnType<typeof loadTranscriptEventsSync> | undefined;
-    const respond = vi.fn<RespondFn>((ok) => {
-      if (ok) {
-        transcriptAtAck = loadTranscriptEventsSync(fixture.scope);
+  it.each([{ acp: false }, { acp: true }, { acp: true, restart: true }])(
+    "keeps idle input custody with its runtime (%j)",
+    async ({ acp, restart }) => {
+      const fixture = await createBrowserFollowupFixture({ active: false });
+      if (acp) {
+        seedCanonicalAcpSessionMeta({
+          sessionKey: fixture.scope.sessionKey,
+          sessionId: fixture.scope.sessionId,
+          meta: {
+            backend: "acpx",
+            agent: "main",
+            runtimeSessionName: "idle-custody",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: 1,
+          },
+        });
       }
-    });
-    try {
-      await fixture.send(respond);
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ status: "started", messageSeq: 2 }),
-        undefined,
-        expect.anything(),
-      );
-      expect(transcriptAtAck).toHaveLength(fixture.activeTranscript.length + 1);
-      expect(transcriptAtAck?.at(-1)).toMatchObject({
-        message: {
-          role: "user",
-          content: fixture.params.message,
-          idempotencyKey: `${fixture.params.idempotencyKey}:user`,
-        },
+      const clone = vi.spyOn(globalThis, "structuredClone");
+      const sql = observeHostDataSql();
+      const read = acpReads.readAcpSessionMetaForEntries;
+      const restarting = restart
+        ? vi
+            .spyOn(acpReads, "readAcpSessionMetaForEntries")
+            .mockImplementationOnce(async (...args) => {
+              const result = await read(...args);
+              rotateAgentEventLifecycleGeneration();
+              return result;
+            })
+        : undefined;
+      let transcriptAtAck: ReturnType<typeof loadTranscriptEventsSync> | undefined;
+      const respond = vi.fn<RespondFn>((ok) => {
+        if (ok) {
+          transcriptAtAck = loadTranscriptEventsSync(fixture.scope);
+        }
       });
-      expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
-      expect(
-        clone.mock.calls.filter(
-          ([entry]) => isRecord(entry) && entry.sessionId === "unrelated-browser-session",
-        ).length,
-      ).toBeLessThanOrEqual(1);
-    } finally {
-      clone.mockRestore();
-      await fixture.cleanup();
-    }
-  });
+      try {
+        await fixture.send(respond);
+        expect(sql.queries.filter((query) => /\bworker_session_placements\b/u.test(query))).toEqual(
+          [],
+        );
+        if (restart) {
+          expect(respond).toHaveBeenCalledOnce();
+          expect(respond).not.toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({ status: "started" }),
+            undefined,
+            expect.anything(),
+          );
+          expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+          expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+          expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
+          return;
+        }
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ status: "started", ...(acp ? {} : { messageSeq: 2 }) }),
+          undefined,
+          expect.anything(),
+        );
+        if (acp) {
+          expect(transcriptAtAck).toEqual(fixture.activeTranscript);
+          expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({ total: 1 });
+          expect(loadSessionEntry(fixture.scope)).not.toHaveProperty("acp");
+        } else {
+          expect(transcriptAtAck).toHaveLength(fixture.activeTranscript.length + 1);
+          expect(transcriptAtAck?.at(-1)).toMatchObject({
+            message: {
+              role: "user",
+              content: fixture.params.message,
+              idempotencyKey: `${fixture.params.idempotencyKey}:user`,
+            },
+          });
+          expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+        }
+        expect(
+          clone.mock.calls.filter(
+            ([entry]) => isRecord(entry) && entry.sessionId === "unrelated-browser-session",
+          ).length,
+        ).toBeLessThanOrEqual(1);
+      } finally {
+        sql.restore();
+        restarting?.mockRestore();
+        clone.mockRestore();
+        await fixture.cleanup();
+      }
+    },
+  );
 
   it.each(["worker-turn", "remote-exec"] as const)(
     "holds an idle %s browser input in custody while its workspace is syncing",
@@ -478,8 +540,12 @@ describe("ordinary chat input admission", () => {
         patch: { workerBundleHash: "a".repeat(64) },
       });
       fixture.context.workerSessionPlacementService = placements;
+      const sql = observeHostDataSql();
       try {
         const respond = await fixture.send();
+        expect(sql.queries.filter((query) => /\bworker_session_placements\b/u.test(query))).toEqual(
+          [],
+        );
         expect(respond).toHaveBeenCalledWith(
           true,
           expect.objectContaining({ status: "started" }),
@@ -493,6 +559,7 @@ describe("ordinary chat input admission", () => {
           items: [{ state: "queued", runId: fixture.params.idempotencyKey }],
         });
       } finally {
+        sql.restore();
         await fixture.cleanup();
       }
     },

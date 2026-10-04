@@ -14,43 +14,30 @@ import type { ChatTranscriptPendingScrollOffset } from "./chat-transcript-sessio
 
 type TranscriptScrollRenderState = { atEnd: boolean; touchActive: boolean };
 
-type TranscriptOffsetState = {
-  pendingScrollOffset: ChatTranscriptPendingScrollOffset | null;
+/** State shared by native input observation and transcript commands. */
+export class TranscriptOffsetState {
+  pendingScrollOffset: ChatTranscriptPendingScrollOffset | null = null;
   scrollCommand:
     | { behavior: ScrollBehavior; target: "end"; source: "auto" | "manual" }
     | { behavior: ScrollBehavior; target: "index" }
     | { behavior: ScrollBehavior; target: "message"; messageId: string }
-    | null;
-  touching: boolean;
-  touchScrolling: boolean;
-  readonly touchActive: boolean;
-  renderedScrollState: TranscriptScrollRenderState;
-  renderState(atEnd: boolean): TranscriptScrollRenderState;
-  maintenanceScrollOffset: number | null;
-  pendingInteractionAnchor: ChatTranscriptInteractionAnchor | null;
-  syncNativeOffset: (() => void) | null;
-  recordProgrammaticScroll: ((before: number, after: number, maintenance: boolean) => void) | null;
-};
+    | null = null;
+  touching = false;
+  touchScrolling = false;
+  renderedScrollState = { atEnd: false, touchActive: false };
+  maintenanceScrollOffset: number | null = null;
+  pendingInteractionAnchor: ChatTranscriptInteractionAnchor | null = null;
+  syncNativeOffset: (() => void) | null = null;
+  recordProgrammaticScroll: ((before: number, after: number, maintenance: boolean) => void) | null =
+    null;
 
-/** Create the state shared by native input observation and transcript commands. */
-export function createTranscriptOffsetState(): TranscriptOffsetState {
-  return {
-    pendingScrollOffset: null,
-    scrollCommand: null,
-    touching: false,
-    touchScrolling: false,
-    get touchActive() {
-      return this.touching || this.touchScrolling;
-    },
-    renderedScrollState: { atEnd: false, touchActive: false },
-    renderState(atEnd) {
-      return { atEnd, touchActive: this.touchActive };
-    },
-    maintenanceScrollOffset: null,
-    pendingInteractionAnchor: null,
-    syncNativeOffset: null,
-    recordProgrammaticScroll: null,
-  };
+  get touchActive(): boolean {
+    return this.touching || this.touchScrolling;
+  }
+
+  renderState(atEnd: boolean): TranscriptScrollRenderState {
+    return { atEnd, touchActive: this.touchActive };
+  }
 }
 
 export function isTranscriptMaintenanceScroll(

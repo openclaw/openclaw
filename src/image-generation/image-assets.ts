@@ -1,4 +1,3 @@
-/** Converts image provider base64/data-url payloads into generated or source image assets. */
 import { canonicalizeBase64 } from "@openclaw/media-core/base64";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -12,8 +11,6 @@ const DEFAULT_IMAGE_MIME_TYPE = "image/png";
 const DEFAULT_IMAGE_FILE_PREFIX = "image";
 const INLINE_IMAGE_JSON_RESPONSE_ENVELOPE_BYTES = 1024 * 1024;
 
-// Image asset helpers for provider responses and source uploads. They normalize
-// base64/data-url inputs into in-memory assets with predictable filenames.
 /** Result of conservative image MIME sniffing for provider responses. */
 export type ImageMimeTypeDetection = {
   mimeType: string;
@@ -219,10 +216,7 @@ export function parseOpenAiCompatibleImageResponse(
     throwMalformedImageResponse(options.malformedResponseError);
     return [];
   }
-  const data = payload.data;
-  if (data === undefined || data === null) {
-    return [];
-  }
+  const data = payload.data ?? [];
   if (!Array.isArray(data)) {
     throwMalformedImageResponse(options.malformedResponseError);
     return [];
@@ -230,11 +224,9 @@ export function parseOpenAiCompatibleImageResponse(
 
   const images: GeneratedImageAsset[] = [];
   for (const [index, entry] of data.entries()) {
-    if (!isRecord(entry)) {
-      throwMalformedImageResponse(options.malformedResponseError);
-      continue;
-    }
-    const image = generatedImageAssetFromOpenAiCompatibleEntry(entry, index, options);
+    const image = isRecord(entry)
+      ? generatedImageAssetFromOpenAiCompatibleEntry(entry, index, options)
+      : undefined;
     if (!image) {
       throwMalformedImageResponse(options.malformedResponseError);
       continue;

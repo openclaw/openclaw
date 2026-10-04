@@ -99,48 +99,63 @@ beforeEach(() => {
   });
 });
 
-it("retains discovery context when capturing read admission fails", async () => {
-  await withTempDir("openclaw-discovery-admission-", async (root) => {
-    const source = path.join(root, "source");
-    fs.writeFileSync(source, "mock snapshot source; never opened as SQLite");
-    const failure = new Error("synthetic admission refusal");
-    mocks.capture.mockImplementation(() => {
-      throw failure;
-    });
-    const operation = vi.fn(async () => 1);
-    await expect(
-      withOpenClawStateDatabaseReadSnapshot(operation, { path: source }),
-    ).rejects.toMatchObject({
-      message: expect.stringContaining(`Cannot read shared state for discovery: ${source}`),
-      cause: failure,
-    });
-    expect(operation).not.toHaveBeenCalled();
-    expect(mocks.prepare).not.toHaveBeenCalled();
-  });
-});
-
-it("preserves a precise source failure and cleans its prepared snapshot before callback admission", async () => {
-  await withTempDir("openclaw-discovery-precedence-", async (root) => {
-    const source = path.join(root, "source");
-    fs.writeFileSync(source, "mock snapshot source; never opened as SQLite");
-    const failure = new Error("synthetic readonly verification failure");
-    mocks.prepare.mockImplementation(async () => {
-      mocks.assertFresh.mockImplementation(() => {
+it.each(["capture", "verification", "cleanup"] as const)(
+  "preserves discovery %s failure and retires snapshot admission",
+  async (phase) => {
+    await withTempDir("openclaw-discovery-admission-", async (root) => {
+      const source = path.join(root, "source");
+      fs.writeFileSync(source, "mock snapshot source; never opened as SQLite");
+      const failure = new Error("synthetic admission refusal");
+      const fail = () => {
         throw failure;
+      };
+      if (phase === "capture") {
+        mocks.capture.mockImplementation(fail);
+      } else if (phase === "verification") {
+        mocks.prepare.mockImplementation(async () => {
+          mocks.assertFresh.mockImplementation(fail);
+          mocks.assertCurrent.mockImplementation(() => {
+            throw new Error("read admission changed");
+          });
+          return { location: "/fixture/private.sqlite", cleanupAsync: mocks.cleanup };
+        });
+      }
+      let escape!: ReturnType<typeof AsyncLocalStorage.snapshot>;
+      if (phase === "cleanup") {
+        mocks.cleanup.mockResolvedValueOnce(false);
+      }
+      const operation = vi.fn(async () => {
+        escape = AsyncLocalStorage.snapshot();
+        expect(getActiveOpenClawStateDatabaseReadSnapshot({ path: source })).toBeDefined();
+        return 1;
       });
-      mocks.assertCurrent.mockImplementation(() => {
-        throw new Error("read admission changed");
-      });
-      return { location: "/fixture/private.sqlite", cleanupAsync: mocks.cleanup };
+      const result = withOpenClawStateDatabaseReadSnapshot(operation, { path: source });
+      if (phase === "capture") {
+        await expect(result).rejects.toMatchObject({
+          message: expect.stringContaining(`Cannot read shared state for discovery: ${source}`),
+          cause: failure,
+        });
+        expect(mocks.prepare).not.toHaveBeenCalled();
+      } else if (phase === "verification") {
+        await expect(result).rejects.toBe(failure);
+        expect(mocks.cleanup).toHaveBeenCalledOnce();
+      } else {
+        await expect(result).rejects.toThrow("snapshot cleanup failed");
+        expect(await escape(() => probeRetiredAdmission(source))).toEqual(rejectedAdmissions);
+        expect(
+          escape(() =>
+            getActiveOpenClawStateDatabaseReadSnapshot({ path: path.join(root, "other") }),
+          ),
+        ).toBeUndefined();
+        expect(mocks.forbiddenNative).not.toHaveBeenCalled();
+        expect(mocks.read).not.toHaveBeenCalled();
+      }
+      if (phase !== "cleanup") {
+        expect(operation).not.toHaveBeenCalled();
+      }
     });
-    const operation = vi.fn(async () => 1);
-    await expect(withOpenClawStateDatabaseReadSnapshot(operation, { path: source })).rejects.toBe(
-      failure,
-    );
-    expect(operation).not.toHaveBeenCalled();
-    expect(mocks.cleanup).toHaveBeenCalledOnce();
-  });
-});
+  },
+);
 
 // Escaped continuations retain ALS, but admission ends before private bytes are removed.
 async function probeRetiredAdmission(source: string) {
@@ -178,30 +193,6 @@ const rejectedAdmissions = {
   nestedDisposable: true,
   worker: true,
 };
-
-it("rejects escaped snapshot reads after failed cleanup instead of reopening a live source", async () => {
-  await withTempDir("openclaw-retired-snapshot-", async (root) => {
-    const source = path.join(root, "source");
-    fs.writeFileSync(source, "mock source; never opened as SQLite");
-    let escape!: ReturnType<typeof AsyncLocalStorage.snapshot>;
-    mocks.cleanup.mockResolvedValueOnce(false);
-    await expect(
-      withOpenClawStateDatabaseReadSnapshot(
-        async () => {
-          escape = AsyncLocalStorage.snapshot();
-          expect(getActiveOpenClawStateDatabaseReadSnapshot({ path: source })).toBeDefined();
-        },
-        { path: source },
-      ),
-    ).rejects.toThrow("snapshot cleanup failed");
-    expect(await escape(() => probeRetiredAdmission(source))).toEqual(rejectedAdmissions);
-    expect(
-      escape(() => getActiveOpenClawStateDatabaseReadSnapshot({ path: path.join(root, "other") })),
-    ).toBeUndefined();
-    expect(mocks.forbiddenNative).not.toHaveBeenCalled();
-    expect(mocks.read).not.toHaveBeenCalled();
-  });
-});
 
 it.each(["snapshot", "disposable"] as const)(
   "drains an admitted %s reader while rejecting escaped new reads, then rejects the closed scope",

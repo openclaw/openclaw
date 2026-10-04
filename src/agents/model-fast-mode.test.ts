@@ -124,3 +124,46 @@ describe("private selected Fast metadata", () => {
     ).toBeUndefined();
   });
 });
+
+it("derives tier recovery from the selected transport rather than catalog provenance", () => {
+  const entry: ModelCatalogEntry = {
+    id: "speed-fixture",
+    name: "Speed fixture",
+    provider: "openai",
+    api: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+  };
+  const resolve = createModelSpeedPolicyResolver({
+    cfg: {},
+    agentId: "main",
+    catalog: [entry],
+    metadataSnapshot: createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "openai",
+          providers: ["openai"],
+          rootDir: path.resolve(import.meta.dirname, "../../extensions/openai"),
+        },
+      ],
+    }),
+  });
+  for (const [baseUrl, expected] of [
+    ["https://api.openai.com/v1", true],
+    ["https://custom.example/v1", false],
+    ["https://api.openai.com/proxy", false],
+  ] as const) {
+    const evaluation = {
+      availability: true,
+      routeResolution: null,
+      selectedAuthMode: "api_key",
+      selectedRoute: {
+        api: "openai-responses" as const,
+        baseUrl,
+        authRequirement: "api-key" as const,
+        requestTransportOverrides: "none" as const,
+      },
+    };
+    expect(resolve(entry, evaluation, "openclaw").supportsServiceTierRecovery).toBe(expected);
+    expect(resolve(entry, evaluation, "codex").supportsServiceTierRecovery).toBe(false);
+  }
+});

@@ -91,38 +91,7 @@ describe("descriptor certification refresh", () => {
     expect(beforeRefresh(workRow)).toEqual({ status: "invalidated" });
   });
 
-  it("immediately invalidates an envelope-only event and absorbs pending certification", async () => {
-    const invalidated = vi.fn();
-    const h = await descriptorOwner(invalidated);
-    h.emitEvent({
-      type: "event",
-      event: "sessions.changed",
-      payload: { agentId: "work", reason: "patch", session: { ...workRow, updatedAt: 201 } },
-    });
-    expect(invalidated).not.toHaveBeenCalled();
-    const pending = h.observation.captureReconcile();
-    await vi.advanceTimersByTimeAsync(4_000);
-    h.emitEvent({
-      type: "event",
-      event: "sessions.changed",
-      payload: { sessionKey: "global", agentId: "work", reason: "swarm" },
-    });
-    expect(invalidated).toHaveBeenCalledExactlyOnceWith("swarm");
-    expect(pending(workRow)).toEqual({ status: "invalidated" });
-    await vi.advanceTimersByTimeAsync(500);
-    h.emitEvent({
-      type: "event",
-      event: "sessions.changed",
-      payload: { agentId: "work", reason: "send", session: { ...workRow, updatedAt: 202 } },
-    });
-    await vi.advanceTimersByTimeAsync(500);
-    expect(invalidated).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(4_500);
-    expect(invalidated).toHaveBeenCalledTimes(2);
-    expect(invalidated).toHaveBeenLastCalledWith("send");
-  });
-
-  it.each(["read", "absence", "delete", "dispose", "reset"] as const)(
+  it.each(["swarm", "read", "absence", "delete", "dispose", "reset"] as const)(
     "absorbs pending certification after %s",
     async (action) => {
       const invalidated = vi.fn();
@@ -134,8 +103,17 @@ describe("descriptor certification refresh", () => {
         payload: { agentId: "work", reason: "patch", session: row },
       });
       expect(invalidated).not.toHaveBeenCalled();
+      const pending = h.observation.captureReconcile();
       await vi.advanceTimersByTimeAsync(4_000);
-      if (action === "read" || action === "absence") {
+      if (action === "swarm") {
+        h.emitEvent({
+          type: "event",
+          event: "sessions.changed",
+          payload: { sessionKey: "global", agentId: "work", reason: "swarm" },
+        });
+        expect(invalidated).toHaveBeenCalledExactlyOnceWith("swarm");
+        expect(pending(workRow)).toEqual({ status: "invalidated" });
+      } else if (action === "read" || action === "absence") {
         expect(h.observation.captureReconcile()(action === "read" ? row : undefined)).toMatchObject(
           {
             status: "current",
@@ -160,7 +138,7 @@ describe("descriptor certification refresh", () => {
       } else {
         h.publish(false);
       }
-      if (action === "read") {
+      if (action === "read" || action === "swarm") {
         await vi.advanceTimersByTimeAsync(500);
         h.emitEvent({
           type: "event",
@@ -168,9 +146,10 @@ describe("descriptor certification refresh", () => {
           payload: { agentId: "work", reason: "send", session: { ...row, updatedAt: 202 } },
         });
         await vi.advanceTimersByTimeAsync(500);
-        expect(invalidated).not.toHaveBeenCalled();
+        expect(invalidated).toHaveBeenCalledTimes(action === "read" ? 0 : 1);
         await vi.advanceTimersByTimeAsync(4_500);
-        expect(invalidated).toHaveBeenCalledExactlyOnceWith("send");
+        expect(invalidated).toHaveBeenCalledTimes(action === "read" ? 1 : 2);
+        expect(invalidated).toHaveBeenLastCalledWith("send");
         return;
       }
       await vi.advanceTimersByTimeAsync(10_000);

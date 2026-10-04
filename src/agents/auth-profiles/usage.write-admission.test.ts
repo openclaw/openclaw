@@ -2,9 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import * as configEnvVars from "../../config/config-env-vars.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
-import * as integrity from "../../infra/sqlite-integrity-worker.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import {
@@ -34,6 +34,7 @@ import {
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
 import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
+import * as sqliteRead from "./sqlite-read.js";
 import {
   closeAuthProfileReadPool,
   resolveAuthProfileDatabasePath,
@@ -68,7 +69,7 @@ afterEach(() => {
 });
 
 it.each(["current", "relocated", "closed"] as const)(
-  "keeps cold auth health behind asynchronous integrity and its %s owner",
+  "keeps cold auth health behind asynchronous preparation and its %s owner",
   async (owner) => {
     await withOpenClawTestState(
       { label: "auth-health-cold-owner", scenario: "minimal" },
@@ -85,21 +86,25 @@ it.each(["current", "relocated", "closed"] as const)(
         clearOpenClawAgentIntegrityVerification(pathname, state.env);
         const entered = createDeferredCore();
         const release = createDeferredCore();
-        const realIntegrity = integrity.assertSqliteIntegrityInWorker;
-        let checking = false;
+        const prepare = sqliteRead.prepareAgentAuthProfileRowsRead;
+        let reading = false;
         let joined = false;
-        vi.spyOn(integrity, "assertSqliteIntegrityInWorker").mockImplementation(async (...args) => {
-          if (args[0] !== pathname) {
-            return realIntegrity(...args);
+        vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation((target) => {
+          const reader = prepare(target);
+          if (target.databasePath !== pathname) {
+            return reader;
           }
-          checking = true;
-          entered.resolve();
-          try {
-            await realIntegrity(...args);
-          } finally {
-            joined = true;
-          }
-          await release.promise;
+          return {
+            ...reader,
+            read: async () => {
+              reading = true;
+              const rows = await reader.read();
+              joined = true;
+              entered.resolve();
+              await release.promise;
+              return rows;
+            },
+          };
         });
         let settled = false;
         const update = markAuthProfileFailure({
@@ -113,8 +118,8 @@ it.each(["current", "relocated", "closed"] as const)(
         void update.catch(() => {});
         try {
           await Promise.race([entered.promise, update]);
-          expect({ checking, settled, usage: store.usageStats }).toEqual({
-            checking: true,
+          expect({ reading, settled, usage: store.usageStats }).toEqual({
+            reading: true,
             settled: false,
             usage: undefined,
           });
@@ -304,7 +309,7 @@ it.each(["shared", "other-agent"] as const)(
         });
         void update.catch(() => {});
         try {
-          await nextTurn();
+          await update;
           expect(settled).toBe(true);
           expect(loadPersistedAuthProfileStore(ownerDir)?.usageStats?.[profileId]?.errorCount).toBe(
             1,
@@ -324,40 +329,77 @@ it.each(["shared", "other-agent"] as const)(
   },
 );
 
-it("does not recreate health after an earlier admitted writer removes the profile", async () => {
-  await withOpenClawTestState(
-    { label: "auth-health-removal", scenario: "minimal" },
-    async (state) => {
-      const cfg = { agents: { entries: { main: {}, voice: {} } } };
-      setRuntimeConfigSnapshot(cfg, cfg);
-      const agentDir = state.agentDir("voice");
-      const store = createStore();
-      saveAuthProfileStore(store, agentDir, saveOptions);
-      setRuntimeAuthProfileStoreSnapshot(store, agentDir);
-      const database = openOpenClawAgentDatabase({ agentId: "voice" });
-      const release = createDeferredCore();
-      const removal = runOpenClawAgentWriteAdmission(
-        { agentId: "voice", path: database.path },
-        async () => {
-          await release.promise;
-          saveAuthProfileStore({ version: 1, profiles: {} }, agentDir, saveOptions);
-        },
-      );
-      const update = markAuthProfileFailure({ store, profileId, reason: "auth", agentDir });
-      void update.catch(() => {});
-      release.resolve();
-      await Promise.all([removal, update]);
-      expect(loadPersistedAuthProfileStore(agentDir)?.profiles).toEqual({});
-      for (const current of [
-        loadPersistedAuthProfileStore(agentDir),
-        getRuntimeAuthProfileStoreSnapshotCore(agentDir),
-        store,
-      ]) {
-        expect(current?.usageStats?.[profileId]).toBeUndefined();
-      }
-    },
-  );
-});
+it.each(["before-read", "after-read"] as const)(
+  "does not recreate health after an earlier admitted writer removes the profile (%s)",
+  async (order) => {
+    await withOpenClawTestState(
+      { label: "auth-health-removal", scenario: "minimal" },
+      async (state) => {
+        const cfg = { agents: { entries: { main: {}, voice: {} } } };
+        setRuntimeConfigSnapshot(cfg, cfg);
+        const agentDir = state.agentDir("voice");
+        const store = createStore();
+        saveAuthProfileStore(store, agentDir, saveOptions);
+        setRuntimeAuthProfileStoreSnapshot(store, agentDir);
+        const database = openOpenClawAgentDatabase({ agentId: "voice" });
+        const release = createDeferredCore();
+        const observed = createDeferredCore();
+        const removal = runOpenClawAgentWriteAdmission(
+          { agentId: "voice", path: database.path },
+          async () => {
+            await release.promise;
+            saveAuthProfileStore({ version: 1, profiles: {} }, agentDir, saveOptions);
+          },
+        );
+        const prepare = sqliteRead.prepareAgentAuthProfileRowsRead;
+        const read = vi
+          .spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead")
+          .mockImplementation((target) => {
+            const reader = prepare(target);
+            if (target.databasePath !== database.path) {
+              return reader;
+            }
+            return {
+              ...reader,
+              read: async () => {
+                if (order === "before-read") {
+                  await removal;
+                }
+                const rows = await reader.read();
+                observed.resolve();
+                return rows;
+              },
+            };
+          });
+        const update = markAuthProfileFailure({ store, profileId, reason: "auth", agentDir });
+        void update.catch(() => {});
+        try {
+          if (order === "after-read") {
+            await awaitGateBeforeSettlement(
+              observed.promise,
+              update,
+              "Auth usage settled before reading the profile being removed",
+            );
+          }
+          release.resolve();
+          await Promise.all([removal, update]);
+          expect(loadPersistedAuthProfileStore(agentDir)?.profiles).toEqual({});
+          for (const current of [
+            loadPersistedAuthProfileStore(agentDir),
+            getRuntimeAuthProfileStoreSnapshotCore(agentDir),
+            store,
+          ]) {
+            expect(current?.usageStats?.[profileId]).toBeUndefined();
+          }
+        } finally {
+          release.resolve();
+          await Promise.allSettled([removal, update]);
+          read.mockRestore();
+        }
+      },
+    );
+  },
+);
 
 it.each(["supplied-first", "ordinary-first"] as const)(
   "keeps %s shared auth snapshots in outer commit order",

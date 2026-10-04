@@ -508,7 +508,6 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
       log.warn("Skipped mention delivery with invalid committed references.");
       return false;
     }
-    policy.recordCommittedInvolvement(input);
     return true;
   }
 
@@ -666,6 +665,7 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
         if (!prepareCommittedInput(input)) {
           return;
         }
+        policy.recordCommittedInvolvement(input);
         let committed: StoredMention[] = [];
         mutateNative(
           (draft) => {
@@ -696,6 +696,7 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
         if (!prepareCommittedInput(input)) {
           return;
         }
+        await policy.recordCommittedInvolvementAsync(input);
         const committed = await mutate<StoredMention[]>(
           (draft, guards, bounds) => applyCommittedInput(input, draft, guards, bounds),
           () => input.recipientProfileIds.map((id) => policy.readProfile(id)?.profileId ?? id),

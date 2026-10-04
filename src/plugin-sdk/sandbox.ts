@@ -1,6 +1,3 @@
-/**
- * Public SDK subpath for sandbox backends, SSH execution, and temp workspace helpers.
- */
 export type {
   CreateSandboxBackendParams,
   CreateReservedSandboxBackendParamsV1,
@@ -38,12 +35,10 @@ export {
   buildExecRemoteCommand,
   buildRemoteWorkdirValidationCommand,
   buildRemoteCommand,
-  buildSshSandboxArgv,
   buildValidatedExecRemoteCommand,
   createRemoteShellSandboxFsBridge,
   createWritableRenameTargetResolver,
   createSshSandboxSessionFromConfigText,
-  createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
   getSandboxBackendFactory,
   getSandboxBackendManager,
@@ -53,12 +48,9 @@ export {
   registerSandboxBackend,
   requireSandboxBackendFactory,
   resolveSandboxRuntimeStatus,
-  resolveWritableRenameTargets,
-  resolveWritableRenameTargetsForBridge,
   runSshSandboxCommand,
   sanitizeEnvVars,
   shellEscape,
-  uploadDirectoryToSshTarget,
 } from "../agents/sandbox.js";
 
 export {

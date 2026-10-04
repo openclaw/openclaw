@@ -7,10 +7,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveRealpathOrAbsolute as canonicalizePathForComparison } from "../../infra/boundary-path.js";
-import {
-  resolveTrajectoryFilePath,
-  resolveTrajectoryPointerFilePath,
-} from "../../trajectory/paths.js";
+import { isPathStrictlyInside } from "../../infra/path-guards.js";
 import {
   isCompactionCheckpointTranscriptFileName,
   isPrimarySessionTranscriptFileName,
@@ -19,6 +16,8 @@ import {
   isSessionStoreTempArtifactName,
   SESSION_STORE_TEMP_STALE_MS,
   isTrajectorySessionArtifactName,
+  resolveTrajectoryPath,
+  resolveTrajectoryPointerPath,
 } from "./artifacts.js";
 import {
   isSessionPromptBlobTempArtifactName,
@@ -108,12 +107,8 @@ function resolveSessionArtifactPathsForEntry(params: {
   }
   return [
     transcriptPath,
-    resolveTrajectoryPointerFilePath(transcriptPath),
-    resolveTrajectoryFilePath({
-      env: {},
-      sessionFile: transcriptPath,
-      sessionId: params.entry.sessionId,
-    }),
+    resolveTrajectoryPointerPath(transcriptPath) ?? `${transcriptPath}.trajectory-path.json`,
+    resolveTrajectoryPath(transcriptPath) ?? `${transcriptPath}.trajectory.jsonl`,
   ];
 }
 
@@ -144,8 +139,7 @@ function resolveReferencedSessionArtifactPaths(params: {
     }
     for (const checkpointFile of readLegacyCompactionSnapshotPaths(entry)) {
       const resolvedCheckpointPath = canonicalizePathForComparison(checkpointFile);
-      const relative = path.relative(resolvedSessionsDir, resolvedCheckpointPath);
-      if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+      if (isPathStrictlyInside(resolvedSessionsDir, resolvedCheckpointPath)) {
         referenced.add(resolvedCheckpointPath);
       }
     }

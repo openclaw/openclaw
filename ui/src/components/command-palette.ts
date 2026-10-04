@@ -503,6 +503,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     try {
       const result = await sessions.list({
         ...SESSION_SEARCH_SCOPE,
+        source: "command-palette",
         search,
         limit: SESSION_SEARCH_LIMIT,
       });

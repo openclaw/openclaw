@@ -10,10 +10,8 @@ import {
   removeTempDirectoryAsync,
 } from "./sqlite-readonly-location-cleanup.js";
 import { captureSqliteReadOnlyWorkerLaunch } from "./sqlite-readonly-worker.js";
-import {
-  allocateWorkerOwnedSqliteSnapshotDirectory,
-  captureSqliteSnapshotStagingOwner,
-} from "./sqlite-snapshot-staging-owner.js";
+import { allocateWorkerOwnedSqliteSnapshotDirectory } from "./sqlite-snapshot-staging-allocation.js";
+import { captureSqliteSnapshotStagingOwner } from "./sqlite-snapshot-staging-owner.js";
 import { holdAllocatedReply } from "./sqlite-snapshot-staging.test-support.js";
 import type { SqliteSnapshotStagingRequest } from "./sqlite-snapshot-staging.types.js";
 import { captureRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";

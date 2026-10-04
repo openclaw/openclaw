@@ -272,13 +272,14 @@ describe("required maintenance with restart-safe admitted input", () => {
               }),
             );
           }
-          const request = createRestartSafeChatRequest({
+          const request = await createRestartSafeChatRequest({
             eligible: true,
             message: approved,
             senderIsOwner: true,
             cfg,
           });
           const restartSafeAdmission = resolveRestartSafeChatAdmission({
+            acpMeta: null,
             activeRunScopeKey: sessionKey,
             agentId: "main",
             cfg,
@@ -287,6 +288,7 @@ describe("required maintenance with restart-safe admitted input", () => {
             entry,
             initialSessionEntry: entry,
             now: Date.now(),
+            placement: undefined,
             request,
             sessionId,
             sessionKey,

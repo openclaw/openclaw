@@ -21,6 +21,7 @@ import {
 } from "./sqlite-error-diagnostics.js";
 import { discardSqliteTransactionState } from "./sqlite-post-commit.js";
 import { captureSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
+import { runSqliteReadOperationSync } from "./sqlite-schema-facts.js";
 import type { SqliteWorkerDatabaseContext } from "./sqlite-worker-database-context.js";
 import { normalizeDatabasePath } from "./sqlite-worker-identity.js";
 
@@ -384,7 +385,7 @@ function runSqliteTransactionSync<T>(
     // nested native/SDK calls correct without module-local depth or counters.
     db.exec("SAVEPOINT openclaw_tx_nested");
     try {
-      const result = operation();
+      const result = runSqliteReadOperationSync(db, operation);
       assertSyncTransactionResult(result);
       assertTransactionUsable(db);
       db.exec("RELEASE SAVEPOINT openclaw_tx_nested");
@@ -415,7 +416,9 @@ function runSqliteTransactionSync<T>(
   const transactionStartedAt = Date.now();
   let commitStarted = false;
   try {
-    const result = operation();
+    // BEGIN may wait for a foreign writer. Admit its committed schema inside
+    // rollback protection, then share that snapshot's facts with all kernels.
+    const result = runSqliteReadOperationSync(db, operation, "fresh");
     assertSyncTransactionResult(result);
     assertTransactionUsable(db);
     commitStarted = true;

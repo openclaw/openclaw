@@ -1,3 +1,4 @@
+import { supportsNativeOpenAIResponsesEndpoint } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderFastModePolicyContext } from "../plugin-sdk/provider-model-types.js";
@@ -47,7 +48,11 @@ export function createModelSpeedPolicyResolver(params: {
     entry: ModelCatalogEntry,
     evaluation: ModelAuthAvailabilityEvaluation,
     runtimeId?: string,
-  ): { supportsFastMode?: boolean; serviceTiers?: readonly string[] } => {
+  ): {
+    supportsFastMode?: boolean;
+    serviceTiers?: readonly string[];
+    supportsServiceTierRecovery?: boolean;
+  } => {
     const policy = policies.get(normalizeProviderId(entry.provider));
     if (!policy || (evaluation.routeResolution !== null && !evaluation.selectedRoute)) {
       return {};
@@ -80,6 +85,13 @@ export function createModelSpeedPolicyResolver(params: {
     return {
       supportsFastMode: policy.resolveFastModeSupport?.(context),
       serviceTiers: policy.resolveServiceTiers?.(context),
+      supportsServiceTierRecovery:
+        context.runtimeId === "openclaw" &&
+        supportsNativeOpenAIResponsesEndpoint({
+          provider: entry.provider,
+          api: route.api ?? "",
+          baseUrl: route.baseUrl,
+        }),
     };
   };
 }

@@ -330,20 +330,17 @@ function isTransientFollowError(error: unknown): boolean {
 }
 
 function createLogWriters(onOutputClosed?: () => void) {
-  const writer = createSafeStreamWriter({
-    beforeWrite: () => clearActiveProgressLine(),
-    onBrokenPipe: (err, stream) => {
-      onOutputClosed?.();
-      const code = err.code ?? "EPIPE";
-      const target = stream === process.stdout ? "stdout" : "stderr";
-      const message = `openclaw logs: output ${target} closed (${code}). Stopping tail.`;
-      try {
-        clearActiveProgressLine();
-        process.stderr.write(`${message}\n`);
-      } catch {
-        // ignore secondary failures while reporting the broken pipe
-      }
-    },
+  const writer = createSafeStreamWriter((err, stream) => {
+    onOutputClosed?.();
+    const code = err.code ?? "EPIPE";
+    const target = stream === process.stdout ? "stdout" : "stderr";
+    const message = `openclaw logs: output ${target} closed (${code}). Stopping tail.`;
+    try {
+      clearActiveProgressLine();
+      process.stderr.write(`${message}\n`);
+    } catch {
+      // ignore secondary failures while reporting the broken pipe
+    }
   });
 
   return {

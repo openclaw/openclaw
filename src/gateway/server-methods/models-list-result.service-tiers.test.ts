@@ -332,11 +332,13 @@ it("publishes Daybreak restrictions through the real model catalog projection", 
   expect(models.find((row) => row.id === ids[0])).toMatchObject({
     available: true,
     supportsFastMode: true,
+    supportsServiceTierRecovery: true,
     serviceTiers: ["default", "priority"],
   });
   expect(models.find((row) => row.id === ids[1])).toMatchObject({
     available: true,
     supportsFastMode: false,
+    supportsServiceTierRecovery: true,
     serviceTiers: ["default"],
   });
 });

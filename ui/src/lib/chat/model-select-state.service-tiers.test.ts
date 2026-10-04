@@ -171,6 +171,7 @@ it.each([{ tiers: ["default", "priority"] }, { tiers: ["priority"] }])(
           id: "fast-only",
           name: "Fast model",
           provider: "openai",
+          supportsServiceTierRecovery: true,
           available: true,
           supportsFastMode: true,
           serviceTiers: tiers,
@@ -199,6 +200,7 @@ it.each([{ tiers: ["default"] }, { tiers: [] }])(
           id: "account-limited",
           name: "Account-limited model",
           provider: "openai",
+          supportsServiceTierRecovery: true,
           available: true,
           supportsFastMode: true,
           serviceTiers: tiers,
@@ -242,6 +244,34 @@ it.each([{ tiers: ["priority"] }, { tiers: ["default"] }, { tiers: [] }])(
     });
     expect(state).toMatchObject({
       active: true,
+      currentOverride: "ultrafast",
+      label: "Ultrafast",
+      ultrafastSupported: false,
+    });
+  },
+);
+
+it.each([false, undefined])(
+  "preserves the wire preference without route recovery capability %s",
+  (supportsServiceTierRecovery) => {
+    const state = resolveFastModeSelection({
+      sessionsResult: null,
+      currentModelOverride: "openai/custom-endpoint",
+      fastModeTarget: { model: "custom-endpoint", modelProvider: "openai", fastMode: "ultrafast" },
+      catalog: [
+        {
+          id: "custom-endpoint",
+          name: "Custom endpoint",
+          provider: "openai",
+          available: true,
+          agentRuntime: { id: "openclaw", source: "model" },
+          supportsFastMode: true,
+          supportsServiceTierRecovery,
+          serviceTiers: ["priority"],
+        },
+      ],
+    });
+    expect(state).toMatchObject({
       currentOverride: "ultrafast",
       label: "Ultrafast",
       ultrafastSupported: false,

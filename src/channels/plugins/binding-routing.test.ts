@@ -372,11 +372,6 @@ describe("ensureConfiguredBindingRouteReady", () => {
     unregisterDriver = registerStatefulBindingTargetDriver({
       id: "slow",
       ensureReady: async () => await new Promise<never>(() => {}),
-      ensureSession: async () => ({
-        ok: false,
-        sessionKey: "agent:slow:binding",
-        error: "not used",
-      }),
     });
 
     const resultPromise = ensureConfiguredBindingRouteReady({

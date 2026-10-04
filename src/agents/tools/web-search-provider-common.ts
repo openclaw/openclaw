@@ -130,14 +130,7 @@ export async function throwWebSearchApiError(
 }
 
 export function resolveSiteName(url: string | undefined): string | undefined {
-  if (!url) {
-    return undefined;
-  }
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return undefined;
-  }
+  return URL.parse(url ?? "")?.hostname;
 }
 
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);

@@ -139,7 +139,7 @@ export async function runSessionRegistryMaintenanceForStore(
           storePath,
           removals,
           skipMaintenance: true,
-          beforeCommitInTransaction: assertCurrent,
+          commitGuard: assertCurrent,
         });
         assertCurrent();
         return {

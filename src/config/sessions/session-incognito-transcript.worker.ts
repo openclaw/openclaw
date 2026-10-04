@@ -18,9 +18,12 @@ import type { TranscriptReportWorkerTarget } from "./session-accessor.sqlite-tra
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
 import { readClosedTranscriptTurnInDatabase } from "./session-accessor.transcript-range.js";
+import type { IncognitoManagerOperations } from "./session-incognito-manager-contract.js";
 import type { IncognitoTranscriptOperations } from "./session-incognito-transcript-contract.js";
 
-type Command = SqliteWorkerCommand<IncognitoTranscriptOperations>;
+type Command = SqliteWorkerCommand<
+  Omit<IncognitoTranscriptOperations, keyof IncognitoManagerOperations>
+>;
 
 /** Report preparation is detached; every append rebinds and validates its captured revision. */
 export function createIncognitoTranscriptWorker(

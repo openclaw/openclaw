@@ -132,6 +132,11 @@ export function renderFormatErrorCopy(raw: string): string {
   let candidate = extractErrorHttpStatus(normalized)?.rest ?? normalized;
   // Some proxies serialize the upstream error inside their own error.message.
   for (let depth = 0; depth < 4; depth++) {
+    // HTTP reason phrases can precede a body, including inside a proxy's message.
+    candidate = (extractErrorHttpStatus(candidate)?.rest ?? candidate).replace(
+      /^(?:bad request|unprocessable (?:entity|content))\s*:?\s*(?=[{[<])/iu,
+      "",
+    );
     const parsedMessage = parseApiErrorInfo(candidate)?.message?.trim();
     if (!parsedMessage || parsedMessage === candidate) {
       break;
@@ -141,13 +146,10 @@ export function renderFormatErrorCopy(raw: string): string {
   if (isSessionTranscriptValidationErrorMessage(candidate)) {
     return GATEWAY_SESSION_TRANSCRIPT_VALIDATION_USER_TEXT;
   }
-  const cacheLimit = candidate.match(PROVIDER_CACHE_CONTROL_LIMIT_RE);
-  if (cacheLimit) {
+  if (PROVIDER_CACHE_CONTROL_LIMIT_RE.test(candidate)) {
     return "The AI service couldn't accept this conversation. Start a new conversation with /new, or choose another model in the Control UI.";
   }
-  const match = candidate.length <= 300 ? candidate.match(PROVIDER_OUTPUT_TOKEN_LIMIT_RE) : null;
-  const [, value, maximum] = match ?? [];
-  if (!value || !maximum) {
+  if (candidate.length > 300 || !PROVIDER_OUTPUT_TOKEN_LIMIT_RE.test(candidate)) {
     if (!candidate || /^[{<]/u.test(candidate)) {
       return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
     }
@@ -156,7 +158,10 @@ export function renderFormatErrorCopy(raw: string): string {
         JSON.parse(candidate);
         return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
       } catch {
-        // A field path such as [messages.0] is a diagnostic, not a JSON body.
+        // Preserve field-path diagnostics, not truncated or suffixed JSON arrays.
+        if (!/^\[[a-z_$][\w$.-]*\](?:\s|:|$)/iu.test(candidate)) {
+          return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
+        }
       }
     }
     // Redact before truncation so a clipped credential cannot escape matching.

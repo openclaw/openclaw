@@ -118,8 +118,24 @@ it.each([
         );
         expect(captures).toHaveLength(selectedAtStartup ? 1 : 0);
         const startupCapture = captures[0];
-        const prepared = await withPluginRuntimeRegistryScope(root, () =>
-          prepareWorkspacePluginRegistries(
+        const prepared = await withPluginRuntimeRegistryScope(root, async () => {
+          if (purpose === "model-catalog") {
+            let primaryRegistry: PluginRegistry | undefined;
+            const runtimePluginRegistry = await resources.load(
+              {
+                ...input,
+                metadataSnapshot: metadata,
+                preferBuiltPluginArtifacts: true,
+                basePluginIds: [],
+                purpose,
+              },
+              (registry) => {
+                primaryRegistry = registry;
+              },
+            );
+            return { runtimePluginRegistry, primaryRegistry, inboundPluginRegistry: undefined };
+          }
+          return prepareWorkspacePluginRegistries(
             input,
             metadata,
             (registry) => resources.retainRegistry(registry),
@@ -129,9 +145,8 @@ it.each([
             () => [],
             undefined,
             inspection ? resources.load.bind(resources) : undefined,
-            purpose,
-          ),
-        );
+          );
+        });
         selected = prepared.runtimePluginRegistry;
         expect(prepared.inboundPluginRegistry === root).toBe(purpose === "agent");
         expect(captures).toHaveLength(1);

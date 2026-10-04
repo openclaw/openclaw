@@ -121,15 +121,6 @@ const loadPreparedModelCatalogApi = createLazyRuntimeModule(async () => ({
   ...(await import("../agents/prepared-model-catalog.js")),
 }));
 
-function resolveLiteralProviderApiKey(
-  cfg: OpenClawConfig | undefined,
-  providerId: string,
-): string | null {
-  return normalizeNullableString(
-    findNormalizedProviderValue(cfg?.models?.providers, providerId)?.apiKey,
-  );
-}
-
 async function hasProviderAuthAvailable(params: {
   capability: MediaUnderstandingCapability;
   provider: string;
@@ -139,7 +130,11 @@ async function hasProviderAuthAvailable(params: {
 }): Promise<boolean> {
   // Literal config keys are cheap to detect; defer loading model-auth until
   // profile/env discovery is actually needed.
-  if (resolveLiteralProviderApiKey(params.cfg, params.provider)) {
+  if (
+    normalizeNullableString(
+      findNormalizedProviderValue(params.cfg?.models?.providers, params.provider)?.apiKey,
+    )
+  ) {
     return true;
   }
   const hasAvailableAuthForProvider = await loadHasAvailableAuthForProvider();
@@ -395,15 +390,6 @@ function hasExplicitImageUnderstandingConfig(params: {
   });
 }
 
-function isMinimaxNativeVisionModel(params: { provider: string; model?: string }): boolean {
-  // MiniMax M2.x catalog rows may advertise image input but still need the
-  // MiniMax-VL-01 media-understanding path; only M3/M3.x is native vision here.
-  return (
-    isMinimaxVlmProvider(params.provider) &&
-    /^MiniMax-M3(\b|[-.])/i.test(params.model?.trim() ?? "")
-  );
-}
-
 async function activeModelSupportsNativeVision(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -417,10 +403,8 @@ async function activeModelSupportsNativeVision(params: {
   }
   if (
     isMinimaxVlmProvider(activeProvider) &&
-    !isMinimaxNativeVisionModel({
-      provider: activeProvider,
-      model: params.activeModel?.model,
-    })
+    // M2.x catalog rows may advertise images but require the separate VLM path.
+    !/^MiniMax-M3(\b|[-.])/i.test(params.activeModel?.model?.trim() ?? "")
   ) {
     return false;
   }

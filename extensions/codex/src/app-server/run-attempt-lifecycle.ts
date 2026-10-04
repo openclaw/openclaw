@@ -5,7 +5,7 @@ import {
   awaitAgentEndSideEffects,
   embeddedAgentLog,
   formatErrorMessage,
-  runAgentEndSideEffects,
+  runAgentEndSideEffectsAsync,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
@@ -74,7 +74,7 @@ export function emitCodexAppServerEvent(
   });
 }
 
-type CodexAgentEndHookParams = Parameters<typeof runAgentEndSideEffects>[0];
+type CodexAgentEndHookParams = Parameters<typeof runAgentEndSideEffectsAsync>[0];
 
 export async function runCodexAgentEndHook(
   params: EmbeddedRunAttemptParams,
@@ -88,7 +88,7 @@ export async function runCodexAgentEndHook(
     await awaitAgentEndSideEffects(sideEffectParams);
     return;
   }
-  runAgentEndSideEffects(sideEffectParams);
+  await runAgentEndSideEffectsAsync(sideEffectParams);
 }
 
 export function reportCodexBackgroundCleanupFailure(

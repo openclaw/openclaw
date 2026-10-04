@@ -7,6 +7,7 @@ import {
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
 import { resolveExecutablePath } from "./executable-path.js";
+import { supersedePackageActivationCustody } from "./package-update-activation-custody.js";
 import {
   openPackageActivationJournal,
   assertPackageActivationOperation,
@@ -29,7 +30,10 @@ import {
 } from "./package-update-activation-status.js";
 import { createPublicationOwner } from "./package-update-publication-owner.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
-import { assertManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-database.js";
+import {
+  assertManagedUpdateLeaseDatabaseIdentity,
+  captureManagedUpdateLeaseDatabaseIdentity,
+} from "./update-managed-service-handoff-database.js";
 import { supportsPostCoreExecutor } from "./update-post-core-capability.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery.js";
 
@@ -135,6 +139,8 @@ export async function preparePackageActivation(
     prepared.journal,
     assertOriginal,
     prepared.initial,
+    undefined,
+    options.onWarning,
   );
   return { ...prepared, ...owner };
 }
@@ -155,15 +161,17 @@ export function readPackageActivationReceipt(installKey: string):
     return undefined;
   }
   const record = openPackageActivationJournal(anchor).read();
-  assertManagedUpdateLeaseDatabaseIdentity(record.descriptor.authority);
   const receipt = status(record);
+  if (receipt.phase !== "complete" || record.intent?.kind !== "recovery-lease-identity-changed") {
+    assertManagedUpdateLeaseDatabaseIdentity(record.descriptor.authority);
+  }
   return receipt.phase === "complete" || record.phase === "superseded"
     ? receipt
     : { ...receipt, recoveryCommand: `${recoveryCommand(record)} status` };
 }
 
-/** A manual install supersedes old package custody, never pending database restoration. */
-export async function supersedePackageActivationAfterManualInstall(installKey: string) {
+/** Explicit repair settles obsolete package custody, never pending state restoration. */
+export async function supersedeStalePackageActivation(installKey: string) {
   const anchor = resolvePackageActivationAnchor(installKey);
   if (!fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
     return undefined;
@@ -174,8 +182,18 @@ export async function supersedePackageActivationAfterManualInstall(installKey: s
   if (isPackageActivationComplete(anchor, initial)) {
     return undefined;
   }
+  const originalAuthority = initial.descriptor.authority;
+  const currentDatabase = captureManagedUpdateLeaseDatabaseIdentity(originalAuthority.databasePath);
+  const leaseIdentityChanged =
+    currentDatabase.databasePath !== originalAuthority.databasePath ||
+    currentDatabase.databaseIdentity !== originalAuthority.databaseIdentity ||
+    currentDatabase.parentIdentity !== originalAuthority.parentIdentity;
+  const reason = leaseIdentityChanged
+    ? "recovery-lease-identity-changed"
+    : "superseded-by-manual-install";
   const replacementIdentity = packageActivationIdentity(installKey, true);
   if (
+    !leaseIdentityChanged &&
     [initial.descriptor.previous.identity, initial.descriptor.candidate.identity].includes(
       replacementIdentity,
     )
@@ -187,21 +205,22 @@ export async function supersedePackageActivationAfterManualInstall(installKey: s
     randomUUID(),
     async (executor) => {
       const fence = await executor.enter(installKey);
-      assertManagedUpdateLeaseDatabaseIdentity(initial.descriptor.authority);
+      assertManagedUpdateLeaseDatabaseIdentity(currentDatabase);
       admission.admit(fence.assertCurrent);
       journal.assertCurrent(initial);
       if (packageActivationIdentity(installKey, true) !== replacementIdentity) {
-        throw new Error("The manually installed package changed before recovery settlement.");
+        throw new Error("The installed package changed before recovery settlement.");
       }
-      const retained = await createPublicationOwner(
+      const retained = await supersedePackageActivationCustody(
         anchor,
         journal,
-        fence.assertCurrent,
         initial,
-      ).supersede();
-      return { operationId: initial.descriptor.operationId, retained };
+        fence.assertCurrent,
+        reason,
+      );
+      return { operationId: initial.descriptor.operationId, retained, reason };
     },
-    { existingAuthority: initial.descriptor.authority },
+    { existingAuthority: { ...originalAuthority, ...currentDatabase } },
   );
 }
 export async function readPackageActivationStatus(

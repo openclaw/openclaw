@@ -9,6 +9,7 @@ import type { AgentMessage } from "../agents/runtime/index.js";
 import { redactTranscriptMessage } from "../agents/transcript-redact.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
+import { mergeCliHistoryWithLookupStats } from "./cli-session-history-lookup.test-support.js";
 import {
   readClaudeCliSessionMessagesAsync,
   mergeImportedChatHistoryMessages,
@@ -1032,30 +1033,31 @@ describe("cli session history", () => {
   });
 
   it.each(["timestamped", "undated"])(
-    "consumes large %s repeated-text histories without rescanning matched candidates",
+    "consumes %s repeated-text histories with bounded indexed candidate lookups",
     (source) => {
       const timestamp = Date.parse("2026-09-01T10:00:00Z");
-      const count = 20_000;
-      const localMessages = Array.from({ length: count }, (_, index) => ({
-        role: "assistant",
-        content: "Repeated answer",
-        ...(source === "timestamped" ? { timestamp: timestamp + index } : {}),
-      }));
+      // Cross both the 65-row insert batches and the 256-row ordinal batches.
+      const count = 257;
+      const localMessages = Array.from({ length: count }, (_, index) =>
+        answer(source === "timestamped" ? timestamp + index : undefined),
+      );
       const importedMessages = localMessages.map((message, index) => ({
         ...message,
         timestamp: timestamp + index,
         __openclaw: cliMeta(`external-${index}`),
       }));
 
-      const startedAt = performance.now();
-      const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+      const { merged, executions } = mergeCliHistoryWithLookupStats({
+        localMessages,
+        importedMessages,
+      });
 
-      expect(performance.now() - startedAt).toBeLessThan(2_000);
-      expect(merged).toHaveLength(count);
-      expect(readRecord(readRecord(merged[0])["__openclaw"]).externalId).toBe("external-0");
-      expect(readRecord(readRecord(merged.at(-1))["__openclaw"]).externalId).toBe(
-        `external-${count - 1}`,
-      );
+      // Each import probes timestamped text, then undated text if needed.
+      expect(executions).toBeGreaterThanOrEqual(count);
+      expect(executions).toBeLessThanOrEqual(count * 2);
+      expect(
+        merged.map((message) => readRecord(readRecord(message)["__openclaw"]).externalId),
+      ).toEqual(importedMessages.map((message) => message["__openclaw"].externalId));
     },
   );
 

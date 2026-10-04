@@ -181,26 +181,43 @@ describe("renderAssistantRequestFailureCopy", () => {
         error: { type: "invalid_request_error", message: JSON.stringify(envelope) },
       });
       const assistant = makeAssistantMessageFixture({ ...target, errorMessage });
-      expect(formatUserFacingAssistantErrorText(assistant)).not.toContain("PRIVATE_PROMPT");
-      expect(renderRecordedAssistantFailureCopy(assistant)).not.toContain("PRIVATE_PROMPT");
+      expect(formatUserFacingAssistantErrorText(assistant)).not.toContain("PRIVATE");
+      expect(renderRecordedAssistantFailureCopy(assistant)).not.toContain("PRIVATE");
     },
   );
 
-  it("unwraps a nested upstream rejection without its request payload", () => {
-    const inner = JSON.stringify({
-      error: { type: "invalid_request_error", message: "Unsupported parameter" },
-      request: { input: "PRIVATE_PROMPT" },
-    });
-    const errorMessage = JSON.stringify({
-      error: { type: "invalid_request_error", message: inner },
-    });
+  it.each(["", "400 Bad Request: ", "422 Unprocessable Entity: ", "422 Unprocessable Content: "])(
+    "unwraps direct and nested upstream rejections with status prefix %j",
+    (prefix) => {
+      const inner = JSON.stringify({
+        error: { type: "invalid_request_error", message: "Unsupported parameter" },
+        request: { input: "PRIVATE_PROMPT" },
+      });
+      for (const errorMessage of [
+        prefix + inner,
+        JSON.stringify({ error: { type: "invalid_request_error", message: prefix + inner } }),
+      ]) {
+        const assistant = makeAssistantMessageFixture({ ...target, errorMessage });
+        expect(formatUserFacingAssistantErrorText(assistant)).toBe(
+          "LLM request rejected: Unsupported parameter",
+        );
+        expect(renderRecordedAssistantFailureCopy(assistant)).toBe(
+          "LLM request rejected: Unsupported parameter",
+        );
+      }
+    },
+  );
+
+  it.each([
+    "400 Bad Request: { malformed PRIVATE_PROMPT",
+    "422 Unprocessable Content: <html>PRIVATE_PROMPT</html>",
+    '400 Bad Request: [{"input":"PRIVATE_PROMPT"}]',
+    '400 Bad Request: [{"input":"PRIVATE_PROMPT"}] trailing text',
+    '422 Unprocessable Entity: [{"input":"PRIVATE_PROMPT"',
+  ])("does not display a status-prefixed raw response body: %s", (errorMessage) => {
     const assistant = makeAssistantMessageFixture({ ...target, errorMessage });
-    expect(formatUserFacingAssistantErrorText(assistant)).toBe(
-      "LLM request rejected: Unsupported parameter",
-    );
-    expect(renderRecordedAssistantFailureCopy(assistant)).toBe(
-      "LLM request rejected: Unsupported parameter",
-    );
+    expect(formatUserFacingAssistantErrorText(assistant)).not.toContain("PRIVATE");
+    expect(renderRecordedAssistantFailureCopy(assistant)).not.toContain("PRIVATE");
   });
 
   it("keeps provider bodies containing SQLite text redacted", () => {

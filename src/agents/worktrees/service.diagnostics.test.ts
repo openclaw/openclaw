@@ -38,6 +38,7 @@ const execFileAsync = promisify(execFile);
 const realRunCommand = commandExec.runCommandWithTimeout;
 const realRunGitWorkerOperation = gitWorker.runGitWorkerOperation;
 const realAbortWorktreeRemoval = worktreeRunLease.abortWorktreeRemoval;
+const realWithOpenClawStateLease = stateLease.withOpenClawStateLease;
 const emptyFailure: SpawnResult = {
   stdout: "",
   stderr: "",
@@ -352,11 +353,6 @@ describe("ManagedWorktreeService removal timing", { concurrent: false }, () => {
     parentSpanId: "abcdef1234567890",
     traceFlags: "01",
   };
-  const leaseContext: stateLease.OpenClawStateLeaseContext = {
-    signal: new AbortController().signal,
-    assertOwned: () => {},
-    assertOwnedInTransaction: () => {},
-  };
   const identityFields = {
     subsystem: "agents/worktrees",
     pid: process.pid,
@@ -423,10 +419,10 @@ describe("ManagedWorktreeService removal timing", { concurrent: false }, () => {
     const finalizeEntered = createDeferredCore();
     const releaseFinalize = createDeferredCore();
     let callbackResult: unknown;
-    vi.spyOn(stateLease, "withOpenClawStateLease").mockImplementation(async (_options, run) => {
+    vi.spyOn(stateLease, "withOpenClawStateLease").mockImplementation(async (options, run) => {
       admissionEntered.resolve();
       await releaseAdmission.promise;
-      const result = await run(leaseContext);
+      const result = await realWithOpenClawStateLease(options, run);
       callbackResult = result;
       finalizeEntered.resolve();
       await releaseFinalize.promise;

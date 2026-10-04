@@ -270,6 +270,7 @@ export {
   extractMessagingToolSourceReplyPayload,
   isDeliveredMessagingToolSendToCurrentSource,
 } from "../agents/embedded-agent-messaging-extraction.js";
+export { captureToolAuthoredSourceReply } from "../agents/embedded-agent-tool-authored-source-reply.js";
 export {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
@@ -619,6 +620,7 @@ export {
 export {
   awaitAgentEndSideEffects,
   runAgentEndSideEffects,
+  runAgentEndSideEffectsAsync,
 } from "../agents/harness/agent-end-side-effects.js";
 export { buildEmbeddedForegroundPromptContext } from "../agents/embedded-agent-runner/run/agent-end-context.js";
 export type { EmbeddedForegroundPromptContext } from "../agents/embedded-agent-runner/run/params.js";
