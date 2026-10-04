@@ -42,7 +42,7 @@ function sanitizeAssistantText(
     text,
     assistantVisibleTextFilters(
       phase === "final_answer" ? "final-answer-delivery" : "delivery",
-      streaming && phase === "final_answer",
+      streaming,
       options,
     ),
   );
@@ -67,7 +67,7 @@ export function createAssistantVisibleStreamText(phase?: AssistantPhase) {
   return createTextProjection([
     ...assistantVisibleTextFilters(
       phase === "final_answer" ? "final-answer-delivery" : "delivery",
-      phase === "final_answer",
+      true,
     ),
     ...userFacingTextFilters(false, true),
     trimTextFilter("both", { preserveCodeIndentation: true }),
