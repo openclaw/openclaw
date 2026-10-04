@@ -3,6 +3,7 @@ import {
   normalizeTrimmedStringList,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import {
   isChatAbortTerminalPersistenceSettled,
@@ -82,10 +83,7 @@ export function resolveChatAbortRequester(
   const sessionTarget = authorization?.admittedTarget;
   const assertCurrent =
     assertCallerCurrent && authorization && sessionTarget
-      ? () => {
-          assertCallerCurrent();
-          authorization.assertCurrent();
-        }
+      ? composeSessionSourceAssertion([assertCallerCurrent, authorization.assertCurrent])
       : undefined;
   assertCurrent?.();
   return {

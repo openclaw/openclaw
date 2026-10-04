@@ -541,9 +541,21 @@ Embedded writer claims, live-model-switch consolidation, and pending-final deliv
 preparation, settlement, and cleanup explicitly select that worker patch path.
 Their reducers prepare outside the transaction; the worker rereads the selected
 rows before applying the patch and publishes acknowledged results before releasing
-the existing writer queue. Uncertain writes never replay. Lifecycle-event
-persistence, cron preparation, and opaque SDK updaters retain their existing native
-routes; these callers do not change the default patch contract. Schemas, retention,
+the existing writer queue. Uncertain writes never replay. Durable lifecycle start
+and terminal persistence select their route from prepared physical store identities.
+Same-store recovery, companion, and scoped-abort source authority prepare session
+and transcript facts through the existing read worker before submission and revalidate
+after settlement. The writer compares every typed row, membership, and transcript-version
+predicate on its own connection; these same-store lifecycle source checks never read
+the agent database from a host grant. Cross-store patches retain the native transaction:
+event-loop atomicity across stores is required while the released synchronous transcript
+SDK can mutate the source outside any async queue; revisit at the next SDK major.
+This is an explicit locality decision, never an error fallback. Incognito sources
+carry that native requirement even when their target is durable. Predicate refusals
+retain the source owner's error ordering, and accepted lifecycle writes settle
+before shutdown closes database workers. Cron preparation and opaque SDK updaters
+retain their existing routes; these callers do not change the default patch
+contract. Schemas, retention,
 durability, and update behavior are unchanged.
 
 Per-turn model selection, harness admission, local-turn placement preparation,

@@ -21,7 +21,8 @@ type DurableHistoryReadOperationRequest = Extract<
       | "transcript-message-presence"
       | "transcript-anchors"
       | "session-pending-input-receipts"
-      | "session-pending-input-source";
+      | "session-pending-input-source"
+      | "session-harness-completion-source";
   }
 >;
 
@@ -50,6 +51,7 @@ export function isSessionHistoryReadOperation(
     case "transcript-anchors":
     case "session-pending-input-receipts":
     case "session-pending-input-source":
+    case "session-harness-completion-source":
       return true;
     default:
       return false;
@@ -113,6 +115,32 @@ async function prepareHistoryRead(
           { ...request.database, env: request.resolved.env },
         );
         return { kind: request.kind, facts: read.found ? read.value : { anchors: [] } };
+      };
+    }
+    case "session-harness-completion-source": {
+      const [
+        { withOpenClawAgentDatabaseReadOnly },
+        { assertCapturedSessionEntryReadSource },
+        { readHarnessCompletionSourceInDatabase },
+      ] = await Promise.all([
+        import("../../state/openclaw-agent-db-readonly.js"),
+        import("./session-accessor.sqlite-exact-read.js"),
+        import("./session-harness-completion-source.kernel.js"),
+      ]);
+      return () => {
+        const read = withOpenClawAgentDatabaseReadOnly(
+          (database) => {
+            assertCapturedSessionEntryReadSource(request.source, database);
+            return runWithSessionTranscriptReadFence(request.admission, () =>
+              readHarnessCompletionSourceInDatabase(database, request.claim),
+            );
+          },
+          { ...request.database, env: request.env },
+        );
+        return {
+          kind: request.kind,
+          snapshot: read.found ? read.value : { validInput: false },
+        };
       };
     }
     case "session-pending-input-source": {

@@ -1,5 +1,10 @@
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
+import type {
+  SessionSourceAssertion,
+  SessionSourcePredicate,
+  SessionSourcePredicateFacts,
+} from "./session-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionEntryPatchSelection =
@@ -7,6 +12,8 @@ export type SessionEntryPatchSelection =
   | { kind: "target"; target: { canonicalKey: string; storeKeys: string[] } };
 
 export type SessionEntryPatchGuard = {
+  /** Storage reads prepare before submission; grants consume the prepared host authority. */
+  source?: SessionSourceAssertion;
   /** Retained host authority only: these assertions must not query SQLite. */
   assertCurrent?: () => void;
   shouldCommitIf?: {
@@ -28,12 +35,14 @@ export type SessionEntryPatchCommit = {
   consumePendingReset?: boolean;
   providerReviewMutation?: boolean;
   shouldCommitIf?: SessionEntryPatchGuard["shouldCommitIf"];
+  sources?: SessionSourcePredicate[];
 };
 
 export type SessionEntryPatchCommitted = {
   kind: "session-entry-patch";
   entry: SessionEntry | null;
   publication?: SessionEntryReplacementPublication;
+  refusedSource?: { index: number; facts: SessionSourcePredicateFacts };
 };
 
 export type SessionEntryPatchReceipt = {

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareQualifiedSessionEntryTarget } from "../config/sessions/session-accessor.entry.js";
@@ -5,7 +6,9 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sql
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import { removeSessionMember as removeSessionMemberSync } from "../config/sessions/session-sharing-store.native.js";
 import { historyLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -14,9 +17,65 @@ import type {
   SessionMutationAuthorization,
 } from "./server-methods/types.js";
 import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
+import { prepareSessionSharingSource } from "./session-sharing-source.js";
 import { roleClient, rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
 import { resolveGatewaySessionStoreTarget } from "./session-utils-store-lookup.js";
 import { withQualifiedGatewaySessionEntry } from "./session-utils-store.js";
+
+it.each(["before", "after"] as const)(
+  "refuses a sharing locator retargeted %s source preparation while the original store remains",
+  async (phase) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const sessionKey = "agent:main:sharing-locator";
+      const original = state.statePath("original", "store.main.sqlite");
+      const replacement = state.statePath("replacement", "store.main.sqlite");
+      for (const storePath of [original, replacement]) {
+        replaceSessionEntrySync(
+          { agentId: "main", storePath, sessionKey },
+          { sessionId: "identical", updatedAt: 1, visibility: "shared" },
+        );
+      }
+      const database = openOpenClawAgentDatabase({ agentId: "main", path: original });
+      const identity = readOpenClawAgentDatabaseIdentity(database);
+      const alias = state.statePath("selected");
+      fs.symlinkSync(state.statePath("original"), alias, "junction");
+      const retarget = () => {
+        fs.unlinkSync(alias);
+        fs.symlinkSync(state.statePath("replacement"), alias, "junction");
+      };
+      const target = {
+        agentId: "main",
+        canonicalKey: sessionKey,
+        storeKey: sessionKey,
+        storePath: state.statePath("selected", "store.json"),
+        readSource: {
+          agentId: "main",
+          path: database.path,
+          databaseIdentity: identity.identity,
+          databaseBirthtime: identity.birthtime,
+        },
+      };
+      if (phase === "before") {
+        retarget();
+        // Join any unexpectedly accepted reader so the negative control cannot leak custody.
+        await expect(
+          prepareSessionSharingSource(target, () => {}).then((prepared) => {
+            prepared.release();
+          }),
+        ).rejects.toThrow("Session sharing source changed");
+      } else {
+        const prepared = await prepareSessionSharingSource(target, () => {});
+        try {
+          expect(prepared.target?.entry.sessionId).toBe("identical");
+          retarget();
+          expect(() => prepared.assertCurrent()).toThrow("Session sharing source changed");
+        } finally {
+          prepared.release();
+        }
+      }
+    });
+  },
+);
 
 it.each([
   { kind: "qualified", agentId: "main" },

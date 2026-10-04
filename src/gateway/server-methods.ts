@@ -1,4 +1,8 @@
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import {
+  captureExternalSessionCommitGuard,
+  composeSessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -315,11 +319,11 @@ export async function handleGatewayRequest(
       : respondUnobserved;
     const sessionMutationCommitGuard =
       profileBinding || runtimeParticipant
-        ? () => {
-            profileBinding?.assertCurrent();
-            runtimeParticipant?.assertCurrent();
-            opts.sessionMutationCommitGuard?.();
-          }
+        ? composeSessionSourceAssertion([
+            profileBinding?.assertCurrent,
+            runtimeParticipant?.assertCurrent,
+            captureExternalSessionCommitGuard(opts.sessionMutationCommitGuard),
+          ])
         : opts.sessionMutationCommitGuard;
     const entry = opts.requestEntry ?? context.requestEntryLifetime?.enter(opts);
     const releaseForegroundWork = retainSessionListForegroundWork();
@@ -410,11 +414,11 @@ export async function handleGatewayRequest(
       }
       const sessionMutationAuthorization = withSessionMutationCommitGuard(
         authorization.sessionMutationAuthorization,
-        () => {
-          runtimeParticipant?.assertCurrent();
-          assertOperatorCurrent();
-          requestMutationAuthority.assertCurrent();
-        },
+        composeSessionSourceAssertion([
+          runtimeParticipant?.assertCurrent,
+          assertOperatorCurrent,
+          requestMutationAuthority.assertCurrent,
+        ]),
         profileBinding?.assertCurrent,
         requestMutationAuthority.assertAdmittedInputCurrent
           ? () => {
