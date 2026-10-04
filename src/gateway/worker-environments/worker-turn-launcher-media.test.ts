@@ -410,7 +410,9 @@ describe("cloud turn media boundary", () => {
     expect
       .soft(replayUsers.flatMap((message) => message.content).some((part) => part.type === "image"))
       .toBe(false);
-    expect(replayUsers[0]?.content).toEqual([{ type: "text", text: "raw image" }]);
+    expect(replayUsers[0]?.content).toEqual([
+      { type: "text", text: expect.stringMatching(/^\[[^\]]+\] raw image$/u) },
+    ]);
     const canonical = (await openSessionManager()).buildSessionContext().messages;
     expect(canonical.slice(0, canonicalHistory.length)).toEqual(canonicalHistory);
     expect(readPersistedMediaFacts(canonical.at(-2)!)?.map((fact) => fact.url)).toEqual(
@@ -463,7 +465,7 @@ describe("cloud turn media boundary", () => {
     await rig.execute({ ...turn("after-expiry"), prompt: "What is two plus two?" });
 
     expect(rig.launches).toHaveLength(4);
-    expect(rig.launches[3]?.assignment.prompt).toBe("What is two plus two?");
+    expect(rig.launches[3]?.assignment.prompt).toMatch(/^\[[^\]]+\] What is two plus two\?$/u);
     const replay = rig.launches[3]?.assignment.initialMessages;
     const firstUser = replay?.find((message) => message.role === "user");
     expect(firstUser?.content).toEqual([
@@ -729,8 +731,10 @@ describe("cloud turn media boundary", () => {
       userTurnTranscriptRecorder: recorder,
     });
     expect(
-      rig.launches[0]?.assignment.initialMessages.some((message) =>
-        message.content.some((part) => part.type === "image"),
+      rig.launches[0]?.assignment.initialMessages.some(
+        (message) =>
+          typeof message.content !== "string" &&
+          message.content.some((part) => part.type === "image"),
       ),
     ).toBe(false);
     expect(rig.tunnel.stageAttachments).toHaveBeenCalledTimes(1);
@@ -739,7 +743,9 @@ describe("cloud turn media boundary", () => {
       "/worker/workspace",
       [...rig.inputFiles().keys()][0]!.split(path.sep).join("/"),
     );
-    expect(rig.launches[0]?.assignment.prompt).toBe(`described [media attached: ${remotePath}]`);
+    expect(rig.launches[0]?.assignment.prompt).toEqual(
+      expect.stringContaining(`described [media attached: ${remotePath}]`),
+    );
 
     const invalidRecorder = createUserTurnTranscriptRecorder({
       target: { ...sessionTarget, sessionEntry: undefined },

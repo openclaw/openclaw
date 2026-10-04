@@ -8,7 +8,7 @@ import type { AgentToolResult } from "openclaw/plugin-sdk/tool-results";
 import { vi } from "vitest";
 import type { GoogleMeetCalendarLookupResult } from "../calendar.js";
 import { listGoogleMeetCalendarEvents } from "../calendar.js";
-import type { GoogleMeetExportManifest } from "../cli-export.js";
+import type { buildGoogleMeetExportManifest } from "../cli-export.js";
 import type {
   GoogleMeetArtifactsResult,
   GoogleMeetAttendanceResult,
@@ -157,6 +157,14 @@ export function setupGoogleMeetPlugin(
       if (argv[0]?.endsWith("system_profiler")) {
         return { code: 0, stdout: "BlackHole 2ch", stderr: "" };
       }
+      if (
+        argv[0] === "pactl" &&
+        argv[1] === "list" &&
+        argv[2] === "short" &&
+        (argv[3] === "sinks" || argv[3] === "sources")
+      ) {
+        return { code: 0, stdout: "1\topenclaw_meeting_audio\n", stderr: "" };
+      }
       return { code: 0, stdout: "", stderr: "" };
     },
   );
@@ -270,7 +278,7 @@ type GoogleMeetToolDetails = {
   export: {
     dryRun?: boolean;
     files?: string[];
-    manifest?: GoogleMeetExportManifest;
+    manifest?: ReturnType<typeof buildGoogleMeetExportManifest>;
     zipFile?: string;
   };
   leave: Awaited<ReturnType<GoogleMeetRuntime["leave"]>>;

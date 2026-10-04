@@ -29,12 +29,8 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import {
-  listAcpSessionEntries,
-  readAcpSessionMeta,
-  upsertAcpSessionMeta,
-  writeAcpSessionMetaForMigration,
-} from "./session-meta.js";
+import { seedCanonicalAcpSessionMeta } from "./session-meta-fixture.test-support.js";
+import { listAcpSessionEntries, readAcpSessionMeta, upsertAcpSessionMeta } from "./session-meta.js";
 
 const SESSION_KEY = "agent:main:retained-acp";
 const SESSION_ID = "retained-acp-session";
@@ -167,7 +163,7 @@ describe("retained legacy ACP metadata", () => {
         expect((await fixture.importCore()).totals.importedEntries).toBe(1);
         const canonicalMeta = { ...LEGACY_META, runtimeSessionName: "canonical-runtime" };
         if (operation === "close") {
-          writeAcpSessionMetaForMigration({
+          seedCanonicalAcpSessionMeta({
             ...fixture.acpScope,
             sessionId: SESSION_ID,
             meta: canonicalMeta,

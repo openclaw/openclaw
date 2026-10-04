@@ -64,19 +64,7 @@ afterEach(() => {
   providerRegistryMocks.resolvePluginProvidersCore.mockClear();
 });
 
-const baseProviderTransform = {
-  provider: "openai",
-  workspaceDir: "/tmp/openclaw",
-  context: {
-    provider: "openai",
-    modelId: "gpt-5.5",
-    promptMode: "full" as const,
-  },
-};
-
-const transformProviderSystemPrompt: Parameters<
-  typeof buildAttemptSystemPrompt
->[0]["transformProviderSystemPrompt"] = ({ context }) => context.systemPrompt;
+const transformSystemPrompt = (systemPrompt: string) => systemPrompt;
 
 async function preparePermissionPrompt(
   isRawModelRun = false,
@@ -477,7 +465,7 @@ describe("buildAttemptSystemPrompt", () => {
       // survive provider transformation.
       const result = await buildAttemptSystemPrompt({
         isRawModelRun: false,
-        transformProviderSystemPrompt,
+        transformSystemPrompt,
         embeddedSystemPrompt: {
           workspaceDir,
           reasoningTagHint: false,
@@ -498,7 +486,6 @@ describe("buildAttemptSystemPrompt", () => {
             { path: "/tmp/openclaw/USER.md", content: "USER_CONTEXT_MARKER" },
           ],
         },
-        providerTransform: { ...baseProviderTransform, workspaceDir },
       });
 
       expect(result.systemPrompt).toContain("\nWorking directory: /tmp/openclaw\n");
@@ -512,7 +499,7 @@ describe("buildAttemptSystemPrompt", () => {
   it("filters first-turn curated context to global and active-project entries", async () => {
     const result = await buildAttemptSystemPrompt({
       isRawModelRun: false,
-      transformProviderSystemPrompt,
+      transformSystemPrompt,
       embeddedSystemPrompt: {
         workspaceDir: "/tmp/openclaw",
         reasoningTagHint: false,
@@ -540,7 +527,6 @@ describe("buildAttemptSystemPrompt", () => {
           },
         ],
       },
-      providerTransform: baseProviderTransform,
     });
 
     expect(result.systemPrompt).toContain("Alpha fact");
@@ -551,7 +537,7 @@ describe("buildAttemptSystemPrompt", () => {
   it("preserves bootstrap Project Context", async () => {
     const result = await buildAttemptSystemPrompt({
       isRawModelRun: false,
-      transformProviderSystemPrompt,
+      transformSystemPrompt,
       embeddedSystemPrompt: {
         workspaceDir: "/tmp/openclaw",
         reasoningTagHint: false,
@@ -587,7 +573,6 @@ describe("buildAttemptSystemPrompt", () => {
           },
         ],
       },
-      providerTransform: baseProviderTransform,
     });
 
     expect(result.systemPrompt).toContain("## Bootstrap Pending");
@@ -601,7 +586,7 @@ describe("buildAttemptSystemPrompt", () => {
   it("preserves runtime extra system prompt context", async () => {
     const result = await buildAttemptSystemPrompt({
       isRawModelRun: false,
-      transformProviderSystemPrompt,
+      transformSystemPrompt,
       embeddedSystemPrompt: {
         workspaceDir: "/tmp/openclaw",
         reasoningTagHint: false,
@@ -622,7 +607,6 @@ describe("buildAttemptSystemPrompt", () => {
         bootstrapMode: "full",
         contextFiles: [],
       },
-      providerTransform: baseProviderTransform,
     });
 
     expect(result.systemPrompt).toContain("Current model identity: openai/gpt-5.5.");
@@ -633,9 +617,10 @@ describe("buildAttemptSystemPrompt", () => {
   it("omits system prompts for raw model probes", async () => {
     // Raw model probes still build a base prompt for diagnostics, but the final
     // provider prompt must be empty.
+    const rawTransform = vi.fn((systemPrompt: string) => systemPrompt);
     const result = await buildAttemptSystemPrompt({
       isRawModelRun: true,
-      transformProviderSystemPrompt,
+      transformSystemPrompt: rawTransform,
       embeddedSystemPrompt: {
         workspaceDir: "/tmp/openclaw",
         reasoningTagHint: false,
@@ -658,11 +643,11 @@ describe("buildAttemptSystemPrompt", () => {
           },
         ],
       },
-      providerTransform: baseProviderTransform,
     });
 
     expect(result.baseSystemPrompt).toContain("Reply with BOOTSTRAP_OK.");
     expect(result.systemPrompt).toBe("");
+    expect(rawTransform).not.toHaveBeenCalled();
   });
 });
 

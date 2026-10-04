@@ -69,6 +69,7 @@ import {
   readPreferredUpstreamUserText,
 } from "./transcript-recent-window.js";
 import { streamSessionTranscriptLinesReverse } from "./transcript-stream.js";
+import { captureOwnedTranscriptWriteAssertion } from "./transcript-write-context.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type SessionTranscriptAppendTarget = {
@@ -499,7 +500,7 @@ export async function appendExactAssistantMessageToSessionTranscript(
     // read the current projected tail again inside the guarded append.
     await waitForSessionTranscriptProjection(target);
   }
-  let latestEquivalentAssistantId: string | undefined;
+  let equivalentAssistant: { messageId: string; assertCurrent: () => void } | undefined;
   // Keyed mirrors use strict replay identity; text-only suppression must not
   // hide conflicting media or collapse distinct source messages.
   const turn = await persistSessionTranscriptTurn(target, {
@@ -541,7 +542,7 @@ export async function appendExactAssistantMessageToSessionTranscript(
             }
           : {}),
         shouldAppend: async (appendTarget) => {
-          latestEquivalentAssistantId =
+          const messageId =
             isRedundantDeliveryMirror(params.message) && !explicitIdempotencyKey
               ? await findLatestEquivalentAssistantMessageId(
                   appendTarget,
@@ -549,7 +550,10 @@ export async function appendExactAssistantMessageToSessionTranscript(
                   params.config,
                 )
               : undefined;
-          return !latestEquivalentAssistantId;
+          equivalentAssistant = messageId
+            ? { messageId, assertCurrent: captureOwnedTranscriptWriteAssertion(appendTarget) }
+            : undefined;
+          return !equivalentAssistant;
         },
       },
     ],
@@ -561,15 +565,17 @@ export async function appendExactAssistantMessageToSessionTranscript(
       reason: `session rebound for sessionKey: ${sessionKey}`,
     };
   }
-  if (latestEquivalentAssistantId) {
+  if (equivalentAssistant) {
     const anchor = await readActiveTranscriptEntryAnchorAsync({
       ...target,
-      entryId: latestEquivalentAssistantId,
+      entryId: equivalentAssistant.messageId,
     });
+    equivalentAssistant.assertCurrent();
+    params.assertCurrent?.();
     return {
       ok: true,
       target,
-      messageId: latestEquivalentAssistantId,
+      messageId: equivalentAssistant.messageId,
       ...(anchor ? { anchor } : {}),
     };
   }

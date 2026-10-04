@@ -262,9 +262,10 @@ export interface ContextUsageEstimate {
   lastUsageIndex: number | null;
 }
 
-function getLastAssistantUsageInfo(
-  messages: AgentMessage[],
-): { usage: Usage; index: number } | undefined {
+/** Estimate context tokens for messages using provider usage when available. */
+export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEstimate {
+  let usageTokens = 0;
+  let lastUsageIndex: number | null = null;
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages.at(i);
     if (!message) {
@@ -273,22 +274,17 @@ function getLastAssistantUsageInfo(
     if (isUnavailableContextBarrier(message)) {
       // Synthetic CLI markers invalidate older usage without contributing a
       // replacement. Estimate the whole transcript instead of scanning past it.
-      return undefined;
+      break;
     }
     const usage = getAssistantUsage(message);
     if (usage && usage.contextUsage?.state !== "unavailable") {
-      return { usage, index: i };
+      usageTokens = calculateContextTokens(usage);
+      lastUsageIndex = i;
+      break;
     }
   }
-  return undefined;
-}
-
-/** Estimate context tokens for messages using provider usage when available. */
-export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEstimate {
-  const usageInfo = getLastAssistantUsageInfo(messages);
-  const usageTokens = usageInfo ? calculateContextTokens(usageInfo.usage) : 0;
   let trailingTokens = 0;
-  for (const message of usageInfo ? messages.slice(usageInfo.index + 1) : messages) {
+  for (const message of lastUsageIndex === null ? messages : messages.slice(lastUsageIndex + 1)) {
     trailingTokens += estimateTokens(message);
   }
 
@@ -296,7 +292,7 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
     tokens: usageTokens + trailingTokens,
     usageTokens,
     trailingTokens,
-    lastUsageIndex: usageInfo?.index ?? null,
+    lastUsageIndex,
   };
 }
 

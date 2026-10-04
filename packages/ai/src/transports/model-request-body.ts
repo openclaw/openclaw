@@ -15,10 +15,7 @@ export function modelRequestBodyState(
   const value =
     Reflect.get(options, REQUEST_BODY) ?? (inheritFrom && Reflect.get(inheritFrom, REQUEST_BODY));
   // SAFETY: Only this module writes the private symbol, always with ModelRequestBodyState.
-  let state = value as ModelRequestBodyState | undefined;
-  if (!state) {
-    state = {};
-  }
+  const state = (value as ModelRequestBodyState | undefined) ?? {};
   Reflect.set(options, REQUEST_BODY, state);
   return state;
 }

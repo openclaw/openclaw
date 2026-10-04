@@ -1,18 +1,15 @@
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { InvalidArgumentError, type Command } from "commander";
 import { validateDiskSize } from "../../fleet/cell-profile.js";
-import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { collectOption, parseStrictPositiveIntOption } from "../program/helpers.js";
-
-const loadFleetRuntime = createLazyPromise(() => import("./commands.runtime.js"));
 
 function tenantAction<TOptions extends object>(
   select: (
-    runtime: Awaited<ReturnType<typeof loadFleetRuntime>>,
+    runtime: typeof import("./commands.runtime.js"),
   ) => (options: TOptions & { tenant: string }) => Promise<void>,
 ) {
   return async (tenant: string, options: TOptions) =>
-    select(await loadFleetRuntime())({ tenant, ...options });
+    select(await import("./commands.runtime.js"))({ tenant, ...options });
 }
 
 function parseContainerRuntime(value: string): "docker" | "podman" {
@@ -126,7 +123,7 @@ export function registerFleetCli(program: Command): void {
     .argument("[tenant]", "Tenant slug")
     .option("--json", "Output JSON", false)
     .action(async (tenant: string | undefined, options: { json: boolean }) => {
-      const runtime = await loadFleetRuntime();
+      const runtime = await import("./commands.runtime.js");
       await runtime.runFleetDoctorCommand({ tenant, ...options });
     });
 
@@ -136,7 +133,7 @@ export function registerFleetCli(program: Command): void {
     .description("List tenant cells")
     .option("--json", "Output JSON", false)
     .action(async (options: { json: boolean }) => {
-      const runtime = await loadFleetRuntime();
+      const runtime = await import("./commands.runtime.js");
       await runtime.runFleetListCommand(options);
     });
 
@@ -165,7 +162,7 @@ export function registerFleetCli(program: Command): void {
       .description(`${action[0]?.toUpperCase()}${action.slice(1)} a tenant cell`)
       .argument("<tenant>", "Tenant slug")
       .action(async (tenant: string) => {
-        const runtime = await loadFleetRuntime();
+        const runtime = await import("./commands.runtime.js");
         await runtime.runFleetLifecycleCommand({ action, tenant });
       });
   }

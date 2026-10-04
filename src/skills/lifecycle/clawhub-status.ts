@@ -192,22 +192,15 @@ export function resolveClawHubSkillStatusLinkSync(params: {
       },
     );
   }
+  const { version: _version, ...origin } = originRead.origin;
   return {
+    ...origin,
     status: "linked",
     valid: true,
     registry: lockedRegistry,
     slug: trackedSlug,
-    ...(ownerHandle ? { ownerHandle } : {}),
-    ...(requestedReference ? { requestedReference } : {}),
-    ...(trustState ? { trustState } : {}),
-    installedVersion: locked.version,
-    installedAt: locked.installedAt,
     originPath: originRead.path,
     lockPath: lockRead.path,
-    ...(sourceUrl ? { sourceUrl } : {}),
-    ...(artifact ? { artifact } : {}),
-    ...(skillFile ? { skillFile } : {}),
-    ...(fileTreeSha256 ? { fileTreeSha256 } : {}),
   };
 }
 
@@ -414,12 +407,7 @@ export async function resolveClawHubSkillVerificationTarget(
     const selector: ClawHubSkillVerificationSelector = version ? "version" : tag ? "tag" : "latest";
     return {
       ok: true,
-      slug: requestedRef.slug,
-      ...(requestedRef.ownerHandle ? { ownerHandle: requestedRef.ownerHandle } : {}),
-      ...(requestedRef.requestedReference
-        ? { requestedReference: requestedRef.requestedReference }
-        : {}),
-      ...(requestedRef.trustState ? { trustState: requestedRef.trustState } : {}),
+      ...requestedRef,
       baseUrl: registry,
       version,
       tag,

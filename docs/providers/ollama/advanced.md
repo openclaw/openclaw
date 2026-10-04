@@ -271,6 +271,10 @@ sidebarTitle: "Advanced"
     DeepSeek V4, and DeepSeek V4.1 Flash also send native
     `think: "max"` for `/think max`; other models and local servers keep the
     compatible `think: "high"` mapping.
+    Native `max` applies to the `ollama-cloud` provider and to any `ollama`
+    provider whose base URL is `https://ollama.com`. A `:cloud` model reached
+    through a local Ollama server keeps `high`, because Ollama 0.21.2 and
+    earlier reject `max`.
 
     GLM 5.3 and GLM 5.3 Flash on Ollama Cloud cannot turn thinking off: their
     `/api/show` thinking values have no `false`, and `think: false` makes them

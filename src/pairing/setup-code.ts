@@ -203,10 +203,7 @@ function validateMobilePairingUrl(url: string, source?: string): string | null {
   return describeSecureMobilePairingFix(source);
 }
 
-type ResolveAuthLabelResult = {
-  label?: "token" | "password" | "trusted-proxy";
-  error?: string;
-};
+type ResolveAuthLabelResult = { label: "token" | "password" | "trusted-proxy" } | { error: string };
 
 const GATEWAY_SCHEME_WITHOUT_AUTHORITY_RE = /^(?:https?|wss?):(?!\/\/)/i;
 const SCHEME_LIKE_PATH_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\//;
@@ -497,7 +494,7 @@ export async function resolvePairingSetupFromConfig(
     hasPasswordFallback: Boolean(normalizeOptionalString(env.OPENCLAW_GATEWAY_PASSWORD)),
   });
   const authLabel = resolvePairingSetupAuthLabel(cfgForAuth, env);
-  if (authLabel.error) {
+  if ("error" in authLabel) {
     return { ok: false, error: authLabel.error };
   }
   const explicitPublicUrl = normalizeOptionalString(options.publicUrl);
@@ -530,10 +527,6 @@ export async function resolvePairingSetupFromConfig(
   const mobilePairingUrlError = validateMobilePairingUrl(urlResult.url, urlResult.source);
   if (mobilePairingUrlError) {
     return { ok: false, error: mobilePairingUrlError };
-  }
-
-  if (!authLabel.label) {
-    return { ok: false, error: "Gateway auth is not configured (no token or password)." };
   }
 
   const requestedBootstrapProfile =

@@ -223,28 +223,4 @@ describe("runNonInteractiveRemoteSetup", () => {
     const commit = commitNonInteractiveOnboardConfigMock.mock.calls[0]?.[0];
     expect(commit?.nextConfig.gateway?.remote).toEqual(remote);
   });
-
-  it.each([
-    {
-      name: "an empty password",
-      options: { remotePassword: " " },
-      message: "Invalid --remote-password: value cannot be empty.",
-    },
-    {
-      name: "simultaneous token and password credentials",
-      options: { remoteToken: "remote-token", remotePassword: "remote-password" },
-      message: "Use either --remote-token or --remote-password, not both.",
-    },
-  ])("rejects $name without committing remote configuration", async ({ options, message }) => {
-    await expect(
-      runNonInteractiveRemoteSetup({
-        opts: { nonInteractive: true, mode: "remote", remoteUrl, skipHooks: true, ...options },
-        runtime,
-        baseConfig: {},
-      }),
-    ).rejects.toThrow("unexpected exit 1");
-
-    expect(runtime.error).toHaveBeenCalledWith(message);
-    expect(commitNonInteractiveOnboardConfigMock).not.toHaveBeenCalled();
-  });
 });

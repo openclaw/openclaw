@@ -219,6 +219,7 @@ async function withSubagentSessionEntry<T>(
 
 export async function resolveSubagentSessionStartedAt(params: {
   childSessionKey: string;
+  childAgentId?: string;
   notBeforeMs?: number;
   cfg?: OpenClawConfig;
   assertCurrent?: () => void;

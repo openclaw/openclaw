@@ -27,12 +27,6 @@ type RemovedSessionArtifactCleanup = {
     reason: "deleted";
     restrictToStoreDir: true;
   }) => Promise<Set<string>>;
-  removeRemovedSessionTrajectoryArtifacts: (params: {
-    removedSessionFiles: RemovedSessionFiles;
-    referencedSessionIds: ReadonlySet<string>;
-    storePath: string;
-    restrictToStoreDir: true;
-  }) => Promise<void>;
   cleanupArchivedSessionTranscripts: (params: {
     directories: string[];
     rules: Array<{ reason: "deleted" | "reset"; olderThanMs: number }>;
@@ -63,8 +57,8 @@ async function cleanupRemovedSessionArtifacts(params: {
   referencedSessionIds: ReadonlySet<string>;
 }): Promise<void> {
   // SQLite should commit entry-retention rows before this named artifact cleanup.
-  // The cleanup needs the final referenced-session set so shared transcripts and
-  // trajectory sidecars survive until the last referring row is gone.
+  // The cleanup needs the final referenced-session set so shared transcripts
+  // survive until the last referring row is gone.
   const archivedDirs = await params.operation.artifacts.archiveRemovedSessionTranscripts({
     removedSessionFiles: params.removedSessionFiles,
     referencedSessionIds: params.referencedSessionIds,
@@ -72,14 +66,6 @@ async function cleanupRemovedSessionArtifacts(params: {
     reason: "deleted",
     restrictToStoreDir: true,
   });
-  if (params.removedSessionFiles.size > 0) {
-    await params.operation.artifacts.removeRemovedSessionTrajectoryArtifacts({
-      removedSessionFiles: params.removedSessionFiles,
-      referencedSessionIds: params.referencedSessionIds,
-      storePath: params.operation.storePath,
-      restrictToStoreDir: true,
-    });
-  }
   // null retention keeps archived transcripts: they are conversation history,
   // and the disk budget (not a wall-clock timer) is the only eviction path.
   if (params.maintenance.resetArchiveRetentionMs == null) {

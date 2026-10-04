@@ -21,12 +21,8 @@ function resolveUserPath(input: string): string {
 }
 
 function isProviderUnreachableWebhookUrl(webhookUrl: string): boolean {
-  try {
-    const parsed = new URL(webhookUrl);
-    return isBlockedHostnameOrIp(parsed.hostname);
-  } catch {
-    return false;
-  }
+  const parsed = URL.parse(webhookUrl);
+  return parsed ? isBlockedHostnameOrIp(parsed.hostname) : false;
 }
 
 function resolveVoiceCallSetupValue(configured: unknown, fallback: unknown): string | undefined {

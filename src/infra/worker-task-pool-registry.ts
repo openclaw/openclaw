@@ -1,6 +1,6 @@
+import { joinOwnedWorkerTasks } from "@openclaw/worker-runtime";
+import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { RetainedOperation } from "./retained-operation.js";
-import { joinOwnedWorkerTasks } from "./worker-task-pool-owned.js";
 
 type ResourceOwningPool = { startCloseResources(key?: string): RetainedOperation<void> };
 

@@ -66,11 +66,6 @@ export type { FleetHealthResult } from "./service-support.runtime.js";
 
 const OFFICIAL_IMAGE_UID = 1_000;
 const OFFICIAL_IMAGE_GID = 1_000;
-// Mirrors the compose healthcheck contract: an upgrade commits only after /healthz
-// answers. The deadline bounds how long a broken image can hold the cell before
-// restore without rolling back slow-booting cells prematurely.
-const CELL_VERIFY_TIMEOUT_MS = 60_000;
-const CELL_VERIFY_POLL_MS = 1_000;
 
 export type FleetCreateOptions = {
   tenant: string;
@@ -388,8 +383,6 @@ export function createFleetService(options: FleetServiceOptions = {}) {
                 now,
                 sleep,
                 checkpoint,
-                timeoutMs: CELL_VERIFY_TIMEOUT_MS,
-                pollMs: CELL_VERIFY_POLL_MS,
                 context: "create",
               });
             } catch (error) {
@@ -608,8 +601,6 @@ export function createFleetService(options: FleetServiceOptions = {}) {
               now,
               sleep,
               checkpoint,
-              timeoutMs: CELL_VERIFY_TIMEOUT_MS,
-              pollMs: CELL_VERIFY_POLL_MS,
               context: "upgrade",
             });
             await checkpoint();

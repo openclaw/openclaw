@@ -4,7 +4,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { listAgentEntriesWithSource } from "../agents/agent-scope.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
-import { normalizePluginsConfig, normalizePluginId } from "../plugins/config-state.js";
+import { normalizePluginId } from "../plugins/config-state.js";
 import {
   findUninspectedPluginDiagnostic,
   pluginDiagnosticToConfigWarning,
@@ -178,7 +178,7 @@ export function validatePreparedConfigWithPlugins(
 
   const ensureKnownIds = (): Set<string> => {
     const info = ensureRegistry();
-    info.knownIds ??= new Set(info.registry.plugins.map((record) => record.id));
+    info.knownIds ??= new Set(info.registry.plugins.map((record) => normalizePluginId(record.id)));
     return info.knownIds;
   };
 
@@ -566,8 +566,6 @@ export function validatePreparedConfigWithPlugins(
       applyDefaults: opts.applyDefaults,
       schemaValidations: opts.schemaValidations,
       registry,
-      knownIds: ensureKnownIds(),
-      normalizedPlugins: normalizePluginsConfig(config.plugins),
       deferredPluginIds,
       ensureCompatPluginIds,
       ensureOverriddenPluginIds,

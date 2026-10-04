@@ -30,7 +30,7 @@ import {
 } from "../../gateway/operator-scopes.js";
 import { pluginHostHookHandlers } from "../../gateway/server-methods/plugin-host-hooks.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
-import { buildGatewaySessionRow } from "../../gateway/session-utils.js";
+import { buildGatewaySessionRow } from "../../gateway/session-utils-row.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";

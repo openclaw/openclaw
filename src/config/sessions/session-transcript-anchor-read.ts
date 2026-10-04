@@ -16,7 +16,10 @@ import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
+import {
+  assertSessionStoreReadCandidate,
+  captureSessionStoreCandidateIdentities,
+} from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import {
   readSessionTranscriptAnchorFactsInDatabase,
@@ -63,14 +66,7 @@ export async function readSessionTranscriptAnchorsAsync(
   }
   const storePath = captured.storePath ?? resolveOpenClawAgentSqlitePath(captured);
   const candidates = captureSessionStoreReadCandidates(storePath);
-  const identities = new Map(
-    candidates
-      .filter((candidate) => !candidate.scope)
-      .map((candidate) => {
-        const identity = readDatabasePathIdentitySync(candidate.path);
-        return [identity.canonicalPath, identity] as const;
-      }),
-  );
+  const identities = captureSessionStoreCandidateIdentities(candidates);
   const context = captureOpenClawStateReadWorkerContext({ env: captured.env });
   return withSessionHistoryWorkerReadCandidates(candidates, async (discovery) => {
     const resolved = await prepareSqliteTranscriptReadScope(captured, signal);

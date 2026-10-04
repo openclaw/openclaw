@@ -30,6 +30,7 @@ import { requireNodeSqlite } from "./node-sqlite.js";
 const loggerWarn = vi.hoisted(() => vi.fn());
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: (name: string) => ({
+    trace: vi.fn(),
     debug: vi.fn(),
     info: vi.fn(),
     warn: name === "infra/exec-approvals" ? loggerWarn : vi.fn(),

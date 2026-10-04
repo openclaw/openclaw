@@ -1,34 +1,14 @@
 // Voice Call API module exposes the plugin public contract.
 import { existsSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 // Doctor enumeration cold-loads this closure; the state-DB helpers stay behind a
 // lazy doctor-repair-runtime import so enumeration never pulls the kysely/state-db graph.
 import type { OpenClawStateDatabaseSchemaMigration } from "openclaw/plugin-sdk/doctor-repair-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import {
-  defineRetiredPluginStateMigration,
-  type PluginDoctorStateMigration,
-} from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveDefaultVoiceCallStoreDir } from "./src/store-path.js";
-import { resolveUserPath } from "./src/utils.js";
-
-/** Read the configured voice-call store path from either package id. */
-function getVoiceCallConfigStore(config: PluginDoctorStateMigrationParams["config"]): string {
-  for (const pluginId of ["voice-call", "@openclaw/voice-call"]) {
-    const rawConfig = config.plugins?.entries?.[pluginId]?.config;
-    if (!rawConfig || typeof rawConfig !== "object" || Array.isArray(rawConfig)) {
-      continue;
-    }
-    const store = (rawConfig as { store?: unknown }).store;
-    if (typeof store === "string" && store.trim()) {
-      return store.trim();
-    }
-  }
-  return "";
-}
+import { resolveVoiceCallStorePath } from "./src/store-path.js";
+import { stateMigrations as retiredStateMigrations } from "./state-retention-api.js";
 
 type PluginDoctorStateMigrationParams = Parameters<
   PluginDoctorStateMigration["detectLegacyState"]
@@ -56,18 +36,6 @@ export function resolveSessionStoreAgentIds(params: { cfg: OpenClawConfig }): st
     }
   }
   return [...agentIds].toSorted();
-}
-
-/** Resolve the voice-call store path used by legacy and plugin-state call records. */
-function resolveVoiceCallStorePath(params: {
-  config: PluginDoctorStateMigrationParams["config"];
-  env: NodeJS.ProcessEnv;
-}): string {
-  const configuredStore = getVoiceCallConfigStore(params.config);
-  if (configuredStore) {
-    return resolveUserPath(configuredStore, () => params.env.HOME?.trim() || os.homedir());
-  }
-  return resolveDefaultVoiceCallStoreDir(params.env);
 }
 
 function resolveVoiceCallStateDatabaseEnv(
@@ -121,12 +89,7 @@ function describeVoiceCallSchemaMigration(migration: OpenClawStateDatabaseSchema
 
 /** Doctor migrations owned by the voice-call plugin. */
 export const stateMigrations: PluginDoctorStateMigration[] = [
-  defineRetiredPluginStateMigration({
-    id: "voice-call-calls-jsonl-to-plugin-state",
-    label: "Voice Call JSONL call log",
-    intermediateVersion: "2026.9.7",
-    findSources: (input) => [path.join(resolveVoiceCallStorePath(input), "calls.jsonl")],
-  }),
+  ...retiredStateMigrations,
   {
     id: "voice-call-sqlite-schema",
     label: "Voice Call SQLite schema",

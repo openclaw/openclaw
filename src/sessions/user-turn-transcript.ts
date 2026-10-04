@@ -14,11 +14,8 @@ import {
 import { readActiveTranscriptEntryAnchorAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
-import { createUserTurnAdmissionWrite } from "./user-turn-transcript-admission-write.js";
-import {
-  registerUserTurnTranscriptAdmissionOwner,
-  resolveUserTurnTranscriptAdmission,
-} from "./user-turn-transcript-admission.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { registerUserTurnTranscriptAdmissionOwner } from "./user-turn-transcript-admission.js";
 import { createUserTurnProcessingCompletion } from "./user-turn-transcript-processing.js";
 import {
   buildLateResolvedMediaMessage,
@@ -231,7 +228,10 @@ export function createUserTurnTranscriptRecorder(
   let resolvedSourceMessage: PersistedUserTurnMessage | undefined;
   let runtimePersistedMessage: PersistedUserTurnMessage | undefined;
   let sentToProvider = false;
-  const admissionWrite = createUserTurnAdmissionWrite();
+  let admissionHandler:
+    | ((admission: UserTurnTranscriptAdmissionReceipt) => void | Promise<void>)
+    | undefined;
+  let admissionWrite: Promise<void> | undefined;
   let resolvedBeforeProvider = false;
   let replacementText: string | undefined;
   let confirmedSteerTargetRunId: string | undefined;
@@ -383,11 +383,20 @@ export function createUserTurnTranscriptRecorder(
     detached = false,
   ): Promise<void> => {
     if (admissionReceipt) {
-      return admissionWrite.pending ?? Promise.resolve();
+      return admissionWrite ?? Promise.resolve();
     }
-    admissionReceipt = resolveUserTurnTranscriptAdmission({ logicalTurnId, receipt });
+    const admission: UserTurnTranscriptAdmissionReceipt =
+      "logicalTurnId" in receipt ? receipt : { ...receipt, logicalTurnId, role: "user" };
+    admissionReceipt = admission;
     admittedMessage = persistedMessage;
-    return admissionWrite.start(admissionReceipt, detached);
+    const run = async () => {
+      await admissionHandler?.(admission);
+    };
+    // Runtime writes must queue behind the transcript writer instead of reentering it.
+    admissionWrite = detached ? runInDetachedAsyncContext(run) : run();
+    // The turn owner awaits this write; an early rejection must not be unobserved.
+    admissionWrite.catch(() => undefined);
+    return admissionWrite;
   };
 
   const refreshAdmission = (
@@ -411,7 +420,7 @@ export function createUserTurnTranscriptRecorder(
       }
     }
     // A failed durable admission reaches the turn owner before provider dispatch.
-    await admissionWrite.pending;
+    await admissionWrite;
   };
 
   const persistPrepared = async (options: {
@@ -642,7 +651,9 @@ export function createUserTurnTranscriptRecorder(
     getPersistedMessage: () =>
       admittedMessage ?? runtimePersistedMessage ?? persistedResult?.message,
     getAdmissionReceipt: () => admissionReceipt,
-    setAdmissionHandler: (handler) => admissionWrite.setHandler(handler),
+    setAdmissionHandler: (handler) => {
+      admissionHandler = handler;
+    },
     markSentToProvider: () => {
       sentToProvider = true;
     },
@@ -673,7 +684,7 @@ export function createUserTurnTranscriptRecorder(
     isBlocked: () => blocked,
     // An admission write from runtime persistence must also settle before provider dispatch.
     hasRuntimePersistencePending: () =>
-      runtimePersistencePromise !== undefined || admissionWrite.pending !== undefined,
+      runtimePersistencePromise !== undefined || admissionWrite !== undefined,
     waitForRuntimePersistence,
     persistApproved: async (options) =>
       await persistPrepared({

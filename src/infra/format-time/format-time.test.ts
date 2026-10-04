@@ -444,13 +444,19 @@ describe("format-relative", () => {
       expect(formatRelativeTimestamp(Date.now() + offsetMs, options)).toBe(expected);
     });
 
-    it("falls back to relative days when date formatting throws", () => {
-      expect(
-        formatRelativeTimestamp(Date.now() - 8 * 24 * 3600000, {
-          dateFallback: true,
-          timezone: "Invalid/Timezone",
-        }),
-      ).toBe("8d ago");
-    });
+    it.each([
+      [-8, "8d ago"],
+      [8, "in 8d"],
+    ])(
+      "falls back to relative days for %d-day offsets when date formatting throws",
+      (days, expected) => {
+        expect(
+          formatRelativeTimestamp(Date.now() + days * 24 * 3600000, {
+            dateFallback: true,
+            timezone: "Invalid/Timezone",
+          }),
+        ).toBe(expected);
+      },
+    );
   });
 });

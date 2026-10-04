@@ -48,21 +48,11 @@ export function warnInvalidSkill(source: string, diagnostic: LocalSkillLoadDiagn
   });
 }
 
-function loadContainedSkillRecord(params: {
-  skillDir: string;
-  skillDirRealPath: string;
-  source: string;
-  maxSkillFileBytes: number;
-  canonicalSkillDir?: string;
-  rejectHardlinks: boolean;
-  onDiagnostic?: (diagnostic: LocalSkillLoadDiagnostic) => void;
-}): LoadedSkillRecord | null {
+function loadContainedSkillRecord(
+  params: Parameters<typeof loadSingleSkillDirectory>[0] & { canonicalSkillDir?: string },
+): LoadedSkillRecord | null {
   const loaded = loadSingleSkillDirectory({
-    skillDir: params.skillDir,
-    rootRealPath: params.skillDirRealPath,
-    source: params.source,
-    maxBytes: params.maxSkillFileBytes,
-    rejectHardlinks: params.rejectHardlinks,
+    ...params,
     onDiagnostic:
       params.onDiagnostic ?? ((diagnostic) => warnInvalidSkill(params.source, diagnostic)),
   });
@@ -150,9 +140,9 @@ export function loadSkillRootRecords(params: {
   const loadCandidate = (candidate: CandidateSkillDir) => {
     const record = loadContainedSkillRecord({
       skillDir: candidate.skillDir,
-      skillDirRealPath: candidate.skillDirRealPath,
+      rootRealPath: candidate.skillDirRealPath,
       source: params.source,
-      maxSkillFileBytes: limits.maxSkillFileBytes,
+      maxBytes: limits.maxSkillFileBytes,
       canonicalSkillDir:
         params.mode === "audit"
           ? candidate.skillDirRealPath
@@ -201,9 +191,9 @@ function loadGeneratedPluginSkillRecords(params: {
   for (const candidate of candidates) {
     const record = loadContainedSkillRecord({
       skillDir: candidate.skillDir,
-      skillDirRealPath: candidate.skillDirRealPath,
+      rootRealPath: candidate.skillDirRealPath,
       source: params.source,
-      maxSkillFileBytes: params.limits.maxSkillFileBytes,
+      maxBytes: params.limits.maxSkillFileBytes,
       rejectHardlinks: candidate.rejectHardlinks,
     });
     if (record) {

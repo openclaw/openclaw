@@ -2200,10 +2200,10 @@ describe("google transport stream", () => {
     expect(googleAuthGetAccessTokenMock).toHaveBeenCalledTimes(2);
   });
 
-  it("does not cache google-auth ADC tokens when fallback expiry would exceed Date range", async () => {
+  it("uses refreshed google-auth ADC tokens on the next Vertex request", async () => {
     await useGoogleAuthLibraryCredentials("authlib-expiry");
     vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    vi.setSystemTime(new Date("2026-10-03T00:00:00.000Z"));
     googleAuthGetAccessTokenMock
       .mockResolvedValueOnce("ya29.first-token")
       .mockResolvedValueOnce("ya29.second-token");
@@ -2212,10 +2212,12 @@ describe("google transport stream", () => {
     await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).resolves.toEqual({
       Authorization: "Bearer ya29.first-token",
     });
+    vi.setSystemTime(new Date("2026-10-03T00:02:00.000Z"));
     await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).resolves.toEqual({
       Authorization: "Bearer ya29.second-token",
     });
 
+    expect(googleAuthMock).toHaveBeenCalledOnce();
     expect(googleAuthGetAccessTokenMock).toHaveBeenCalledTimes(2);
     expect(tokenFetchMock).not.toHaveBeenCalled();
   });

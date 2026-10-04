@@ -79,6 +79,7 @@ export function createIncognitoSessionFacts(
   identity: AgentDatabaseIncognitoIdentity,
   assertActorCurrent: () => void,
   withGrant: <T>(operation: () => T) => T,
+  assertOutsideGrant: () => void,
 ) {
   const entries = new Map<string, IncognitoSessionFacts>();
   const pending = new Set<string>();
@@ -118,7 +119,11 @@ export function createIncognitoSessionFacts(
     }
     unavailable.delete(facts.sessionKey);
   };
-  const claim = (sessionKey: string, assertBorrowed: () => void): IncognitoSessionClaim => {
+  const claim = (
+    sessionKey: string,
+    assertBorrowed: () => void,
+    absent?: IncognitoSessionFacts,
+  ): IncognitoSessionClaim => {
     const observed = current(sessionKey)?.sharing?.entry;
     const capturedRevision = topologyRevision;
     const assertCurrent = () => {
@@ -140,7 +145,7 @@ export function createIncognitoSessionFacts(
         withGrant(() => {
           authority.assertCurrent();
           assertCurrent();
-          const facts = current(sessionKey);
+          const facts = current(sessionKey) ?? (!observed ? absent : undefined);
           if (!facts) {
             throw new Error("Incognito session facts are unavailable");
           }
@@ -361,6 +366,25 @@ export function createIncognitoSessionFacts(
         );
       };
       return {
+        /** Join a shared-owner composition without holding this actor's FIFO turn. */
+        withSharedState<T>(operation: () => Promise<T>): Promise<T> {
+          assertOutsideGrant();
+          assertBorrowed();
+          return retain(Promise.resolve().then(operation));
+        },
+        captureSnapshot(sessionKey: string) {
+          assertBorrowed();
+          const observed = current(sessionKey)?.revision;
+          const held = claim(sessionKey, assertBorrowed);
+          return {
+            assertCurrent() {
+              held.assertCurrent();
+              if (current(sessionKey)?.revision !== observed) {
+                throw new Error("Incognito session snapshot changed; prepare it again");
+              }
+            },
+          };
+        },
         withCompute: <T>(
           authority: IncognitoSessionAuthority,
           target: IncognitoComputeTarget,
@@ -408,7 +432,10 @@ export function createIncognitoSessionFacts(
             authority,
             { type: "session.entry.read", input },
             false,
-            (value) => ({ entry: value.entry, claim: claim(sessionKey, assertBorrowed) }),
+            (value) => ({
+              entry: value.entry,
+              claim: claim(sessionKey, assertBorrowed, value.facts[0]),
+            }),
             signal,
           );
         },
@@ -422,8 +449,22 @@ export function createIncognitoSessionFacts(
             authority,
             { type: "session.entry.create", input },
             true,
-            (value) => ({ entry: value.entry, claim: claim(sessionKey, assertBorrowed) }),
+            (value) => ({
+              entry: value.entry,
+              claim: claim(sessionKey, assertBorrowed, value.facts[0]),
+            }),
             signal,
+          );
+        },
+        acpSource(authority: IncognitoSessionAuthority, sessionKey: string) {
+          return perform(
+            authority,
+            { type: "session.acp.source", input: { sessionKey } },
+            false,
+            (result) => ({
+              snapshot: result.value,
+              claim: claim(sessionKey, assertBorrowed, result.facts[0]),
+            }),
           );
         },
         sideData: <Key extends keyof IncognitoSideDataOperations>(

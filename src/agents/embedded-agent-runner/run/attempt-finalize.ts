@@ -1,5 +1,3 @@
-import { readActiveTranscriptEntryAnchorAsync } from "../../../config/sessions/session-transcript-anchor-read.js";
-import { captureOwnedTranscriptWriteAssertion } from "../../../config/sessions/transcript-write-context.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { createAbortError } from "../../../infra/abort-signal.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
@@ -204,94 +202,51 @@ export async function completeEmbeddedAttemptAfterTurn(
   // rewrite callback reacquires the synchronous session write boundary.
   if (activeContextEngine && !beforeAgentFinalizeRevisionReason) {
     const lifecycleState = projectAgentRunAttemptTerminal(executionState.terminal);
-    if (attempt.onContextEngineTurnCandidate) {
-      const admission = attempt.userTurnTranscriptRecorder?.getAdmissionReceipt();
-      const terminalEntryId = resolveTerminalMessageEntryId(sessionManager) ?? undefined;
-      const assertCurrent = admission && captureOwnedTranscriptWriteAssertion(admission);
-      const terminal =
-        admission && terminalEntryId
-          ? await readActiveTranscriptEntryAnchorAsync({
-              agentId: admission.agentId,
-              sessionId: admission.sessionId,
-              sessionKey: admission.sessionKey,
-              storePath: admission.storePath,
-              entryId: terminalEntryId,
-            })
-          : undefined;
-      assertCurrent?.();
-      const currentAdmission = attempt.userTurnTranscriptRecorder?.getAdmissionReceipt();
-      const currentLifecycle = projectAgentRunAttemptTerminal(executionState.terminal);
-      if (
-        admission &&
-        terminal &&
-        currentAdmission?.logicalTurnId === admission.logicalTurnId &&
-        currentAdmission.entryId === admission.entryId &&
-        currentAdmission.generation === admission.generation &&
-        resolveTerminalMessageEntryId(sessionManager) === terminalEntryId
-      ) {
-        attempt.onContextEngineTurnCandidate({
-          boundary: { admission, terminal },
-          sessionIdUsed,
-          sessionKey: attempt.sessionKey,
-          sessionTarget: attempt.sessionTarget,
-          promptError: Boolean(promptError),
-          aborted: currentLifecycle.aborted,
-          yieldAborted,
-          isHeartbeat: isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind),
-          runtimeContext: {
-            provider: attempt.provider,
-            modelId: attempt.modelId,
-            modelContextWindow: attempt.modelContextWindow,
+    await finalizeHarnessContextEngineTurn({
+      ...attempt,
+      contextEngine: activeContextEngine,
+      promptError: Boolean(promptError),
+      aborted: lifecycleState.aborted,
+      yieldAborted,
+      sessionIdUsed,
+      messagesSnapshot,
+      prePromptMessageCount: contextEngineAfterTurnCheckpoint ?? prePromptMessageCount,
+      tokenBudget: attempt.contextTokenBudget,
+      turnCandidate: attempt.onContextEngineTurnCandidate
+        ? {
+            admission: attempt.userTurnTranscriptRecorder?.getAdmissionReceipt(),
+            terminalEntryId: resolveTerminalMessageEntryId(sessionManager),
+            record: attempt.onContextEngineTurnCandidate,
+          }
+        : undefined,
+      runtimeContext: attempt.onContextEngineTurnCandidate
+        ? undefined
+        : buildAfterTurnRuntimeContextFromUsage({
+            attempt,
+            workspaceDir: effectiveWorkspace,
+            agentDir,
             tokenBudget: attempt.contextTokenBudget,
-          },
-        });
-      }
-    } else {
-      const afterTurnRuntimeContext = buildAfterTurnRuntimeContextFromUsage({
-        attempt,
-        workspaceDir: effectiveWorkspace,
-        agentDir,
-        tokenBudget: attempt.contextTokenBudget,
-        lastCallUsage,
-        promptCache,
-        activeAgentId: sessionAgentId,
-        contextEnginePluginId: resolveActiveContextEnginePluginId(),
-      });
-      await finalizeHarnessContextEngineTurn({
-        contextEngine: activeContextEngine,
-        promptError: Boolean(promptError),
-        aborted: lifecycleState.aborted,
-        yieldAborted,
-        sessionIdUsed,
-        sessionKey: attempt.sessionKey,
-        sessionTarget: attempt.sessionTarget,
-        sessionFile: attempt.sessionFile,
-        messagesSnapshot,
-        prePromptMessageCount: contextEngineAfterTurnCheckpoint ?? prePromptMessageCount,
-        tokenBudget: attempt.contextTokenBudget,
-        runtimeContext: afterTurnRuntimeContext,
-        contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
-        providerId: attempt.provider,
-        requestedModelId: attempt.requestedModelId,
-        modelId: attempt.modelId,
-        fallbackReason: attempt.fallbackReason,
-        degradedReason: attempt.degradedReason,
-        runMaintenance: async (contextParams) =>
-          await runContextEngineMaintenance({
-            ...contextParams,
-            contextEngine: contextParams.contextEngine as never,
-            sessionManager: contextParams.sessionManager as never,
-            withSessionManagerRewriteLock: withOwnedTranscriptWrite,
-            config: attempt.config,
-            agentId: sessionAgentId,
-            contextEngineAgentId: attempt.contextEngineAgentId,
+            lastCallUsage,
+            promptCache,
+            activeAgentId: sessionAgentId,
+            contextEnginePluginId: resolveActiveContextEnginePluginId(),
           }),
-        sessionManager,
-        config: attempt.config,
-        warn: (message) => log.warn(message),
-        isHeartbeat: isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind),
-      });
-    }
+      contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+      providerId: attempt.provider,
+      runMaintenance: async (contextParams) =>
+        await runContextEngineMaintenance({
+          ...contextParams,
+          contextEngine: activeContextEngine,
+          sessionManager,
+          withSessionManagerRewriteLock: withOwnedTranscriptWrite,
+          config: attempt.config,
+          agentId: sessionAgentId,
+          contextEngineAgentId: attempt.contextEngineAgentId,
+        }),
+      sessionManager,
+      warn: (message) => log.warn(message),
+      isHeartbeat: isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind),
+    });
   }
 
   const shouldPersistBootstrapCompletion = () => {

@@ -54,6 +54,8 @@ export function createWorkerPlacementTools(params: {
         ? `Exec denied (approval_required) in worker ${params.permissionMode} permission mode. Run this command locally for interactive approval, or ask an administrator to clear the session permission mode.`
         : undefined,
       config: WORKER_TOOL_CONFIG,
+      // The Gateway secret store is not delegated to the worker's scratch state.
+      preparedStoreEnvironment: Object.freeze({}),
       ...(params.github ? { preparedRunEnvironment: params.github } : {}),
       commandHighlighting: false,
       agentId: params.agentId,

@@ -128,7 +128,6 @@ export const forcedUnitFastTestFiles = [
   "src/realtime-transcription/websocket-session.test.ts",
   "src/routing/resolve-route.test.ts",
   "src/status/status-message.test.ts",
-  "src/trajectory/cleanup.test.ts",
   "src/trajectory/export.test.ts",
   "src/trajectory/metadata.test.ts",
   "src/tts/openai-compatible-speech-provider.test.ts",

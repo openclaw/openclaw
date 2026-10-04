@@ -20,66 +20,8 @@ import type { PreparedGatewayModelCatalogSnapshot } from "../server-model-catalo
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
 import { resolveProviderApiKeys } from "./models-auth-status-api-keys.js";
 import { resolveConfigBoundProfileIds } from "./models-auth-status-config.js";
-import type { ModelAuthStatusProvider } from "./models-auth-status.types.js";
 
 const apiKeyUsageStatusProviders = new Set<UsageProviderId>(["clawrouter", "deepseek"]);
-
-function resolveConfiguredProviders(
-  cfg: OpenClawConfig,
-  apiKeys: ReadonlyMap<string, ModelAuthStatusProvider["apiKey"]>,
-): {
-  providers: string[];
-  expectsOAuth: Set<string>;
-} {
-  const out = new Set<string>();
-  const expectsOAuth = new Set<string>();
-  for (const [id, provider] of Object.entries(cfg.models?.providers ?? {})) {
-    const normalized = normalizeProviderId(id);
-    if (!normalized) {
-      continue;
-    }
-    const rawKey = typeof provider?.apiKey === "string" ? provider.apiKey.trim() : "";
-    const hasApiKey =
-      hasConfiguredSecretInput(provider?.apiKey, cfg.secrets?.defaults) &&
-      (rawKey === NON_ENV_SECRETREF_MARKER ||
-        !isNonSecretApiKeyMarker(rawKey, { includeEnvVarName: false }));
-    const mode = provider?.auth;
-    if (mode !== "oauth" && mode !== "token" && !hasApiKey) {
-      continue;
-    }
-    if (apiKeys.has(normalized)) {
-      continue;
-    }
-    out.add(normalized);
-    if (mode === "oauth") {
-      expectsOAuth.add(normalized);
-    }
-  }
-  // auth.profiles opt in via `mode: oauth | token`; API-key profiles have no lifecycle.
-  for (const profile of Object.values(cfg.auth?.profiles ?? {})) {
-    const provider = profile?.provider;
-    const mode = profile?.mode;
-    if (
-      typeof provider !== "string" ||
-      provider.length === 0 ||
-      (mode !== "oauth" && mode !== "token")
-    ) {
-      continue;
-    }
-    const normalized = normalizeProviderId(provider);
-    if (!normalized) {
-      continue;
-    }
-    if (apiKeys.has(normalized)) {
-      continue;
-    }
-    out.add(normalized);
-    if (mode === "oauth") {
-      expectsOAuth.add(normalized);
-    }
-  }
-  return { providers: Array.from(out), expectsOAuth };
-}
 
 type ModelAuthStatusFacts = ReturnType<typeof buildModelAuthStatusFacts>;
 const authStatusFacts = new WeakMap<
@@ -112,8 +54,53 @@ function buildModelAuthStatusFacts(
     includeUntrustedWorkspacePlugins: false,
   };
   const apiKeys = resolveProviderApiKeys(cfg, store, authAliasLookupParams);
-  const configured = resolveConfiguredProviders(cfg, apiKeys);
-  const statusProviderIds = new Set(configured.providers);
+  const statusProviderIds = new Set<string>();
+  const expectsOAuth = new Set<string>();
+  for (const [id, provider] of Object.entries(cfg.models?.providers ?? {})) {
+    const normalized = normalizeProviderId(id);
+    if (!normalized) {
+      continue;
+    }
+    const rawKey = typeof provider?.apiKey === "string" ? provider.apiKey.trim() : "";
+    const hasApiKey =
+      hasConfiguredSecretInput(provider?.apiKey, cfg.secrets?.defaults) &&
+      (rawKey === NON_ENV_SECRETREF_MARKER ||
+        !isNonSecretApiKeyMarker(rawKey, { includeEnvVarName: false }));
+    const mode = provider?.auth;
+    if (mode !== "oauth" && mode !== "token" && !hasApiKey) {
+      continue;
+    }
+    if (apiKeys.has(normalized)) {
+      continue;
+    }
+    statusProviderIds.add(normalized);
+    if (mode === "oauth") {
+      expectsOAuth.add(normalized);
+    }
+  }
+  // auth.profiles opt in via `mode: oauth | token`; API-key profiles have no lifecycle.
+  for (const profile of Object.values(cfg.auth?.profiles ?? {})) {
+    const provider = profile?.provider;
+    const mode = profile?.mode;
+    if (
+      typeof provider !== "string" ||
+      provider.length === 0 ||
+      (mode !== "oauth" && mode !== "token")
+    ) {
+      continue;
+    }
+    const normalized = normalizeProviderId(provider);
+    if (!normalized) {
+      continue;
+    }
+    if (apiKeys.has(normalized)) {
+      continue;
+    }
+    statusProviderIds.add(normalized);
+    if (mode === "oauth") {
+      expectsOAuth.add(normalized);
+    }
+  }
   for (const provider of apiKeys.keys()) {
     statusProviderIds.add(provider);
   }
@@ -199,7 +186,7 @@ function buildModelAuthStatusFacts(
   return {
     authAliasLookupParams,
     apiKeys,
-    configured,
+    expectsOAuth,
     authHealth,
     readAuthHealth: readsExternalAuth ? readAuthHealth : undefined,
     usageProviderIds,

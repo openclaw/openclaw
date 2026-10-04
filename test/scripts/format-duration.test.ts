@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { formatDurationElapsed } from "../../scripts/lib/format-duration.mts";
+import { execNodeEvalSync } from "../../src/test-utils/node-process.js";
 
 describe("formatDurationElapsed", () => {
+  it("loads through native Node TypeScript stripping", () => {
+    const output = execNodeEvalSync(
+      'import { formatDurationElapsed } from "./scripts/lib/format-duration.mts"; process.stdout.write(formatDurationElapsed(1_234));',
+    );
+    expect(output).toBe("1.2s");
+  });
+
   it.each<[number, 1 | 2, string]>([
     [0, 1, "0ms"],
     [999, 1, "999ms"],

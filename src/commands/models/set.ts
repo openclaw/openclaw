@@ -1,8 +1,7 @@
 import { logConfigUpdated } from "../../config/logging.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runtime-plugin-install.js";
-import { repairCopilotRuntimePluginInstallForModelSelection } from "../copilot-runtime-plugin-install.js";
+import { repairModelSelectionRuntimePlugins } from "../runtime-plugin-install.js";
 import { updateDefaultModelPrimaryConfig } from "./shared.js";
 
 export async function modelsSetCommand(modelRaw: string, runtime: RuntimeEnv) {
@@ -14,15 +13,10 @@ export async function modelsSetCommand(modelRaw: string, runtime: RuntimeEnv) {
     runtime.error?.(catalogWarning);
   }
   const selectedModel = resolveAgentModelPrimaryValue(updated.agents?.defaults?.model) ?? modelRaw;
-  const repaired = await repairCodexRuntimePluginInstallForModelSelection({
+  const warnings = await repairModelSelectionRuntimePlugins({
     cfg: updated,
     model: selectedModel,
   });
-  const copilotRepaired = await repairCopilotRuntimePluginInstallForModelSelection({
-    cfg: updated,
-    model: selectedModel,
-  });
-  const warnings = [...repaired.warnings, ...copilotRepaired.warnings];
   for (const warning of warnings) {
     runtime.error?.(warning);
   }

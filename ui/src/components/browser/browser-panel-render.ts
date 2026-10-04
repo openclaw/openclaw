@@ -40,17 +40,6 @@ function renderIconButton(params: {
   </button>`;
 }
 
-function renderTabStrip(controller: BrowserPanelController, embedded: boolean) {
-  return renderBrowserPanelTabs({
-    tabs: controller.tabs,
-    activeTargetId: controller.activeTargetId,
-    onSelect: (targetId) => void controller.selectTab(targetId),
-    onClose: (targetId) => controller.closeTab(targetId),
-    onNew: () => controller.beginNewTab(),
-    hideNewControl: embedded,
-  });
-}
-
 function renderHeaderActions(
   controller: BrowserPanelController,
   dock: BrowserPanelDock,
@@ -438,7 +427,14 @@ export function renderBrowserPanelChrome(
       ${
         rendersTabStrip
           ? html`<header class="rail-header bp-header">
-              ${renderTabStrip(controller, embedded)}
+              ${renderBrowserPanelTabs({
+                tabs: controller.tabs,
+                activeTargetId: controller.activeTargetId,
+                onSelect: (targetId) => void controller.selectTab(targetId),
+                onClose: (targetId) => controller.closeTab(targetId),
+                onNew: () => controller.beginNewTab(),
+                hideNewControl: embedded,
+              })}
               ${embedded ? nothing : renderHeaderActions(controller, dock, onDockChange, onClose)}
             </header>`
           : nothing

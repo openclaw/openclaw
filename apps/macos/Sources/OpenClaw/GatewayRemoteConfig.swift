@@ -104,12 +104,7 @@ enum GatewayRemoteConfig {
     }
 
     static func resolveTokenString(root: [String: Any]) -> String? {
-        switch self.resolveTokenValue(root: root) {
-        case let .plaintext(token):
-            token
-        case .missing, .unsupportedNonString:
-            nil
-        }
+        self.remoteString("token", root: root)
     }
 
     static func resolvePasswordString(root: [String: Any]) -> String? {
@@ -133,8 +128,6 @@ enum GatewayRemoteConfig {
         }
         let value = remote["remotePort"]
         let port: Int? = switch value {
-        case let raw as Int:
-            raw
         case let raw as NSNumber:
             raw.intValue
         case let raw as String:
