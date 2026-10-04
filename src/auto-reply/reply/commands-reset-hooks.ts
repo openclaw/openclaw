@@ -7,10 +7,7 @@ import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-
-const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
 
 export type ResetCommandAction = "new" | "reset";
 
@@ -108,7 +105,7 @@ export async function emitResetCommandHooks(params: {
     const channel = params.ctx.OriginatingChannel || params.command.channel;
     const to = params.ctx.OriginatingTo || params.command.from || params.command.to;
     if (channel && to) {
-      const { routeReply } = await routeReplyRuntimeLoader.load();
+      const { routeReply } = await import("./route-reply.runtime.js");
       const result = await routeReply({
         payload: { text: hookEvent.messages.join("\n\n") },
         channel,

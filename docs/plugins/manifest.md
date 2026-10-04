@@ -371,6 +371,23 @@ Example schema extension:
 }
 ```
 
+## Retained state checks
+
+A source plugin may expose a lightweight `state-retention-api.ts` alongside its
+Doctor contract. The core package retains this artifact separately when it
+externalizes the plugin runtime. It exports `packageName` and `stateMigrations`,
+using the same `defineRetiredPluginStateMigration` objects as Doctor. Checks only
+inspect source presence; they must not decode, mutate, or migrate state.
+
+Before replacing the Gateway, candidate update admission runs matching checks
+for selected official installed owners and bundled owners. The package name and
+migration ID must match the selected owner's manifest declaration. External
+shadows and disabled installed owners retain their own contracts. Disabling
+bundled runtimes does not disable these host-retained checks or activate plugins.
+Admission reads checks only from the staged candidate package, independently of
+runtime registry and bundle-directory overrides. Inspection failures produce a refusal verdict so published updaters preserve the
+running Gateway and original files instead of falling back to older admission.
+
 ## Validation behavior
 
 ### Capability catalogs

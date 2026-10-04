@@ -76,7 +76,7 @@ async function executeSingleAction(
   }
   switch (action.kind) {
     case "click":
-      await clickViaPlaywright({
+      return await clickViaPlaywright({
         ...action,
         ...interaction,
         button: action.button as "left" | "right" | "middle" | undefined,
@@ -84,40 +84,30 @@ async function executeSingleAction(
           "Alt" | "Control" | "ControlOrMeta" | "Meta" | "Shift"
         >,
       });
-      break;
     case "clickCoords":
-      await clickCoordsViaPlaywright({
+      return await clickCoordsViaPlaywright({
         ...action,
         ...interaction,
         button: action.button as "left" | "right" | "middle" | undefined,
       });
-      break;
     case "type":
-      await typeViaPlaywright({ ...action, ...interaction });
-      break;
+      return await typeViaPlaywright({ ...action, ...interaction });
     case "insertText":
-      await insertTextViaPlaywright({ ...action, ...interaction });
-      break;
+      return await insertTextViaPlaywright({ ...action, ...interaction });
     case "press":
-      await pressKeyViaPlaywright({ ...action, ...interaction });
-      break;
+      return await pressKeyViaPlaywright({ ...action, ...interaction });
     case "hover":
-      await hoverViaPlaywright({ ...action, ...interaction });
-      break;
+      return await hoverViaPlaywright({ ...action, ...interaction });
     case "scrollIntoView":
-      await scrollIntoViewViaPlaywright({ ...action, ...interaction });
-      break;
+      return await scrollIntoViewViaPlaywright({ ...action, ...interaction });
     case "drag":
-      await dragViaPlaywright({ ...action, ...interaction });
-      break;
+      return await dragViaPlaywright({ ...action, ...interaction });
     case "select":
-      await selectOptionViaPlaywright({ ...action, ...interaction });
-      break;
+      return await selectOptionViaPlaywright({ ...action, ...interaction });
     case "fill":
-      await fillFormViaPlaywright({ ...action, ...interaction });
-      break;
+      return await fillFormViaPlaywright({ ...action, ...interaction });
     case "resize":
-      await resizeViewportViaPlaywright({
+      return await resizeViewportViaPlaywright({
         cdpUrl,
         targetId: effectiveTargetId,
         width: action.width,
@@ -125,25 +115,22 @@ async function executeSingleAction(
         signal,
         assertCurrent,
       });
-      break;
     case "wait":
       if (action.fn && !evaluateEnabled) {
         throw new Error("wait --fn is disabled by config (browser.evaluateEnabled=false)");
       }
-      await waitForViaPlaywright({ ...action, ...interaction });
-      break;
+      return await waitForViaPlaywright({ ...action, ...interaction });
     case "evaluate":
       if (!evaluateEnabled) {
         throw new Error("act:evaluate is disabled by config (browser.evaluateEnabled=false)");
       }
       return await evaluateViaPlaywright({ ...action, ...interaction });
     case "close":
-      await closePageViaPlaywright({
+      return await closePageViaPlaywright({
         cdpUrl,
         targetId: effectiveTargetId,
         assertCurrent,
       });
-      break;
     case "batch": {
       const batch = await batchViaPlaywright({
         ...action,

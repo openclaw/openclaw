@@ -52,14 +52,6 @@ type RaftBridgeProcess = Pick<ChildProcess, "pid"> & Pick<EventEmitter, "once">;
 
 type RaftWakeReplayEvent = { accountId: string; key: string };
 
-type RaftWakeReplayGuard = ReturnType<typeof createChannelReplayGuard<RaftWakeReplayEvent>>;
-
-type RaftGatewayDeps = {
-  createToken?: () => string;
-  spawnBridge?: (params: { profile: string; endpoint: string; token: string }) => RaftBridgeProcess;
-  wakeDedupe?: RaftWakeReplayGuard;
-};
-
 class WakeRequestError extends Error {
   constructor(
     readonly statusCode: number,
@@ -209,7 +201,6 @@ async function listenLoopback(server: Server): Promise<number> {
 
 export async function startRaftGatewayAccount(
   ctx: ChannelGatewayContext<ResolvedRaftAccount>,
-  deps: RaftGatewayDeps = {},
 ): Promise<void> {
   const profile = ctx.account.profile;
   if (!ctx.account.enabled) {
@@ -224,23 +215,21 @@ export async function startRaftGatewayAccount(
   }
 
   const wakeQueue = new KeyedAsyncQueue();
-  const wakeDedupe =
-    deps.wakeDedupe ??
-    createChannelReplayGuard<RaftWakeReplayEvent>({
-      dedupe: {
-        ttlMs: WAKE_DEDUPE_TTL_MS,
-        memoryMaxSize: WAKE_DEDUPE_MEMORY_MAX_SIZE,
-        pluginId: RAFT_CHANNEL_ID,
-        namespacePrefix: "raft-wake-dedupe",
-        stateMaxEntries: WAKE_DEDUPE_STATE_MAX_ENTRIES,
-        onDiskError: (error) => {
-          ctx.log?.warn?.(`Raft wake dedupe storage failed: ${String(error)}`);
-        },
+  const wakeDedupe = createChannelReplayGuard<RaftWakeReplayEvent>({
+    dedupe: {
+      ttlMs: WAKE_DEDUPE_TTL_MS,
+      memoryMaxSize: WAKE_DEDUPE_MEMORY_MAX_SIZE,
+      pluginId: RAFT_CHANNEL_ID,
+      namespacePrefix: "raft-wake-dedupe",
+      stateMaxEntries: WAKE_DEDUPE_STATE_MAX_ENTRIES,
+      onDiskError: (error) => {
+        ctx.log?.warn?.(`Raft wake dedupe storage failed: ${String(error)}`);
       },
-      buildReplayKey: (event) => event.key,
-      namespace: (event) => event.accountId,
-    });
-  const token = deps.createToken ? deps.createToken() : randomBytes(32).toString("hex");
+    },
+    buildReplayKey: (event) => event.key,
+    namespace: (event) => event.accountId,
+  });
+  const token = randomBytes(32).toString("hex");
   const runtimeSession = randomUUID();
   const sockets = new Set<Socket>();
   let stopped = false;
@@ -365,7 +354,7 @@ export async function startRaftGatewayAccount(
   try {
     const port = await listenLoopback(server);
     const endpoint = `http://${BRIDGE_HOST}:${port}${WAKE_PATH}`;
-    bridge = (deps.spawnBridge ?? spawnRaftBridge)({ profile, endpoint, token });
+    bridge = spawnRaftBridge({ profile, endpoint, token });
     bridge.once("error", (error) => {
       if (!stopped) {
         bridgeExited = new Error(`Raft bridge failed to start: ${String(error)}`);

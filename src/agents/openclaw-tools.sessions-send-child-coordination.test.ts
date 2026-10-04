@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -797,7 +798,7 @@ describe("sessions_send child coordination", () => {
       };
       metadata.writeAcpSessionMetaForMigration({
         databasePath,
-        sessionKey: reusedKey,
+        sessionKey: buildAcpDatabaseSessionKey(reusedKey, parseAgentSessionKey(reusedKey)?.agentId),
         sessionId,
         lifecycleRevision,
         now: () => 100,

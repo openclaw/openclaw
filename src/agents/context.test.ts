@@ -1,14 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getContextWindowCaches, providerContextTokenCacheKey } from "./context-cache.js";
 import {
   applyConfiguredContextWindows,
-  applyDiscoveredContextWindows,
-  resetContextWindowCacheForTest,
-  resolveContextTokensForModel,
-  resolveModelContextTokenProjection,
-} from "./context.js";
+  prepareDiscoveredContextTokenCache,
+  type ContextWindowCatalog,
+} from "./context-cache-projection.js";
+import {
+  getContextWindowCaches,
+  providerContextTokenCacheKey,
+  replaceDiscoveredContextTokenCache,
+} from "./context-cache.js";
+import { resolveContextTokensForModel, resolveModelContextTokenProjection } from "./context.js";
+import { resetContextWindowCacheForTest } from "./context.test-support.js";
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => ({}),
@@ -47,21 +51,23 @@ function resolve(params: Parameters<typeof resolveContextTokensForModel>[0]) {
   return resolveContextTokensForModel({ allowAsyncLoad: false, ...params });
 }
 
-function discover(models: Parameters<typeof applyDiscoveredContextWindows>[0]["models"]) {
-  applyDiscoveredContextWindows({ cache: getContextWindowCaches().discoveredTokenCache, models });
+async function discover(models: ContextWindowCatalog["entries"]) {
+  replaceDiscoveredContextTokenCache(
+    await prepareDiscoveredContextTokenCache({ modelCatalog: { entries: models } }),
+  );
 }
 
 beforeEach(resetContextWindowCacheForTest);
 afterEach(resetContextWindowCacheForTest);
 
 describe("context cache projection", () => {
-  it("prefers discovered contextTokens over the native window", () => {
-    discover([{ id: "gpt-5.4", contextWindow: 1_050_000, contextTokens: 272_000 }]);
+  it("prefers discovered contextTokens over the native window", async () => {
+    await discover([{ id: "gpt-5.4", contextWindow: 1_050_000, contextTokens: 272_000 }]);
     expect(resolve({ model: "gpt-5.4" })).toBe(272_000);
   });
 
-  it("keeps unowned CLI discovery at its reported window", () => {
-    discover([{ id: "claude-cli/claude-opus-4.7-20260219", contextWindow: 200_000 }]);
+  it("keeps unowned CLI discovery at its reported window", async () => {
+    await discover([{ id: "claude-cli/claude-opus-4.7-20260219", contextWindow: 200_000 }]);
     expect(resolve({ model: "claude-cli/claude-opus-4.7-20260219" })).toBe(200_000);
   });
 
@@ -113,8 +119,8 @@ describe("context cache projection", () => {
 });
 
 describe("context token resolution", () => {
-  it("can exclude unscoped discovery from provider-owned lookup", () => {
-    discover([{ id: "large", contextTokens: 32_000 }]);
+  it("can exclude unscoped discovery from provider-owned lookup", async () => {
+    await discover([{ id: "large", contextTokens: 32_000 }]);
     const params = { provider: "claude-cli", model: "large" };
     expect(resolve({ ...params, allowUnscopedModelLookup: false })).toBeUndefined();
     expect(resolve(params)).toBe(32_000);
@@ -196,8 +202,8 @@ describe("context token resolution", () => {
     ).toBe(100_000);
   });
 
-  it("keeps configured token caps authoritative over lower discovery", () => {
-    discover([{ provider: "openai", id: "gpt-5.5", contextWindow: 272_000 }]);
+  it("keeps configured token caps authoritative over lower discovery", async () => {
+    await discover([{ provider: "openai", id: "gpt-5.5", contextWindow: 272_000 }]);
     const cfg = modelConfig("openai", "gpt-5.5", { contextTokens: 350_000 });
     const caches = getContextWindowCaches();
     applyConfiguredContextWindows({
@@ -208,8 +214,8 @@ describe("context token resolution", () => {
     expect(resolve({ provider: "openai", model: "gpt-5.5" })).toBe(350_000);
   });
 
-  it("keeps provider discovery ahead of static caps under configured windows", () => {
-    discover([{ provider: "openai", id: "gpt-5.5", contextTokens: 200_000 }]);
+  it("keeps provider discovery ahead of static caps under configured windows", async () => {
+    await discover([{ provider: "openai", id: "gpt-5.5", contextTokens: 200_000 }]);
     expect(
       resolve({
         cfg: modelConfig("openai", "gpt-5.5", { contextWindow: 1_000_000 }),

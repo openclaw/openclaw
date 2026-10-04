@@ -87,12 +87,14 @@ export async function prepareChatSendSessionEntry(params: {
   };
 }
 
-function loadChatSendSessionContext(params: {
+/** Load and validate the session/model facts shared by later admission and dispatch phases. */
+export function prepareChatSendSession(params: {
   request: NormalizedChatSendRequest;
   context: GatewayRequestHandlerOptions["context"];
+  client: GatewayRequestHandlerOptions["client"];
 }) {
-  const { request, context } = params;
-  const { p, explicitOrigin, normalizedAttachments } = request;
+  const { request, context, client } = params;
+  const { p, explicitOrigin, normalizedAttachments, turnKind, rawMessage } = request;
   const rawSessionKey = p.sessionKey;
   if (!rawSessionKey.trim()) {
     return { ok: false as const, error: "sessionKey must not be blank" };
@@ -139,51 +141,6 @@ function loadChatSendSessionContext(params: {
   const sessionRoutingChanged = (candidateConfig: OpenClawConfig) =>
     expectedSessionRoutingContract !== undefined &&
     expectedSessionRoutingContract.toLowerCase() !== resolveSessionRoutingContract(candidateConfig);
-  return {
-    ok: true as const,
-    value: {
-      rawSessionKey,
-      sessionLoadKey,
-      clientRunId,
-      pendingChatSendKey,
-      sessionLoadOptions,
-      sessionLoadMs,
-      cfg,
-      agentId,
-      selectedAgent: requestedAgent,
-      storePath,
-      ...(sessionLoadResult.readSource ? { readSource: sessionLoadResult.readSource } : {}),
-      ...(sessionLoadResult.capturedReadSource
-        ? { capturedReadSource: sessionLoadResult.capturedReadSource }
-        : {}),
-      ...(sessionLoadResult.capturedReadSources
-        ? { capturedReadSources: sessionLoadResult.capturedReadSources }
-        : {}),
-      entry,
-      sessionKey,
-      legacyKey,
-      sessionRoutingChanged,
-      expectedLeafEntryId,
-      agentIdOverride,
-      requestedAgentId,
-    },
-  };
-}
-
-/** Load and validate the session/model facts shared by later admission and dispatch phases. */
-export function prepareChatSendSession(params: {
-  request: NormalizedChatSendRequest;
-  context: GatewayRequestHandlerOptions["context"];
-  client: GatewayRequestHandlerOptions["client"];
-}) {
-  const loaded = loadChatSendSessionContext(params);
-  if (!loaded.ok) {
-    return loaded;
-  }
-  const loadedValue = loaded.value;
-  const { request, client } = params;
-  const { p, explicitOrigin, normalizedAttachments, turnKind, rawMessage } = request;
-  const { cfg, agentId, sessionKey, entry, legacyKey } = loadedValue;
   if (isIncognitoSessionKey(sessionKey) && !entry) {
     return { ok: false as const, error: `Incognito session "${sessionKey}" was not found.` };
   }
@@ -245,7 +202,30 @@ export function prepareChatSendSession(params: {
   return {
     ok: true as const,
     value: {
-      ...loadedValue,
+      rawSessionKey,
+      sessionLoadKey,
+      clientRunId,
+      pendingChatSendKey,
+      sessionLoadOptions,
+      sessionLoadMs,
+      cfg,
+      agentId,
+      selectedAgent: requestedAgent,
+      storePath,
+      ...(sessionLoadResult.readSource ? { readSource: sessionLoadResult.readSource } : {}),
+      ...(sessionLoadResult.capturedReadSource
+        ? { capturedReadSource: sessionLoadResult.capturedReadSource }
+        : {}),
+      ...(sessionLoadResult.capturedReadSources
+        ? { capturedReadSources: sessionLoadResult.capturedReadSources }
+        : {}),
+      entry,
+      sessionKey,
+      legacyKey,
+      sessionRoutingChanged,
+      expectedLeafEntryId,
+      agentIdOverride,
+      requestedAgentId,
       requestedSessionId,
       backingSessionId,
       resolvedSessionModel,

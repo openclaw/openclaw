@@ -161,7 +161,11 @@ function isDetectedTextMime(mimeType: string): boolean {
   );
 }
 
-function applyInlineFilePreview(entry: SessionFileEntry, buffer: Buffer, mimeType?: string): void {
+export async function populateSessionFilePreview(
+  entry: SessionFileEntry,
+  buffer: Buffer,
+): Promise<void> {
+  const mimeType = await detectMime({ buffer });
   if (mimeType && BROWSER_IMAGE_MIME_TYPES.has(mimeType)) {
     entry.mimeType = mimeType;
     entry.contentEncoding = "base64";
@@ -184,13 +188,6 @@ function applyInlineFilePreview(entry: SessionFileEntry, buffer: Buffer, mimeTyp
   if (mimeType) {
     entry.mimeType = mimeType;
   }
-}
-
-export async function populateSessionFilePreview(
-  entry: SessionFileEntry,
-  buffer: Buffer,
-): Promise<void> {
-  applyInlineFilePreview(entry, buffer, await detectMime({ buffer }));
 }
 
 function applyOversizedFileMetadata(

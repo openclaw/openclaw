@@ -124,25 +124,7 @@ const TURN_COVERAGE = {
   "audio-activity-and-all-video": TurnCoverage.TURN_INCLUDES_AUDIO_ACTIVITY_AND_ALL_VIDEO,
 } satisfies Record<GoogleRealtimeTurnCoverage, TurnCoverage>;
 
-type GoogleRealtimeVoiceProviderConfig = {
-  apiKey?: string;
-  model?: string;
-  voice?: string;
-  temperature?: number;
-  apiVersion?: string;
-  prefixPaddingMs?: number;
-  silenceDurationMs?: number;
-  startSensitivity?: GoogleRealtimeSensitivity;
-  endSensitivity?: GoogleRealtimeSensitivity;
-  activityHandling?: GoogleRealtimeActivityHandling;
-  turnCoverage?: GoogleRealtimeTurnCoverage;
-  automaticActivityDetectionDisabled?: boolean;
-  enableAffectiveDialog?: boolean;
-  sessionResumption?: boolean;
-  contextWindowCompression?: boolean;
-  thinkingLevel?: GoogleRealtimeThinkingLevel;
-  thinkingBudget?: number;
-};
+type GoogleRealtimeVoiceProviderConfig = Partial<ReturnType<typeof normalizeProviderConfig>>;
 
 type GoogleRealtimeLiveConfig = GoogleRealtimeVoiceProviderConfig & {
   apiKey: string;
@@ -217,10 +199,7 @@ function resolveGoogleRealtimeProviderConfigRecord(
   return asOptionalRecord(providers?.google) ?? asOptionalRecord(config.google) ?? config;
 }
 
-function normalizeProviderConfig(
-  config: RealtimeVoiceProviderConfig,
-  cfg?: OpenClawConfig,
-): GoogleRealtimeVoiceProviderConfig {
+function normalizeProviderConfig(config: RealtimeVoiceProviderConfig, cfg?: OpenClawConfig) {
   const raw = resolveGoogleRealtimeProviderConfigRecord(config);
   return {
     apiKey: normalizeResolvedSecretInputString({

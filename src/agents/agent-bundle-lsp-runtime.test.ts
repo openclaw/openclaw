@@ -1,29 +1,19 @@
 /** Tests embedded LSP runtime JSON-RPC, tool behavior, and cleanup. */
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as bundleLspConfig from "../plugins/bundle-lsp.js";
 import { OwnedStdioCleanupError, type OwnedStdioProcess } from "../process/owned-stdio.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as lspProcess from "./agent-bundle-lsp-process.js";
 import {
-  createBundleLspToolRuntime as createProductionBundleLspToolRuntime,
+  createBundleLspToolRuntime,
   disposeAllBundleLspRuntimes,
 } from "./agent-bundle-lsp-runtime.js";
 import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
 
 const spawnMock = vi.fn();
 const loadLspConfigMock = vi.fn();
-
-function createBundleLspToolRuntime(
-  params: Parameters<typeof createProductionBundleLspToolRuntime>[0],
-) {
-  return createProductionBundleLspToolRuntime({
-    ...params,
-    dependencies: {
-      loadLspConfig: loadLspConfigMock,
-      spawnServerProcess: spawnMock,
-    },
-  });
-}
 
 function encodeLspMessage(body: unknown): string {
   const json = JSON.stringify(body);
@@ -190,10 +180,16 @@ function waitForLspInitialization(child: MockChildProcess, creation: Promise<unk
 }
 
 describe("bundle LSP runtime", () => {
+  beforeEach(() => {
+    vi.spyOn(bundleLspConfig, "loadEnabledBundleLspConfig").mockImplementation(loadLspConfigMock);
+    vi.spyOn(lspProcess, "spawnLspServerProcess").mockImplementation(spawnMock);
+  });
+
   afterEach(async () => {
     await disposeAllBundleLspRuntimes();
     spawnMock.mockReset();
     loadLspConfigMock.mockReset();
+    vi.restoreAllMocks();
   });
 
   it("reuses the prepared plugin manifest registry for bundle discovery", async () => {

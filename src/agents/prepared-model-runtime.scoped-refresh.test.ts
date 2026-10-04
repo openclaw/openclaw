@@ -134,14 +134,21 @@ describe("prepared model runtime scoped refresh", () => {
         serviceTiers: ["priority"],
       };
       const recordChanged = accounts.prepareServiceTierObserver({
-        profileId: "demo:changed",
+        selectedCredential: {
+          source: "profile",
+          profileId: "demo:changed",
+          identityKey: "profile:demo:changed",
+        },
         credential,
       });
       for (const [profileId, profile] of Object.entries({
         ...authStore.profiles,
         [personalId]: credential,
       })) {
-        accounts.prepareServiceTierObserver({ profileId, credential: profile })(observation);
+        accounts.prepareServiceTierObserver({
+          selectedCredential: { source: "profile", profileId, identityKey: `profile:${profileId}` },
+          credential: profile,
+        })(observation);
       }
       const refresh = async (nextStore: PreparedModelCatalogAuth["authStore"]) => {
         if (refreshKind === "catalog") {
@@ -155,18 +162,22 @@ describe("prepared model runtime scoped refresh", () => {
         }
       };
       await refresh(authStore);
-      expect(accounts.readServiceTiers({ ...observation, profileId: "demo:changed" })).toEqual([
-        "priority",
-      ]);
+      expect(
+        accounts.readServiceTiers({ ...observation, identityKey: "profile:demo:changed" }),
+      ).toEqual(["priority"]);
       await refresh({
         version: 1,
         profiles: { "demo:changed": { ...credential, key: "synthetic-replacement" } },
       });
       for (const profileId of ["demo:changed", "demo:removed"]) {
-        expect(accounts.readServiceTiers({ ...observation, profileId })).toBeUndefined();
+        expect(
+          accounts.readServiceTiers({ ...observation, identityKey: `profile:${profileId}` }),
+        ).toBeUndefined();
       }
       for (const profileId of ["other:retained", personalId]) {
-        expect(accounts.readServiceTiers({ ...observation, profileId })).toEqual(["priority"]);
+        expect(
+          accounts.readServiceTiers({ ...observation, identityKey: `profile:${profileId}` }),
+        ).toEqual(["priority"]);
       }
       expect(recordChanged({ ...observation, modelId: "next-model" })).toBe(false);
       expect(owner.isCurrent()).toBe(true);

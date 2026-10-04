@@ -1,4 +1,8 @@
 import type { RouteMatch, Router, RouterState } from "@openclaw/uirouter";
+import {
+  isAgentDatabaseInspectionPendingError,
+  resolveGatewayReadRetryDelayMs,
+} from "../lib/gateway-availability.ts";
 
 const DEFAULT_PENDING_DELAY_MS = 1_000;
 
@@ -19,12 +23,15 @@ export type RouterOutletSnapshot<
 > = RouterOutletStateSlice<TRouteId, TModule, TData> & {
   settled: RouteMatch<TRouteId, TModule, TData> | undefined;
   showPending: boolean;
+  startupPending?: boolean;
 };
 
 export type RouterOutletInputs<TRouteId extends string, TLoadContext, TModule, TData> = {
   router?: Router<TRouteId, TLoadContext, TModule, TData>;
   onNotFound?: () => boolean | void;
   notFoundRecoveryReady?: boolean;
+  retryContext?: TLoadContext;
+  retryEnabled?: boolean;
 };
 
 type RouterOutletControllerOptions = {
@@ -91,6 +98,11 @@ export class RouterOutletController<
   private notFoundGeneration = 0;
   private notFoundRecoveryReady = true;
   private readonly pendingDelayMs: number;
+  private retryContext?: TLoadContext;
+  private retryEnabled = true;
+  private startupMatchId?: string;
+  private startupAttempt = 0;
+  private startupTimer?: ReturnType<typeof globalThis.setTimeout>;
 
   constructor(
     private readonly invalidate: () => void,
@@ -104,12 +116,21 @@ export class RouterOutletController<
   }
 
   setInputs(inputs: RouterOutletInputs<TRouteId, TLoadContext, TModule, TData>): void {
+    if (
+      this.retryContext !== inputs.retryContext ||
+      this.retryEnabled !== (inputs.retryEnabled ?? true)
+    ) {
+      this.clearStartupRetry();
+    }
+    this.retryContext = inputs.retryContext;
+    this.retryEnabled = inputs.retryEnabled ?? true;
     this.onNotFound = inputs.onNotFound;
     const nextNotFoundRecoveryReady = inputs.notFoundRecoveryReady ?? true;
     const recoveryBecameReady =
       !this.notFoundRecoveryReady && nextNotFoundRecoveryReady && this.notFoundDeclined;
     this.notFoundRecoveryReady = nextNotFoundRecoveryReady;
     if (this.router === inputs.router) {
+      this.updateStartupRetry();
       if (recoveryBecameReady && this.selection.status === "notFound") {
         this.cancelNotFoundEffect();
         this.updateNotFoundEffect(this.selection.status);
@@ -173,6 +194,7 @@ export class RouterOutletController<
     this.pendingMatchId = undefined;
     this.showPending = false;
     this.cancelNotFoundEffect();
+    this.clearStartupRetry();
   }
 
   private applySelection(
@@ -213,7 +235,16 @@ export class RouterOutletController<
       this.schedulePendingFallback(pending.id);
     }
 
-    this.publish({ ...selection, settled: this.settled, showPending: this.showPending }, notify);
+    this.updateStartupRetry();
+    this.publish(
+      {
+        ...selection,
+        settled: this.settled,
+        showPending: this.showPending,
+        startupPending: this.startupMatchId !== undefined,
+      },
+      notify,
+    );
     this.updateNotFoundEffect(selection.status);
   }
 
@@ -236,6 +267,55 @@ export class RouterOutletController<
       this.showPending = true;
       this.publish({ ...this.selection, settled: this.settled, showPending: true });
     }, this.pendingDelayMs);
+  }
+
+  private updateStartupRetry(): void {
+    // A new destination cancels the old retry even while its module is still loading.
+    const match = this.selection.pending ?? this.selection.active;
+    if (match?.id !== this.startupMatchId) {
+      this.clearStartupRetry();
+    }
+    if (!this.connected || !this.retryEnabled || this.retryContext === undefined || !match) {
+      this.clearStartupRetry();
+      return;
+    }
+    if (match.status === "pending" || match.isFetching) {
+      globalThis.clearTimeout(this.startupTimer);
+      this.startupTimer = undefined;
+      return;
+    }
+    if (!isAgentDatabaseInspectionPendingError(match.error)) {
+      this.clearStartupRetry();
+      return;
+    }
+    this.startupMatchId = match.id;
+    if (this.startupTimer !== undefined) {
+      return;
+    }
+    this.startupTimer = globalThis.setTimeout(
+      () => {
+        this.startupTimer = undefined;
+        const current = this.selection.pending ?? this.selection.active;
+        if (
+          !this.connected ||
+          !this.retryEnabled ||
+          current?.id !== match.id ||
+          !isAgentDatabaseInspectionPendingError(current.error) ||
+          this.retryContext === undefined
+        ) {
+          return;
+        }
+        void this.router?.revalidate(this.retryContext, match.routeId).catch(() => undefined);
+      },
+      resolveGatewayReadRetryDelayMs(match.error, this.startupAttempt++),
+    );
+  }
+
+  private clearStartupRetry(): void {
+    globalThis.clearTimeout(this.startupTimer);
+    this.startupTimer = undefined;
+    this.startupMatchId = undefined;
+    this.startupAttempt = 0;
   }
 
   private updateNotFoundEffect(status: RouterOutletStateSlice["status"]): void {
@@ -283,7 +363,8 @@ export class RouterOutletController<
       previous.active === snapshot.active &&
       previous.pending === snapshot.pending &&
       previous.settled === snapshot.settled &&
-      previous.showPending === snapshot.showPending
+      previous.showPending === snapshot.showPending &&
+      previous.startupPending === snapshot.startupPending
     ) {
       return;
     }

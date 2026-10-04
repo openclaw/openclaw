@@ -164,6 +164,14 @@ const FULL_RELEASE_CHILD_DISPATCHES = [
     workflow: "full-release-artifacts.yml",
   },
   {
+    jobName: "prepare_plugin_npm",
+    kind: "plugin-npm-preflight",
+    nonceSuffix: "-plugin-npm-preflight)",
+    runName: `Plugin NPM Artifact Preflight [beta] ${"b".repeat(40)} (`,
+    stepName: "Dispatch exact plugin npm artifact preflight",
+    workflow: "plugin-npm-release.yml",
+  },
+  {
     jobName: "prepare_docker_release",
     kind: "artifact-docker",
     nonceSuffix: "-artifacts-docker",
@@ -3576,6 +3584,7 @@ function runFullReleaseChildDispatch(
     CI_RELEASE_SCOPE: "full",
     CODEX_PLUGIN_SPEC: "",
     CROSS_OS_SUITE_FILTER: "",
+    DISPATCH_ID: `full-release-validation-77-1-${child.kind}`,
     EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: "[]",
     FAIL_FAST: "false",
     GH_TOKEN: "fixture-token",
@@ -3589,6 +3598,8 @@ function runFullReleaseChildDispatch(
     PREPARED_NPM_BUNDLE_JSON: '{"schema":"openclaw.prepared-npm-bundle/v1"}',
     PHASE: child.jobName.endsWith("_candidate") ? "candidate" : "independent",
     PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: "[]",
+    PLUGIN_PUBLISH_SCOPE: "all-publishable",
+    PLUGINS: "",
     PROVIDER: "openai",
     PROVIDER_MODE: "mock-openai",
     RELEASE_PACKAGE_SPEC: "",
@@ -3621,7 +3632,7 @@ function runFullReleaseChildDispatch(
       "HTTP 5[0-9][0-9]",
     GITHUB_OUTPUT: resolve(workdir, "github-output"),
     GITHUB_REPOSITORY: "openclaw/openclaw",
-    GITHUB_RUN_ATTEMPT: "2",
+    GITHUB_RUN_ATTEMPT: child.jobName === "prepare_plugin_npm" ? "1" : "2",
     GITHUB_RUN_ID: "77",
     GITHUB_STEP_SUMMARY: resolve(workdir, "github-summary"),
     MOCK_GH_CALLS: callsPath,
@@ -3638,7 +3649,10 @@ function runFullReleaseChildDispatch(
     MOCK_GH_RUN_ID: "101",
     MOCK_GH_RUN_PATH: `.github/workflows/${child.workflow}`,
     MOCK_GH_RUN_ATTEMPT: "1",
-    MOCK_GH_RUN_TITLE: `${child.runName} full-release-validation-77-2${child.nonceSuffix}`,
+    MOCK_GH_RUN_TITLE:
+      child.jobName === "prepare_plugin_npm"
+        ? `Plugin NPM Artifact Preflight [beta] ${"b".repeat(40)} (${stepValues.DISPATCH_ID})`
+        : `${child.runName} full-release-validation-77-2${child.nonceSuffix}`,
     MOCK_GH_RUN_TITLES: "[]",
     MOCK_GH_RUN_WORKFLOW_ID: "789",
     MOCK_GH_STATUSES: '["completed"]',
@@ -5931,6 +5945,7 @@ esac
     expect(identity.run).toContain(
       "node .release-tooling/scripts/release-tooling-identity.mjs verify",
     );
+    expect(identity.run).toContain("--allow-prevalidated-ref");
     expect(target.run).not.toContain('WORKFLOW_REF}" != "refs/heads/main');
     expect(target.run).not.toContain('git merge-base --is-ancestor "${WORKFLOW_SHA}" origin/main');
   });
@@ -8993,7 +9008,7 @@ test "$package_manager" = "pnpm@12.1.0"
       const job = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, child.jobName);
       const step = workflowStep(job, child.stepName);
       expect(step.env?.CHILD_WORKFLOW_KIND ?? job.env?.CHILD_WORKFLOW_KIND).toBe(child.kind);
-      if (child.kind.startsWith("artifact-")) {
+      if (child.kind.startsWith("artifact-") || child.kind === "plugin-npm-preflight") {
         expect(step.if).toBe("github.run_attempt == 1");
       } else {
         expect(job["timeout-minutes"]).toBe(15);
@@ -9850,6 +9865,9 @@ describe("package artifact reuse", () => {
       ...process.env,
       NPM_PREPARE_RESULT: "success",
       NPM_QUALIFY_RESULT: "success",
+      PLUGIN_NPM_REQUIRED: "false",
+      PLUGIN_NPM_PREPARE_RESULT: "skipped",
+      PREPARED_PLUGIN_NPM_JSON: "",
       QUALIFIED_NPM_BUNDLE_JSON: "{}",
       DOCKER_PREPARE_RESULT: "success",
       PREPARED_DOCKER_MANIFEST_SHA256: "a".repeat(64),
@@ -9871,6 +9889,21 @@ describe("package artifact reuse", () => {
           }).status,
         ).not.toBe(0);
       }
+      expect(
+        spawnSync("bash", ["-c", gate.run ?? ""], {
+          env: {
+            ...releaseEnv,
+            PLUGIN_NPM_REQUIRED: "true",
+            PLUGIN_NPM_PREPARE_RESULT: "success",
+            PREPARED_PLUGIN_NPM_JSON: "{}",
+          },
+        }).status,
+      ).toBe(0);
+      expect(
+        spawnSync("bash", ["-c", gate.run ?? ""], {
+          env: { ...releaseEnv, PLUGIN_NPM_REQUIRED: "true" },
+        }).status,
+      ).not.toBe(0);
     }
   });
 
@@ -13604,6 +13637,7 @@ describe("package artifact reuse", () => {
       "npm_telegram",
       "performance",
       "prepare_npm_package",
+      "prepare_plugin_npm",
       "prepare_docker_release",
     ]) {
       const job = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, jobName);
@@ -16337,17 +16371,13 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       "Outside this extended-stable procedure, a direct canonical-branch dispatch",
       "Current extended-stable validation requires distinct",
       "Direct canonical-branch and mutable-`main` dispatches are not valid",
-      "--ref main",
-      '-f tag="$VALIDATION_SHA"',
-      "-f preflight_only=true",
-      "-f npm_dist_tag=extended-stable",
-      '-f release_candidate_branch="$CONTEXT_REF"',
     ]);
     expectTextToIncludeAll(releaseCi, [
-      "standalone run is a supplemental validation-only preflight",
-      "Do not pass",
-      "publication `preflight_run_id`",
-      "Publication continues to use",
+      "Current all-group FRV also owns read-only core and selected-plugin npm",
+      "Prepared descriptors live in `publicationArtifacts`",
+      "Release Prepare adopts the manifest's plugin npm",
+      "descriptor and prepares only ClawHub",
+      "it never repacks plugin npm after FRV",
     ]);
     expectTextToIncludeAll(ciDocs, [
       'VALIDATION_SHA="<full-commit-sha>"',

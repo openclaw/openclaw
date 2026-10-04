@@ -9,26 +9,22 @@ import type {
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
 import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
-import type { WorkerSessionPlacementRecord } from "./placement-store.js";
-import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
+import type { WorkerSessionPlacementRecord } from "./placement-record.js";
+import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
 
-export type WorkerSessionPlacementReader = {
-  prepareRuntimeRefresh?: import("./placement-store.js").WorkerSessionPlacementStore["prepareRuntimeRefresh"];
-  getMany(sessionIds: readonly string[]): ReadonlyMap<string, WorkerSessionPlacementRecord>;
-  /** @deprecated Await getWorkspaceResultReconcilingSessionIdsAsync. */
-  getWorkspaceResultReconcilingSessionIds?(sessionIds: readonly string[]): ReadonlySet<string>;
-  getWorkspaceResultReconcilingSessionIdsAsync?(
-    sessionIds: readonly string[],
-  ): Promise<ReadonlySet<string>>;
-  /** @deprecated Await listPendingWorkspaceResultsAsync. */
-  listPendingWorkspaceResults?(sessionId?: string): WorkerWorkspacePendingResult[];
-  listPendingWorkspaceResultsAsync?(sessionId?: string): Promise<WorkerWorkspacePendingResult[]>;
-  /** Runtime consumers may cancel work when the exact captured turn claim closes. */
-  registerTurnClaimClosedHandler?: (
-    handler: (claim: import("./placement-record.js").WorkerSessionTurnClaim) => void,
-  ) => () => void;
-};
+export type WorkerSessionPlacementReader = Pick<WorkerSessionPlacementStore, "getMany"> &
+  Partial<
+    Pick<
+      WorkerSessionPlacementStore,
+      | "prepareRuntimeRefresh"
+      | "getWorkspaceResultReconcilingSessionIds"
+      | "getWorkspaceResultReconcilingSessionIdsAsync"
+      | "listPendingWorkspaceResults"
+      | "listPendingWorkspaceResultsAsync"
+      | "registerTurnClaimClosedHandler"
+    >
+  >;
 
 export type WorkerPlacementDiskSpaceReader = {
   read(record: WorkerSessionPlacementRecord): SessionPlacementDiskSpace | undefined;

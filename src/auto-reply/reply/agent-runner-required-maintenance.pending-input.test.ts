@@ -53,6 +53,7 @@ describe("required maintenance with restart-safe admitted input", () => {
     async (history) => {
       await withOpenClawTestState({ label: "required-maintenance-pending" }, async (state) => {
         const requests: ModelRequest[] = [];
+        const runtimeContext = "Synthetic current runtime fact for the approved request.";
         const approved =
           "Approved current request: preserve ünicode 🦞 and exact newlines.\n" +
           "Current background information.\n".repeat(1_600) +
@@ -278,6 +279,7 @@ describe("required maintenance with restart-safe admitted input", () => {
             cfg,
           });
           const restartSafeAdmission = resolveRestartSafeChatAdmission({
+            acpMeta: null,
             activeRunScopeKey: sessionKey,
             agentId: "main",
             cfg,
@@ -328,6 +330,7 @@ describe("required maintenance with restart-safe admitted input", () => {
             conversationToolPolicy: { deny: ["read"] },
           });
           followupRun.prompt = approved;
+          followupRun.currentInboundContext = { text: runtimeContext };
           followupRun.userTurnTranscriptRecorder = recorder;
           entry = loadSessionEntry(scope)!;
           const sessionStore = { [sessionKey]: entry };
@@ -413,6 +416,9 @@ describe("required maintenance with restart-safe admitted input", () => {
           expect(providerText(lastUser?.content).endsWith(approved)).toBe(true);
           expect(providerText(lastUser?.content).split(approved)).toHaveLength(2);
           expect(foregroundMessages.filter(isModelRuntimeContextCarrier)).toHaveLength(1);
+          expect(
+            providerText(foregroundMessages.find(isModelRuntimeContextCarrier)?.content),
+          ).toContain(runtimeContext);
           expect(foregroundMessages.findIndex(isModelRuntimeContextCarrier)).toBeGreaterThan(
             userIndex,
           );

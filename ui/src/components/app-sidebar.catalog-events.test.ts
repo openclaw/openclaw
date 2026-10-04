@@ -207,6 +207,42 @@ describe("AppSidebar catalog event refresh", () => {
     }
   });
 
+  it("keeps agent startup quiet past three minutes and surfaces a later inspection failure", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const request = createGatewayRequestMock().mockRejectedValue(
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Agent has not completed startup inspection. Run openclaw doctor --fix.",
+        retryable: true,
+        retryAfterMs: 250,
+        details: { code: "agent-database-inspection-pending", agentId: "main" },
+      }),
+    );
+    const { sidebar } = await mountTab(request);
+    await vi.advanceTimersByTimeAsync(180_000);
+    await sidebar.updateComplete;
+    expect(request.mock.calls.length).toBeGreaterThan(30);
+    expect(sidebar.querySelector('[role="status"]')?.textContent).toContain("Starting up");
+    expect(sidebar.querySelector(".callout.danger")).toBeNull();
+    expect(sidebar.textContent).not.toContain("doctor --fix");
+    expect(warning).not.toHaveBeenCalled();
+
+    request.mockRejectedValue(
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Inspection failed. Run openclaw doctor --fix.",
+        retryable: false,
+        details: { code: "agent-database-inspection-failed", agentId: "main" },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    await sidebar.updateComplete;
+    expect(sidebar.textContent).not.toContain("Starting up");
+    expect(sidebar.querySelector(".sidebar-session-catalog-error")?.textContent).toContain(
+      "Inspection failed. Run openclaw doctor --fix.",
+    );
+  });
+
   it.each(["hide", "remove"])(
     "retires a pending catalog retry when the sidebar must %s",
     async (action) => {

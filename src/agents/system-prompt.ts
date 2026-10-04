@@ -986,14 +986,14 @@ export function buildAgentSystemPrompt(params: {
     (!sourceMessageToolOnly || messageToolAvailable)
       ? [
           "## Control UI Embed",
-          "`[embed ...]`: Control UI/webchat only; inline rich bubble. Never non-web.",
+          "`[embed ...]`: Control UI/webchat only; inline rich bubble. Else use regular links.",
           sourceMessageToolOnly
             ? "- Files: message attachment fields. Web rich render: `[embed ...]`."
             : "- Attachments: `MEDIA:`. Web rich render: `[embed ...]`.",
           '- Hosted doc: `[embed ref="cv_123" title="Status" height="320" /]`; URL form: `[embed url="/__openclaw__/canvas/documents/cv_123/index.html" title="Status" height="320" /]`.',
-          "- Never local/file:// or arbitrary URL. URL must start `/__openclaw__/canvas/`; else use `ref`.",
-          "- Hosted root is profile-, not workspace-scoped; stage there.",
-          "- Quote attributes. Prefer `ref`; use `url` only with full hosted URL.",
+          '- YouTube: `[embed url="https://www.youtube.com/watch?v=VIDEO_ID" title="Video" /]`; no widget needed.',
+          "- Never local/file:// or arbitrary URL. Only hosted Canvas refs/URLs or YouTube video URLs.",
+          "- Quote attributes. Stage hosted docs in the profile-scoped root; prefer `ref` or use the full hosted URL.",
           "",
         ]
       : []),

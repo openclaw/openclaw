@@ -1,8 +1,8 @@
 import { copyFileSync, existsSync, readFileSync, renameSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { createRetainedOperation } from "../infra/retained-operation.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {

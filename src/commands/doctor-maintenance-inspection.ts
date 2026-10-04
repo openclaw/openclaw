@@ -47,7 +47,10 @@ export async function readDoctorGatewayOwnerLease(
   }
   // The recorded process may have exited while the reader and its private snapshot settled.
   return reply.lease
-    ? { ...reply.lease, state: readStateLeaseProcessOwnerStatus(reply.lease) }
+    ? {
+        ...reply.lease,
+        state: readStateLeaseProcessOwnerStatus(reply.lease, reply.lease.heartbeatAt),
+      }
     : undefined;
 }
 

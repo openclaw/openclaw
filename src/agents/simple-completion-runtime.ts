@@ -29,6 +29,7 @@ import {
 } from "./execution-auth-binding.js";
 import { createAgentRuntimeMetadataPluginIdScope } from "./harness/runtime-plugin-load-plan.js";
 import { resolveProviderModelAuthPolicy } from "./model-auth-policy.js";
+import { resolveSelectedModelCredential } from "./model-auth-selected-credential.js";
 import {
   applySecretRefHeaderSentinels,
   applyLocalNoAuthHeaderOverride,
@@ -484,16 +485,21 @@ async function prepareSimpleCompletionModelCore(
           }),
           providerRuntimeHandle,
         );
-  const selectedCredential = auth.profileId ? authStore?.profiles[auth.profileId] : undefined;
+  const selectedCredential = resolveSelectedModelCredential({
+    provider: model.provider,
+    profileId: auth.profileId,
+    mode: auth.mode,
+  });
   const recordServiceTierObservation =
     params.transport === "provider-stream" &&
-    auth.profileId &&
-    selectedCredential?.type === "api_key" &&
+    selectedCredential &&
+    selectedCredential.source !== "harness" &&
+    selectedCredential.requirement === "api-key" &&
     model.provider === "openai" &&
     model.api === "openai-responses"
       ? context.preparedModelRuntime.accountCatalog?.prepareServiceTierObserver({
-          profileId: auth.profileId,
-          credential: selectedCredential,
+          selectedCredential,
+          credential: auth.profileId ? authStore?.profiles[auth.profileId] : undefined,
         })
       : undefined;
 

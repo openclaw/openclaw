@@ -71,7 +71,10 @@ const createRecordedSendActivity = (
     sink.push(content);
     attempts += 1;
     if (failFirstWithStatusCode !== undefined && attempts === 1) {
-      throw Object.assign(new Error("send failed"), { statusCode: failFirstWithStatusCode });
+      throw Object.assign(new Error("send failed"), {
+        statusCode: failFirstWithStatusCode,
+        ...(failFirstWithStatusCode === 429 ? { retryAfterMs: 0 } : {}),
+      });
     }
     return { id: `id:${content}` };
   };
@@ -160,14 +163,6 @@ describe("msteams messenger", () => {
         { textChunkLimit: 4000, tableMode: "code" },
       );
       expect(messages).toEqual([{ text: "hi" }, { mediaUrl: "https://example.com/a.png" }]);
-    });
-
-    it("supports inline media mode", () => {
-      const messages = renderReplyPayloadsToMessages(
-        [{ text: "hi", mediaUrl: "https://example.com/a.png" }],
-        { textChunkLimit: 4000, mediaMode: "inline", tableMode: "code" },
-      );
-      expect(messages).toEqual([{ text: "hi", mediaUrl: "https://example.com/a.png" }]);
     });
 
     it("chunks long text when enabled", () => {
@@ -427,7 +422,10 @@ describe("msteams messenger", () => {
         graphUploadMockState.uploadAndShareSharePoint.mockImplementation(async () => {
           uploadAttempts += 1;
           if (uploadAttempts === 1) {
-            throw Object.assign(new Error("transient upload failure"), { statusCode: 429 });
+            throw Object.assign(new Error("transient upload failure"), {
+              statusCode: 429,
+              retryAfterMs: 0,
+            });
           }
           return {
             itemId: "item123",
@@ -465,7 +463,6 @@ describe("msteams messenger", () => {
             getAccessToken: async () => "token",
           },
           sharePointSiteId: "site-123",
-          retry: { maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0 },
           onRetry: (e) => retryEvents.push({ nextAttempt: e.nextAttempt, delayMs: e.delayMs }),
         });
 
@@ -496,7 +493,6 @@ describe("msteams messenger", () => {
           conversationRef: baseRef,
           context: ctx,
           messages: [{ text: "one" }],
-          retry: { maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0 },
         }),
       ).rejects.toMatchObject({ statusCode: 400 });
     });
@@ -642,7 +638,6 @@ describe("msteams messenger", () => {
           }),
           conversationRef: baseRef,
           messages: [{ text: "hello" }],
-          retry: { maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 },
         }).catch((cause: unknown) => cause);
 
         expect(attempts).toEqual(["hello"]);
@@ -664,7 +659,6 @@ describe("msteams messenger", () => {
           }),
           conversationRef: baseRef,
           messages: [{ text: "hello" }],
-          retry: { maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0 },
         }).catch((cause: unknown) => cause);
 
         expect(attempts).toEqual(["hello"]);
@@ -688,7 +682,6 @@ describe("msteams messenger", () => {
         }),
         conversationRef: baseRef,
         messages: [{ text: "first" }, { text: "second" }],
-        retry: { maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0 },
       }).catch((cause: unknown) => cause);
 
       expect(attempts).toEqual(["first", "second"]);

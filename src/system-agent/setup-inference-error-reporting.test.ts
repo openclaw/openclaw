@@ -20,6 +20,21 @@ import {
 } from "./system-agent.test-helpers.js";
 import { captureSystemAgentOwnerPluginArtifacts } from "./verified-inference.js";
 
+const inferenceMocks = vi.hoisted(() => ({
+  verifySetupInference: vi.fn(),
+  runSystemAgent: vi.fn(),
+  runGuidedOnboarding: vi.fn(),
+}));
+vi.mock("./setup-inference.js", () => ({
+  verifySetupInference: inferenceMocks.verifySetupInference,
+}));
+vi.mock("./system-agent.js", () => ({
+  runSystemAgent: inferenceMocks.runSystemAgent,
+}));
+vi.mock("../commands/onboard-guided.js", () => ({
+  runGuidedOnboarding: inferenceMocks.runGuidedOnboarding,
+}));
+
 const runtimeLoader = vi.hoisted(() => vi.fn());
 vi.mock("../agents/runtime-plugins.js", () => ({
   loadAgentRuntimePluginRegistryHandle: runtimeLoader,
@@ -136,45 +151,44 @@ async function observeScenario(scenario: Scenario, json: boolean) {
               };
             },
           };
+          inferenceMocks.verifySetupInference.mockImplementation(
+            async ({ runtime }: { runtime: RuntimeEnv }) => {
+              let binding: typeof fixture.binding | undefined;
+              const result = await verifySetupInferenceConfig({
+                config,
+                agentId: "main",
+                runtime,
+                requireExecutionOwner: true,
+                deps,
+                onVerifiedExecution: (verified) => {
+                  phases.push("callback");
+                  callbackAttempts += 1;
+                  if (scenario === "callback") {
+                    faultReached += 1;
+                    // oxlint-disable-next-line typescript/only-throw-error -- Exercise non-Error failures at the verifier boundary.
+                    throw fault;
+                  }
+                  binding = verified;
+                },
+              });
+              if (!result.ok) {
+                return result;
+              }
+              if (!binding) {
+                throw new Error("successful verification lacked a binding");
+              }
+              return { ...result, binding };
+            },
+          );
+          inferenceMocks.runSystemAgent.mockImplementation(async () => {
+            managedDispatches += 1;
+          });
+          inferenceMocks.runGuidedOnboarding.mockImplementation(async () => {
+            onboardingDispatches += 1;
+          });
           await runSystemAgentWithInference(
             json ? { json: true } : { message: "status", interactive: false },
             renderedRuntime,
-            {},
-            {
-              verifyInference: async ({ runtime }) => {
-                let binding: typeof fixture.binding | undefined;
-                const result = await verifySetupInferenceConfig({
-                  config,
-                  agentId: "main",
-                  runtime,
-                  requireExecutionOwner: true,
-                  deps,
-                  onVerifiedExecution: (verified) => {
-                    phases.push("callback");
-                    callbackAttempts += 1;
-                    if (scenario === "callback") {
-                      faultReached += 1;
-                      // oxlint-disable-next-line typescript/only-throw-error -- Exercise non-Error failures at the verifier boundary.
-                      throw fault;
-                    }
-                    binding = verified;
-                  },
-                });
-                if (!result.ok) {
-                  return result;
-                }
-                if (!binding) {
-                  throw new Error("successful verification lacked a binding");
-                }
-                return { ...result, binding };
-              },
-              runSystemAgent: async () => {
-                managedDispatches += 1;
-              },
-              runGuidedOnboarding: async () => {
-                onboardingDispatches += 1;
-              },
-            },
           );
         });
       },

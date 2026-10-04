@@ -1,6 +1,7 @@
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { lookupContextTokens, resetContextWindowCacheForTest } from "../agents/context.js";
+import { lookupContextTokens } from "../agents/context.js";
+import { resetContextWindowCacheForTest } from "../agents/context.test-support.js";
 import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.lifecycle.js";
 import { createModelProviderRouteOverrideResolver } from "../config/model-provider-config.js";
 import {

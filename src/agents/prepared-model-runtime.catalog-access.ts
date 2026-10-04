@@ -86,6 +86,7 @@ export async function createFullModelCatalogAccess(
   const accountCatalog = createPreparedAccountCatalogAccess(
     params.isCurrent,
     params.retirementSignal,
+    params.agentFacts.input.config,
   );
   const readUsage = createPreparedRuntimeAuthProfileUsageReader(
     params.agentFacts.input.agentDir,

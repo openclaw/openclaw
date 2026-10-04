@@ -157,23 +157,38 @@ describe("worker Gateway tool RPC authority", () => {
     },
   );
 
-  it("keeps catalog and cancellation available while stale source authority fences effects", async () => {
-    const h = await toolHarness("source-custody");
-    h.invalidateSource();
-    await expect(h.workerService.getToolSurface(h.identity)).resolves.toMatchObject({ ok: true });
-    await expect(
-      h.workerService.cancelGatewayTool(h.identity, {
-        generation: h.request.generation,
-        toolCallId: h.request.toolCallId,
-      }),
-    ).resolves.toMatchObject({ ok: true, result: { cancelled: false } });
-    expect(h.assertSource).not.toHaveBeenCalled();
-    await expect(h.invoke()).resolves.toMatchObject({
-      ok: true,
-      result: { details: { error: "Source transcript writer changed" } },
-    });
-    expect(h.execute).not.toHaveBeenCalled();
-  });
+  it.each([
+    { sourceStale: true, error: "Source transcript writer changed" },
+    { sourceStale: false, error: "portal port required" },
+  ])(
+    "returns an actionable error with sourceStale=$sourceStale",
+    async ({ sourceStale, error }) => {
+      const h = await toolHarness(`tool-error-${sourceStale}`);
+      if (sourceStale) {
+        h.invalidateSource();
+        await expect(h.workerService.getToolSurface(h.identity)).resolves.toMatchObject({
+          ok: true,
+        });
+        await expect(
+          h.workerService.cancelGatewayTool(h.identity, {
+            generation: h.request.generation,
+            toolCallId: h.request.toolCallId,
+          }),
+        ).resolves.toMatchObject({ ok: true, result: { cancelled: false } });
+        expect(h.assertSource).not.toHaveBeenCalled();
+      } else {
+        h.execute.mockRejectedValueOnce(new Error(error));
+      }
+      await expect(h.invoke()).resolves.toMatchObject({
+        ok: true,
+        result: {
+          content: [{ type: "text", text: expect.stringContaining(error) }],
+          details: { status: "error", error },
+        },
+      });
+      expect(h.execute).toHaveBeenCalledTimes(sourceStale ? 0 : 1);
+    },
+  );
 
   it("accepts only issued handles and canonical arguments before dispatch", async () => {
     const h = await toolHarness("tool-authority");
@@ -213,18 +228,6 @@ describe("worker Gateway tool RPC authority", () => {
       result: { details: { status: "error", error: "Worker tool call cancelled" } },
     });
     expect(h.execute).not.toHaveBeenCalled();
-  });
-
-  it("returns actionable tool failures to an authorized worker", async () => {
-    const h = await toolHarness("tool-error");
-    h.execute.mockRejectedValueOnce(new Error("portal port required"));
-    await expect(h.invoke()).resolves.toMatchObject({
-      ok: true,
-      result: {
-        content: [{ type: "text", text: expect.stringContaining("portal port required") }],
-        details: { status: "error", error: "portal port required" },
-      },
-    });
   });
 
   it.each(["placement", "run"] as const)(

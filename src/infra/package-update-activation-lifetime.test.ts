@@ -138,30 +138,6 @@ describe.skipIf(process.platform === "win32")(
       }
     });
 
-    it("preserves version-1 launcher receipts with current structured metadata", async () => {
-      const f = await prepare();
-      const record = openPackageActivationJournal(f.anchor).read();
-      const captured = await createPackageIntegrityReader().launcher(f.launcher);
-      expect(record.descriptor.version).toBe(1);
-      expect(record.descriptor.launchers[0]?.previous).toBe(
-        JSON.stringify([
-          captured.type,
-          captured.mode,
-          captured.uid,
-          captured.gid,
-          captured.contents,
-        ]),
-      );
-      const journalPath = resolvePackageActivationJournalPath(f.anchor);
-      const before = fs.readFileSync(journalPath);
-      expect((await readPackageActivationStatus(f.anchor, f.operationId)).phase).toBe("prepared");
-      expect(fs.readFileSync(journalPath)).toEqual(before);
-      await runPackageActivationRecovery(f.anchor, "repair", f.operationId);
-      expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
-      await runPackageActivationRecovery(f.anchor, "retire", f.operationId);
-      expect((await readPackageActivationStatus(f.anchor, f.operationId)).phase).toBe("complete");
-    });
-
     it("recovers the original operation after a killed uncommitted journal write", async () => {
       const fixture = await prepare();
       const journalPath = resolvePackageActivationJournalPath(fixture.anchor);
@@ -663,26 +639,6 @@ describe.skipIf(process.platform === "win32")(
       expect(observed).toBe(true);
     });
 
-    it("retains positive completion outside the anchor and remains readable after helper removal", async () => {
-      const f = await prepare();
-      await expect(
-        runPackageActivationRecovery(f.anchor, "repair", f.operationId),
-      ).resolves.toMatchObject({
-        phase: "aborted",
-      });
-      await expect(
-        runPackageActivationRecovery(f.anchor, "retire", f.operationId),
-      ).resolves.toMatchObject({
-        phase: "complete",
-      });
-      expect(fs.existsSync(f.anchor)).toBe(false);
-      expect(fs.existsSync(resolvePackageActivationHelper(f.anchor))).toBe(false);
-      await expect(readPackageActivationStatus(f.anchor, f.operationId)).resolves.toMatchObject({
-        phase: "complete",
-      });
-      expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
-      expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
-    });
     it.each(["candidate", "launchers"])(
       "reconciles lost %s transfer acknowledgement without adopting another object",
       async (name) => {
@@ -860,10 +816,38 @@ describe.skipIf(process.platform === "win32")(
       },
     );
 
-    it("reads completion through the actual status command after the helper is removed", async () => {
+    it("preserves version-1 launcher receipts and reads completion through status after helper removal", async () => {
       const f = await prepare();
-      await runPackageActivationRecovery(f.anchor, "repair", f.operationId);
-      await runPackageActivationRecovery(f.anchor, "retire", f.operationId);
+      const record = openPackageActivationJournal(f.anchor).read();
+      const captured = await createPackageIntegrityReader().launcher(f.launcher);
+      expect(record.descriptor.version).toBe(1);
+      expect(record.descriptor.launchers[0]?.previous).toBe(
+        JSON.stringify([
+          captured.type,
+          captured.mode,
+          captured.uid,
+          captured.gid,
+          captured.contents,
+        ]),
+      );
+      const journalPath = resolvePackageActivationJournalPath(f.anchor);
+      const before = fs.readFileSync(journalPath);
+      expect((await readPackageActivationStatus(f.anchor, f.operationId)).phase).toBe("prepared");
+      expect(fs.readFileSync(journalPath)).toEqual(before);
+      await expect(
+        runPackageActivationRecovery(f.anchor, "repair", f.operationId),
+      ).resolves.toMatchObject({ phase: "aborted" });
+      expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+      await expect(
+        runPackageActivationRecovery(f.anchor, "retire", f.operationId),
+      ).resolves.toMatchObject({ phase: "complete" });
+      expect(fs.existsSync(f.anchor)).toBe(false);
+      expect(fs.existsSync(resolvePackageActivationHelper(f.anchor))).toBe(false);
+      await expect(readPackageActivationStatus(f.anchor, f.operationId)).resolves.toMatchObject({
+        phase: "complete",
+      });
+      expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+      expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
       const shared = await import("../cli/update-cli/shared.js");
       const config = await import("../config/config.js");
       const diagnostics = await import("../commands/node-runtime-diagnostics.js");

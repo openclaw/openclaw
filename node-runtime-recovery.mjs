@@ -10,6 +10,7 @@ import {
   RESPAWN_SIGNAL_HARD_EXIT_GRACE_MS,
   resolveLauncherStopTimeoutMs,
 } from "./gateway-shutdown-budget.mjs";
+import { withNodeRuntimePath } from "./node-runtime-env.mjs";
 import {
   detectCurrentSqliteCapabilities,
   nodeRuntimeFailure,
@@ -746,7 +747,7 @@ export async function recoverNodeRuntime({
     `openclaw: Retrying with ${JSON.stringify(nodePath)} (${reason}; current Node failed runtime admission).\n`,
   );
   runRespawnedChild(nodePath, [...process.execArgv, process.argv[1], ...process.argv.slice(2)], {
-    ...env,
+    ...withNodeRuntimePath(env, nodePath),
     OPENCLAW_NODE_UPDATE_RESPAWNED: "1",
   });
   // The original CLI must not continue while the replacement owns the invocation.

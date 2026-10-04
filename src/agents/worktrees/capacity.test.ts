@@ -142,6 +142,7 @@ describe("worktree Git size estimates", () => {
       );
       const fetches = commandSpy.mock.calls.filter(([, args]) => args[0] === "fetch");
       expect(fetches).toHaveLength(1);
+      expect(fetches[0]?.[1]).toContain("--no-auto-maintenance");
       const fetchOptions = fetches[0]?.[2];
       expect(fetchOptions?.timeoutMs).toBe(300_000);
       const input = fetchOptions?.input;

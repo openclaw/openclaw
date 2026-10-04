@@ -737,6 +737,15 @@
       "@openclaw/retry": [
         "../../packages/plugin-sdk/dist/packages/retry/src/index.d.ts"
       ],
+      "@openclaw/worker-runtime": [
+        "../../packages/plugin-sdk/dist/packages/worker-runtime/src/index.d.ts"
+      ],
+      "@openclaw/worker-runtime/worker": [
+        "../../packages/plugin-sdk/dist/packages/worker-runtime/src/worker.d.ts"
+      ],
+      "@openclaw/worker-runtime/lifecycle": [
+        "../../packages/plugin-sdk/dist/packages/worker-runtime/src/lifecycle.d.ts"
+      ],
       "@openclaw/workboard-contract": [
         "../../packages/workboard-contract/src/index.ts"
       ],

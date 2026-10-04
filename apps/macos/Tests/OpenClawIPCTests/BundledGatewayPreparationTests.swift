@@ -344,7 +344,7 @@ struct BundledGatewayPreparationTests {
                 var runtimeActions: [String] = []
                 var failHealth = scenario == "runtime-failure"
                 var operations = ManagedNodeGatewayMigration.liveOperations(
-                    checkCurrent: {}, resolveLegacyCLI: { cli }, allowNamedServiceRetry: true,
+                    checkCurrent: {}, resolveLegacyCLI: { cli },
                     verifyHealth: {
                         runtimeActions.append("health")
                         if failHealth {

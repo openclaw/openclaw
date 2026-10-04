@@ -258,7 +258,9 @@ describe("node worker output framing", () => {
       );
 
       expect(await harness.close()).toMatchObject({ state: "completed" });
-      expect(harness.frames.map((frame) => frame.turnId)).toEqual(["first", "second"]);
+      expect(harness.frames.map((frame) => ("turnId" in frame ? frame.turnId : undefined))).toEqual(
+        ["first", "second"],
+      );
       expect(harness.kill).not.toHaveBeenCalled();
     } finally {
       await harness.close();
@@ -309,7 +311,9 @@ describe("node worker output framing", () => {
           expect(harness.frames).toEqual([]);
         } else {
           expect(outcome).toMatchObject({ state: "completed" });
-          expect(harness.frames.map((frame) => frame.turnId)).toEqual(["first", "second"]);
+          expect(
+            harness.frames.map((frame) => ("turnId" in frame ? frame.turnId : undefined)),
+          ).toEqual(["first", "second"]);
         }
       } finally {
         await harness.close();

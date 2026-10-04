@@ -376,50 +376,26 @@ function decodeAnsiCStringWithOffsets(text: string): DecodedShellText {
       continue;
     }
 
-    if (next === "x") {
-      const hex = body.slice(index + 2).match(/^[0-9A-Fa-f]{1,2}/)?.[0] ?? "";
-      if (hex) {
-        appendDecodedText(
-          decoded,
-          String.fromCodePoint(Number.parseInt(hex, 16)),
-          sourceOffset + 2 + hex.length,
-        );
-        index += 1 + hex.length;
-        continue;
-      }
+    let digits: string | undefined;
+    let radix = 16;
+    let prefixLength = 2;
+    if (next === "x" || next === "u" || next === "U") {
+      const maxLength = next === "x" ? 2 : next === "u" ? 4 : 8;
+      digits = body.slice(index + 2).match(new RegExp(`^[0-9A-Fa-f]{1,${maxLength}}`))?.[0];
+    } else if (/^[0-7]$/.test(next)) {
+      digits = body.slice(index + 1).match(/^[0-7]{1,3}/)?.[0];
+      radix = 8;
+      prefixLength = 1;
     }
-
-    if (next === "u" || next === "U") {
-      const maxLength = next === "u" ? 4 : 8;
-      const hex =
-        body.slice(index + 2).match(new RegExp(`^[0-9A-Fa-f]{1,${maxLength}}`))?.[0] ?? "";
-      if (hex) {
-        const codePoint = Number.parseInt(hex, 16);
-        try {
-          appendDecodedText(
-            decoded,
-            String.fromCodePoint(codePoint),
-            sourceOffset + 2 + hex.length,
-          );
-        } catch {
-          appendDecodedText(decoded, `\\${next}${hex}`, sourceOffset + 2 + hex.length);
-        }
-        index += 1 + hex.length;
-        continue;
+    if (digits) {
+      const endOffset = sourceOffset + prefixLength + digits.length;
+      try {
+        appendDecodedText(decoded, String.fromCodePoint(Number.parseInt(digits, radix)), endOffset);
+      } catch {
+        appendDecodedText(decoded, `\\${next}${digits}`, endOffset);
       }
-    }
-
-    if (/^[0-7]$/.test(next)) {
-      const octal = body.slice(index + 1).match(/^[0-7]{1,3}/)?.[0] ?? "";
-      if (octal) {
-        appendDecodedText(
-          decoded,
-          String.fromCodePoint(Number.parseInt(octal, 8)),
-          sourceOffset + 1 + octal.length,
-        );
-        index += octal.length;
-        continue;
-      }
+      index += prefixLength + digits.length - 1;
+      continue;
     }
 
     appendDecodedText(decoded, next, sourceOffset + 2);

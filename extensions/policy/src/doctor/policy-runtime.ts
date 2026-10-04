@@ -2,7 +2,6 @@ import { basename, isAbsolute, resolve } from "node:path";
 import JSON5 from "json5";
 import { readExecApprovalsSnapshot } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import type { HealthCheckContext, HealthFinding } from "openclaw/plugin-sdk/health";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { EXEC_APPROVALS_POLICY_DOCUMENT_NAME } from "../exec-approvals-uri.js";
 import type { PolicyAuthProfileEvidence } from "../policy-state.js";
@@ -13,8 +12,6 @@ import {
 } from "./policy-constants.js";
 import { isChannelDenyRule } from "./shape-helpers.js";
 import { readPolicyStringArray } from "./utils.js";
-
-const loadFsPromisesModule = createLazyRuntimeModule(() => import("node:fs/promises"));
 
 export async function readPolicyFile(
   ctx: HealthCheckContext,
@@ -45,7 +42,7 @@ export async function readWorkspaceFile(
 ): Promise<{ raw: string; path: string } | null> {
   const path = resolveWorkspacePath(ctx, fileName);
   try {
-    const fs = await loadFsPromisesModule();
+    const fs = await import("node:fs/promises");
     return { raw: await fs.readFile(path, "utf-8"), path };
   } catch (err) {
     if (isNotFoundPathError(err)) {

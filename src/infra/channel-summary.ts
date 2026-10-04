@@ -24,17 +24,6 @@ type ChannelAccountEntry = ChannelAccountInspectionResult & {
   accountId: string;
 };
 
-const formatAccountLabel = (params: { accountId: string; name?: string }) => {
-  const base = params.accountId || DEFAULT_ACCOUNT_ID;
-  if (params.name?.trim()) {
-    return `${base} (${params.name.trim()})`;
-  }
-  return base;
-};
-
-const accountLine = (label: string, details: string[]) =>
-  `  - ${label}${details.length ? ` (${details.join(", ")})` : ""}`;
-
 const buildAccountDetails = (params: {
   entry: ChannelAccountEntry;
   plugin: ChannelPlugin;
@@ -100,8 +89,6 @@ export async function buildChannelSummary(
   const effective = cfg ?? (await import("../config/config.js")).getRuntimeConfig();
   const lines: string[] = [];
   const { colorize = false, includeAllowFrom = false } = options ?? {};
-  const tint = (value: string, color?: (input: string) => string) =>
-    colorize && color ? color(value) : value;
   const sourceConfig = options?.sourceConfig ?? effective;
 
   const plugins =
@@ -189,7 +176,7 @@ export async function buildChannelSummary(
       line += ` auth ${formatTimeAgo(authAgeMs)}`;
     }
 
-    lines.push(tint(line, statusColor));
+    lines.push(colorize ? statusColor(line) : line);
 
     for (const entry of configuredEntries) {
       const details = buildAccountDetails({
@@ -198,15 +185,10 @@ export async function buildChannelSummary(
         cfg: effective,
         includeAllowFrom,
       });
-      lines.push(
-        accountLine(
-          formatAccountLabel({
-            accountId: entry.accountId,
-            name: entry.snapshot.name,
-          }),
-          details,
-        ),
-      );
+      const accountId = entry.accountId || DEFAULT_ACCOUNT_ID;
+      const name = entry.snapshot.name?.trim();
+      const label = name ? `${accountId} (${name})` : accountId;
+      lines.push(`  - ${label}${details.length ? ` (${details.join(", ")})` : ""}`);
     }
   }
 

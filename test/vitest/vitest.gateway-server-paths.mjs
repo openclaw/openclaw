@@ -118,6 +118,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/operator-approval-store.worker.test.ts",
   "src/gateway/operator-run-authority.worker.test.ts",
   "src/gateway/probe.device-auth-scope.test.ts",
+  "src/gateway/progress-card-store.worker.test.ts",
   "src/gateway/provider-auth-account-relogin.persistence.integration.test.ts",
   "src/gateway/server-methods/agent.create-event.test.ts",
   "src/gateway/server-methods/approval.legacy-authority.test.ts",
@@ -494,6 +495,7 @@ export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server-worker-environment-startup.state.test.ts",
   // A failed native close permanently fences this process's metadata owner.
   "src/gateway/server-close.agent-databases.test.ts",
+  "src/gateway/server-close.progress-card.test.ts",
   "src/gateway/server-close.question-publication.test.ts",
   "src/gateway/server-close.session-signals.test.ts",
   "src/gateway/server-close.acp-diagnostics.test.ts",

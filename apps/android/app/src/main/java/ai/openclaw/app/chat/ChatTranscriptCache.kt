@@ -259,14 +259,17 @@ internal interface ChatCacheDao {
  * before their suspend point, so a connection switch cannot re-scope an old response.
  */
 class RoomChatTranscriptCache internal constructor(
-  private val database: GatewayCacheDatabase,
+  private val openDatabase: suspend () -> GatewayCacheDatabase,
 ) : ChatTranscriptCache {
+  internal constructor(database: GatewayCacheDatabase) : this({ database })
+
   private val json = Json { ignoreUnknownKeys = true }
   private val cachedPayloadSerializer = CachedMessagePayload.serializer()
   private val cachedContentSerializer = ListSerializer(CachedMessageContent.serializer())
   private val legacyTextPartsSerializer = ListSerializer(String.serializer())
 
   override suspend fun loadLastDefaultAgentId(gatewayId: String): String? {
+    val database = openDatabase()
     val gateway = scopedGatewayId(gatewayId) ?: return null
     return database
       .dao()
@@ -279,6 +282,7 @@ class RoomChatTranscriptCache internal constructor(
     gatewayId: String,
     agentId: String,
   ) {
+    val database = openDatabase()
     val gateway = scopedGatewayId(gatewayId) ?: return
     val agent = scopedAgentId(agentId) ?: return
     database.dao().upsertGatewayOwner(CachedGatewayOwnerEntity(gatewayId = gateway, agentId = agent))
@@ -288,6 +292,7 @@ class RoomChatTranscriptCache internal constructor(
     gatewayId: String,
     agentId: String,
   ): List<ChatSessionEntry> {
+    val database = openDatabase()
     val gateway = scopedGatewayId(gatewayId) ?: return emptyList()
     val agent = scopedAgentId(agentId) ?: return emptyList()
     return database.dao().sessions(gateway, agent).map { row ->
@@ -312,6 +317,7 @@ class RoomChatTranscriptCache internal constructor(
     agentId: String,
     sessionKey: String,
   ): List<ChatMessage> {
+    val database = openDatabase()
     val gateway = scopedGatewayId(gatewayId) ?: return emptyList()
     val agent = scopedAgentId(agentId) ?: return emptyList()
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return emptyList()
@@ -368,6 +374,7 @@ class RoomChatTranscriptCache internal constructor(
     sessions: List<ChatSessionEntry>,
     retainedSessionKey: String?,
   ) {
+    val database = openDatabase()
     val gateway = scopedGatewayId(gatewayId) ?: return
     val agent = scopedAgentId(agentId) ?: return
     val retainedKey = retainedSessionKey?.trim()?.takeIf { it.isNotEmpty() }
@@ -403,6 +410,7 @@ class RoomChatTranscriptCache internal constructor(
     messages: List<ChatMessage>,
     sessionInfo: ChatSessionEntry?,
   ) {
+    val database = openDatabase()
     val gateway = scopedGatewayId(gatewayId) ?: return
     val agent = scopedAgentId(agentId) ?: return
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return
@@ -514,6 +522,7 @@ class RoomChatTranscriptCache internal constructor(
   }
 
   override suspend fun clearGateway(gatewayId: String) {
+    val database = openDatabase()
     val gateway = scopedGatewayId(gatewayId) ?: return
     val dao = database.dao()
     database.withWriteTransaction {
@@ -528,6 +537,7 @@ class RoomChatTranscriptCache internal constructor(
     agentId: String,
     sessionKey: String,
   ) {
+    val database = openDatabase()
     val gateway = scopedGatewayId(gatewayId) ?: return
     val agent = scopedAgentId(agentId) ?: return
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return

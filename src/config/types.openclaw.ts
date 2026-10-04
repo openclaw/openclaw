@@ -176,12 +176,8 @@ export type ConfigValidationIssue = {
   allowedValuesHiddenCount?: number;
 };
 
-export type LegacyConfigIssue = {
-  /** Dot-path to the legacy config value. */
-  path: string;
-  /** Human-readable migration or rejection message. */
-  message: string;
-};
+/** Dot-path and migration or rejection message for a legacy config value. */
+export type LegacyConfigIssue = Pick<ConfigValidationIssue, "path" | "message">;
 
 export type ConfigFileSnapshot = {
   /** Config file path that was read. */

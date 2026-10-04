@@ -3,7 +3,11 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveRootedRunRuntimeWorkspace, resolveRunWorkspaceDir } from "./workspace-run.js";
+import {
+  resolveCanonicalRunRuntimeWorkspace,
+  resolveRootedRunRuntimeWorkspace,
+  resolveRunWorkspaceDir,
+} from "./workspace-run.js";
 
 vi.unmock("./agent-scope-config.js");
 
@@ -59,8 +63,20 @@ describe("rooted runtime workspace selection", () => {
           bootstrapWorkspaceDir: canonical,
         }),
       ).toBeUndefined();
+      expect(
+        resolveCanonicalRunRuntimeWorkspace({ config: missingConfig, workspaceDir: executionRoot }),
+      ).toBeUndefined();
     },
   );
+
+  it("selects the agent's canonical workspace only for runs that execute elsewhere", () => {
+    expect(
+      resolveCanonicalRunRuntimeWorkspace({ config, agentId: "main", workspaceDir: executionRoot }),
+    ).toMatchObject({ workspaceDir: canonical, isCanonicalWorkspace: true, usedFallback: false });
+    expect(
+      resolveCanonicalRunRuntimeWorkspace({ config, agentId: "main", workspaceDir: canonical }),
+    ).toBeUndefined();
+  });
 });
 
 describe("resolveRunWorkspaceDir", () => {

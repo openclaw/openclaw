@@ -21,7 +21,6 @@ import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { inheritSessionSelection } from "../config/sessions/session-entry-selection.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import { isUserModelAuthProfileOwner } from "../state/user-model-accounts.js";
 import type { ModelAccountConnectAction } from "./model-account-authority.js";
@@ -34,10 +33,6 @@ import type {
   CreateGatewaySessionParams,
   GatewaySessionTitleModelSelection,
 } from "./session-create-service.types.js";
-
-const loadSessionAuthRuntime = createLazyRuntimeModule(
-  () => import("../agents/auth-profiles/session-override.js"),
-);
 
 export function resolveSessionCreateModelInputError(
   params: Pick<
@@ -182,7 +177,8 @@ export async function prepareSessionCreateDefaultAccount(params: {
   | { ok: true; profileId?: string; validate: () => ErrorShape | undefined }
   | { ok: false; error: ErrorShape }
 > {
-  const { resolveUserLinkedAuthProfile } = await loadSessionAuthRuntime();
+  const { resolveUserLinkedAuthProfile } =
+    await import("../agents/auth-profiles/session-override.js");
   params.assertCurrent?.();
   params.defaults.assertCurrent();
   const selected = prepareSessionPatchModelSelection({

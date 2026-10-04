@@ -39,17 +39,16 @@ type ResolvedExecPolicyField<TValue extends ExecSecurity | ExecAsk> = {
   source: string | null;
 };
 
-function resolveExecApprovalsFromFilePrepared(params: {
-  rawFile: ExecApprovalsFile;
+export function resolveExecApprovalsFromFileInternal(params: {
   file: ExecApprovalsFile;
-  token: string;
   agentId?: string;
   overrides?: ExecApprovalsDefaultOverrides;
   path?: string;
   socketPath?: string;
+  token?: string;
 }): ExecApprovalsResolved {
-  const rawFile = params.rawFile;
-  const file = params.file;
+  const rawFile = params.file;
+  const file = normalizeExecApprovalsInternal(rawFile);
   const defaults = file.defaults ?? {};
   const agentKey = params.agentId ?? "default";
   const agent = file.agents?.[agentKey] ?? {};
@@ -111,7 +110,7 @@ function resolveExecApprovalsFromFilePrepared(params: {
     socketPath: expandHomePrefix(
       params.socketPath ?? file.socket?.path ?? resolveExecApprovalsSocketPath(),
     ),
-    token: params.token,
+    token: params.token ?? file.socket?.token ?? "",
     defaults: resolvedDefaults,
     agent: resolvedAgent,
     agentSources: {
@@ -122,23 +121,4 @@ function resolveExecApprovalsFromFilePrepared(params: {
     allowlist,
     file,
   };
-}
-
-export function resolveExecApprovalsFromFileInternal(params: {
-  file: ExecApprovalsFile;
-  agentId?: string;
-  overrides?: ExecApprovalsDefaultOverrides;
-  path?: string;
-  socketPath?: string;
-  token?: string;
-}): ExecApprovalsResolved {
-  const rawFile = params.file;
-  const file = normalizeExecApprovalsInternal(params.file);
-  const { token: socketToken } = file.socket ?? {};
-  return resolveExecApprovalsFromFilePrepared({
-    ...params,
-    rawFile,
-    file,
-    token: params.token ?? socketToken ?? "",
-  });
 }

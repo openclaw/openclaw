@@ -13,6 +13,13 @@
   flex: 0 0 auto;
 }
 
+/* A nested plugin section stacks its parent link and children inside the flex row. */
+.nav-item-group {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .sidebar-reorder-trigger {
   display: flex;
   align-items: center;

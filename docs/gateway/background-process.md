@@ -110,6 +110,20 @@ Worker completion does not currently wake the Gateway session automatically;
 use `process poll` in a later turn to inspect the result. Closing a portal closes
 its proxy, not the development server: stop the server with `process kill`.
 
+## Control UI
+
+The chat side panel offers a separate **Processes** tab through its **+** menu
+and the chat header's **Panels** menu. **Subagents** remains its own tab.
+Processes shows the current conversation's background exec commands and retained
+finished records, including status, duration, exit information, and recent output.
+Reading the output does not drain pending agent output or acknowledge completion
+notifications. **Stop** requests termination of the exact observed process instance.
+
+The list is bounded, prioritizes running processes, and follows the existing
+in-memory retention limits. It refreshes while visible; disconnected or
+unavailable workers show an error rather than an empty list. It does not provide
+an interactive terminal or enumerate unrelated operating-system processes.
+
 ## Child process bridging
 
 After a host exec command finishes, OpenClaw releases its retained process
