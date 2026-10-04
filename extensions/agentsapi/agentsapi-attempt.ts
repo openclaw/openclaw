@@ -101,6 +101,12 @@ export async function runAgentsApiAttempt(
   let timeout: AgentHarnessAttemptTimeout | undefined;
   let settling = false;
   let settlementDeadlineAtMs: number | undefined;
+  // Monotonic seed captured when settlement begins. The settlement cleanup
+  // budget is fixed (settlementTimeoutMs), so measuring elapsed time with the
+  // monotonic clock keeps AbortSignal.timeout bounded even if the wall clock
+  // jumps (NTP correction, sleep/resume, manual changes). settlementDeadlineAtMs
+  // stays wall-clock because queue owners compare it against Date.now().
+  let settlementStartedAtMonotonicMs: number | undefined;
   const deadlines = createAgentHarnessAttemptDeadlineController({
     startedAtMs,
     timeoutMs: params.timeoutMs,
@@ -121,7 +127,15 @@ export async function runAgentsApiAttempt(
   });
   const beginSettlement = () => {
     settling = true;
-    deadlines.beginSettlement(Date.now());
+    // Preserve the first monotonic seed across both settlement calls
+    // (onSettled from the native session, then the attempt's finally block).
+    // The deadline controller ignores the second beginSettlement because
+    // settlement is already active, so without this guard the cleanup budget
+    // would restart from a fresh 30s instead of the original remaining budget.
+    if (settlementStartedAtMonotonicMs === undefined) {
+      settlementStartedAtMonotonicMs = performance.now();
+    }
+    deadlines.beginSettlement(Date.now(), settlementStartedAtMonotonicMs);
   };
   const emitEvent = (
     event: Parameters<NonNullable<AgentHarnessAttemptParamsV2["onAgentEvent"]>>[0],
@@ -518,10 +532,21 @@ export async function runAgentsApiAttempt(
     beginSettlement();
     // Reuse the owner's absolute settlement boundary. After an upstream abort
     // closes that owner, one cleanup budget starts before native retirement.
-    const cleanupMs = Math.max(
-      0,
-      Math.min(30_000, (settlementDeadlineAtMs ?? Date.now() + 30_000) - Date.now()),
-    );
+    // Measure the cleanup budget against the monotonic clock so wall-clock jumps
+    // cannot stretch or shrink the configured 30s settlement timeout.
+    const cleanupMs =
+      settlementStartedAtMonotonicMs === undefined
+        ? Math.max(
+            0,
+            Math.min(30_000, (settlementDeadlineAtMs ?? Date.now() + 30_000) - Date.now()),
+          )
+        : Math.max(
+            0,
+            Math.min(
+              30_000,
+              Math.floor(30_000 - (performance.now() - settlementStartedAtMonotonicMs)),
+            ),
+          );
     const cleanupSignal =
       cleanupMs > 0
         ? AbortSignal.timeout(cleanupMs)

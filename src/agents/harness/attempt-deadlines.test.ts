@@ -132,4 +132,36 @@ describe("agent harness attempt deadlines", () => {
     expect(onTimeout).not.toHaveBeenCalled();
     expect(onDeadlineChanged).not.toHaveBeenCalled();
   });
+
+  it("keeps the settlement timeout bounded when the wall clock rewinds", () => {
+    // Alias performance.now to Date.now for setup, then decouple them at
+    // settlement time to model a clock jump. advanceTimersByTime drives the
+    // monotonic clock (performance.now under fake timers), setSystemTime drives
+    // the wall clock (Date.now).
+    const perfSpy = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
+    const { controller, onTimeout, onDeadlineChanged } = createController(60_000, 0);
+    vi.advanceTimersByTime(59_000);
+    // Begin settlement with a monotonic seed captured at fake-time 59_000.
+    const monotonicSeed = 59_000;
+    perfSpy.mockRestore();
+    controller.beginSettlement(59_000, monotonicSeed);
+    expect(onDeadlineChanged).toHaveBeenLastCalledWith({
+      kind: "bounded",
+      deadlineAtMs: 59_000 + SETTLEMENT_TIMEOUT_MS,
+    });
+    // A clock correction rewinds the wall clock by 90s while the monotonic clock
+    // keeps running. A wall-clock-based remaining budget would grow by 90s; the
+    // monotonic budget must still expire at SETTLEMENT_TIMEOUT_MS of real elapsed
+    // time.
+    vi.setSystemTime(-31_000);
+    vi.advanceTimersByTime(SETTLEMENT_TIMEOUT_MS - 1);
+    expect(onTimeout).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(onTimeout).toHaveBeenCalledExactlyOnceWith({
+      kind: "settlement",
+      elapsedMs: SETTLEMENT_TIMEOUT_MS,
+      timeoutMs: SETTLEMENT_TIMEOUT_MS,
+    });
+    controller.dispose();
+  });
 });

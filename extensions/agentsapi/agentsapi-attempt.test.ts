@@ -73,6 +73,53 @@ afterEach(() => {
 });
 
 describe("Agents API completed reply settlement", () => {
+  it("preserves the first settlement monotonic seed across onSettled and finally", async () => {
+    // The native session calls onSettled (first beginSettlement), then the
+    // attempt's finally block calls beginSettlement again. The second call
+    // must not overwrite the first monotonic seed, otherwise the cleanup
+    // budget restarts from a fresh 30s instead of the remaining budget.
+    let performanceNow = 1_000;
+    const perfSpy = vi.spyOn(performance, "now").mockImplementation(() => performanceNow);
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockImplementation(() => new AbortController().signal);
+
+    createSession.mockImplementation((options) => ({
+      isAvailable: () => false,
+      isSettled: () => true,
+      wasSubmitted: () => true,
+      queueMessage: async () => {},
+      readUsageTurns: async () => [completedTurn],
+      run: async () => {
+        // Native settlement fires onSettled first (captures monotonic seed).
+        options.onSettled?.();
+        // Asynchronous reconciliation elapses 10s of monotonic time before
+        // the attempt reaches its finally block.
+        performanceNow += 10_000;
+        await options.onReconcile?.(completedTurn, [completedItem]);
+        return { turn: completedTurn, cancelled: false, terminatedByTool: false };
+      },
+      close: async () => {},
+      reconcileAfterClose: async () => {
+        await options.onReconcile?.(completedTurn, [completedItem]);
+        return completedTurn;
+      },
+    }));
+
+    const fixture = await createAttempt();
+    await fixture.run();
+
+    // cleanupMs must use the first seed (1_000): 30_000 - (11_000 - 1_000) = 20_000.
+    // If the second beginSettlement overwrote the seed, cleanupMs would be
+    // 30_000 - (11_000 - 11_000) = 30_000 (a fresh budget).
+    expect(timeoutSpy).toHaveBeenCalled();
+    const cleanupMs = timeoutSpy.mock.calls.at(-1)?.[0];
+    expect(cleanupMs).toBe(20_000);
+
+    perfSpy.mockRestore();
+    timeoutSpy.mockRestore();
+  });
+
   it("retains and presents one durable completed reply when artifact listing fails", async () => {
     const fixture = await createAttempt();
     const failure = new Error("fixture artifact listing failed");
