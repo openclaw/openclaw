@@ -1,6 +1,7 @@
 /** Shared read-only proof that retained transcript events exist in canonical SQLite. */
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLegacyOpenAICodexTranscriptMetadata } from "../config/sessions/legacy-transcript-repair.js";
 import { withSqliteSessionImportStage } from "../config/sessions/session-accessor.sqlite-import-stage.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
@@ -10,6 +11,20 @@ import {
   createTranscriptEventReader,
   readTranscriptFingerprint,
 } from "./session-sqlite-migration-readers.js";
+
+/**
+ * Read-only reconciliation identity. It allows only the historical Codex metadata
+ * migration already applied by SQLite import; every other byte-level difference,
+ * including JSON object-member order, remains significant.
+ */
+function reconciliationEventKey(eventJson: string): string {
+  const entry: unknown = JSON.parse(eventJson);
+  if (!isRecord(entry)) {
+    return eventJson;
+  }
+  normalizeLegacyOpenAICodexTranscriptMetadata([entry]);
+  return JSON.stringify(entry);
+}
 
 export function verifyTranscriptEvents(
   database: DatabaseSync,
@@ -51,14 +66,20 @@ export function verifyTranscriptEvents(
           .where("session_id", "=", source.sessionId)
           .orderBy("seq", "asc"),
       )) {
+        const eventKey =
+          mode === "ordered" ? event.event_json : reconciliationEventKey(event.event_json);
         if (mode !== "ordered") {
-          stage.addSeen(event.event_json);
+          stage.addSeen(eventKey);
           const entry: unknown = JSON.parse(event.event_json);
           if (isRecord(entry) && typeof entry.id === "string") {
             stage.addSeen(`id\0${entry.id}`);
           }
         }
-        if (!expected.done && event.event_json === expected.value.eventJson) {
+        const expectedKey =
+          mode === "ordered"
+            ? expected.value.eventJson
+            : reconciliationEventKey(expected.value.eventJson);
+        if (!expected.done && eventKey === expectedKey) {
           expected = sourceRows.next();
           if (expected.done) {
             break;
@@ -77,8 +98,9 @@ export function verifyTranscriptEvents(
     for (const row of stage.rows(0)) {
       const entry: unknown = JSON.parse(row.eventJson);
       const id = isRecord(entry) && typeof entry.id === "string" ? entry.id : `row ${row.seq + 1}`;
-      // Exact payloads include identity and parent links; physical SQLite order may differ.
-      if (stage.contains(row.eventJson)) {
+      const eventKey = reconciliationEventKey(row.eventJson);
+      // Reconciliation accepts only legacy Codex provider/API normalisation; IDs, parents, values, arrays, and JSON member order remain strict.
+      if (stage.contains(eventKey)) {
         if (firstMissing !== undefined) {
           throw new Error(
             `Missing legacy event ${firstMissing} precedes existing event ${id}; only a missing suffix can be appended`,
