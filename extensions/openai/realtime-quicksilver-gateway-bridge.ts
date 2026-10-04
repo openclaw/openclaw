@@ -103,6 +103,8 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   private closingPromise: Promise<void> | undefined;
   private closeReason: "completed" | "error" = "completed";
   private providerSessionClosed = false;
+  private providerOutputComplete = false;
+  private outputCompletion: object | undefined;
   private peer: OpenAIQuicksilverAudioPeerContract | undefined;
   private audioOutput: RealtimeVoiceAudioOutputPort | undefined;
   private pendingAudio = new OpenAIQuicksilverPendingAudio();
@@ -302,7 +304,11 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       });
     const peerPromise = createPeer(
       {
-        onAudio: (audio) => this.audio.sendOutput(audio),
+        onAudio: (audio) => {
+          if (!this.closed) {
+            this.audio.sendOutput(audio);
+          }
+        },
         onError: (error) => this.fail(error),
         onMediaError: () => this.config.logger.debug?.("GPT-Live WebRTC media packet dropped"),
         onRtpPacket: () => this.config.onEvent?.({ direction: "server", type: "output_audio.rtp" }),
@@ -381,7 +387,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
             },
             {
               onAudio: (audio) => {
-                if (this.closed) {
+                if (this.closed || this.providerOutputComplete) {
                   return;
                 }
                 this.config.onAudio(audio);
@@ -483,11 +489,50 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
           }
           params?.onSessionStarted?.();
         },
-        onTranscript: (role, text, done) => this.config.onTranscript?.(role, text, done),
+        onTranscript: (role, text, done) => {
+          // WebRTC media and sideband transcripts have no shared completion boundary.
+          // Public transcript finals also publish batches rather than reply boundaries.
+          if (this.transport === "webrtc" || isOpenAIGptLiveApiModel(this.config.model)) {
+            this.config.onTranscript?.(role, text, done);
+            return;
+          }
+          if (
+            !this.closed &&
+            role === "assistant" &&
+            done &&
+            (this.providerOutputComplete || this.outputCompletion)
+          ) {
+            return;
+          }
+          if (role === "user" || !done) {
+            const continuing = role === "assistant" && this.providerOutputComplete && !this.closed;
+            this.providerOutputComplete = false;
+            this.outputCompletion = undefined;
+            if (continuing) {
+              // A delegation can speak its final answer after a completed spoken receipt.
+              this.config.onEvent?.({ direction: "server", type: "response.created" });
+            }
+          }
+          const completed = role === "assistant" && done && !this.closed;
+          if (completed) {
+            this.completeOutput(text);
+            return;
+          }
+          this.config.onTranscript?.(role, text, done);
+        },
+        onResponseRequest: () => {
+          if (this.closed || isOpenAIGptLiveApiModel(this.config.model)) {
+            return;
+          }
+          this.providerOutputComplete = false;
+          this.outputCompletion = undefined;
+          this.config.onEvent?.({ direction: "client", type: "response.create" });
+        },
         handleDelegationInput: this.config.handleDelegationInput,
         onWireEventType: (eventType) => {
           this.config.onEvent?.({ direction: "server", type: eventType });
           if (eventType === "output_audio_buffer.cleared") {
+            this.outputCompletion = undefined;
             this.audio.reset();
             // Retire the worker backlog even when the consumer uses callbacks.
             if (this.transport === "webrtc") {
@@ -503,6 +548,18 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       },
       this.runtime.formatErrorMessage,
     );
+  }
+
+  private completeOutput(text: string): void {
+    const completion = {};
+    this.outputCompletion = completion;
+    this.config.onTranscript?.("assistant", text, true);
+    if (this.closed || this.outputCompletion !== completion) {
+      return;
+    }
+    // The direct media owner flushes PCM before forwarding this ordered control frame.
+    this.providerOutputComplete = true;
+    this.config.onResponseDone?.({ status: "completed" });
   }
 
   private sendSocketEvent(event: object): void {

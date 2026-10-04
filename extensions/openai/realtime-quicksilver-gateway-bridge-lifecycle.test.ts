@@ -1,4 +1,5 @@
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
+import type { RealtimeVoiceBridgeCreateRequest } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it, vi } from "vitest";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
@@ -11,9 +12,11 @@ import {
 } from "./realtime-quicksilver.test-helpers.js";
 
 function createBridge(params: {
+  model?: string;
   runAgentConsult: (request: { prompt: string; signal?: AbortSignal }) => Promise<{ text: string }>;
   onError?: (error: Error) => void;
   onTranscript?: (role: "user" | "assistant", text: string, done: boolean) => void;
+  onResponseDone?: RealtimeVoiceBridgeCreateRequest["onResponseDone"];
   handleDelegationInput?: (text: string) => "control" | "consult";
 }) {
   let socket: FakeSocket | undefined;
@@ -30,13 +33,14 @@ function createBridge(params: {
   const bridge = new OpenAIQuicksilverGatewayBridge(
     {
       providerConfig: {},
-      model: "gpt-live-test",
+      model: params.model ?? "gpt-live-test",
       voice: "marin",
       audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
       onError: params.onError,
       onTranscript: params.onTranscript,
+      onResponseDone: params.onResponseDone,
       runAgentConsult: params.runAgentConsult,
       handleDelegationInput: params.handleDelegationInput,
       logger: { debug: vi.fn(), warn: vi.fn() },
@@ -51,7 +55,8 @@ function createBridge(params: {
         const send = socket.send.bind(socket);
         socket.send = (payload) => {
           send(payload);
-          if ((JSON.parse(payload) as { type?: string }).type === "session.update") {
+          const type = (JSON.parse(payload) as { type?: string }).type;
+          if (type === "session.update" || type === "session.start") {
             queueMicrotask(() =>
               emitSideband(socket!, {
                 type: "session.started",
@@ -91,6 +96,36 @@ function emitDelegation(socket: FakeSocket, id: string, text: string): void {
 }
 
 describe("OpenAI Quicksilver gateway bridge lifecycle", () => {
+  it("keeps public transcript batch finals separate from response completion", async () => {
+    const onTranscript = vi.fn();
+    const onResponseDone = vi.fn();
+    const harness = createBridge({
+      model: "gpt-live-1",
+      runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+      onTranscript,
+      onResponseDone,
+    });
+    try {
+      await harness.bridge.connect();
+      const socket = harness.getSocket();
+      for (const delta of ["a".repeat(8_000), "b"]) {
+        emitSideband(socket, {
+          type: "session.output_transcript.delta",
+          delta,
+          start_ms: 0,
+          end_ms: 100,
+        });
+      }
+      expect(onTranscript).toHaveBeenCalledWith("assistant", "a".repeat(8_000), true);
+      expect(onResponseDone).not.toHaveBeenCalled();
+      emitSideband(socket, { type: "session.closed", reason: "close_requested" });
+      expect(onTranscript).toHaveBeenCalledWith("assistant", "b", true);
+      expect(onResponseDone).not.toHaveBeenCalled();
+    } finally {
+      await harness.bridge.close();
+    }
+  });
+
   it("reports recoverable provider errors to the relay while preserving its connection", async () => {
     const onError = vi.fn();
     const onTranscript = vi.fn();

@@ -63,6 +63,7 @@ type OpenAIQuicksilverDelegationControllerOptions = {
     reason: Extract<OpenAIQuicksilverInboundEvent, { kind: "session-closed" }>["reason"],
   ) => void;
   onTranscript?: (role: "user" | "assistant", text: string, done: boolean) => void;
+  onResponseRequest?: () => void;
   handleDelegationInput?: RealtimeVoiceGatewayControl["handleDelegationInput"];
   onWireEventType?: (eventType: string) => void;
   runAgentConsult: LifecycleBoundAgentConsultRunner;
@@ -567,17 +568,19 @@ export class OpenAIQuicksilverDelegationController {
     delegationId?: string,
     socket = this.options.getSocket(),
   ): boolean {
+    let responseRequested = false;
     for (const chunk of chunkOpenAIQuicksilverAppendText(text)) {
       // A control reply belongs to this call/socket, not the task it may have cancelled.
-      if (
-        this.stopped ||
-        this.drainDisposition ||
-        this.options.signal.aborted ||
-        !socket ||
-        socket !== this.options.getSocket() ||
-        socket.readyState !== WEBSOCKET_OPEN
-      ) {
+      if (!this.canSendAppend(socket)) {
         return false;
+      }
+      if (channel === "speakable" && !responseRequested) {
+        // Media can arrive before a transcript, so admit speech before sending its request.
+        responseRequested = true;
+        this.options.onResponseRequest?.();
+        if (!this.canSendAppend(socket)) {
+          return false;
+        }
       }
       socket.send(
         JSON.stringify(
@@ -591,6 +594,19 @@ export class OpenAIQuicksilverDelegationController {
       );
     }
     return true;
+  }
+
+  private canSendAppend(
+    socket: OpenAIQuicksilverSocket | undefined,
+  ): socket is OpenAIQuicksilverSocket {
+    return (
+      !this.stopped &&
+      !this.drainDisposition &&
+      !this.options.signal.aborted &&
+      socket !== undefined &&
+      socket === this.options.getSocket() &&
+      socket.readyState === WEBSOCKET_OPEN
+    );
   }
 
   private fail(error: Error): void {
