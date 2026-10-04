@@ -24,6 +24,12 @@ export type SandboxBackendCommandParams = {
   stdin?: Buffer | string;
   allowFailure?: boolean;
   signal?: AbortSignal;
+  /**
+   * Caller authority fence for mutating commands. A backend must call it
+   * synchronously after all of its own awaited launch preparation and
+   * immediately before starting the command.
+   */
+  assertBeforeMutation?: () => void;
 };
 
 export type SandboxBackendCommandResult = {
@@ -46,6 +52,8 @@ export type SandboxFsBridgeContext = {
   };
   backend?: {
     runShellCommand(params: SandboxBackendCommandParams): Promise<SandboxBackendCommandResult>;
+    /** See SandboxBackendHandle.enforcesMutationFence. */
+    readonly enforcesMutationFence?: true;
   };
 };
 
@@ -73,6 +81,13 @@ export type SandboxBackendHandle = {
     browser?: boolean;
     readOnlyResourceMounts?: boolean;
   };
+  /**
+   * Declares that `runShellCommand` calls `SandboxBackendCommandParams.assertBeforeMutation`
+   * synchronously after all of its own awaited launch preparation and right before
+   * starting the command. The default filesystem bridge only advertises
+   * `enforcesMutationFence` when its backend declares this.
+   */
+  readonly enforcesMutationFence?: true;
   buildExecSpec(params: {
     command: string;
     workdir?: string;

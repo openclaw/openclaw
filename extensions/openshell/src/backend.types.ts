@@ -11,19 +11,29 @@ export type OpenShellSandboxBackend = SandboxBackendHandle &
 
 export type OpenShellMirrorBackend = {
   remoteAgentWorkspaceDir: string;
-  mkdirpRemotePath(remotePath: string, signal?: AbortSignal): Promise<void>;
+  mkdirpRemotePath(
+    remotePath: string,
+    signal?: AbortSignal,
+    assertBeforeMutation?: () => void,
+  ): Promise<void>;
   removeRemotePath(
     remotePath: string,
     params?: {
       recursive?: boolean;
       signal?: AbortSignal;
       ignoreMissing?: boolean;
+      assertBeforeMutation?: () => void;
     },
   ): Promise<void>;
   renameRemotePath(
     fromRemotePath: string,
     toRemotePath: string,
     signal?: AbortSignal,
+    assertBeforeMutation?: () => void,
   ): Promise<void>;
-  syncLocalPathToRemote(localPath: string, remotePath: string): Promise<void>;
+  syncLocalPathToRemote(
+    localPath: string,
+    remotePath: string,
+    assertBeforeMutation?: () => void,
+  ): Promise<void>;
 };

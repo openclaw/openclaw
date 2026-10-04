@@ -234,6 +234,84 @@ describe("rooted CLI preparation", () => {
     expect(prepared.systemPromptReport.sandbox).toEqual({ mode: "all", sandboxed: true });
   });
 
+  it("prepares the session sandbox for an ordinary restricted run and retains it only on the host grant", async () => {
+    const sandbox = createAgentToolsSandboxContext({ workspaceDir: fixture.session.dir });
+    resolveSandboxContext.mockResolvedValue(sandbox);
+    await prepare({
+      rootedExecution: undefined,
+      sessionKey: "agent:main:cron:sandbox-bind",
+      toolsAllow: ["read", "write"],
+      config: { agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "rw" } } } },
+    });
+
+    const grant = mintGrant.mock.calls[0]?.[0];
+    expect(grant?.rootedExecution).toBeUndefined();
+    expect(grant?.sandboxExecution?.sandbox).toBe(sandbox);
+    expect(grant?.context).not.toHaveProperty("sandboxExecution");
+    expect(projectTools.mock.calls[0]?.[0].sandboxExecution?.sandbox).toBe(sandbox);
+  });
+
+  it("prepares the sandbox for an explicit non-rooted coding cap", async () => {
+    const sandbox = createAgentToolsSandboxContext({ workspaceDir: fixture.session.dir });
+    resolveSandboxContext.mockResolvedValue(sandbox);
+    await prepare({
+      rootedExecution: undefined,
+      sessionKey: "agent:main:cron:explicit-cap",
+      cliToolAvailability: { native: [], openClaw: ["read", "write"] },
+      config: { agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "rw" } } } },
+    });
+    expect(mintGrant.mock.calls[0]?.[0].sandboxExecution?.sandbox).toBe(sandbox);
+  });
+
+  it("prepares the sandbox for the backend's default host-owned coding tools", async () => {
+    const sandbox = createAgentToolsSandboxContext({ workspaceDir: fixture.session.dir });
+    resolveSandboxContext.mockResolvedValue(sandbox);
+    backend.toolAvailabilityEnforcement = "execution-args";
+    backend.resolveExecutionArgs = () => ({ args: [] }) as never;
+    backend.hostOwnedTools = ["exec", "process"];
+    await prepare({
+      rootedExecution: undefined,
+      sessionKey: "agent:main:cron:host-owned",
+      config: { agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "rw" } } } },
+    });
+    expect(mintGrant.mock.calls[0]?.[0].sandboxExecution?.sandbox).toBe(sandbox);
+  });
+
+  it.each([
+    { label: "an empty cap", toolsAllow: [] as string[] },
+    { label: "a cap with only non-coding tools", toolsAllow: ["session_status"] },
+  ])("does not provision a sandbox for $label", async ({ toolsAllow }) => {
+    resolveSandboxContext.mockRejectedValue(new Error("sandbox backend unavailable"));
+    await prepare({
+      rootedExecution: undefined,
+      sessionKey: "agent:main:cron:no-coding-tools",
+      toolsAllow,
+      config: { agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "rw" } } } },
+    });
+
+    expect(resolveSandboxContext).not.toHaveBeenCalled();
+    expect(mintGrant.mock.calls[0]?.[0].sandboxExecution).toBeUndefined();
+  });
+
+  it("does not prepare a sandbox for an unrestricted run or an unsandboxed restricted run", async () => {
+    await prepare({
+      rootedExecution: undefined,
+      sessionKey: "agent:main:cron:unrestricted",
+      config: { agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "rw" } } } },
+    });
+    await prepare({
+      rootedExecution: undefined,
+      sessionKey: "agent:main:cron:unsandboxed",
+      toolsAllow: ["read"],
+      config: { agents: { defaults: { sandbox: { mode: "off" } } } },
+    });
+
+    expect(resolveSandboxContext).not.toHaveBeenCalled();
+    expect(mintGrant.mock.calls.every(([grant]) => grant.sandboxExecution === undefined)).toBe(
+      true,
+    );
+  });
+
   it("rejects an undeclared backend despite its exact native-tool support", async () => {
     delete backend.isolatesInstructionsWithExactTools;
     await expect(prepare()).rejects.toThrow(

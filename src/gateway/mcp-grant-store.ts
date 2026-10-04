@@ -9,7 +9,10 @@ import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
 import type { DelegationCapability } from "../agents/delegation-capability.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
 import type { PreparedQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
-import type { PreparedRootedExecutionCapability } from "../agents/rooted-run-params.js";
+import type {
+  PreparedRootedExecutionCapability,
+  PreparedSandboxExecutionCapability,
+} from "../agents/rooted-run-params.js";
 import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../agents/subagents/announce/subagent-announce-handoff.js";
 import type {
@@ -154,6 +157,8 @@ type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
   bindQuestionAnswerAuthority?: (assertActive: () => void) => PreparedQuestionAnswerAuthority;
   skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
   rootedExecution?: PreparedRootedExecutionCapability;
+  /** Host-prepared sandbox for mediated coding tools of an ordinary sandboxed run. */
+  sandboxExecution?: PreparedSandboxExecutionCapability;
   activeCaptureKey?: string;
   /** Effective attempt authority, including plugin-owned timeout and cancellation. */
   assertCaptureCurrent?: () => void;
@@ -293,6 +298,7 @@ export function mintMcpLoopbackClientGrant(
       ? { skillLibraryAuthoring: params.skillLibraryAuthoring }
       : {}),
     ...(params.rootedExecution ? { rootedExecution: params.rootedExecution } : {}),
+    ...(params.sandboxExecution ? { sandboxExecution: params.sandboxExecution } : {}),
     ...(params.toolAuth ? { toolAuth: structuredClone(params.toolAuth) } : {}),
   };
   clientGrantsByToken.set(grant.token, grant);
@@ -489,6 +495,7 @@ export function resolveMcpLoopbackClientGrant(params: {
       questionAnswerAuthority?: PreparedQuestionAnswerAuthority;
       skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
       rootedExecution?: PreparedRootedExecutionCapability;
+      sandboxExecution?: PreparedSandboxExecutionCapability;
       isCurrent: () => boolean;
       toolAuth?: McpLoopbackToolAuth;
     }
@@ -546,6 +553,7 @@ export function resolveMcpLoopbackClientGrant(params: {
     ...(grant.skillLibraryAuthoring ? { skillLibraryAuthoring: grant.skillLibraryAuthoring } : {}),
     isCurrent,
     ...(grant.rootedExecution ? { rootedExecution: grant.rootedExecution } : {}),
+    ...(grant.sandboxExecution ? { sandboxExecution: grant.sandboxExecution } : {}),
     ...(grant.toolAuth ? { toolAuth: grant.toolAuth } : {}),
   };
 }

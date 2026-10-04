@@ -3,6 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createAgentToolsSandboxContext } from "../agents/test-helpers/agent-tools-sandbox-context.js";
+import { createHostSandboxFsBridge } from "../agents/test-helpers/host-sandbox-fs-bridge.js";
+import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   McpLoopbackToolCache,
@@ -203,6 +206,210 @@ describe("resolveGatewayScopedTools", () => {
     await expect(fs.readFile(path.join(workspaceDir, "proof.txt"), "utf8")).resolves.toBe(
       "mediated write ok",
     );
+  });
+
+  it.each(["all", "non-main"] as const)(
+    "withholds mediated coding tools from a sandbox.mode=%s session that has no prepared sandbox",
+    async (mode) => {
+      const base = tempDirs.make("openclaw-mediated-sandbox-");
+      const workspaceDir = path.join(base, "ws");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      const outsidePath = path.join(base, "outside.txt");
+      await fs.writeFile(outsidePath, "outside-sentinel");
+      const result = await resolveTools({
+        cfg: {
+          agents: { defaults: { sandbox: { mode } } },
+        },
+        sessionKey: "agent:main:cron:mediated-sandbox",
+        workspaceDir,
+        mediatedToolNames: ["read", "write", "edit", "ls", "apply_patch", "exec", "process"],
+        excludeToolNames: [],
+      });
+      const names = result.tools.map((tool) => tool.name);
+      for (const name of ["read", "write", "edit", "ls", "apply_patch", "exec", "process"]) {
+        expect(names).not.toContain(name);
+      }
+      await expect(fs.stat(path.join(base, "escape.txt"))).rejects.toThrow();
+    },
+  );
+
+  it("binds mediated file tools to the prepared sandbox bridge for a sandboxed session", async () => {
+    const base = tempDirs.make("openclaw-mediated-bound-sandbox-");
+    const workspaceDir = path.join(base, "ws");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const outsidePath = path.join(base, "outside.txt");
+    await fs.writeFile(outsidePath, "outside-sentinel");
+    const bridge = createHostSandboxFsBridge(workspaceDir);
+    const writeFile = vi.spyOn(bridge, "writeFile");
+    const readFile = vi.spyOn(bridge, "readFile");
+    const result = await resolveTools({
+      cfg: { agents: { defaults: { sandbox: { mode: "all" } } } },
+      sessionKey: "agent:main:cron:mediated-bound-sandbox",
+      workspaceDir,
+      sandboxExecution: {
+        sandbox: createAgentToolsSandboxContext({ workspaceDir, fsBridge: bridge }),
+      },
+      mediatedToolNames: ["read", "write"],
+      excludeToolNames: ["edit", "apply_patch", "exec", "process"],
+    });
+    const writeTool = result.tools.find((tool) => tool.name === "write");
+    const readTool = result.tools.find((tool) => tool.name === "read");
+    expect(writeTool).toBeDefined();
+    expect(readTool).toBeDefined();
+
+    await writeTool!.execute("bound-write", { path: "inside.txt", content: "inside ok" });
+    expect(writeFile).toHaveBeenCalled();
+    await expect(fs.readFile(path.join(workspaceDir, "inside.txt"), "utf8")).resolves.toBe(
+      "inside ok",
+    );
+    await readTool!.execute("bound-read", { path: "inside.txt" });
+    expect(readFile).toHaveBeenCalled();
+
+    await expect(readTool!.execute("bound-read-outside", { path: outsidePath })).rejects.toThrow(
+      /escapes|outside/i,
+    );
+    const escapePath = path.join(base, "escape.txt");
+    await expect(
+      writeTool!.execute("bound-write-outside", { path: escapePath, content: "escape" }),
+    ).rejects.toThrow(/escapes|outside/i);
+    await expect(fs.stat(escapePath)).rejects.toThrow();
+    await expect(fs.readFile(outsidePath, "utf8")).resolves.toBe("outside-sentinel");
+  });
+
+  it("withholds mutating file tools when the bound bridge does not declare the mutation fence", async () => {
+    const workspaceDir = tempDirs.make("openclaw-mediated-unfenced-bridge-");
+    const fenced = createHostSandboxFsBridge(workspaceDir);
+    const legacyBridge = { ...fenced, enforcesMutationFence: undefined };
+    const result = await resolveTools({
+      cfg: { agents: { defaults: { sandbox: { mode: "all" } } } },
+      sessionKey: "agent:main:cron:mediated-unfenced-bridge",
+      workspaceDir,
+      sandboxExecution: {
+        sandbox: createAgentToolsSandboxContext({ workspaceDir, fsBridge: legacyBridge }),
+      },
+      mediatedToolNames: ["read", "write", "edit", "ls"],
+      excludeToolNames: ["apply_patch", "exec", "process"],
+    });
+    const names = result.tools.map((tool) => tool.name);
+    expect(names).toContain("read");
+    expect(names).not.toContain("write");
+    expect(names).not.toContain("edit");
+  });
+
+  it("withholds mutating tools when a legacy backend sits behind the default bridge", async () => {
+    const workspaceDir = tempDirs.make("openclaw-mediated-legacy-backend-");
+    const { createSandboxFsBridge } = await import("../agents/sandbox/fs-bridge.js");
+    const sandbox = createAgentToolsSandboxContext({ workspaceDir });
+    sandbox.backend = {
+      runShellCommand: async () => ({ stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), code: 0 }),
+    } as never;
+    sandbox.fsBridge = createSandboxFsBridge({ sandbox: sandbox as never });
+    const result = await resolveTools({
+      cfg: { agents: { defaults: { sandbox: { mode: "all" } } } },
+      sessionKey: "agent:main:cron:mediated-legacy-backend",
+      workspaceDir,
+      sandboxExecution: { sandbox },
+      mediatedToolNames: ["read", "write", "edit"],
+      excludeToolNames: ["ls", "apply_patch", "exec", "process"],
+    });
+    const names = result.tools.map((tool) => tool.name);
+    expect(names).toContain("read");
+    expect(names).not.toContain("write");
+    expect(names).not.toContain("edit");
+  });
+
+  it("rejects a revoked grant before a sandbox write reaches the bridge command", async () => {
+    const base = tempDirs.make("openclaw-mediated-revoked-sandbox-");
+    const workspaceDir = path.join(base, "ws");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const bridge = createHostSandboxFsBridge(workspaceDir);
+    let revoked = false;
+    const realWrite = bridge.writeFile.bind(bridge);
+    let commandRan = false;
+    vi.spyOn(bridge, "writeFile").mockImplementation(async (writeParams) => {
+      // The bridge awaits its path checks, during which the grant is revoked.
+      await Promise.resolve();
+      revoked = true;
+      writeParams.assertBeforeMutation?.();
+      commandRan = true;
+      await realWrite(writeParams);
+    });
+    const result = await resolveTools({
+      cfg: { agents: { defaults: { sandbox: { mode: "all" } } } },
+      sessionKey: "agent:main:cron:mediated-revoked-sandbox",
+      workspaceDir,
+      sandboxExecution: {
+        sandbox: createAgentToolsSandboxContext({ workspaceDir, fsBridge: bridge }),
+      },
+      isGrantCurrent: () => !revoked,
+      mediatedToolNames: ["write"],
+      excludeToolNames: ["read", "edit", "apply_patch", "exec", "process"],
+    });
+    const writeTool = result.tools.find((tool) => tool.name === "write");
+    await expect(
+      withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:cron:mediated-revoked-sandbox",
+          receiptAuthority: () => !revoked,
+        },
+        () => writeTool!.execute("revoked-write", { path: "late.txt", content: "must not land" }),
+      ),
+    ).rejects.toThrow(/no longer active/i);
+    expect(commandRan).toBe(false);
+    await expect(fs.stat(path.join(workspaceDir, "late.txt"))).rejects.toThrow();
+  });
+
+  it("serves a restricted MCP grant's file tools when the grant carries a prepared sandbox", async () => {
+    const workspaceDir = tempDirs.make("openclaw-mcp-bound-sandbox-");
+    const { tools } = await resolveMcpLoopbackScopedTools({
+      cfg: { agents: { defaults: { sandbox: { mode: "all" } } } },
+      sandboxExecution: {
+        sandbox: createAgentToolsSandboxContext({
+          workspaceDir,
+          fsBridge: createHostSandboxFsBridge(workspaceDir),
+        }),
+      },
+      context: {
+        sessionKey: "agent:main:cron:mcp-bound-sandbox",
+        senderIsOwner: true,
+        workspaceDir,
+        toolsAllow: ["read", "write"],
+      },
+    });
+    const names = tools.map((tool) => (tool as { name?: string }).name);
+    expect(names).toContain("read");
+    expect(names).toContain("write");
+  });
+
+  it("keeps mediated coding tools for a session that is not sandboxed", async () => {
+    const workspaceDir = tempDirs.make("openclaw-mediated-unsandboxed-");
+    const result = await resolveTools({
+      cfg: { agents: { defaults: { sandbox: { mode: "off" } } } },
+      sessionKey: "agent:main:cron:mediated-unsandboxed",
+      workspaceDir,
+      mediatedToolNames: ["read", "write"],
+      excludeToolNames: ["edit", "apply_patch", "exec", "process"],
+    });
+    const names = result.tools.map((tool) => tool.name);
+    expect(names).toContain("read");
+    expect(names).toContain("write");
+  });
+
+  it("does not expose host file tools through a sandboxed restricted MCP grant", async () => {
+    const workspaceDir = tempDirs.make("openclaw-mcp-sandbox-");
+    const { tools } = await resolveMcpLoopbackScopedTools({
+      cfg: { agents: { defaults: { sandbox: { mode: "all" } } } },
+      context: {
+        sessionKey: "agent:main:cron:mcp-sandbox",
+        senderIsOwner: true,
+        workspaceDir,
+        toolsAllow: ["read", "write"],
+      },
+    });
+    const names = tools.map((tool) => (tool as { name?: string }).name);
+    expect(names).not.toContain("read");
+    expect(names).not.toContain("write");
   });
 
   it("applies sandbox tool denies to sandboxed loopback turns", async () => {

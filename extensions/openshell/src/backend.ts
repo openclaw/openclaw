@@ -269,6 +269,7 @@ class OpenShellSandboxBackendImpl {
       finalizeExec: async ({ token }) => {
         await this.finalizeExec(token as PendingExec | undefined);
       },
+      enforcesMutationFence: true,
       runShellCommand: runRemoteShellScript,
       createFsBridge: ({ sandbox }) =>
         this.params.execContext.config.mode === "remote"
@@ -288,16 +289,20 @@ class OpenShellSandboxBackendImpl {
       sandbox,
       backend: {
         remoteAgentWorkspaceDir: this.params.remoteAgentWorkspaceDir,
-        mkdirpRemotePath: (remotePath, signal) => this.mkdirpRemotePath(remotePath, signal),
+        mkdirpRemotePath: (remotePath, signal, assertBeforeMutation) =>
+          this.mkdirpRemotePath(remotePath, signal, assertBeforeMutation),
         removeRemotePath: (remotePath, params) => this.removeRemotePath(remotePath, params),
-        renameRemotePath: (from, to, signal) => this.renameRemotePath(from, to, signal),
-        syncLocalPathToRemote: (localPath, remotePath) =>
-          this.syncLocalPathToRemote(localPath, remotePath),
+        renameRemotePath: (from, to, signal, assertBeforeMutation) =>
+          this.renameRemotePath(from, to, signal, assertBeforeMutation),
+        syncLocalPathToRemote: (localPath, remotePath, assertBeforeMutation) =>
+          this.syncLocalPathToRemote(localPath, remotePath, assertBeforeMutation),
       },
     });
     // Hold one lease across validation and both commits, not just the remote step.
     // Otherwise exec publication can erase a successful file-tool write or expose partial reads.
     return {
+      // The wrapped bridge forwards the fence to the backend; declare it here too.
+      enforcesMutationFence: bridge.enforcesMutationFence,
       get pathMappings() {
         return bridge.pathMappings;
       },
@@ -524,11 +529,16 @@ class OpenShellSandboxBackendImpl {
     return await this.runRemoteShellScriptInternal(params);
   }
 
-  async mkdirpRemotePath(remotePath: string, signal?: AbortSignal): Promise<void> {
+  async mkdirpRemotePath(
+    remotePath: string,
+    signal?: AbortSignal,
+    assertBeforeMutation?: () => void,
+  ): Promise<void> {
     const target = this.resolveRemoteTarget(remotePath);
     await this.runPinnedRemotePathMutation({
       args: ["mkdirp", target.root, target.relativePath],
       signal,
+      assertBeforeMutation,
     });
   }
 
@@ -538,6 +548,7 @@ class OpenShellSandboxBackendImpl {
       recursive?: boolean;
       signal?: AbortSignal;
       ignoreMissing?: boolean;
+      assertBeforeMutation?: () => void;
     },
   ): Promise<void> {
     const target = this.resolveRemoteTarget(remotePath);
@@ -554,6 +565,7 @@ class OpenShellSandboxBackendImpl {
       ],
       ignoreMissingParent: params?.ignoreMissing,
       signal: params?.signal,
+      assertBeforeMutation: params?.assertBeforeMutation,
     });
   }
 
@@ -561,6 +573,7 @@ class OpenShellSandboxBackendImpl {
     fromRemotePath: string,
     toRemotePath: string,
     signal?: AbortSignal,
+    assertBeforeMutation?: () => void,
   ): Promise<void> {
     const from = this.resolveRemoteTarget(fromRemotePath);
     const to = this.resolveRemoteTarget(toRemotePath);
@@ -576,6 +589,7 @@ class OpenShellSandboxBackendImpl {
         "1",
       ],
       signal,
+      assertBeforeMutation,
     });
   }
 
@@ -586,6 +600,8 @@ class OpenShellSandboxBackendImpl {
       context: this.params.execContext,
     });
     try {
+      // SSH session setup is awaited; re-check the caller's authority right before launch.
+      params.assertBeforeMutation?.();
       return await runSshSandboxCommand({
         session,
         remoteCommand: buildRemoteCommand([
@@ -604,17 +620,25 @@ class OpenShellSandboxBackendImpl {
     }
   }
 
-  async syncLocalPathToRemote(localPath: string, remotePath: string): Promise<void> {
+  async syncLocalPathToRemote(
+    localPath: string,
+    remotePath: string,
+    assertBeforeMutation?: () => void,
+  ): Promise<void> {
     await this.ensureSandboxExists();
     await this.maybeSeedRemoteWorkspace();
     const target = this.resolveRemoteTarget(remotePath);
     const stats = await fs.lstat(localPath).catch(() => null);
     if (!stats || stats.isSymbolicLink()) {
-      await this.removeRemotePath(remotePath, { recursive: true, ignoreMissing: true });
+      await this.removeRemotePath(remotePath, {
+        recursive: true,
+        ignoreMissing: true,
+        assertBeforeMutation,
+      });
       return;
     }
     if (stats.isDirectory()) {
-      await this.mkdirpRemotePath(remotePath);
+      await this.mkdirpRemotePath(remotePath, undefined, assertBeforeMutation);
       return;
     }
     await this.runPinnedRemotePathMutation({
@@ -625,7 +649,10 @@ class OpenShellSandboxBackendImpl {
           ? ""
           : path.posix.dirname(target.relativePath),
       ],
+      assertBeforeMutation,
     });
+    // Provisioning, seeding, inspection and the remote mkdir above are awaited.
+    assertBeforeMutation?.();
     const result = await runOpenShellCli({
       context: this.params.execContext,
       args: [
@@ -647,6 +674,7 @@ class OpenShellSandboxBackendImpl {
     args: string[];
     ignoreMissingParent?: boolean;
     signal?: AbortSignal;
+    assertBeforeMutation?: () => void;
   }): Promise<SandboxBackendCommandResult> {
     return await this.runRemoteShellScript({
       script: 'python_script="$1"; shift; python3 -c "$python_script" "$@"',
@@ -657,6 +685,7 @@ class OpenShellSandboxBackendImpl {
         ...params.args,
       ],
       signal: params.signal,
+      assertBeforeMutation: params.assertBeforeMutation,
     });
   }
 

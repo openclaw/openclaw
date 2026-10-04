@@ -1,9 +1,5 @@
 import path from "node:path";
-import {
-  isPathInside,
-  removePathWithinRoot,
-  root as fsRoot,
-} from "openclaw/plugin-sdk/file-access-runtime";
+import { isPathInside, root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   createWritableRenameTargetResolver,
   type DirectoryEntry,
@@ -66,6 +62,8 @@ class MxcFsBridge implements SandboxFsBridge {
     };
   }
 
+  readonly enforcesMutationFence = true as const;
+
   get pathMappings(): NonNullable<SandboxFsBridge["pathMappings"]> {
     return [...this.protectedSkillMounts, ...this.workspaceMounts];
   }
@@ -99,6 +97,8 @@ class MxcFsBridge implements SandboxFsBridge {
       await fsRoot(target.mount.hostRoot)
     ).write(target.relativePath, buffer, {
       mkdir: params.mkdir !== false,
+      // Runs after the awaited root setup, immediately before the write.
+      assertBeforeMutation: params.assertBeforeMutation,
     });
   }
 
@@ -115,6 +115,7 @@ class MxcFsBridge implements SandboxFsBridge {
         await fsRoot(target.mount.hostRoot)
       ).create(target.relativePath, buffer, {
         mkdir: params.mkdir !== false,
+        assertBeforeMutation: params.assertBeforeMutation,
       });
       return "created";
     } catch (error) {
@@ -125,27 +126,38 @@ class MxcFsBridge implements SandboxFsBridge {
     }
   }
 
-  async mkdirp(params: { filePath: string; cwd?: string }): Promise<void> {
+  async mkdirp(params: {
+    filePath: string;
+    cwd?: string;
+    assertBeforeMutation?: () => void;
+  }): Promise<void> {
     const target = this.resolveTarget(params);
     this.ensureWritable(target, "create directories");
     if (target.relativePath.length === 0) {
       return;
     }
-    await (await fsRoot(target.mount.hostRoot)).mkdir(target.relativePath);
+    await (
+      await fsRoot(target.mount.hostRoot)
+    ).mkdir(target.relativePath, { assertBeforeMutation: params.assertBeforeMutation });
   }
 
   async remove(params: Parameters<SandboxFsBridge["remove"]>[0]): Promise<void> {
     const target = this.resolveTarget(params);
     this.ensureWritable(target, "remove files");
-    await removePathWithinRoot({
-      rootDir: target.mount.hostRoot,
-      relativePath: target.relativePath,
+    const root = await fsRoot(target.mount.hostRoot);
+    await root.remove(target.relativePath, {
       recursive: params.recursive,
       force: params.force ?? false,
+      assertBeforeMutation: params.assertBeforeMutation,
     });
   }
 
-  async rename(params: { from: string; to: string; cwd?: string }): Promise<void> {
+  async rename(params: {
+    from: string;
+    to: string;
+    cwd?: string;
+    assertBeforeMutation?: () => void;
+  }): Promise<void> {
     const { from: source, to: target } = this.resolveRenameTargets(params);
     if (
       normalizeMxcPathForComparison(source.mount.hostRoot) !==
@@ -159,9 +171,12 @@ class MxcFsBridge implements SandboxFsBridge {
     const root = await fsRoot(source.mount.hostRoot);
     const targetParent = path.dirname(target.relativePath);
     if (targetParent !== "." && targetParent !== "") {
-      await root.mkdir(targetParent);
+      await root.mkdir(targetParent, { assertBeforeMutation: params.assertBeforeMutation });
     }
-    await root.move(source.relativePath, target.relativePath, { overwrite: true });
+    await root.move(source.relativePath, target.relativePath, {
+      overwrite: true,
+      assertBeforeMutation: params.assertBeforeMutation,
+    });
   }
 
   async stat(params: { filePath: string; cwd?: string }): Promise<SandboxFsStat | null> {

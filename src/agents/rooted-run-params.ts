@@ -15,6 +15,25 @@ export type PreparedRootedExecutionCapability = Readonly<{
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
 }>;
 
+/**
+ * Sandbox prepared by the host for an ordinary (non-rooted) sandboxed CLI run.
+ * Retained outside child-visible MCP request context, like the rooted capability,
+ * so loopback coding tools execute against the session's real sandbox filesystem.
+ */
+export type PreparedSandboxExecutionCapability = Readonly<{ sandbox: SandboxContext }>;
+
+/** Resolve the session's sandbox for mediated coding tools; undefined when it is not sandboxed. */
+export async function prepareSandboxExecutionCapability(
+  params: Omit<
+    WorkspaceSandboxParams,
+    "sessionRoot" | "requireWritableSandbox" | "requireWorkspaceOnly"
+  >,
+): Promise<PreparedSandboxExecutionCapability | undefined> {
+  const { resolveAttemptWorkspaceSandbox } = await import("./workspace-sandbox.js");
+  const workspace = await resolveAttemptWorkspaceSandbox(params);
+  return workspace.sandbox?.enabled ? Object.freeze({ sandbox: workspace.sandbox }) : undefined;
+}
+
 export async function prepareRootedExecutionCapability(
   params: Omit<
     WorkspaceSandboxParams,

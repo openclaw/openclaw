@@ -23,6 +23,13 @@ export type SandboxFsStat = {
 /** Filesystem operations exposed across the sandbox boundary. */
 export type SandboxFsBridge = {
   /**
+   * Declares that every mutating method honors `assertBeforeMutation`, calling
+   * it after its own awaited preparation and immediately before the final
+   * effect. Bridges that omit this (for example older third-party bridges) are
+   * never given mutating tools for a run whose authority can be revoked.
+   */
+  readonly enforcesMutationFence?: true;
+  /**
    * Backend-owned runtime roots and their local policy projections, in mount
    * precedence order for equal roots. These do not grant access: bridge methods
    * still enforce visibility, read-only rules and physical path safety.
@@ -103,6 +110,12 @@ export type SandboxFsBridge = {
     /** Pre-authorized canonical destination from resolvePinnedMutationTarget. */
     pinnedPath?: string;
     signal?: AbortSignal;
+    /**
+     * Called immediately before the mutating command runs, after every awaited
+     * path-safety check. Throw to abort; lets a caller fence the final effect
+     * to the lifetime of its own authority.
+     */
+    assertBeforeMutation?: () => void;
   }): Promise<void>;
   writeFile(params: {
     filePath: string;
@@ -113,6 +126,12 @@ export type SandboxFsBridge = {
     /** Pre-authorized canonical mutation target from resolvePinnedMutationTarget. */
     pinnedPath?: string;
     signal?: AbortSignal;
+    /**
+     * Called immediately before the mutating command runs, after every awaited
+     * path-safety check. Throw to abort; lets a caller fence the final effect
+     * to the lifetime of its own authority.
+     */
+    assertBeforeMutation?: () => void;
   }): Promise<void>;
   /**
    * Atomically creates a file only when no entry already exists at the path.
@@ -128,6 +147,12 @@ export type SandboxFsBridge = {
     /** Pre-authorized canonical destination from resolvePinnedMutationTarget. */
     pinnedPath?: string;
     signal?: AbortSignal;
+    /**
+     * Called immediately before the mutating command runs, after every awaited
+     * path-safety check. Throw to abort; lets a caller fence the final effect
+     * to the lifetime of its own authority.
+     */
+    assertBeforeMutation?: () => void;
   }): Promise<void>;
   remove(params: {
     filePath: string;
@@ -137,8 +162,25 @@ export type SandboxFsBridge = {
     /** Pre-authorized canonical destination from resolvePinnedMutationTarget. */
     pinnedPath?: string;
     signal?: AbortSignal;
+    /**
+     * Called immediately before the mutating command runs, after every awaited
+     * path-safety check. Throw to abort; lets a caller fence the final effect
+     * to the lifetime of its own authority.
+     */
+    assertBeforeMutation?: () => void;
   }): Promise<void>;
-  rename(params: { from: string; to: string; cwd?: string; signal?: AbortSignal }): Promise<void>;
+  rename(params: {
+    from: string;
+    to: string;
+    cwd?: string;
+    signal?: AbortSignal;
+    /**
+     * Called immediately before the mutating command runs, after every awaited
+     * path-safety check. Throw to abort; lets a caller fence the final effect
+     * to the lifetime of its own authority.
+     */
+    assertBeforeMutation?: () => void;
+  }): Promise<void>;
   stat(params: {
     filePath: string;
     cwd?: string;

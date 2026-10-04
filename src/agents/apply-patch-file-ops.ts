@@ -70,7 +70,13 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
         },
         writeFile: (filePath, content) => {
           assertCurrent();
-          return bridge.writeFile({ filePath, cwd: root, data: content, signal: options.signal });
+          return bridge.writeFile({
+            filePath,
+            cwd: root,
+            data: content,
+            signal: options.signal,
+            assertBeforeMutation: assertCurrent,
+          });
         },
         createFileExclusive: (filePath, content) => {
           if (!bridge.createFileExclusive) {
@@ -84,15 +90,27 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
             cwd: root,
             data: content,
             signal: options.signal,
+            assertBeforeMutation: assertCurrent,
           });
         },
         remove: (filePath) => {
           assertCurrent();
-          return bridge.remove({ filePath, cwd: root, force: false, signal: options.signal });
+          return bridge.remove({
+            filePath,
+            cwd: root,
+            force: false,
+            signal: options.signal,
+            assertBeforeMutation: assertCurrent,
+          });
         },
         mkdirp: (dir) => {
           assertCurrent();
-          return bridge.mkdirp({ filePath: dir, cwd: root, signal: options.signal });
+          return bridge.mkdirp({
+            filePath: dir,
+            cwd: root,
+            signal: options.signal,
+            assertBeforeMutation: assertCurrent,
+          });
         },
       },
     });

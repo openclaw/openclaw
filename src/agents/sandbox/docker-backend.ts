@@ -199,6 +199,7 @@ function createContainerSandboxBackendHandle(params: {
     runtimeLabel: params.containerName,
     workdir: params.workdir,
     env: params.env,
+    enforcesMutationFence: true,
     configLabel: params.image,
     configLabelKind: "Image",
     capabilities: {
@@ -332,6 +333,7 @@ async function runContainerSandboxShellCommand(
   }
   // The engine-target probe above can outlive the admitted workspace owner.
   params.assertCurrent?.();
+  params.assertBeforeMutation?.();
   return execContainerRaw(params.engine, dockerArgs, {
     input: params.stdin,
     allowFailure: params.allowFailure,

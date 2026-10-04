@@ -1290,14 +1290,24 @@ function createSandboxMutationOperations(params: SandboxToolParams) {
       resolveQueueKey: (absolutePath: string, signal?: AbortSignal) =>
         resolveSandboxFileQueueKey(params, absolutePath, signal),
       mkdir: async (dir: string) => {
-        await params.bridge.mkdirp({ filePath: dir, cwd: params.root, signal: params.abortSignal });
+        // Captured per call, inside the invocation's authority scope, and checked
+        // by the bridge after its awaited path checks and before the command runs.
+        const assertBeforeMutation = captureAgentToolSourceExecutionGuard(params.abortSignal);
+        await params.bridge.mkdirp({
+          filePath: dir,
+          cwd: params.root,
+          signal: params.abortSignal,
+          assertBeforeMutation,
+        });
       },
       writeFile: async (absolutePath: string, content: string) => {
+        const assertBeforeMutation = captureAgentToolSourceExecutionGuard(params.abortSignal);
         await params.bridge.writeFile({
           filePath: absolutePath,
           cwd: params.root,
           data: content,
           signal: params.abortSignal,
+          assertBeforeMutation,
         });
       },
       readFile: (absolutePath: string) =>

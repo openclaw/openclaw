@@ -17,7 +17,10 @@ import {
 } from "../agents/core-tool-factory-descriptors.js";
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { loadNodeExecAvailability } from "../agents/node-exec-availability.js";
-import type { PreparedRootedExecutionCapability } from "../agents/rooted-run-params.js";
+import type {
+  PreparedRootedExecutionCapability,
+  PreparedSandboxExecutionCapability,
+} from "../agents/rooted-run-params.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import { getInProcessGatewayToolContext } from "../agents/tools/in-process-gateway.js";
 import { hasSessionControlAuthority } from "../agents/tools/sessions-operator-authority.js";
@@ -67,6 +70,7 @@ type McpLoopbackScopeParams = {
   authProfileStoreAgentDir?: string;
   skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
   rootedExecution?: PreparedRootedExecutionCapability;
+  sandboxExecution?: PreparedSandboxExecutionCapability;
   /** Host-selected coding owners for pre-grant projection only. */
   defaultMediatedToolNames?: readonly string[];
   messageActionTurnCapability?: string;
@@ -167,6 +171,14 @@ function resolveMediatedNativeTools(
       toolsAllow,
     ).map((tool) => tool.name),
   );
+}
+
+/**
+ * Whether a restricted run's cap selects any mediated coding tool, so callers
+ * can skip preparing a sandbox for tool-free or non-coding runs.
+ */
+export function selectsMediatedCodingTools(toolsAllow: string[] | undefined): boolean {
+  return resolveMediatedNativeTools(toolsAllow, "policy").size > 0;
 }
 
 async function resolveNodeExecScope(
@@ -338,6 +350,7 @@ async function constructMcpLoopbackTools(
   const scopeOptions: Parameters<typeof resolveGatewayScopedTools>[0] = {
     ...context,
     rootedExecution: params.rootedExecution,
+    sandboxExecution: params.sandboxExecution,
     messageActionTurnCapability: params.messageActionTurnCapability,
     cfg: params.cfg,
     authProfileStore: params.authProfileStore,

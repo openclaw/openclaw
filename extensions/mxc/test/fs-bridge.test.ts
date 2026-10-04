@@ -316,3 +316,78 @@ describe("MXC public coding-tool composition", () => {
     },
   );
 });
+
+describe("MXC filesystem mutation fence", () => {
+  async function createBridge() {
+    const workspace = await tempWorkspace({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-mxc-fence-",
+    });
+    const workspaceDir = await fs.realpath(workspace.dir);
+    await fs.writeFile(path.join(workspaceDir, "victim.txt"), "original");
+    const bridge = createMxcFsBridge({
+      sandbox: {
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        workspaceAccess: "rw",
+        containerName: "mxc-fence-test",
+        containerWorkdir: workspaceDir,
+        docker: {},
+      },
+    });
+    return { workspace, workspaceDir, bridge };
+  }
+  const revoked = () => {
+    throw new Error("tool invocation authority is no longer active");
+  };
+
+  test("declares the fence and runs it before a live write", async () => {
+    const { workspace, workspaceDir, bridge } = await createBridge();
+    await using cleanup = workspace;
+    expect(cleanup).toBe(workspace);
+    expect(bridge.enforcesMutationFence).toBe(true);
+    let calls = 0;
+    await bridge.writeFile({
+      filePath: "victim.txt",
+      data: "updated",
+      assertBeforeMutation: () => {
+        calls += 1;
+      },
+    });
+    expect(calls).toBeGreaterThan(0);
+    await expect(fs.readFile(path.join(workspaceDir, "victim.txt"), "utf8")).resolves.toBe(
+      "updated",
+    );
+  });
+
+  test.each(["writeFile", "mkdirp", "remove", "rename"] as const)(
+    "does not touch the workspace when the fence throws for %s",
+    async (method) => {
+      const { workspace, workspaceDir, bridge } = await createBridge();
+      await using cleanup = workspace;
+      expect(cleanup).toBe(workspace);
+      const call =
+        method === "writeFile"
+          ? bridge.writeFile({
+              filePath: "victim.txt",
+              data: "late",
+              assertBeforeMutation: revoked,
+            })
+          : method === "mkdirp"
+            ? bridge.mkdirp({ filePath: "newdir", assertBeforeMutation: revoked })
+            : method === "remove"
+              ? bridge.remove({ filePath: "victim.txt", assertBeforeMutation: revoked })
+              : bridge.rename({
+                  from: "victim.txt",
+                  to: "moved.txt",
+                  assertBeforeMutation: revoked,
+                });
+      await expect(call).rejects.toThrow("no longer active");
+      await expect(fs.readFile(path.join(workspaceDir, "victim.txt"), "utf8")).resolves.toBe(
+        "original",
+      );
+      await expect(fs.stat(path.join(workspaceDir, "newdir"))).rejects.toThrow();
+      await expect(fs.stat(path.join(workspaceDir, "moved.txt"))).rejects.toThrow();
+    },
+  );
+});

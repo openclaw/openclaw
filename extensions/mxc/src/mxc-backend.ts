@@ -163,6 +163,7 @@ export function createMxcSandboxBackendHandle(params: {
       }
     },
     capabilities: {},
+    enforcesMutationFence: true,
 
     async buildExecSpec({ command, workdir, env, usePty }): Promise<SandboxBackendExecSpec> {
       const effectiveWorkdir = resolveWorkdirInsideWorkspace(
@@ -277,6 +278,7 @@ export function createMxcSandboxBackendHandle(params: {
           payloadFile.payloadFile,
         ];
         try {
+          cmdParams.assertBeforeMutation?.();
           const result = await runCommandBuffered(argv, {
             baseEnv: buildLauncherEnv(),
             input: execInput,

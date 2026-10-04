@@ -149,6 +149,7 @@ class RemoteShellSandboxBackendImpl {
           await pending.session.dispose();
         }
       },
+      enforcesMutationFence: true,
       runShellCommand: (command) => this.runRemoteShellScript(command),
       createFsBridge: ({ sandbox }) =>
         createRemoteShellSandboxFsBridge({
@@ -391,6 +392,7 @@ class RemoteShellSandboxBackendImpl {
       await this.refreshRemoteSkillsWorkspace(session, params.signal);
       params.signal?.throwIfAborted();
       this.params.createParams.assertRuntimeCurrent?.();
+      params.assertBeforeMutation?.();
       return await session.runCommand({
         remoteCommand: buildRemoteCommand([
           "/bin/sh",

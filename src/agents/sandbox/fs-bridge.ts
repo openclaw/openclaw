@@ -74,6 +74,16 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     };
   }
 
+  /**
+   * The default bridge delegates its final effect to the backend's command
+   * runner, so it can only promise the fence when that runner honors it. With no
+   * backend handle it uses the built-in container runner, which does.
+   */
+  get enforcesMutationFence(): true | undefined {
+    const backend = this.sandbox.backend;
+    return backend === undefined || backend.enforcesMutationFence === true ? true : undefined;
+  }
+
   get pathMappings(): NonNullable<SandboxFsBridge["pathMappings"]> {
     return this.mounts;
   }
@@ -163,6 +173,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
         mkdir: params.mkdir !== false,
       }),
       signal: params.signal,
+      assertBeforeMutation: params.assertBeforeMutation,
     });
   }
 
@@ -211,6 +222,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       allowFailure: kind === "create" ? true : undefined,
       stdin: buffer,
       signal: params.signal,
+      assertBeforeMutation: params.assertBeforeMutation,
     });
     return { result, containerPath: target.containerPath };
   }
@@ -240,6 +252,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
         ),
       }),
       signal: params.signal,
+      assertBeforeMutation: params.assertBeforeMutation,
     });
   }
 
@@ -268,6 +281,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
         force: params.force,
       }),
       signal: params.signal,
+      assertBeforeMutation: params.assertBeforeMutation,
     });
   }
 
@@ -301,6 +315,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
         destination: this.pathGuard.resolvePinnedEntry(to, "rename files"),
       }),
       signal: params.signal,
+      assertBeforeMutation: params.assertBeforeMutation,
     });
   }
 
@@ -428,7 +443,11 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   }
 
   private async runCheckedCommand(
-    plan: SandboxFsCommandPlan & { stdin?: Buffer | string; signal?: AbortSignal },
+    plan: SandboxFsCommandPlan & {
+      stdin?: Buffer | string;
+      signal?: AbortSignal;
+      assertBeforeMutation?: () => void;
+    },
   ): Promise<SandboxBackendCommandResult> {
     await this.pathGuard.assertPathChecks(plan.checks);
     if (plan.recheckBeforeCommand) {
@@ -436,11 +455,15 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       // checks immediately before command execution to close TOCTOU gaps.
       await this.pathGuard.assertPathChecks(plan.checks);
     }
+    // Last synchronous point before the command: the caller's authority must
+    // still be live after every awaited check above.
+    plan.assertBeforeMutation?.();
     return await this.runCommand(plan.script, {
       args: plan.args,
       stdin: plan.stdin,
       allowFailure: plan.allowFailure,
       signal: plan.signal,
+      assertBeforeMutation: plan.assertBeforeMutation,
     });
   }
 

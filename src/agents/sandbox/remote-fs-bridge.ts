@@ -71,6 +71,8 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     };
   }
 
+  readonly enforcesMutationFence = true as const;
+
   get pathMappings(): NonNullable<SandboxFsBridge["pathMappings"]> {
     const mounts = this.getMounts();
     // Use the resolver's exact-target owner, including agent/protected ties.
@@ -220,6 +222,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
         mkdir: params.mkdir !== false,
       }),
       signal: params.signal,
+      assertBeforeMutation: params.assertBeforeMutation,
     });
   }
 
@@ -279,6 +282,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       stdin: buffer,
       allowFailure: kind === "create" ? true : undefined,
       signal: params.signal,
+      assertBeforeMutation: params.assertBeforeMutation,
     });
     return { result, containerPath: target.containerPath };
   }
@@ -315,6 +319,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
         pinned: { mountRootPath: pinned.mountRootPath, relativePath: pinned.relativeParentPath },
       }),
       signal: params.signal,
+      assertBeforeMutation: params.assertBeforeMutation,
     });
   }
 
@@ -350,6 +355,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       }),
       signal: params.signal,
       allowFailure: params.force !== false,
+      assertBeforeMutation: params.assertBeforeMutation,
     });
   }
 
@@ -380,6 +386,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
         destination: toPinned,
       }),
       signal: params.signal,
+      assertBeforeMutation: params.assertBeforeMutation,
     });
   }
 
@@ -687,7 +694,10 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     stdin?: Buffer | string;
     signal?: AbortSignal;
     allowFailure?: boolean;
+    assertBeforeMutation?: () => void;
   }): Promise<SandboxBackendCommandResult> {
+    // Last synchronous point before the remote command, after every awaited check.
+    params.assertBeforeMutation?.();
     return await this.runtime.runRemoteShellScript({
       script: [
         "set -eu",

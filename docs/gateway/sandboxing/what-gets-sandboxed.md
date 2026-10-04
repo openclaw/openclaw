@@ -21,6 +21,21 @@ signal })`, returning `{ name, isDirectory }` entries from their permitted
 filesystem roots. The method is optional for older plugins: `ls` is hidden when
 it is absent, and OpenClaw does not fall back to reading the host filesystem.
 
+Custom backends that mutate files must honor the caller's authority fence.
+Every mutating `SandboxFsBridge` method (`writeFile`, `createFileExclusive`,
+`mkdirp`, `remove`, `rename`, `copyFile`) accepts an optional
+`assertBeforeMutation()`. Call it after your own awaited preparation (path
+checks, session or SSH setup) and immediately before the final effect, and let
+its error propagate. Backends that run commands receive the same callback on
+`SandboxBackendCommandParams` and must call it right before launching the
+command. Declare `enforcesMutationFence: true` on the bridge once every
+mutating method does this.
+
+A bridge that does not declare it still serves `read` and `ls` to restricted
+CLI runs, but OpenClaw withholds `write`, `edit` and `apply_patch` from them
+and logs a warning naming the session. OpenClaw never falls back to the host
+filesystem.
+
 Not sandboxed:
 
 - The Gateway process itself.
