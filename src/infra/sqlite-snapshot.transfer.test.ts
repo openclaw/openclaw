@@ -110,7 +110,8 @@ function mockExclusiveCopyTransfer() {
 describe("owned SQLite snapshot transfer", () => {
   it.each([
     { isolated: false, copyFallback: false },
-    { isolated: true, copyFallback: true },
+    { isolated: true, copyFallback: false },
+    { isolated: false, copyFallback: true },
   ])(
     "publishes one owned private image (isolated=$isolated, copy fallback=$copyFallback)",
     async ({ isolated, copyFallback }) => {

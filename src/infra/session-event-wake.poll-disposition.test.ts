@@ -175,6 +175,7 @@ describe("session event wake private poll disposition", () => {
     ["missing cadence", { scheduledEveryMs: undefined }, "native-first"],
     ["zero cadence", { scheduledEveryMs: 0 }],
     ["fractional cadence", { scheduledEveryMs: 1.5 }],
+    ["unsafe cadence", { scheduledEveryMs: Number.MAX_SAFE_INTEGER + 1 }],
     ["event", { source: "exec-event", intent: "event" }, "native-first"],
     ["manual", { source: "manual", intent: "manual" }, "ineligible-first"],
     ["immediate interval", { intent: "immediate" }, "native-first"],

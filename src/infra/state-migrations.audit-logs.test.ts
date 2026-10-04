@@ -309,13 +309,17 @@ describe("legacy core audit log migration", () => {
     });
   });
 
-  it.each(["interrupted", "active", "reserved"] as const)(
+  it.each(["claim-only", "interrupted", "active", "reserved"] as const)(
     "uses the correct audit archive generation for a %s source",
     async (mode) => {
       await withAuditMigrationFixture(async (audit) => {
         const { claim, raw, sanitized, source } = audit.system;
         const record = systemAuditEvent("Interrupted operation");
-        if (mode === "interrupted") {
+        const firstGeneration = mode === "claim-only" || mode === "interrupted";
+        if (mode === "claim-only") {
+          await audit.writeJsonLines(source, [record]);
+          await fs.rename(source, claim);
+        } else if (mode === "interrupted") {
           await audit.writeJsonLines(claim, [record]);
           await audit.writeJsonLines(sanitized, [record]);
         } else {
@@ -327,9 +331,12 @@ describe("legacy core audit log migration", () => {
             await fs.rename(source, `${claim}.2`);
           }
         }
-        const firstSanitized = await fs.readFile(sanitized, "utf8");
+        const firstSanitized = mode === "active" ? await fs.readFile(sanitized, "utf8") : undefined;
 
         const detected = audit.detect();
+        if (mode === "claim-only") {
+          expect(detected.sources).toMatchObject([{ sourcePath: claim, storage: "claim" }]);
+        }
         if (mode === "reserved") {
           expect(detected.sources).toMatchObject([
             {
@@ -343,9 +350,10 @@ describe("legacy core audit log migration", () => {
         const result = await audit.migrate(detected);
 
         expect(result.warnings).toEqual([]);
-        expect(audit.systemEntries()).toHaveLength(mode === "interrupted" ? 1 : 2);
-        await fs.access(mode === "interrupted" ? raw : `${source}.migrated.2.raw`);
-        if (mode === "interrupted") {
+        expect(audit.systemEntries()).toHaveLength(firstGeneration ? 1 : 2);
+        await fs.access(firstGeneration ? raw : `${source}.migrated.2.raw`);
+        if (firstGeneration) {
+          await expect(fs.access(claim)).rejects.toMatchObject({ code: "ENOENT" });
           await expect(fs.access(`${source}.migrated.2.raw`)).rejects.toMatchObject({
             code: "ENOENT",
           });
