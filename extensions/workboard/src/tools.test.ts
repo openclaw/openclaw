@@ -778,4 +778,53 @@ describe("workboard tools", () => {
     );
     expect(claimed.card).toMatchObject({ status: "review" });
   });
+
+  it("moves a card to a different board preserving status and respecting claims", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const tools = new Map(
+      createWorkboardTools({ store, context: { agentId: "agent-b" } }).map((tool) => [
+        tool.name,
+        tool,
+      ]),
+    );
+    const card = await store.create({ title: "Board move card", status: "blocked" });
+
+    const unclaimed = readPayload(
+      await tools.get("workboard_board_move")?.execute("move-unclaimed", {
+        id: card.id,
+        boardId: "people",
+        reason: "re-routing to people board",
+      }),
+    );
+    expect(unclaimed.card).toMatchObject({
+      status: "blocked",
+      metadata: {
+        automation: { boardId: "people" },
+      },
+    });
+    const updatedUnclaimed = await store.get(card.id);
+    expect(updatedUnclaimed?.metadata?.comments?.at(-1)?.body).toBe("re-routing to people board");
+
+    await store.claim(card.id, { ownerId: "agent-a", token: "test-auth-token" });
+    await expect(
+      tools.get("workboard_board_move")?.execute("move-denied", {
+        id: card.id,
+        boardId: "security",
+      }),
+    ).rejects.toThrow("card is claimed by agent-a");
+
+    const claimed = readPayload(
+      await tools.get("workboard_board_move")?.execute("move-claimed", {
+        id: card.id,
+        boardId: "security",
+        token: "test-auth-token",
+      }),
+    );
+    expect(claimed.card).toMatchObject({
+      status: "blocked",
+      metadata: {
+        automation: { boardId: "security" },
+      },
+    });
+  });
 });

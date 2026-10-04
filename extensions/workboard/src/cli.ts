@@ -223,6 +223,26 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
       writeCard(updated, options);
     });
 
+  workboard
+    .command("board-move")
+    .argument("<id>", "Card id or prefix")
+    .description("Move a Workboard card to a different board without changing its status")
+    .requiredOption("--board <id>", "Target board id")
+    .option("--reason <text>", "Optional move reason")
+    .option("--json", "Print JSON", false)
+    .action(async (id: string, options: JsonOptions & { board: string; reason?: string }) => {
+      const cards = await params.store.list();
+      const { card, error } = resolveWorkboardCardByIdOrPrefix(cards, id);
+      if (!card) {
+        throw new Error(error);
+      }
+      const updated = await params.store.boardMove(card.id, {
+        boardId: options.board,
+        reason: options.reason,
+      });
+      writeCard(updated, options);
+    });
+
   addGatewayClientOptions(
     workboard
       .command("dispatch")
