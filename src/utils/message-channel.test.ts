@@ -11,6 +11,7 @@ import {
   isEphemeralGatewayClient,
   isInternalNonDeliveryChannel,
   isMarkdownCapableMessageChannel,
+  isNativeAppUiClient,
   isOperatorUiClient,
   resolveGatewayMessageChannel,
 } from "./message-channel.js";
@@ -87,6 +88,23 @@ describe("message-channel", () => {
     expect(isOperatorUiClient(client)).toBe(true);
     expect(isBrowserCopilotClient({ id: "webchat", mode: "webchat" })).toBe(false);
     expect(isBrowserCopilotClient({ id: "openclaw-browser-copilot", mode: "webchat" })).toBe(true);
+  });
+
+  it("classifies the first-party native apps as native app UIs", () => {
+    for (const id of ["openclaw-macos", "openclaw-linux", "openclaw-ios", "openclaw-android"]) {
+      expect(isNativeAppUiClient({ id, mode: "ui" })).toBe(true);
+    }
+    // The id alone is not the class: the mode has to be ui, and watchOS is out.
+    for (const client of [
+      { id: "openclaw-ios", mode: "webchat" },
+      { id: "openclaw-watchos", mode: "ui" },
+      { id: "openclaw-control-ui", mode: "ui" },
+      { id: "webchat-ui", mode: "ui" },
+      { id: undefined, mode: "ui" },
+      undefined,
+    ]) {
+      expect(isNativeAppUiClient(client)).toBe(false);
+    }
   });
 
   it("normalizes plugin aliases when registered", () => {

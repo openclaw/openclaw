@@ -1,4 +1,4 @@
-import { isOperatorUiClient } from "../../utils/message-channel.js";
+import { isNativeAppUiClient, isOperatorUiClient } from "../../utils/message-channel.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 type ChatSendAckServerTiming = {
@@ -44,14 +44,23 @@ export function resolveControlUiReconnectResumeParams(
     return { params, resumeRequested: false };
   }
   const record = params as Record<string, unknown>;
-  const resumeRequested =
-    record[CONTROL_UI_RECONNECT_RESUME_PARAM] === true && isOperatorUiClient(clientInfo);
-  if (!resumeRequested) {
+  // The reserved marker is UI-internal, and only the UI clients that may carry it
+  // get it stripped before the strict params validator runs: the operator UI and
+  // the first-party native apps. For any other client the field stays where it
+  // is and the validator rejects the request, which is the guard a public webchat
+  // client is held to. Which clients may act on it is a separate question,
+  // answered by resumeRequested below.
+  const carriesReservedMarker = isOperatorUiClient(clientInfo) || isNativeAppUiClient(clientInfo);
+  const requested = record[CONTROL_UI_RECONNECT_RESUME_PARAM] === true;
+  if (!requested || !carriesReservedMarker) {
     return { params, resumeRequested: false };
   }
   const validatedParams = { ...record };
   delete validatedParams[CONTROL_UI_RECONNECT_RESUME_PARAM];
-  return { params: validatedParams, resumeRequested: true };
+  return {
+    params: validatedParams,
+    resumeRequested: requested && isOperatorUiClient(clientInfo),
+  };
 }
 
 export function emitOperatorChatSendServerTiming(params: {
