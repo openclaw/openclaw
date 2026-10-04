@@ -35,6 +35,7 @@ import {
   openDoctorStateSchemaReadAdmission,
 } from "./openclaw-state-db-doctor-schema.js";
 import { assertCurrentStateRuntimeSchema } from "./openclaw-state-db-fast-path.js";
+import { clearOpenClawStateIntegrityReceipts } from "./openclaw-state-db-integrity-receipt.js";
 import {
   assertOpenClawStateDatabaseOwner,
   markCurrentStateSchemaVersion,
@@ -333,6 +334,10 @@ export function repairStateSchema(
       warnings: [`Failed migrating shared state database schema at ${pathname}: ${reason}`],
     };
   } finally {
+    // A repair rewrites pages of the same inode at the same path, and it can leave the schema
+    // cookie unchanged, so an integrity receipt minted before or during it describes contents that
+    // no longer exist. Discard every receipt in this process: the cost is one more full check.
+    clearOpenClawStateIntegrityReceipts();
     if (db.isOpen) {
       clearNodeSqliteKyselyCacheForDatabase(db);
       // Rollback cleanup may have closed the handle after an unrecoverable

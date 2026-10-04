@@ -1,12 +1,9 @@
-import { realpathSync, rmSync, statSync } from "node:fs";
+import { existsSync, fstatSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isOpenClawStateSchemaFastPathEligible } from "./openclaw-state-db-fast-path.js";
-import {
-  closeTrackedStateDatabase,
-  openTrackedStateDatabase,
-} from "./openclaw-state-db-handle.js";
+import { closeTrackedStateDatabase, openTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import { clearOpenClawStateIntegrityReceipts } from "./openclaw-state-db-integrity-receipt.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -43,6 +40,28 @@ function countFullIntegrityChecks(): { readonly count: number } {
 function fileIdentity(pathname: string): string {
   const file = statSync(pathname, { bigint: true });
   return `${file.dev}:${file.ino}`;
+}
+
+const PROC_FD_DIRECTORY = "/proc/self/fd";
+
+/**
+ * How many descriptors this process holds on one dev:ino pair. Reading /proc is what makes the
+ * security property observable instead of inferred: a retained descriptor, not the filesystem's
+ * inode allocator, is what keeps a proved inode from being handed to a different file.
+ */
+function descriptorsOnIdentity(identity: string): number {
+  let found = 0;
+  for (const entry of readdirSync(PROC_FD_DIRECTORY)) {
+    try {
+      const file = fstatSync(Number(entry), { bigint: true });
+      if (`${file.dev}:${file.ino}` === identity) {
+        found += 1;
+      }
+    } catch {
+      // A descriptor can vanish between the directory read and the fstat; it is not a proved one.
+    }
+  }
+  return found;
 }
 
 // Enough proved files to give the filesystem a wide target, kept well inside the receipt table so
@@ -110,5 +129,50 @@ describe("shared-state integrity receipt and reused inodes", () => {
       ranPerAdmission: Array.from({ length: ADMISSIONS }, () => 1),
       recycledProvedIdentities: [],
     });
+  });
+
+  it("scans a physically new file created at a proved path and keeps the proved inode held", () => {
+    const env = { OPENCLAW_STATE_DIR: dirs.make("state-integrity-receipt-inode-new-file-") };
+    const createAtSamePath = (): string => {
+      const created = realpathSync(openOpenClawStateDatabase({ env }).path);
+      closeOpenClawStateDatabaseForTest();
+      return created;
+    };
+    const removeAtSamePath = (target: string): void => {
+      for (const suffix of ["", "-wal", "-shm"]) {
+        rmSync(target + suffix, { force: true });
+      }
+    };
+    const checks = countFullIntegrityChecks();
+    const admit = (target: string): number => {
+      const before = checks.count;
+      const database = openTrackedStateDatabase(target, { readOnly: true });
+      try {
+        expect(isOpenClawStateSchemaFastPathEligible(database, target)).toBe(true);
+      } finally {
+        closeTrackedStateDatabase(database);
+      }
+      return checks.count - before;
+    };
+
+    const pathname = createAtSamePath();
+    const provedIdentity = fileIdentity(pathname);
+    expect(admit(pathname)).toBe(1);
+    // Positive control: the proof is a live, reusable receipt, so the full scan asserted below
+    // means the new file was refused the receipt rather than that no receipt existed.
+    expect(admit(pathname)).toBe(0);
+
+    removeAtSamePath(pathname);
+    const replacement = createAtSamePath();
+    expect(replacement).toBe(pathname);
+    if (existsSync(PROC_FD_DIRECTORY)) {
+      // The mechanism itself: the proof owner still holds the proved inode open, which is why the
+      // filesystem could not hand that identity to this new file.
+      expect(descriptorsOnIdentity(provedIdentity)).toBeGreaterThan(0);
+    }
+    expect(fileIdentity(pathname)).not.toBe(provedIdentity);
+    // The security property: a different physical file at the proved path runs the whole check.
+    expect(admit(pathname)).toBe(1);
+    removeAtSamePath(pathname);
   });
 });

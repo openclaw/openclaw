@@ -3,10 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isOpenClawStateSchemaFastPathEligible } from "./openclaw-state-db-fast-path.js";
-import {
-  closeTrackedStateDatabase,
-  openTrackedStateDatabase,
-} from "./openclaw-state-db-handle.js";
+import { closeTrackedStateDatabase, openTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import { clearOpenClawStateIntegrityReceipts } from "./openclaw-state-db-integrity-receipt.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -89,5 +86,28 @@ describe("shared-state integrity receipt names the file the connection opened", 
     } finally {
       closeTrackedStateDatabase(opened);
     }
+  });
+
+  // Positive control for the test above. That one counts full scans to show a receipt was refused,
+  // which a harness that never minted or never honoured a receipt would also satisfy. This one uses
+  // the same helpers on a file nothing renames over and shows a honoured receipt costing 0 checks,
+  // so a refusal there is a real refusal.
+  it("honours its own receipt for a file nothing renamed over", () => {
+    const pathname = createStateDatabase("state-integrity-receipt-rename-over-control-");
+    const checks = countFullIntegrityChecks();
+
+    expect(
+      withTrackedConnection(pathname, (database) =>
+        isOpenClawStateSchemaFastPathEligible(database, pathname),
+      ),
+    ).toBe(true);
+    expect(checks.count).toBe(1);
+
+    expect(
+      withTrackedConnection(pathname, (database) =>
+        isOpenClawStateSchemaFastPathEligible(database, pathname),
+      ),
+    ).toBe(true);
+    expect(checks.count).toBe(1);
   });
 });

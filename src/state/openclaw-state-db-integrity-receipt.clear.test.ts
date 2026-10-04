@@ -3,10 +3,8 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isOpenClawStateSchemaFastPathEligible } from "./openclaw-state-db-fast-path.js";
-import {
-  closeTrackedStateDatabase,
-  openTrackedStateDatabase,
-} from "./openclaw-state-db-handle.js";
+import { closeTrackedStateDatabase, openTrackedStateDatabase } from "./openclaw-state-db-handle.js";
+import { clearOpenClawStateIntegrityReceipts } from "./openclaw-state-db-integrity-receipt.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -16,6 +14,10 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
     vi.restoreAllMocks();
     closeOpenClawStateDatabaseForTest();
+    // Receipts are process-wide and this vitest worker is shared with other test files: free this
+    // file's slots instead of leaking proofs into them. Retained descriptors are never released,
+    // so a clear hands back slots only, never the descriptor budget.
+    clearOpenClawStateIntegrityReceipts();
     cleanup();
   }),
 );
@@ -58,9 +60,6 @@ describe("shared-state integrity receipt fail-closed", () => {
     } finally {
       closeSync(fd);
     }
-    fastPath(first);
-    fastPath(second);
-
     // oxlint-disable-next-line typescript/unbound-method -- Forwarded with its exact database receiver.
     const prepare = DatabaseSync.prototype.prepare;
     let checks = 0;
@@ -73,11 +72,20 @@ describe("shared-state integrity receipt fail-closed", () => {
       }
       return Reflect.apply(prepare, this, [sql]);
     });
+    fastPath(first);
+    fastPath(second);
+    expect(checks).toBe(2);
+    // Positive control: both receipts are honoured by a fresh connection. Without this, a harness
+    // that never minted anything would pass the re-proof count below just as well.
+    fastPath(first);
+    fastPath(second);
+    expect(checks).toBe(2);
+
     expect(() => fastPath(corrupted)).toThrow(/integrity_check|malformed|corrupt/iu);
     // Neither file was replaced or touched: only the fail-closed clear can force these re-proofs.
     fastPath(first);
     fastPath(second);
-    expect(checks).toBe(3);
+    expect(checks).toBe(5);
   });
 
   it("does not let a check that was running when another check failed mint a receipt", () => {

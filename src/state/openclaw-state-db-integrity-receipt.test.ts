@@ -5,10 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { assertExistingOpenClawStateRuntimeSchema } from "./openclaw-state-db-existing-schema.js";
 import { isOpenClawStateSchemaFastPathEligible } from "./openclaw-state-db-fast-path.js";
-import {
-  closeTrackedStateDatabase,
-  openTrackedStateDatabase,
-} from "./openclaw-state-db-handle.js";
+import { closeTrackedStateDatabase, openTrackedStateDatabase } from "./openclaw-state-db-handle.js";
+import { clearOpenClawStateIntegrityReceipts } from "./openclaw-state-db-integrity-receipt.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -18,6 +16,10 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
     vi.restoreAllMocks();
     closeOpenClawStateDatabaseForTest();
+    // Receipts are process-wide and this vitest worker is shared with other test files: free this
+    // file's slots instead of leaking proofs into them. Retained descriptors are never released,
+    // so a clear hands back slots only, never the descriptor budget.
+    clearOpenClawStateIntegrityReceipts();
     cleanup();
   }),
 );
@@ -143,6 +145,11 @@ describe("shared-state full integrity proof reuse", () => {
     withFreshConnection(pathname, (db) => isOpenClawStateSchemaFastPathEligible(db, pathname));
     const checks = countFullIntegrityChecks();
 
+    // Positive control: a receipt really was minted and really is honoured, so the single check
+    // counted after the replacement cannot be a harness that never caches anything.
+    withFreshConnection(pathname, (db) => isOpenClawStateSchemaFastPathEligible(db, pathname));
+    expect(checks.count).toBe(0);
+
     replaceWithCopy(pathname, pathname);
     withFreshConnection(pathname, (db) => isOpenClawStateSchemaFastPathEligible(db, pathname));
 
@@ -185,6 +192,10 @@ describe("shared-state full integrity proof reuse", () => {
     });
     withFreshConnection(pathname, (db) => isOpenClawStateSchemaFastPathEligible(db, pathname));
 
+    expect(checks.count).toBe(2);
+    // Positive control: the second, outermost admission did mint a receipt, so the 2 above counts a
+    // refused nested proof rather than a cache that never fills.
+    withFreshConnection(pathname, (db) => isOpenClawStateSchemaFastPathEligible(db, pathname));
     expect(checks.count).toBe(2);
   });
 });
