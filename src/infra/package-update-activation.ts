@@ -170,8 +170,8 @@ export function readPackageActivationReceipt(installKey: string):
     : { ...receipt, recoveryCommand: `${recoveryCommand(record)} status` };
 }
 
-/** Explicit repair settles obsolete package custody, never pending state restoration. */
-export async function supersedeStalePackageActivation(installKey: string) {
+/** Explicit repair settles untouched preparation or obsolete custody, never pending restoration. */
+export async function settlePendingPackageActivation(installKey: string) {
   const anchor = resolvePackageActivationAnchor(installKey);
   if (!fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
     return undefined;
@@ -192,7 +192,15 @@ export async function supersedeStalePackageActivation(installKey: string) {
     ? "recovery-lease-identity-changed"
     : "superseded-by-manual-install";
   const replacementIdentity = packageActivationIdentity(installKey, true);
+  const publicationNotStarted =
+    !leaseIdentityChanged &&
+    replacementIdentity === initial.descriptor.previous.identity &&
+    ((initial.phase === "prepared" &&
+      initial.intent === null &&
+      initial.publications.length === 0) ||
+      initial.phase === "aborted");
   if (
+    !publicationNotStarted &&
     !leaseIdentityChanged &&
     [initial.descriptor.previous.identity, initial.descriptor.candidate.identity].includes(
       replacementIdentity,
@@ -210,6 +218,27 @@ export async function supersedeStalePackageActivation(installKey: string) {
       journal.assertCurrent(initial);
       if (packageActivationIdentity(installKey, true) !== replacementIdentity) {
         throw new Error("The installed package changed before recovery settlement.");
+      }
+      if (publicationNotStarted) {
+        const assertPrevious = () => {
+          fence.assertCurrent();
+          if (
+            packageActivationIdentity(installKey, true) !== initial.descriptor.previous.identity
+          ) {
+            throw new Error("The installed package changed before preparation retirement.");
+          }
+        };
+        const owner = createPublicationOwner(anchor, journal, assertPrevious, initial);
+        if (initial.phase === "prepared") {
+          await owner.preflight("repair");
+          await owner.disarmRollback();
+        }
+        await owner.retire();
+        return {
+          operationId: initial.descriptor.operationId,
+          reason: "publication-not-started",
+          retained: undefined,
+        };
       }
       const retained = await supersedePackageActivationCustody(
         anchor,
