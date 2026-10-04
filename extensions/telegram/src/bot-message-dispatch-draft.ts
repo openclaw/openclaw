@@ -18,6 +18,7 @@ import type { TelegramDraftPreview } from "./draft-stream-message.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import type { DraftLaneState, LaneName } from "./lane-delivery-text-deliverer.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
+import { retireTelegramStreamPreviewAcrossAccounts } from "./preview-retirement.js";
 import { splitTelegramReasoningText } from "./reasoning-lane-coordinator.js";
 import { buildTelegramRichMarkdownPlan, TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 import { reportTelegramProviderDelivery } from "./send-outbound.js";
@@ -159,6 +160,27 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
                 ? { messageThreadId: params.context.threadSpec.id }
                 : {}),
               successfulSendThread: params.context.threadSpec,
+            });
+          },
+          onPreviewRetired: (messageId) => {
+            // Telegram never tells sibling bots about the deletion, so every
+            // account's own history cache has to drop the dead preview copy.
+            void (
+              params.telegramDeps.retireTelegramStreamPreviewAcrossAccounts ??
+              retireTelegramStreamPreviewAcrossAccounts
+            )({
+              cfg: params.cfg,
+              chatId: params.context.chatId,
+              messageId,
+            }).catch((error) => {
+              draftLogger.warn(
+                `telegram stream preview history retirement failed: ${String(error)}`,
+                {
+                  lane: laneName,
+                  chatId: params.context.chatId,
+                  threadId: params.context.threadSpec.id,
+                },
+              );
             });
           },
           log: logVerbose,

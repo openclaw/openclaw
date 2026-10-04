@@ -65,6 +65,15 @@ export type TelegramMessageCache = {
     chatId: string | number;
     messageId?: string;
   }) => Promise<TelegramCachedMessageNode | null>;
+  /**
+   * Removes one precisely identified message from the cache (live map and
+   * persisted store). Returns true when an entry was actually retired.
+   */
+  retireMessage: (params: {
+    accountId: string;
+    chatId: string | number;
+    messageId: string | number;
+  }) => Promise<boolean>;
   recentBefore: (params: {
     accountId: string;
     chatId: string | number;
@@ -115,6 +124,7 @@ const TELEGRAM_MESSAGE_CACHE_BUCKETS_KEY = Symbol.for("openclaw.telegram.message
 type TelegramMessageCachePersistentStore = {
   register(key: string, value: PersistedTelegramMessageCacheValue): Promise<void>;
   entries(): Promise<Array<{ key: string; value: unknown }>>;
+  delete?(key: string): Promise<boolean>;
 };
 
 type TelegramMessageCacheRetainedStore = Required<
@@ -440,6 +450,55 @@ export function createTelegramMessageCache(params?: {
     return entry;
   };
 
+  const retireMessage: TelegramMessageCache["retireMessage"] = async ({
+    accountId,
+    chatId,
+    messageId,
+  }) => {
+    await hydrateMessageCacheBucket(bucket, maxMessages, scopeKey, hasRetainedStore);
+    if (usesRetainedHistory(accountId, chatId)) {
+      const id = retainedMessageId(String(messageId));
+      if (!id) {
+        return false;
+      }
+      const store = await openRetainedStore();
+      const key = telegramMessageCacheKey({ scopeKey, accountId, chatId, messageId: id });
+      let observation = await store.observe(key);
+      if (observation.value === undefined) {
+        return false;
+      }
+      for (;;) {
+        const result = await store.compareAndApply(key, observation.comparison, {
+          operation: "delete",
+          action: "delete",
+        });
+        if (result.status !== "conflict") {
+          return true;
+        }
+        observation = result.current;
+        if (observation.value === undefined) {
+          // A concurrent retire won the race; the message is gone either way.
+          return false;
+        }
+      }
+    }
+    const key = telegramMessageCacheKey({
+      scopeKey,
+      accountId,
+      chatId,
+      messageId: String(messageId),
+    });
+    const removed = messages.delete(key);
+    if (removed && bucket.persistentStore?.delete) {
+      try {
+        await bucket.persistentStore.delete(key);
+      } catch (error) {
+        logVerbose(`telegram: failed to retire persisted message cache entry: ${String(error)}`);
+      }
+    }
+    return removed;
+  };
+
   const readNodes = async (options: {
     accountId: string;
     chatId: string | number;
@@ -641,6 +700,7 @@ export function createTelegramMessageCache(params?: {
       });
     },
     get,
+    retireMessage,
     recentBefore: async ({ accountId, chatId, messageId, threadId, limit }) => {
       const targetId = parseStrictPositiveInteger(messageId);
       return targetId === undefined
