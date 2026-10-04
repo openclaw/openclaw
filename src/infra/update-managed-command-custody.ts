@@ -44,7 +44,7 @@ export function createManagedCommandProcessCustody(options: {
   prepareSettlement: (
     helperPid: number,
     identities: readonly CommandProcessIdentity[],
-  ) => () => void;
+  ) => { retire: () => void; diagnostics: string[] };
 } {
   const roots = [...new Set(options.roots)];
   if (!roots.length || roots.some((root) => !root || root.endsWith("/"))) {
@@ -174,17 +174,25 @@ export function createManagedCommandProcessCustody(options: {
       }
       const observed = store.readCommandChildren(roots);
       const leases: ManagedHandoffLease[] = [];
+      const foreignCustody = new Set<string>();
       const aliases = new Map<
         number,
         { name: string; helper: string; birth: string; roots: Set<string> }
       >();
       for (const lease of observed) {
+        const identity = expected.get(lease.executor.pid);
+        // Installation roots are shared; another helper cannot settle this Doctor's receipt.
+        if (lease.helper.pid !== helperPid && !identity) {
+          foreignCustody.add(
+            `Native command PID ${lease.executor.pid}: foreign custody, owned by Doctor ${lease.helper.pid}. Installation replacement remains blocked while that custody is live.`,
+          );
+          continue;
+        }
         if (lease.owner !== options.runId || lease.helper.pid !== helperPid) {
           throw new Error(
             `Native command custody for PID ${lease.executor.pid} belongs to another Doctor`,
           );
         }
-        const identity = expected.get(lease.executor.pid);
         const namespace = roots.find((root) => {
           const prefix = `${root}/`;
           return (
@@ -234,13 +242,16 @@ export function createManagedCommandProcessCustody(options: {
           throw new Error(`Native command aliases are incomplete for PID ${identity.pid}`);
         }
       }
-      return () => {
-        if (leases.length && !store.releaseAll(leases)) {
-          throw new Error(
-            `Native command retirement changed for PIDs ${identities.map(({ pid }) => pid).join(", ")}`,
-          );
-        }
-        releaseAnchors(ownedAnchors);
+      return {
+        diagnostics: [...foreignCustody],
+        retire() {
+          if (leases.length && !store.releaseAll(leases)) {
+            throw new Error(
+              `Native command retirement changed for PIDs ${identities.map(({ pid }) => pid).join(", ")}`,
+            );
+          }
+          releaseAnchors(ownedAnchors);
+        },
       };
     },
   };

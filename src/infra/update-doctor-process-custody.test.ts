@@ -1,3 +1,5 @@
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -124,6 +126,89 @@ it.skipIf(process.platform === "win32").each(["reservation-before-ipc", "retired
     } finally {
       reservation?.settled();
       doctorNative.releaseAnchors();
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "settles an exited Doctor's empty receipt while foreign live custody still blocks replacement",
+  async () => {
+    const root = directories.make("doctor-foreign-custody-");
+    const roots = [root, path.join(root, "candidate")];
+    const resultPath = path.join(root, "doctor-result.json");
+    const peer = nativeCustody.createManagedCommandProcessCustody({
+      roots,
+      runId: "doctor-b",
+      databasePath: path.join(root, "handoffs.sqlite"),
+    });
+    const parent = createUpdateDoctorProcessCustody("doctor-a", root, resultPath, {
+      roots,
+      databaseIdentity: peer.databaseIdentity,
+    });
+    const doctor = spawnSync(process.execPath, [
+      "-e",
+      "const fs = require('node:fs'); const file = process.argv[1]; " +
+        "const receipt = JSON.parse(fs.readFileSync(file, 'utf8')); " +
+        "receipt.pid = process.pid; fs.writeFileSync(file, JSON.stringify(receipt));",
+      `${resultPath}.processes`,
+    ]);
+    expect(doctor.error).toBeUndefined();
+    expect(doctor.status).toBe(0);
+    expect(JSON.parse(fs.readFileSync(`${resultPath}.processes`, "utf8"))).toMatchObject({
+      pid: doctor.pid,
+      slots: [],
+    });
+    const argv = [process.execPath, "-e", "process.stdin.resume()"];
+    const reservation = peer.custody.reserve(argv);
+    const writer = spawn(process.execPath, argv.slice(1), {
+      detached: true,
+      stdio: ["pipe", "ignore", "ignore"],
+    });
+    const closed = once(writer, "close");
+    const store = createManagedHandoffLeaseStore({
+      databasePath: peer.databasePath,
+      existingIdentity: peer.databaseIdentity,
+      serviceManagerEnv: {},
+    });
+    try {
+      await once(writer, "spawn");
+      if (!writer.pid) {
+        throw new Error("Missing peer command PID");
+      }
+      reservation.spawned({ pid: writer.pid, startedAt: null });
+      const claims = store.readCommandChildren(roots);
+      expect(claims).toHaveLength(roots.length);
+      const settlement = await parent.settle({
+        pid: doctor.pid,
+        code: 0,
+        cleanup: "normal",
+        termination: "exit",
+      });
+      expect(settlement, settlement?.stderrTail ?? undefined).toMatchObject({
+        exitCode: 0,
+        diagnostics: [expect.stringContaining(`foreign custody, owned by Doctor ${process.pid}`)],
+      });
+      expect(settlement?.advisory).toBeUndefined();
+      parent.close();
+      expect(fs.existsSync(`${resultPath}.processes`)).toBe(false);
+      expect(groups.isChildProcessTreeAlive({ pid: writer.pid })).toBe(true);
+      expect(store.readCommandChildren(roots)).toEqual(claims);
+      for (const installRoot of roots) {
+        expect(store.acquire(installRoot, "replacement", { kind: "update" }).kind).toBe("busy");
+      }
+    } finally {
+      writer.stdin?.end();
+      await closed;
+      reservation.settled();
+      peer.releaseAnchors();
+      parent.close();
+    }
+    for (const installRoot of roots) {
+      const replacement = store.acquire(installRoot, "replacement", { kind: "update" });
+      expect(replacement.kind).toBe("acquired");
+      if (replacement.kind === "acquired") {
+        expect(store.release(replacement.lease)).toBe(true);
+      }
     }
   },
 );
