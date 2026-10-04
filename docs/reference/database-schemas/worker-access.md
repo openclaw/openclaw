@@ -1146,6 +1146,12 @@ Per-turn restart admission, runtime selection, and initial placement routing rea
 through the existing placement projection. Reads retain the original physical
 store; admission and initial routing also retain a revocable placement observation
 until their caller consumes the facts.
+If a placement publication overlaps read preparation, the owner joins its
+settlement and reads fresh facts from the same physical store. A preceding turn
+finishing or setup advancing cannot reject the next turn merely by superseding
+that read. Only read preparation repeats; consumer effects and writes never do.
+Unknown publication outcomes, cancellation, and store replacement still refuse
+the read, and an observation already handed to its consumer remains revocable.
 Chat admission reruns its session, reservation, and caller checks after preparation;
 reply admission rechecks its session and lifecycle after the worker read. Runtime
 selection is a prepared default that tolerates setup and preceding-turn publications;
