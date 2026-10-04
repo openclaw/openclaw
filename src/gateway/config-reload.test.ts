@@ -2235,6 +2235,7 @@ describe("startGatewayConfigReloader", () => {
   });
 
   it("prepares a superseding config against the env owner committed at the runtime edge", async () => {
+    const { clock, scheduler } = createConfigReloadTestClock();
     const envKey = "OPENCLAW_TEST_COMMITTED_ENV_SOURCE";
     const targetEnv: NodeJS.ProcessEnv = { [envKey]: "old" };
     const initialConfig = {
@@ -2254,6 +2255,7 @@ describe("startGatewayConfigReloader", () => {
     } satisfies OpenClawConfig;
     const preparedEnvValues: Array<string | undefined> = [];
     const harness = createWriteReloaderHarness({
+      scheduler,
       initialConfig,
       prepareConfigCandidate: async ({ runtimeConfig, sourceConfig, previousSourceConfig }) => ({
         runtimeConfig,
@@ -2272,23 +2274,17 @@ describe("startGatewayConfigReloader", () => {
         ownership.publishRuntimeEnv();
         ownership.markRuntimeCommitted(nextConfig, plan);
         if (nextConfig === configA) {
-          emitWrite(configB, "env-b", 2);
+          harness.emitWrite(makeWrite(configB, "env-b", { revision: 2 }));
         }
         return "applied";
       },
     });
     await harness.reloader.ready;
-    const emitWrite = (config: OpenClawConfig, hash: string, revision: number) => {
-      harness.emitWrite(
-        makeWrite(config, hash, {
-          snapshot: makeSnapshot({ config, hash }),
-          revision,
-        }),
-      );
-    };
 
-    emitWrite(configA, "env-a", 1);
-    await flushReload(harness.reloader);
+    harness.emitWrite(makeWrite(configA, "env-a", { revision: 1 }));
+    // The superseding write runs after the committed owner releases its reload pass.
+    await clock.advanceBy(0);
+    await clock.advanceBy(0);
 
     expect(preparedEnvValues).toEqual(["a", "b"]);
     expect(targetEnv[envKey]).toBe("b");
