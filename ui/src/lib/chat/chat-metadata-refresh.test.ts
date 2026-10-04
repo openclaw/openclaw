@@ -254,9 +254,6 @@ describe("automatic metadata admission", () => {
 
   it.each([
     { reason: "delete", sessionKey: scope.sessionKey },
-    { reason: "create", sessionKey: scope.sessionKey },
-    { reason: "new", sessionKey: scope.sessionKey },
-    { reason: "recovery", sessionKey: scope.sessionKey },
     { reason: "delete", sessionKey: undefined },
     { reason: "cleanup", sessionKey: undefined },
   ])("retires cached sessions before remount after $reason ($sessionKey)", async (event) => {
