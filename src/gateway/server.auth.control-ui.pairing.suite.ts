@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { expect, test } from "vitest";
 import type { WebSocket } from "ws";
 import {
@@ -123,16 +124,20 @@ export function registerControlUiPairingSuite(): void {
         expect((await connectBrowser(first.identityPath)).response.ok).toBe(true);
 
         const supersededMessages: string[] = [];
-        unrelated.socket.on("message", (message) => supersededMessages.push(String(message)));
-        const supersededClosed = new Promise<number>((resolve) =>
-          unrelated.socket.once("close", resolve),
+        unrelated.socket.on("message", (message) =>
+          supersededMessages.push(rawDataToString(message)),
         );
+        const supersededClosed = new Promise<number>((resolve) => {
+          unrelated.socket.once("close", resolve);
+        });
         const upgraded = await connectBrowser(second.identityPath);
         expect(await supersededClosed).toBe(1008);
         expect(supersededMessages).toEqual([]);
         expect(upgraded.response.error?.details).toMatchObject({ waitForResolution: true });
 
-        const closed = new Promise<number>((resolve) => upgraded.socket.once("close", resolve));
+        const closed = new Promise<number>((resolve) => {
+          upgraded.socket.once("close", resolve);
+        });
         upgraded.socket.send(
           JSON.stringify({
             type: "req",
