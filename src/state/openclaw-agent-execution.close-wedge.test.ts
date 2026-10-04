@@ -222,6 +222,39 @@ it.each([
   await retry.release();
 });
 
+it("reopens a native generation lost between operations before dispatch", async () => {
+  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-native-preflight-")) };
+  const execution = captureOpenClawAgentDatabaseExecution({ agentId: "first", env });
+  await execution.prepare(source);
+  expect(
+    await execution.runExisting(source, (scope) =>
+      scope.execute({ type: "session.entry.read", input: { sessionKey: "healthy" } }),
+    ),
+  ).toBeUndefined();
+  const claim = execution.captureGenerationClaim();
+  expect(() => claim.assertCurrent()).not.toThrow();
+
+  const agentWorker = [...fault.workers].at(-1);
+  expect(agentWorker).toBeDefined();
+  await agentWorker!.terminate();
+  expect(() => claim.assertCurrent()).toThrow("Agent database execution lost its native owner");
+
+  let dispatched = 0;
+  expect(
+    await execution.runExisting(source, (scope) => {
+      dispatched += 1;
+      return scope.execute({ type: "session.entry.read", input: { sessionKey: "recovered" } });
+    }),
+  ).toBeUndefined();
+  expect(dispatched).toBe(1);
+  expect(
+    await execution.runExisting(source, (scope) =>
+      scope.execute({ type: "session.entry.read", input: { sessionKey: "still-healthy" } }),
+    ),
+  ).toBeUndefined();
+  await execution.release();
+});
+
 it("surfaces the native cleanup cause while the close still fails, then recovers once it clears", async () => {
   const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-close-wedge-scope-")) };
   const first = captureOpenClawAgentDatabaseExecution({ agentId: "first", env });

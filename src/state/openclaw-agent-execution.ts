@@ -290,13 +290,12 @@ function createAgentDatabaseExecution(
       await nativeClosing;
       assertCallerCurrent();
     }
-    if (cleanupFailure) {
-      // A transient lifecycle refusal must not poison every later borrower.
-      // Retire the original generation before admitting any replacement work.
-      await closeNative();
+    if (cleanupFailure || generation?.failed()) {
+      await closeNative(cleanupFailure ? undefined : generation);
       assertCurrent();
       source.assertCurrent();
       assertCallerCurrent();
+      signal?.throwIfAborted();
     }
     if (!generation) {
       for (let idle = executionState.idle; idle && idle !== owner; idle = executionState.idle) {
