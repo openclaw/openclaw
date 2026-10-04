@@ -1,32 +1,49 @@
-// mcp.reloadRuntimes disposes the Gateway process's cached session MCP runtimes
-// so the CLI's `mcp reload` can invalidate the cross-process cache (#164642).
+// mcp.reloadRuntimes runs the Gateway's lease-preserving MCP config reload and
+// revalidates the caller's mutation authority immediately before it (#164642).
 import { describe, expect, it, vi } from "vitest";
 import * as managerApi from "../../agents/agent-bundle-mcp-manager-api.js";
 import { mcpAppHandlers } from "./mcp-app.js";
 
-function stubResponder() {
-  return vi.fn();
+function handlerOptions() {
+  const respond = vi.fn();
+  const hasCurrentClientAuthority = vi.fn(() => true);
+  const options = {
+    request: { method: "mcp.reloadRuntimes", params: {} },
+    params: {},
+    respond,
+    client: {},
+    hasCurrentClientAuthority,
+    context: { getRuntimeConfig: () => ({}) },
+  } as unknown as Parameters<(typeof mcpAppHandlers)["mcp.reloadRuntimes"]>[0];
+  return { options, respond, hasCurrentClientAuthority };
 }
 
 describe("mcp.reloadRuntimes", () => {
-  it("disposes all session MCP runtimes and acknowledges", async () => {
-    const disposeSpy = vi
-      .spyOn(managerApi, "disposeAllSessionMcpRuntimes")
-      .mockResolvedValue(undefined);
-    const respond = stubResponder();
+  it("reloads runtimes and revalidates the caller authority", async () => {
+    const reloadSpy = vi.spyOn(managerApi, "reloadSessionMcpRuntimes").mockResolvedValue(undefined);
+    const { options, hasCurrentClientAuthority } = handlerOptions();
+    const respond = options.respond;
     const handler = mcpAppHandlers["mcp.reloadRuntimes"];
     expect(handler).toBeDefined();
 
-    await handler({
-      request: { method: "mcp.reloadRuntimes", params: {} },
-      params: {},
-      respond: respond as unknown as Parameters<typeof handler>[0]["respond"],
-      client: {} as never,
-      context: {} as never,
-    } as unknown as Parameters<typeof handler>[0]);
+    await handler(options);
 
-    expect(disposeSpy).toHaveBeenCalledTimes(1);
-    expect(respond).toHaveBeenCalledWith(true, { ok: true });
-    disposeSpy.mockRestore();
+    expect(hasCurrentClientAuthority).toHaveBeenCalled();
+    expect(reloadSpy).toHaveBeenCalledTimes(1);
+    expect(reloadSpy.mock.calls[0]?.[0]).toMatchObject({ reloadPlugins: false });
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, reloaded: true });
+    reloadSpy.mockRestore();
+  });
+
+  it("reports reload failures instead of acknowledging them", async () => {
+    vi.spyOn(managerApi, "reloadSessionMcpRuntimes").mockRejectedValue(new Error("reload boom"));
+    const { options, respond } = handlerOptions();
+    const handler = mcpAppHandlers["mcp.reloadRuntimes"];
+
+    await handler(options);
+
+    expect(respond.mock.calls[0]?.[0]).toBe(false);
+    expect(String(respond.mock.calls[0]?.[2])).toContain("reload boom");
+    vi.restoreAllMocks();
   });
 });

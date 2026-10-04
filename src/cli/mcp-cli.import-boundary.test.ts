@@ -118,7 +118,7 @@ it("keeps MCP client and catalog paths free of plugin tool construction and chan
       });
     `,
   );
-  expect(stdout).toContain("Disposed cached MCP runtimes.");
+  expect(stdout).toContain("Disposed cached CLI-local MCP runtimes.");
 });
 
 it("keeps registry reads independent of agent tool materialization", async () => {

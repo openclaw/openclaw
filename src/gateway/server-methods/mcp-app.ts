@@ -3,7 +3,7 @@ import {
   errorShape,
   GatewayErrorDetailCodes,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { disposeAllSessionMcpRuntimes } from "../../agents/agent-bundle-mcp-manager-api.js";
+import { reloadSessionMcpRuntimes } from "../../agents/agent-bundle-mcp-manager-api.js";
 import { updateMcpAppModelContext } from "../../agents/mcp-app-model-context.js";
 import { buildMcpAppSandboxPath } from "../../agents/mcp-app-sandbox.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -20,6 +20,7 @@ import {
 import { createMcpAppStandaloneTicket } from "../mcp-app-standalone.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 
 function requireString(params: Record<string, unknown>, key: string): string {
@@ -93,13 +94,21 @@ async function handle(
 }
 
 export const mcpAppHandlers: GatewayRequestHandlers = {
-  "mcp.reloadRuntimes": async ({ respond }) => {
+  "mcp.reloadRuntimes": async (options) => {
+    const { respond, context } = options;
+    // The Gateway's own config-reload path is lease-preserving: admitted calls
+    // keep their runtimes and only stale ones rebuild on the next turn. The
+    // shutdown-grade dispose used here previously aborted in-flight requests
+    // and closed healthy transports (#164642 Rev 3).
+    const authority = readGatewayRequestMutationAuthority(options);
     await handle(respond, async () => {
-      // The Gateway process owns its own cached session MCP runtimes; the CLI's
-      // `mcp reload` can only dispose CLI-local ones, so it dispatches here to
-      // invalidate the Gateway side across the process boundary (#164642).
-      await disposeAllSessionMcpRuntimes();
-      return { ok: true };
+      const cfg = context.getRuntimeConfig();
+      // Revalidate the caller's mutation authority immediately before the
+      // side effect: the reload waits behind acquisition chains, and a caller
+      // revoked during that wait must not trigger it (#164642 Rev 3).
+      authority.assertCurrent();
+      await reloadSessionMcpRuntimes({ cfg, reloadPlugins: false });
+      return { ok: true, reloaded: true };
     });
   },
   "mcp.app.view": async ({ respond, params, context, client }) => {

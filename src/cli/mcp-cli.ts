@@ -1373,7 +1373,7 @@ export function registerMcpCli(program: Command) {
     .command("reload")
     .description("Dispose cached MCP runtimes so new config is used on the next turn")
     .action(async () => {
-      let gatewayDisposed = false;
+      let gatewayReloaded = false;
       let gatewayError: string | undefined;
       try {
         // The Gateway process owns its own cached session MCP runtimes; the
@@ -1383,20 +1383,20 @@ export function registerMcpCli(program: Command) {
           params: {},
           timeoutMs: 10_000,
         });
-        gatewayDisposed = true;
+        gatewayReloaded = true;
       } catch (err) {
         gatewayError = err instanceof Error ? err.message : String(err);
       }
       await disposeAllSessionMcpRuntimes();
-      if (gatewayDisposed) {
+      if (gatewayReloaded) {
         defaultRuntime.log(
-          "Disposed cached MCP runtimes (Gateway + CLI). Active agents use new MCP config on their next runtime build.",
+          "Reloaded MCP runtimes (Gateway + CLI). Active agents use new MCP config on their next runtime build.",
         );
       } else {
         defaultRuntime.log(
           gatewayError
-            ? `Disposed cached MCP runtimes (CLI only; Gateway dispose failed: ${gatewayError}). Active agents use new MCP config on their next runtime build.`
-            : "Disposed cached MCP runtimes. Active agents use new MCP config on their next runtime build.",
+            ? `Disposed cached CLI-local MCP runtimes. Gateway-side reload was not confirmed (${gatewayError}); active Gateway agents may keep the previous MCP config until the Gateway reloads it.`
+            : "Disposed cached CLI-local MCP runtimes. No Gateway is configured, so CLI-local runtimes were the only cached ones.",
         );
       }
     });
