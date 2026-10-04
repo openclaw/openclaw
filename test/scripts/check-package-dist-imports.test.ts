@@ -318,4 +318,30 @@ describe("check-package-dist-imports", () => {
       expect(result.stderr).toContain(`dist/${file} imports missing dist/${target}`);
     }
   });
+
+  it("ignores import.meta.url probes outside packaged dist", () => {
+    const root = tempDirs.make("openclaw-package-dist-imports-");
+    mkdirSync(join(root, "dist"), { recursive: true });
+    const probes = [
+      "../../openclaw.mjs",
+      "../../scripts/run-node.mjs",
+      "../../dist/entry.js",
+      "../../dist/entry.mjs",
+    ];
+    writeFileSync(
+      join(root, "dist", "index.js"),
+      probes
+        .map(
+          (specifier, index) =>
+            `const candidate${index} = new URL(${JSON.stringify(specifier)}, import.meta.url);`,
+        )
+        .join("\n"),
+      "utf8",
+    );
+
+    const result = spawnSync("node", [CHECK_SCRIPT, root], { encoding: "utf8" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("OpenClaw package dist import closure passed.");
+  });
 });

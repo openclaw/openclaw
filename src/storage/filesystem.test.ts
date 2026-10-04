@@ -111,7 +111,7 @@ describe("filesystem storage provider", () => {
     });
   });
 
-  it.each([3, 10])(
+  it.each([0, 3, 10])(
     "refuses a mismatched declared size of %s before publication",
     async (sizeBytes) => {
       const directory = tempDirs.make("openclaw-storage-filesystem-");

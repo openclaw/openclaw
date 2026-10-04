@@ -368,7 +368,9 @@ describe("staged content guard", () => {
       "foobar foo FOOBAR",
       "[REDACTED] [REDACTED] FOOBAR",
     ],
+    ["longer prefix first", ["foobar", "foo"], "foobar foo FOOBAR", "[REDACTED] [REDACTED] FOOBAR"],
     ["crossing overlaps", ["abc", "bcd"], "abcd", "[REDACTED]"],
+    ["reversed crossing overlaps", ["bcd", "abc"], "abcd", "[REDACTED]"],
     ["self-overlap", ["aba"], "ababa", "[REDACTED]"],
     ["marker literal", ["foo", "REDACTED"], "foo REDACTED", "[REDACTED] [REDACTED]"],
   ])(

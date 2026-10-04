@@ -90,6 +90,7 @@ describe("standing-intent schema admission", () => {
   it.each([
     ["creator column", "ALTER TABLE standing_intents DROP COLUMN creator_sender", "transaction"],
     ["index", "DROP INDEX idx_standing_intents_scope", "later DDL"],
+    ["trigger", "DROP TRIGGER standing_intents_fts_after_update", "later DDL"],
     ["index", "DROP INDEX idx_standing_intents_scope", "inspection"],
   ])("does not cache removal of the %s (%s, %s)", (_name, mutation, phase) => {
     const db = open();

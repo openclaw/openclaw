@@ -205,6 +205,27 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
     },
   );
 
+  it("retires the first-run utility route when a primary becomes configured", async () => {
+    const utility = await projectDefaultInferenceRoute(utilityConfig());
+    const primary = await projectDefaultInferenceRoute(utilityConfig("openai/gpt-5.5"));
+
+    expect(utility.route).toMatchObject({ modelTarget: "utility", model: "tiny" });
+    expect(primary.route).toMatchObject({ model: "gpt-5.5" });
+    expect(primary.route).not.toHaveProperty("modelTarget");
+    expect(sameDefaultInferenceRoute(utility, primary)).toBe(false);
+  });
+
+  it("does not reuse a primary verification for the same model selected as utility", async () => {
+    const config = utilityConfig("local-utility/tiny");
+
+    expect(
+      sameDefaultInferenceRoute(
+        await projectDefaultInferenceRoute(config),
+        await projectDefaultInferenceRoute(config, { modelTarget: "utility" }),
+      ),
+    ).toBe(false);
+  });
+
   it("treats a setup-materialized first-agent roster as inference-route neutral", async () => {
     const withoutRoster: OpenClawConfig = {
       agents: { defaults: { model: "openai/gpt-5.5" } },

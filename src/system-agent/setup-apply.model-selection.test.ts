@@ -58,6 +58,7 @@ describe("applySystemAgentModelSelection", () => {
 
   it.each([
     { targetAgentId: "ops", priorUtility: undefined },
+    { targetAgentId: undefined, priorUtility: "local-utility/old" },
     { targetAgentId: undefined, priorUtility: "" },
     { targetAgentId: undefined, priorUtility: undefined, ownership: "explicit" as const },
   ])("writes a utility selection only to its agent owner: %j", async (scenario) => {

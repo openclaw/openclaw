@@ -275,6 +275,62 @@ it.each(["missing mapping", "extra column", "dependent view", "draft layout"] as
   },
 );
 
+it("checks deployed ownership through indexes across 5000 sessions", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const pathname = state.path("scaled22.sqlite");
+    const db = new DatabaseSync(pathname);
+    try {
+      seedOpenClawAgentSchemaV22(db);
+      seedHistoricalData(db, 22);
+      db.exec(`WITH RECURSIVE sessions(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM sessions WHERE n < 5000)
+        INSERT INTO session_windows(session_id, session_key, created_at, updated_at)
+        SELECT 'scale-' || n, 'agent:main:history', 1, 2 FROM sessions;
+        INSERT INTO session_transcript_fts(text, session_id, message_id)
+        SELECT 'indexed ownership', session_id, session_id FROM session_windows WHERE session_id LIKE 'scale-%';
+        INSERT INTO session_transcript_fts_rows(session_id, fts_rowid)
+        SELECT session_id, rowid FROM session_transcript_fts WHERE session_id LIKE 'scale-%';
+        INSERT INTO session_transcript_index_state(session_id, indexed_seq, needs_rebuild, active_event_count, active_message_count, fts_row_count, updated_at)
+        SELECT session_id, 1, 0, 1, 1, 1, 2 FROM session_windows WHERE session_id LIKE 'scale-%';
+        UPDATE session_transcript_index_state SET fts_row_count = NULL WHERE session_id = 'scale-42';`);
+      const plans: string[] = [];
+      const exec = db.exec.bind(db);
+      const write = vi.spyOn(db, "exec").mockImplementation((sql) => {
+        if (sql.startsWith("UPDATE session_transcript_index_state AS state")) {
+          const update = sql.split(";")[0];
+          for (const row of db.prepare(`EXPLAIN QUERY PLAN ${update}`).all()) {
+            if (typeof row.detail !== "string") {
+              throw new Error("Missing ownership migration query-plan detail");
+            }
+            plans.push(row.detail);
+          }
+        }
+        exec(sql);
+      });
+      await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
+        ensureOpenClawAgentDatabaseSchema(db, { agentId: "main", path: pathname, env: state.env });
+      });
+      write.mockRestore();
+      expect(plans.some((detail) => detail.includes("idx_agent_transcript_fts_rows_session"))).toBe(
+        true,
+      );
+      expect(
+        plans.some((detail) => detail.includes("idx_session_transcript_fts_rows_session_message")),
+      ).toBe(true);
+      expect(plans.some((detail) => detail.includes("INTEGER PRIMARY KEY"))).toBe(true);
+      expect(plans.filter((detail) => /SCAN (old|current)\b/.test(detail))).toEqual([]);
+      expect(
+        db
+          .prepare(
+            "SELECT session_id FROM session_transcript_index_state WHERE session_id LIKE 'scale-%' AND needs_rebuild != 0",
+          )
+          .all(),
+      ).toEqual([{ session_id: "scale-42" }]);
+    } finally {
+      db.close();
+    }
+  });
+});
+
 describe.each([21, 22])("agent schema %s storage cutover", (version) => {
   const seedSchema = version === 21 ? seedOpenClawAgentSchemaV21 : seedOpenClawAgentSchemaV22;
   it("rolls back converted storage when the maintenance scope rejects publication", async () => {
