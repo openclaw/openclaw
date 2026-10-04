@@ -1,0 +1,34 @@
+/**
+ * openclaw.json configuration for MLX ONLY local-first instance.
+ * STRICTLY VALIDATED JSON5
+ *
+ * Target path: ~/.openclaw/openclaw.json
+ *
+ * RUNTIME HARDENING NOTES:
+ * - sysctl iogpu.wired_limit_mb needs to be tuned for your 32g M5 Mac to keep MLX resident 24/7
+ * - Consider creating a launchd plist for MLX and OpenClaw daemon for 24/7 uptime.
+ */
+{
+  "provider": "openai",
+  "openai": {
+    "baseUrl": "http://127.0.0.1:8080/v1",
+    "apiKey": "mlx-local",
+    "model": "local-mlx-model"
+  },
+  "contextWindow": 128000, // Verify your specific MLX model maximum before hardcoding
+  "agents": {
+    "defaults": {
+      "sandbox": {
+        "workspaceAccess": "ro",
+        "browser": {
+          "allowHostControl": false
+        }
+      }
+    }
+  },
+  "tools": {
+    "exec": {
+      "safeBins": ["echo", "cat", "ls", "jq"] // Stdin-only binaries, restrict execution
+    }
+  }
+}
