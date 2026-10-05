@@ -68,7 +68,7 @@ import {
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export function captureSessionEntryReadScope(input: SessionEntryReadScope) {
   const env = cloneEnvWithPlatformSemantics(input.env ?? process.env);

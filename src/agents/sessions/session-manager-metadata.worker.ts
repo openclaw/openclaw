@@ -40,6 +40,7 @@ import type {
   SessionMetadataWorkerOperations,
   SessionMetadataMessageControl,
 } from "../../config/sessions/session-manager-write-contract.js";
+import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { prepareTranscriptPayloadForReuse } from "../../config/sessions/transcript-payload.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
@@ -339,11 +340,7 @@ export function bindSqliteWorkerBackend(
           command.input.view?.admission?.entryId,
         );
         if (mutationAt === undefined) {
-          const error = new Error(
-            `SQLite transcript changed while preparing rewrite for ${scope.sessionId}`,
-          );
-          error.name = "SqliteTranscriptMutationConflictError";
-          throw error;
+          throw new SqliteTranscriptMutationConflictError(scope.sessionId);
         }
         command.input.options.expectedMutationAt = mutationAt;
       }

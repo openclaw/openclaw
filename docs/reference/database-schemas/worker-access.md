@@ -2343,6 +2343,15 @@ before using the result. Caller-owned in-memory recovery keeps its existing
 buffer. Compaction persistence, stored bytes, retention, and update behavior are
 unchanged.
 
+Manual compaction also prepares transcript statistics and current session entries
+through the existing database executor and entry readers. Direct and queued compaction
+prepare harness selection and successor facts through those same owners, then
+recheck caller authority after reading. Legacy successor markers retain their
+stored-key selection, and final writer comparisons remain transaction-local.
+The released synchronous statistics SDK and process-held incognito paths keep
+their existing owners. Schemas, stored bytes, retention, and update behavior are
+unchanged.
+
 SessionManager's awaited persistence family uses its existing SQLite writer
 domain for file-backed transcripts, including user and custom messages,
 `beforeFreshMessageCommit`, metadata, compaction, and branch/leaf mutations.

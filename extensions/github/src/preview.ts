@@ -31,8 +31,7 @@ const CO_AUTHOR_FACE_LIMIT = 3;
 // One line-bounded name scan avoids overlapping whitespace backtracking.
 const CO_AUTHOR_TRAILER =
   /^co-authored-by:[^<\r\n\u2028\u2029]*<(?<id>\d{1,12})\+(?<login>[a-z\d](?:[a-z\d-]{0,38}))@users\.noreply\.github\.com>[^\S\r\n\u2028\u2029]*$/gimu;
-const AUTHENTICATED_SUCCESS_CACHE_MS = 5 * 60_000;
-const ANONYMOUS_SUCCESS_CACHE_MS = 60 * 60_000;
+const SUCCESS_CACHE_MS = 60_000;
 const FAILURE_CACHE_MS = 30_000;
 const CACHE_LIMIT = 200;
 
@@ -181,19 +180,11 @@ function safeAvatarUrl(raw: string | undefined): URL | null {
 
 async function fetchCoAuthors(
   authorLogin: string,
-  loadCommits: () => Promise<unknown>,
+  commits: unknown,
   fetchImpl: typeof fetch,
   signal: AbortSignal,
 ): Promise<{ coAuthors: { login: string; avatarDataUrl?: string }[]; coAuthorCount: number }> {
   const empty = { coAuthors: [], coAuthorCount: 0 };
-  let commits: unknown;
-  try {
-    commits = await loadCommits();
-  } catch {
-    // Co-authors are decoration on an already-useful card, so a failed or
-    // oversized commits page degrades to no faces instead of failing the card.
-    return empty;
-  }
   if (!Array.isArray(commits)) {
     return empty;
   }
@@ -300,7 +291,17 @@ async function fetchPreview(
     : undefined;
   const readItem = async (url: string, maxBytes?: number) =>
     readGitHubJsonResponse(await request(url, beforeRedirect), maxBytes);
-  const parsed = await readItem(itemUrl);
+  // Both item reads use the same public admission and redirect guard. Commits
+  // are optional decoration; their failure must not discard useful metadata.
+  const item = readItem(itemUrl);
+  const commits =
+    target.kind === "pull"
+      ? readItem(
+          `${itemUrl}/commits?per_page=${GITHUB_COMMITS_PAGE_SIZE}`,
+          GITHUB_COMMITS_MAX_BYTES,
+        ).catch(() => undefined)
+      : Promise.resolve(undefined);
+  const parsed = await item;
   if (!isRecord(parsed)) {
     throw new ControlUiGitHubError(502, "GitHub response was not an object");
   }
@@ -308,22 +309,10 @@ async function fetchPreview(
     await assertPublicRepository(previewRepositoryApiUrl(target, parsed));
   }
   const { preview, avatarUrl } = parseControlUiGitHubPreviewResponse(target, parsed);
-  // Both extra fetches run only after the public-repository assertions above,
-  // so neither can widen what this token is allowed to read.
+  // Render only after rechecking the response's public repository.
   const [avatarDataUrl, coAuthorFacts] = await Promise.all([
     fetchAvatarDataUrl(avatarUrl, fetchImpl, signal),
-    target.kind === "pull"
-      ? fetchCoAuthors(
-          preview.login,
-          () =>
-            readItem(
-              `${itemUrl}/commits?per_page=${GITHUB_COMMITS_PAGE_SIZE}`,
-              GITHUB_COMMITS_MAX_BYTES,
-            ),
-          fetchImpl,
-          signal,
-        )
-      : Promise.resolve({ coAuthors: [], coAuthorCount: 0 }),
+    commits.then((value) => fetchCoAuthors(preview.login, value, fetchImpl, signal)),
   ]);
   return {
     ...preview,
@@ -359,11 +348,11 @@ export async function loadControlUiGitHubPreview(
     previewCache.delete(key);
     entry = undefined;
   }
+  const joined = entry !== undefined;
   if (entry) {
     previewCache.delete(key);
     previewCache.set(key, entry);
   } else {
-    const successCacheMs = token ? AUTHENTICATED_SUCCESS_CACHE_MS : ANONYMOUS_SUCCESS_CACHE_MS;
     // One upstream budget includes redirects, optional-auth retries and decoration;
     // a slow avatar or commits page must not add another full request timeout.
     const signal = AbortSignal.timeout(GITHUB_PREVIEW_TIMEOUT_MS);
@@ -374,21 +363,18 @@ export async function loadControlUiGitHubPreview(
             fetchPreview(target, fetchImpl, signal, requestToken, identity),
           );
     const pending: CacheEntry<ControlUiGitHubPreview> = {
-      expiresAt: now + successCacheMs,
+      expiresAt: now + SUCCESS_CACHE_MS,
       promise: request.then(
         (preview) => {
-          if (identity && !previewCache.has(key)) {
-            cachePreview(key, pending);
-          }
+          pending.expiresAt = Date.now() + SUCCESS_CACHE_MS;
           return preview;
         },
         (error: unknown) => {
           // Lifecycle failures belong to this caller; only upstream failures
           // may suppress later requests from other readers of the credential.
-          if (previewCache.get(key) === (identity ? undefined : pending)) {
+          if (previewCache.get(key) === pending) {
             if (error instanceof ControlUiGitHubError) {
               pending.expiresAt = Date.now() + FAILURE_CACHE_MS;
-              cachePreview(key, pending);
             } else {
               previewCache.delete(key);
             }
@@ -398,13 +384,16 @@ export async function loadControlUiGitHubPreview(
       ),
     };
     entry = pending;
-    // A managed in-flight request carries its caller's live identity closure.
-    // Share its settled result, never its transport with another connection.
-    if (!identity) {
-      cachePreview(key, entry);
-    }
+    cachePreview(key, entry);
   }
-  const preview = await entry.promise;
+  const preview = await entry.promise.catch((error: unknown) => {
+    // Only the initiating reader authorizes dispatch. If it loses authority,
+    // followers retry with their own live identity instead of inheriting failure.
+    if (joined && identity && !(error instanceof ControlUiGitHubError)) {
+      return loadControlUiGitHubPreview(target, identity, fetchImpl);
+    }
+    throw error;
+  });
   // Transport is credential-scoped, but every reader must still hold its
   // current identity before cached or newly fetched metadata is delivered.
   await identity?.revalidate();

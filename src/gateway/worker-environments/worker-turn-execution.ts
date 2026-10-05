@@ -377,6 +377,7 @@ export async function executeWorkerTurn(
         const tools = await withPluginRuntimeGenerationScope(preparedRuntime.snapshot, () =>
           params.environments.createGatewayTools?.({
             identity,
+            inheritedToolPolicySource: capabilityProfile.policy.inheritedToolPolicySource,
             skillWorkshop,
             portalAvailable,
             prepareTools: async (adapters) => {

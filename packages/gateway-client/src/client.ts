@@ -599,7 +599,11 @@ export class GatewayClient {
     const ws = this.ws;
     this.ws = null;
     if (ws) {
-      const { promise, resolve } = Promise.withResolvers<void>();
+      // The package declaration build targets ES2023, which has no Promise.withResolvers.
+      let resolve: () => void = () => {};
+      const promise = new Promise<void>((done) => {
+        resolve = done;
+      });
       const pendingStop: PendingStop = { ws, promise, resolve };
       this.pendingStop = pendingStop;
       const forceTerminateTimer = setTimeout(() => {

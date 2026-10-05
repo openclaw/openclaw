@@ -239,7 +239,14 @@ function printStep(step: Omit<UpdateStepResult, "cwd">): void {
       : step.signal
         ? ` — interrupted (${step.signal})`
         : "";
-  defaultRuntime.log(`  ${formatStepStatus(step)} ${step.name}${termination} ${duration}`);
+  const statusIcon = step.advisory
+    ? theme.warn("!")
+    : !isFailedUpdateStep(step)
+      ? theme.success("\u2713")
+      : step.exitCode === null
+        ? theme.warn("?")
+        : theme.error("\u2717");
+  defaultRuntime.log(`  ${statusIcon} ${step.name}${termination} ${duration}`);
   for (const finding of step.doctorLintFindings ?? []) {
     defaultRuntime.log(`    ${formatUpdateDoctorLintFinding(finding)}`);
   }
@@ -270,16 +277,6 @@ function printStep(step: Omit<UpdateStepResult, "cwd">): void {
       }
     }
   }
-}
-
-function formatStepStatus(step: Omit<UpdateStepResult, "cwd">): string {
-  return step.advisory
-    ? theme.warn("!")
-    : !isFailedUpdateStep(step)
-      ? theme.success("\u2713")
-      : step.exitCode === null
-        ? theme.warn("?")
-        : theme.error("\u2717");
 }
 
 export async function printResult(

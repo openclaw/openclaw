@@ -11,6 +11,7 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -41,7 +42,7 @@ const directories = useAutoCleanupTempDirTracker((cleanup) =>
 it.each([
   { phase: "before basis", present: true, suspicious: false, producer: "sync" },
   { phase: "before basis", present: true, suspicious: false, producer: "async" },
-  { phase: "basis dispatched", present: true, suspicious: false, producer: "sync" },
+  { phase: "after basis read", present: true, suspicious: false, producer: "sync" },
   { phase: "before admission", present: true, suspicious: false, producer: "sync" },
   { phase: "after dispatch", present: true, suspicious: false, producer: "sync" },
   { phase: "after dispatch", present: false, suspicious: false, producer: "sync" },
@@ -178,6 +179,17 @@ it.each([
           return result;
         },
       );
+    } else if (phase === "after basis read") {
+      const read = stateReads.executeExistingOpenClawStateRead;
+      vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementation(
+        async (...args) => {
+          const reply = await read(...args);
+          if (!intervened && args[1].type === "config.health.read") {
+            writeNewerObservation();
+          }
+          return reply;
+        },
+      );
     } else {
       const postMessage = vi.spyOn(Worker.prototype, "postMessage");
       Worker.prototype.postMessage = function (this: Worker, ...args) {
@@ -189,10 +201,9 @@ it.each([
         if (
           !intervened &&
           isRecord(command) &&
+          command.type === "config.health.patch" &&
           isRecord(command.input) &&
-          (phase === "basis dispatched"
-            ? command.type === "config.health.read"
-            : command.type === "config.health.patch" && command.input.configPath === configPath)
+          command.input.configPath === configPath
         ) {
           // Hold the ordinary SQLite writer before dispatch. The synchronous observer
           // commits after postMessage, before the worker can admit its write transaction.

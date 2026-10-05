@@ -220,6 +220,24 @@ describe("ManagedWorktreeService branch discovery", () => {
     await git(linked, "switch", "--detach");
     expect((await service.listRepositoryBranches(linked)).headBranch).toBeUndefined();
     expect((await service.listRepositoryBranches(repo)).headBranch).toBe("main");
+
+    const commit = await git(repo, "rev-parse", "HEAD");
+    const refs = path.join(repo, ".git", "refs", "heads", "fleet");
+    await fs.mkdir(refs);
+    await Promise.all(
+      Array.from({ length: 810 }, (_, index) =>
+        fs.writeFile(path.join(refs, String(index).padStart(4, "0")), `${commit}\n`),
+      ),
+    );
+    const fleet = await service.listRepositoryBranches(repo);
+    run.mockClear();
+    expect(await service.listRepositoryBranches(repo)).toEqual(fleet);
+    expect(run).toHaveBeenCalledTimes(1);
+    await fs.unlink(path.join(refs, "0000"));
+    expect((await service.listRepositoryBranches(repo)).branches).not.toContainEqual({
+      name: "fleet/0000",
+      kind: "local",
+    });
   });
 
   it("keeps large repositories usable with bounded suggestions and an explicit unlisted base", async () => {

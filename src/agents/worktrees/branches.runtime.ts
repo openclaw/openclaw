@@ -29,22 +29,21 @@ function branchInventoryRevision(repoRoot: string): string | undefined {
     return undefined;
   }
   try {
-    const stamps: string[] = [];
+    const stamps: [string, string][] = [];
     const stamp = (file: string) => {
       const stat = fsSync.lstatSync(file, { bigint: true, throwIfNoEntry: false });
       if (stat?.isSymbolicLink() || stamps.length >= 1024) {
         throw new Error("Uncacheable ref inventory");
       }
-      stamps.push(
+      stamps.push([
         file,
         stat
           ? `${stat.dev}:${stat.ino}:${stat.mode}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`
           : "missing",
-      );
+      ]);
       return stat;
     };
-    const marker = path.join(repoRoot, ".git");
-    stamp(marker);
+    stamp(path.join(repoRoot, ".git"));
     const directories = readGitMetadataDirectories(repoRoot);
     if (!directories) {
       return undefined;

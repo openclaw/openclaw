@@ -16,6 +16,14 @@ const XAccountSchema = z.object({
   clientSecret: buildSecretInputSchema().optional(),
   refreshToken: buildSecretInputSchema().optional(),
   bearerToken: buildSecretInputSchema().optional(),
+  costLimits: z
+    .object({
+      dailyUsd: z.number().finite().nonnegative().optional(),
+      monthlyUsd: z.number().finite().nonnegative().optional(),
+      cycleStartDay: z.number().int().min(1).max(28).optional(),
+    })
+    .strict()
+    .optional(),
   events: z
     .object({
       mode: z.enum(["auto", "stream", "poll"]).optional(),
