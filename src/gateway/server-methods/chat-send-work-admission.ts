@@ -8,7 +8,10 @@ import {
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
 import type { registerChatAbortController } from "../chat-abort.js";
-import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
+import {
+  authorizeGatewayUnpreparedSessionCreation,
+  resolveCreatorSandbox,
+} from "../operator-role-policy.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
@@ -186,7 +189,7 @@ export function createChatSendGoalCommitGuard(
       ) {
         throw new Error("Session routing changed before Goal admission; refresh and retry.");
       }
-      const creationError = authorizeGatewaySessionCreation({
+      const creationError = authorizeGatewayUnpreparedSessionCreation({
         cfg: currentConfig,
         client,
         agentId: session.agentId,

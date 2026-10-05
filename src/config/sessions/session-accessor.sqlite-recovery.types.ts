@@ -29,6 +29,8 @@ export type RestartTombstoneRecoveryParams = {
     sessionId: string;
   };
   commitGuard?: () => void;
+  /** Synchronous, non-throwing observer of the native successor commit, before publication. */
+  onCommitted?: () => void;
   sourceTarget: { canonicalKey: string; storeKeys: readonly string[] };
   storePath: string;
   successorEntry: InternalSessionEntry & { sessionId: string };
@@ -37,5 +39,5 @@ export type RestartTombstoneRecoveryParams = {
 
 export type RestartTombstoneRecoveryInput = Omit<
   RestartTombstoneRecoveryParams,
-  "commitGuard" | "storePath"
+  "commitGuard" | "onCommitted" | "storePath"
 >;

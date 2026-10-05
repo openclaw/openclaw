@@ -6,7 +6,7 @@ import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  authorizeGatewaySessionCreation,
+  authorizeGatewayUnpreparedSessionCreation,
   resolveSandboxedSessionCreation,
 } from "./operator-role-policy.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
@@ -45,7 +45,11 @@ export function prepareGatewayOperatorSessionRun(params: {
             client,
             target: { agentId: params.agentId, canonicalKey: params.sessionKey, entry },
           })
-        : authorizeGatewaySessionCreation({ cfg: params.cfg, client, agentId: params.agentId });
+        : authorizeGatewayUnpreparedSessionCreation({
+            cfg: params.cfg,
+            client,
+            agentId: params.agentId,
+          });
       if (error) {
         throw new ToolAuthorizationError(error.message);
       }

@@ -101,6 +101,7 @@ function prepareRunRolePolicy(
     ? {
         sessionAccessCap: role.sessions.others,
         sandboxRequired: role.sandbox === "required",
+        workspace: role.sessions.workspace,
         agents: role.agents,
       }
     : undefined;

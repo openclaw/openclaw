@@ -64,7 +64,11 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
+import {
+  authorizeGatewaySessionCreation,
+  resolveCreatorSandbox,
+  resolveOperatorRolePolicyForProfile,
+} from "./operator-role-policy.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import {
   prepareSessionCreateFilesystemRoot,
@@ -115,6 +119,11 @@ import {
   resolveGatewaySessionStoreTarget,
 } from "./session-utils.js";
 import { resolveSessionWorkerPlacementContext } from "./session-worker-placement-context.js";
+import {
+  prepareRequiredSessionWorkspace,
+  resolveRequiredSessionWorkspace,
+  REQUIRED_WORKSPACE_MESSAGE,
+} from "./session-workspace-policy.js";
 import { projectSessionsPatchEntry } from "./sessions-patch.js";
 
 const loadSessionLifecycleRuntime = createLazyRuntimeModule(
@@ -172,7 +181,7 @@ export async function createGatewaySession(
   const label = normalizeOptionalString(params.label);
   const requestedKey = normalizeOptionalString(params.key);
   const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
-  const projectId = normalizeOptionalString(params.projectId);
+  let projectId = normalizeOptionalString(params.projectId);
   const pendingProjectGitUrl = normalizeOptionalString(params.pendingProjectGitUrl);
   const requestedToolOverrides = params.toolOverrides !== undefined;
   const selectedAgent = resolveRequestedSessionAgentId(
@@ -418,6 +427,15 @@ export async function createGatewaySession(
     params.emitCommandHooks === true &&
     !requestedKey &&
     params.resetMainWhenUnspecified === true &&
+    !operatorAuthority?.rolePolicy?.workspace &&
+    !(
+      params.operatorRoleActor?.kind !== "system" &&
+      resolveOperatorRolePolicyForProfile(
+        params.operatorRoleActor?.profileId ?? params.requestingOperatorProfileId,
+        params.cfg,
+      )?.sessions.workspace
+    ) &&
+    !parentSessionEntry?.requiredWorkspace &&
     !requestedToolOverrides &&
     !parentIncognito &&
     // Catalog targets need a fresh locked row; resetting main would return before
@@ -610,6 +628,41 @@ export async function createGatewaySession(
       creation?.sandbox ?? (creation ? resolveCreatorSandbox(params.cfg, creation) : undefined);
     const sandboxRequired =
       currentTargetEntry?.sandbox === "required" || creationSandbox === "required";
+    const roleWorkspace =
+      operatorAuthority?.rolePolicy?.workspace ??
+      (params.operatorRoleActor?.kind === "system"
+        ? undefined
+        : resolveOperatorRolePolicyForProfile(
+            params.operatorRoleActor?.profileId ?? params.requestingOperatorProfileId,
+            params.getCurrentConfig?.() ?? params.cfg,
+          )?.sessions.workspace);
+    const workspaceRequirement = resolveRequiredSessionWorkspace({
+      policy: roleWorkspace,
+      inherited:
+        currentTargetEntry?.requiredWorkspace ??
+        creation?.requiredWorkspace ??
+        (params.fork ? currentParentSessionEntry?.requiredWorkspace : undefined),
+      projectId,
+    });
+    if (!workspaceRequirement.ok) {
+      return workspaceRequirement;
+    }
+    const requiredWorkspace = workspaceRequirement.value;
+    if (requiredWorkspace) {
+      if (
+        (currentTargetEntry && !currentTargetEntry.requiredWorkspace) ||
+        params.execNode ||
+        params.pendingProjectGitUrl ||
+        params.pendingWorktree ||
+        params.catalogTarget ||
+        params.incognito ||
+        params.spawnedCwd ||
+        params.sessionRoot
+      ) {
+        return { ok: false, error: errorShape(ErrorCodes.FORBIDDEN, REQUIRED_WORKSPACE_MESSAGE) };
+      }
+      projectId = requiredWorkspace.projectId;
+    }
     const forkWorkspace =
       params.fork === true &&
       currentParentSessionEntry &&
@@ -667,8 +720,20 @@ export async function createGatewaySession(
     validateRuntimeSelection = modelSelection.validate;
     commitGuard?.();
     onPhase?.("worktree");
-    const preparationResult = params.prepareLifecycle
-      ? await params.prepareLifecycle({
+    const prepareLifecycle =
+      requiredWorkspace && !currentTargetEntry
+        ? prepareRequiredSessionWorkspace({
+            cfg: params.cfg,
+            required: requiredWorkspace,
+            getCurrentConfig: params.getCurrentConfig ?? (() => params.cfg),
+            assertCurrent: () => commitGuard?.(),
+            signal: operatorAuthority?.signal,
+          })
+        : requiredWorkspace
+          ? undefined
+          : params.prepareLifecycle;
+    const preparationResult = prepareLifecycle
+      ? await prepareLifecycle({
           agentId: target.agentId,
           entry: currentTargetEntry,
           key: target.canonicalKey,
@@ -898,12 +963,18 @@ export async function createGatewaySession(
           // must not restamp write-once node facts (this direct store write bypasses
           // the merge-level write-once guard), and legacy rows stay "unknown".
           ...(creation && createdNewEntry
-            ? buildSessionCreationStamp({ ...creation, sandbox: creationSandbox, incognito })
+            ? buildSessionCreationStamp({
+                ...creation,
+                sandbox: creationSandbox,
+                requiredWorkspace,
+                incognito,
+              })
             : {}),
           ...(createdNewEntry && inheritedSpawnOwner ? { owner: inheritedSpawnOwner } : {}),
           ...(visibility.value && createdNewEntry ? { visibility: visibility.value } : {}),
           ...projectPreparedSessionWorkspace(existingEntry, {
             projectId,
+            requiredWorkspace,
             pendingProjectGitUrl,
             pendingWorktree,
             spawnedCwd,

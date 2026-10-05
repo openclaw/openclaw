@@ -155,6 +155,12 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     'Access to other people\'s sessions: "none" hides them, "view" allows reading, "suggest" permits the suggestion flow, and "write" permits participation. Explicit session membership can grant additional access.',
   "gateway.roles.definitions.*.sandbox":
     'Execution isolation for newly created sessions: "inherit" (default) uses the agent policy; "required" permanently requires a sandbox, even when the agent sandbox mode is off, and fails closed if the backend is unavailable.',
+  "gateway.roles.definitions.*.sessions.workspace":
+    "Require selection of an authorized project and a fresh managed worktree before creating a thread. The selected project and checkout remain bound to that thread across role changes and resets. Omitted preserves existing workspace behavior.",
+  "gateway.roles.definitions.*.sessions.workspace.projects":
+    "Project registry IDs available for new threads, including workspace:<agentId> aliases. An empty list disables new thread creation; it never falls back to an agent directory or host path.",
+  "gateway.roles.definitions.*.sessions.workspace.worktreeBaseRef":
+    "Required base ref for each new thread worktree, for example main. The Gateway pins its resolved commit during allocation and rejects unavailable refs without falling back to HEAD.",
   "gateway.roles.definitions.*.agents":
     'Agents available when this role creates sessions or starts runs: set "*" to allow every agent, list agent IDs to allow only those agents, or use an empty list to disable both.',
   "gateway.roles.definitions.*.modelPolicy":

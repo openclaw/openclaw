@@ -47,6 +47,51 @@ function withProjectState(run: (state: OpenClawTestState) => Promise<void>) {
   return withOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" }, run);
 }
 
+test("workspace-required discovery returns only approved descriptors, including an empty policy", async () => {
+  await withProjectState(async (state) => {
+    const repo = await initializeRepository(state.root);
+    const project = await registerProjectRegistry({ path: repo });
+    const profile = ensureProfileForEmail("workspace-picker@example.test");
+    for (const projects of [[project.id], []]) {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          roles: {
+            default: "contributor",
+            definitions: {
+              contributor: {
+                sessions: { others: "view", workspace: { projects, worktreeBaseRef: "main" } },
+                agents: "*",
+                scopes: ["operator.sessions.read", "operator.sessions.write"],
+              },
+            },
+          },
+        },
+      };
+      const response = await invokeProjectMethod(
+        "projects.list",
+        {},
+        cfg,
+        ["operator.sessions.read"],
+        profile.id,
+      );
+      expect(response).toMatchObject({
+        ok: true,
+        payload: {
+          projects: projects.length
+            ? [{ id: project.id, displayName: project.displayName, source: project.source }]
+            : [],
+          creationPolicy: {
+            workspaceRequired: true,
+            worktreeRequired: true,
+            worktreeBaseRef: "main",
+          },
+        },
+      });
+      expect(JSON.stringify(response?.payload)).not.toContain(repo);
+    }
+  });
+});
+
 test("projects.list coalesces concurrent observed Git discovery and refreshes later reads", async () => {
   await withProjectState(async (state) => {
     const repo = await initializeRepository(state.root);

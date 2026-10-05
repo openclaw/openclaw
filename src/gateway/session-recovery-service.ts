@@ -7,7 +7,6 @@ import {
   type ErrorShape,
   type SessionsRecoverResult,
 } from "../../packages/gateway-protocol/src/index.js";
-import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
 import {
   inspectMainRestartRecoveryRolloverEligibility,
@@ -34,9 +33,17 @@ import { normalizeSessionIdentities } from "../sessions/session-lifecycle-identi
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
-import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
+import {
+  authorizeGatewaySessionCreation,
+  resolveCreatorSandbox,
+  resolveOperatorRolePolicyForProfile,
+} from "./operator-role-policy.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import { buildDashboardSessionKey } from "./session-create-key.js";
+import {
+  commitPreparedSessionWorkspace,
+  projectPreparedSessionWorkspace,
+} from "./session-lifecycle-preparation.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { buildRestartRecoverySuccessorEntry } from "./session-recovery-entry.js";
 import { invalidSessionRequest } from "./session-request-error.js";
@@ -46,6 +53,10 @@ import {
 } from "./session-sharing-preparation.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
+import {
+  prepareRequiredSessionWorkspace,
+  resolveRequiredSessionWorkspace,
+} from "./session-workspace-policy.js";
 import {
   prepareSessionWorkerPlacementMutationCheck,
   prepareSessionWorkerPlacementStop,
@@ -265,6 +276,7 @@ export async function recoverGatewaySession(params: {
   agentId?: string;
   authorizedPluginId?: string;
   cfg: OpenClawConfig;
+  getCurrentConfig?: () => OpenClawConfig;
   commitGuard?: () => void;
   key: string;
   requestingOperatorProfileId?: string;
@@ -472,39 +484,89 @@ export async function recoverGatewaySession(params: {
             assertPlacementCurrent?.();
           };
           commitGuard();
-          const successorEntry = buildRestartRecoverySuccessorEntry({
-            sessionId: successorSessionId,
-            source: currentSource,
-            // Owner attribution keeps the source isolation inherited by actorless recovery.
-            creation: params.actor
-              ? {
-                  actor: params.actor,
-                  sandbox:
-                    params.actor.id === GATEWAY_OWNER_PROFILE_ID
-                      ? currentSource.sandbox
-                      : resolveCreatorSandbox(params.cfg, params),
-                }
-              : inheritSessionCreationPolicy(currentSource),
+          const requirement = resolveRequiredSessionWorkspace({
+            policy:
+              params.operatorRoleActor?.kind === "system"
+                ? undefined
+                : resolveOperatorRolePolicyForProfile(
+                    params.operatorRoleActor?.profileId ?? params.requestingOperatorProfileId,
+                    params.cfg,
+                  )?.sessions.workspace,
+            inherited: currentSource.requiredWorkspace,
+            projectId: currentSource.projectId,
           });
-
-          const result = await recoverSessionEntryFromRestartTombstone({
-            agentId: sourceTarget.agentId,
-            ...(params.actor ? { archivedBy: params.actor } : {}),
-            commitGuard,
-            expected: {
-              cycleId: recovery.cycleId,
-              lifecycleRevision: initialSource.lifecycleRevision,
-              revision: recovery.revision,
-              sessionId: initialSource.sessionId,
-              ...(normalizeOptionalString(initialSource.pluginOwnerId)
-                ? { pluginOwnerId: initialSource.pluginOwnerId }
+          if (!requirement.ok) {
+            return requirement;
+          }
+          const requiredWorkspace = requirement.value;
+          const preparedWorkspace =
+            requiredWorkspace && !currentSource.mainRestartRecovery?.tombstone?.recoveredSessionKey
+              ? await prepareRequiredSessionWorkspace({
+                  cfg: params.cfg,
+                  getCurrentConfig: params.getCurrentConfig ?? (() => params.cfg),
+                  required: requiredWorkspace,
+                  assertCurrent: commitGuard,
+                })({
+                  agentId: sourceTarget.agentId,
+                  key: successorTarget.canonicalKey,
+                  storePath: successorTarget.storePath,
+                  projectId: requiredWorkspace.projectId,
+                  sandboxRequired:
+                    currentSource.sandbox === "required" ||
+                    resolveCreatorSandbox(params.cfg, params) === "required",
+                })
+              : undefined;
+          if (preparedWorkspace && !preparedWorkspace.ok) {
+            return preparedWorkspace;
+          }
+          const workspace = preparedWorkspace?.value;
+          const recover = (onCommitted: () => void, assertSourceCurrent?: () => void) => {
+            const successorEntry = buildRestartRecoverySuccessorEntry({
+              sessionId: successorSessionId,
+              source: currentSource,
+              // Recovery cannot relax the source's isolation or change its creator
+              // namespace merely because a maintainer launches the successor.
+              creation: {
+                ...inheritSessionCreationPolicy(
+                  currentSource,
+                  currentSource.requiredWorkspace ? currentSource.createdActor : params.actor,
+                ),
+                sandbox: currentSource.sandbox ?? resolveCreatorSandbox(params.cfg, params),
+                requiredWorkspace,
+              },
+              ...(workspace
+                ? {
+                    workspace: projectPreparedSessionWorkspace(undefined, {
+                      requiredWorkspace,
+                      preparedLifecycle: workspace,
+                    }),
+                  }
                 : {}),
-            },
-            sourceTarget,
-            storePath: sourceTarget.storePath,
-            successorEntry,
-            successorTarget,
-          });
+            });
+            return recoverSessionEntryFromRestartTombstone({
+              agentId: sourceTarget.agentId,
+              ...(params.actor ? { archivedBy: params.actor } : {}),
+              onCommitted,
+              commitGuard: () => {
+                commitGuard();
+                assertSourceCurrent?.();
+              },
+              expected: {
+                cycleId: recovery.cycleId,
+                lifecycleRevision: initialSource.lifecycleRevision,
+                revision: recovery.revision,
+                sessionId: initialSource.sessionId,
+                ...(normalizeOptionalString(initialSource.pluginOwnerId)
+                  ? { pluginOwnerId: initialSource.pluginOwnerId }
+                  : {}),
+              },
+              sourceTarget,
+              storePath: sourceTarget.storePath,
+              successorEntry,
+              successorTarget,
+            });
+          };
+          const result = await commitPreparedSessionWorkspace(workspace, recover);
           if (result.status === "conflict") {
             return { ok: false as const, error: recoveryConflictError(result.reason) };
           }

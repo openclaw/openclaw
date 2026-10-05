@@ -17,6 +17,7 @@ import {
   type SessionBranchSwitchMutationResult,
   type SessionMessageCutMutationResult,
 } from "../../config/sessions/session-accessor.js";
+import { inheritSessionCreationPolicy } from "../../config/sessions/session-entry-provenance.js";
 import { parseInboundMediaUri } from "../../media/media-reference.js";
 import { MEDIA_MAX_BYTES, readMediaBuffer } from "../../media/store.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
@@ -30,13 +31,26 @@ import {
 import { readSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
-import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
+import {
+  authorizeGatewaySessionCreation,
+  resolveCreatorSandbox,
+  resolveOperatorRolePolicy,
+} from "../operator-role-policy.js";
 import { buildDashboardSessionKey } from "../session-create-key.js";
+import type { PreparedGatewaySessionLifecycle } from "../session-create-service.types.js";
+import {
+  commitPreparedSessionWorkspace,
+  projectPreparedSessionWorkspace,
+} from "../session-lifecycle-preparation.js";
 import {
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "../session-request-agent.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import {
+  prepareRequiredSessionWorkspace,
+  resolveRequiredSessionWorkspace,
+} from "../session-workspace-policy.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import { resolveSessionWorkerPlacementMutationError } from "../worker-environments/session-placement-lifecycle.js";
 import { forkSessionRepositoryWorkspace } from "../worker-environments/session-repository-checkpoints.js";
@@ -399,8 +413,44 @@ async function mutateSessionAtMessage(
         );
         return;
       }
-      const creation = resolveOperatorSessionCreation(client);
-      const sandbox = action === "fork" ? resolveCreatorSandbox(cfg, creation) : undefined;
+      const requestedCreation = resolveOperatorSessionCreation(client);
+      const creation = {
+        ...requestedCreation,
+        ...(action === "fork"
+          ? inheritSessionCreationPolicy(current.entry, requestedCreation.actor)
+          : {}),
+      };
+      const sandbox =
+        action === "fork"
+          ? (current.entry.sandbox ?? resolveCreatorSandbox(cfg, creation))
+          : undefined;
+      const workspaceRequirement = resolveRequiredSessionWorkspace({
+        policy:
+          action === "fork"
+            ? resolveOperatorRolePolicy(client, cfg)?.sessions.workspace
+            : undefined,
+        inherited: action === "fork" ? current.entry.requiredWorkspace : undefined,
+        projectId: current.entry.projectId,
+      });
+      if (!workspaceRequirement.ok) {
+        respond(false, undefined, workspaceRequirement.error);
+        return;
+      }
+      const requiredWorkspace = workspaceRequirement.value;
+      if (
+        requiredWorkspace &&
+        (upstreamLink || current.entry.repositoryWorkspaceId || current.entry.incognito)
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.FORBIDDEN,
+            "This fork requires a managed workspace. Select an authorized workspace in a new thread.",
+          ),
+        );
+        return;
+      }
       const upstreamForkGuard =
         upstreamLink && upstreamForkHarness
           ? createUpstreamForkCurrentGuard({
@@ -490,7 +540,7 @@ async function mutateSessionAtMessage(
         return;
       }
       const forkWorkspace =
-        action === "fork"
+        action === "fork" && !requiredWorkspace
           ? prepareSessionForkFilesystemRoot({
               cfg,
               parent: current.entry,
@@ -504,6 +554,7 @@ async function mutateSessionAtMessage(
         return;
       }
       let result: MessageCutMutationResult;
+      let requiredPreparation: PreparedGatewaySessionLifecycle | undefined;
       let forkRepository:
         | {
             workspaceId: string;
@@ -519,6 +570,30 @@ async function mutateSessionAtMessage(
         storePath: current.storePath,
       };
       try {
+        if (requiredWorkspace) {
+          const prepared = await prepareRequiredSessionWorkspace({
+            cfg,
+            required: requiredWorkspace,
+            getCurrentConfig: () => context.getRuntimeConfig(),
+            assertCurrent: () => {
+              commitGuard();
+              if (context.getRuntimeConfig() !== cfg) {
+                throw new Error("Workspace policy changed before fork. Retry.");
+              }
+            },
+          })({
+            agentId: current.target.agentId,
+            key: targetKey,
+            storePath: current.storePath,
+            projectId: requiredWorkspace.projectId,
+            sandboxRequired: sandbox === "required",
+          });
+          if (!prepared.ok) {
+            respond(false, undefined, prepared.error);
+            return;
+          }
+          requiredPreparation = prepared.value;
+        }
         if (action === "fork" && current.entry.repositoryWorkspaceId) {
           const repositories = getSessionRepositoryWorkspaceStore();
           const repositorySource = captureOpenClawStateWorkerContext({ path: repositories.path });
@@ -558,21 +633,40 @@ async function mutateSessionAtMessage(
           };
           mutationParams.commitGuard = assertRepositoryCurrent;
         }
-        result = await (action === "fork"
-          ? forkSessionAtMessage(
-              {
-                ...mutationParams,
-                entryId,
-                targetKey,
-                repositoryWorkspaceId: forkRepository?.workspaceId,
-                forkWorkspace: forkWorkspace?.value,
-                creation: { ...creation, sandbox },
-              },
-              expectedState,
-            )
-          : action === "rewind"
-            ? rewindSessionToMessage({ ...mutationParams, entryId }, expectedState)
-            : switchSessionBranch({ ...mutationParams, leafEntryId: entryId }, expectedState));
+        const mutate = (onCommitted: () => void, assertSourceCurrent?: () => void) => {
+          const currentMutation = {
+            ...mutationParams,
+            commitGuard: () => {
+              mutationParams.commitGuard();
+              assertSourceCurrent?.();
+            },
+          };
+          return action === "fork"
+            ? forkSessionAtMessage(
+                {
+                  ...currentMutation,
+                  onCommitted,
+                  entryId,
+                  targetKey,
+                  repositoryWorkspaceId: forkRepository?.workspaceId,
+                  forkWorkspace: requiredPreparation
+                    ? projectPreparedSessionWorkspace(undefined, {
+                        requiredWorkspace,
+                        preparedLifecycle: requiredPreparation,
+                      })
+                    : forkWorkspace?.value,
+                  creation: { ...creation, sandbox, requiredWorkspace },
+                },
+                expectedState,
+              )
+            : action === "rewind"
+              ? rewindSessionToMessage({ ...currentMutation, entryId }, expectedState)
+              : switchSessionBranch({ ...currentMutation, leafEntryId: entryId }, expectedState);
+        };
+        result = await commitPreparedSessionWorkspace<MessageCutMutationResult>(
+          requiredPreparation,
+          mutate,
+        );
       } catch (error) {
         if (error instanceof SessionMutationAuthorizationChangedError) {
           throw error;

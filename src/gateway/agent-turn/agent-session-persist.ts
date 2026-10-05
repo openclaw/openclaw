@@ -33,7 +33,10 @@ import { recordSessionCreated } from "../../sessions/session-created.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { errorShapeFromError } from "../error-shape.js";
-import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
+import {
+  authorizeGatewayUnpreparedSessionCreation,
+  resolveCreatorSandbox,
+} from "../operator-role-policy.js";
 import {
   assertExpectedExistingSession,
   ExpectedExistingSessionChangedError,
@@ -186,7 +189,7 @@ export async function persistAgentSessionPhase(params: {
             assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
             const freshEntry = patchContext.existingEntry;
             if (!freshEntry) {
-              creationAuthorizationError = authorizeGatewaySessionCreation({
+              creationAuthorizationError = authorizeGatewayUnpreparedSessionCreation({
                 cfg: params.cfg,
                 agentId: params.sessionAgentId,
                 ...(params.operatorRoleActor

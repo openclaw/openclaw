@@ -8,6 +8,7 @@ import {
 import { prepareSessionEntryMutationDatabases } from "../config/sessions/session-accessor.entry-mutation.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import type {
@@ -276,14 +277,21 @@ export function projectPreparedSessionWorkspace(
   existingEntry: SessionEntry | undefined,
   params: {
     projectId?: string;
+    requiredWorkspace?: SessionEntry["requiredWorkspace"];
     pendingProjectGitUrl?: string;
     pendingWorktree?: SessionEntry["pendingWorktree"];
     spawnedCwd?: string;
     preparedLifecycle?: PreparedGatewaySessionLifecycle;
   },
 ): Partial<SessionEntry> {
-  const { projectId, pendingProjectGitUrl, pendingWorktree, spawnedCwd, preparedLifecycle } =
-    params;
+  const {
+    requiredWorkspace,
+    pendingProjectGitUrl,
+    pendingWorktree,
+    spawnedCwd,
+    preparedLifecycle,
+  } = params;
+  const projectId = requiredWorkspace?.projectId ?? params.projectId;
   const createdNewEntry = existingEntry === undefined;
   const recovered =
     preparedLifecycle?.worktree &&
@@ -297,6 +305,14 @@ export function projectPreparedSessionWorkspace(
     ...(preparedLifecycle?.worktree ? { worktree: preparedLifecycle.worktree } : {}),
     ...(preparedLifecycle?.repositoryWorkspaceId
       ? { repositoryWorkspaceId: preparedLifecycle.repositoryWorkspaceId }
+      : {}),
+    ...(createdNewEntry && requiredWorkspace
+      ? {
+          requiredWorkspace,
+          sessionRoot: preparedLifecycle?.sessionRoot,
+          spawnedCwd: preparedLifecycle?.spawnedCwd,
+          spawnedWorkspaceDir: preparedLifecycle?.sessionRoot,
+        }
       : {}),
     ...(recovered
       ? { projectId, pendingWorktree: undefined, pendingProjectGitUrl: undefined }
@@ -322,7 +338,7 @@ export async function settleGatewaySessionLifecycleCommit<T>(
     }
   }
   if (failures.length > 1) {
-    throw new AggregateError(failures, "Session reset commit and post-commit actions failed", {
+    throw new AggregateError(failures, "Session lifecycle commit and follow-up actions failed", {
       cause: failures.at(-1),
     });
   }
@@ -333,6 +349,35 @@ export async function settleGatewaySessionLifecycleCommit<T>(
     throw failures[0];
   }
   return result.value;
+}
+
+/** Native commit facts protect prepared checkouts even if result delivery or publication fails. */
+export async function commitPreparedSessionWorkspace<T>(
+  prepared: PreparedGatewaySessionLifecycle | undefined,
+  run: (onCommitted: () => void, assertSourceCurrent?: () => void) => Promise<T>,
+): Promise<T> {
+  let retained = false;
+  const onCommitted = () => {
+    retained = true;
+  };
+  const commit = async () => {
+    try {
+      return prepared?.withCommit
+        ? await prepared.withCommit((assertCurrent) => run(onCommitted, assertCurrent))
+        : await run(onCommitted);
+    } catch (error) {
+      // Missing settlement cannot authorize removal of a possibly committed checkout.
+      retained ||= hasSqliteWorkerOutcomeUnknown(error);
+      throw error;
+    }
+  };
+  return await settleGatewaySessionLifecycleCommit(commit(), [
+    async () => {
+      if (!retained) {
+        await prepared?.rollback?.();
+      }
+    },
+  ]);
 }
 
 export async function rollbackGatewaySessionPreparation(params: {

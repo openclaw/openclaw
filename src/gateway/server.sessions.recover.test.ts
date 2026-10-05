@@ -714,14 +714,17 @@ test.each([
       createdVia: "operator",
       createdAt: expect.any(Number),
     });
+    // Recovery keeps the original required isolation namespace, even for a later owner.
     expect(successor?.createdActor).toEqual(
-      recovering
-        ? { type: "human", source: "profile", id: recovering.id }
-        : sourceStamp.sandbox === "required"
-          ? sourceStamp.createdActor
+      sourceStamp.sandbox === "required"
+        ? sourceStamp.createdActor
+        : recovering
+          ? { type: "human", source: "profile", id: recovering.id }
           : undefined,
     );
-    expect(successor?.sandbox).toBe((systemActor ? !required : required) ? "required" : undefined);
+    expect(successor?.sandbox).toBe(
+      sourceStamp.sandbox ?? (!systemActor && required ? "required" : undefined),
+    );
     expect(successor?.createdAt).not.toBe(sourceStamp.createdAt);
     const repeated = await directSessionReq<RecoveryPayload>(
       "sessions.recover",

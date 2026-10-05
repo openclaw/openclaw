@@ -41,6 +41,7 @@ import {
   githubApiToken,
 } from "../github-public-api.js";
 import { WRITE_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
+import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
 import { searchRemoteProjects } from "../project-github-search.js";
 import {
   getSessionRowProjection,
@@ -343,7 +344,19 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
       }
       const diagnostics = startProjectsListDiagnostics(context);
       try {
-        const registryProjects = await listProjectRegistry(context.getRuntimeConfig());
+        const listingConfig = context.getRuntimeConfig();
+        const workspacePolicy = resolveOperatorRolePolicy(client, listingConfig)?.sessions
+          .workspace;
+        const registryProjects = (await listProjectRegistry(listingConfig)).filter(
+          (project) => !workspacePolicy || workspacePolicy.projects.includes(project.id),
+        );
+        const creationPolicy = workspacePolicy
+          ? {
+              workspaceRequired: true as const,
+              worktreeRequired: true as const,
+              worktreeBaseRef: workspacePolicy.worktreeBaseRef,
+            }
+          : undefined;
         diagnostics?.mark("sessions");
         const projects = registryProjects.map(sanitizeProjectRecord);
         const cfg = context.getRuntimeConfig();
@@ -355,7 +368,8 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
             client?.authenticatedUserProfile?.profileId !== requesterProfileId ||
             client?.authenticatedUserId !== requesterUserId ||
             readGatewayAccessRevision() !== accessRevision ||
-            context.getRuntimeConfig() !== cfg
+            context.getRuntimeConfig() !== listingConfig ||
+            cfg !== listingConfig
           ) {
             throw new Error(
               "Project access changed while preparing the listing. Retry the request.",
@@ -363,6 +377,7 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
           }
         };
         const canWrite = () =>
+          !workspacePolicy &&
           authorizeOperatorScopesForRequiredScope(
             WRITE_SCOPE,
             Array.isArray(client?.connect.scopes) ? client.connect.scopes : [],
@@ -448,6 +463,7 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
             projects: projects.map(({ id, displayName, source, agentId }) =>
               agentId ? { id, displayName, source, agentId } : { id, displayName, source },
             ),
+            ...(creationPolicy ? { creationPolicy } : {}),
             ...(recents ? { recents: recents.filter((recent) => recent.kind === "project") } : {}),
           },
           undefined,

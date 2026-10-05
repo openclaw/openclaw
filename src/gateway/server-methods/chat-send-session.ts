@@ -29,7 +29,10 @@ import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
-import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
+import {
+  authorizeGatewayUnpreparedSessionCreation,
+  resolveCreatorSandbox,
+} from "../operator-role-policy.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -55,7 +58,7 @@ export function prepareChatSendSessionEntry(params: {
   getRuntimeConfig: () => OpenClawConfig;
 }): { entry: SessionEntry; assertSkillSelection: () => void } {
   const { cfg, client, agentId, getRuntimeConfig } = params;
-  const creationError = authorizeGatewaySessionCreation({ cfg, client, agentId });
+  const creationError = authorizeGatewayUnpreparedSessionCreation({ cfg, client, agentId });
   if (creationError) {
     throw new Error(creationError.message);
   }
@@ -205,7 +208,7 @@ export function prepareChatSendSession(params: {
   const requestedSessionId = normalizeOptionalString(p.sessionId);
   const backingSessionId = entry?.sessionId ?? requestedSessionId;
   if (!entry) {
-    const creationError = authorizeGatewaySessionCreation({
+    const creationError = authorizeGatewayUnpreparedSessionCreation({
       cfg,
       client,
       agentId,
@@ -415,7 +418,7 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
       const current = loadSessionEntry(session.sessionLoadKey, session.sessionLoadOptions);
       const currentCreation = resolveOperatorSessionCreation(client);
       const currentModel = resolveSessionModelRef(currentConfig, undefined, agentId);
-      const creationError = authorizeGatewaySessionCreation({
+      const creationError = authorizeGatewayUnpreparedSessionCreation({
         cfg: currentConfig,
         client,
         agentId,

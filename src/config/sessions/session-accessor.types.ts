@@ -708,10 +708,13 @@ export type SessionMessageCutMutationParams = {
   agentId?: string;
   /** Synchronous authority check run inside the transcript commit transaction. */
   commitGuard?: () => void;
+  /** Synchronous, non-throwing observer of a created fork's native commit. */
+  onCommitted?: () => void;
   creation?: {
     via: import("./session-entry-provenance.js").SessionCreatedVia;
     actor?: import("./session-entry-provenance.js").SessionCreatedActor;
     sandbox?: "required";
+    requiredWorkspace?: import("./session-entry-provenance.js").RequiredSessionWorkspace;
   };
   entryId: string;
   env?: NodeJS.ProcessEnv;
@@ -722,7 +725,7 @@ export type SessionMessageCutMutationParams = {
   /** Canonical local workspace prepared by the fork lifecycle before transcript commit. */
   forkWorkspace?: Pick<
     SessionEntry,
-    "projectId" | "spawnedCwd" | "spawnedWorkspaceDir" | "sessionRoot"
+    "projectId" | "spawnedCwd" | "spawnedWorkspaceDir" | "sessionRoot" | "worktree"
   >;
   /** Distinct repository owner prepared by the fork lifecycle before transcript commit. */
   repositoryWorkspaceId?: string;

@@ -196,6 +196,7 @@ export function inheritSessionCreationPolicy(
     | {
         createdActor?: SessionCreatedActor;
         sandbox?: "required";
+        requiredWorkspace?: RequiredSessionWorkspace;
         skillLibrarySelections?: SkillLibrarySelection[];
       }
     | undefined,
@@ -203,9 +204,11 @@ export function inheritSessionCreationPolicy(
 ): {
   actor?: SessionCreatedActor;
   sandbox?: "required";
+  requiredWorkspace?: RequiredSessionWorkspace;
   skillLibrarySelections?: SkillLibrarySelection[];
 } {
   return {
+    ...(source?.requiredWorkspace ? { requiredWorkspace: { ...source.requiredWorkspace } } : {}),
     ...(source?.sandbox === "required"
       ? { actor: source.createdActor, sandbox: "required" as const }
       : { actor }),

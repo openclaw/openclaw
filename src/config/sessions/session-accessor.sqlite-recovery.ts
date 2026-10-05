@@ -24,7 +24,7 @@ export type { RestartTombstoneRecoveryResult } from "./session-accessor.sqlite-r
 export async function recoverSessionEntryFromRestartTombstone(
   params: RestartTombstoneRecoveryParams,
 ): Promise<RestartTombstoneRecoveryResult> {
-  const { commitGuard, storePath, ...values } = params;
+  const { commitGuard, onCommitted, storePath, ...values } = params;
   const input = structuredClone(values);
   const scope = captureLifecycleDatabaseScope(
     await prepareSqliteScope({
@@ -74,6 +74,12 @@ export async function recoverSessionEntryFromRestartTombstone(
             (isRecord(facts) && facts.kind === "session-restart-recovery-unchanged");
           const unknown =
             admitted.admission.settlement?.kind !== "completed" || (!receipt && !unchanged);
+          if (
+            receipt?.current.get(input.successorTarget.canonicalKey)?.sessionId ===
+            input.successorEntry.sessionId
+          ) {
+            onCommitted?.();
+          }
           const published = publication.settle(receipt, unknown);
           if (published) {
             publishCommittedSessionIdentity(

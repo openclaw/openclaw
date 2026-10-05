@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { readMessageWorkContext } from "../../chat/work-context.js";
+import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { assertModelSelectionUnlocked } from "../../sessions/model-overrides.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import {
@@ -171,6 +172,14 @@ async function mutateSqliteSessionAtMessage(
               sourceKey,
               targetKey,
             });
+            if (mode === "fork" && mutationResult.status === "created" && params.onCommitted) {
+              // Custody must settle before any synchronous publication can throw.
+              stageSqliteTransactionState(database.db, {
+                stage: () => {},
+                commit: params.onCommitted,
+                rollback: () => {},
+              });
+            }
             const currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
             return {
               databasePath: database.path,

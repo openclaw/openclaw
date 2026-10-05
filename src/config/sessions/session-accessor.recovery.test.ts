@@ -310,113 +310,124 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
     },
   );
 
-  it("fences a lost mutation receipt while recognizing a committed unchanged recovery", async () => {
-    const fixture = await createFixture();
-    const params = {
-      agentId: "main",
-      expected: {
-        cycleId: "cycle-1",
-        revision: 4,
-        sessionId: fixture.sourceSessionId,
-        pluginOwnerId: "codex",
-      },
-      sourceTarget: { canonicalKey: fixture.sourceKey, storeKeys: [fixture.sourceKey] },
-      storePath: fixture.storePath,
-      successorEntry: { sessionId: "settled-successor", updatedAt: 20 },
-      successorTarget: { canonicalKey: fixture.successorKey, storeKeys: [fixture.successorKey] },
-    };
-    const deliveryFailure = new Error("Recovery result delivery failed");
-    const restoreFaults: Array<() => void> = [];
-    let dropReceipt = true;
-    let verifiedCommands = 0;
-    const runOperation = workerStore.runSqliteWorkerStoreOperation;
-    const observer = vi
-      .spyOn(workerStore, "runSqliteWorkerStoreOperation")
-      .mockImplementation(
-        <Operations extends SqliteWorkerOperations, T>(
-          store: SqliteWorkerStore<Operations>,
-          operation: (worker: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
-          stateContext?: Parameters<typeof runOperation>[2],
-          assertCurrent?: Parameters<typeof runOperation>[3],
-          createAdmission?: Parameters<typeof runOperation>[4],
-        ) => {
-          let recovering = false;
-          let nativeAdmission: admission.SqliteWorkerOperationAdmission | undefined;
-          return runOperation(
-            store,
-            (worker) =>
-              operation({
-                execute: async (command, options) => {
-                  recovering = command.type === "session.restart.recover";
-                  const result = await worker.execute(command, options);
-                  if (!recovering) {
-                    return result;
-                  }
-                  if (!nativeAdmission) {
-                    throw new Error("Recovery did not retain native admission");
-                  }
-                  // Observe the actual commit before simulating lost receipt/result delivery.
-                  expect(nativeAdmission.committed).toMatchObject({
-                    facts: {
-                      kind: dropReceipt
-                        ? "session-entry-replacements"
-                        : "session-restart-recovery-unchanged",
-                    },
-                  });
-                  expect(nativeAdmission.settlement?.kind).toBe("completed");
-                  verifiedCommands++;
-                  if (dropReceipt) {
-                    const receipt = vi
-                      .spyOn(nativeAdmission, "committed", "get")
-                      .mockReturnValue(undefined);
-                    const settlement = vi
-                      .spyOn(nativeAdmission, "settlement", "get")
-                      .mockReturnValue({ kind: "completed" });
-                    restoreFaults.push(
-                      () => receipt.mockRestore(),
-                      () => settlement.mockRestore(),
-                    );
-                  }
-                  throw deliveryFailure;
-                },
-              }),
-            stateContext,
-            assertCurrent,
-            createAdmission &&
-              ((retained) => {
-                const owned = createAdmission(retained);
-                if (recovering) {
-                  nativeAdmission = owned.admission;
-                }
-                return owned;
-              }),
-          );
+  it.each([false, true])(
+    "preserves native recovery facts across lost delivery (missing receipt: %s)",
+    async (hideReceipt) => {
+      const fixture = await createFixture();
+      const onCommitted = vi.fn();
+      const params = {
+        onCommitted,
+        agentId: "main",
+        expected: {
+          cycleId: "cycle-1",
+          revision: 4,
+          sessionId: fixture.sourceSessionId,
+          pluginOwnerId: "codex",
         },
-      );
-    try {
-      const outcome = await recoverSessionEntryFromRestartTombstone(params).then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      expect(isSqliteWorkerError(outcome, "outcome-unknown")).toBe(true);
-      expect(
-        loadSessionEntry({
-          agentId: "main",
-          sessionKey: fixture.successorKey,
-          storePath: fixture.storePath,
-        }),
-      ).toMatchObject(params.successorEntry);
-      for (const restore of restoreFaults.splice(0)) {
-        restore();
+        sourceTarget: { canonicalKey: fixture.sourceKey, storeKeys: [fixture.sourceKey] },
+        storePath: fixture.storePath,
+        successorEntry: { sessionId: "settled-successor", updatedAt: 20 },
+        successorTarget: { canonicalKey: fixture.successorKey, storeKeys: [fixture.successorKey] },
+      };
+      const deliveryFailure = new Error("Recovery result delivery failed");
+      const restoreFaults: Array<() => void> = [];
+      let firstCommand = true;
+      let verifiedCommands = 0;
+      const runOperation = workerStore.runSqliteWorkerStoreOperation;
+      const observer = vi
+        .spyOn(workerStore, "runSqliteWorkerStoreOperation")
+        .mockImplementation(
+          <Operations extends SqliteWorkerOperations, T>(
+            store: SqliteWorkerStore<Operations>,
+            operation: (worker: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
+            stateContext?: Parameters<typeof runOperation>[2],
+            assertCurrent?: Parameters<typeof runOperation>[3],
+            createAdmission?: Parameters<typeof runOperation>[4],
+          ) => {
+            let recovering = false;
+            let nativeAdmission: admission.SqliteWorkerOperationAdmission | undefined;
+            return runOperation(
+              store,
+              (worker) =>
+                operation({
+                  execute: async (command, options) => {
+                    recovering = command.type === "session.restart.recover";
+                    const result = await worker.execute(command, options);
+                    if (!recovering) {
+                      return result;
+                    }
+                    if (!nativeAdmission) {
+                      throw new Error("Recovery did not retain native admission");
+                    }
+                    // Observe the actual commit before simulating lost receipt/result delivery.
+                    expect(nativeAdmission.committed).toMatchObject({
+                      facts: {
+                        kind: firstCommand
+                          ? "session-entry-replacements"
+                          : "session-restart-recovery-unchanged",
+                      },
+                    });
+                    expect(nativeAdmission.settlement?.kind).toBe("completed");
+                    verifiedCommands++;
+                    if (firstCommand && hideReceipt) {
+                      const receipt = vi
+                        .spyOn(nativeAdmission, "committed", "get")
+                        .mockReturnValue(undefined);
+                      const settlement = vi
+                        .spyOn(nativeAdmission, "settlement", "get")
+                        .mockReturnValue({ kind: "completed" });
+                      restoreFaults.push(
+                        () => receipt.mockRestore(),
+                        () => settlement.mockRestore(),
+                      );
+                    }
+                    throw deliveryFailure;
+                  },
+                }),
+              stateContext,
+              assertCurrent,
+              createAdmission &&
+                ((retained) => {
+                  const owned = createAdmission(retained);
+                  if (recovering) {
+                    nativeAdmission = owned.admission;
+                  }
+                  return owned;
+                }),
+            );
+          },
+        );
+      try {
+        const outcome = await recoverSessionEntryFromRestartTombstone(params).then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        if (hideReceipt) {
+          expect(isSqliteWorkerError(outcome, "outcome-unknown")).toBe(true);
+        } else {
+          expect(outcome).toBe(deliveryFailure);
+        }
+        expect(onCommitted).toHaveBeenCalledTimes(hideReceipt ? 0 : 1);
+        expect(
+          loadSessionEntry({
+            agentId: "main",
+            sessionKey: fixture.successorKey,
+            storePath: fixture.storePath,
+          }),
+        ).toMatchObject(params.successorEntry);
+        for (const restore of restoreFaults.splice(0)) {
+          restore();
+        }
+        firstCommand = false;
+        await expect(recoverSessionEntryFromRestartTombstone(params)).rejects.toBe(deliveryFailure);
+        expect(verifiedCommands).toBe(2);
+        expect(onCommitted).toHaveBeenCalledTimes(hideReceipt ? 0 : 1);
+      } finally {
+        observer.mockRestore();
+        for (const restore of restoreFaults) {
+          restore();
+        }
       }
-      dropReceipt = false;
-      await expect(recoverSessionEntryFromRestartTombstone(params)).rejects.toBe(deliveryFailure);
-      expect(verifiedCommands).toBe(2);
-    } finally {
-      observer.mockRestore();
-      for (const restore of restoreFaults) {
-        restore();
-      }
-    }
-  });
+    },
+  );
 });

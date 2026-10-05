@@ -56,7 +56,10 @@ import { normalizeSpawnedRunMetadata } from "../spawned-context.js";
 import { resolveEffectiveAgentRuntime } from "../thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
 import { ensureAgentWorkspace } from "../workspace.js";
-import { assertRequiredSessionWorktreeCheckout } from "../worktrees/required-session-binding.js";
+import {
+  assertRequiredSessionWorktreeCheckout,
+  REQUIRED_WORKTREE_UNAVAILABLE,
+} from "../worktrees/required-session-binding.js";
 import { acquireWorktreeRunLease, resolveWorktreeIdForPath } from "../worktrees/run-lease.js";
 import { resolveExplicitAgentCommandSessionKey } from "./explicit-session-key.js";
 import { loadAcpManagerRuntime } from "./runtime-loaders.js";
@@ -239,6 +242,14 @@ export async function prepareAgentCommandExecution(
   }
   const sessionStore: Record<string, InternalSessionEntry> =
     sessionKey && sessionEntryRaw ? { [sessionKey]: sessionEntryRaw } : {};
+  const requiredWorkspacePolicy = opts.operatorAuthority?.rolePolicy?.workspace;
+  if (
+    requiredWorkspacePolicy &&
+    (!sessionEntryRaw?.requiredWorkspace ||
+      !requiredWorkspacePolicy.projects.includes(sessionEntryRaw.requiredWorkspace.projectId))
+  ) {
+    throw new Error(REQUIRED_WORKTREE_UNAVAILABLE);
+  }
   assertAgentDatabaseAdmitted(sessionAgentId);
   const outboundSession = buildOutboundSessionContext({
     cfg,

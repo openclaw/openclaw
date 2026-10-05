@@ -261,6 +261,8 @@ export async function prepareSessionWorktree(params: {
   checkoutCommit?: string;
   label?: string;
   runSetupScript: boolean;
+  /** New required threads cannot adopt an orphan from an earlier failed allocation. */
+  requireNew?: boolean;
   signal?: AbortSignal;
   commitGuard?: () => void;
   withSource?: WorktreeSourceStage;
@@ -379,6 +381,14 @@ export async function prepareSessionWorktree(params: {
       );
     }
     existing ??= managedWorktrees.findLiveByOwner("session", target.key);
+    if (params.requireNew && existing) {
+      return err(
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "A worktree already owns this new session key. Select a new thread or ask a maintainer to reconcile the unfinished allocation.",
+        ),
+      );
+    }
     let existingDirectory = false;
     if (existing) {
       try {
@@ -386,6 +396,14 @@ export async function prepareSessionWorktree(params: {
       } catch {
         // Missing registry targets are replaced by create() under its owner lease.
       }
+    }
+    if (target.entry?.requiredWorkspace && (!existing || !existingDirectory)) {
+      return err(
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "The thread's required worktree is missing. Restore it or select a workspace in a new thread.",
+        ),
+      );
     }
     if (existing && existingDirectory) {
       if (repository && existing.repoRoot !== repository.canonicalRoot) {

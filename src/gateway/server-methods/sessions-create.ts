@@ -17,6 +17,7 @@ import { buildDashboardSessionTitleSource } from "../dashboard-session-title.js"
 import { acceptGatewayDeviceSourceAuthority } from "../device-revocation.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
+import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { startSessionCreateDiagnostics } from "../session-create-diagnostics.js";
 import { buildDashboardSessionKey } from "../session-create-key.js";
@@ -154,7 +155,12 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           agentId: explicitlyRequestedAgent.agentId,
         }).entry
       : undefined;
-    const workspacePolicy = existingTargetEntry?.requiredWorkspace;
+    const workspacePolicy =
+      resolveOperatorRolePolicy(client, cfg)?.sessions.workspace ??
+      existingTargetEntry?.requiredWorkspace ??
+      ((p.fork || spawnRequesterSessionKey === parentSessionKey) && parentSessionKey
+        ? loadGatewaySessionEntryReadOnly(parentSessionKey).entry?.requiredWorkspace
+        : undefined);
     if (workspacePolicy) {
       const selectionError = validateRequiredWorkspaceSelectors(p, workspacePolicy);
       if (selectionError) {
@@ -614,11 +620,12 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (created.postCommit.status === "failed") {
       runError = errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(created.postCommit.error));
     }
-    const createdWorktree = preparedWorktree?.worktree
+    const responseWorktree = preparedWorktree?.worktree ?? created.entry.worktree;
+    const createdWorktree = responseWorktree
       ? {
-          id: preparedWorktree.worktree.id,
-          path: preparedWorktree.sessionRoot,
-          branch: preparedWorktree.worktree.branch,
+          id: responseWorktree.id,
+          path: preparedWorktree?.sessionRoot ?? created.entry.sessionRoot,
+          branch: responseWorktree.branch,
         }
       : undefined;
     const responseEntry = sessionEntryForkedFromParent(created.entry)

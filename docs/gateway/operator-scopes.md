@@ -295,6 +295,44 @@ created by an authenticated person with that role, even when the agent's
 sandbox mode is `"off"`. The example lets maintainers use host execution on
 `roboclaw` while guest-created sessions on the same agent remain sandboxed.
 
+For a team role that must work in separate Git checkouts, add an explicit workspace
+policy. This applies to any named role; the role name does not grant permissions:
+
+```json5
+sessions: {
+  others: "view",
+  workspace: {
+    projects: ["workspace:roboclaw"],
+    worktreeBaseRef: "main",
+  },
+},
+```
+
+`projects` contains approved project registry IDs, or `workspace:<agentId>` for a
+configured agent workspace. The project must be a Git repository with the selected
+base ref. `projects.list` returns only approved choices and a `creationPolicy`
+descriptor. Removing a project also revokes that role's ability to run its existing
+threads; an empty list permits neither new threads nor continued runs. Omit
+`workspace` to retain the role's existing creation behavior.
+Revocation preserves history and the checkout; the separate read policy still
+controls visibility. Select another permitted workspace in a new thread, or ask a
+maintainer to restore workspace access.
+
+The caller selects a `projectId` with `sessions.create`. OpenClaw resolves the
+configured base once, creates a new branch and managed worktree, and records the
+binding before the thread can run. Paths, external repository sources, node cwd
+overrides, incognito, and disabling the worktree cannot bypass this policy. If
+allocation fails, creation fails; sending a message or patching a missing session
+cannot fall back to an agent's shared directory.
+
+Visible forks get separate worktrees from the configured base. Hidden joined
+children may share only their parent's exact checkout and session incarnation.
+A reset or later maintainer turn keeps the original workspace requirement and
+binding. A removed checkout must be restored or replaced with a new thread; it
+is not silently reallocated. Existing unstamped sessions cannot run under a role
+that requires this policy. Managed worker placement can execute an admitted local
+project remotely through its existing snapshot and recovery lifecycle.
+
 Required sandboxes are isolated per authenticated session creator, not merely
 per agent or per session. Different guests using the same agent receive separate
 sandbox environments and workspaces. Multiple sessions created by the same guest
