@@ -45,6 +45,7 @@ type TextTurnTranscriptContext = {
   threadId?: string | number;
   sessionCwd: string;
   config: OpenClawConfig;
+  runId?: string;
 };
 
 type PersistTextTurnTranscriptParams = TextTurnTranscriptContext & {
@@ -215,6 +216,7 @@ async function persistTextTurnTranscript(
       config: params.config,
       cwd: params.sessionCwd,
       messages,
+      runId: params.runId,
       publishWhen: "always",
       touchSessionEntry: true,
       updateMode: "file-only",
