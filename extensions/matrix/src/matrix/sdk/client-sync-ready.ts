@@ -29,7 +29,7 @@ export async function waitForMatrixInitialSyncReady(params: {
     throw new Error(`Matrix sync entered ${params.state} during startup`);
   }
 
-  const ready = createDeferred<void>();
+  const ready = createDeferred();
   const settle = (error?: Error) => {
     if (error) {
       ready.reject(error);
