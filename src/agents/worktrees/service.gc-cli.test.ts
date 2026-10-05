@@ -19,6 +19,7 @@ import {
 import * as allocation from "./allocation.js";
 import { formatWorktreeGcResult } from "./gc-result.js";
 import { requireGit } from "./git.js";
+import { insertRegistryWorktreeInDatabase } from "./registry-run-end.worker.js";
 import {
   getRegistryWorktree,
   deleteRegistryWorktree,
@@ -49,7 +50,7 @@ const initializeRepository = useManagedWorktreeTestRepository();
 async function bindFixtureRepository(env: NodeJS.ProcessEnv, repo: string, ids: string[]) {
   const identity = await resolveRepository(repo);
   for (const id of ids) {
-    updateRegistryWorktree(env, id, {
+    await updateRegistryWorktree(env, id, {
       repositoryIdentity: { repoRoot: identity.repoRoot, repoFingerprint: identity.fingerprint },
     });
   }
@@ -179,13 +180,15 @@ it("finishes CLI cleanup with moved HEADs, missing gitdirs, and 600 mixed regist
     ({ db }) => {
       for (let index = 0; index < 594; index++) {
         const id = `a-protected-${String(index).padStart(3, "0")}`;
-        insertRegistryWorktree(env, {
-          ...moved!,
-          id,
-          name: id,
-          path: repo,
-          ownerKind: index >= 590 ? "manual" : "workboard",
-          ownerId: index < 390 ? "active-owner" : id,
+        insertRegistryWorktreeInDatabase(db, {
+          record: {
+            ...moved!,
+            id,
+            name: id,
+            path: repo,
+            ownerKind: index >= 590 ? "manual" : "workboard",
+            ownerId: index < 390 ? "active-owner" : id,
+          },
         });
         if (index >= 390 && index < 590) {
           admitWorktreeRunLeaseInDatabase(db, {
@@ -355,7 +358,7 @@ it.each(["gitdir", "checkout"])(
     });
     deleteRegistryWorktree(env, record!.id);
     record!.id = randomUUID();
-    insertRegistryWorktree(env, record!);
+    await insertRegistryWorktree(env, record!);
     await bindFixtureRepository(env, repo, [record!.id]);
     const projection = await withLocalWorkspaceProjection(
       {

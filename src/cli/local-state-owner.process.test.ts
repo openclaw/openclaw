@@ -614,12 +614,12 @@ describe("same-root local mutation routing", () => {
       const snapshotRef = `refs/openclaw/snapshots/${record.id}`;
       await git(repo, "update-ref", snapshotRef, snapshot);
       await git(repo, "update-ref", `refs/openclaw/removals/${record.id}`, snapshot);
-      updateRegistryWorktree(env, record.id, { snapshotRef, provisionedState: [] });
+      await updateRegistryWorktree(env, record.id, { snapshotRef, provisionedState: [] });
       await fs.unlink(path.join(record.path, ".git"));
       args = ["recover-removal", record.id, "--snapshot", snapshot];
     }
     if (kind === "gc" || kind === "gc-partial") {
-      updateRegistryWorktree(env, record.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
+      await updateRegistryWorktree(env, record.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
       let brokenId: string | undefined;
       if (kind === "gc-partial") {
         const brokenRepo = await initializeRepository(path.join(root, name));
@@ -635,7 +635,7 @@ describe("same-root local mutation routing", () => {
         await fs.rename(brokenRepo, `${brokenRepo}-away`);
         cleanup = async () => {
           await fs.rename(`${brokenRepo}-away`, brokenRepo);
-          updateRegistryWorktree(env, broken.id, { lastActiveAt: Date.now() });
+          await updateRegistryWorktree(env, broken.id, { lastActiveAt: Date.now() });
         };
       }
       args = ["gc"];
@@ -711,8 +711,11 @@ describe("same-root local mutation routing", () => {
           scenario === "live" || scenario === "lost-reply" ? [method] : [],
         );
         if (scenario === "offline") {
-          expect(observation).toMatchObject({ missingCustody: 0, ownerPids: [observation.pid] });
-          expect(observation.worktreeSql).toBeGreaterThan(0);
+          // Worker-only operations need no caller-thread SQL; any native access still needs custody.
+          expect(observation.missingCustody).toBe(0);
+          for (const pid of observation.ownerPids) {
+            expect(pid).toBe(observation.pid);
+          }
         } else {
           expect(observation.worktreeSql).toBe(0);
         }

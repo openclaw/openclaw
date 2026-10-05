@@ -52,7 +52,7 @@ export async function proveRequiredPodmanWorkspace(
   owner.worktree.repoFingerprint = (
     await service.resolveRepositoryIdentity(owner.worktree.path)
   ).fingerprint;
-  insertRegistryWorktree(process.env, owner.worktree, { provisionedPaths: [] });
+  await insertRegistryWorktree(process.env, owner.worktree, { provisionedPaths: [] });
   await upsertSessionEntryCore(
     { agentId: owner.agentId, sessionKey: owner.sessionKey },
     {

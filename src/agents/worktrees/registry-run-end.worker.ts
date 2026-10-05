@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -24,13 +25,109 @@ import {
   getRegistryWorktreeInDatabase,
 } from "./registry-read.kernel.js";
 import {
+  assertRegistryMutationCustody,
   collectLiveRunLeases,
   worktreeRunLeaseScope,
   WORKTREE_REMOVING_LEASE_KEY,
 } from "./run-lease-owner.js";
-import type { WorktreeRegistryPredicate } from "./types.js";
+import type {
+  ManagedWorktreeRecord,
+  ProvisionedFileState,
+  WorktreeRegistryPredicate,
+} from "./types.js";
 
 const query = (db: DatabaseSync) => getNodeSqliteKysely<Pick<DB, "worktrees" | "state_leases">>(db);
+
+export type WorktreeRegistryPatch = Partial<
+  Pick<ManagedWorktreeRecord, "lastActiveAt" | "removedAt" | "runEndCleanup" | "snapshotRef">
+> & {
+  repositoryIdentity?: Pick<ManagedWorktreeRecord, "repoRoot" | "repoFingerprint">;
+  provisionedPaths?: readonly string[];
+  provisionedState?: readonly ProvisionedFileState[];
+};
+
+export function insertRegistryWorktreeInDatabase(
+  db: DatabaseSync,
+  {
+    record,
+    provisionedPaths,
+  }: {
+    record: ManagedWorktreeRecord;
+    provisionedPaths?: readonly string[];
+  },
+): void {
+  executeSqliteQuerySync(
+    db,
+    query(db)
+      .insertInto("worktrees")
+      .values({
+        id: record.id,
+        repo_fingerprint: record.repoFingerprint,
+        repo_root: record.repoRoot,
+        path: record.path,
+        branch: record.branch,
+        base_ref: record.baseRef,
+        owner_kind: record.ownerKind,
+        owner_id: record.ownerId ?? null,
+        snapshot_ref: record.snapshotRef ?? null,
+        created_at: record.createdAt,
+        last_active_at: record.lastActiveAt,
+        removed_at: record.removedAt ?? null,
+        gc_protection_json: null,
+        provisioned_paths_json:
+          provisionedPaths === undefined ? null : JSON.stringify(provisionedPaths),
+        run_end_cleanup_json:
+          record.runEndCleanup === undefined ? null : JSON.stringify(record.runEndCleanup),
+      }),
+  );
+}
+
+export function updateRegistryWorktreeInDatabase(
+  db: DatabaseSync,
+  input: {
+    id: string;
+    patch: WorktreeRegistryPatch;
+    onlyIfLive?: boolean;
+    onlyIfActiveAt?: number;
+    removalToken?: string;
+  },
+): void {
+  const { id, patch } = input;
+  const values: Partial<Selectable<DB["worktrees"]>> = {};
+  if (patch.lastActiveAt !== undefined) {
+    values.last_active_at = patch.lastActiveAt;
+  }
+  if ("removedAt" in patch) {
+    values.removed_at = patch.removedAt ?? null;
+  }
+  if ("snapshotRef" in patch) {
+    values.snapshot_ref = patch.snapshotRef ?? null;
+  }
+  if ("runEndCleanup" in patch) {
+    values.run_end_cleanup_json =
+      patch.runEndCleanup === undefined ? null : JSON.stringify(patch.runEndCleanup);
+  }
+  if (patch.repositoryIdentity) {
+    values.repo_root = patch.repositoryIdentity.repoRoot;
+    values.repo_fingerprint = patch.repositoryIdentity.repoFingerprint;
+  }
+  if (patch.provisionedState !== undefined) {
+    values.provisioned_paths_json = JSON.stringify(patch.provisionedState);
+  } else if (patch.provisionedPaths !== undefined) {
+    values.provisioned_paths_json = JSON.stringify(patch.provisionedPaths);
+  }
+  assertRegistryMutationCustody(db, query(db), id, input.removalToken);
+  let update = query(db).updateTable("worktrees").set(values).where("id", "=", id);
+  // Retained/failed outcomes belong only to the observed live lifecycle.
+  if (input.onlyIfLive) {
+    update = update.where("removed_at", "is", null);
+  }
+  if (input.onlyIfActiveAt !== undefined) {
+    update = update.where("last_active_at", "=", input.onlyIfActiveAt);
+  }
+  executeSqliteQuerySync(db, update);
+}
+
 export type WorktreeRunEndInput<T> = {
   value: T;
   receipt: string;
