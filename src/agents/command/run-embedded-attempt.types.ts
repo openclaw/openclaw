@@ -11,6 +11,7 @@ export type RunEmbeddedAgentAttemptParams = {
   preparedRunAdmission: ReturnType<typeof prepareAgentCommandExecutionIdentity>;
   prepared: PreparedAgentCommandExecution;
   opts: AgentCommandOpts;
+  isAdmittedHarnessCompletion?: boolean;
   sessionEntry?: SessionEntry;
   lifecycleGeneration: string;
   onLifecycleGenerationChanged: (lifecycleGeneration: string) => void;

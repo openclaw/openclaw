@@ -33,6 +33,7 @@ type DirectAnnounceResponseContext = {
     requesterIsSubagent: boolean;
   };
   parentOnly: boolean;
+  assertHarnessCompletionSourceCurrent?: () => void;
   requesterSessionBound: boolean;
   deliveryTarget: Parameters<typeof hasMessagingToolDeliveryToSource>[1];
   shouldDeliverAgentFinal: boolean;
@@ -64,6 +65,7 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
   const {
     params,
     parentOnly,
+    assertHarnessCompletionSourceCurrent,
     requesterSessionBound,
     deliveryTarget,
     shouldDeliverAgentFinal,
@@ -233,6 +235,23 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
     const hasCompletionSideEffect = Boolean(
       directAnnounceResult && hasCommittedOutboundDeliveryEvidence(directAnnounceResult),
     );
+    if (
+      assertHarnessCompletionSourceCurrent &&
+      requesterCompletedSuccessfully &&
+      terminalReply?.disposition === "silent" &&
+      !params.requireVisibleReply &&
+      !params.requesterIsSubagent &&
+      !isSubagentCompletion &&
+      directAnnounceResult?.meta?.yielded !== true &&
+      directAnnounceResult?.meta?.continuationPending !== true &&
+      !hasVisibleNonSilentGatewayPayload &&
+      !hasCompletionSideEffect
+    ) {
+      // Command admission already bound the claim and allowed this silent terminal.
+      // Revalidate its source before acknowledging consumption without a send receipt.
+      assertHarnessCompletionSourceCurrent();
+      return buildRequesterCompletionDeliveryResult(false, undefined);
+    }
     const hasVisibleRequiredCompletionReply =
       hasMessagingToolDelivery ||
       (!requiresMessageToolDelivery && hasVisibleNonSilentGatewayPayload);

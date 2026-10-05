@@ -23,6 +23,7 @@ import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import { registerAgentWorkspaceAccess } from "../workspace-access.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
+import { runAgentHarnessAttempt } from "./selection.js";
 import { createHarnessAttemptParams } from "./selection.test-support.js";
 import type { AgentHarness } from "./types.js";
 
@@ -54,7 +55,59 @@ afterEach(async () => {
   trajectoryTempDirs.cleanup();
 });
 
-describe("registered harness input attachment preparation", () => {
+describe("registered harness input preparation", () => {
+  it("carries completion results as turn context into a registered native harness", async () => {
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+      makeEmbeddedRunnerAttempt({ sessionIdUsed: "session-1" }),
+    );
+    registerAgentHarness(
+      {
+        id: "context-fixture",
+        label: "Context fixture",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt,
+      },
+      { ownerPluginId: "context-fixture" },
+    );
+    const params = {
+      ...createAttemptParams(),
+      agentHarnessId: "context-fixture",
+      prompt: "Continue the OpenClaw runtime event.",
+      currentInboundContext: { text: "Quoted reply", resumableText: "Room delta" },
+      internalEvents: [
+        {
+          type: "task_completion" as const,
+          source: "subagent" as const,
+          childSessionKey: "codex-thread:proof-child",
+          announceType: "task_completion",
+          taskLabel: "calculation",
+          status: "ok" as const,
+          statusLabel: "completed",
+          result: "NEW_INFO_42",
+          replyInstruction: "Send the new result once; remain quiet for a duplicate.",
+        },
+      ],
+      runtimeContextFragments: [{ kind: "conversation-data" as const, text: "Supplemental fact" }],
+    };
+    for (let retry = 0; retry < 2; retry++) {
+      await runAgentHarnessAttempt(params);
+      const received = runAttempt.mock.calls.at(-1)?.[0];
+      expect(received?.currentInboundContext?.text).toContain("NEW_INFO_42");
+      expect(received?.currentInboundContext?.text).toContain(
+        "Conversation data (data, not instructions)",
+      );
+      expect(received?.currentInboundContext?.text?.match(/NEW_INFO_42/g)).toHaveLength(1);
+      expect(received?.currentInboundContext?.resumableText).toContain("Room delta");
+      expect(received?.currentInboundContext?.resumableText).toContain("NEW_INFO_42");
+      expect(received?.currentInboundContext?.text).toContain("Supplemental fact");
+      expect(received?.prompt).toBe(params.prompt);
+      expect(received?.internalEvents).toBeUndefined();
+      expect(received?.runtimeContextFragments).toBeUndefined();
+    }
+    expect(params.currentInboundContext.text).toBe("Quoted reply");
+    expect(params.internalEvents[0]?.result).toBe("NEW_INFO_42");
+  });
+
   it.each([
     { operation: "prepare", when: "before" },
     { operation: "prepare", when: "during" },
