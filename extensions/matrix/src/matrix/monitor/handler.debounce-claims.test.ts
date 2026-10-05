@@ -87,4 +87,56 @@ describe("matrix handler debounced replay claims", () => {
       expect(claim.release).toHaveBeenCalledOnce();
     }
   });
+
+  it("adopts the debounce flush's claim instead of claiming the event again", async () => {
+    const preclaimed = createClaim("preclaimed");
+    const inboundDeduper = createDeduper(createClaim("unused"));
+    const { handler } = createMatrixHandlerTestHarness({
+      accountAllowBots: true,
+      configuredBotUserIds: new Set(["@ops:example.org"]),
+      inboundDeduper,
+      isDirectMessage: false,
+      roomsConfig: {
+        "!room:example.org": { requireMention: false },
+      },
+      runPrepared: vi.fn(
+        async (turn: { ctxPayload: Record<string, unknown>; routeSessionKey: string }) => ({
+          admission: { kind: "drop" as const, reason: "bot-loop-protection" as const },
+          dispatched: false as const,
+          ctxPayload: turn.ctxPayload,
+          routeSessionKey: turn.routeSessionKey,
+        }),
+      ),
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({ eventId: "$merged", sender: "@ops:example.org", body: "hi" }),
+      { replayClaim: preclaimed },
+    );
+
+    expect(inboundDeduper.claim).not.toHaveBeenCalled();
+    expect(preclaimed.commit).toHaveBeenCalledOnce();
+    expect(preclaimed.release).not.toHaveBeenCalled();
+  });
+
+  it("releases debounce-owned claims when ingress drops the merged event", async () => {
+    const preclaimed = createClaim("preclaimed");
+    const absorbed = createClaim("absorbed");
+    const { handler } = createMatrixHandlerTestHarness({
+      inboundDeduper: createDeduper(createClaim("unused")),
+      startupMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({ eventId: "$history", body: "old", originServerTs: 1 }),
+      { replayClaim: preclaimed, absorbedReplayClaims: [absorbed] },
+    );
+
+    for (const claim of [preclaimed, absorbed]) {
+      expect(claim.commit).not.toHaveBeenCalled();
+      expect(claim.release).toHaveBeenCalledOnce();
+    }
+  });
 });

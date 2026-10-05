@@ -23,7 +23,7 @@ function text(eventId: string, body: string, extra: Partial<MatrixRawEvent> = {}
     type: "m.room.message",
     event_id: eventId,
     sender: ALICE,
-    origin_server_ts: 0,
+    origin_server_ts: STARTUP_TS,
     content: { msgtype: "m.text", body },
     ...extra,
   };
@@ -38,7 +38,7 @@ function media(eventId: string, msgtype: string, body: string): MatrixRawEvent {
     type: "m.room.message",
     event_id: eventId,
     sender: ALICE,
-    origin_server_ts: 0,
+    origin_server_ts: STARTUP_TS,
     content: { msgtype, body, url: "mxc://example.org/media" },
   };
 }
@@ -50,6 +50,8 @@ function createClaim(eventId: string) {
     release: vi.fn(),
   } satisfies ChannelReplayClaimHandle;
 }
+
+const STARTUP_TS = 1_000;
 
 function createSubject(params?: { debounceMs?: number; duplicates?: Set<string> }) {
   const dispatched: Dispatched[] = [];
@@ -80,6 +82,7 @@ function createSubject(params?: { debounceMs?: number; duplicates?: Set<string> 
       }
     },
     logVerboseMessage: () => {},
+    isPreStartupEvent: (event) => (event.origin_server_ts ?? STARTUP_TS) < STARTUP_TS,
     onError: (err) => {
       throw err;
     },
@@ -116,8 +119,9 @@ describe("matrix inbound debounce", () => {
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0]?.event.event_id).toBe("$3");
     expect(dispatched[0]?.event.content.body).toBe("one\ntwo\nthree");
-    // The merged event claims itself in the handler; only absorbed events are pre-claimed.
-    expect([...claims.keys()]).toEqual(["$1", "$2"]);
+    // Every batched event is claimed once; the handler adopts the base claim.
+    expect([...claims.keys()]).toEqual(["$1", "$2", "$3"]);
+    expect(dispatched[0]?.options?.replayClaim).toBe(claims.get("$3"));
     expect(dispatched[0]?.options?.absorbedReplayClaims).toEqual([
       claims.get("$1"),
       claims.get("$2"),
@@ -131,7 +135,9 @@ describe("matrix inbound debounce", () => {
     await enqueue(ROOM, text("$2", "two"));
 
     expect(dispatched.map((entry) => entry.event.content.body)).toEqual(["one", "two"]);
-    expect(dispatched[0]?.options?.absorbedReplayClaims).toEqual([]);
+    // Single events keep the handler's own claim path.
+    expect(dispatched[0]?.options?.replayClaim).toBeUndefined();
+    expect(dispatched[0]?.options?.absorbedReplayClaims).toBeUndefined();
     expect(claims.size).toBe(0);
   });
 
@@ -243,6 +249,51 @@ describe("matrix inbound debounce", () => {
     });
   });
 
+  it("merges a redelivered copy of an event only once", async () => {
+    const { enqueue, dispatched, claims } = createSubject();
+
+    await enqueue(ROOM, text("$a", "first"));
+    await enqueue(ROOM, text("$b", "second"));
+    await enqueue(ROOM, text("$a", "first"));
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]?.event.event_id).toBe("$b");
+    expect(dispatched[0]?.event.content.body).toBe("first\nsecond");
+    expect(dispatched[0]?.options?.replayClaim).toBe(claims.get("$b"));
+    expect(dispatched[0]?.options?.absorbedReplayClaims).toEqual([claims.get("$a")]);
+  });
+
+  it("keeps fresh events when the latest event was already handled", async () => {
+    const { enqueue, dispatched, claims } = createSubject({ duplicates: new Set(["$2"]) });
+
+    await enqueue(ROOM, text("$1", "fresh"));
+    await enqueue(ROOM, text("$2", "already handled"));
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]?.event.event_id).toBe("$1");
+    expect(dispatched[0]?.event.content.body).toBe("fresh");
+    expect(dispatched[0]?.options?.replayClaim).toBe(claims.get("$1"));
+  });
+
+  it("never merges cold-start history into a fresh turn", async () => {
+    const { enqueue, dispatched } = createSubject();
+
+    await enqueue(ROOM, text("$old", "from before startup", { origin_server_ts: STARTUP_TS - 1 }));
+    await enqueue(ROOM, text("$new", "fresh"));
+    await enqueue(ROOM, media("$img", "m.image", "a.jpg"));
+    await enqueue(ROOM, text("$late", "history", { origin_server_ts: STARTUP_TS - 1 }));
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    // History dispatches alone so the handler's startup filter drops it untouched.
+    expect(dispatched.map((entry) => [entry.event.event_id, entry.event.content.body])).toEqual([
+      ["$old", "from before startup"],
+      ["$img", "fresh"],
+      ["$late", "history"],
+    ]);
+  });
+
   it("releases absorbed claims when the monitor stopped before the flush", async () => {
     const { enqueue, dispatched, claims, stop } = createSubject();
 
@@ -252,7 +303,9 @@ describe("matrix inbound debounce", () => {
     await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
 
     expect(dispatched).toHaveLength(0);
-    expect(claims.get("$1")?.release).toHaveBeenCalledOnce();
+    for (const eventId of ["$1", "$2"]) {
+      expect(claims.get(eventId)?.release).toHaveBeenCalledOnce();
+    }
   });
 });
 

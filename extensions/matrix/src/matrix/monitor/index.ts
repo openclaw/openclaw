@@ -49,6 +49,7 @@ import { registerMatrixAutoJoin } from "./auto-join.js";
 import { resolveMatrixMonitorConfig } from "./config.js";
 import { createDirectRoomTracker } from "./direct.js";
 import { registerMatrixMonitorEvents } from "./events.js";
+import { isMatrixPreStartupEvent } from "./handler-ingress-prefix.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
 import { createMatrixInboundDebouncer } from "./inbound-debounce.js";
 import { createMatrixInboundEventDeduper } from "./inbound-dedupe.js";
@@ -476,6 +477,13 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         inboundDeduper,
         runDetachedTask: monitorTaskRunner.runDetachedTask,
         logVerboseMessage,
+        isPreStartupEvent: (event) =>
+          isMatrixPreStartupEvent({
+            dropPreStartupMessages,
+            eventTs: event.origin_server_ts ?? undefined,
+            eventAge: event.unsigned?.age ?? undefined,
+            startupMs,
+          }),
         onError: (err) => {
           logger.warn("matrix inbound debounce flush failed", { error: String(err) });
         },

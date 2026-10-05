@@ -54,6 +54,8 @@ type MatrixReplayClaimHandle =
 
 /** Inbound debounce context for one dispatch; see inbound-debounce.ts. */
 export type MatrixRoomMessageDispatchOptions = {
+  /** This event's replay claim, already taken by the debounce flush; adopted instead of reclaimed. */
+  replayClaim?: MatrixReplayClaimHandle;
   /** Claims for burst events merged into this event; they settle with its own claim. */
   absorbedReplayClaims?: readonly MatrixReplayClaimHandle[];
   /** Releases the debounce lane once the turn is adopted or deferred, not when it ends. */
@@ -135,8 +137,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
   ) => {
     const eventId = typeof event.event_id === "string" ? event.event_id.trim() : "";
     let inboundReplayClaim: MatrixReplayClaimHandle | undefined;
-    // Absorbed claims join this event's claim once it exists; otherwise finally releases them.
-    let unjoinedAbsorbedClaims = dispatchOptions?.absorbedReplayClaims ?? [];
+    // Debounce-owned claims join this event's claim once ingress accepts it; otherwise
+    // finally releases them so the events stay replayable.
+    const preclaimedReplay = dispatchOptions?.replayClaim;
+    let unjoinedAbsorbedClaims = [
+      ...(preclaimedReplay ? [preclaimedReplay] : []),
+      ...(dispatchOptions?.absorbedReplayClaims ?? []),
+    ];
     const debounceAdmission = dispatchOptions?.admission;
     let draftControllerRef: Awaited<ReturnType<typeof createMatrixDraftController>> | undefined;
     try {
@@ -193,12 +200,17 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           event,
           eventType,
           eventId,
-          inboundDeduper,
+          inboundDeduper: preclaimedReplay
+            ? { claim: async () => ({ kind: "claimed" as const, handle: preclaimedReplay }) }
+            : inboundDeduper,
           roomId,
           logVerboseMessage,
           directTracker,
           claimInboundReplay: (handle) => {
-            inboundReplayClaim = joinMatrixInboundReplayClaims(handle, unjoinedAbsorbedClaims);
+            inboundReplayClaim = joinMatrixInboundReplayClaims(
+              handle,
+              unjoinedAbsorbedClaims.filter((claim) => claim !== handle),
+            );
             unjoinedAbsorbedClaims = [];
           },
         });

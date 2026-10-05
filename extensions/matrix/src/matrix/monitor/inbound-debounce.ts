@@ -10,10 +10,10 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { asNullableObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asNullableObjectRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CoreConfig } from "../../types.js";
 import { resolveMatrixMessageAttachment } from "../media-text.js";
-import type { MatrixRoomMessageHandler } from "./handler.js";
+import type { MatrixRoomMessageDispatchOptions, MatrixRoomMessageHandler } from "./handler.js";
 import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import { stripMatrixMentionPrefix } from "./mentions.js";
 import { EventType, type MatrixRawEvent } from "./types.js";
@@ -23,17 +23,13 @@ type MatrixInboundDebounceEntry = { roomId: string; event: MatrixRawEvent };
 // Audio and stickers stay immediate: voice notes are complete messages on their own.
 const CAPTION_WAITING_MSGTYPES = new Set(["m.image", "m.file", "m.video"]);
 
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
 function readRelation(event: MatrixRawEvent) {
   return asNullableObjectRecord(event.content["m.relates_to"]);
 }
 
 function resolveThreadRootId(event: MatrixRawEvent): string {
   const relation = readRelation(event);
-  return relation?.rel_type === "m.thread" ? (readString(relation.event_id) ?? "") : "";
+  return relation?.rel_type === "m.thread" ? (readStringValue(relation.event_id) ?? "") : "";
 }
 
 /** New, unedited messages only; edits, reactions, and real replies keep their own turn. */
@@ -54,24 +50,24 @@ function isPlainNewMessage(event: MatrixRawEvent): boolean {
 
 function hasMediaSource(event: MatrixRawEvent): boolean {
   const file = asNullableObjectRecord(event.content.file);
-  return Boolean(readString(event.content.url) ?? readString(file?.url));
+  return Boolean(readStringValue(event.content.url) ?? readStringValue(file?.url));
 }
 
 function isCaptionlessMedia(event: MatrixRawEvent): boolean {
-  const msgtype = readString(event.content.msgtype);
+  const msgtype = readStringValue(event.content.msgtype);
   if (!msgtype || !CAPTION_WAITING_MSGTYPES.has(msgtype) || !hasMediaSource(event)) {
     return false;
   }
   const attachment = resolveMatrixMessageAttachment({
-    body: readString(event.content.body),
-    filename: readString(event.content.filename),
+    body: readStringValue(event.content.body),
+    filename: readStringValue(event.content.filename),
     msgtype,
   });
   return attachment !== undefined && attachment.caption === undefined;
 }
 
 function readTextBody(event: MatrixRawEvent): string {
-  return readString(event.content.body)?.trim() ?? "";
+  return readStringValue(event.content.body)?.trim() ?? "";
 }
 
 function mergeMentions(events: readonly MatrixRawEvent[]): Record<string, unknown> | undefined {
@@ -121,7 +117,7 @@ function mergeMatrixInboundBurst(events: readonly MatrixRawEvent[]): MatrixRawEv
   }
   if (media) {
     const filename =
-      readString(media.content.filename)?.trim() || readTextBody(media) || "attachment";
+      readStringValue(media.content.filename)?.trim() || readTextBody(media) || "attachment";
     content.filename = filename;
     content.body = text || filename;
   } else {
@@ -137,6 +133,8 @@ export function createMatrixInboundDebouncer(params: {
   inboundDeduper: Pick<MatrixInboundEventDeduper, "claim">;
   runDetachedTask: (label: string, task: () => Promise<void>) => Promise<void>;
   logVerboseMessage: (message: string) => void;
+  /** Startup eligibility owner; cold-start history must never merge into a fresh turn. */
+  isPreStartupEvent: (event: MatrixRawEvent) => boolean;
   onError: (err: unknown) => void;
 }) {
   const { cfg, handleRoomMessage, inboundDeduper, logVerboseMessage } = params;
@@ -147,7 +145,8 @@ export function createMatrixInboundDebouncer(params: {
     if (
       event.type !== EventType.RoomMessage ||
       event.sender === params.selfUserId ||
-      !isPlainNewMessage(event)
+      !isPlainNewMessage(event) ||
+      params.isPreStartupEvent(event)
     ) {
       return false;
     }
@@ -163,27 +162,34 @@ export function createMatrixInboundDebouncer(params: {
     });
   };
 
-  /** Claim absorbed events up front so a replayed or already-handled copy is not merged twice. */
-  const claimAbsorbedEvents = async (roomId: string, events: readonly MatrixRawEvent[]) => {
-    const kept: MatrixRawEvent[] = [];
-    const claims: ChannelReplayClaimHandle[] = [];
+  /**
+   * Claim every batched event before choosing the merge base, so a redelivered copy or an
+   * already-handled event drops out on its own instead of rejecting the whole merged turn.
+   */
+  const claimBatch = async (roomId: string, events: readonly MatrixRawEvent[]) => {
+    const kept: Array<{ event: MatrixRawEvent; claim?: ChannelReplayClaimHandle }> = [];
+    const seen = new Set<string>();
     for (const event of events) {
       const eventId = event.event_id?.trim();
       if (!eventId) {
-        kept.push(event);
+        kept.push({ event });
         continue;
       }
+      if (seen.has(eventId)) {
+        logVerboseMessage(`matrix: skip repeated debounced event room=${roomId} id=${eventId}`);
+        continue;
+      }
+      seen.add(eventId);
       const claim = await inboundDeduper.claim({ roomId, eventId });
       if (claim.kind === "claimed") {
-        claims.push(claim.handle);
-        kept.push(event);
+        kept.push({ event, claim: claim.handle });
       } else if (claim.kind === "invalid") {
-        kept.push(event);
+        kept.push({ event });
       } else {
         logVerboseMessage(`matrix: skip duplicate debounced event room=${roomId} id=${eventId}`);
       }
     }
-    return { kept, claims };
+    return kept;
   };
 
   const { debouncer } = createChannelInboundDebouncer<MatrixInboundDebounceEntry>({
@@ -207,20 +213,29 @@ export function createMatrixInboundDebouncer(params: {
           }
           const { roomId } = last;
           let event = last.event;
-          let absorbedReplayClaims: ChannelReplayClaimHandle[] = [];
+          let options: MatrixRoomMessageDispatchOptions = { admission };
           if (entries.length > 1) {
-            const events = entries.map((entry) => entry.event);
-            const base = events.find(isCaptionlessMedia) ?? last.event;
-            const absorbed = await claimAbsorbedEvents(
+            const kept = await claimBatch(
               roomId,
-              events.filter((candidate) => candidate !== base),
+              entries.map((entry) => entry.event),
             );
-            absorbedReplayClaims = absorbed.claims;
-            event = mergeMatrixInboundBurst(
-              events.filter((candidate) => candidate === base || absorbed.kept.includes(candidate)),
-            );
+            const base = kept.find((entry) => isCaptionlessMedia(entry.event)) ?? kept.at(-1);
+            if (!base) {
+              return;
+            }
+            event =
+              kept.length > 1
+                ? mergeMatrixInboundBurst(kept.map((entry) => entry.event))
+                : base.event;
+            options = {
+              admission,
+              replayClaim: base.claim,
+              absorbedReplayClaims: kept
+                .filter((entry) => entry !== base)
+                .flatMap((entry) => (entry.claim ? [entry.claim] : [])),
+            };
             logVerboseMessage(
-              `matrix: debounce merged ${absorbed.kept.length + 1} events room=${roomId} into id=${event.event_id ?? "unknown"}`,
+              `matrix: debounce merged ${kept.length} events room=${roomId} into id=${event.event_id ?? "unknown"}`,
             );
           }
           let started = false;
@@ -228,12 +243,13 @@ export function createMatrixInboundDebouncer(params: {
             `debounced room message handler room=${roomId} id=${event.event_id ?? "unknown"}`,
             async () => {
               started = true;
-              await handleRoomMessage(roomId, event, { absorbedReplayClaims, admission });
+              await handleRoomMessage(roomId, event, options);
             },
           );
           if (!started) {
             // The monitor stopped before this batch's timer fired; leave the events replayable.
-            for (const claim of absorbedReplayClaims) {
+            options.replayClaim?.release();
+            for (const claim of options.absorbedReplayClaims ?? []) {
               claim.release();
             }
             logVerboseMessage(`matrix: dropped debounced batch after monitor stop room=${roomId}`);
