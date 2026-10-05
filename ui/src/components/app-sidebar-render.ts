@@ -330,17 +330,19 @@ export function renderAppSidebarPagesHead(host: AppSidebarRenderHost, row: unkno
     <div class="sidebar-nav__lead">
       ${row}
       <span class="sidebar-recent-sessions__label-text sr-only">${t("nav.pages")}</span>
-      <button
-        type="button"
-        class="sidebar-nav__head-action"
-        aria-haspopup="menu"
-        aria-expanded=${String(host.sidebarMenus.moreMenuPosition !== null)}
-        aria-label=${t("nav.customize")}
-        @click=${(event: MouseEvent) =>
-          host.sidebarMenus.toggleMoreMenu(event.currentTarget as HTMLElement)}
-      >
-        ${icons.penLine}
-      </button>
+      <span class="sidebar-nav__head-slot">
+        <button
+          type="button"
+          class="sidebar-nav__head-action"
+          aria-haspopup="menu"
+          aria-expanded=${String(host.sidebarMenus.moreMenuPosition !== null)}
+          aria-label=${t("nav.customize")}
+          @click=${(event: MouseEvent) =>
+            host.sidebarMenus.toggleMoreMenu(event.currentTarget as HTMLElement)}
+        >
+          ${icons.penLine}
+        </button>
+      </span>
     </div>
   `;
 }

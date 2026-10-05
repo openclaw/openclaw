@@ -15,6 +15,7 @@ import {
   waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
+import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
 import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { openSidebarMoreMenu } from "./sidebar-customization.test-support.ts";
@@ -91,60 +92,99 @@ async function setThemeMode(page: Page, mode: "dark" | "light") {
 }
 
 suite.define(() => {
-  it.each([1440, 390])("keeps nav controls separated at %i px", async (width) => {
-    await suite.withPage(
-      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width } },
-      async ({ page }) => {
-        await installMockGateway(page);
-        await page.addInitScript(
-          (key) =>
-            localStorage.setItem(
-              key,
-              JSON.stringify({
-                sidebarAgentsMode: "roster",
-                sidebarEntries: ["route:systems", "route:agents-home", "route:cron"],
-              }),
-            ),
-          controlUiBundledSettingsStorageKey(suite.server.baseUrl),
-        );
-        await page.goto(`${suite.server.baseUrl}chat`);
-        if (width < 900) {
-          await visibleDrawerButton(page).click();
-        }
-        const sidebar = page.locator("openclaw-app-sidebar");
-        const row = sidebar.locator('[data-sidebar-entry="route:systems"]');
-        const grip = row.getByRole("button", { name: "Reorder Systems", exact: true });
-        const editor = sidebar.getByRole("button", { name: "Edit pinned items", exact: true });
-        await row.hover();
-        await expect
-          .poll(() => editor.evaluate((element) => getComputedStyle(element).opacity))
-          .toBe("1");
-        await expect
-          .poll(() => grip.evaluate((element) => getComputedStyle(element).opacity))
-          .toBe("1");
-        const [gripBox, editorBox, iconBox, rowBox, linkBox, siblingBox] = await Promise.all([
-          grip.boundingBox(),
-          editor.boundingBox(),
-          row.locator(".nav-item__icon").boundingBox(),
-          row.boundingBox(),
-          row.locator(".nav-item").boundingBox(),
-          sidebar.locator('[data-sidebar-entry="route:agents-home"]').boundingBox(),
-        ]);
-        expect(gripBox).not.toBeNull();
-        expect(editorBox).not.toBeNull();
-        expect(iconBox).not.toBeNull();
-        expect(rowBox).not.toBeNull();
-        expect(linkBox).not.toBeNull();
-        expect(siblingBox).not.toBeNull();
-        expect(rowBox!.height).toBe(siblingBox!.height);
-        expect(linkBox!.height).toBe(rowBox!.height);
-        expect(editorBox!.y + editorBox!.height / 2).toBe(rowBox!.y + rowBox!.height / 2);
-        expect(gripBox!.x).toBeGreaterThanOrEqual(rowBox!.x);
-        expect(gripBox!.x + gripBox!.width).toBeLessThanOrEqual(editorBox!.x);
-        expect(gripBox!.x + gripBox!.width).toBeLessThanOrEqual(iconBox!.x);
-      },
-    );
-  });
+  it.each(
+    [1440, 390].flatMap((width) => [
+      { width, entry: "route:systems", label: "Systems", route: "chat" },
+      { width, entry: "plugin:workboard/workboard", label: "Workboard", route: "workboard/ops" },
+    ]),
+  )(
+    "keeps $label nav controls aligned and separated at $width px",
+    async ({ width, entry, label, route }) => {
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width } },
+        async ({ page }) => {
+          const boards = [
+            { id: "default", total: 0, active: 0, archived: 0, byStatus: {} },
+            { id: "ops", name: "Operations", total: 0, active: 0, archived: 0, byStatus: {} },
+          ];
+          await installMockGateway(page, {
+            ...workboardUi,
+            methodResponses: {
+              "workboard.boards.list": { boards },
+              "workboard.cards.list": { boards, cards: [], statuses: ["todo", "done"] },
+            },
+          });
+          await page.addInitScript(
+            ({ key, entry }) =>
+              localStorage.setItem(
+                key,
+                JSON.stringify({
+                  sidebarAgentsMode: "roster",
+                  sidebarEntries: ["route:agents-home", entry, "route:cron"],
+                }),
+              ),
+            { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), entry },
+          );
+          await page.goto(`${suite.server.baseUrl}${route}`);
+          if (label === "Workboard") {
+            await page.locator(".workboard-page-title", { hasText: "Operations" }).waitFor();
+          }
+          if (width < 900) {
+            await visibleDrawerButton(page).click();
+          }
+          const sidebar = page.locator("openclaw-app-sidebar");
+          const row = sidebar.locator(`[data-sidebar-entry="${entry}"]`);
+          if (label === "Workboard") {
+            await expect.poll(() => row.locator(".nav-item--child:visible").count()).toBe(2);
+          }
+          const originalBox = await row.boundingBox();
+          expect(originalBox).not.toBeNull();
+          const grip = row.getByRole("button", { name: `Reorder ${label}`, exact: true });
+          await row.hover();
+          await grip.click();
+          await page.getByRole("menuitem", { name: "Move up", exact: true }).click();
+          await expect
+            .poll(() =>
+              sidebar.locator(".sidebar-zone-entry").first().getAttribute("data-sidebar-entry"),
+            )
+            .toBe(entry);
+          const editor = sidebar.getByRole("button", { name: "Edit pinned items", exact: true });
+          await row.hover();
+          await expect
+            .poll(() => editor.evaluate((element) => getComputedStyle(element).opacity))
+            .toBe("1");
+          await expect
+            .poll(() => grip.evaluate((element) => getComputedStyle(element).opacity))
+            .toBe("1");
+          const [gripBox, editorBox, iconBox, rowBox, linkBox] = await Promise.all([
+            grip.boundingBox(),
+            editor.boundingBox(),
+            row.locator(".nav-item__icon").first().boundingBox(),
+            row.boundingBox(),
+            row.locator(".nav-item").first().boundingBox(),
+          ]);
+          expect(gripBox).not.toBeNull();
+          expect(editorBox).not.toBeNull();
+          expect(iconBox).not.toBeNull();
+          expect(rowBox).not.toBeNull();
+          expect(linkBox).not.toBeNull();
+          if (captureUiProofEnabled) {
+            await page.locator(".shell-nav").screenshot({
+              animations: "disabled",
+              path: path.join(suite.artifactDir, `lead-${label}-${width}.png`),
+            });
+          }
+          expect(rowBox!.height).toBe(originalBox!.height);
+          expect(
+            Math.abs(editorBox!.y + editorBox!.height / 2 - (linkBox!.y + linkBox!.height / 2)),
+          ).toBeLessThanOrEqual(1);
+          expect(gripBox!.x).toBeGreaterThanOrEqual(rowBox!.x);
+          expect(gripBox!.x + gripBox!.width).toBeLessThanOrEqual(editorBox!.x);
+          expect(gripBox!.x + gripBox!.width).toBeLessThanOrEqual(iconBox!.x);
+        },
+      );
+    },
+  );
 
   it("uses catalog labels in the hidden-section recovery rows", async () => {
     const context = await suite.browser.newContext({

@@ -3067,7 +3067,7 @@ a:is(
   align-items: center;
   justify-content: flex-start;
   gap: 8px;
-  min-height: 32px;
+  min-height: var(--sidebar-nav-row-height);
   padding: 0 8px;
   border-radius: var(--radius-md);
   border: 1px solid transparent;
@@ -3383,15 +3383,21 @@ a:is(
 
 .sidebar-nav__lead {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   min-width: 0;
-  min-height: 32px;
   padding-inline-end: 8px;
 }
 
 .sidebar-nav__lead > :first-child {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+.sidebar-nav__head-slot {
+  display: flex;
+  align-items: center;
+  flex: none;
+  block-size: var(--sidebar-nav-row-height);
 }
 
 .sidebar-nav__head-action {

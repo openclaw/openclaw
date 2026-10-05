@@ -21,6 +21,7 @@
 .shell--mobile-nav,
 .shell--mobile-nav.shell--nav-collapsed {
   --shell-topbar-height: 58px;
+  --sidebar-nav-row-height: 40px;
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: var(--shell-topbar-height) minmax(0, 1fr);
   grid-template-areas:
@@ -215,7 +216,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 
 .shell--mobile-nav .nav-item {
   margin: 0;
-  min-height: 40px;
   padding: 0 12px 0 8px;
   font-size: calc(13px * var(--control-ui-text-scale));
   border-radius: var(--radius-md);
