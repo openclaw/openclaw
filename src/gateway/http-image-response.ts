@@ -5,6 +5,7 @@ import path from "node:path";
 import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { fileTypeFromBuffer } from "file-type";
 import { isSelfContainedSvg } from "../../packages/gateway-protocol/src/svg-image.js";
+import { sanitizeContentDispositionHeader } from "../shared/http-header-sanitize.js";
 import { matchesHttpIfNoneMatch } from "./http-conditional.js";
 
 /** Authenticated UI images are deliberately small, bounded presentation assets. */
@@ -94,7 +95,10 @@ export function sendHttpImageResponse(params: {
   res.setHeader("cross-origin-resource-policy", "same-origin");
   res.setHeader("x-content-type-options", "nosniff");
   applyHttpImageContentSecurityPolicy(res);
-  res.setHeader("content-disposition", `attachment; filename="${params.filename}"`);
+  res.setHeader(
+    "content-disposition",
+    sanitizeContentDispositionHeader(`attachment; filename="${params.filename}"`),
+  );
   if (matchesHttpIfNoneMatch(req.headers["if-none-match"], image.etag)) {
     res.statusCode = 304;
     res.end();
