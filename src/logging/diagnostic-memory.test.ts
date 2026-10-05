@@ -93,7 +93,13 @@ describe("diagnostic memory", () => {
       const { emitDiagnosticMemorySample: sample } = await import("./diagnostic-memory.js");
       expect(getHeapStatistics).not.toHaveBeenCalled();
 
-      const options = { memoryUsage: memoryUsage({}), emitSample: false };
+      const options = {
+        memoryUsage: memoryUsage({}),
+        emitSample: false,
+        isBunRuntime: false,
+      };
+      sample({ ...options, isBunRuntime: true });
+      expect(getHeapStatistics).not.toHaveBeenCalled();
       for (const heapSizeLimitBytes of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
         sample({ ...options, heapSizeLimitBytes });
       }

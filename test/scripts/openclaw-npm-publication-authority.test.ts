@@ -178,6 +178,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { promisify } from 'node:util';
 const root = process.env.NPM_AUTHORITY_FIXTURE;
+const isGh = command => command === 'gh' || command === root + '/bin/gh';
 const statePath = root + '/state.json';
 const readState = () => JSON.parse(readFileSync(statePath, 'utf8'));
 const save = state => writeFileSync(statePath, JSON.stringify(state));
@@ -210,23 +211,28 @@ function response(args) {
 }
 const originalSync = cp.execFileSync;
 cp.execFileSync = (command, args, options = {}) => {
-  if (command !== 'gh') return originalSync(command, args, options);
+  if (!isGh(command)) return originalSync(command, args, options);
   const bytes = response(args);
   if (Number.isInteger(options.stdio?.[1])) writeFileSync(options.stdio[1], bytes);
   return options.encoding ? bytes.toString(options.encoding) : bytes;
 };
 const originalAsync = cp.execFile;
 cp.execFile = (command, args, options, callback) => {
-  if (command !== 'gh') return originalAsync(command, args, options, callback);
+  if (!isGh(command)) return originalAsync(command, args, options, callback);
   try { callback(null, response(args).toString('utf8'), ''); }
   catch (error) { callback(error, '', ''); }
 };
 cp.execFile[promisify.custom] = async (command, args, options) => {
-  if (command !== 'gh') throw new Error('Unexpected async transport: ' + command);
+  if (!isGh(command)) throw new Error('Unexpected async transport: ' + command);
   return { stdout: response(args).toString('utf8'), stderr: '' };
 };
 syncBuiltinESMExports();
 `,
+  );
+  writeFileSync(
+    join(bin, "gh"),
+    "#!/bin/sh\necho 'GitHub transport escaped the fixture' >&2; exit 90\n",
+    { mode: 0o755 },
   );
   writeFileSync(
     join(bin, "npm"),
@@ -258,7 +264,7 @@ fs.writeFileSync(path, JSON.stringify(state));
     NODE_OPTIONS: "--preserve-symlinks-main --import=" + preload,
     PATH: bin + ":" + process.env.PATH,
     NPM_AUTHORITY_FIXTURE: root,
-    OPENCLAW_GH_BIN: "",
+    OPENCLAW_GH_BIN: join(bin, "gh"),
     GH_TOKEN: "test-only",
     GITHUB_ACTIONS: "true",
     GITHUB_REPOSITORY: f.repository,
