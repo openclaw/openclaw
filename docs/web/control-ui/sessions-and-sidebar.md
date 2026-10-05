@@ -47,6 +47,9 @@ updates the sidebar without renaming an existing branch.
 In **Project → Browse**, keyboard focus moves to the folder path. Escape returns
 focus to **Browse**. Loading and folder errors are announced without moving focus
 away from the path field.
+Enter opens the typed path; use Up or Down first to open a highlighted folder.
+Tab completes a folder name. If the starting workspace does not exist yet, Browse
+opens the home folder. Errors for paths you enter remain visible.
 
 For connections with a durable user profile, the Gateway stores each agent's latest folder, worktree, model, thinking, and fast-mode choices. New sessions restore the last fast-mode choice, including an explicit off choice, for supported providers. The new-session picker also shows recent projects and folders derived only from sessions created by that profile. These conveniences follow the person across browsers; they do not grant access to a project or path.
 
