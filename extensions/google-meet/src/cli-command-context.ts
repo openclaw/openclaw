@@ -2,8 +2,7 @@ import type { Command } from "commander";
 import type { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   callGoogleMeetGateway,
-  type CreateOptions,
-  type MeetArtifactOptions,
+  parseOptionalNumber,
   type ResolveSpaceOptions,
 } from "./cli-shared.js";
 import type { GoogleMeetConfig } from "./config.js";
@@ -39,22 +38,28 @@ export function addGoogleMeetArtifactOptions(command: Command): Command {
     .option("--all-conference-records", "Fetch every conference record for --meeting");
 }
 
-type GoogleMeetCliArtifactParams = Record<string, unknown> & {
-  lateAfterMinutes?: number;
-  earlyBeforeMinutes?: number;
-};
-
 export type GoogleMeetCliCommandContext = {
   root: Command;
   config: GoogleMeetConfig;
   ensureRuntime: () => Promise<GoogleMeetRuntime>;
   callGateway: typeof callGatewayFromCli;
   operationTimeoutMs: number;
-  resolveMeetingInput: (config: GoogleMeetConfig, value?: string) => string;
-  resolveCliParams: (options: ResolveSpaceOptions) => Record<string, unknown>;
-  resolveCliArtifactParams: (options: MeetArtifactOptions) => GoogleMeetCliArtifactParams;
-  hasCreateOAuth: (config: GoogleMeetConfig, options: CreateOptions) => boolean;
 };
+
+export function resolveCliMeetingInput(config: GoogleMeetConfig, value?: string): string {
+  const meeting = value?.trim() || config.defaults.meeting;
+  if (!meeting) {
+    throw new Error(
+      "Meeting input is required. Pass a URL/meeting code or configure defaults.meeting.",
+    );
+  }
+  return meeting;
+}
+
+export function resolveCliParams(options: ResolveSpaceOptions) {
+  const { calendar, expiresAt, ...raw } = options;
+  return { ...raw, calendarId: calendar, expiresAt: parseOptionalNumber(expiresAt) };
+}
 
 export async function callGoogleMeetRuntime<Result>(
   context: GoogleMeetCliCommandContext,
