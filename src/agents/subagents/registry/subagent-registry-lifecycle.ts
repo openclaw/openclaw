@@ -35,6 +35,7 @@ import type {
   ScheduledRequesterSettleWake,
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle-context.js";
+import { deleteSuspendedSubagentSession as deleteSuspendedSubagentSessionCleanup } from "./subagent-registry-lifecycle-delete-cleanup.js";
 import { refreshFrozenResultFromSession } from "./subagent-registry-lifecycle-delivery.js";
 import { finalizeResumedAnnounceGiveUp } from "./subagent-registry-lifecycle-give-up.js";
 import {
@@ -481,6 +482,10 @@ export class SubagentLifecycleController {
       }
     }, "subagents:lifecycle-complete");
   };
+
+  deleteSuspendedSubagentSession = (
+    params: Parameters<typeof deleteSuspendedSubagentSessionCleanup>[1],
+  ) => deleteSuspendedSubagentSessionCleanup(this, params);
 
   completeCleanupBookkeeping = (params: CleanupBookkeepingParams) =>
     completeCleanupBookkeeping(this, params);

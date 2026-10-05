@@ -524,6 +524,10 @@ async function runSweepSample(childCount: number): Promise<Sample> {
     resumeRequesterSettleWake: () => {},
     startSubagentAnnounceCleanupFlow: () => true,
     completeCleanupBookkeeping: async () => {},
+    deleteSuspendedSubagentSession: async () => {
+      sessionEffects += 1;
+      throw new Error("Recovery-sweep benchmark attempted suspended session deletion");
+    },
     isCleanupOwnerCurrent: (entry) =>
       isSameSubagentRunOwner(runs.get(entry.runId), entry) || !runs.has(entry.runId),
     sessionEffectsHostCurrent: (entry) => entry.execution.suppressSessionEffects !== true,

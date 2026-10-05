@@ -39,6 +39,7 @@ import {
 import { createRequesterInitialTransferFixture } from "./registry/subagent-registry-requester-yield.test-support.js";
 import type { SubagentRunRecord } from "./registry/subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./registry/subagent-run-generation.js";
+import * as requesterCronAuthority from "./requester-cron-authority.js";
 import {
   consumeRequesterCronAuthorityAdmission,
   prepareRequesterCronAuthority,
@@ -311,6 +312,130 @@ function consume(
 }
 
 describe("requester cron authority lifetime", () => {
+  it.each(
+    (["first", "last"] as const).flatMap((closedPosition) =>
+      (["live", "revoked", "missing", "duplicate", "foreign", "unpublished"] as const)
+        .filter(
+          (sourceState) =>
+            closedPosition === "first" || sourceState === "live" || sourceState === "revoked",
+        )
+        .map((sourceState) => ({ closedPosition, sourceState })),
+    ),
+  )(
+    "preserves operator restrictions when a $closedPosition delete receipt closes after mark ($sourceState source)",
+    async ({ closedPosition, sourceState }) => {
+      let holds = 1;
+      let revoked = false;
+      const assertCurrent = () => {
+        if (revoked || holds === 0) {
+          throw new Error("source retired");
+        }
+      };
+      const operator = createAdmittedRunOperatorAuthority({
+        profileId: "late-failed-delete-profile",
+        scopes: ["operator.read"],
+        assertCurrent,
+        retain: () => {
+          assertCurrent();
+          holds++;
+          let released = false;
+          return () => {
+            if (!released) {
+              released = true;
+              holds--;
+            }
+          };
+        },
+      });
+      const batch = createBatch("late-failed-delete", 2);
+      const closedIndex = closedPosition === "first" ? 0 : 1;
+      await inAdminRun(
+        "late-failed-delete",
+        async () => expect(await mark(batch)).toBe(2),
+        undefined,
+        undefined,
+        undefined,
+        operator,
+        false,
+      );
+      holds--;
+      expect(holds).toBe(1);
+      // The original producer closes AFTER intent captured this full cohort.
+      // updateBatch delegates to the real native mutation owner and acknowledges publication.
+      await updateBatch(batch, (members) => {
+        const closed = members[closedIndex]!;
+        closed.cleanup = "delete";
+        closed.cleanupCompletedAt = 3;
+        closed.archiveAtMs = 60_003;
+        closed.delivery = { status: "failed", lastError: "original delivery suppressed" };
+        closed.deleteCleanupTarget = {
+          sessionId: "original-child",
+          lifecycleRevision: "original-child-revision",
+        };
+        closed.deleteCleanupDispatchedAt = 2;
+      });
+      const closedBefore = structuredClone(batch[closedIndex]!);
+      const malformed = sourceState !== "live" && sourceState !== "revoked";
+      const promote = requesterCronAuthority.promoteRequesterCronAuthority;
+      const promotion = malformed
+        ? vi
+            .spyOn(requesterCronAuthority, "promoteRequesterCronAuthority")
+            .mockImplementation((params) => {
+              const [closed] = params.acknowledgedClosedEntries!;
+              const acknowledgedClosedEntries =
+                sourceState === "missing"
+                  ? []
+                  : sourceState === "duplicate"
+                    ? [closed!, closed!]
+                    : sourceState === "foreign"
+                      ? [{ ...closed!, runId: "foreign" }]
+                      : [structuredClone(closed!)];
+              promote({ ...params, acknowledgedClosedEntries });
+            })
+        : undefined;
+      try {
+        expect(await settle(batch)).toBe(true);
+      } finally {
+        promotion?.mockRestore();
+      }
+      const closed = batch[closedIndex]!;
+      const owed = [batch[closedIndex === 0 ? 1 : 0]!];
+      expect(closed).toMatchObject({
+        cleanupCompletedAt: closedBefore.cleanupCompletedAt,
+        archiveAtMs: closedBefore.archiveAtMs,
+        delivery: closedBefore.delivery,
+        deleteCleanupTarget: closedBefore.deleteCleanupTarget,
+        deleteCleanupDispatchedAt: closedBefore.deleteCleanupDispatchedAt,
+      });
+      expect(closed.requesterTurnRunId).toBeUndefined();
+      expect(closed.requesterTurnYielded).toBeUndefined();
+      expect(closed.requesterSettleWake).toBeUndefined();
+      expect(owed[0]!.requesterSettleWake?.batchRunIds).toEqual([owed[0]!.runId]);
+      expect(holds).toBe(malformed ? 0 : 1);
+      const work = vi.fn(async () => {
+        expect(readOperatorToolGatewayAuthority()?.operatorRunAuthority).toBe(operator);
+        expect(operator.scopes).toEqual(["operator.read"]);
+        expect(consume(owed)).toBeUndefined();
+      });
+      try {
+        revoked = sourceState === "revoked";
+        if (revoked || malformed) {
+          await expect(dispatch(owed, work)).rejects.toThrow(
+            revoked ? "no longer current" : "Requester operator authority",
+          );
+          expect(work).not.toHaveBeenCalled();
+        } else {
+          await dispatch(owed, work);
+          expect(work).toHaveBeenCalledOnce();
+        }
+      } finally {
+        revokeRequesterCronAuthority(SESSION);
+      }
+      expect(holds).toBe(0);
+      expect(closed.delivery?.status).toBe("failed");
+    },
+  );
+
   it.each(["completion", "scope ended", "reset"] as const)(
     "retains the full cohort's authority across a scoped child pause until %s",
     async (outcome) => {

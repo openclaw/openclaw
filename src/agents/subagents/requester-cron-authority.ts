@@ -374,21 +374,33 @@ export function prepareRequesterCronAuthority(params: {
 export function promoteRequesterCronAuthority(params: {
   requesterTurnRunId: string;
   batch: readonly SubagentRunRecord[];
+  acknowledgedClosedEntries?: readonly SubagentRunRecord[];
   rearmGeneration?: number;
 }): void {
-  const authority = params.batch[0] && state.byEntry.get(getSubagentRunRuntimeKey(params.batch[0]));
+  const closed = params.acknowledgedClosedEntries ?? [];
+  const acknowledged = [...params.batch, ...closed];
+  const authority = acknowledged
+    .map((entry) => state.byEntry.get(getSubagentRunRuntimeKey(entry)))
+    .find((candidate) => candidate !== undefined);
   if (!authority || authority.kind !== "yield") {
     return;
   }
   if (
-    params.rearmGeneration === undefined ||
     authority.requesterTurnRunId !== params.requesterTurnRunId ||
-    !sameRequesterSettleBatch(authority.batch, params.batch) ||
-    !isCurrent(authority)
+    !sameRequesterSettleBatch(authority.batch, acknowledged, { closed, runs: authority.runs }) ||
+    acknowledged.some(
+      (entry) => state.byEntry.get(getSubagentRunRuntimeKey(entry)) !== authority,
+    ) ||
+    !isCurrent(authority) ||
+    params.batch.length === 0 ||
+    params.rearmGeneration === undefined
   ) {
     discard(authority);
     return;
   }
+  // Only the complete acknowledged union can discharge a closed member.
+  // Remaining continuation keeps this same captured source and restrictions.
+  authority.batch = [...params.batch];
   authority.rearmGeneration = params.rearmGeneration;
   if (!isCurrent(authority)) {
     discard(authority);

@@ -1,6 +1,7 @@
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import {
+  normalizeDeleteCleanupTarget,
   getDeliveryLastError,
   clearSubagentPendingDelivery,
   ensureDeliveryState,
@@ -19,6 +20,8 @@ import {
 import { retireSupersededCleanupIfNeeded } from "./subagent-registry-lifecycle-attempt.js";
 import { suspendPendingFinalDelivery } from "./subagent-registry-lifecycle-cleanup.js";
 import type { SubagentLifecycleAnnounceCleanupContext } from "./subagent-registry-lifecycle-context.js";
+import { createSubagentDeleteCleanup } from "./subagent-registry-lifecycle-delete-cleanup.js";
+import { buildSafeLifecycleErrorMeta } from "./subagent-registry-lifecycle-log.js";
 import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-persistence.js";
 import { getCurrentSubagentRunOwner } from "./subagent-registry-memory.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
@@ -82,6 +85,14 @@ export const finalizeResumedAnnounceGiveUp = async (
       if (draft.delivery?.status === "delivered") {
         return false;
       }
+      // A targetless give-up cannot later clean effects owned by a same-key successor.
+      if (
+        (cleanup ?? draft.cleanup) === "delete" &&
+        !normalizeDeleteCleanupTarget(draft.deleteCleanupTarget)
+      ) {
+        draft.execution.suppressSessionEffects = true;
+        draft.deleteCleanupDispatchedAt = undefined;
+      }
       const deliveryError = getDeliveryLastError(draft) ?? reason;
       clearSubagentPendingDelivery(draft);
       const failedDelivery = ensureDeliveryState(draft);
@@ -100,6 +111,61 @@ export const finalizeResumedAnnounceGiveUp = async (
   });
   if (entry.delivery?.status === "delivered") {
     return;
+  }
+  if (
+    (cleanup ?? entry.cleanup) === "delete" &&
+    normalizeDeleteCleanupTarget(entry.deleteCleanupTarget)
+  ) {
+    const commit = async (mutate: (draft: SubagentRunRecord) => void) => {
+      entry = await commitSubagentLifecycleMutation(context, {
+        entry,
+        stateContext,
+        mutate,
+        assertCurrent() {
+          if (!isCurrent()) {
+            throw new Error("Subagent give-up owner changed");
+          }
+        },
+      });
+    };
+    const suppress = async (ownershipChanged = false) => {
+      await commit((draft) => {
+        draft.execution.suppressSessionEffects = true;
+        if (ownershipChanged) {
+          draft.deleteCleanupDispatchedAt = undefined;
+          draft.deleteCleanupTarget = undefined;
+        }
+      });
+    };
+    const effectsCurrent = () =>
+      isCurrent() &&
+      context.sessionEffectsHostCurrent(entry) &&
+      entry.execution.suppressSessionEffects !== true;
+    const deleteCleanup = createSubagentDeleteCleanup({
+      readEntry: () => entry,
+      commit,
+      suppress,
+      isCurrent: effectsCurrent,
+      prepareCurrent: async () => {
+        if (!effectsCurrent()) {
+          return false;
+        }
+        const suppressed = await context.shouldSuppressSessionEffects(entry);
+        if (!effectsCurrent()) {
+          return false;
+        }
+        if (suppressed) {
+          await suppress();
+        }
+        return effectsCurrent();
+      },
+      callGateway: params.callGateway,
+      onError: (error) =>
+        params.warn("sessions.delete failed during subagent give-up cleanup", {
+          error: buildSafeLifecycleErrorMeta(error),
+        }),
+    });
+    await deleteCleanup.deleteSession();
   }
   await finishSubagentCleanup(context, {
     entry,
@@ -130,7 +196,10 @@ export async function finishSubagentCleanup(
 ): Promise<void> {
   const { cleanup, cleanupGeneration, stateContext, isCurrent } = args;
   let entry = args.entry;
-  const sessionEffectsCurrent = () => isCurrent() && context.sessionEffectsHostCurrent(entry);
+  const sessionEffectsCurrent = () =>
+    isCurrent() &&
+    entry.execution.suppressSessionEffects !== true &&
+    context.sessionEffectsHostCurrent(entry);
   if (shouldRemoveSubagentAttachments(entry, cleanup) && sessionEffectsCurrent()) {
     await safeRemoveAttachmentsDir(entry, sessionEffectsCurrent);
   }

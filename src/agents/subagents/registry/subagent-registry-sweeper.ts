@@ -34,7 +34,8 @@ import {
 import {
   deleteSweptSession,
   mutateCleanup,
-  freezeSessionIdentity,
+  freezeCleanupSessionIdentity,
+  shouldRunSweptSessionEffects,
   sweptContext,
   isSessionCleanupDeferred,
   isCollectorArchiveReady,
@@ -78,6 +79,7 @@ export function createSubagentRegistrySweeper(params: {
   resumeRequesterSettleWake: SubagentLifecycleController["resumeRequesterSettleWake"];
   startSubagentAnnounceCleanupFlow: SubagentLifecycleController["startSubagentAnnounceCleanupFlow"];
   completeCleanupBookkeeping: SubagentLifecycleController["completeCleanupBookkeeping"];
+  deleteSuspendedSubagentSession: SubagentLifecycleController["deleteSuspendedSubagentSession"];
   isCleanupOwnerCurrent: SubagentLifecycleController["isCleanupOwnerCurrent"];
   sessionEffectsHostCurrent: SubagentLifecycleController["sessionEffectsHostCurrent"];
   shouldSuppressSessionEffects: SubagentLifecycleController["shouldSuppressSessionEffects"];
@@ -244,12 +246,7 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
         // Suppressed session cleanup still requires the captured member for artifact cleanup.
-        cleanupIdentities.set(
-          getSubagentRunRuntimeKey(entry),
-          shouldSuppressSubagentRecoverySessionEffects(entry)
-            ? undefined
-            : freezeSessionIdentity(entry.childSessionKey),
-        );
+        cleanupIdentities.set(getSubagentRunRuntimeKey(entry), freezeCleanupSessionIdentity(entry));
       }
       for (const [runId, snapshot] of runEntries) {
         const selected = runs.get(runId);
@@ -309,6 +306,7 @@ export function createSubagentRegistrySweeper(params: {
               clearPendingLifecycleTimeout: params.clearPendingLifecycleTimeout,
               discardTerminalDelivery: params.discardTerminalDelivery,
               completeCleanupBookkeeping: params.completeCleanupBookkeeping,
+              deleteSuspendedSubagentSession: params.deleteSuspendedSubagentSession,
               isCurrent: () => params.isCleanupOwnerCurrent(entry),
               sessionEffectsHostCurrent: params.sessionEffectsHostCurrent,
               shouldSuppressSessionEffects: params.shouldSuppressSessionEffects,
@@ -498,7 +496,7 @@ export function createSubagentRegistrySweeper(params: {
           );
           if (deleted === null) {
             params.clearPendingLifecycleError(runId);
-            if (!shouldSuppressSubagentRecoverySessionEffects(entry)) {
+            if (shouldRunSweptSessionEffects(entry)) {
               runCleanupTail(runId, "context-engine cleanup", () =>
                 params.notifyContextEngineSubagentEnded(sweptContext(entry)),
               );
@@ -513,8 +511,9 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
         const suppressSessionEffects = shouldSuppressSubagentRecoverySessionEffects(entry);
+        const sessionEffectsAllowed = shouldRunSweptSessionEffects(entry, suppressSessionEffects);
         let sessionOwnershipChanged = false;
-        if (!suppressSessionEffects) {
+        if (sessionEffectsAllowed) {
           if (!cleanupIdentities.has(getSubagentRunRuntimeKey(entry))) {
             continue;
           }
@@ -550,7 +549,10 @@ export function createSubagentRegistrySweeper(params: {
         }
         params.clearPendingLifecycleError(runId);
         await safeRemoveAttachmentsDir(entry);
-        if (!suppressSessionEffects && !sessionOwnershipChanged) {
+        if (
+          shouldRunSweptSessionEffects(entry, suppressSessionEffects) &&
+          !sessionOwnershipChanged
+        ) {
           runCleanupTail(runId, "context-engine cleanup", () =>
             params.notifyContextEngineSubagentEnded(sweptContext(entry)),
           );
@@ -580,7 +582,7 @@ export function createSubagentRegistrySweeper(params: {
           if (!isCleanupCurrent(current, candidate) || !isCollectorArchiveReady(current, now)) {
             continue collectorGroups;
           }
-          if (!shouldSuppressSubagentRecoverySessionEffects(current)) {
+          if (shouldRunSweptSessionEffects(current)) {
             const sessionIdentity = cleanupIdentities.get(getSubagentRunRuntimeKey(candidate));
             try {
               const changed =

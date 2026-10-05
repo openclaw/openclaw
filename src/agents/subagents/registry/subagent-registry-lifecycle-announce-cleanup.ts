@@ -4,7 +4,6 @@ import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-requ
 import { defaultRuntime } from "../../../runtime.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
-import { loadSessionEntryByKey } from "../announce/subagent-announce-delivery.runtime.js";
 import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
 import {
   ensureDeliveryState,
@@ -32,6 +31,7 @@ import {
   suspendPendingFinalDelivery,
 } from "./subagent-registry-lifecycle-cleanup.js";
 import type { SubagentLifecycleAnnounceCleanupContext } from "./subagent-registry-lifecycle-context.js";
+import { createSubagentDeleteCleanup } from "./subagent-registry-lifecycle-delete-cleanup.js";
 import {
   formatAnnounceDeliveryError,
   hasPriorRequesterDeliveryMirror,
@@ -52,7 +52,6 @@ import {
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { hasRequesterCompletionCohort } from "./subagent-requester-settle-identity.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
-import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 
 type RunSubagentAnnounceFlow =
   (typeof import("../announce/subagent-announce.js"))["runSubagentAnnounceFlow"];
@@ -197,23 +196,17 @@ export const startSubagentAnnounceCleanupFlow = (
       skipAnnounce: true,
       ...options,
     });
-  if (!checkDescendants && alreadyDelivered()) {
-    runDetachedCleanupAttempt(context, {
-      runId,
-      entry,
-      cleanupGeneration,
-      stateContext,
-      run: () => finalizeDelivered(),
-    });
-    return true;
-  }
-  const suppressChildSessionEffects = async () => {
+  const suppressChildSessionEffects = async (ownershipChanged = false) => {
     suppressSessionEffects = true;
     await commit((draft) => {
-      if (draft.execution.suppressSessionEffects === true) {
+      if (draft.execution.suppressSessionEffects === true && !ownershipChanged) {
         return false;
       }
       draft.execution.suppressSessionEffects = true;
+      if (ownershipChanged) {
+        draft.deleteCleanupDispatchedAt = undefined;
+        draft.deleteCleanupTarget = undefined;
+      }
       return undefined;
     });
   };
@@ -236,6 +229,36 @@ export const startSubagentAnnounceCleanupFlow = (
     }
     return childSessionEffectsAllowed();
   };
+  const deleteCleanup = createSubagentDeleteCleanup({
+    readEntry: () => entry,
+    commit,
+    prepareCurrent: prepareChildSessionEffects,
+    isCurrent: childSessionEffectsAllowed,
+    suppress: suppressChildSessionEffects,
+    callGateway: params.callGateway,
+    onError: (error) =>
+      params.warn("sessions.delete failed during subagent cleanup", {
+        error: buildSafeLifecycleErrorMeta(error),
+        runId: maskLifecycleIdentifier(runId, "run"),
+        childSessionKey: maskLifecycleIdentifier(entry.childSessionKey, "session"),
+      }),
+  });
+  const finalizeDeliveredWithDelete = async (options?: { skipRequesterDelivery: boolean }) => {
+    if (cleanup === "delete") {
+      await deleteCleanup.deleteSession();
+    }
+    await finalizeDelivered(options);
+  };
+  if (!checkDescendants && alreadyDelivered()) {
+    runDetachedCleanupAttempt(context, {
+      runId,
+      entry,
+      cleanupGeneration,
+      stateContext,
+      run: () => finalizeDeliveredWithDelete(),
+    });
+    return true;
+  }
   if (entry.expectsCompletionMessage === false || skipRequesterDelivery) {
     runDetachedCleanupAttempt(context, {
       runId,
@@ -271,52 +294,11 @@ export const startSubagentAnnounceCleanupFlow = (
           return;
         }
         if (checkDescendants && alreadyDelivered()) {
-          await finalizeDelivered();
+          await finalizeDeliveredWithDelete();
           return;
         }
-        if (cleanup === "delete" && (await prepareChildSessionEffects())) {
-          const cleanupSessionEntry = await loadSessionEntryByKey(entry.childSessionKey);
-          const cleanupSessionIdentity =
-            cleanupSessionEntry?.sessionId && cleanupSessionEntry.lifecycleRevision
-              ? {
-                  sessionId: cleanupSessionEntry.sessionId,
-                  lifecycleRevision: cleanupSessionEntry.lifecycleRevision,
-                }
-              : undefined;
-          const canDelete = await prepareChildSessionEffects();
-          if (canDelete && !cleanupSessionIdentity) {
-            // Without both lifecycle identities, key-only deletion could remove
-            // a successor that reused this child session after cleanup yielded.
-            await suppressChildSessionEffects();
-          } else if (canDelete && cleanupSessionIdentity) {
-            // This durable boundary prevents a late yield from reviving a run
-            // after deletion may already have reached the gateway.
-            await commit((draft) => {
-              draft.deleteCleanupDispatchedAt ??= Date.now();
-            });
-            const sessionCleanup = await deleteSubagentSessionForCleanup({
-              callGateway: params.callGateway,
-              gatewayBinding: { resolveGatewayContext: getGatewayContextResolver(entry) },
-              isCurrent: childSessionEffectsAllowed,
-              prepareCurrent: prepareChildSessionEffects,
-              childSessionKey: entry.childSessionKey,
-              spawnMode: entry.spawnMode,
-              expectedSessionId: cleanupSessionIdentity.sessionId,
-              expectedLifecycleRevision: cleanupSessionIdentity.lifecycleRevision,
-              onError: (error) =>
-                params.warn("sessions.delete failed during subagent cleanup", {
-                  error: buildSafeLifecycleErrorMeta(error),
-                  runId: maskLifecycleIdentifier(runId, "run"),
-                  childSessionKey: maskLifecycleIdentifier(entry.childSessionKey, "session"),
-                }),
-            });
-            if (sessionCleanup === "failed") {
-              throw new Error("subagent session cleanup did not complete");
-            }
-            if (sessionCleanup === "changed") {
-              await suppressChildSessionEffects();
-            }
-          }
+        if (cleanup === "delete") {
+          await deleteCleanup.deleteSession();
         }
         assertPersistenceCurrent();
         if (!context.isCleanupAttemptCurrent(entry, cleanupGeneration)) {
@@ -459,11 +441,11 @@ export const startSubagentAnnounceCleanupFlow = (
                 delivery.createdAt ??= Date.now();
                 delivery.payload = loadPendingFinalDeliveryPayload(draft);
               }
-              draft.deleteCleanupDispatchedAt ??= Date.now();
             });
-            return childSessionEffectsAllowed();
+            return deleteCleanup.stamp();
           }
         : undefined,
+    onChildSessionDeleteResult: cleanup === "delete" ? deleteCleanup.onResult : undefined,
     onDeliveryResult: async (delivery) => {
       assertPersistenceCurrent();
       if (!context.isCleanupAttemptCurrent(entry, cleanupGeneration)) {
@@ -572,10 +554,15 @@ export const startSubagentAnnounceCleanupFlow = (
         deadlineTimer = setTimeout(abortDelivery, remainingMs);
         deadlineTimer.unref?.();
       }
+      const expectedDeleteTarget =
+        cleanup === "delete" ? await deleteCleanup.prepareTarget() : undefined;
       try {
         announceOutcome = await subagentRuns.runWithCompletionAuthority(entry, () =>
           params.runSubagentAnnounceFlow({
             ...announceParams,
+            expectedDeleteTarget,
+            suppressChildSessionEffects: suppressSessionEffects,
+            cleanup: suppressSessionEffects ? "keep" : cleanup,
             childAgentId: entry.childAgentId,
             signal: deadline.signal,
             // Delivery expiry bounds admission; the requester owns its execution budget.
@@ -613,6 +600,7 @@ export const startSubagentAnnounceCleanupFlow = (
         });
         return;
       }
+      deleteCleanup.assertSucceeded();
       await finalizeAnnounceCleanup(announceOutcome);
     },
   });

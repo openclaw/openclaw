@@ -119,6 +119,8 @@ export function createSubagentSweeperHarness(
     resumeRequesterSettleWake,
     startSubagentAnnounceCleanupFlow: vi.fn(() => true),
     completeCleanupBookkeeping,
+    // Scheduling-only fixture; native physical deletion is covered by the worker owner suite.
+    deleteSuspendedSubagentSession: vi.fn(async ({ entry: suspendedEntry }) => suspendedEntry),
     isCleanupOwnerCurrent: (selected) =>
       isSameSubagentRunOwner(runs.get(selected.runId), selected) || !runs.has(selected.runId),
     sessionEffectsHostCurrent: (selected) => selected.execution.suppressSessionEffects !== true,

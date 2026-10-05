@@ -185,8 +185,9 @@ describe("subagent registry persistence resume", () => {
         expect(announceSpy, "replayed announcement delivered").toHaveBeenCalledOnce();
         expect(readPersistedRun(run.runId), "delivered row awaits real settlement").toMatchObject({
           delivery: { status: "delivered" },
-          requesterSettleWake: { retireAfterSettle: true },
+          cleanupCompletedAt: expect.any(Number),
         });
+        expect(readPersistedRun(run.runId)?.requesterSettleWake?.retireAfterSettle).toBeUndefined();
         expect(announceSpy).toHaveBeenCalledWith(
           expect.objectContaining({
             childSessionKey: run.childSessionKey,
@@ -201,15 +202,19 @@ describe("subagent registry persistence resume", () => {
         expect(settlement.run).toHaveBeenCalledOnce();
         expect(
           loadSubagentRegistryFromSqlite().has(run.runId),
-          "settlement retired delivered row",
-        ).toBe(false);
+          "settlement retains the delivered receipt until archive expiry",
+        ).toBe(true);
+        expect(readPersistedRun(run.runId)?.requesterSettleWake).toBeUndefined();
         await settleSubagentRegistryPersistenceWork(() => settleOwnedWork?.(true));
 
         await mod.resetSubagentRegistryForTests({ persist: false });
         await mod.initSubagentRegistry();
         await activateSubagentPersistenceRegistry(mod, callGatewayModule.callGateway);
         await settleSubagentRegistryPersistenceWork(() => settleOwnedWork?.(true));
-        expect(announceSpy, "retired completion is not replayed again").toHaveBeenCalledOnce();
+        expect(
+          announceSpy,
+          "retained delivered completion is not replayed again",
+        ).toHaveBeenCalledOnce();
       } finally {
         await settlement.release();
       }

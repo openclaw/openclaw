@@ -25,6 +25,7 @@ type GatewayRequest = { method?: string; params?: unknown; timeoutMs?: number };
 type AgentWaitCall = { runId?: string; timeoutMs?: number };
 type TestSessionEntry = {
   sessionId: string;
+  lifecycleRevision: string;
   updatedAt: number;
   startedAt?: number;
   endedAt?: number;
@@ -87,15 +88,22 @@ const hoisted = vi.hoisted(() => {
       });
     }
 
-    if (params.cleanup === "delete") {
-      await callGatewayMock({
-        method: "sessions.delete",
-        params: {
-          key: params.childSessionKey,
-          deleteTranscript: true,
-          emitLifecycleHooks: params.spawnMode === "session",
-        },
-      });
+    if (params.cleanup === "delete" && params.expectedDeleteTarget) {
+      const current = (await params.prepareChildSessionEffects?.()) ?? true;
+      const stamped = current && ((await params.onBeforeDeleteChildSession?.()) ?? true);
+      if (stamped && (params.isChildSessionEffectsAllowed?.() ?? true)) {
+        await callGatewayMock({
+          method: "sessions.delete",
+          params: {
+            key: params.childSessionKey,
+            deleteTranscript: true,
+            emitLifecycleHooks: params.spawnMode === "session",
+            expectedSessionId: params.expectedDeleteTarget.sessionId,
+            expectedLifecycleRevision: params.expectedDeleteTarget.lifecycleRevision,
+          },
+        });
+        await params.onChildSessionDeleteResult?.("deleted");
+      }
     }
 
     return "delivered";
@@ -297,6 +305,7 @@ export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMoc
         if (childSessionKey) {
           hoisted.sessionStore[childSessionKey] = {
             sessionId: `sess-${childSessionKey}`,
+            lifecycleRevision: `revision-${runId}`,
             updatedAt: Date.now(),
             ...setupOpts.subagentSessionEntryPatch,
           };
@@ -399,6 +408,27 @@ vi.mock("./subagents/announce/subagent-announce.js", async (importOriginal) => {
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => hoisted.state.configOverride,
   resolveGatewayPort: () => 18789,
+}));
+
+vi.mock("../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-entry-read-runtime.js")>()),
+  withSessionEntryReadOnlyInWorker: async (
+    input: Parameters<
+      typeof import("../config/sessions/session-entry-read-runtime.js").withSessionEntryReadOnlyInWorker
+    >[0],
+    assertCurrent: () => void,
+    consume: Parameters<
+      typeof import("../config/sessions/session-entry-read-runtime.js").withSessionEntryReadOnlyInWorker
+    >[2],
+  ) => {
+    assertCurrent();
+    const result = await consume(
+      { ok: true, value: hoisted.sessionStore[input.sessionKey] },
+      { kind: "file", assertCurrent },
+    );
+    assertCurrent();
+    return result;
+  },
 }));
 
 vi.mock("../config/sessions.js", async () => ({

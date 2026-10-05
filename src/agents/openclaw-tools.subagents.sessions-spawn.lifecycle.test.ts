@@ -181,6 +181,21 @@ describe("sessions_spawn lifecycle", () => {
           deletedKey === child.sessionKey,
       );
       expect(deletedKey).toBe(child.sessionKey);
+      const target = {
+        sessionId: `sess-${child.sessionKey}`,
+        lifecycleRevision: `revision-${child.runId}`,
+      };
+      expect(ctx.calls.find((call) => call.method === "sessions.delete")?.params).toMatchObject({
+        key: child.sessionKey,
+        expectedSessionId: target.sessionId,
+        expectedLifecycleRevision: target.lifecycleRevision,
+      });
+      await waitForCleanup(child.sessionKey);
+      expect(getLatestSubagentRunByChildSessionKey(child.sessionKey)).toMatchObject({
+        deleteCleanupTarget: target,
+        deleteCleanupDispatchedAt: expect.any(Number),
+        cleanupCompletedAt: expect.any(Number),
+      });
       expect(ctx.waitCalls.find((call) => call.runId === child.runId)?.timeoutMs).toBe(1000);
     } finally {
       await settleRootWork();

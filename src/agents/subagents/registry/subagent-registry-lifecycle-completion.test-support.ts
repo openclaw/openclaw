@@ -501,7 +501,7 @@ export function registerRequesterSettleRetirementTests({
   ) => Promise<void>;
 }): void {
   it.each([false, true])(
-    "resumes an ancestor after requester-settle retirement (persistence fails: %s)",
+    "resumes an ancestor after retained requester settlement (persistence fails: %s)",
     async (persistenceFails) => {
       vi.useFakeTimers();
       const ancestor = createRunEntry({
@@ -545,7 +545,13 @@ export function registerRequesterSettleRetirementTests({
         countPendingDescendantRuns,
         maybeWakeRequesterAfterAllChildrenSettled: runRequesterSettleWake,
         beforeWrite: ({ postimages }) => {
-          if (failRetirement && postimages.get(intermediate.runId) === null) {
+          const postimage = postimages.get(intermediate.runId);
+          if (
+            failRetirement &&
+            postimage &&
+            typeof postimage.cleanupCompletedAt === "number" &&
+            postimage.requesterSettleWake === undefined
+          ) {
             throw new SubagentRegistryWriteError(
               "not-committed",
               new Error("retirement transaction failed"),
@@ -581,7 +587,10 @@ export function registerRequesterSettleRetirementTests({
           expect(readLifecycleRun(ancestor).cleanupCompletedAt).toBeUndefined();
           await vi.advanceTimersByTimeAsync(1);
         }
-        await waitForLifecycleState(() => expect(subagentRuns.has(intermediate.runId)).toBe(false));
+        await waitForLifecycleState(() =>
+          expect(readLifecycleRun(intermediate).requesterSettleWake).toBeUndefined(),
+        );
+        expect(subagentRuns.has(intermediate.runId)).toBe(true);
         await completeRun(controller, descendant, {
           endedAt: Date.now(),
           triggerCleanup: true,

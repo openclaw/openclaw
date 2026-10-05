@@ -725,6 +725,7 @@ describe("subagent registry sqlite store", () => {
       accumulatedRuntimeMs: 90,
       runTimeoutSeconds: 7_200,
       endedReason: "subagent-error",
+      cleanup: "keep",
       cleanupCompletedAt: 300,
       delivery: {
         status: "suspended",

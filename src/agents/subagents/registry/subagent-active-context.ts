@@ -129,8 +129,7 @@ export async function buildActiveSubagentRuntimeContext(params: {
       const context = captureSubagentListReadContext(runs, index, snapshot, recentMinutes);
       const list = buildSubagentList({
         context,
-        // Prompt fields are registry-owned; model and usage enrichment belongs to visible lists.
-        sessionEntries: new Map(),
+        // Prompt fields are registry-owned; existence and enrichment need an actual session read.
         taskMaxChars: 96,
       });
       // buildSubagentList returns recent runs in registry order, so sort before
