@@ -63,6 +63,8 @@ describe("OpenAI realtime public projection", () => {
       for (const [azureConfig, supportsRelay] of [
         [{ azureEndpoint: " https://example.openai.azure.com " }, false],
         [{ azureDeployment: " live-deployment " }, false],
+        [{ baseUrl: " wss://voice.example.test/realtime " }, false],
+        [{ baseUrl: " " }, true],
         [{ azureEndpoint: "", azureDeployment: " \t " }, true],
         [{ azureEndpoint: " \t ", azureDeployment: "" }, true],
       ] as const) {
