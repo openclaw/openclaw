@@ -413,6 +413,34 @@ describe("sandbox/tool-policy", () => {
     expect(isToolAllowed(resolved, "message")).toBe(false);
   });
 
+  it("extends the default sandbox denylist when a deny list is configured", () => {
+    // A configured deny list extends the shipped default denies; it never clears them.
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: { mode: "all", scope: "agent" },
+        },
+      },
+      tools: {
+        sandbox: {
+          tools: {
+            deny: ["exec"],
+          },
+        },
+      },
+    };
+
+    const resolved = resolveSandboxToolPolicyForAgent(cfg, "main");
+    expect(resolved.deny).toContain("exec");
+    expect(resolved.deny).toContain("browser");
+    expect(resolved.deny).toContain("computer");
+    expect(resolved.deny).toContain("nodes");
+    expect(resolved.deny).toContain("gateway");
+    expect(isToolAllowed(resolved, "exec")).toBe(false);
+    expect(isToolAllowed(resolved, "browser")).toBe(false);
+    expect(isToolAllowed(resolved, "nodes")).toBe(false);
+  });
+
   it("uses the effective sandbox policy when formatting blocked-tool guidance", () => {
     const cfg: OpenClawConfig = {
       agents: {
