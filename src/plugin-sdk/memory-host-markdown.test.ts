@@ -12,6 +12,136 @@ describe("withTrailingNewline", () => {
 });
 
 describe("replaceManagedMarkdownBlock", () => {
+  it("replaces the complete outer block when generated blocks are nested", () => {
+    const params = {
+      heading: "## Generated",
+      startMarker: "<!-- start -->",
+      endMarker: "<!-- end -->",
+      body: "current",
+    };
+    const original = [
+      "# Title",
+      "",
+      "## Generated",
+      "<!-- start -->",
+      "outer before",
+      "<!-- start -->",
+      "inner stale",
+      "<!-- end -->",
+      "outer stale tail",
+      "<!-- end -->",
+      "",
+      "Human history",
+      "",
+    ].join("\n");
+    const updated = replaceManagedMarkdownBlock({ original, ...params });
+    expect(updated).toBe(
+      [
+        "# Title",
+        "",
+        "## Generated",
+        "<!-- start -->",
+        "current",
+        "<!-- end -->",
+        "",
+        "Human history",
+        "",
+      ].join("\n"),
+    );
+    expect(replaceManagedMarkdownBlock({ original: updated, ...params })).toBe(updated);
+  });
+
+  it("ignores standalone marker examples in inline and fenced code", () => {
+    const original = [
+      "# Human history",
+      "Use <!-- start --> and <!-- end --> as examples.",
+      "`<!-- start -->`",
+      "",
+      "```markdown",
+      "<!-- start -->",
+      "Human code sample",
+      "<!-- end -->",
+      "```",
+      "",
+      "    <!-- start -->",
+      "    Indented code sample",
+      "    <!-- end -->",
+      "\t<!-- start -->",
+      "\tTabbed code sample",
+      "\t<!-- end -->",
+      "",
+      "## Generated",
+      "<!-- start -->",
+      "stale",
+      "<!-- end -->",
+    ].join("\n");
+
+    expect(
+      replaceManagedMarkdownBlock({
+        original,
+        heading: "## Generated",
+        startMarker: "<!-- start -->",
+        endMarker: "<!-- end -->",
+        body: "current",
+      }),
+    ).toBe(original.replace("stale", "current"));
+  });
+
+  it("removes surplus end marker bytes only after finding a balanced block", () => {
+    const original = [
+      "Outside history.",
+      "<!-- end -->",
+      "## Generated",
+      "<!-- start -->",
+      "stale",
+      "<!-- end -->",
+      "More history.",
+      "<!-- end -->",
+    ].join("\n");
+    const updated = replaceManagedMarkdownBlock({
+      original,
+      heading: "## Generated",
+      startMarker: "<!-- start -->",
+      endMarker: "<!-- end -->",
+      body: "current",
+    });
+
+    expect(updated).toBe(
+      [
+        "Outside history.",
+        "",
+        "## Generated",
+        "<!-- start -->",
+        "current",
+        "<!-- end -->",
+        "More history.",
+        "",
+      ].join("\n"),
+    );
+    expect(updated.split("<!-- end -->")).toHaveLength(2);
+  });
+
+  it("rejects orphan-only and unclosed marker sequences", () => {
+    const params = {
+      startMarker: "<!-- start -->",
+      endMarker: "<!-- end -->",
+      body: "current",
+    };
+
+    expect(() =>
+      replaceManagedMarkdownBlock({
+        original: "Outside history.\n<!-- end -->",
+        ...params,
+      }),
+    ).toThrow("restore the missing start marker");
+    expect(() =>
+      replaceManagedMarkdownBlock({
+        original: "<!-- start -->\nold\n<!-- end -->\n<!-- start -->\nunclosed",
+        ...params,
+      }),
+    ).toThrow("restore the missing end marker");
+  });
+
   it("appends a managed block when missing", () => {
     expect(
       replaceManagedMarkdownBlock({
