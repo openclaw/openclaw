@@ -617,7 +617,7 @@ test("sessions.search real WS run: configured ACP store owner with a non-ACP-sha
     const { ws } = await openClient();
     const owned = await rpcReq<{
       ok: boolean;
-      results?: Array<{ sessionKey: string; excerpt?: string }>;
+      results?: Array<{ sessionKey: string; excerpt?: string; snippet?: string }>;
     }>(ws, "sessions.search", {
       agentId,
       query: "real run proof needle",
