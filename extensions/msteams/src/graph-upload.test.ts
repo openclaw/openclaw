@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import {
   getDriveItemProperties,
-  requireMSTeamsSharePointSiteId,
+  resolveUploadSiteId,
   uploadAndShareSharePoint,
 } from "./graph-upload.js";
 import {
@@ -253,11 +253,46 @@ async function startTimedUpload(
 }
 
 describe("graph upload helpers", () => {
-  it("requires a non-empty SharePoint site ID", () => {
-    expect(() => requireMSTeamsSharePointSiteId()).toThrow(
-      "channels.msteams.sharePointSiteId is required",
+  it("rejects when no site ID is available and no team context exists", async () => {
+    await expect(resolveUploadSiteId({ tokenProvider })).rejects.toThrow(
+      "No SharePoint site ID available",
     );
-    expect(requireMSTeamsSharePointSiteId(" site-123 ")).toBe("site-123");
+  });
+
+  it("returns an explicit site ID without Graph lookup", async () => {
+    const result = await resolveUploadSiteId({ configuredSiteId: " site-123 ", tokenProvider });
+    expect(result).toBe("site-123");
+    expect(tokenProvider.getAccessToken).not.toHaveBeenCalled();
+  });
+
+  it.each(["", "   "])(
+    "rejects a blank configured site ID before discovery (%j)",
+    async (configuredSiteId) => {
+      tokenProvider.getAccessToken.mockClear();
+      await expect(
+        resolveUploadSiteId({
+          configuredSiteId,
+          teamId: "team-1",
+          channelId: "19:channel@thread.tacv2",
+          tokenProvider,
+        }),
+      ).rejects.toThrow("sharePointSiteId is blank");
+      expect(tokenProvider.getAccessToken).not.toHaveBeenCalled();
+    },
+  );
+
+  it("uses default folder name when none is configured", async () => {
+    const fetchFn = createGraphFetch(
+      fixedGraphRoute("/content", {
+        id: "item-default-folder",
+        webUrl: "https://example.com/df",
+        name: "d.txt",
+      }),
+      fixedGraphRoute("/createLink", { link: { webUrl: "https://example.com/share" } }),
+    );
+    await runGraphUpload(fetchFn);
+    const [url] = requireFetchCall(fetchFn);
+    expect(url).toContain("/OpenClawShared/");
   });
 
   it.each([undefined, "application/pdf"])(
@@ -297,6 +332,50 @@ describe("graph upload helpers", () => {
         webUrl: "https://example.com/2",
         name: "b.txt",
       });
+    },
+  );
+
+  it("uploads to a custom folder when folderName is specified", async () => {
+    const fetchFn = createGraphFetch(
+      fixedGraphRoute("/content", {
+        id: "item-custom",
+        webUrl: "https://example.com/custom",
+        name: "c.txt",
+      }),
+      fixedGraphRoute("/createLink", { link: { webUrl: "https://example.com/share" } }),
+    );
+
+    const result = await runGraphUpload(fetchFn, { folderName: "BotUploads" });
+
+    const [url] = requireFetchCall(fetchFn);
+    expect(url).toContain("/BotUploads/");
+    expect(url).not.toContain("/OpenClawShared/");
+    expect(result.name).toBe("c.txt");
+  });
+
+  it("encodes reserved folder characters in the upload path", async () => {
+    const fetchFn = createGraphFetch(
+      fixedGraphRoute("/content", {
+        id: "item-hash",
+        webUrl: "https://example.com/h",
+        name: "h.txt",
+      }),
+      fixedGraphRoute("/createLink", { link: { webUrl: "https://example.com/share" } }),
+    );
+    await runGraphUpload(fetchFn, { folderName: "Reports#2026" });
+    const [url] = requireFetchCall(fetchFn);
+    expect(url).toContain("/Reports%232026/");
+    expect(url).not.toContain("/Reports#2026/");
+  });
+
+  it.each(["../secrets", "a/b", "a\\b", ".", ".."])(
+    "rejects folder name %s",
+    async (folderName) => {
+      const fetchFn = createGraphFetch();
+      await expect(runGraphUpload(fetchFn, { folderName })).rejects.toThrow(
+        "single folder name without path separators",
+      );
+      expect(fetchFn).not.toHaveBeenCalled();
     },
   );
 
