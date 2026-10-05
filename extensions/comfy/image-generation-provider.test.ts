@@ -639,14 +639,25 @@ describe("comfy image-generation provider", () => {
   });
 
   it("caps oversized local workflow timeouts", async () => {
-    const nowSpy = vi.spyOn(Date, "now");
-    nowSpy
-      .mockReturnValueOnce(0)
-      .mockReturnValueOnce(0)
-      .mockReturnValueOnce(MAX_TIMER_TIMEOUT_MS + 1);
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce(fetchGuardJson({ prompt_id: "local-prompt-1" }))
-      .mockResolvedValueOnce(fetchGuardJson({ "local-prompt-1": { outputs: {} } }));
+    // Seed the deadline and read the remaining budget from a monotonic clock so
+    // wall-clock jumps cannot stretch or shrink the workflow poll deadline.
+    // The spy returns a single advancing `monotonicNow` value; fetch mock
+    // callbacks advance it so plugin-metadata snapshot calls to performance.now
+    // during provider init cannot desync the seed/read sequence.
+    let monotonicNow = 0;
+    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => monotonicNow);
+    fetchWithSsrFGuardMock.mockImplementation(async () => {
+      const call = fetchWithSsrFGuardMock.mock.calls.length;
+      // After the history poll returns empty outputs, advance the monotonic
+      // clock past the deadline so the next resolveComfyRemainingMs read sees
+      // a negative remaining and throws.
+      if (call >= 2) {
+        monotonicNow = MAX_TIMER_TIMEOUT_MS + 1;
+      }
+      return call === 1
+        ? fetchGuardJson({ prompt_id: "local-prompt-1" })
+        : fetchGuardJson({ "local-prompt-1": { outputs: {} } });
+    });
 
     try {
       const provider = buildComfyImageGenerationProvider();
