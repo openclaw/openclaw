@@ -771,6 +771,13 @@ An interruption alone is not a blocker; the parent continues until the request
 is finished or a specific blocker requires user input or unavailable authority.
 Existing cleanup and retention settings still apply.
 
+Startup skips superseded requester completion claims and logs the affected run.
+Those historical rows do not block current children in the same requester turn
+or recovery of other subagents. Saved yield intent is evaluated from the same
+current children used for the transfer. The existing cleanup owner settles historical rows;
+interrupted current children still report their restart outcome to the parent.
+Turns with only superseded children need no requester settlement.
+
 If a parent yielded while waiting for children, its saved batch collects both
 completed and interrupted results and wakes the parent once the batch settles.
 A parent already working on those results resumes through ordinary main-session
