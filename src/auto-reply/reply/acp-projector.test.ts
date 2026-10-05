@@ -199,15 +199,15 @@ describe("createAcpReplyProjector", () => {
       vi.useFakeTimers();
       try {
         const { deliveries, projector } = createStreamHarness(deliveryMode);
-        const text = Array.from({ length: 4_001 }, (_, index) =>
+        const inputText = Array.from({ length: 4_001 }, (_, index) =>
           String(index).padStart(6, "0"),
         ).join("");
-        await emitText(projector, text);
+        await emitText(projector, inputText);
         await emitText(projector, "discarded after the limit");
         await projector.flush();
 
         const output = deliveries.filter(({ kind }) => kind !== "tool");
-        expect(output.map(({ text }) => text).join("")).toBe(text.slice(0, 24_000));
+        expect(output.map(({ text }) => text).join("")).toBe(inputText.slice(0, 24_000));
         if (deliveryMode === "live") {
           for (const { kind, text } of output) {
             expect(kind).toBe("block");
