@@ -67,7 +67,7 @@ describe("skills watcher residency", () => {
         sharedScanPending: false,
         unavailable: false,
       });
-      registry.workspaceWatchTargets.set(key, sharedTargets);
+      registry.setWorkspaceWatchTargets(key, sharedTargets);
       for (const target of sharedTargets) {
         registry.pathWatchers.get(target.path)!.subscribers.add(key);
       }

@@ -17,6 +17,7 @@ import {
 
 export type WatchTarget = {
   path: string;
+  roots: string[];
   authorityPath: string;
   depth: number;
   executionOnly?: true;
@@ -27,7 +28,8 @@ function skillsWatchTargetsMatch(previous: WatchTarget, next: WatchTarget): bool
     previous.path === next.path &&
     previous.authorityPath === next.authorityPath &&
     previous.depth === next.depth &&
-    previous.executionOnly === next.executionOnly
+    previous.executionOnly === next.executionOnly &&
+    areOrderedArraysEqual(previous.roots, next.roots, (left, right) => left === right)
   );
 }
 
@@ -123,6 +125,7 @@ export function resolveSkillsWatchTargets(
     const shared = targets.get(key);
     if (shared) {
       shared.depth = Math.max(shared.depth, target.depth);
+      shared.roots = [...new Set([...shared.roots, ...target.roots])].toSorted();
     } else {
       targets.set(key, { ...target, executionOnly: true });
     }
@@ -146,8 +149,21 @@ export function resolveSkillsWatchTargets(
   return { signature, targets: sortedTargets };
 }
 
-function addWatchTarget(targets: Map<string, WatchTarget>, raw: string, depth: number): void {
-  const target: WatchTarget = { path: toWatchRoot(raw), authorityPath: path.dirname(raw), depth };
+function addWatchTarget(
+  targets: Map<string, WatchTarget>,
+  raw: string,
+  depth: number,
+  sourceRoot: string,
+): void {
+  const target: WatchTarget = {
+    path: toWatchRoot(raw),
+    authorityPath: path.dirname(raw),
+    depth,
+    roots: [],
+  };
+  target.roots = [
+    ...new Set([...(targets.get(target.path)?.roots ?? []), path.resolve(sourceRoot)]),
+  ].toSorted();
   target.depth = Math.max(target.depth, targets.get(target.path)?.depth ?? 0);
   targets.set(target.path, target);
 }
@@ -156,10 +172,11 @@ function addSkillRootWatchTargets(
   targets: Map<string, WatchTarget>,
   root: string,
   rootDepth: number,
+  sourceRoot: string,
 ): string {
-  addWatchTarget(targets, root, rootDepth);
+  addWatchTarget(targets, root, rootDepth, sourceRoot);
   const companionSkillsRoot = path.join(root, "skills");
-  addWatchTarget(targets, companionSkillsRoot, GROUPED_SKILLS_WATCH_DEPTH);
+  addWatchTarget(targets, companionSkillsRoot, GROUPED_SKILLS_WATCH_DEPTH, sourceRoot);
   return companionSkillsRoot;
 }
 
@@ -172,14 +189,14 @@ function addSkillSourceWatchTargets(
     ? GROUPED_SKILLS_WATCH_DEPTH
     : CONFIGURED_ROOT_WATCH_DEPTH,
 ): void {
-  const companionSkillsRoot = addSkillRootWatchTargets(targets, root, rootDepth);
+  const companionSkillsRoot = addSkillRootWatchTargets(targets, root, rootDepth, root);
   // Both bounded scans share the source's containment identity for this preparation.
   // Trusted symlink leaves below remain registration-only, never recursive scans.
   const rootRealPath = resolvePathViaExistingAncestorSync(root);
   if (toWatchRoot(rootRealPath) !== toWatchRoot(root)) {
     // The configured source admits its canonical root even when an ancestor,
     // rather than the leaf, is the alias (including missing descendants).
-    addSkillRootWatchTargets(targets, rootRealPath, rootDepth);
+    addSkillRootWatchTargets(targets, rootRealPath, rootDepth, root);
   }
   addTrustedSymlinkSkillWatchTargets(
     targets,
@@ -189,6 +206,7 @@ function addSkillSourceWatchTargets(
     rootDepth,
     rootRealPath,
     rootRealPath,
+    root,
   );
   addTrustedSymlinkSkillWatchTargets(
     targets,
@@ -198,6 +216,7 @@ function addSkillSourceWatchTargets(
     GROUPED_SKILLS_WATCH_DEPTH,
     rootRealPath,
     resolvePathViaExistingAncestorSync(companionSkillsRoot),
+    root,
   );
 }
 
@@ -209,6 +228,7 @@ function addTrustedSymlinkSkillWatchTargets(
   maxDepth: number,
   containmentRootRealPath: string,
   rootRealPath: string,
+  sourceRoot: string,
 ): void {
   try {
     if (
@@ -220,7 +240,7 @@ function addTrustedSymlinkSkillWatchTargets(
         allowedSymlinkTargetRealPaths,
       )
     ) {
-      addSkillRootWatchTargets(targets, rootRealPath, maxDepth);
+      addSkillRootWatchTargets(targets, rootRealPath, maxDepth, sourceRoot);
     }
   } catch {
     return;
@@ -269,7 +289,7 @@ function addTrustedSymlinkSkillWatchTargets(
             allowedSymlinkTargetRealPaths,
           )
         ) {
-          addSkillRootWatchTargets(targets, targetRealPath, GROUPED_SKILLS_WATCH_DEPTH);
+          addSkillRootWatchTargets(targets, targetRealPath, GROUPED_SKILLS_WATCH_DEPTH, sourceRoot);
           watched += 1;
         }
         continue;

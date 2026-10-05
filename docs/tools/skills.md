@@ -821,6 +821,18 @@ the total number of operating-system file watches.
     keys, sources, precedence winners, and `SKILL.md` content
     keep the same snapshot version and do not notify chat metadata consumers.
     Idle worktree watcher cleanup does not invalidate other workspaces.
+    Unchanged roots reuse discovery records only while every watcher they depend on
+    is verified and unchanged: the root's own watch targets, plus the watched paths
+    holding every symlink discovery followed and every discovered skill directory.
+    Remote-node changes and events in other roots do not rescan them. A root whose
+    links pass through unwatched paths, or that contains a dangling link, is rescanned
+    whenever discovery runs, as are roots without verified watch coverage. Manual,
+    Workshop, and configuration refreshes still invalidate discovery. Changes the
+    watcher cannot observe are picked up on the next observed change, configuration
+    refresh, or restart. That includes skills created inside ignored build-output
+    directories (`build`, `dist`, `node_modules`, `.venv`, `.cache`) and directories
+    outside every configured root and allowed symlink target, such as the
+    destination of an escaped symlink.
     Copies with identical `SKILL.md` content and declared metadata do not produce
     precedence collision logs. Different content is summarized per ordered
     winner/loser discovery root and source kind. During a Gateway process,
@@ -832,6 +844,10 @@ the total number of operating-system file watches.
     root symlink points outside the configured root, for example
     `<workspace>/skills/manager -> ~/path/to/skills`.
     Skill Workshop does not use these configured symlink targets.
+    Escaped paths are skipped on every scan, but each source/root/path warning is
+    logged once per process unless its resolved target changes. The warning cache
+    retains up to 1,024 paths; evicted paths can warn again. Audit diagnostics are
+    still reported on every scan.
 
   </Accordion>
   <Accordion title="Remote macOS nodes (Linux gateway)">
