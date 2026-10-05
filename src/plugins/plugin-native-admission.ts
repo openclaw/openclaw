@@ -48,6 +48,7 @@ import type { PluginSourceInput } from "./plugin-source-verification.js";
 
 type NativeSnapshot = ReturnType<typeof createPluginNativeCaptureRoot>;
 type NativeReceipt = { signature: string; sourceDigest: string };
+const nativeSourceMembers = new WeakMap<PluginNativeNamespaceFact, Map<string, string>>();
 
 function nativeMemberForSource(namespace: PluginNativeNamespaceFact, source: string) {
   const relative = path.relative(namespace.sourceDirectory, source);
@@ -56,7 +57,17 @@ function nativeMemberForSource(namespace: PluginNativeNamespaceFact, source: str
   if (namespace.members[relative]?.source === source) {
     return relative;
   }
-  return Object.entries(namespace.members).find(([, member]) => member.source === source)?.[0];
+  let members = nativeSourceMembers.get(namespace);
+  if (!members) {
+    members = new Map<string, string>();
+    for (const [key, member] of Object.entries(namespace.members)) {
+      if (!members.has(member.source)) {
+        members.set(member.source, key);
+      }
+    }
+    nativeSourceMembers.set(namespace, members);
+  }
+  return members.get(source);
 }
 
 export type PluginNativeRecovery = {
