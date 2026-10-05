@@ -35,6 +35,7 @@ import {
   initializeModelRegistryRuntime,
 } from "../../sessions/model-registry-runtime.js";
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
+import { runPreparedTestPrompt } from "./attempt-prompt-admission.test-support.js";
 import { getSkillMocks, resetSkillMocks } from "./attempt-skills-mock.test-support.js";
 import {
   readMockSessionCacheTtlTimestamp,
@@ -818,7 +819,7 @@ type MutableSession = {
   [agentSessionSetContextReplacementHook]: (
     callback: ((tokensAfter: number, tokensBefore: number) => void) | undefined,
   ) => void;
-  [agentSessionSetPromptPreparation]: (prepare: (() => Promise<void>) | undefined) => void;
+  [agentSessionSetPromptPreparation]: AgentSession[typeof agentSessionSetPromptPreparation];
 };
 
 export type EmbeddedAttemptSession = Omit<MutableSession, "agent"> & {
@@ -961,7 +962,7 @@ export function createDefaultEmbeddedSession(params?: {
   ) => Promise<void>;
 }): MutableSession {
   let activeToolNames: string[] = [];
-  let promptPreparation: (() => Promise<void>) | undefined;
+  let promptPreparation: Parameters<AgentSession[typeof agentSessionSetPromptPreparation]>[0];
   let promptPreparationInstalled = false;
   let pendingPrompt:
     | {
@@ -1063,16 +1064,11 @@ export function createDefaultEmbeddedSession(params?: {
       // Cases can replace prompt with a real Agent bridge before runner setup.
       // Wrap the composed entrypoint so every fake model-start honors the host hook.
       const prompt = session.prompt;
-      session.prompt = async (...args) => {
-        const currentPreparation = promptPreparation;
-        if (currentPreparation) {
-          await currentPreparation();
-          if (currentPreparation !== promptPreparation) {
-            throw new Error("Session prompt preparation is stale after replacement or disposal.");
-          }
-        }
-        return prompt(...args);
-      };
+      session.prompt = (...args) =>
+        runPreparedTestPrompt(
+          () => promptPreparation,
+          () => prompt(...args),
+        );
     },
   };
 

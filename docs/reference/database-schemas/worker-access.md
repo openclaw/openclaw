@@ -1827,6 +1827,16 @@ watermark. These facts select transcript boundaries, never writer or turn author
 Released synchronous SDK callbacks and process-held incognito retain their existing
 contracts. Schemas, stored bytes, retention, durability, and update behavior are unchanged.
 
+Persisted-turn replay admission validates the exact session writer row and the
+prepared transcript version in the anchor reader's single snapshot. Each scan
+retains its physical source through validation and cleanup; later preparation
+phases must select that same physical file and obtain fresh reader authority.
+Final consumption retains writer FIFO custody and the native mutation witness
+through synchronous prompt publication and core entry. Current run ownership,
+permission generation, cancellation, and one-time replay consumption remain live
+checks after waits. The core run settles outside reader custody. This changes no
+schema, stored bytes, retention, durability, or update behavior.
+
 Awaited full-transcript event reads use the same history worker's hydration stream.
 Compaction preflight, reset hooks, BTW context, exports, and the asynchronous SDK
 reader retain raw event order, read fences, and byte limits. The host captures the

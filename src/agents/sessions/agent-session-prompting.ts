@@ -33,6 +33,7 @@ import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 import { setSteeringMessageIdentity } from "./steering-message-identity.js";
 
 type PostAgentRunAction = "continue" | "settled" | "handoff";
+type PromptAdmission = (onAdmitted: (commit?: () => void) => void) => Promise<void>;
 
 /** @internal Host preparation runs after SDK prompt hooks and owns its run cancellation. */
 export const agentSessionSetPromptPreparation: unique symbol = Symbol.for(
@@ -46,7 +47,7 @@ export const agentSessionQueuePromptContext: unique symbol = Symbol.for(
 
 export abstract class AgentSessionPrompting extends AgentSessionBase {
   private logicalPromptActive = false;
-  private promptPreparation?: () => Promise<void | (() => void)>;
+  private promptPreparation?: () => Promise<void | PromptAdmission>;
 
   [agentSessionQueuePromptContext](message: CustomMessage): () => void;
   [agentSessionQueuePromptContext](
@@ -79,7 +80,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
   }
 
   [agentSessionSetPromptPreparation](
-    prepare: (() => Promise<void | (() => void)>) | undefined,
+    prepare: (() => Promise<void | PromptAdmission>) | undefined,
   ): void {
     this.promptPreparation = prepare;
   }
@@ -127,15 +128,44 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
 
   private async runPreparedAgentLoop(run: () => Promise<void>): Promise<void> {
     const prepare = this.promptPreparation;
-    if (prepare) {
-      const admit = await prepare();
+    if (!prepare) {
+      return run();
+    }
+    const admit = await prepare();
+    const assertCurrent = () => {
       if (prepare !== this.promptPreparation) {
         throw new Error("Session prompt preparation is stale after replacement or disposal.");
       }
-      admit?.();
+    };
+    assertCurrent();
+    let running: Promise<PromiseSettledResult<void>> | undefined;
+    const start = (commit?: () => void) => {
+      assertCurrent();
+      commit?.();
+      assertCurrent();
+      // Start under admission custody, but settle outside its reader and writer FIFO.
+      running = run().then(
+        (value) => ({ status: "fulfilled", value }),
+        (reason: unknown) => ({ status: "rejected", reason }),
+      );
+    };
+    try {
+      if (admit) {
+        await admit(start);
+      } else {
+        start();
+      }
+    } catch (error) {
+      await running;
+      throw error;
     }
-    // Start synchronously after the owner check; disposal must not reopen a core loop.
-    return run();
+    if (!running) {
+      throw new Error("Session prompt admission did not start the agent loop.");
+    }
+    const result = await running;
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
   }
 
   private async handlePostAgentRun(): Promise<PostAgentRunAction> {
