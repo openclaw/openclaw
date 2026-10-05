@@ -12,10 +12,12 @@ import { coreGatewayHandlers } from "./core-handlers.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const local = vi.hoisted(() => ({ plugins: vi.fn(), skills: vi.fn() }));
+// mock-isolation: Registered-handler proof uses synthetic inventory, never host installations.
 vi.mock("../../plugins/management-service.js", () => ({
   listManagedPlugins: local.plugins,
   inspectManagedPlugin: vi.fn(),
 }));
+// mock-isolation: Per-agent fixture reports must not read actual workspace skill state.
 vi.mock("../../skills/discovery/status.js", () => ({ prepareWorkspaceSkillStatus: local.skills }));
 
 const registry = "https://catalog.example.test";
