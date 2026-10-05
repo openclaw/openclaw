@@ -33,6 +33,7 @@ import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { createReasoningTagTextPartitioner } from "../utils/reasoning-tag-text-partitioner.js";
 import { withFirstStreamEventTimeout } from "../utils/stream-first-event-timeout.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
+import { hasOpenAICompletionsChunkProgress } from "./openai-completions-chunk-progress.js";
 import {
   createDsmlRecoverer,
   type DeepSeekDsmlRecoveredPart,
@@ -403,9 +404,13 @@ export async function processCompletionsStream(
     if (!rawChunk || typeof rawChunk !== "object") {
       continue;
     }
-    // Hidden reasoning is still provider progress; keep the idle watchdog alive without exposing it.
-    notifyLlmRequestActivity(options?.signal);
     const chunk = rawChunk as OpenAICompatibleChatCompletionChunk;
+    // Hidden reasoning is still provider progress; keep the idle watchdog alive without exposing it.
+    // Content-free keepalive chunks (empty choices, empty deltas) are not progress, otherwise a
+    // stalled provider that keeps the socket chatty would re-arm the idle watchdog forever.
+    if (hasOpenAICompletionsChunkProgress(chunk)) {
+      notifyLlmRequestActivity(options?.signal);
+    }
     output.responseId ||= chunk.id;
     // Retain the provider-returned model when it differs from the requested id so
     // routed/alias responses are not misattributed, matching the direct provider
