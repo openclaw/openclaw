@@ -28,12 +28,52 @@ vi.mock("../../daemon/launchd-exec.js", async (importOriginal) => ({
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const { waitForGatewayHealthyRestart, renderRestartDiagnostics } =
+const { waitForGatewayHealthyRestart, renderRestartDiagnostics, formatGatewayRestartFailure } =
   await import("./restart-health.js");
 
 describe("restart health", () => {
   beforeEach(resetRestartHealthMocks);
   afterEach(restoreRestartHealthMocks);
+
+  it.each(["masked", "refuse-manual-start", "disabled-no-start"] as const)(
+    "ends readiness polling immediately for a verified service hold (%s)",
+    async (reason) => {
+      const runtime = {
+        status: "unknown",
+        systemd: {
+          startRefusal: { reason, message: "Resolve the managed service hold before starting." },
+        },
+      };
+      const service = makeGatewayService({ status: "stopped" });
+      vi.mocked(service.readRuntime).mockResolvedValue(runtime);
+      const result = await waitForGatewayHealthyRestart({
+        service,
+        port: 18789,
+        timeoutMs: 30 * 60_000,
+        requireRunningService: true,
+      });
+      expect(result).toMatchObject({
+        outcome: "failed",
+        healthy: false,
+        waitOutcome: "service-definition-refused",
+        runtime,
+        elapsedMs: 0,
+      });
+      expect(sleep).not.toHaveBeenCalled();
+      expect(renderRestartDiagnostics(result)).toContain(
+        "SERVICE-DEFINITION: Resolve the managed service hold before starting.",
+      );
+      expect(
+        formatGatewayRestartFailure({
+          health: result,
+          port: 18789,
+          defaultTimeoutSeconds: 30 * 60,
+        }),
+      ).toMatchObject({
+        failMessage: "SERVICE-DEFINITION: Resolve the managed service hold before starting.",
+      });
+    },
+  );
 
   it.each(["running", "stopped", "unknown"] as const)(
     "classifies a non-listening managed service at the deadline (%s)",

@@ -98,9 +98,8 @@ function renderToolSummaryText(
 
 export function createAcpReplyProjector(params: {
   cfg: OpenClawConfig;
-  shouldSendToolSummaries: boolean;
-  shouldSendToolSummariesNow?: () => boolean;
-  shouldSendFullToolDetails: boolean;
+  shouldSendToolSummaries: () => Promise<boolean>;
+  shouldSendFullToolDetails: () => Promise<boolean>;
   deliver: (
     kind: ReplyDispatchKind,
     payload: ReplyPayload,
@@ -147,9 +146,6 @@ export function createAcpReplyProjector(params: {
   let liveIdleTimer: NodeJS.Timeout | undefined;
   const pendingToolDeliveries: BufferedToolDelivery[] = [];
   const toolLifecycleById = new Map<string, ToolLifecycleState>();
-
-  const shouldSendToolSummaries = () =>
-    params.shouldSendToolSummariesNow?.() ?? params.shouldSendToolSummaries;
 
   const clearLiveIdleTimer = () => {
     if (!liveIdleTimer) {
@@ -200,7 +196,7 @@ export function createAcpReplyProjector(params: {
       flushLiveBuffer();
     }
     if (settings.deliveryMode === "final_only") {
-      if (shouldSendToolSummaries()) {
+      if (await params.shouldSendToolSummaries()) {
         for (const entry of pendingToolDeliveries.splice(0)) {
           await params.deliver("tool", entry.payload, entry.meta);
         }
@@ -219,7 +215,7 @@ export function createAcpReplyProjector(params: {
   };
 
   const emitSystemStatus = async (text: string, opts?: { dedupe?: boolean }) => {
-    if (!shouldSendToolSummaries()) {
+    if (!(await params.shouldSendToolSummaries())) {
       return;
     }
     const bounded = truncateText(text.trim(), ACP_MAX_SESSION_UPDATE_CHARS);
@@ -252,11 +248,14 @@ export function createAcpReplyProjector(params: {
   };
 
   const emitToolSummary = async (event: Extract<AcpRuntimeEvent, { type: "tool_call" }>) => {
-    if (!shouldSendToolSummaries()) {
+    if (!(await params.shouldSendToolSummaries())) {
       markHiddenToolBoundary(event);
       return;
     }
-    const renderedToolSummary = renderToolSummaryText(event, params.shouldSendFullToolDetails);
+    const renderedToolSummary = renderToolSummaryText(
+      event,
+      await params.shouldSendFullToolDetails(),
+    );
     const toolSummary = truncateText(renderedToolSummary, ACP_MAX_SESSION_UPDATE_CHARS);
     const hash = renderedToolSummary.trim();
     const toolCallId = normalizeOptionalString(event.toolCallId);

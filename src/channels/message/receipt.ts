@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   normalizeUniqueStringEntries,
   normalizeUniqueTrimmedStringList,
+  uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import type {
   MessageReceipt,
@@ -77,7 +78,7 @@ export function createMessageReceiptFromOutboundResults(params: {
 }): MessageReceipt {
   const sentResults = params.results.filter((result) => result.outcome !== "not_sent");
   const requestedThreadId = normalizeOptionalString(params.threadId);
-  const providerThreadIds = normalizeUniqueStringEntries(
+  const providerThreadIds = uniqueStrings(
     sentResults.flatMap(({ receipt }) =>
       receipt?.parts.length
         ? receipt.parts.flatMap(
@@ -179,7 +180,7 @@ export function resolveMessageReceiptThreadId(
   receipt: MessageReceipt,
   requestedThreadId?: string,
 ): string | undefined {
-  const partThreadIds = normalizeUniqueStringEntries(
+  const partThreadIds = uniqueStrings(
     receipt.parts.flatMap((part) => normalizeOptionalString(part.threadId) ?? []),
   );
   if (partThreadIds.length > 1) {

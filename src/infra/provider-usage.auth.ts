@@ -20,26 +20,30 @@ import {
 } from "../plugins/manifest-owner-policy.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { resolveProviderUsageAuthWithPlugin } from "../plugins/provider-runtime.js";
+import type { ProviderUsageAuthToken } from "../plugins/provider-runtime.types.js";
 import { resolveProviderAuthEnvVarCandidatesCore } from "../secrets/provider-env-vars.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { isOAuthOnlyUsageProvider } from "./provider-usage.shared.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
 
-export type ProviderAuth = {
+export type ProviderAuth = ProviderUsageAuthToken & {
   provider: UsageProviderId;
-  token: string;
-  authFlow?: string;
-  accountId?: string;
   authProfileId?: string;
   hookProvider?: string;
-  /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
-  subscriptionType?: string;
-  rateLimitTier?: string;
-  /** Account email captured on the resolved credential, when known. */
-  email?: string;
 };
 
 type AuthStore = ReturnType<typeof ensureAuthProfileStore>;
+
+function projectUsageAuthToken(auth: ProviderUsageAuthToken): ProviderUsageAuthToken {
+  return {
+    token: auth.token,
+    ...(auth.authFlow ? { authFlow: auth.authFlow } : {}),
+    ...(auth.accountId ? { accountId: auth.accountId } : {}),
+    ...(auth.subscriptionType ? { subscriptionType: auth.subscriptionType } : {}),
+    ...(auth.rateLimitTier ? { rateLimitTier: auth.rateLimitTier } : {}),
+    ...(auth.email ? { email: auth.email } : {}),
+  };
+}
 
 type UsageAuthState = {
   signal?: AbortSignal;
@@ -475,16 +479,7 @@ export async function resolveProviderAuths(params: {
                 provider: options?.provider ?? provider,
                 excludeProfileIds: options?.excludeProfileIds,
               });
-              return auth
-                ? {
-                    token: auth.token,
-                    ...(auth.authFlow ? { authFlow: auth.authFlow } : {}),
-                    ...(auth.accountId ? { accountId: auth.accountId } : {}),
-                    ...(auth.subscriptionType ? { subscriptionType: auth.subscriptionType } : {}),
-                    ...(auth.rateLimitTier ? { rateLimitTier: auth.rateLimitTier } : {}),
-                    ...(auth.email ? { email: auth.email } : {}),
-                  }
-                : null;
+              return auth ? projectUsageAuthToken(auth) : null;
             },
           },
         });
@@ -493,14 +488,7 @@ export async function resolveProviderAuths(params: {
           if (!("handled" in pluginAuth)) {
             auths.push({
               provider,
-              token: pluginAuth.token,
-              ...(pluginAuth.accountId ? { accountId: pluginAuth.accountId } : {}),
-              ...(pluginAuth.subscriptionType
-                ? { subscriptionType: pluginAuth.subscriptionType }
-                : {}),
-              ...(pluginAuth.authFlow ? { authFlow: pluginAuth.authFlow } : {}),
-              ...(pluginAuth.rateLimitTier ? { rateLimitTier: pluginAuth.rateLimitTier } : {}),
-              ...(pluginAuth.email ? { email: pluginAuth.email } : {}),
+              ...projectUsageAuthToken(pluginAuth),
             });
           }
           continue;

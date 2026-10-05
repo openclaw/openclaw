@@ -74,11 +74,16 @@ export type SessionStoreTargetReadResult =
       database: { agentId: string; path: string };
     };
 
-/** Resolve a single configured store without inspecting or listing its session rows. */
-function readSessionStoreTarget(
+class SessionStoreTargetDataReadError extends Error {
+  constructor(readonly readError: unknown) {
+    super("Session store target data read failed", { cause: readError });
+  }
+}
+
+/** Preserve positive locator failures without catching native close or candidate revocation. */
+export function readSessionStoreTargetResult(
   request: SessionStoreTargetReadRequest,
-  onReadError?: (error: unknown) => never,
-): SessionStoreTargetReadResult {
+): Result<SessionStoreTargetReadResult, unknown> {
   try {
     const target = resolveSqliteTargetFromSessionStorePath(request.storePath, {
       agentId: request.agentId,
@@ -86,7 +91,9 @@ function readSessionStoreTarget(
       env: request.env,
       registeredDatabases: request.registeredDatabases,
       readCandidates: request.candidates,
-      onReadError,
+      onReadError(error) {
+        throw new SessionStoreTargetDataReadError(error);
+      },
     });
     let agentId: string | undefined;
     try {
@@ -99,10 +106,9 @@ function readSessionStoreTarget(
         throw new Error("Cannot resolve SQLite session scope without an agent id");
       }
     } catch (error) {
-      onReadError?.(error);
-      throw error;
+      throw new SessionStoreTargetDataReadError(error);
     }
-    return {
+    return ok({
       kind: "session-store-target",
       sourcePath: target.path,
       logicalAgentId: agentId,
@@ -110,32 +116,11 @@ function readSessionStoreTarget(
         agentId: target.shared ? (target.agentId ?? agentId) : agentId,
         path: assertSessionStoreReadCandidate(target.path, request.candidates),
       },
-    };
+    });
   } catch (error) {
     if (error instanceof SessionStoreRegistryReadRequired) {
-      return { kind: "session-target-registry-required" };
+      return ok({ kind: "session-target-registry-required" });
     }
-    throw error;
-  }
-}
-
-class SessionStoreTargetDataReadError extends Error {
-  constructor(readonly readError: unknown) {
-    super("Session store target data read failed", { cause: readError });
-  }
-}
-
-/** Preserve positive locator failures without catching native close or candidate revocation. */
-export function readSessionStoreTargetResult(
-  request: SessionStoreTargetReadRequest,
-): Result<SessionStoreTargetReadResult, unknown> {
-  try {
-    return ok(
-      readSessionStoreTarget(request, (error) => {
-        throw new SessionStoreTargetDataReadError(error);
-      }),
-    );
-  } catch (error) {
     if (error instanceof SessionStoreTargetDataReadError) {
       return err(error.readError);
     }
