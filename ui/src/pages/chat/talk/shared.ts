@@ -1,6 +1,5 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TalkClientToolCallResult } from "../../../../../packages/gateway-protocol/src/schema/channels.js";
-import type { AgentWaitResult as GatewayAgentWaitResult } from "../../../../../src/agents/run-wait.types.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../../../../src/talk/agent-consult-tool.js";
 import {
   buildRealtimeVoiceAgentCancelProviderResult,
@@ -15,6 +14,20 @@ import type { TalkEvent, TalkEventInput } from "../../../../../src/talk/talk-eve
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../../api/gateway.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import type { RealtimeTalkInputController } from "./input.ts";
+
+/** Agent wait result from the Gateway, used locally to avoid cross-package type dependency. */
+type GatewayAgentWaitResult = {
+  status?: string;
+  error?: string;
+  stopReason?: string;
+  endedAt?: number;
+  pendingError?: boolean;
+  timeoutPhase?: string;
+  providerStarted?: boolean;
+  aborted?: boolean;
+  livenessState?: string;
+  yielded?: boolean;
+};
 
 export type RealtimeTalkStatus = "idle" | "connecting" | "listening" | "thinking" | "error";
 export type RealtimeTalkEvent = TalkEvent;
@@ -181,12 +194,6 @@ type ChatPayload = {
   message?: unknown;
 };
 
-type AgentWaitResult = Omit<Partial<GatewayAgentWaitResult>, "status" | "timeoutPhase"> & {
-  status?: string;
-  timeoutPhase?: string;
-  aborted?: boolean;
-};
-
 const EMPTY_FINAL_FALLBACK_GRACE_MS = 500;
 
 function extractTextFromMessage(message: unknown): string {
@@ -207,7 +214,7 @@ function extractTextFromMessage(message: unknown): string {
   return parts.join("\n\n").trim();
 }
 
-function getTerminalAgentWaitError(result: AgentWaitResult | undefined): Error | undefined {
+function getTerminalAgentWaitError(result: GatewayAgentWaitResult | undefined): Error | undefined {
   if (!result) {
     return undefined;
   }
@@ -221,9 +228,13 @@ function getTerminalAgentWaitError(result: AgentWaitResult | undefined): Error |
   const stopReason = result.stopReason?.trim();
   const timeoutPhase = result.timeoutPhase?.trim();
   const livenessState = result.livenessState?.trim();
+  // Error-message presence indicates a terminal timeout: the wait owner resolved
+  // with an error but without a canonical terminal status, so treat it as an
+  // interruption rather than letting the consultation wait for the outer deadline.
+  const hasErrorMessage = message !== undefined && message.length > 0;
   const hasTerminalTimeoutMetadata =
+    hasErrorMessage ||
     result.endedAt !== undefined ||
-    message !== undefined ||
     result.aborted === true ||
     (livenessState !== undefined && livenessState.length > 0) ||
     result.yielded === true ||
@@ -231,6 +242,7 @@ function getTerminalAgentWaitError(result: AgentWaitResult | undefined): Error |
     timeoutPhase === "preflight" ||
     timeoutPhase === "provider" ||
     timeoutPhase === "post_turn" ||
+    timeoutPhase === "gateway_draining" ||
     result.providerStarted === true;
   if (hasTerminalTimeoutMetadata) {
     return new Error(message || "OpenClaw tool call timed out");
