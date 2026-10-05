@@ -49,7 +49,11 @@ function fixture() {
   };
 }
 
-function seal(data = fixture(), runAttempt = 1) {
+function seal(
+  data = fixture(),
+  runAttempt = 1,
+  identity: { targetSha?: string; workflowSha?: string; workflowRef?: string } = {},
+) {
   const root = tempDirs.make("frv-child-receipt-");
   const bin = join(root, "bin");
   mkdirSync(bin);
@@ -99,15 +103,15 @@ if (endpoint === "repos/openclaw/openclaw/actions/runs/101") {
       GH_TOKEN: "synthetic-test-token",
       FRV_FIXTURE: fixturePath,
       FRV_CHILD_ROLE: "normalCi",
-      FRV_CHILD_TARGET_SHA: TARGET,
+      FRV_CHILD_TARGET_SHA: identity.targetSha ?? TARGET,
       FRV_CHILD_EVIDENCE_PATH: receipt,
       GITHUB_EVENT_PATH: event,
       GITHUB_OUTPUT: output,
       GITHUB_REPOSITORY: "openclaw/openclaw",
       GITHUB_RUN_ID: "101",
       GITHUB_RUN_ATTEMPT: String(runAttempt),
-      GITHUB_SHA: SHA,
-      GITHUB_REF_NAME: "main",
+      GITHUB_SHA: identity.workflowSha ?? SHA,
+      GITHUB_REF_NAME: identity.workflowRef ?? "main",
     },
   });
   return { result, receipt, output };
@@ -224,6 +228,25 @@ describe("full release child evidence producer", () => {
       );
     },
   );
+
+  it("seals candidate-owned workflow evidence outside main ancestry", () => {
+    const data = fixture();
+    const workflowRef = `release-ci/${TARGET.slice(0, 12)}-123`;
+    data.run.head_sha = TARGET;
+    data.run.head_branch = workflowRef;
+    data.lineage.status = "diverged";
+    const { result, receipt } = seal(data, 1, {
+      targetSha: TARGET,
+      workflowSha: TARGET,
+      workflowRef,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(receipt, "utf8"))).toMatchObject({
+      targetSha: TARGET,
+      workflowSha: TARGET,
+      workflowRef,
+    });
+  });
 
   it.each([
     { runAttempt: 2, retryWorkload: true, observedRunAttempts: [1, 2], accepted: 2 },

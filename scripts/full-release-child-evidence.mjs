@@ -118,12 +118,14 @@ function seal() {
   ) {
     throw new Error("Child evidence publisher is not in the current active workflow attempt");
   }
-  const lineage = github(repository, `compare/${workflowSha}...main?per_page=1`);
-  if (
-    !["ahead", "identical"].includes(lineage.status) ||
-    lineage.merge_base_commit?.sha !== workflowSha
-  ) {
-    throw new Error("Child evidence workflow SHA is not a main ancestor");
+  if (workflowSha !== targetSha) {
+    const lineage = github(repository, `compare/${workflowSha}...main?per_page=1`);
+    if (
+      !["ahead", "identical"].includes(lineage.status) ||
+      lineage.merge_base_commit?.sha !== workflowSha
+    ) {
+      throw new Error("Child evidence workflow SHA is not a main ancestor or the candidate SHA");
+    }
   }
   const attempts = [];
   let publisher;
