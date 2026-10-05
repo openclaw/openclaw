@@ -4,7 +4,6 @@ import {
   createAgentLifecycleTerminalBackstop,
   resolveAgentLifecycleTerminalMetadata,
 } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { prepareCronRootSessionGeneration } from "../../config/sessions/session-delivery-generation.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { revokeMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
@@ -14,10 +13,7 @@ import {
   getAgentEventLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
-import {
-  buildHandledBeforeAgentReplyPayloads,
-  runBeforeAgentReplyForTurn,
-} from "../../plugins/before-agent-reply.js";
+import { runBeforeAgentReplyForTurn } from "../../plugins/before-agent-reply.js";
 import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
@@ -81,6 +77,7 @@ import { runPreparedEmbeddedLoop } from "./run-loop.js";
 import { createEmbeddedRunStageSummaryEmitter } from "./run/attempt-stage-timing.js";
 import { withExecutionPhaseDiagnostics } from "./run/execution-phase-diagnostics.js";
 import { buildEmbeddedFailureSuspension } from "./run/failure-suspension.js";
+import { buildEmbeddedHandledBeforeAgentReplyResult } from "./run/handled-before-agent-reply-transcript.js";
 import type {
   RunEmbeddedAgentInternalParams,
   RunEmbeddedAgentParamsWithSessionFile,
@@ -502,19 +499,22 @@ async function runEmbeddedAgentInternal(
                   notifyExecutionPhase("runtime_plugins", { provider, model: modelId }),
               });
               if (hookResult?.handled) {
-                return {
-                  payloads: buildHandledBeforeAgentReplyPayloads(hookResult.reply),
-                  meta: {
-                    durationMs: Date.now() - started,
-                    agentMeta: {
-                      sessionId: params.sessionId,
-                      provider,
-                      model: modelId,
-                    },
-                    finalAssistantVisibleText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
-                    finalAssistantRawText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
+                return await buildEmbeddedHandledBeforeAgentReplyResult({
+                  assertCurrent: () => {
+                    throwIfAborted();
+                    assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
                   },
-                };
+                  agentId: workspaceResolution.agentId,
+                  model: modelId,
+                  provider,
+                  redactedSessionId,
+                  reply: hookResult.reply,
+                  run: params,
+                  sessionKey: resolvedSessionKey,
+                  sessionTarget: { ...params.sessionTarget, ...runSessionTarget },
+                  startedAt: started,
+                  warn: (message) => log.warn(message),
+                });
               }
 
               assistantErrorTranscript ??=

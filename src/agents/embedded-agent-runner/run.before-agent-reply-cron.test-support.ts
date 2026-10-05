@@ -1,6 +1,9 @@
 // Full-entry coverage for before_agent_reply hook handling before embedded attempts.
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { captureGuardedFetchRequestAuthority } from "../../infra/net/fetch-request-authority.js";
 import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
 import { readClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
@@ -12,7 +15,10 @@ import {
   createOverflowRunParams,
   resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
-import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
+import {
+  createSharedRunIntegrationSession,
+  loadSharedRunIntegrationHarness,
+} from "./run.shared-integration-harness.test-support.js";
 
 let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
@@ -64,6 +70,316 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
   afterEach(async () => {
     await state?.cleanup();
   });
+
+  it.each(
+    [
+      {
+        name: "persistent user turn",
+        sessionPersistence: undefined,
+        currentInboundEventKind: undefined,
+        persists: true,
+      },
+      {
+        name: "detached user turn",
+        sessionPersistence: "detached" as const,
+        currentInboundEventKind: undefined,
+        persists: false,
+      },
+      {
+        name: "room event",
+        sessionPersistence: undefined,
+        currentInboundEventKind: "room_event" as const,
+        persists: false,
+      },
+    ].flatMap((testCase) =>
+      [
+        { name: "text", reply: { text: "user turn claimed" }, expected: "user turn claimed" },
+        {
+          name: "media only",
+          reply: { mediaUrl: "https://example.com/photo.png?token=redacted" },
+          expected: "photo.png",
+        },
+        {
+          name: "captioned media",
+          reply: { text: "caption", mediaUrl: "https://example.com/photo.png" },
+          expected: "caption\nphoto.png",
+        },
+        {
+          name: "silent token with media",
+          reply: { text: SILENT_REPLY_TOKEN, mediaUrl: "https://example.com/photo.png" },
+          expected: "photo.png",
+        },
+        {
+          name: "mixed silent token text",
+          reply: { text: `Hello ${SILENT_REPLY_TOKEN}` },
+          expected: "Hello",
+        },
+        {
+          name: "mixed silent token with media",
+          reply: { text: `Hello ${SILENT_REPLY_TOKEN}`, mediaUrl: "https://example.com/photo.png" },
+          expected: "Hello\nphoto.png",
+        },
+        {
+          name: "mixed heartbeat token text",
+          reply: { text: `Hello ${HEARTBEAT_TOKEN}` },
+          expected: "Hello",
+        },
+        {
+          name: "mixed heartbeat token media",
+          reply: { text: `Hello ${HEARTBEAT_TOKEN}`, mediaUrl: "https://example.com/photo.png" },
+          expected: "Hello\nphoto.png",
+        },
+        {
+          name: "heartbeat token media",
+          reply: { text: HEARTBEAT_TOKEN, mediaUrl: "https://example.com/photo.png" },
+          expected: "photo.png",
+        },
+        {
+          name: "heartbeat token location",
+          reply: {
+            text: HEARTBEAT_TOKEN,
+            location: { latitude: 48.858844, longitude: 2.294351 },
+          },
+          expected: "📍 48.858844, 2.294351",
+        },
+        {
+          name: "heartbeat token with opaque channel data",
+          reply: {
+            text: HEARTBEAT_TOKEN,
+            channelData: {
+              slack: { blocks: [{ type: "section", text: { type: "plain_text", text: "Hello" } }] },
+            },
+          },
+          expected: null,
+        },
+        {
+          name: "silent token with opaque channel data",
+          reply: {
+            text: SILENT_REPLY_TOKEN,
+            channelData: {
+              slack: { blocks: [{ type: "section", text: { type: "plain_text", text: "Hello" } }] },
+            },
+          },
+          expected: null,
+        },
+        {
+          name: "multiple media",
+          reply: {
+            text: "caption",
+            mediaUrls: ["https://example.com/photo.png", "https://example.com/report.pdf"],
+            mediaUrl: "https://example.com/ignored.png",
+          },
+          expected: "caption\nphoto.png, report.pdf",
+        },
+      ].map((mediaCase) =>
+        Object.assign({}, testCase, mediaCase, {
+          name: `${testCase.name} with ${mediaCase.name}`,
+        }),
+      ),
+    ),
+  )("keeps hook-claimed $name transcript ownership", async (testCase) => {
+    const session = await createSharedRunIntegrationSession();
+    const { loadTranscriptEvents } = await import("../../config/sessions/session-accessor.js");
+    const { getReplyPayloadMetadata, setReplyPayloadMetadata } =
+      await import("../../auto-reply/reply-payload.js");
+    const { createRegisteredBeforeAgentReplyFixture } =
+      await import("../before-agent-reply.test-support.js");
+    try {
+      const { hookRunner, handler } = createRegisteredBeforeAgentReplyFixture(
+        setReplyPayloadMetadata({ ...testCase.reply }, { blockSourceText: "plugin-owned source" }),
+      );
+      mockedGlobalHookRunner.hasHooks.mockImplementation(
+        (hookName: string) => hookName === "before_agent_reply" && hookRunner.hasHooks(hookName),
+      );
+      mockedGlobalHookRunner.runBeforeAgentReply.mockImplementation(hookRunner.runBeforeAgentReply);
+
+      const result = await runEmbeddedAgent({
+        ...session.runParams,
+        trigger: "user",
+        sessionPersistence: testCase.sessionPersistence,
+        currentInboundEventKind: testCase.currentInboundEventKind,
+      });
+
+      expect(result.payloads?.[0]).toEqual(testCase.reply);
+      expect(handler).toHaveBeenCalledOnce();
+      expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+      const transcript = await loadTranscriptEvents(session.runParams.sessionTarget);
+      const metadata = getReplyPayloadMetadata(result.payloads?.[0] ?? {});
+      expect(metadata).toMatchObject({
+        assistantTranscriptOwned: true,
+        blockSourceText: "plugin-owned source",
+      });
+      if (testCase.persists && testCase.expected !== null) {
+        expect(
+          transcript.filter(
+            (event) =>
+              isRecord(event) && isRecord(event.message) && event.message.role === "assistant",
+          ),
+        ).toEqual([
+          expect.objectContaining({
+            message: expect.objectContaining({
+              role: "assistant",
+              content: [{ type: "text", text: testCase.expected }],
+            }),
+          }),
+        ]);
+        expect(metadata).toMatchObject({
+          assistantTranscriptIdempotencyKey: `before-agent-reply:${session.runParams.runId}`,
+        });
+      } else {
+        expect(transcript).toEqual([]);
+        expect(metadata?.assistantTranscriptIdempotencyKey).toBeUndefined();
+      }
+    } finally {
+      await session.cleanup();
+    }
+  });
+
+  it("does not persist a hook reply after its session writer is replaced", async () => {
+    const session = await createSharedRunIntegrationSession();
+    const { loadTranscriptEvents } = await import("../../config/sessions/session-accessor.js");
+    const { claimAgentSessionWriter } = await import("./run/session-bootstrap.js");
+    try {
+      mockedGlobalHookRunner.hasHooks.mockImplementation(
+        (hookName: string) => hookName === "before_agent_reply",
+      );
+      mockedGlobalHookRunner.runBeforeAgentReply.mockImplementationOnce(async () => {
+        await claimAgentSessionWriter({
+          ...session.runParams,
+          runId: "replacement-writer",
+        });
+        return { handled: true, reply: { text: "stale writer reply" } };
+      });
+
+      await runEmbeddedAgent({ ...session.runParams, trigger: "user" });
+
+      expect(mockedGlobalHookRunner.runBeforeAgentReply).toHaveBeenCalledTimes(1);
+      expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+      expect(await loadTranscriptEvents(session.runParams.sessionTarget)).toEqual([]);
+    } finally {
+      await session.cleanup();
+    }
+  });
+
+  it.each([
+    { name: "absent reply", reply: undefined },
+    { name: "explicit silent reply", reply: { text: SILENT_REPLY_TOKEN } },
+    { name: "heartbeat acknowledgment", reply: { text: HEARTBEAT_TOKEN } },
+  ])("keeps a $name hook claim out of the assistant transcript", async ({ reply }) => {
+    const session = await createSharedRunIntegrationSession();
+    const { loadTranscriptEvents } = await import("../../config/sessions/session-accessor.js");
+    try {
+      mockedGlobalHookRunner.hasHooks.mockImplementation(
+        (hookName: string) => hookName === "before_agent_reply",
+      );
+      mockedGlobalHookRunner.runBeforeAgentReply.mockResolvedValue({ handled: true, reply });
+      const result = await runEmbeddedAgent({ ...session.runParams, trigger: "user" });
+      expect(result.payloads?.[0]?.text).toBe(reply?.text ?? SILENT_REPLY_TOKEN);
+      expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+      const assistantMessages = (
+        await loadTranscriptEvents(session.runParams.sessionTarget)
+      ).filter(
+        (event) =>
+          isRecord(event) &&
+          event.type === "message" &&
+          isRecord(event.message) &&
+          event.message.role === "assistant",
+      );
+      expect(assistantMessages).toEqual([]);
+    } finally {
+      await session.cleanup();
+    }
+  });
+
+  it("does not persist a claimed reply after cancellation during the hook", async () => {
+    const session = await createSharedRunIntegrationSession();
+    const { loadTranscriptEvents } = await import("../../config/sessions/session-accessor.js");
+    const entered = createDeferred();
+    const release = createDeferred();
+    const abort = new AbortController();
+    mockedGlobalHookRunner.hasHooks.mockImplementation(
+      (hookName: string) => hookName === "before_agent_reply",
+    );
+    mockedGlobalHookRunner.runBeforeAgentReply.mockImplementation(async () => {
+      entered.resolve();
+      await release.promise;
+      return { handled: true, reply: { text: "late claimed reply" } };
+    });
+    try {
+      const outcome = runEmbeddedAgent({
+        ...session.runParams,
+        abortSignal: abort.signal,
+        trigger: "user",
+      }).catch((error: unknown) => error);
+      await entered.promise;
+      abort.abort(new Error("cancelled while the hook was pending"));
+      release.resolve();
+      await outcome;
+      const assistantMessages = (
+        await loadTranscriptEvents(session.runParams.sessionTarget)
+      ).filter(
+        (event) =>
+          isRecord(event) &&
+          event.type === "message" &&
+          isRecord(event.message) &&
+          event.message.role === "assistant",
+      );
+      expect(assistantMessages).toEqual([]);
+    } finally {
+      release.resolve();
+      await session.cleanup();
+    }
+  });
+
+  it.each(["during", "after"] as const)(
+    "does not persist a claimed reply cancelled %s transcript preparation",
+    async (cancellationTiming) => {
+      const session = await createSharedRunIntegrationSession();
+      const { loadTranscriptEvents } = await import("../../config/sessions/session-accessor.js");
+      const abort = new AbortController();
+      let prepared = 0;
+      mockedGlobalHookRunner.hasHooks.mockImplementation(
+        (hookName: string) => hookName === "before_agent_reply",
+      );
+      mockedGlobalHookRunner.runBeforeAgentReply.mockResolvedValue({
+        handled: true,
+        reply: { text: "late claimed reply" },
+      });
+
+      try {
+        const outcome = await runEmbeddedAgent({
+          ...session.runParams,
+          abortSignal: abort.signal,
+          trigger: "user",
+          prepareAssistantTranscriptMessage: (message) => {
+            prepared += 1;
+            const failure = new Error("cancelled while transcript write was preparing");
+            if (cancellationTiming === "during") {
+              abort.abort(failure);
+            } else {
+              queueMicrotask(() => abort.abort(failure));
+            }
+            return message;
+          },
+        }).catch((error: unknown) => error);
+
+        expect(prepared).toBe(1);
+        expect(outcome).toBeInstanceOf(Error);
+        const assistantMessages = (
+          await loadTranscriptEvents(session.runParams.sessionTarget)
+        ).filter(
+          (event) =>
+            isRecord(event) &&
+            event.type === "message" &&
+            isRecord(event.message) &&
+            event.message.role === "assistant",
+        );
+        expect(assistantMessages).toEqual([]);
+      } finally {
+        await session.cleanup();
+      }
+    },
+  );
 
   it("lets before_agent_reply claim cron runs before the embedded attempt starts", async () => {
     // Cron hooks can fully handle maintenance prompts before the model is

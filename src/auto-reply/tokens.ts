@@ -266,6 +266,18 @@ export function startsWithSilentToken(
   return text.slice(leading[0].length).trimStart().length > 0;
 }
 
+/** Strip control tokens from a reply that also contains visible text. */
+export function stripMixedSilentReplyTokens(
+  text: string,
+  token: string = SILENT_REPLY_TOKEN,
+): string {
+  const hasLeadingSilentToken = startsWithSilentToken(text, token);
+  const withoutLeading = hasLeadingSilentToken ? stripLeadingSilentToken(text, token) : text;
+  return hasLeadingSilentToken || withoutLeading.toLowerCase().includes(token.toLowerCase())
+    ? stripSilentToken(withoutLeading, token)
+    : withoutLeading;
+}
+
 export function isSilentReplyPrefixText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,

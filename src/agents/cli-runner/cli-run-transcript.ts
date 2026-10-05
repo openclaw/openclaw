@@ -1,3 +1,9 @@
+import {
+  isExplicitlySilentReplyPayload,
+  setReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../../auto-reply/reply-payload.js";
+import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { getCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -26,6 +32,10 @@ import { buildGenericCliContextEngineHostSupport } from "../../context-engine/ho
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { StopReason } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  buildHandledBeforeAgentReplyPayloads,
+  resolveHandledBeforeAgentReplyTranscriptText,
+} from "../../plugins/before-agent-reply.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
@@ -132,6 +142,7 @@ export async function persistApprovedCliUserTurnTranscript(
 
 export async function persistCliAssistantTranscript(params: {
   runParams: RunCliAgentParams;
+  assertCurrentBeforeWrite?: () => void;
   text: string;
   modelId: string;
   usage?: CliUsage;
@@ -169,7 +180,9 @@ export async function persistCliAssistantTranscript(params: {
       idempotencyKey,
       runId: runParams.runId,
       config: runParams.config,
+      assertCurrent: params.assertCurrentBeforeWrite,
       beforeMessageWrite: (write) => {
+        params.assertCurrentBeforeWrite?.();
         const message = runAgentHarnessBeforeMessageWriteHook({
           ...write,
           message: projectAgentHarnessTranscriptMessageForDisplay({
@@ -179,6 +192,7 @@ export async function persistCliAssistantTranscript(params: {
           }),
           prepareAssistantTranscriptMessage: runParams.prepareAssistantTranscriptMessage,
         });
+        params.assertCurrentBeforeWrite?.();
         return message
           ? projectAgentHarnessTranscriptMessageForDisplay({
               hidden: false,
@@ -230,6 +244,42 @@ export async function persistCliAssistantTranscript(params: {
     log.warn(`CLI assistant transcript persistence failed: ${formatErrorMessage(error)}`);
     return { owned: false };
   }
+}
+
+export async function prepareCliHandledBeforeAgentReply(params: {
+  runParams: RunCliAgentParams;
+  reply?: ReplyPayload;
+  assertCurrent: () => void;
+}): Promise<{ finalText: string; payloads: ReplyPayload[] }> {
+  params.assertCurrent();
+  const finalText = params.reply?.text ?? SILENT_REPLY_TOKEN;
+  const payloads = buildHandledBeforeAgentReplyPayloads(params.reply);
+  const transcriptText = resolveHandledBeforeAgentReplyTranscriptText(params.reply);
+  if (!params.reply || isExplicitlySilentReplyPayload(params.reply) || transcriptText === null) {
+    for (const payload of payloads) {
+      setReplyPayloadMetadata(payload, { assistantTranscriptOwned: true });
+    }
+    return { finalText, payloads };
+  }
+  const transcript = await persistCliAssistantTranscript({
+    runParams: params.runParams,
+    assertCurrentBeforeWrite: params.assertCurrent,
+    text: transcriptText,
+    modelId: params.runParams.model ?? "",
+    stopReason: "stop",
+  });
+  params.assertCurrent();
+  if (transcript.owned) {
+    for (const payload of payloads) {
+      setReplyPayloadMetadata(payload, {
+        assistantTranscriptOwned: true,
+        ...(transcript.idempotencyKey
+          ? { assistantTranscriptIdempotencyKey: transcript.idempotencyKey }
+          : {}),
+      });
+    }
+  }
+  return { finalText, payloads };
 }
 
 async function notifyCliUserMessagePersisted(
