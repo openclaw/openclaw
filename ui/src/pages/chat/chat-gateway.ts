@@ -1,6 +1,7 @@
 import {
   hasSessionProjectionAcceptedFinal,
   isSessionProjectionErrorMessage,
+  readSessionMessageIdentity,
   reduceSessionProjectionRunEvent,
 } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
@@ -25,13 +26,14 @@ import {
   readChatSessionProjectionScope,
   setChatRunOwner,
   publishChatSessionProjection,
+  reduceChatSessionProjection,
 } from "./history-merge.ts";
 import {
   adoptStartedChatRun,
   reconcileChatRunLifecycle,
   setChatRunError,
 } from "./run-lifecycle.ts";
-import { appendChatMessageToCache } from "./session-message-cache.ts";
+import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-message-cache.ts";
 import {
   latestStreamBoundaryRunId,
   reconcileTerminalStreamBoundary,
@@ -116,8 +118,21 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
         : payload.errorDetail?.providerRuntimeFailureKind === "auth_refresh"
           ? "auth_refresh"
           : undefined;
-  const normalizedFinalMessage =
+  const injectedMessageId =
+    payload.state === "final" && payload.runId?.startsWith("inject-")
+      ? payload.runId.slice("inject-".length)
+      : null;
+  const finalMessage =
     payload.state === "final" ? normalizeFinalAssistantMessage(payload.message) : null;
+  // chat.inject encodes the persisted row ID in its delivery ID, not an agent run.
+  // Use that same identity when session.message or history arrives in either order.
+  const normalizedFinalMessage =
+    injectedMessageId && finalMessage
+      ? {
+          ...finalMessage,
+          __openclaw: { ...asRecord(finalMessage["__openclaw"]), id: injectedMessageId },
+        }
+      : finalMessage;
   const hadActiveRunBeforeEvent = state.chatRunId !== null;
   const sessionMatches = visibleSessionMatches(state, payload.sessionKey, payload.agentId);
   const activeRunMatches =
@@ -135,17 +150,41 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
           ? (payload.agentId ?? resolveUiDefaultAgentId(state))
           : payload.agentId;
         if (state.chatMessagesBySession) {
+          if (
+            injectedMessageId &&
+            readChatMessagesFromCache(state.chatMessagesBySession, state, {
+              sessionKey: payload.sessionKey,
+              agentId: cacheAgentId,
+            })?.some((message) => readSessionMessageIdentity(message)?.id === injectedMessageId)
+          ) {
+            return null;
+          }
           appendChatMessageToCache(
             state.chatMessagesBySession,
             state,
             { sessionKey: payload.sessionKey, agentId: cacheAgentId },
             finalMessage,
-            payload,
+            injectedMessageId ? { messageId: injectedMessageId } : payload,
           );
         }
       }
     }
     return null;
+  }
+  if (injectedMessageId) {
+    if (
+      normalizedFinalMessage &&
+      !shouldHideAssistantChatMessage(normalizedFinalMessage) &&
+      !state.chatMessages.some(
+        (message) => readSessionMessageIdentity(message)?.id === injectedMessageId,
+      )
+    ) {
+      reduceChatSessionProjection(state, {
+        type: "messagePersisted",
+        message: normalizedFinalMessage,
+      });
+    }
+    return "injected";
   }
   const scope = readChatSessionProjectionScope(state);
   const publishVisibleTerminal = (
