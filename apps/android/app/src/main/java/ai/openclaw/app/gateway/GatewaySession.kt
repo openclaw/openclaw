@@ -428,6 +428,9 @@ class GatewaySession(
 
     fun supportsMethod(method: String): Boolean = method in advertisedMethods
 
+    /** False when hello omitted the method catalog; callers must not treat that as "put is absent". */
+    fun hasAdvertisedMethods(): Boolean = advertisedMethods.isNotEmpty()
+
     fun commitIfCurrent(block: () -> Unit): Boolean {
       commitIfCurrentImpl?.let { return it(block) }
       if (!isCurrentImpl()) return false

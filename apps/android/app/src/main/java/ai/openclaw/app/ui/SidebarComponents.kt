@@ -33,9 +33,11 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -156,6 +158,8 @@ internal fun SidebarCollapsibleHeader(
   iconContent: (@Composable () -> Unit)? = null,
   trailingContent: (@Composable () -> Unit)? = null,
   attention: SidebarAttention? = null,
+  /** Loaded membership, same as the web collapsed section count. Hidden when expanded or zero. */
+  count: Int? = null,
 ) {
   Row(
     modifier =
@@ -189,6 +193,14 @@ internal fun SidebarCollapsibleHeader(
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
     )
+    if (!expanded && count != null && count > 0) {
+      Text(
+        text = count.toString(),
+        style = ClawTheme.type.caption,
+        color = palette.muted,
+        maxLines = 1,
+      )
+    }
     attention?.let { SidebarAttentionIndicator(it, palette) }
     trailingContent?.invoke()
   }
@@ -385,6 +397,10 @@ internal fun SidebarSessionRow(
   onDragCommit: ((Int) -> Unit)? = null,
   onDragActiveChange: (Boolean) -> Unit = {},
   attention: SidebarAttention? = null,
+  groupNames: List<String> = emptyList(),
+  onMoveToGroup: ((String) -> Unit)? = null,
+  onRemoveFromGroup: (() -> Unit)? = null,
+  onNewGroup: (() -> Unit)? = null,
 ) {
   val activity =
     sidebarSessionActivity(
@@ -440,6 +456,92 @@ internal fun SidebarSessionRow(
         modifier = Modifier.size(13.dp),
         tint = palette.muted,
       )
+    }
+    if (onMoveToGroup != null || onNewGroup != null || onRemoveFromGroup != null) {
+      SidebarSessionGroupMenu(
+        palette = palette,
+        groupNames = groupNames,
+        currentCategory = session.category,
+        onMoveToGroup = onMoveToGroup,
+        onRemoveFromGroup = onRemoveFromGroup,
+        onNewGroup = onNewGroup,
+      )
+    }
+  }
+}
+
+@Composable
+private fun SidebarSessionGroupMenu(
+  palette: SidebarPalette,
+  groupNames: List<String>,
+  currentCategory: String?,
+  onMoveToGroup: ((String) -> Unit)?,
+  onRemoveFromGroup: (() -> Unit)?,
+  onNewGroup: (() -> Unit)?,
+) {
+  var expanded by remember { mutableStateOf(false) }
+  var choosingGroup by remember { mutableStateOf(false) }
+  val category = currentCategory?.trim()?.takeIf { it.isNotEmpty() }
+  Box {
+    IconButton(onClick = {
+      choosingGroup = false
+      expanded = true
+    }, modifier = Modifier.size(36.dp)) {
+      Icon(
+        imageVector = Icons.Default.MoreVert,
+        contentDescription = nativeString("Move to group"),
+        tint = palette.muted,
+        modifier = Modifier.size(18.dp),
+      )
+    }
+    AppDropdownMenu(
+      expanded = expanded,
+      onDismissRequest = {
+        expanded = false
+        choosingGroup = false
+      },
+    ) {
+      if (choosingGroup) {
+        DropdownMenuItem(
+          text = { Text(nativeString("← Back"), style = ClawTheme.type.body) },
+          onClick = { choosingGroup = false },
+        )
+        groupNames.filterNot { it == category }.forEach { name ->
+          DropdownMenuItem(
+            text = { Text(name, style = ClawTheme.type.body) },
+            onClick = {
+              expanded = false
+              choosingGroup = false
+              onMoveToGroup?.invoke(name)
+            },
+          )
+        }
+        if (onNewGroup != null) {
+          DropdownMenuItem(
+            text = { Text(nativeString("New group…"), style = ClawTheme.type.body) },
+            onClick = {
+              expanded = false
+              choosingGroup = false
+              onNewGroup()
+            },
+          )
+        }
+        if (category != null && onRemoveFromGroup != null) {
+          DropdownMenuItem(
+            text = { Text(nativeString("Remove from group"), style = ClawTheme.type.body) },
+            onClick = {
+              expanded = false
+              choosingGroup = false
+              onRemoveFromGroup()
+            },
+          )
+        }
+      } else {
+        DropdownMenuItem(
+          text = { Text(nativeString("Move to group"), style = ClawTheme.type.body) },
+          onClick = { choosingGroup = true },
+        )
+      }
     }
   }
 }
