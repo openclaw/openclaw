@@ -21,6 +21,10 @@ import type {
 import type { SessionEntry } from "./types.js";
 
 export type IncognitoLifecycleEntry = { sessionKey: string; entry: SessionEntry };
+export type IncognitoLifecycleSettlement = {
+  beforeCommit(): void;
+  settle(outcome: "committed" | "rolled-back" | "unknown"): void;
+};
 type IncognitoForkPreparation = IncognitoLifecycleEntry & {
   identity: Readonly<SqliteWorkerEphemeralTarget>;
   version: SessionTranscriptContextVersion;
@@ -91,6 +95,24 @@ export function isIncognitoLifecycleWrite(type: keyof IncognitoLifecycleOperatio
     type !== "session.lifecycle.parentFork.prepare" &&
     type !== "session.lifecycle.parentFork.source"
   );
+}
+
+export function captureIncognitoLifecycleSettlement(
+  input: SqliteWorkerCommand<IncognitoLifecycleOperations>["input"],
+  capture?: (entries: readonly IncognitoLifecycleEntry[]) => IncognitoLifecycleSettlement,
+): IncognitoLifecycleSettlement | undefined {
+  const removedEntries =
+    "target" in input
+      ? [input.target]
+      : "plan" in input
+        ? input.plan.entries.flatMap(({ sessionKey, expectedEntry }) =>
+            expectedEntry ? [{ sessionKey, entry: expectedEntry }] : [],
+          )
+        : undefined;
+  if (removedEntries && !capture) {
+    throw new Error("Incognito deletion requires its prepared lifecycle owner");
+  }
+  return removedEntries ? capture?.(removedEntries) : undefined;
 }
 
 export function incognitoLifecycleKeys(

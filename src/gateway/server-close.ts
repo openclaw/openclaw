@@ -265,6 +265,7 @@ export type GatewayClosePrepareParams = GatewayRunShutdownParams & {
 export type GatewayClosePreparation = {
   start: number;
   notice: ReturnType<typeof resolveGatewayShutdownNotice>;
+  restart: boolean;
   warnings: string[];
   cleanupWork: AsyncWorkScope;
 };
@@ -278,6 +279,7 @@ export async function prepareGatewayClose(
   const notice = resolveGatewayShutdownNotice(opts);
   const { reason } = notice;
   const restartExpectedMs = notice.restartExpectedMs ?? null;
+  const restart = restartExpectedMs !== null;
   const measureCloseStep = createCloseStepTimer(reason);
   const cleanupWork = new AsyncWorkScope();
   // Fence async session-state writes before the first awaited shutdown step.
@@ -317,7 +319,7 @@ export async function prepareGatewayClose(
     );
     if (!opts?.onProcessExitReady) {
       await triggerLifecycleHook("shutdown", GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS);
-      if (restartExpectedMs !== null) {
+      if (restart) {
         await triggerLifecycleHook("pre-restart", GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS);
       }
     }
@@ -328,7 +330,7 @@ export async function prepareGatewayClose(
     await measureCloseStep("reply-drain", () =>
       prepareGatewayRunShutdown({
         ...params,
-        restart: restartExpectedMs !== null,
+        restart,
         timeoutMs: drainTimeoutMs,
         warnings,
       }),
@@ -358,7 +360,7 @@ export async function prepareGatewayClose(
         await measureCloseStep("process-exit", opts.onProcessExitReady!);
       });
     }
-    return { start, notice, warnings, cleanupWork };
+    return { start, notice, restart, warnings, cleanupWork };
   } catch (error) {
     await cleanupWork.drain();
     throw error;
@@ -384,7 +386,7 @@ async function closeGatewayResources(
   preparation: GatewayClosePreparation,
 ): Promise<ShutdownResult> {
   await params.pluginMetadata.beginClose();
-  const { start, notice, warnings, cleanupWork } = preparation;
+  const { start, notice, restart, warnings, cleanupWork } = preparation;
   const { reason } = notice;
   const restartExpectedMs = notice.restartExpectedMs ?? null;
   let pluginServicesCleanup: Promise<void> | undefined;
@@ -404,8 +406,7 @@ async function closeGatewayResources(
         shutdownStep(
           "session-end-drain",
           async () => {
-            const drainReason: "shutdown" | "restart" =
-              restartExpectedMs !== null ? "restart" : "shutdown";
+            const drainReason: "shutdown" | "restart" = restart ? "restart" : "shutdown";
             const result = await params.drainActiveSessionsForShutdown!({
               reason: drainReason,
               totalTimeoutMs: ACTIVE_SESSIONS_SHUTDOWN_DRAIN_TIMEOUT_MS,
@@ -649,9 +650,7 @@ async function closeGatewayResources(
             await closePluginStateDatabaseAsync();
           }
           try {
-            await drainGlobalSingletonLifecycleState(
-              restartExpectedMs === null ? "close" : "restart",
-            );
+            await drainGlobalSingletonLifecycleState(restart ? "restart" : "close");
           } finally {
             try {
               params.clearSecretsRuntimeSnapshot?.();

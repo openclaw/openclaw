@@ -1529,7 +1529,7 @@ src/agents/tools/cron-tool-write.ts	2
 src/agents/tools/cron-tool.ts	5
 src/agents/tools/dashboard-tool.ts	1
 src/agents/tools/embedded-gateway-stub.ts	7
-src/agents/tools/gateway-tool.ts	3
+src/agents/tools/gateway-tool.ts	2
 src/agents/tools/goal-tools.ts	2
 src/agents/tools/heartbeat-response-tool.ts	1
 src/agents/tools/image-generate-tool.ts	1
@@ -2523,7 +2523,6 @@ src/plugins/lazy-service-module.ts	1
 src/plugins/legacy-session-surfaces.ts	2
 src/plugins/loader-channel-runtime.ts	1
 src/plugins/loader-channel-setup.ts	12
-src/plugins/loader-discovery.ts	1
 src/plugins/loader-load-context.ts	4
 src/plugins/loader-module-runtime.ts	5
 src/plugins/loader-records.ts	1

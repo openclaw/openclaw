@@ -161,24 +161,6 @@ function resolveRequestedPolicy(params: {
   };
 }
 
-function formatHostFieldSource(params: {
-  hostPath: string;
-  field: ExecPolicyField;
-  sourceSuffix: string | null;
-  hostDefaultSource?: string;
-}): string {
-  if (params.sourceSuffix) {
-    return `${params.hostPath} ${params.sourceSuffix}`;
-  }
-  if (params.hostDefaultSource) {
-    return params.hostDefaultSource;
-  }
-  if (params.field === "askFallback") {
-    return `OpenClaw default (${DEFAULT_EXEC_APPROVAL_ASK_FALLBACK})`;
-  }
-  return "inherits requested tool policy";
-}
-
 export function collectExecPolicyScopeSnapshots(params: {
   cfg: OpenClawConfig;
   approvals: ExecApprovalsFile;
@@ -262,6 +244,18 @@ export function resolveExecPolicyScopeSnapshot(params: {
     },
   });
   const hostPath = params.hostPath ?? resolveExecApprovalsDisplayPath();
+  const formatHostFieldSource = (field: ExecPolicyField, sourceSuffix: string | null): string => {
+    if (sourceSuffix) {
+      return `${hostPath} ${sourceSuffix}`;
+    }
+    if (params.hostDefaultSource) {
+      return params.hostDefaultSource;
+    }
+    if (field === "askFallback") {
+      return `OpenClaw default (${DEFAULT_EXEC_APPROVAL_ASK_FALLBACK})`;
+    }
+    return "inherits requested tool policy";
+  };
   const effectiveSecurity = minSecurity(requestedPolicy.security, resolved.agent.security);
   const effectiveAsk = maxAsk(requestedPolicy.ask, resolved.agent.ask);
   const effectiveAskFallback = minSecurity(effectiveSecurity, resolved.agent.askFallback);
@@ -293,12 +287,7 @@ export function resolveExecPolicyScopeSnapshot(params: {
       requested: requestedPolicy.security,
       requestedSource: requestedPolicy.securitySource,
       host: resolved.agent.security,
-      hostSource: formatHostFieldSource({
-        hostPath,
-        field: "security",
-        sourceSuffix: resolved.agentSources.security,
-        hostDefaultSource: params.hostDefaultSource,
-      }),
+      hostSource: formatHostFieldSource("security", resolved.agentSources.security),
       effective: effectiveSecurity,
       note:
         effectiveSecurity === requestedPolicy.security
@@ -309,24 +298,14 @@ export function resolveExecPolicyScopeSnapshot(params: {
       requested: requestedPolicy.ask,
       requestedSource: requestedPolicy.askSource,
       host: resolved.agent.ask,
-      hostSource: formatHostFieldSource({
-        hostPath,
-        field: "ask",
-        sourceSuffix: resolved.agentSources.ask,
-        hostDefaultSource: params.hostDefaultSource,
-      }),
+      hostSource: formatHostFieldSource("ask", resolved.agentSources.ask),
       effective: effectiveAsk,
       note:
         effectiveAsk === requestedPolicy.ask ? "requested ask applies" : "more aggressive ask wins",
     },
     askFallback: {
       effective: effectiveAskFallback,
-      source: formatHostFieldSource({
-        hostPath,
-        field: "askFallback",
-        sourceSuffix: resolved.agentSources.askFallback,
-        hostDefaultSource: params.hostDefaultSource,
-      }),
+      source: formatHostFieldSource("askFallback", resolved.agentSources.askFallback),
     },
     allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: effectiveAsk }),
   };
