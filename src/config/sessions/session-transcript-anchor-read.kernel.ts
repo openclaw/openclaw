@@ -2,6 +2,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { validateSessionTranscriptContextInDatabase } from "./session-accessor.sqlite-model-context.js";
 import { loadTranscriptEventRowsAfterSeqInDatabase } from "./session-accessor.sqlite-read.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
@@ -11,11 +12,13 @@ import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 export type SessionTranscriptAnchorSelection = {
   entryIds: readonly string[];
   afterSeq?: number;
+  includeSession?: boolean;
   contextValidation?: Parameters<typeof validateSessionTranscriptContextInDatabase>[2];
 };
 
 export type SessionTranscriptAnchorFacts = {
   anchors: TranscriptEntryAnchor[];
+  session?: { sessionId: string; lifecycleRevision?: string };
   contextValidated?: true;
   tail?: {
     lastSeq?: number;
@@ -30,7 +33,7 @@ export type SessionTranscriptAnchorFacts = {
 
 /** Readiness, identities and optional reply-tail facts belong to one snapshot. */
 export function readSessionTranscriptAnchorFactsInDatabase(
-  database: Pick<OpenClawAgentDatabase, "db" | "path">,
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   resolved: ResolvedTranscriptScope,
   selection: SessionTranscriptAnchorSelection,
 ): SessionTranscriptAnchorFacts {
@@ -42,6 +45,13 @@ export function readSessionTranscriptAnchorFactsInDatabase(
         validateSessionTranscriptContextInDatabase(database, resolved, context);
       }
       const validated = context ? { contextValidated: true as const } : {};
+      const entry = selection.includeSession
+        ? readExactSessionEntryRow(database, resolved.sessionKey, "list", "canonical")?.entry
+        : undefined;
+      const session = entry
+        ? { sessionId: entry.sessionId, lifecycleRevision: entry.lifecycleRevision }
+        : undefined;
+      const sessionFacts = selection.includeSession ? { session } : {};
       const anchors = new Map<string, TranscriptEntryAnchor | undefined>();
       const readAnchor = (entryId: string) => {
         if (!anchors.has(entryId)) {
@@ -54,7 +64,7 @@ export function readSessionTranscriptAnchorFactsInDatabase(
       };
       const selected = selection.entryIds.flatMap((entryId) => readAnchor(entryId) ?? []);
       if (selection.afterSeq === undefined) {
-        return { anchors: selected, ...validated };
+        return { anchors: selected, ...validated, ...sessionFacts };
       }
       const rows = loadTranscriptEventRowsAfterSeqInDatabase(
         database,
@@ -80,7 +90,12 @@ export function readSessionTranscriptAnchorFactsInDatabase(
           ...(anchor ? { anchor } : {}),
         });
       }
-      return { anchors: selected, ...validated, tail: { lastSeq: rows.at(-1)?.seq, entries } };
+      return {
+        anchors: selected,
+        ...validated,
+        ...sessionFacts,
+        tail: { lastSeq: rows.at(-1)?.seq, entries },
+      };
     },
     { databaseLabel: database.path, operationLabel: "session transcript anchors read" },
   );

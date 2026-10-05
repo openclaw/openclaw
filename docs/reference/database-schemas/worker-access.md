@@ -720,6 +720,17 @@ transaction-local predicates and does not inherit scheduler cancellation.
 Process-held incognito retains its native reader. No schema, retention,
 durability, or update migration is required.
 
+Gateway chat admission and terminal reply checks read current session rows through
+that same worker lookup, retaining physical source identities and foreign-commit
+freshness. Session initialization supplies the transcript-start binding; it is
+only a selection bound, and delivery still rechecks the stored lifecycle after
+waits. Final anchor snapshots include the current session lifecycle in their
+existing read transaction. Restart lifecycle preparation preserves per-run event
+order, and the lifecycle persistence owner joins accepted preparation and writes
+before database teardown. Ordinary verbosity and maintenance admission use fresh
+worker reads; released synchronous hook callbacks retain their compatibility
+reader. Schemas, stored bytes, permissions, retention, and update behavior are unchanged.
+
 Durable transcript turns append messages, consume pending inputs, evaluate typed
 latest-assistant and active-entry predicates, update entries, and commit goal
 receipts in one agent-executor transaction. Host preparation uses worker-read
