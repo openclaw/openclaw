@@ -337,6 +337,12 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "latest-active-message", ...input }),
       (value) => value.message,
     ),
+    readVoiceSessions: reader(
+      "voice-sessions",
+      "voice sessions",
+      (input) => ({ kind: "voice-sessions", ...input }),
+      (value) => value,
+    ),
     readUsageCache: reader(
       "usage-refresh-lock",
       "usage cache",

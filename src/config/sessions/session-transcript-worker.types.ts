@@ -11,13 +11,11 @@ import type {
   SessionRowTranscriptReadParams,
 } from "../../gateway/session-row-transcript-backfill.types.js";
 import type { SessionPreviewItem, SessionTitleFields } from "../../gateway/session-utils.types.js";
-import type {
-  SessionCostUsageCacheRead,
-  SessionCostUsageCacheReadResult,
-} from "../../infra/session-cost-usage-cache-read.js";
+import type { SessionCostUsageCacheReadResult } from "../../infra/session-cost-usage-cache-read.js";
 import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
+import type { VoiceSessionMatch } from "../../talk/client-voice-session-store.js";
 import type {
   SessionActivitySummaryBatchInput,
   SessionActivitySummaryBatchResult,
@@ -145,6 +143,8 @@ import type {
   SessionTranscriptWatermarkWorkerInput,
   SessionTranscriptMessagePresenceWorkerInput,
   SessionProgressCardWorkerInput,
+  VoiceSessionsWorkerInput,
+  SessionUsageCacheWorkerInput,
 } from "./session-transcript-worker-read.types.js";
 import type {
   ConversationDeliveryWorkerInput,
@@ -266,13 +266,6 @@ type SessionProjectionStatusWorkerInput = {
   database: { agentId: string; path: string };
   env: NodeJS.ProcessEnv;
   sessionId?: string;
-};
-
-type SessionUsageCacheWorkerInput = {
-  kind: "usage-cache";
-  database: { agentId: string; path: string };
-  request: SessionCostUsageCacheRead;
-  env: NodeJS.ProcessEnv;
 };
 
 export type SessionEntryCurrentWorkerInput = Omit<SessionEntryReadWorkerInput, "kind"> & {
@@ -470,6 +463,7 @@ export type SessionHistoryWorkerInput =
   | SessionStoreTargetWorkerInput
   | SessionTargetInventoryWorkerInput
   | SessionIdentityEvidenceWorkerInput
+  | VoiceSessionsWorkerInput
   | SessionUsageCacheWorkerInput
   | SessionTranscriptSearchWorkerInput
   | SessionTranscriptMatchWorkerInput;
@@ -583,6 +577,7 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     kind: "session-identity-evidence";
     evidence: SessionIdentityEvidenceResult[];
   };
+  "voice-sessions": { kind: "voice-sessions"; matches: VoiceSessionMatch[] };
   "usage-cache": SessionCostUsageCacheReadResult;
   "model-context": ReturnType<typeof readSessionTranscriptModelContext>;
   "context-messages": import("./session-history-read.types.js").SessionTranscriptContextSnapshot;
@@ -744,5 +739,6 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
     SessionPendingInputReceiptsWorkerInput,
     ReturnType<typeof listSessionPendingInputReceipts>
   >;
+  readVoiceSessions: SessionHistoryReader<VoiceSessionsWorkerInput>;
   readUsageCache: SessionHistoryReader<SessionUsageCacheWorkerInput>;
 };
