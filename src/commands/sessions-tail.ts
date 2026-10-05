@@ -61,7 +61,7 @@ function formatTimestamp(ts: string): string {
   if (Number.isNaN(date.getTime())) {
     return "--:--:--";
   }
-  return date.toISOString().slice(11, 19);
+  return `${date.toISOString().slice(11, 19)}Z`;
 }
 
 function toolName(data: Record<string, unknown> | undefined): string {
@@ -137,7 +137,9 @@ function formatProgressLine(event: TrajectoryEvent): string {
   const sessionLabel = formatTextCell(sanitizeTerminalText(sessionKey), SESSION_KEY_PAD);
   const typeLabel = formatTextCell(sanitizeTerminalText(event.type), EVENT_TYPE_PAD);
   const preview = safePreview(event);
-  return [formatTimestamp(event.ts), typeLabel, sessionLabel, preview].join(" ").trimEnd();
+  return [formatTimestamp(event.ts).padEnd(9), typeLabel, sessionLabel, preview]
+    .join(" ")
+    .trimEnd();
 }
 
 function renderEvents(events: TrajectoryEvent[], runtime: RuntimeEnv): void {
