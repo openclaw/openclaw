@@ -44,7 +44,7 @@ import {
 } from "./git-lock.js";
 import { createWorktreeGitMaintenance } from "./git-maintenance.js";
 import { commandError, worktreePathExists, runGit, requireGit } from "./git.js";
-import { worktreeOwnerMatches } from "./owner.js";
+import { assertOwnerWorktreeReuse, worktreeOwnerMatches } from "./owner.js";
 import { provisionIncludedFiles } from "./provisioned-files.js";
 import {
   readRegistryWorktrees,
@@ -309,11 +309,7 @@ export class ManagedWorktreeService {
       if (existing && (await worktreePathExists(existing.path))) {
         return await withWorktreeSource(params, async (current) => {
           const validated = await rebindLiveWorktreeRepository(this.env, existing, current);
-          if (validated.repoRoot !== repository.repoRoot) {
-            throw new Error(
-              `worktree owner ${params.ownerKind ?? "manual"} ${params.ownerId} is already bound to another repository`,
-            );
-          }
+          assertOwnerWorktreeReuse(validated, current, repository.repoRoot);
           current.commitGuard?.();
           return { record: validated, materialized: false };
         });
