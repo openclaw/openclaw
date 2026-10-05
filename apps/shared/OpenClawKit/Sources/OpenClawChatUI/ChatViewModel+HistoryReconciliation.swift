@@ -635,6 +635,30 @@ extension OpenClawChatViewModel {
         return Self.dedupeMessages(reconciled)
     }
 
+    /// Retained local rows keep their place after their nearest surviving predecessor.
+    /// Appending them moved unpersisted voice consult answers below every later turn.
+    static func insertingRetainedMessages(
+        _ retainedIDs: Set<UUID>,
+        from previous: [OpenClawChatMessage],
+        into reconciled: [OpenClawChatMessage]) -> [OpenClawChatMessage]
+    {
+        var result = reconciled
+        var present = Set(reconciled.map(\.id))
+        var anchor: UUID?
+        for message in previous {
+            if present.contains(message.id) {
+                anchor = message.id
+            } else if retainedIDs.contains(message.id) {
+                let index = anchor.flatMap { id in result.firstIndex { $0.id == id } }
+                    .map { result.index(after: $0) } ?? result.startIndex
+                result.insert(message, at: index)
+                present.insert(message.id)
+                anchor = message.id
+            }
+        }
+        return result
+    }
+
     static func dedupeMessages(_ messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {
         var seen = Set<String>()
         return messages.filter { message in
@@ -710,6 +734,7 @@ extension OpenClawChatViewModel {
         guard self.canApplyHistory(request) else { return false }
         let incoming = self.adoptingProvisionalFinalMessageIDs(
             in: Self.decodeMessages(payload.messages ?? [], activity: payload.activity))
+        let earlierPrefix = self.retainedEarlierHistoryPrefix(payload, incoming: incoming)
         let unmatchedProvisionalFinalIDs = Set(provisionalFinalMessagesMissing(from: incoming).map(\.id))
         var retainedMessageIDs = unmatchedProvisionalFinalIDs
         if request.historyMutationGeneration != self.historyMutationGeneration {
@@ -733,11 +758,13 @@ extension OpenClawChatViewModel {
         } else {
             Self.reconcileMessageIDs(previous: self.messages, incoming: incoming)
         }
+        nextMessages = Self.insertingRetainedMessages(
+            unmatchedProvisionalFinalIDs, from: self.messages, into: nextMessages)
         let reconciledMessageIDs = Set(nextMessages.map(\.id))
         nextMessages.append(contentsOf: self.messages.filter { message in
             retainedMessageIDs.contains(message.id) && !reconciledMessageIDs.contains(message.id)
         })
-        nextMessages = Self.dedupeMessages(nextMessages)
+        nextMessages = Self.dedupeMessages(earlierPrefix + nextMessages)
         // Explicit idle includes terminal persistence. Only a current, complete
         // snapshot may retire narration absent from canonical history.
         let narrationSettled = payload.sessionInfo?.hasActiveRun == false &&
@@ -747,6 +774,8 @@ extension OpenClawChatViewModel {
             unmatchedProvisionalFinalIDs.isEmpty &&
             (!preservingOptimisticLocalMessages || !incoming.isEmpty)
         replaceMessages(nextMessages, narrationSettled: narrationSettled)
+        // Accepted history can admit rows while an older bootstrap is still in flight.
+        self.invalidateHistorySnapshots()
         confirmOutboxCommands(in: incoming)
         self.prunePendingLocalUserEchoMessageIDs()
         self.clearProvisionalFinalMarkersAdoptedByHistory(incoming)

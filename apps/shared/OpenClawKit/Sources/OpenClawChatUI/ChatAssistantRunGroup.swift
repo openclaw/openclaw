@@ -46,11 +46,25 @@ struct ChatAssistantRunGroup: Identifiable {
     var parts: [Part]
     var includesLive = false
 
-    var answerID: UUID? {
-        self.parts.reversed().compactMap { part -> UUID? in
-            if case let .row(.message(message)) = part, message.isCompletedReply { return message.id }
-            return nil
-        }.first
+    /// Keep the current turn eager and premeasure nearby history before live-edge positioning.
+    /// Anchor the window to that turn, not the group count; appended tools cannot retire a reader's row.
+    static func eagerHistoryStart(_ groups: [Self], warming count: Int) -> Int {
+        let latestTurnIndex = groups.lastIndex { group in
+            group.parts.contains { part in
+                if case let .row(row) = part { return row.startsTurn }
+                return false
+            }
+        } ?? groups.lastIndex(where: \.includesLive) ?? groups.endIndex
+        return max(groups.startIndex, latestTurnIndex - count)
+    }
+
+    /// ScrollViewReader resolves the lazy group's root, not an unmeasured nested row.
+    static func scrollTargets(_ groups: [Self]) -> [UUID: ID] {
+        groups.reduce(into: [:]) { targets, group in
+            for case let .row(row) in group.parts {
+                targets[row.id] = group.id
+            }
+        }
     }
 
     static func build(
@@ -149,38 +163,4 @@ extension ChatTranscriptRow {
             return nil
         }
     }
-}
-
-struct ChatAssistantRunFrame<Content: View>: View {
-    let assistantName: String?
-    let assistantAvatarText: String?
-    let assistantAvatarTint: Color?
-    let showsAssistantAvatar: Bool
-    let isClean: Bool
-    @ViewBuilder let content: () -> Content
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            if self.showsAssistantAvatar {
-                ChatAgentAvatar(
-                    text: self.assistantAvatarText,
-                    name: self.assistantName,
-                    tint: self.assistantAvatarTint)
-                    .padding(.top, 5)
-            }
-            VStack(alignment: .leading, spacing: 8, content: self.content)
-                .environment(\.openClawAssistantRunContent, true)
-                .padding(self.isClean ? 4 : 12)
-                .assistantBubbleContainerStyle(isClean: self.isClean)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        // Include disclosure and action rows in the container's accessibility bounds.
-        .contentShape(.accessibility, Rectangle())
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("chat-assistant-run")
-    }
-}
-
-extension EnvironmentValues {
-    @Entry var openClawAssistantRunContent: Bool = false
 }

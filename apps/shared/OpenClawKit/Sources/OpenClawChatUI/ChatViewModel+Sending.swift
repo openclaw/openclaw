@@ -264,19 +264,15 @@ extension OpenClawChatViewModel {
         return nil
     }
 
-    private func handleLocalSlashCommandIfNeeded(_ command: String, draftInput: String) async -> Bool {
-        guard Self.isLiveOnlyLocalSlashCommand(command) else { return false }
-        if input == draftInput {
-            input = ""
-        }
+    private func handleLocalSlashCommandIfNeeded(_ command: String) async -> Bool? {
+        guard Self.isLiveOnlyLocalSlashCommand(command) else { return nil }
         if command == "/new" {
-            await performStartNewSession(worktree: false)
+            return await performStartNewSession(worktree: false)
         } else if Self.resetTriggers.contains(command) {
-            await performReset()
+            return await performReset()
         } else {
-            await performCompact()
+            return await performCompact()
         }
-        return true
     }
 
     private static func isLiveOnlyLocalSlashCommand(_ command: String) -> Bool {
@@ -398,11 +394,19 @@ extension OpenClawChatViewModel {
             let canRunCommand = await prepareLiveOnlyLocalSlashCommand(session: draft.session)
             guard canRunCommand else { return false }
         }
-        if await self.handleLocalSlashCommandIfNeeded(command, draftInput: draft.input) {
-            self.recordSuccessfulInput(
-                draft.trimmed,
-                submittedRevision: draft.composerRevision,
-                sessionKey: draft.composerSessionKey)
+        if let accepted = await self.handleLocalSlashCommandIfNeeded(command) {
+            if accepted {
+                self.recordSuccessfulInput(
+                    draft.trimmed,
+                    submittedRevision: draft.composerRevision,
+                    sessionKey: draft.composerSessionKey)
+                if self.composerSessionKey(for: self.sessionKey) == draft.composerSessionKey,
+                   self.composerRevision(for: self.sessionKey) == draft.composerRevision,
+                   self.input == draft.input
+                {
+                    self.input = ""
+                }
+            }
             return false
         }
         return await self.validateSlashCommandDraftForSend(

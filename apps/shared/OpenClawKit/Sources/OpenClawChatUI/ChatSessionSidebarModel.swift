@@ -147,6 +147,19 @@ public enum ChatSessionSidebarModel {
         }
     }
 
+    /// A depth-preserving projection for flat native row containers.
+    public struct Row: Identifiable, Equatable, Sendable {
+        public let node: Node
+        public let depth: Int
+        public var id: String {
+            self.node.id
+        }
+    }
+
+    public static func rows(_ nodes: [Node], depth: Int = 0) -> [Row] {
+        nodes.flatMap { [Row(node: $0, depth: depth)] + self.rows($0.children, depth: depth + 1) }
+    }
+
     public struct Section: Identifiable, Equatable, Sendable {
         public let id: String
         public let title: String?
@@ -244,7 +257,10 @@ public enum ChatSessionSidebarModel {
             let byKey = Dictionary(nodes.map { (identity($0.session), $0) }, uniquingKeysWith: { first, _ in first })
             let groupRows = nodes.map { node in
                 var row = node.session
-                row.childSessions = nil // Group projected roots without rebuilding their child links.
+                // Group projected roots without rebuilding their child links.
+                row.childSessions = nil
+                row.parentSessionKey = nil
+                row.spawnedBy = nil
                 return row
             }
             return self.groupedSections(
@@ -270,26 +286,29 @@ public enum ChatSessionSidebarModel {
         }
         // Pin state owns first placement. Group sections then preserve the
         // same tree builder, so grouped parent/child rosters still nest.
-        let pinned = self.tree(
-            from: OpenClawChatSessionListOrganizer.organize(visible.filter { $0.pinned == true }),
-            identity: identity)
-        let unpinned = visible.filter { $0.pinned != true }
+        let roots = self.tree(from: visible, identity: identity)
+        let pinnedOrder = OpenClawChatSessionListOrganizer.organize(visible.filter { $0.pinned == true })
+            .map(identity)
+        let pinned = roots.filter { $0.session.pinned == true }.sorted {
+            (pinnedOrder.firstIndex(of: identity($0.session)) ?? Int.max) <
+                (pinnedOrder.firstIndex(of: identity($1.session)) ?? Int.max)
+        }
+        let unpinned = roots.filter { $0.session.pinned != true }
         let orderedGroups = groups.sorted { lhs, rhs in
             lhs.position == rhs.position ? lhs.name < rhs.name : lhs.position < rhs.position
         }
         let groupNames = Set(orderedGroups.map(\.name))
-        let recent = self.tree(from: unpinned.filter { session in
-            guard let category = session.category else { return true }
+        let recent = unpinned.filter { node in
+            guard let category = node.session.category else { return true }
             return !groupNames.contains(category)
-        }, identity: identity)
+        }
 
         var result: [Section] = []
         if !pinned.isEmpty {
             result.append(Section(id: "pinned", title: "Pinned", nodes: pinned))
         }
         for group in orderedGroups {
-            let nodes = self.tree(
-                from: unpinned.filter { $0.category == group.name }, identity: identity)
+            let nodes = unpinned.filter { $0.session.category == group.name }
             if !nodes.isEmpty {
                 result.append(Section(id: "group:\(group.name)", title: group.name, nodes: nodes))
             }
@@ -316,21 +335,42 @@ public enum ChatSessionSidebarModel {
             return sessions.map { self.node(session: $0, children: []) }
         }
 
-        let sessionKeys = Set(sessions.map(identity))
+        let sessionsByID = Dictionary(sessions.map { (identity($0), $0) }, uniquingKeysWith: { first, _ in first })
+        // ui/src/lib/sessions/session-pending-rows.ts:95 keeps bare keys tied to their owner.
+        func relatedID(_ key: String, owner: OpenClawChatSessionEntry) -> String {
+            var related = owner
+            related.key = key
+            related.agentId = OpenClawChatSessionKey.agentID(from: owner.key) ?? owner.agentId
+            return identity(related)
+        }
         var parentByChild: [String: String] = [:]
-        // The gateway child roster is freshness-filtered and omitted when
-        // empty. Persisted parent metadata can outlive that freshness window,
-        // so it is display metadata only and must not recreate stale edges.
-        for parent in sessions {
+        // Navigation ancestry is independent of the freshness-filtered child
+        // roster. Child-side metadata owns placement when the two disagree.
+        for parent in sessions where parent.archived != true {
             for childKey in parent.childSessions ?? [] where childKey != parent.key {
-                // ui/src/lib/sessions/session-pending-rows.ts:95 keeps bare keys tied to their owner.
-                var child = parent
-                child.key = childKey
-                child.agentId = OpenClawChatSessionKey.agentID(from: parent.key) ?? parent.agentId
-                let childID = identity(child)
-                if sessionKeys.contains(childID), parentByChild[childID] == nil {
+                let childID = relatedID(childKey, owner: parent)
+                if sessionsByID[childID] != nil, parentByChild[childID] == nil {
                     parentByChild[childID] = identity(parent)
                 }
+            }
+        }
+        for child in sessions {
+            let childID = identity(child)
+            // A roster edge that names the same parent key already holds that row's exact identity.
+            if let parentKey = ChatPayloadDecoding.trimmedNonEmptyString(child.parentSessionKey) ??
+                ChatPayloadDecoding.trimmedNonEmptyString(child.spawnedBy),
+                parentByChild[childID].flatMap({ sessionsByID[$0]?.key }) != parentKey
+            {
+                parentByChild[childID] = relatedID(parentKey, owner: child)
+            }
+            guard let parentID = parentByChild[childID],
+                  parentID != childID,
+                  let parent = sessionsByID[parentID], parent.archived != true,
+                  child.pinned != true || parent.pinned == true,
+                  ChatPayloadDecoding.trimmedNonEmptyString(child.category) == nil || child.category == parent.category
+            else {
+                parentByChild[childID] = nil
+                continue
             }
         }
 

@@ -883,6 +883,11 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
     public let inFlightRun: OpenClawChatInFlightRun?
     public let inputConsumptions: [InputConsumption]?
     public let activity: [OpenClawChatHistoryActivity]?
+    public let offset: Int?
+    public let nextOffset: Int?
+    public let hasMore: Bool?
+    public let totalMessages: Int?
+    public let windowReset: Bool?
 
     public init(
         sessionKey: String,
@@ -892,7 +897,12 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
         sessionInfo: OpenClawChatSessionInfo? = nil,
         inFlightRun: OpenClawChatInFlightRun? = nil,
         inputConsumptions: [InputConsumption]? = nil,
-        activity: [OpenClawChatHistoryActivity]? = nil)
+        activity: [OpenClawChatHistoryActivity]? = nil,
+        offset: Int? = nil,
+        nextOffset: Int? = nil,
+        hasMore: Bool? = nil,
+        totalMessages: Int? = nil,
+        windowReset: Bool? = nil)
     {
         self.sessionKey = sessionKey
         self.sessionId = sessionId
@@ -902,6 +912,11 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
         self.inFlightRun = inFlightRun
         self.inputConsumptions = inputConsumptions
         self.activity = activity
+        self.offset = offset
+        self.nextOffset = nextOffset
+        self.hasMore = hasMore
+        self.totalMessages = totalMessages
+        self.windowReset = windowReset
     }
 }
 

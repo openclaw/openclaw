@@ -399,8 +399,8 @@ struct RootSidebar: View {
                         self.attentionBadges(
                             for: Self.flattened(section.nodes).map(\.session), targetID: "section:\(section.id)")
                     }
-                    ForEach(self.sessionNodes(for: section)) { node in
-                        self.sessionButton(node, selectedSessionKey: selectedSessionKey)
+                    ForEach(self.sessionRows(for: section)) { row in
+                        self.sessionButton(row.node, selectedSessionKey: selectedSessionKey, depth: row.depth)
                     }
                 }
             }
@@ -442,8 +442,8 @@ struct RootSidebar: View {
                 .accessibilityLabel(String(localized: "Edit Pages"))
             }
             self.homeRow
-            ForEach(pinnedSessionNodes) { node in
-                self.sessionButton(node, selectedSessionKey: self.resolvedSelectedSessionKey)
+            ForEach(ChatSessionSidebarModel.rows(pinnedSessionNodes)) { row in
+                self.sessionButton(row.node, selectedSessionKey: self.resolvedSelectedSessionKey, depth: row.depth)
             }
             ForEach(self.pinnedPages) { destination in
                 self.destinationButton(destination)
@@ -572,7 +572,7 @@ struct RootSidebar: View {
         var remainingSections = sections
         let pinnedSection = remainingSections.remove(at: pinnedIndex)
         return SessionLayout(
-            pinnedNodes: self.flattened(pinnedSection.nodes),
+            pinnedNodes: pinnedSection.nodes,
             sections: remainingSections)
     }
 
@@ -590,12 +590,12 @@ struct RootSidebar: View {
         nodes.flatMap { [$0] + self.flattened($0.children) }
     }
 
-    private func sessionNodes(for section: ChatSessionSidebarModel.Section) -> [ChatSessionSidebarModel.Node] {
-        let nodes = Self.flattened(section.nodes)
+    private func sessionRows(for section: ChatSessionSidebarModel.Section) -> [ChatSessionSidebarModel.Row] {
+        let nodes = section.nodes
         guard section.id == "recent", let limit = Self.recentSessionCap(searchText: self.searchText) else {
-            return nodes
+            return ChatSessionSidebarModel.rows(nodes)
         }
-        return Array(nodes.prefix(limit))
+        return ChatSessionSidebarModel.rows(Array(nodes.prefix(limit)))
     }
 
     static func recentSessionCap(searchText: String) -> Int? {
@@ -604,7 +604,8 @@ struct RootSidebar: View {
 
     private func sessionButton(
         _ node: ChatSessionSidebarModel.Node,
-        selectedSessionKey: String) -> some View
+        selectedSessionKey: String,
+        depth: Int = 0) -> some View
     {
         let session = node.session
         let isSelected = session.key == selectedSessionKey
@@ -695,6 +696,8 @@ struct RootSidebar: View {
                 isUnread: session.unread == true))
             self.attentionBadges(for: Self.flattened([node]).map(\.session), targetID: "session:\(session.key)")
         }
+        .padding(.leading, CGFloat(min(depth, 6)) * 16)
+        .accessibilityIdentifier("RootTabs.Sidebar.Session.\(session.key)")
     }
 
     private func attentionBadges(for sessions: [OpenClawChatSessionEntry], targetID: String) -> some View {

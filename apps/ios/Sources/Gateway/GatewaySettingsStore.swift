@@ -42,7 +42,6 @@ enum GatewaySettingsStore {
     private static let instanceIdDefaultsKey = "node.instanceId"
     private static let preferredGatewayStableIDDefaultsKey = "gateway.preferredStableID"
     private static let lastDiscoveredGatewayStableIDDefaultsKey = "gateway.lastDiscoveredStableID"
-    private static let selectedAgentDefaultsPrefix = "gateway.selectedAgentId."
 
     private static let instanceIdAccount = "instanceId"
     private static let preferredGatewayStableIDAccount = "preferredStableID"
@@ -664,14 +663,6 @@ enum GatewaySettingsStore {
         return deletedAll
     }
 
-    static func loadGatewaySelectedAgentId(stableID: String) -> String? {
-        self.loadGatewayDefault(prefix: self.selectedAgentDefaultsPrefix, stableID: stableID)
-    }
-
-    static func saveGatewaySelectedAgentId(stableID: String, agentId: String?) {
-        self.saveGatewayDefault(agentId, prefix: self.selectedAgentDefaultsPrefix, stableID: stableID)
-    }
-
     private static func loadGatewayDefault(prefix: String, stableID: String) -> String? {
         guard let stableID = GatewayStableIdentifier.exact(stableID) else { return nil }
         let defaults = UserDefaults.standard
@@ -868,6 +859,27 @@ enum GatewaySettingsStore {
         if let stored {
             defaults.set(stored, forKey: defaultsKey)
         }
+    }
+}
+
+extension GatewaySettingsStore {
+    private static let selectedAgentDefaultsPrefix = "gateway.selectedAgentId."
+    private static let focusedChatSessionDefaultsPrefix = "gateway.focusedChatSessionKey."
+
+    static func loadGatewaySelectedAgentId(stableID: String) -> String? {
+        self.loadGatewayDefault(prefix: self.selectedAgentDefaultsPrefix, stableID: stableID)
+    }
+
+    static func saveGatewaySelectedAgentId(stableID: String, agentId: String?) {
+        self.saveGatewayDefault(agentId, prefix: self.selectedAgentDefaultsPrefix, stableID: stableID)
+    }
+
+    static func loadGatewayFocusedChatSessionKey(stableID: String) -> String? {
+        self.loadGatewayDefault(prefix: self.focusedChatSessionDefaultsPrefix, stableID: stableID)
+    }
+
+    static func saveGatewayFocusedChatSessionKey(stableID: String, sessionKey: String?) {
+        self.saveGatewayDefault(sessionKey, prefix: self.focusedChatSessionDefaultsPrefix, stableID: stableID)
     }
 }
 

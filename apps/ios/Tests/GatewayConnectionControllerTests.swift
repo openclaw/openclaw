@@ -2472,6 +2472,38 @@ private func waitUntil(
         }
     }
 
+    @Test @MainActor func `forget gateway erases only its saved chat focus`() async {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let forgottenID = "focus-forgotten-\(UUID().uuidString)"
+        let keptID = "focus-kept-\(UUID().uuidString)"
+        let keptChat = "agent:main:dashboard:kept"
+        defer {
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: forgottenID, sessionKey: nil)
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: keptID, sessionKey: nil)
+        }
+        for stableID in [forgottenID, keptID] {
+            #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+                stableID: stableID, kind: .manual, name: "Focus test", host: "localhost", port: 443,
+                useTLS: true, contextPath: nil, lastConnectedAtMs: nil), activate: false))
+        }
+        GatewaySettingsStore.saveGatewayFocusedChatSessionKey(
+            stableID: forgottenID, sessionKey: "agent:main:dashboard:forgotten")
+        GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: keptID, sessionKey: keptChat)
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+        await controller.forgetGateway(stableID: forgottenID)
+
+        // Re-adding the same stable ID starts without the forgotten conversation.
+        #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: forgottenID, kind: .manual, name: "Focus test", host: "localhost", port: 443,
+            useTLS: true, contextPath: nil, lastConnectedAtMs: nil), activate: false))
+        #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: forgottenID) == nil)
+        #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: keptID) == keptChat)
+    }
+
     @Test @MainActor func `forget gateway cancels its pending trust handoff`() async {
         let registryIsolation = GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
