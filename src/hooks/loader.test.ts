@@ -684,6 +684,32 @@ describe("loader", () => {
       },
     );
 
+    it("rejects a stale non-initial commit after a newer reload wins", async () => {
+      const managedHooksDir = path.join(tmpDir, "managed-hooks");
+      const options = { managedHooksDir, bundledHooksDir: "/nonexistent/bundled/hooks" };
+      await writeDiscoveredHook({ sourceDir: managedHooksDir, hookName: "original" });
+      await commitPreparedHooks(createEnabledHooksConfig(), tmpDir, options);
+
+      const stale = await prepareInternalHooks(
+        createSelectedHooksConfig("original"),
+        tmpDir,
+        options,
+      );
+      await writeDiscoveredHook({ sourceDir: managedHooksDir, hookName: "replacement" });
+      const current = await prepareInternalHooks(
+        createSelectedHooksConfig("replacement"),
+        tmpDir,
+        options,
+      );
+
+      expect(current.commit()).toBe(true);
+      expect(stale.commit()).toBe(false);
+
+      const event = createInternalHookEvent("command", "new", "test-session");
+      await triggerInternalHook(event);
+      expect(event.messages).toEqual(["replacement"]);
+    });
+
     it("keeps configured hooks across plugin cleanup and retires them on Gateway restart", async () => {
       const managedHooksDir = path.join(tmpDir, "managed-hooks");
       await writeDiscoveredHook({ sourceDir: managedHooksDir, hookName: "managed" });

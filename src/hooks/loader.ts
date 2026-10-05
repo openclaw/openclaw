@@ -148,8 +148,8 @@ export async function prepareInternalHooks(
     commit({ initial = false } = {}) {
       // Deferred startup must not overwrite a reload, or a later Gateway lifecycle.
       if (
-        initial &&
-        (previousGeneration !== hookOwner.generation || previousGeneration.committed)
+        previousGeneration !== hookOwner.generation ||
+        (initial && previousGeneration.committed)
       ) {
         return false;
       }
