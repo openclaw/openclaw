@@ -311,11 +311,17 @@ export function authorizePreparedSessionMutation(
     policy: GatewayOperatorRoleDefinition | undefined;
     aliases: ReadonlySet<string>;
   },
+  options: { intent: "mutation" | "agent-run" } = { intent: "agent-run" },
 ): ErrorShape | null {
-  return authorizeSessionMutationTarget(params, () => facts.target, {
-    ...prepared,
-    membership: facts.membership,
-  });
+  return authorizeSessionMutationTarget(
+    params,
+    () => facts.target,
+    {
+      ...prepared,
+      membership: facts.membership,
+    },
+    options.intent,
+  );
 }
 
 function authorizeSessionMutationTarget(
@@ -326,6 +332,7 @@ function authorizeSessionMutationTarget(
     aliases: ReadonlySet<string>;
     membership: ReadonlySet<string>;
   },
+  intent: "mutation" | "agent-run" = "agent-run",
 ): ErrorShape | null {
   if (isGatewayAdmin(params.client) && !params.cfg.gateway?.roles) {
     return null;
@@ -334,7 +341,9 @@ function authorizeSessionMutationTarget(
     return authenticatedProfileUnavailableError();
   }
   const target = readTarget();
-  if (target) {
+  // Publication mutates session work without starting an agent. Run callers still
+  // require agent admission in addition to the same sharing and identity checks.
+  if (target && intent === "agent-run") {
     const agentError = authorizeSessionAgentRun(
       { cfg: params.cfg, client: params.client, target },
       prepared,
