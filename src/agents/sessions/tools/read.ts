@@ -110,7 +110,7 @@ const COMPACT_RESOURCE_FILE_NAMES = new Set(["AGENTS.md", "AGENTS.MD", "CLAUDE.m
  * Pluggable operations for the read tool.
  * Override these to delegate file reading to remote systems (for example SSH).
  */
-export interface ReadOperations {
+interface ReadOperations {
   /** Resolve the physical identity used to order this backend's file operations. */
   resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>;
   /** Resolve a user-supplied path for this read backend. */

@@ -9,8 +9,10 @@ import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
-import { createEditTool, createEditToolDefinition, type EditOperations } from "./edit.js";
+import { createEditTool, createEditToolDefinition, type EditToolOptions } from "./edit.js";
 import type { EditToolDetails, EditToolInput } from "./tool-contracts.js";
+
+type EditOperations = NonNullable<EditToolOptions["operations"]>;
 
 const testTheme = {
   bg: (_name: string, text: string) => text,

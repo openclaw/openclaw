@@ -42,7 +42,7 @@ const EDIT_MISMATCH_HINT_LIMIT = 800;
  * Pluggable operations for the edit tool.
  * Override these to delegate file editing to remote systems (for example SSH).
  */
-export interface EditOperations {
+interface EditOperations {
   /** Resolve the physical identity used to order this backend's file operations. */
   resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>;
   /** Read file contents as a Buffer */

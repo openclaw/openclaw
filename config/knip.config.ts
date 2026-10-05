@@ -448,8 +448,7 @@ const rootEntries = [
   // Human plugin listing lazily loads its formatter to keep JSON startup lean.
   "src/cli/plugins-list-format.ts!",
   "src/infra/warning-filter.ts!",
-  // Jiti exposes this SDK barrel and its type-only declaration owner.
-  "src/agents/sessions/extension-sdk.ts!",
+  // The session extension SDK exposes this type-only declaration owner.
   "src/agents/sessions/extensions/types.ts!",
   // Plugin-SDK ACP facades expose the registry's runtime signatures.
   "src/acp/runtime/registry.ts!",

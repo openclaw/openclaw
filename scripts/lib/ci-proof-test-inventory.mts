@@ -1337,7 +1337,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/sessions/settings-storage.test.ts",
   "src/agents/sessions/tools/bash-termination.test.ts",
   "src/agents/sessions/tools/bash.test.ts",
-  "src/agents/sessions/tools/grep.stream-errors.test.ts",
   "src/agents/sessions/tools/read.test.ts",
   "src/agents/simple-completion-runtime.generation.test.ts",
   "src/agents/simple-completion-runtime.selection.test.ts",
