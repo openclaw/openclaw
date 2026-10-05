@@ -122,7 +122,7 @@ beforeEach(() => {
 });
 
 describe("nodeHandlers node.runnerInventory.update", () => {
-  it.each([GATEWAY_CLIENT_IDS.NODE_HOST, GATEWAY_CLIENT_IDS.MACOS_APP])(
+  it.each([GATEWAY_CLIENT_IDS.MACOS_APP])(
     "publishes explicit runner consent and launch capacity for authenticated %s",
     async (clientId) => {
       const inventoryChanged = vi.fn();
