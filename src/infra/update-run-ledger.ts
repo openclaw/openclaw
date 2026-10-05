@@ -40,7 +40,11 @@ import {
 } from "./update-run-record.js";
 import { isUpdateRecoveryPending } from "./update-run-recovery-schema.js";
 import { readRecoveries } from "./update-run-recovery-store.js";
-import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
+import {
+  recordUpdateRunVerificationCheckRecord,
+  recordUpdateRunVerificationRecord,
+  type UpdateRunVerificationCheck,
+} from "./update-run-verification.js";
 import {
   applyUpdateRunPhase,
   applyUpdateRunStep,
@@ -503,6 +507,18 @@ export function recordUpdateRunVerification(
   return mutateRun(
     runId,
     (record) => recordUpdateRunVerificationRecord(record, verification, options),
+    options,
+  );
+}
+
+export function recordUpdateRunVerificationCheck(
+  runId: string,
+  check: UpdateRunVerificationCheck,
+  options: LedgerOptions & { onlyIfRunning?: true } = {},
+): UpdateRunRecord {
+  return mutateRun(
+    runId,
+    (record) => recordUpdateRunVerificationCheckRecord(record, check, options),
     options,
   );
 }

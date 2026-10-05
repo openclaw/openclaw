@@ -87,7 +87,11 @@ export function executeSharedStateCommand(
   if (stateWorkerRegistry.has(command)) {
     return stateWorkerRegistry.execute(command, { open, stateOptions });
   }
-  if (command.type === "updateRuns.recordStep" || command.type === "updateRuns.recordPhase") {
+  if (
+    command.type === "updateRuns.recordStep" ||
+    command.type === "updateRuns.recordPhase" ||
+    command.type === "updateRuns.recordVerification"
+  ) {
     return recordUpdateRunMutationInWorker(
       command,
       stateOptions(),

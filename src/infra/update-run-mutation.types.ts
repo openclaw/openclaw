@@ -18,12 +18,17 @@ type UpdateRunWriteInput = {
   runId: string;
   redactionFacts: UpdateRunRedactionFacts;
   requireNoRecovery?: true;
+  normalCycleEligibility?: {
+    nowMs: number;
+    maxAgeMs: number;
+  };
   busyTimeoutMs?: number;
   redactPaths?: readonly string[];
 };
 
 type UpdateRunWriteResult =
   | { kind: "recorded"; record: UpdateRunRecord }
+  | { kind: "not-recorded" }
   | { kind: "recovery-required"; recovery: UpdateRecoveryRecord };
 
 export type UpdateRunWriteOperations = {
@@ -35,6 +40,10 @@ export type UpdateRunWriteOperations = {
   };
   "updateRuns.recordPhase": {
     input: UpdateRunWriteInput & { phase: UpdateRunPhase; patch: UpdateRunPhasePatch };
+    output: UpdateRunWriteResult;
+  };
+  "updateRuns.recordVerification": {
+    input: UpdateRunWriteInput & { verification: UpdateRunRecord["verification"] };
     output: UpdateRunWriteResult;
   };
 };

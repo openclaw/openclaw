@@ -14,6 +14,15 @@ import type { UpdateRunRecord } from "./update-run-record.js";
 import { UpdateRunRecordSchema } from "./update-run-schema.js";
 
 const JSON_BYTES = 16 * 1024;
+const PRESERVED_VERIFICATION_TEXT_FIELDS = new Set([
+  "buildId",
+  "reason",
+  "runningBuildId",
+  "runningVersion",
+  "service",
+  "status",
+  "version",
+]);
 const RETAINED_STEP_NAMES = [
   ...UPDATE_RUN_PHASES,
   "candidate-admission",
@@ -174,6 +183,52 @@ function boundedJson(
   return json;
 }
 
+function boundedVerificationJson(verification: UpdateRunRecord["verification"]): string {
+  const checks = verification.checks;
+  if (!checks) {
+    return boundedJson(verification, JSON_BYTES, PRESERVED_VERIFICATION_TEXT_FIELDS);
+  }
+
+  const requiredChecks = checks.filter((check) => check.required !== false);
+  const optionalChecks = checks.filter((check) => check.required === false);
+  const diagnostics = Object.fromEntries(
+    Object.entries(verification).filter(([key]) => key !== "checks"),
+  );
+  const requiredChecksBytes = Buffer.byteLength(JSON.stringify({ checks: requiredChecks }));
+  if (requiredChecksBytes > JSON_BYTES) {
+    throw new Error("Required update verification checks exceed their byte limit");
+  }
+
+  // Reserve the check field before bounding diagnostics so the generic array
+  // eviction path can never remove a required check.
+  const diagnosticsBudget = Math.max(0, JSON_BYTES - requiredChecksBytes - 1);
+  const boundedDiagnostics =
+    Object.keys(diagnostics).length === 0 || diagnosticsBudget < 2
+      ? "{}"
+      : boundedJson(diagnostics, diagnosticsBudget, PRESERVED_VERIFICATION_TEXT_FIELDS);
+  // SAFETY: boundedJson returns a JSON object for the diagnostics map.
+  const diagnosticsObject = JSON.parse(boundedDiagnostics) as Record<string, unknown>;
+  const serialize = (retainedChecks: typeof checks): string =>
+    JSON.stringify({ ...diagnosticsObject, checks: retainedChecks });
+
+  let retainedOptional: typeof optionalChecks = [];
+  for (let index = optionalChecks.length - 1; index >= 0; index -= 1) {
+    const check = optionalChecks[index];
+    if (!check) {
+      continue;
+    }
+    const candidate = [check, ...retainedOptional];
+    if (Buffer.byteLength(serialize([...requiredChecks, ...candidate])) <= JSON_BYTES) {
+      retainedOptional = candidate;
+    }
+  }
+  const bounded = serialize([...requiredChecks, ...retainedOptional]);
+  if (Buffer.byteLength(bounded) > JSON_BYTES) {
+    throw new Error("Required update verification checks exceed their byte limit");
+  }
+  return bounded;
+}
+
 function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
   const {
     driver,
@@ -304,7 +359,7 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
     before_json: boundedJson(record.before),
     after_json: boundedJson(record.after),
     steps_json: boundedJson(record.steps),
-    verification_json: boundedJson(record.verification),
+    verification_json: boundedVerificationJson(record.verification),
     repair_json: boundedJson(record.repair),
     confirmed_at_ms: record.confirmedAtMs,
     finished_at_ms: record.finishedAtMs,

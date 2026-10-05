@@ -22,6 +22,10 @@ export type UpdateRunWriteOptions = UpdateRunLedgerOptions & {
   assertAccepting?: () => void;
   retainSettlement?: (settled: Promise<void>) => void;
   requireNoRecovery?: true;
+  normalCycleEligibility?: {
+    nowMs: number;
+    maxAgeMs: number;
+  };
 };
 
 /** Capture the receipt before yielding and join its writer through native settlement. */
@@ -29,9 +33,10 @@ async function recordUpdateRunMutationAsync(
   runId: string,
   mutation:
     | { kind: "step"; step: UpdateRunStep & { reason?: string } }
-    | { kind: "phase"; phase: UpdateRunPhase; patch: UpdateRunPhasePatch },
+    | { kind: "phase"; phase: UpdateRunPhase; patch: UpdateRunPhasePatch }
+    | { kind: "verification"; verification: UpdateRunRecord["verification"] },
   options: UpdateRunWriteOptions = {},
-): Promise<UpdateRunRecord> {
+): Promise<UpdateRunRecord | undefined> {
   options.assertAccepting?.();
   if (options.database || options.readOnly) {
     throw new Error("Existing-state writes require their own tracked writable connection.");
@@ -52,16 +57,22 @@ async function recordUpdateRunMutationAsync(
     runId,
     redactionFacts: captureUpdateRunRedactionFacts(captured.env),
     requireNoRecovery: captured.requireNoRecovery,
+    normalCycleEligibility: captured.normalCycleEligibility,
     busyTimeoutMs: captured.busyTimeoutMs,
     redactPaths: captured.redactPaths,
   };
   const command = structuredClone<UpdateRunWriteCommand>(
     mutation.kind === "step"
       ? { type: "updateRuns.recordStep", input: { ...input, step: mutation.step } }
-      : {
-          type: "updateRuns.recordPhase",
-          input: { ...input, phase: mutation.phase, patch: mutation.patch },
-        },
+      : mutation.kind === "phase"
+        ? {
+            type: "updateRuns.recordPhase",
+            input: { ...input, phase: mutation.phase, patch: mutation.patch },
+          }
+        : {
+            type: "updateRuns.recordVerification",
+            input: { ...input, verification: mutation.verification },
+          },
   );
   const pending = runOpenClawStateWorkerOperation(context, (scope) => scope.execute(command), {
     existingOnly: true,
@@ -85,7 +96,19 @@ async function recordUpdateRunMutationAsync(
   if (reply.kind === "recovery-required") {
     throw new UpdateRecoveryRequiredError(reply.recovery);
   }
+  if (reply.kind === "not-recorded") {
+    return undefined;
+  }
   return reply.record;
+}
+
+function requireRecorded(record: Promise<UpdateRunRecord | undefined>): Promise<UpdateRunRecord> {
+  return record.then((value) => {
+    if (!value) {
+      throw new Error("Update mutation was not recorded");
+    }
+    return value;
+  });
 }
 
 export function recordUpdateRunStepAsync(
@@ -93,7 +116,7 @@ export function recordUpdateRunStepAsync(
   step: UpdateRunStep & { reason?: string },
   options: UpdateRunWriteOptions = {},
 ): Promise<UpdateRunRecord> {
-  return recordUpdateRunMutationAsync(runId, { kind: "step", step }, options);
+  return requireRecorded(recordUpdateRunMutationAsync(runId, { kind: "step", step }, options));
 }
 
 export function recordUpdateRunPhaseAsync(
@@ -102,5 +125,20 @@ export function recordUpdateRunPhaseAsync(
   patch: UpdateRunPhasePatch = {},
   options: UpdateRunWriteOptions = {},
 ): Promise<UpdateRunRecord> {
-  return recordUpdateRunMutationAsync(runId, { kind: "phase", phase, patch }, options);
+  return requireRecorded(
+    recordUpdateRunMutationAsync(runId, { kind: "phase", phase, patch }, options),
+  );
+}
+
+export function recordUpdateRunNormalCycleAsync(
+  runId: string,
+  verification: UpdateRunRecord["verification"],
+  eligibility: { nowMs: number; maxAgeMs: number },
+  options: UpdateRunWriteOptions = {},
+): Promise<UpdateRunRecord | undefined> {
+  return recordUpdateRunMutationAsync(
+    runId,
+    { kind: "verification", verification },
+    { ...options, normalCycleEligibility: eligibility },
+  );
 }

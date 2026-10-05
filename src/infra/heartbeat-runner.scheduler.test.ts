@@ -157,6 +157,26 @@ describe("startHeartbeatRunner", () => {
     expect(runSpy).toHaveBeenCalledTimes(2);
   });
 
+  it("notifies the normal-cycle observer only after a scheduled interval run", async () => {
+    const observer = vi.fn();
+    start(config(), { onNormalCycle: observer });
+    await wake({ source: "manual", intent: "manual", reason: "manual" });
+    expect(observer).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    await wake({ source: "interval", intent: "scheduled", reason: "interval" });
+    expect(observer).toHaveBeenCalledOnce();
+    expect(observer).toHaveBeenCalledWith({ agentIds: ["main"], durationMs: expect.any(Number) });
+  });
+
+  it("notifies the normal-cycle observer for a targeted scheduled interval run", async () => {
+    const observer = vi.fn();
+    start(config(), { onNormalCycle: observer });
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    await interval("main");
+    expect(observer).toHaveBeenCalledOnce();
+    expect(observer).toHaveBeenCalledWith({ agentIds: ["main"], durationMs: expect.any(Number) });
+  });
+
   it("reads the latest runtime config for heartbeat wakes after no-op reload commits", async () => {
     const initialConfig: OpenClawConfig = {
       ...config(),
