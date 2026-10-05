@@ -1,4 +1,5 @@
 import { homedir } from "node:os";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentEntries, tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
@@ -479,13 +480,13 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   const { repairSystemAgentWorkspacePin } =
     await import("./doctor/shared/system-agent-workspace-repair.js");
-  type AuthoredWorkspaceDefaults = { agents?: { defaults?: { workspace?: unknown } } };
   // authoredConfig keeps include-resolved authored values (env refs intact); parsed only has the
   // root file, so an agents.defaults $include would otherwise freeze the resolved absolute path.
+  const parsedAgents = isRecord(snapshot.parsed) ? snapshot.parsed.agents : undefined;
+  const parsedDefaults = isRecord(parsedAgents) ? parsedAgents.defaults : undefined;
   const authoredDefaultWorkspace =
-    (snapshot.authoredConfig as AuthoredWorkspaceDefaults | undefined)?.agents?.defaults
-      ?.workspace ??
-    (snapshot.parsed as AuthoredWorkspaceDefaults | undefined)?.agents?.defaults?.workspace;
+    snapshot.authoredConfig?.agents?.defaults?.workspace ??
+    (isRecord(parsedDefaults) ? parsedDefaults.workspace : undefined);
   const systemAgentWorkspace = await repairSystemAgentWorkspacePin(state.candidate, process.env, {
     includeOwnsRoster,
     authoredDefaultWorkspace:

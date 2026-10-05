@@ -45,16 +45,17 @@ function authoredAgentWorkspacePin(params: {
   }
   const pin = `${authored.replace(/[\\/]+$/, "")}/${params.agentId}`;
   try {
-    const resolvedPin = containsEnvVarReference(pin)
+    const resolved = containsEnvVarReference(pin)
       ? resolveConfigEnvVars(pin, params.env, { onMissing: () => {} })
       : pin;
-    const probe = {
+    const resolvedPin = typeof resolved === "string" ? resolved : pin;
+    const probe: OpenClawConfig = {
       ...params.cfg,
       agents: {
         ...params.cfg.agents,
         entries: { ...params.cfg.agents?.entries, [params.agentId]: { workspace: resolvedPin } },
       },
-    } as OpenClawConfig;
+    };
     return resolveAgentWorkspaceDir(probe, params.agentId, params.env) === params.agentDir
       ? pin
       : params.agentDir;
