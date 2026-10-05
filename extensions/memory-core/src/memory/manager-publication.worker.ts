@@ -1,5 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
-import { loadSqliteVecExtensionFromPath } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
+import {
+  ensureMemoryIndexSchema,
+  loadSqliteVecExtensionFromPath,
+} from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
   assertTransactionUsable,
   openNodeSqliteDatabase,
@@ -197,6 +200,17 @@ function createPublicationBackend(
       },
       execute(command) {
         assertPath();
+        if (command.type === "schema.admit") {
+          // Storage/STRICT migration must disable foreign keys before BEGIN.
+          db.exec("PRAGMA foreign_keys = OFF");
+          try {
+            return write(() => ensureMemoryIndexSchema({ ...command.input, db }));
+          } finally {
+            if (db.isOpen) {
+              db.exec(`PRAGMA foreign_keys = ${input.pragmas.foreign_keys}`);
+            }
+          }
+        }
         if (command.type === "source.hash") {
           return readMemorySourceHash(db, command.input.source, command.input.path);
         }

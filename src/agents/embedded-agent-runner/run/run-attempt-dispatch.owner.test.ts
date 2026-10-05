@@ -184,7 +184,7 @@ it.each(dispatchCases)(
           createdAt: Date.now(),
           lastActiveAt: Date.now(),
         };
-        insertRegistryWorktree(process.env, realWorktree, { provisionedPaths: [] });
+        await insertRegistryWorktree(process.env, realWorktree, { provisionedPaths: [] });
         await upsertSessionEntryCore(
           { agentId, sessionKey: "global" },
           {

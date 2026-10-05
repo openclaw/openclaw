@@ -919,7 +919,7 @@ it("orders native reads with writers and ignores unrelated metadata notification
       runOpenClawAgentWriteAdmission({ agentId: "main", path: database.path, env }, () =>
         withSessionEntriesFromStoresInWorker([input], () => {}, { ordered: true }),
       ),
-    ).rejects.toThrow("cannot reenter an active SQLite writer admission");
+    ).resolves.toBeUndefined();
   });
 });
 

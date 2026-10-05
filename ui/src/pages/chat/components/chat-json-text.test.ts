@@ -275,7 +275,7 @@ describe("JSON group DOM retention", () => {
       content: role === "user" ? '{"ok":true}' : '{"nested":{"ok":true}}',
       timestamp: 1,
     };
-    renderJsonMessageGroup(container, message, role, { autoExpandToolCalls: true });
+    renderJsonMessageGroup(container, message, role, { showToolCalls: true });
     const code = expectElement(container, ".chat-text pre code", HTMLElement);
     expect(code.textContent).toBe(message.content);
     const tree =
@@ -292,7 +292,7 @@ describe("JSON group DOM retention", () => {
     } else {
       expect(container.querySelector(".chat-text button, .chat-text details")).toBeNull();
     }
-    renderJsonMessageGroup(container, message, role, { autoExpandToolCalls: false });
+    renderJsonMessageGroup(container, message, role, { showToolCalls: false });
     expect(container.querySelector(".chat-text pre code")).toBe(code);
     expect(code.textContent).toBe(message.content);
     if (role === "assistant") {

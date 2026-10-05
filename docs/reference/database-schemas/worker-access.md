@@ -190,6 +190,17 @@ filter retains that first physical generation; different owners, replacement, an
 retirement still invalidate the read. Discovery, transcript callbacks, and writes
 are not replayed. Registration before target selection retains its existing refusal.
 
+Accepted chat input prepares fresh sharing and exact-row facts again before
+dispatch. Each read retains its physical owner and writer FIFO through synchronous
+consumption; the native mutation witness rejects intervening synchronous SDK
+writes. Pending-input and transcript worker grants supply transaction-local sharing
+facts to the original caller's live custody checks. Collected inputs recheck every
+source against the same snapshot. Foreign-store transcript rewrites retain the
+original source owner's live host assertion; the destination cannot supply its facts.
+Accepted persistence keeps its existing settlement
+and close owner. Released synchronous custody callbacks retain their compatibility
+contract; no schema, permission, retention, or update migration is required.
+
 ### Incognito worker ownership (P1, inactive)
 
 The accepted incognito migration extends the canonical agent execution owner
@@ -1195,6 +1206,18 @@ fresh results. Forget therefore either precedes the fused read or follows its
 acceptance. Cancellation and close join the accepted read and lock cleanup. Mixed and semantic searches
 retain their final asynchronous metadata reader. No schema, retention, durability,
 SDK, or update migration changes.
+
+Memory index construction and shadow reindexing admit their schema through that
+same publication worker. Each memory database owner retains its admitted FTS facts;
+the manager never repeats the storage or STRICT schema checks. Admission captures
+the original file identity and checks current host authority after BEGIN and before
+COMMIT. The synchronous SDK schema helper remains available to standalone callers
+and joins the worker's existing transaction when one is supplied. Published-owner
+admission closes its temporary client before an accepted sync acquires its retained
+executor, preserving shutdown settlement. Missing-store status carries empty index
+facts without constructing an in-memory schema or creating persistent stores.
+Doctor repairs and canonical agent migrations retain their existing owners. Updates
+use the same schemas, migration rules, stored bytes, and strict drift refusals.
 
 The exported `OpenClawAgentSqliteWorkerStore` type retains its `run` and `close`
 contract for existing adapters. The factory's inferred return type additionally
@@ -2394,9 +2417,13 @@ those leases own final settlement independently of caller cancellation.
 Restoration settles old leases before publishing a live row, so
 an awaited finalizer cannot remove a successor run's lease. The final Gateway close seals
 new worktree operations and joins accepted settlement before worker teardown,
-independently of scheduler cancellation. Native registry publication and the
-existing synchronous lock assertions retain their current owners. This changes
-no schema, stored bytes, retention, durability, SDK, or update behavior.
+independently of scheduler cancellation. Registry creation, activity, and lifecycle
+publication use the same transaction and receipt owner. Command lookup retains
+its physical store and selected binding through run-lease admission; replacement
+refuses the run. Source preparation, listing, and ordinary service lookups await
+the existing registry reader. Native Git-effect assertions, lock primitives, and
+retired-snapshot cleanup retain their current owners. This changes no schema,
+stored bytes, retention, durability, SDK, or update behavior.
 
 GitHub publication preparation and per-turn tool availability read the selected
 live worktree through the existing worktree reader and shared-state worker. They

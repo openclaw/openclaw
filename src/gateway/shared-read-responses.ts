@@ -97,11 +97,6 @@ export async function dispatchSharedRead(
   assertCurrent: () => void,
 ): Promise<void> {
   const owner = options.context.broadcast;
-  let entries = owners.get(owner);
-  if (!entries) {
-    entries = new Map();
-    owners.set(owner, entries);
-  }
   await withPreparedGatewayRead(handler, options, async (read) => {
     const deliver: RespondFn = (...response) => {
       assertCurrent();
@@ -122,6 +117,11 @@ export async function dispatchSharedRead(
       return;
     }
     read.assertCurrent?.();
+    let entries = owners.get(owner);
+    if (!entries) {
+      entries = new Map();
+      owners.set(owner, entries);
+    }
     const key = JSON.stringify([options.req.method, shareKey]);
     const existing = entries.get(key);
     const valid = (entry: Entry) =>

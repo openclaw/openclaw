@@ -357,9 +357,9 @@ function handleNoticeEvent(host: ToolStreamHost, payload: AgentEventPayload): bo
       runId: payload.runId,
       seq: payload.seq,
       state,
-      ...(model ? { model: formatUiExternalText(model.slice(0, 256)) } : {}),
+      ...(model ? { model: formatUiExternalText(truncateText(model, 256).text) } : {}),
       ...(fallbackModel
-        ? { fallbackModel: formatUiExternalText(fallbackModel.slice(0, 256)) }
+        ? { fallbackModel: formatUiExternalText(truncateText(fallbackModel, 256).text) }
         : {}),
     };
     return true;

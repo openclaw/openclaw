@@ -302,18 +302,3 @@ export async function runModelProviderApiKeyMutation(
     }
   }
 }
-
-export function modelProviderApiKeySuccess(
-  action: "edit" | "add",
-  apiKey: string | null,
-  provider: string,
-): string {
-  return t(
-    action === "add"
-      ? "modelProviders.add.saved"
-      : apiKey === null
-        ? "modelProviders.apiKey.removed"
-        : "modelProviders.apiKey.saved",
-    { provider },
-  );
-}

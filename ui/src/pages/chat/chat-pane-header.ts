@@ -35,7 +35,6 @@ import { displayedChatSessionBranches } from "./chat-history-branches.ts";
 import { ChatPaneDiscussion } from "./chat-pane-discussion.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
-import { createChatHeaderPanelActions } from "./chat-pane-header-panels.ts";
 import { ChatPaneNativeSessionActions } from "./chat-pane-native-session-actions.ts";
 import { resolveChatPaneDesktopTarget, resolveChatPanePlacement } from "./chat-pane-placement.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
@@ -310,18 +309,84 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         catalog,
         i18n.getLocale(),
       ],
-      () =>
-        createChatHeaderPanelActions({
-          sessionWorkspace,
-          desktopPanelAvailable,
-          discussion,
-          modifiedFiles,
-          sessionRailVisible,
-          subagentsVisible,
-          processesVisible,
-          catalog,
-          callbacks: this.headerPanelCallbacks,
-        }),
+      () => {
+        const callbacks = this.headerPanelCallbacks;
+        const actions: HeaderMenuQuickAction[] = [];
+        for (const [id, label, icon, onActivate] of [
+          [
+            "terminal",
+            t("terminal.toggle"),
+            icons.terminal,
+            sessionWorkspace.onToggleTerminal && callbacks.terminal,
+          ],
+          [
+            "browser",
+            t("browser.toggle"),
+            icons.globe,
+            sessionWorkspace.onToggleBrowser && callbacks.browser,
+          ],
+          [
+            "desktop",
+            t("desktop.toggle"),
+            icons.monitor,
+            desktopPanelAvailable && sessionWorkspace.onToggleDesktop && callbacks.desktop,
+          ],
+          [
+            "discussion",
+            discussion?.label ?? "",
+            icons.messageSquare,
+            discussion && callbacks.discussion,
+          ],
+          [
+            "changes",
+            t("chat.sessionDiff.show"),
+            icons.diff,
+            sessionWorkspace.onOpenDiff && callbacks.changes,
+          ],
+        ] as const) {
+          if (onActivate) {
+            actions.push({
+              id,
+              label,
+              icon,
+              onActivate,
+              ...(id === "discussion" ? { active: discussion?.active } : {}),
+            });
+          }
+        }
+        actions.push({
+          id: "session-files",
+          label: t(
+            sessionWorkspace.collapsed
+              ? "chat.workspaceFiles.showFiles"
+              : "chat.workspaceFiles.collapse",
+          ),
+          icon: icons.fileText,
+          active: !sessionWorkspace.collapsed,
+          badge: modifiedFiles,
+          onActivate: callbacks.files,
+        });
+        actions.push({
+          id: "session-companion",
+          label: t(sessionRailVisible ? "chat.rail.collapse" : "chat.rail.show"),
+          icon: icons.spark,
+          active: sessionRailVisible,
+          onActivate: callbacks.companion,
+        });
+        if (!catalog) {
+          for (const slot of ["subagents", "processes"] as const) {
+            const subagents = slot === "subagents";
+            actions.push({
+              id: `session-${slot}`,
+              label: t(subagents ? "chat.subagentsPanel.title" : "chat.processesPanel.title"),
+              icon: subagents ? icons.bot : icons.terminal,
+              active: subagents ? subagentsVisible : processesVisible,
+              onActivate: callbacks[slot],
+            });
+          }
+        }
+        return actions;
+      },
     );
     const defaultAction = !catalog && this.dashboardDefaultMenuAction(row, currentLayout);
     this.headerDefaultAction = defaultAction
@@ -567,7 +632,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
                 this.context.runtimeConfig.canPatch === false
               }
               .compact=${this.narrow}
-              .navigationAllowed=${true}
               .copyMarkdownAllowed=${canCopySessionMarkdown(this.context.gateway.snapshot)}
               .splitAllowed=${canSplitSessionView()}
               .settings=${this.state.settings}

@@ -165,6 +165,7 @@ export function projectRealtimeVoicePublicProjection(ctx: {
       clientHints: {
         gatewayRelaySupported:
           ctx.config.consultRouting !== "force-agent-consult" &&
+          !normalizeOptionalString(ctx.providerConfig.baseUrl) &&
           !normalizeOptionalString(ctx.providerConfig.azureEndpoint) &&
           !normalizeOptionalString(ctx.providerConfig.azureDeployment),
       },

@@ -3,6 +3,7 @@ import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor
 import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { isFastModeAutoProgressPayload } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -418,9 +419,7 @@ export async function executeFollowupTurn(params: {
         replyRunRegistry.bindSourceTurnId(turn.operation, sourceTurnId);
         setChannelSourceTurnId(sessionCtx, sourceTurnId);
       }
-      execution = await (recorder?.withPendingInput
-        ? recorder.withPendingInput(execute)
-        : execute());
+      execution = await withCurrentUserTurnInput(recorder, execute);
     } catch (error) {
       await drainPendingWork();
       if (!hasReplyOperationExecutionStarted(turn.operation)) {

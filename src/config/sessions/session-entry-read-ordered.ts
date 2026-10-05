@@ -145,6 +145,7 @@ export async function withOrderedSessionEntriesInWorker<T>(
           unsubscribe();
         }
       },
+      true,
     );
   };
   return enter(0);

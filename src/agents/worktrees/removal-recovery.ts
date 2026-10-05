@@ -527,11 +527,26 @@ async function recoverRemovalWithAllocation(params: {
     }
     await assertRefs(true);
     assertCurrent();
-    updateRegistryWorktree(
+    await updateRegistryWorktree(
       params.env,
       record.id,
       { removedAt: record.removedAt ?? params.now() },
-      { assertCurrent, removalToken: token },
+      {
+        assertCurrent,
+        removalToken: token,
+        workerAuthority: {
+          ...params.workerAuthority,
+          assertCurrent: () => {
+            params.workerAuthority?.assertCurrent?.();
+            assertDirectRefFiles();
+          },
+          predicates: [
+            ...(params.workerAuthority?.predicates ?? []),
+            { kind: "record", record },
+            { kind: "removal-claim", id: record.id, token },
+          ],
+        },
+      },
     );
     const finalized = JSON.stringify(getRegistryWorktree(params.env, record.id));
     await requireGit(record.repoRoot, ["update-ref", "--stdin"], {

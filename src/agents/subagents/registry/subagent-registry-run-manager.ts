@@ -38,8 +38,6 @@ import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
-export { preserveSubagentRunForRestart } from "./subagent-registry-run-wait.js";
-
 const log = createSubsystemLogger("agents/subagent-registry");
 
 class SubagentRunManager extends SubagentLaunchManager {

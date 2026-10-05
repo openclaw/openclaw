@@ -248,6 +248,9 @@ export class SessionManagerEntries extends SessionManagerAppend {
             this.appendParentId = captured.appendParentId;
             this.appendMode = captured.appendMode;
             this.pendingDeliberateAppend = false;
+            this.cacheTtlProjectionPrefixes = this.cacheTtlProjectionPrefixes?.filter(
+              (prefix) => prefix.anchorIds.length > 0,
+            );
           }
         }
         return entry;
@@ -310,6 +313,9 @@ export class SessionManagerEntries extends SessionManagerAppend {
     this.appendParentId = params.appendParentId;
     this.appendMode = params.appendMode;
     this.pendingDeliberateAppend = false;
+    this.cacheTtlProjectionPrefixes = this.cacheTtlProjectionPrefixes?.filter(
+      (prefix) => prefix.anchorIds.length > 0,
+    );
     return entry;
   }
 
@@ -341,6 +347,20 @@ export class SessionManagerEntries extends SessionManagerAppend {
 
   buildSessionContext(): SessionContext {
     return buildCoreSessionContext(this.getBranch() as CoreSessionTreeEntry[]) as SessionContext;
+  }
+
+  /** Omitted projection metadata follows its retained branch anchors, outside model history. */
+  getToolResultProjectionEntries() {
+    let entries: (SessionEntry | Record<string, unknown>)[] = this.getBranch();
+    for (const prefix of this.cacheTtlProjectionPrefixes ?? []) {
+      const anchor = prefix.anchorIds.length
+        ? entries.findIndex((entry) => prefix.anchorIds.some((id) => id === entry.id))
+        : entries.length;
+      if (anchor >= 0) {
+        entries = [...entries.slice(0, anchor), ...prefix.entries, ...entries.slice(anchor)];
+      }
+    }
+    return entries;
   }
 
   async branchAsync(branchFromId: string): Promise<void> {

@@ -173,6 +173,13 @@ export async function restoreManagedWorktreeSnapshot(
         return await restoreSnapshot(
           {
             ...input,
+            workerAuthority: {
+              ...input.workerAuthority,
+              predicates: [
+                ...(input.workerAuthority.predicates ?? []),
+                { kind: "removal-claim", id: record.id, token },
+              ],
+            },
             commitGuard: () => {
               input.commitGuard?.();
               assertClaim();
@@ -371,8 +378,16 @@ async function restoreSnapshot(
     const restoreRecord = record;
     const finalize = async (identity: ExactStateSnapshot) => {
       const callerGuard = params.commitGuard;
+      const workerAuthority = params.workerAuthority;
       params = {
         ...params,
+        workerAuthority: {
+          ...workerAuthority,
+          assertCurrent: () => {
+            workerAuthority.assertCurrent?.();
+            assertExactStateSourceIdentity(restoreRecord.path, identity);
+          },
+        },
         commitGuard: () => {
           callerGuard?.();
           assertExactStateSourceIdentity(restoreRecord.path, identity);
@@ -666,7 +681,7 @@ async function finishRestoredSnapshot(
   if (exact) {
     await finishRecovery();
   }
-  updateRegistryWorktree(
+  await updateRegistryWorktree(
     env,
     params.id,
     {
@@ -678,7 +693,7 @@ async function finishRestoredSnapshot(
       // a live row until the next run-end cleanup records fresh truth.
       runEndCleanup: undefined,
     },
-    { assertCurrent: params.commitGuard },
+    { assertCurrent: params.commitGuard, workerAuthority: params.workerAuthority },
   );
   onFinalized();
   if (!exact) {

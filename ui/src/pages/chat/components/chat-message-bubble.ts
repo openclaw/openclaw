@@ -127,9 +127,7 @@ function renderInlineToolCards(
         return renderToolCard(card, {
           ...opts,
           expanded,
-          onToggleExpanded: opts.onToggleToolExpanded
-            ? () => opts.onToggleToolExpanded?.(disclosureId, expanded)
-            : () => undefined,
+          onToggleExpanded: () => opts.onToggleToolExpanded?.(disclosureId, expanded),
         });
       })}
     </div>
@@ -187,7 +185,6 @@ export function renderGroupedMessage(
     showToolCalls?: boolean;
     runActive?: boolean;
     asyncQuestions?: AsyncQuestionPresentation;
-    autoExpandToolCalls?: boolean;
     isToolMessageExpanded?: (messageId: string) => boolean | undefined;
     onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
     isUserMessageExpanded?: (messageId: string) => boolean;

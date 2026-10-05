@@ -105,13 +105,8 @@ function renderModelSetupFailure(status: string, error: string): TemplateResult 
   `;
 }
 
-function modelName(modelRef: string): string {
-  const separator = modelRef.indexOf("/");
-  return separator < 0 ? modelRef : modelRef.slice(separator + 1);
-}
-
 function configuredModelDetail(candidate: Candidate | undefined, modelRef: string): string {
-  const name = modelName(modelRef);
+  const name = modelRef.slice(modelRef.indexOf("/") + 1);
   const detail = candidate?.detail.trim();
   if (!detail || candidate?.kind === "existing-model") {
     return name;

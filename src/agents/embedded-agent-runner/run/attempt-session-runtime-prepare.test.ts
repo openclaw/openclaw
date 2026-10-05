@@ -68,6 +68,7 @@ function createFixture() {
   const sessionManager = {
     kind: "manager",
     getBranch: () => [activeMarker],
+    getToolResultProjectionEntries: () => [activeMarker],
     getEntries: () => [activeMarker, { ...activeMarker, data: "sibling" }],
   };
   const activeSession = {
@@ -288,6 +289,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       };
       Object.assign(fixture.sessionManager, {
         getBranch: () => entries,
+        getToolResultProjectionEntries: () => entries,
         getSessionTarget: () => undefined,
         getSessionId: () => "interrupted-route-retirement",
         appendCustomEntryAsync,
@@ -358,6 +360,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     };
     Object.assign(fixture.sessionManager, {
       getBranch: () => entries,
+      getToolResultProjectionEntries: () => entries,
       getSessionTarget: () => undefined,
       getSessionId: () => "restart-notice",
       appendCustomEntryAsync,

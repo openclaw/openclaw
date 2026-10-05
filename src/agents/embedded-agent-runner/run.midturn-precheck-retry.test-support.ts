@@ -2,6 +2,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { buildEmbeddedRunnerAssistant } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { serializeCacheTtlToolResultProjections } from "./cache-ttl-checkpoint.js";
 import { makeCompactionSuccess, makeOverflowError } from "./run.overflow-compaction.fixture.js";
 import {
   mockedCompactDirect,
@@ -172,11 +173,8 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
 
   it("recovers a successor transcript from its own frozen tool projection", async () => {
     const { SessionManager } = await import("../sessions/session-manager.js");
-    const {
-      getEmbeddedSessionPromptState,
-      clearEmbeddedSessionPromptStates,
-      serializeCacheTtlToolResultProjections,
-    } = await import("./session-prompt-state.js");
+    const { getEmbeddedSessionPromptState, clearEmbeddedSessionPromptStates } =
+      await import("./session-prompt-state.js");
     const actualTruncation = await vi.importActual<typeof import("./tool-result-truncation.js")>(
       "./tool-result-truncation.js",
     );

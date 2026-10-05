@@ -600,7 +600,7 @@ function renderChatQueueItem(
                   <button
                     class="chat-queue__remove"
                     type="button"
-                    ?disabled=${editing || (item.serverQueued && !props.canRemoveServerQueued)}
+                    ?disabled=${item.serverQueued && !props.canRemoveServerQueued}
                     aria-label=${t("chat.queue.removeQueuedMessage")}
                     @click=${(event: MouseEvent) => {
                       // Chromium retargets click 2 after row removal; detail still owns the gesture.

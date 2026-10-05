@@ -1,5 +1,9 @@
 import { performance } from "node:perf_hooks";
 import { raceWithTimeout } from "../../../packages/retry/src/index.js";
+import {
+  formatGatewayPendingCloseSteps,
+  measureGatewayCloseStep,
+} from "../../gateway/restart-trace.js";
 import { flushDiagnosticsTimeline } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -37,15 +41,16 @@ export async function prepareGatewayExit(
   skipLocalServices = false,
   handoff?: { releaseLock: () => Promise<void>; exit: () => void },
 ): Promise<void> {
-  const exitTimer = handoff ? setTimeout(handoff.exit, 5_000) : undefined;
-  const step = async (name: string, run: () => Promise<void>) => {
-    const startedAt = Date.now();
-    try {
-      await run();
-    } finally {
-      logger.info(`shutdown step ${name} settled after ${Date.now() - startedAt}ms`);
-    }
-  };
+  const exitTimer = handoff
+    ? setTimeout(() => {
+        logger.warn(
+          `shutdown exit deadline reached; pending close steps: ${formatGatewayPendingCloseSteps()}`,
+        );
+        handoff.exit();
+      }, 5_000)
+    : undefined;
+  const step = (name: string, run: () => Promise<void>) =>
+    measureGatewayCloseStep(`restart.close.${name}`, run);
   try {
     if (!skipLocalServices) {
       await step("managed-local-services", () =>
@@ -62,7 +67,7 @@ export async function prepareGatewayExit(
     if (handoff) {
       await step("gateway-lock-release", handoff.releaseLock);
     } else {
-      await cleanupSnapshotOperations();
+      await step("snapshot-operations", cleanupSnapshotOperations);
     }
     await step("log-flush", () => flushGatewayLogsBeforeExit(logger, handoff ? 1_000 : 4_000));
     handoff?.exit();
