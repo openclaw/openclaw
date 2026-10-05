@@ -43,53 +43,53 @@ const TWILIO_MMS_OTHER_MAX_BYTES = 500_000;
 const TWILIO_MMS_LARGE_MEDIA_TYPES = new Set(["image/gif", "image/jpeg", "image/jpg", "image/png"]);
 const TWILIO_MMS_MEDIA_ONLY_TYPES = new Set(["application/vcard"]);
 // Twilio validates the Content-Disposition filename extension for outbound MMS.
-const TWILIO_MMS_EXTENSION_BY_TYPE: Readonly<Record<string, string>> = {
-  "application/pdf": ".pdf",
-  "application/vcard": ".vcf",
-  "audio/3gpp": ".3gp",
-  "audio/3gpp2": ".3g2",
-  "audio/ac3": ".ac3",
-  "audio/amr": ".amr",
-  "audio/amr-nb": ".amr",
-  "audio/basic": ".au",
-  "audio/l24": ".l24",
-  "audio/mp3": ".mp3",
-  "audio/mp4": ".m4a",
-  "audio/mpeg": ".mp3",
-  "audio/ogg": ".ogg",
-  "audio/vnd.rn-realaudio": ".ra",
-  "audio/vnd.wave": ".wav",
-  "audio/webm": ".webm",
-  "image/bmp": ".bmp",
-  "image/gif": ".gif",
-  "image/heic": ".heic",
-  "image/heif": ".heif",
-  "image/jpeg": ".jpg",
-  "image/jpg": ".jpg",
-  "image/png": ".png",
-  "image/tiff": ".tiff",
-  "text/calendar": ".ics",
-  "text/csv": ".csv",
-  "text/directory": ".vcf",
-  "text/richtext": ".rtx",
-  "text/rtf": ".rtf",
-  "text/vcard": ".vcf",
-  "text/x-vcard": ".vcf",
-  "video/3gpp": ".3gp",
-  "video/3gpp-tt": ".3gp",
-  "video/3gpp2": ".3g2",
-  "video/h261": ".h261",
-  "video/h263": ".h263",
-  "video/h263-1998": ".h263",
-  "video/h263-2000": ".h263",
-  "video/h264": ".h264",
-  "video/h265": ".h265",
-  "video/mp4": ".mp4",
-  "video/mpeg": ".mpg",
-  "video/mpeg4": ".mp4",
-  "video/quicktime": ".mov",
-  "video/webm": ".webm",
-};
+const TWILIO_MMS_EXTENSION_BY_TYPE: ReadonlyMap<string, string> = new Map([
+  ["application/pdf", ".pdf"],
+  ["application/vcard", ".vcf"],
+  ["audio/3gpp", ".3gp"],
+  ["audio/3gpp2", ".3g2"],
+  ["audio/ac3", ".ac3"],
+  ["audio/amr", ".amr"],
+  ["audio/amr-nb", ".amr"],
+  ["audio/basic", ".au"],
+  ["audio/l24", ".l24"],
+  ["audio/mp3", ".mp3"],
+  ["audio/mp4", ".m4a"],
+  ["audio/mpeg", ".mp3"],
+  ["audio/ogg", ".ogg"],
+  ["audio/vnd.rn-realaudio", ".ra"],
+  ["audio/vnd.wave", ".wav"],
+  ["audio/webm", ".webm"],
+  ["image/bmp", ".bmp"],
+  ["image/gif", ".gif"],
+  ["image/heic", ".heic"],
+  ["image/heif", ".heif"],
+  ["image/jpeg", ".jpg"],
+  ["image/jpg", ".jpg"],
+  ["image/png", ".png"],
+  ["image/tiff", ".tiff"],
+  ["text/calendar", ".ics"],
+  ["text/csv", ".csv"],
+  ["text/directory", ".vcf"],
+  ["text/richtext", ".rtx"],
+  ["text/rtf", ".rtf"],
+  ["text/vcard", ".vcf"],
+  ["text/x-vcard", ".vcf"],
+  ["video/3gpp", ".3gp"],
+  ["video/3gpp-tt", ".3gp"],
+  ["video/3gpp2", ".3g2"],
+  ["video/h261", ".h261"],
+  ["video/h263", ".h263"],
+  ["video/h263-1998", ".h263"],
+  ["video/h263-2000", ".h263"],
+  ["video/h264", ".h264"],
+  ["video/h265", ".h265"],
+  ["video/mp4", ".mp4"],
+  ["video/mpeg", ".mpg"],
+  ["video/mpeg4", ".mp4"],
+  ["video/quicktime", ".mov"],
+  ["video/webm", ".webm"],
+]);
 const SMS_OUTBOUND_MEDIA_TTL_MS = 10 * 60_000;
 const SMS_OUTBOUND_MEDIA_ID_RE = /^[a-f0-9]{24}$/;
 const SMS_OUTBOUND_MEDIA_TOKEN_PARAM_PREFIX = "__openclaw_mms_token";
@@ -268,7 +268,7 @@ export async function prepareHostedSmsMedia(
     throw new Error("Hosted MMS media expired before it could be sent.");
   }
   const contentType = entry.metadata.contentType?.split(";", 1)[0]?.trim().toLowerCase();
-  if (!contentType || !TWILIO_MMS_EXTENSION_BY_TYPE[contentType]) {
+  if (!contentType || !TWILIO_MMS_EXTENSION_BY_TYPE.has(contentType)) {
     await cleanup();
     throw new Error(
       `Twilio MMS does not support media type ${contentType || "unknown content type"}.`,
@@ -505,7 +505,7 @@ export async function materializeSmsInboundMedia(params: {
 function hostedSmsMediaFileName(id: string, contentType: string | undefined): string | undefined {
   const normalizedContentType = contentType?.split(";", 1)[0]?.trim().toLowerCase();
   const extension = normalizedContentType
-    ? TWILIO_MMS_EXTENSION_BY_TYPE[normalizedContentType]
+    ? TWILIO_MMS_EXTENSION_BY_TYPE.get(normalizedContentType)
     : undefined;
   return extension ? `mms-${id.slice(0, 10)}${extension}` : undefined;
 }
