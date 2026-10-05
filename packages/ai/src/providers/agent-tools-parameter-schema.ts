@@ -383,6 +383,8 @@ export function normalizeToolParameterSchema(
       return cached;
     }
   }
+  const rememberResult = (normalized: TSchema): TSchema =>
+    source ? toolParameterSchemaCache.remember(source, cacheKey, normalized) : normalized;
   const isGeminiProvider =
     normalizedProvider.includes("google") ||
     normalizedProvider.includes("gemini") ||
@@ -404,9 +406,7 @@ export function normalizeToolParameterSchema(
       ? (inlinedSchema as Record<string, unknown>)
       : undefined;
   if (!schemaRecord) {
-    return source
-      ? toolParameterSchemaCache.remember(source, cacheKey, inlinedSchema as TSchema)
-      : (inlinedSchema as TSchema);
+    return rememberResult(inlinedSchema as TSchema);
   }
 
   function applyProviderCleaning(s: unknown): TSchema {
@@ -426,9 +426,7 @@ export function normalizeToolParameterSchema(
         unsupportedToolSchemaKeywords,
       );
     }
-    return source
-      ? toolParameterSchemaCache.remember(source, cacheKey, arrayItemsCompatibleSchema as TSchema)
-      : (arrayItemsCompatibleSchema as TSchema);
+    return rememberResult(arrayItemsCompatibleSchema as TSchema);
   }
 
   const flattenableVariantKey = Array.isArray(schemaRecord.anyOf)
