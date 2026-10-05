@@ -2,11 +2,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
+import { waitForReplyDispatcherIdle } from "./reply-dispatcher-idle.js";
 import {
   composeReplyDispatchBeforeDeliver,
   createReplyDispatcher,
   createReplyDispatcherWithTyping,
-  waitForReplyDispatcherIdle,
 } from "./reply-dispatcher.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 

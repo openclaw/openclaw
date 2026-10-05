@@ -50,6 +50,7 @@ import type {
   VerboseLevel,
 } from "../directives.js";
 import type { ReplyOperationRunState } from "../reply-operation-run-state.js";
+import type { TypingController } from "../typing.js";
 
 export type { QueueDropPolicy } from "../../../config/types.queue.js";
 
@@ -156,6 +157,8 @@ export type FollowupRun = {
   deliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
   /** Canonical ownership lifecycle for durable ingress / reply-lane transfer. */
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
+  /** Typing of the dispatch that queued this run; drain reuses the latest runner's defaults. */
+  typing?: TypingController;
   /** @internal Source execution receipts retained across queued collect batches. */
   replyOperationRunStates?: ReplyOperationRunState[];
   /** Records terminal queue-cap outcomes at the queue owner before lifecycle cleanup. */
