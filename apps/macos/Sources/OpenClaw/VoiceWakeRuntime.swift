@@ -319,10 +319,14 @@ actor VoiceWakeRuntime {
         self.updateDiagnostic(.finalizing)
         self.captureTask = Task { [weak self] in
             guard await SimpleTaskSupport.waitForNextOperation(interval: 1.5) else { return }
-            guard let self, self.diagnostic?.id == id else { return }
-            self.stop(dismissOverlay: false)
-            self.diagnostic?.update = nil
+            await self?.finishDiagnosticDrain(id: id)
         }
+    }
+
+    private func finishDiagnosticDrain(id: UUID) {
+        guard self.diagnostic?.id == id else { return }
+        self.stop(dismissOverlay: false)
+        self.diagnostic?.update = nil
     }
 
     func stopDiagnostic(id: UUID) async {
