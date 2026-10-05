@@ -230,11 +230,12 @@ describe("SQLite backup commands", () => {
   });
 
   it.each([
-    { label: "default", customAgentDir: false },
-    { label: "configured external", customAgentDir: true },
+    { label: "default", customAgentDir: false, canonicalStore: false },
+    { label: "configured external", customAgentDir: true, canonicalStore: false },
+    { label: "canonical over configured external", customAgentDir: true, canonicalStore: true },
   ])(
     "creates a snapshot for a normalized $label per-agent database",
-    async ({ customAgentDir }) => {
+    async ({ customAgentDir, canonicalStore }) => {
       const tempDir = state.root;
       const repositoryPath = path.join(tempDir, "snapshots");
       const agentDir = customAgentDir ? path.join(tempDir, "external-agent") : undefined;
@@ -248,6 +249,17 @@ describe("SQLite backup commands", () => {
         : resolveOpenClawAgentSqlitePath({ agentId: "ops-team" });
       await fs.mkdir(path.dirname(databasePath), { recursive: true });
       createAgentDatabase(databasePath, "ops-team");
+      if (canonicalStore) {
+        const canonicalPath = resolveOpenClawAgentSqlitePath({ agentId: "ops-team" });
+        await fs.mkdir(path.dirname(canonicalPath), { recursive: true });
+        createAgentDatabase(canonicalPath, "ops-team");
+        const database = new (requireNodeSqlite().DatabaseSync)(canonicalPath);
+        try {
+          database.prepare("UPDATE durable_entries SET value = ?").run("canonical-session-state");
+        } finally {
+          database.close();
+        }
+      }
       const runtime = createRuntimeCapture();
 
       const created = await backupSqliteCreateCommand(runtime, {
@@ -261,6 +273,17 @@ describe("SQLite backup commands", () => {
         basename: "openclaw-agent.sqlite",
         userVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
       });
+      const snapshot = new (requireNodeSqlite().DatabaseSync)(
+        path.join(created.snapshotPath, "database.sqlite"),
+        { readOnly: true },
+      );
+      try {
+        expect(snapshot.prepare("SELECT value FROM durable_entries").all()).toEqual([
+          { value: canonicalStore ? "canonical-session-state" : "agent-state" },
+        ]);
+      } finally {
+        snapshot.close();
+      }
       expect(runtime.logs).toEqual([expect.stringContaining("Database: agent:ops-team")]);
       expect(runtime.errors).toEqual([]);
     },
