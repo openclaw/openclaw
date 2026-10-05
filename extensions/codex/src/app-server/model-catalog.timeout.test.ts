@@ -7,6 +7,7 @@ vi.mock("./shared-client.js", () => ({
   getLeasedSharedCodexAppServerClient: async () => ({ request: transport.request }),
   createIsolatedCodexAppServerClient: vi.fn(),
   captureSharedCodexAppServerCatalogLifetime: () => () => true,
+  captureSharedClientRegistration: () => () => true,
   releaseLeasedSharedCodexAppServerClient: transport.release,
   isCodexAppServerStartSelectionChangedError: () => false,
   retireSharedCodexAppServerClientIfCurrent: vi.fn(),

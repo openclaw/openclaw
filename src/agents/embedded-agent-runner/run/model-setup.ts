@@ -253,7 +253,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
       });
   const nativeCatalogEntry = nativeCatalogSelection?.entry;
   runParams.abortSignal?.throwIfAborted();
-  if (!nativeSessionRuntime && params.preparedModelRuntime) {
+  if (!nativeSessionRuntime && nativeCatalogSelection && params.preparedModelRuntime) {
     assertPreparedModelRuntimeInputCurrent(
       params.preparedModelRuntime,
       params.preparedModelRuntime.isCurrent,
