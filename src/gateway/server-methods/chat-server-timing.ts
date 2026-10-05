@@ -1,4 +1,5 @@
 import { isOperatorUiClient } from "../../utils/message-channel.js";
+import type { ChatRunTiming } from "../server-chat-state.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 type ChatSendAckServerTiming = {
@@ -7,7 +8,7 @@ type ChatSendAckServerTiming = {
   prepareAttachmentsMs?: number;
 };
 
-export type ChatSendServerTimingPhase =
+type ChatSendServerTimingPhase =
   | "dispatch-started"
   | "model-selected"
   | "agent-run-started"
@@ -71,40 +72,51 @@ export function resolveControlUiReconnectResumeParams(
   return { params: validatedParams, resumeRequested: true };
 }
 
-export function emitOperatorChatSendServerTiming(params: {
+export function createOperatorChatSendServerTiming(params: {
   context: Pick<GatewayRequestContext, "broadcastToConnIds">;
   client?: GatewayClient | null;
-  phase: ChatSendServerTimingPhase;
   runId: string;
   sessionKey: string;
   agentId?: string;
   receivedAtMs: number;
   ackedAtMs: number;
-  dispatchStartedAtMs?: number;
-  extra?: Record<string, string | number>;
+  dispatchStartedAtMs: number;
+  chatSendTiming?: ChatRunTiming;
 }) {
   const connId = params.client?.connId?.trim();
-  if (!connId || !isOperatorUiClient(params.client?.connect?.client)) {
-    return;
-  }
-  const nowMs = performance.now();
-  params.context.broadcastToConnIds(
-    "chat.send_timing",
-    {
-      phase: params.phase,
-      runId: params.runId,
-      sessionKey: params.sessionKey,
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      ackToPhaseMs: roundedChatSendTimingMs(nowMs - params.ackedAtMs),
-      receivedToPhaseMs: roundedChatSendTimingMs(nowMs - params.receivedAtMs),
-      ...(params.dispatchStartedAtMs !== undefined
-        ? {
-            dispatchStartedToPhaseMs: roundedChatSendTimingMs(nowMs - params.dispatchStartedAtMs),
-          }
-        : {}),
-      ...params.extra,
-    },
-    new Set([connId]),
-    { dropIfSlow: true },
-  );
+  const recipients =
+    connId && isOperatorUiClient(params.client?.connect?.client) ? new Set([connId]) : undefined;
+  const emit = (
+    phase: ChatSendServerTimingPhase,
+    extra?: Record<string, string | number>,
+    dispatchStartedAtMs?: number,
+  ) => {
+    if (!recipients) {
+      return;
+    }
+    const nowMs = performance.now();
+    params.context.broadcastToConnIds(
+      "chat.send_timing",
+      {
+        phase,
+        runId: params.runId,
+        sessionKey: params.sessionKey,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        ackToPhaseMs: roundedChatSendTimingMs(nowMs - params.ackedAtMs),
+        receivedToPhaseMs: roundedChatSendTimingMs(nowMs - params.receivedAtMs),
+        ...(dispatchStartedAtMs !== undefined
+          ? { dispatchStartedToPhaseMs: roundedChatSendTimingMs(nowMs - dispatchStartedAtMs) }
+          : {}),
+        ...extra,
+      },
+      recipients,
+      { dropIfSlow: true },
+    );
+  };
+  return {
+    emit,
+    emitFirstAssistant: createFirstAssistantServerTiming(params.chatSendTiming, () =>
+      emit("first-assistant-event", undefined, params.dispatchStartedAtMs),
+    ),
+  };
 }

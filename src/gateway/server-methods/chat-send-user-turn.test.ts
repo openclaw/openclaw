@@ -298,6 +298,7 @@ describe("prepareChatSendUserTurn", () => {
           userTurn: controller,
         });
 
+        await prepared.prepareSessionCreation();
         expect(prepared.ctx.SessionCreation).toEqual({
           via: "operator",
           actor: { type: "human", source: "profile", id: profile.id },
