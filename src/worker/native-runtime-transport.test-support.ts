@@ -8,12 +8,13 @@ process.on(
       let runtime: Awaited<ReturnType<typeof createNativeRuntime>> | undefined;
       try {
         runtime = await createNativeRuntime(message.config, {
-          NATIVE_PROXY_AUTH: message.credential,
+          [`${message.config.models[0]!.provider}/${message.config.models[0]!.id}`]:
+            message.credential,
         });
         const selected = message.config.models[0]!;
         const result = await runtime.withTurn(
           {
-            binding: { workspaceId: "test" },
+            binding: { workspacePath: message.config.workspace },
             selection: { provider: selected.provider, modelId: selected.id },
           },
           async ({ model, streamFn }) => {

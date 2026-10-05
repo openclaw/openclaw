@@ -1,4 +1,3 @@
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { takeNativeInferenceStartup } from "./native-inference-startup.js";
 
@@ -30,14 +29,11 @@ const startup = {
         contextWindow: 8192,
         maxTokens: 1024,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        apiKeyEnv: "NATIVE_TEST_KEY",
       },
     ],
-    workspaces: [
-      { id: "agent-1", path: path.resolve("synthetic-workspace"), models: ["provider-1/model-1"] },
-    ],
+    workspace: "/synthetic-workspace",
   },
-  credentials: { NATIVE_TEST_KEY: "synthetic-opaque/Case+lease=v1.%25" },
+  credentials: { "provider-1/model-1": "synthetic-opaque/Case+lease=v1.%25" },
 };
 
 function supply(bytes: Buffer, chunkBytes = bytes.length) {

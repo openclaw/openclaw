@@ -1,4 +1,3 @@
-import path from "node:path";
 import { MODEL_CATALOG_THINKING_LEVELS } from "@openclaw/model-catalog-core/model-catalog-types";
 import { z } from "zod";
 import { isNativeRuntimeEndpoint } from "./native-runtime-transport.js";
@@ -17,86 +16,49 @@ const baseUrl = z
   );
 
 /** Trusted local startup configuration, never a turn-wire configuration surface. */
-export const NativeRuntimeConfigSchema = z
-  .strictObject({
-    models: z
-      .array(
-        z.strictObject({
-          provider,
-          id: NativeRuntimeIdentifier,
-          api: NativeRuntimeIdentifier,
-          baseUrl,
-          name: NativeRuntimeIdentifier.optional(),
-          contextWindow: z.number().int().positive(),
-          maxTokens: z.number().int().positive(),
-          reasoning: z.boolean().optional(),
-          thinkingLevelMap: z.partialRecord(ThinkingSchema, z.string().nullable()).optional(),
-          cost: z.strictObject({
-            input: z.number().finite().nonnegative(),
-            output: z.number().finite().nonnegative(),
-            cacheRead: z.number().finite().nonnegative(),
-            cacheWrite: z.number().finite().nonnegative(),
-          }),
-          input: z
-            .array(z.enum(["text", "image"]))
-            .min(1)
-            .optional(),
-          apiKeyEnv: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),
-          headers: z.record(z.string(), z.string()).optional(),
-          sensitiveHeaderNames: z.array(z.string().min(1)).optional(),
-        }),
-      )
-      .min(1),
-    workspaces: z
-      .array(
-        z.strictObject({
-          id: NativeRuntimeIdentifier,
-          path: z
-            .string()
-            .min(1)
-            .refine((value) => path.isAbsolute(value), "Workspace grants require absolute paths"),
-          sessionId: NativeRuntimeIdentifier.optional(),
-          scope: z.enum(["exact", "subdirectories"]).optional(),
-          models: z.array(z.string().min(1), {
-            error: "Workspace grants require an explicit models allowlist ([] denies all)",
-          }),
-        }),
-      )
-      .min(1),
-  })
-  .superRefine((config, ctx) => {
-    // Validate the grant graph before any owner snapshots credentials or projects a child.
-    const modelRefs = new Set<string>();
-    config.models.forEach((model, index) => {
-      const ref = model.provider + "/" + model.id;
-      if (modelRefs.has(ref)) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["models", index],
-          message: "Duplicate native runtime model",
-        });
-      }
-      modelRefs.add(ref);
-    });
-    const workspaceIds = new Set<string>();
-    config.workspaces.forEach((workspace, index) => {
-      if (workspaceIds.has(workspace.id)) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["workspaces", index, "id"],
-          message: "Duplicate native runtime workspace",
-        });
-      }
-      workspaceIds.add(workspace.id);
-      workspace.models.forEach((ref, modelIndex) => {
-        if (!modelRefs.has(ref)) {
+export const NativeRuntimeModelSchema = z.strictObject({
+  provider,
+  id: NativeRuntimeIdentifier,
+  api: NativeRuntimeIdentifier,
+  baseUrl,
+  name: NativeRuntimeIdentifier.optional(),
+  contextWindow: z.number().int().positive(),
+  maxTokens: z.number().int().positive(),
+  reasoning: z.boolean().optional(),
+  thinkingLevelMap: z.partialRecord(ThinkingSchema, z.string().nullable()).optional(),
+  cost: z.strictObject({
+    input: z.number().finite().nonnegative(),
+    output: z.number().finite().nonnegative(),
+    cacheRead: z.number().finite().nonnegative(),
+    cacheWrite: z.number().finite().nonnegative(),
+  }),
+  input: z
+    .array(z.enum(["text", "image"]))
+    .min(1)
+    .optional(),
+  headers: z.record(z.string(), z.string()).optional(),
+});
+
+/** Canonical node models and exact workspace projected into one trusted worker child. */
+export const NativeRuntimeConfigSchema = z.strictObject({
+  models: z
+    .array(NativeRuntimeModelSchema)
+    .min(1)
+    .superRefine((models, ctx) => {
+      const refs = new Set<string>();
+      models.forEach((model, index) => {
+        const ref = `${model.provider}/${model.id}`;
+        if (refs.has(ref)) {
           ctx.addIssue({
             code: "custom",
-            path: ["workspaces", index, "models", modelIndex],
-            message: "Unknown native runtime workspace model",
+            path: [index],
+            message: "Duplicate native runtime model",
           });
         }
+        refs.add(ref);
       });
-    });
-  });
+    }),
+  workspace: z.string().trim().min(1),
+});
 export type NativeRuntimeConfig = z.infer<typeof NativeRuntimeConfigSchema>;
+export type NativeRuntimeModel = z.infer<typeof NativeRuntimeModelSchema>;

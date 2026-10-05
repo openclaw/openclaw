@@ -36,6 +36,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 const binding = {
+  workspacePath: undefined,
   gatewayId: "gateway",
   workspaceId: "workspace",
   sessionId: "session",
@@ -59,18 +60,22 @@ function configFor(workspace: string, baseUrl = "http://127.0.0.1:1/v1"): Native
         contextWindow: 8192,
         maxTokens: 256,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        apiKeyEnv: "NATIVE_TEST_KEY",
         headers: { "x-startup": "startup" },
       },
     ],
-    workspaces: [{ id: "workspace", path: workspace, models: ["openai/local-model"] }],
+    workspace,
   };
 }
 async function start(
   config: NativeRuntimeConfig,
   env: NodeJS.ProcessEnv = { NATIVE_TEST_KEY: "fixture-key" },
 ) {
-  const runtime = await createNativeRuntime(config, env);
+  const credential = env.NATIVE_TEST_KEY!;
+  const runtime = await createNativeRuntime(config, {
+    "openai/local-model": credential,
+    "openai/other-model": credential,
+    "openai/second-model": credential,
+  });
   runtimes.push(runtime);
   return runtime;
 }
@@ -168,30 +173,24 @@ async function probe(scenario: string, config: NativeRuntimeConfig, env: NodeJS.
 }
 
 describe("native runtime startup authority", () => {
-  it("guards explicit custom authentication headers without blocking ordinary metadata", async () => {
+  it("guards every configured header value", async () => {
     const config = configFor(tempDirs.make("native-custom-header-"));
     config.models[0]!.headers = {
-      "x-route": "assistant",
+      "x-route": "synthetic-route",
       "x-session": "synthetic-custom-auth",
       "x-short": "abcdefghi",
     };
-    config.models[0]!.sensitiveHeaderNames = ["X-Session", "X-Short"];
     const runtime = await start(config);
     await runtime.withTurn(turn, async (resolved) => {
       expect(() => resolved.assertProtocolSafe({ role: "assistant" })).not.toThrow();
       expect(() => resolved.assertProtocolSafe({ text: "synthetic-custom-auth" })).toThrow(
         "Native credential appeared",
       );
-      expect(resolved.hasCredentialPrefix("ordinarys")).toBe(false);
+      expect(resolved.hasCredentialPrefix("ordinaryz")).toBe(false);
       expect(resolved.hasCredentialPrefix("synthetic-custom-")).toBe(true);
       expect(resolved.hasCredentialPrefix("a")).toBe(true);
       expect(resolved.hasCredentialPrefix("abcdefg")).toBe(true);
     });
-  });
-  it("rejects a missing explicitly classified authentication header", async () => {
-    const config = configFor(tempDirs.make("native-missing-header-"));
-    config.models[0]!.sensitiveHeaderNames = ["x-missing"];
-    await expect(start(config)).rejects.toThrow("Sensitive native header name is not configured");
   });
   it("filters HTTP-normalized representations of startup credential values", async () => {
     const config = configFor(tempDirs.make("native-http-secret-"));
@@ -344,7 +343,6 @@ describe("native runtime startup authority", () => {
       values.map(async (value) => {
         const config = configFor(workspace, "https://proxy.example.test/v1");
         config.models[0]!.headers = { "x-custom-auth": value };
-        config.models[0]!.sensitiveHeaderNames = ["x-custom-auth"];
         const runtime = await start(config, { NATIVE_TEST_KEY: value });
         await runtime.withTurn(turn, async (resolved) => {
           const stream = await resolved.streamFn(resolved.model, context);
@@ -372,7 +370,7 @@ describe("native runtime startup authority", () => {
   it("reads only named env keys once and fails missing credentials before opening workspaces", async () => {
     const config = configFor("/nonexistent-native-test-workspace");
     const reads: PropertyKey[] = [];
-    const env = new Proxy(
+    const env: NodeJS.ProcessEnv = new Proxy(
       {},
       {
         get: (_target, key) => {
@@ -381,9 +379,11 @@ describe("native runtime startup authority", () => {
         },
       },
     );
-    await expect(createNativeRuntime(config, env)).rejects.toThrow("NATIVE_TEST_KEY");
+    await expect(
+      createNativeRuntime(config, { "openai/local-model": env.NATIVE_TEST_KEY! }),
+    ).rejects.toThrow("openai/local-model");
     expect(reads).toEqual(["NATIVE_TEST_KEY"]);
-    config.workspaces[0]!.path = tempDirs.make("native-runtime-");
+    config.workspace = tempDirs.make("native-runtime-");
     config.models.push({ ...config.models[0]!, id: "second-model" });
     reads.length = 0;
     await start(
@@ -426,42 +426,27 @@ describe("native runtime startup authority", () => {
     }
   });
 
-  it("rejects duplicate models/workspaces, unknown model grants, and unavailable or ambient APIs", async () => {
+  it("rejects duplicate models and unavailable or ambient APIs", async () => {
     const workspace = tempDirs.make("native-runtime-");
     const config = configFor(workspace);
     await expect(
       createNativeRuntime(
         { ...config, models: [...config.models, ...config.models] },
-        { NATIVE_TEST_KEY: "test" },
+        { "openai/local-model": "test" },
       ),
     ).rejects.toThrow("Duplicate");
-    await expect(
-      createNativeRuntime(
-        { ...config, workspaces: [...config.workspaces, ...config.workspaces] },
-        { NATIVE_TEST_KEY: "test" },
-      ),
-    ).rejects.toThrow("Duplicate");
-    await expect(
-      createNativeRuntime(
-        {
-          ...config,
-          workspaces: [{ id: "workspace", path: workspace, models: ["missing/model"] }],
-        },
-        { NATIVE_TEST_KEY: "test" },
-      ),
-    ).rejects.toThrow("Unknown");
     for (const api of ["unregistered-api", "azure-openai-responses"]) {
       await expect(
         createNativeRuntime(
           { ...config, models: [{ ...config.models[0]!, api }] },
-          { NATIVE_TEST_KEY: "test" },
+          { "openai/local-model": "test" },
         ),
       ).rejects.toThrow(/Unsupported|ambient-configured/);
     }
     await expect(
       createNativeRuntime(
         { ...config, models: [{ ...config.models[0]!, api: "google-vertex" }] },
-        { NATIVE_TEST_KEY: "gcp-vertex-credentials" },
+        { "openai/local-model": "gcp-vertex-credentials" },
       ),
     ).rejects.toThrow("ambient ADC");
   });
@@ -474,23 +459,23 @@ describe("native runtime startup authority", () => {
     await expect(start(configFor(path.join(root, "missing")))).rejects.toThrow();
   });
 
-  it("enforces workspace grants and exact immutable local model identity", async () => {
+  it("enforces the exact workspace while allowing every configured node model", async () => {
     const workspace = tempDirs.make("native-runtime-");
     const config = configFor(workspace);
     config.models.push({ ...config.models[0]!, id: "other-model" });
-    config.workspaces[0]!.models = ["openai/local-model"];
     const runtime = await start(config);
     const callback = vi.fn(async () => {});
+    const outside = tempDirs.make("native-runtime-outside-");
     await expect(
-      runtime.withTurn({ ...turn, binding: { ...binding, workspaceId: "unknown" } }, callback),
-    ).rejects.toThrow("not allowed");
-    await expect(
-      runtime.withTurn({ ...turn, selection: { ...selection, modelId: "other-model" } }, callback),
-    ).rejects.toThrow("not allowed");
+      runtime.withTurn({ ...turn, binding: { workspacePath: outside } }, callback),
+    ).rejects.toThrow("does not match");
+    await runtime.withTurn(
+      { ...turn, selection: { ...selection, modelId: "other-model" } },
+      callback,
+    );
     await expect(
       runtime.withTurn({ ...turn, selection: { ...selection, modelId: "unknown" } }, callback),
-    ).rejects.toThrow("not allowed");
-    expect(callback).not.toHaveBeenCalled();
+    ).rejects.toThrow("not configured");
     await runtime.withTurn(turn, async (resolved) => {
       await expect(resolved.streamFn({ ...resolved.model }, context)).rejects.toThrow(
         "exact selected local model",
@@ -502,10 +487,6 @@ describe("native runtime startup authority", () => {
         resolved.model.input.push("image");
       }).toThrow();
     });
-    const deniedConfig = configFor(workspace);
-    deniedConfig.workspaces[0]!.models = [];
-    const denied = await start(deniedConfig);
-    await expect(denied.withTurn(turn, callback)).rejects.toThrow("not allowed");
   });
 
   it("canonicalizes symlinks and rejects retargeting before and during turns", async () => {

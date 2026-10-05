@@ -1,17 +1,15 @@
-import { closeSync, readSync } from "node:fs";
-import path from "node:path";
+import { closeSync, readSync, realpathSync } from "node:fs";
 import { z } from "zod";
-import { isPathInside } from "../infra/path-guards.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { NativeRuntimeConfigSchema } from "./native-runtime-config.js";
 
 /** Private node-to-worker startup carrier, never part of a Gateway turn envelope. */
-const WORKER_NATIVE_INFERENCE_STARTUP_ARG = "--internal-worker-native-inference";
-const WORKER_NATIVE_INFERENCE_STARTUP_FD = 3;
-const WORKER_NATIVE_INFERENCE_STARTUP_MAX_BYTES = 2 * 1024 * 1024;
+export const WORKER_NATIVE_INFERENCE_STARTUP_ARG = "--internal-worker-native-inference";
+export const WORKER_NATIVE_INFERENCE_STARTUP_FD = 3;
+export const WORKER_NATIVE_INFERENCE_STARTUP_MAX_BYTES = 2 * 1024 * 1024;
 const NativeInferenceStartupSchema = z.strictObject({
   config: NativeRuntimeConfigSchema,
-  credentials: z.record(z.string(), z.string()),
+  credentials: z.record(z.string(), z.string().min(1)),
 });
 export type NativeInferenceStartup = z.infer<typeof NativeInferenceStartupSchema>;
 
@@ -58,25 +56,16 @@ export function assertNativeInferenceAssignment(
   descriptor: WorkerLaunchDescriptor,
 ): void {
   const assignment = descriptor.assignment;
-  const grant = startup.config.workspaces.find((workspace) => workspace.id === assignment.agentId);
-  const modelRef = assignment.modelRef.provider + "/" + assignment.modelRef.model;
+  const modelRef = `${assignment.modelRef.provider}/${assignment.modelRef.model}`;
+  const configuredWorkspace = realpathSync(startup.config.workspace);
+  const assignedWorkspace = realpathSync(assignment.workspaceDir);
   if (
     assignment.inference !== "runtime-local" ||
-    !grant ||
-    !(
-      path.resolve(grant.path) === path.resolve(assignment.workspaceDir) ||
-      (grant.scope === "subdirectories" &&
-        isPathInside(path.resolve(grant.path), path.resolve(assignment.workspaceDir)))
-    ) ||
-    (grant.sessionId !== undefined && grant.sessionId !== descriptor.admission.sessionId) ||
-    !grant.models.includes(modelRef) ||
     !startup.config.models.some(
-      (model) =>
-        model.provider === assignment.modelRef.provider && model.id === assignment.modelRef.model,
-    )
+      (model) => `${model.provider}/${model.id}` === modelRef && startup.credentials[modelRef],
+    ) ||
+    configuredWorkspace !== assignedWorkspace
   ) {
-    throw new Error(
-      "Node-local inference is not authorized for this agent, session, workspace, or model",
-    );
+    throw new Error("Node-local inference startup does not match the admitted workspace or model");
   }
 }

@@ -6,20 +6,14 @@ const config = NativeRuntimeConfigSchema.parse(
   JSON.parse(await readFile(process.argv[2]!, "utf8")),
 );
 const binding = {
-  gatewayId: "gateway",
-  workspaceId: "workspace",
-  sessionId: "session",
-  runId: "run",
-  attemptId: "attempt",
-  epoch: "epoch",
-  connectionId: "connection",
+  workspacePath: config.workspace,
 };
 const selection = { provider: "openai", modelId: "local-model" };
 const context = { messages: [{ role: "user" as const, content: "hello", timestamp: 1 }] };
 if (process.argv[3] === "snapshot") {
-  const env = { NATIVE_TEST_KEY: process.env.NATIVE_TEST_KEY };
-  const pending = createNativeRuntime(config, env);
-  env.NATIVE_TEST_KEY = "changed-during-startup";
+  const credentials = { "openai/local-model": process.env.NATIVE_TEST_KEY! };
+  const pending = createNativeRuntime(config, credentials);
+  credentials["openai/local-model"] = "changed-during-startup";
   config.models[0]!.baseUrl = "http://127.0.0.1:1/untrusted";
   config.models[0]!.headers!["x-startup"] = "changed";
   const runtime = await pending;
@@ -51,10 +45,10 @@ if (process.argv[3] === "snapshot") {
   process.send?.({ ...result, hookCalled });
 } else {
   const first = await createNativeRuntime(config, {
-    NATIVE_TEST_KEY: process.env.NATIVE_FIRST_KEY,
+    "openai/local-model": process.env.NATIVE_FIRST_KEY!,
   });
   const second = await createNativeRuntime(config, {
-    NATIVE_TEST_KEY: process.env.NATIVE_SECOND_KEY,
+    "openai/local-model": process.env.NATIVE_SECOND_KEY!,
   });
   createLlmRuntime().registry.clearApiProviders();
   const cwd = process.cwd();

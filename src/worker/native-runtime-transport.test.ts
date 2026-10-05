@@ -78,12 +78,10 @@ function config(api: string, baseUrl: string): NativeRuntimeConfig {
         contextWindow: 8192,
         maxTokens: 256,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        apiKeyEnv: "NATIVE_PROXY_AUTH",
         headers: { "x-worker-session": sensitiveHeader },
-        sensitiveHeaderNames: ["x-worker-session"],
       },
     ],
-    workspaces: [{ id: "test", path: workspace, models: ["fixture/fixture-model"] }],
+    workspace,
   };
 }
 function run(

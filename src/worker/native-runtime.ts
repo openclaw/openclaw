@@ -11,17 +11,17 @@ import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { isCredentialFieldName } from "@openclaw/ai/internal/shared";
 import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 import { z } from "zod";
-import { isPathInside } from "../infra/path-guards.js";
 import {
   NativeRuntimeConfigSchema,
   NativeRuntimeIdentifier as id,
   type NativeRuntimeConfig,
 } from "./native-runtime-config.js";
+import { nativeRuntimeModelUnsupportedReason } from "./native-runtime-model-support.js";
 import { buildNativeRuntimeFetch } from "./native-runtime-transport.js";
-const BindingSchema = z.object({ workspaceId: id, workspacePath: z.string().optional() });
+const BindingSchema = z.object({ workspacePath: z.string().optional() });
 
 type NativeRuntimeTurn = {
-  binding: { workspaceId: string; workspacePath?: string };
+  binding: { workspacePath?: string };
   selection: { provider: string; modelId: string };
 };
 export type NativeRuntimeResolved = {
@@ -44,12 +44,9 @@ type Workspace = {
   canonicalPath: string;
   dev: number;
   ino: number;
-  models: Set<string>;
-  scope?: "exact" | "subdirectories";
 };
 type RegisteredModel = {
   model: Model;
-  apiKeyEnv: string;
   headers: Record<string, string>;
 };
 const SelectionSchema = z.strictObject({
@@ -78,7 +75,7 @@ async function assertWorkspace(workspace: Workspace): Promise<void> {
  */
 export async function createNativeRuntime(
   config: NativeRuntimeConfig,
-  env: NodeJS.ProcessEnv = process.env,
+  credentials: Readonly<Record<string, string>>,
 ): Promise<NativeRuntime> {
   const parsed = NativeRuntimeConfigSchema.parse(config);
   // The embedded loop can import the Gateway facade. Keep its process policy
@@ -88,10 +85,7 @@ export async function createNativeRuntime(
     requiresManagedTransport: () => true,
   });
   registerBuiltInApiProviders(runtime.registry);
-  const models = new Map<string, RegisteredModel>();
-  const workspaces = new Map<string, Workspace>();
-  const credentials = new Map<string, string>();
-
+  const models = new Map<string, RegisteredModel & { credential: string }>();
   const protocolSecrets = new Set<string>();
   const addProtocolSecret = (value: string) => {
     protocolSecrets.add(value);
@@ -102,42 +96,18 @@ export async function createNativeRuntime(
     }
   };
 
-  // Snapshot only explicitly named credentials, before the first asynchronous work.
   for (const entry of parsed.models) {
-    if (!credentials.has(entry.apiKeyEnv)) {
-      const value = env[entry.apiKeyEnv];
-      if (!value?.trim()) {
-        throw new Error(
-          "Missing native runtime credential environment variable: " + entry.apiKeyEnv,
-        );
-      }
-      credentials.set(entry.apiKeyEnv, value);
-      addProtocolSecret(value);
+    const ref = `${entry.provider}/${entry.id}`;
+    const credential = credentials[ref];
+    if (!credential?.trim()) {
+      throw new Error(`Native runtime credential is unavailable for ${ref}`);
     }
-  }
-  for (const entry of parsed.models) {
-    const ref = entry.provider + "/" + entry.id;
-    if (!runtime.registry.getApiProvider(entry.api)) {
-      throw new Error("Unsupported native runtime API: " + entry.api);
+    addProtocolSecret(credential);
+    const unsupportedReason = nativeRuntimeModelUnsupportedReason(entry.api, credential);
+    if (!runtime.registry.getApiProvider(entry.api) || unsupportedReason) {
+      throw new Error(unsupportedReason ?? `Unsupported native runtime API: ${entry.api}`);
     }
-    // The maintained Azure simple adapter reads endpoint/deployment overrides
-    // from ambient env even with an explicit model. It cannot meet this contract.
-    if (entry.api === "azure-openai-responses") {
-      throw new Error("Native runtime does not support ambient-configured Azure API adapters");
-    }
-    const apiKey = credentials.get(entry.apiKeyEnv)!;
-    if (
-      entry.api === "google-vertex" &&
-      (apiKey.trim() === "gcp-vertex-credentials" || /^<[^>]+>$/.test(apiKey.trim()))
-    ) {
-      throw new Error("Native runtime Vertex requires an explicit API key, not ambient ADC");
-    }
-    const {
-      apiKeyEnv,
-      headers: configuredHeaders,
-      sensitiveHeaderNames: classifiedHeaders,
-      ...definition
-    } = entry;
+    const { headers: configuredHeaders, ...definition } = entry;
     const headers = Object.fromEntries(
       Object.entries(configuredHeaders ?? {}).map(([name, value]) => [name.toLowerCase(), value]),
     );
@@ -159,42 +129,34 @@ export async function createNativeRuntime(
       Object.freeze(model.thinkingLevelMap);
     }
     Object.freeze(model);
-    const sensitiveHeaderNames = new Set(
-      (classifiedHeaders ?? []).map((name) => name.toLowerCase()),
-    );
-    if ([...sensitiveHeaderNames].some((name) => !Object.hasOwn(headers, name))) {
-      throw new Error("Sensitive native header name is not configured");
-    }
-    models.set(ref, { model, apiKeyEnv, headers: Object.freeze(headers) });
+    models.set(ref, { model, credential, headers: Object.freeze(headers) });
     for (const [name, value] of Object.entries(headers)) {
-      if (value && (isCredentialFieldName(name) || sensitiveHeaderNames.has(name))) {
-        addProtocolSecret(value);
-        if (name === "authorization" || name === "proxy-authorization") {
-          const token = /^(?:Bearer|Basic)\s+(\S+)$/iu.exec(value.trim())?.[1];
-          if (token) {
-            protocolSecrets.add(token);
-          }
+      if (!value) {
+        continue;
+      }
+      // Canonical provider headers are secret-bearing inputs. Model headers are
+      // conservatively guarded too because startup has no second classification surface.
+      addProtocolSecret(value);
+      if (isCredentialFieldName(name)) {
+        const token = /^(?:Bearer|Basic)\s+(\S+)$/iu.exec(value.trim())?.[1];
+        if (token) {
+          protocolSecrets.add(token);
         }
       }
     }
   }
-  for (const entry of parsed.workspaces) {
-    const allowed = new Set(entry.models);
-    const sourcePath = path.resolve(entry.path);
-    const canonicalPath = await realpath(sourcePath);
-    const directory = await stat(canonicalPath);
-    if (!directory.isDirectory()) {
-      throw new Error("Native runtime workspace must be a directory: " + entry.id);
-    }
-    workspaces.set(entry.id, {
-      sourcePath,
-      canonicalPath,
-      dev: directory.dev,
-      ino: directory.ino,
-      models: allowed,
-      scope: entry.scope,
-    });
+  const sourcePath = path.resolve(parsed.workspace);
+  const canonicalPath = await realpath(sourcePath);
+  const directory = await stat(canonicalPath);
+  if (!directory.isDirectory()) {
+    throw new Error("Native runtime workspace must be a directory");
   }
+  const workspace: Workspace = {
+    sourcePath,
+    canonicalPath,
+    dev: directory.dev,
+    ino: directory.ino,
+  };
 
   const hasCredentialPrefix = (value: unknown): boolean => {
     if (typeof value === "string") {
@@ -229,24 +191,17 @@ export async function createNativeRuntime(
       assertOpen();
       const binding = BindingSchema.parse(turn.binding);
       const selection = SelectionSchema.parse(turn.selection);
-      const ref = selection.provider + "/" + selection.modelId;
-      const workspace = workspaces.get(binding.workspaceId);
+      const ref = `${selection.provider}/${selection.modelId}`;
       const registered = models.get(ref);
-      if (!workspace || !registered || !workspace.models.has(ref)) {
-        throw new Error("Native runtime workspace/model selection is not allowed");
+      if (!registered) {
+        throw new Error("Native runtime model selection is not configured");
       }
       await assertWorkspace(workspace);
       const workspacePath = binding.workspacePath
         ? await realpath(binding.workspacePath)
         : workspace.canonicalPath;
-      if (
-        workspacePath !== workspace.canonicalPath &&
-        !(
-          workspace.scope === "subdirectories" &&
-          isPathInside(workspace.canonicalPath, workspacePath)
-        )
-      ) {
-        throw new Error("Native runtime workspace escapes its provisioned root");
+      if (workspacePath !== workspace.canonicalPath) {
+        throw new Error("Native runtime workspace does not match the admitted workspace");
       }
       const assignedStat = await stat(workspacePath);
       if (!assignedStat.isDirectory()) {
@@ -295,7 +250,7 @@ export async function createNativeRuntime(
           maxRetryDelayMs: options?.maxRetryDelayMs,
           onActiveResponse: options?.onActiveResponse,
           asyncToolExecution: options?.asyncToolExecution,
-          apiKey: credentials.get(registered.apiKeyEnv)!,
+          apiKey: registered.credential,
           headers: { ...registered.headers },
           sessionId,
           transport: "sse",
@@ -351,11 +306,10 @@ export async function createNativeRuntime(
       activeTurns.clear();
       for (const registered of models.values()) {
         registered.headers = {};
+        registered.credential = "";
       }
-      credentials.clear();
-      protocolSecrets.clear();
       models.clear();
-      workspaces.clear();
+      protocolSecrets.clear();
       runtime.registry.clearApiProviders();
     },
   };

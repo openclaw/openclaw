@@ -138,7 +138,7 @@ export async function runWorkerDescriptor(
   if (descriptor.assignment.inference === "runtime-local") {
     if (!options.nativeInference) {
       throw new Error(
-        "Runtime-local inference was requested but no node-local registry was provisioned",
+        "Runtime-local inference was requested but no node-local model configuration was provisioned",
       );
     }
     assertNativeInferenceAssignment(options.nativeInference, descriptor);
@@ -328,7 +328,6 @@ export async function runWorkerDescriptor(
         await nativeRuntime.withTurn(
           {
             binding: {
-              workspaceId: descriptor.assignment.agentId,
               workspacePath: descriptor.assignment.workspaceDir,
             },
             selection: {
