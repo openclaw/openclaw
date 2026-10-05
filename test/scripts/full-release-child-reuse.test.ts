@@ -205,6 +205,29 @@ async function fixture(role = "normalCi", dispatchInputs?: Record<string, string
 }
 
 describe("independent release child reuse", () => {
+  it("accepts candidate-owned evidence outside main ancestry", async () => {
+    const data = await fixture();
+    const workflowRef = `release-ci/${TARGET.slice(0, 12)}-123`;
+    data.request.workflowSha = TARGET;
+    data.run.head_sha = TARGET;
+    data.run.head_branch = workflowRef;
+    for (const job of data.jobs) {
+      job.head_sha = TARGET;
+    }
+    data.receipt.workflowSha = TARGET;
+    data.receipt.workflowRef = workflowRef;
+    data.artifact.workflow_run.head_sha = TARGET;
+    data.lineage.status = "diverged";
+    await data.seal();
+
+    const selection = await discoverReusableReleaseChild(data.request, data.deps);
+    expect(selection).not.toBeNull();
+    await expect(
+      validateReusableReleaseChild(selection!, data.request, data.deps),
+    ).resolves.toMatchObject({ receipt: { workflowSha: TARGET, workflowRef } });
+    expect(data.reads).not.toContain(`compare/${TARGET}...main?per_page=1`);
+  });
+
   it.each([
     {
       role: "productPerformance",
