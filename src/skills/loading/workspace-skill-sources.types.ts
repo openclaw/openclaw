@@ -1,6 +1,7 @@
 import type { WorkspaceSkillStatusFacts } from "../discovery/status.types.js";
 import type { SkillEntry } from "../types.js";
 import type { PluginSkillRoot } from "./plugin-skill-root.js";
+import type { SkillLoadDiagnostics } from "./skill-load-diagnostics.js";
 
 export type ResolvedSkillDiscoveryLimits = {
   maxCandidatesPerRoot: number;
@@ -12,6 +13,8 @@ export type ResolvedSkillDiscoveryLimits = {
 export type WorkspaceSkillSources = {
   entries: Array<SkillEntry & { sourceOrder?: number }>;
   executionEntries: SkillEntry[];
+  /** Bounded discovery failures; optional for existing workspace adapters. */
+  diagnostics?: SkillLoadDiagnostics;
   runtime: { platform: string; bins: string[] };
   status?: WorkspaceSkillStatusFacts;
 };

@@ -70,6 +70,19 @@ export const SkillsCuratorStatusResultSchema = closedObject({
   }),
   skills: Type.Array(SkillCuratorEntrySchema),
   overlaps: Type.Array(SkillOverlapCandidateSchema),
+  diagnostics: Type.Optional(
+    closedObject({
+      items: Type.Array(
+        closedObject({
+          kind: Type.Union([Type.Literal("read"), Type.Literal("invalid")]),
+          path: Type.String({ maxLength: 4096 }),
+          message: Type.String({ maxLength: 1024 }),
+        }),
+        { maxItems: 64 },
+      ),
+      omitted: Type.Integer({ minimum: 0 }),
+    }),
+  ),
 });
 
 /** Preserves retired curator action methods so clients receive an actionable error. */

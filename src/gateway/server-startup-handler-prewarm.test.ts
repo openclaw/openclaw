@@ -24,7 +24,7 @@ const mocks = vi.hoisted(() => ({
   ensureSkillsWatcher: vi.fn(),
   prepareWorkspaceSkillEntries: vi.fn<
     typeof import("../skills/loading/workspace-skill-loader.js").prepareWorkspaceSkillEntries
-  >(async () => ({ entries: [] })),
+  >(async () => ({ entries: [], diagnostics: { items: [], omitted: 0 } })),
   prewarmContextWindowCacheAfterReady: vi.fn(async () => {}),
   getMemoryCapabilityRegistration: vi.fn<() => { pluginId: string } | undefined>(),
   prewarmMemorySearchWorker: vi.fn(async () => {

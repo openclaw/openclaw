@@ -13,6 +13,7 @@ import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
+import { createSkillLoadDiagnostics } from "../loading/skill-load-diagnostics.js";
 import { parseSkillProposalRow } from "./store-sqlite-record.js";
 import {
   listWritableWorkshopSkillSummaries,
@@ -36,12 +37,14 @@ export async function getSkillCuratorStatus(
   options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> & { config: OpenClawConfig },
 ): Promise<SkillsCuratorLiveStatusResult> {
   const context = captureOpenClawStateWorkerContext(options);
+  const diagnostics = createSkillLoadDiagnostics();
   const curatedByFile = new Map<string, WritableWorkshopSkillSummary>();
   for (const agentId of listAgentIds(options.config)) {
     for (const skill of listWritableWorkshopSkillSummaries({
       config: options.config,
       agentId,
       env: options.env,
+      onDiagnostic: diagnostics.add,
     })) {
       const skillFile = canonicalizePath(skill.filePath);
       curatedByFile.set(skillFile, skill);
@@ -89,7 +92,11 @@ export async function getSkillCuratorStatus(
       };
     },
   );
+  const loadDiagnostics = diagnostics.snapshot();
   return {
+    ...(loadDiagnostics.items.length > 0 || loadDiagnostics.omitted > 0
+      ? { diagnostics: loadDiagnostics }
+      : {}),
     inventory: "live-workshop",
     lastAttemptAtMs: reviewStatus.lastAttemptAtMs,
     lastSuccessAtMs: reviewStatus.lastSuccessAtMs,

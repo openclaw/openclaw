@@ -13,6 +13,7 @@ import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import { resolveSkillDiscoveryLimits } from "./skill-root-discovery.js";
 import {
   loadWorkspaceSkills,
+  prepareWorkspaceSkillEntries,
   prepareWorkspaceSkills,
   readWorkspaceSkillSources,
   resolveWorkspaceSkillPromptEntries,
@@ -232,6 +233,9 @@ describe.each(["prompt", "runtime"] as const)("remote %s skill discovery", (call
       description: "Gateway canonical instructions",
       metadata: JSON.stringify({ openclaw: { requires: { bins: ["remote-tool"] } } }),
     });
+    const invalidFile = path.join(options.executionWorkspaceDir, "skills", "invalid", "SKILL.md");
+    await fs.mkdir(path.dirname(invalidFile), { recursive: true });
+    await fs.writeFile(invalidFile, "---\nname: invalid\n---\n");
     const loadSkills = vi.fn(async (_request: WorkspaceSkillSourceRequest) => sources);
     const release = registerAgentWorkspaceAccess(gateway, { bridge, loadSkills });
     try {
@@ -246,6 +250,11 @@ describe.each(["prompt", "runtime"] as const)("remote %s skill discovery", (call
       expect(project).toMatchObject({ description: "Gateway canonical instructions" });
       expect(resolveSkillFileHost(project!)).toBe("gateway");
       expect(resolveSkillFileHost(available!)).toBe("workspace");
+      const prepared = await prepareWorkspaceSkillEntries(gateway, params);
+      expect(prepared.diagnostics).toEqual({
+        items: [{ kind: "invalid", path: invalidFile, message: "description is required" }],
+        omitted: 0,
+      });
       expect(loadSkills.mock.calls[0]![0]).toMatchObject({
         executionWorkspaceDir: undefined,
         additionalBins: expect.arrayContaining(["remote-tool", "library-tool"]),
@@ -287,6 +296,12 @@ it("preserves extra-directory precedence across Gateway and workspace sources", 
   ] as const) {
     await writeSkill({ dir: path.join(dir, name), name, description });
   }
+  const gatewayFailure = path.join(earlier, "bad-gateway", "SKILL.md");
+  await fs.mkdir(path.dirname(gatewayFailure), { recursive: true });
+  await fs.writeFile(gatewayFailure, "---\nname: bad-gateway\n---\n");
+  const remoteFailure = path.join(hostExtra, "bad-remote", "SKILL.md");
+  await fs.mkdir(path.dirname(remoteFailure), { recursive: true });
+  await fs.writeFile(remoteFailure, "---\nname: bad-remote\n---\n");
   const loadSkills = vi.fn(async (request: WorkspaceSkillSourceRequest) => {
     const map = (dir: string) => path.join(remote, path.relative(gateway, dir));
     return readWorkspaceSkillSources({
@@ -319,6 +334,22 @@ it("preserves extra-directory precedence across Gateway and workspace sources", 
     expect(loadSkills.mock.calls[0]![0].sourcePlan.roots.map((root) => root.dir)).toContain(
       logicalExtra,
     );
+    const { report } = await prepareWorkspaceSkillStatus(gateway, {
+      ...options,
+      config: {
+        ...options.config,
+        skills: { load: { extraDirs: [earlier, logicalExtra, later] } },
+      },
+    });
+    expect(report.diagnostics).toEqual({
+      items: [gatewayFailure, remoteFailure].map((file) => ({
+        kind: "invalid",
+        path: file,
+        message: "description is required",
+      })),
+      omitted: 0,
+    });
+    expect(bridge.readFile).not.toHaveBeenCalled();
   } finally {
     release();
   }

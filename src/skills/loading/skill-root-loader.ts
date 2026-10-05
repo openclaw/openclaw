@@ -12,6 +12,7 @@ import {
 } from "./local-loader.js";
 import type { PluginSkillRoot } from "./plugin-skill-root.js";
 import { createSkillEntry } from "./skill-entry-metadata.js";
+import type { createSkillLoadDiagnostics } from "./skill-load-diagnostics.js";
 import { compactSkillPath } from "./skill-paths.js";
 import { mergeSkillRecords, type SkillCollision } from "./skill-precedence.js";
 import {
@@ -49,12 +50,21 @@ export function warnInvalidSkill(source: string, diagnostic: LocalSkillLoadDiagn
 }
 
 function loadContainedSkillRecord(
-  params: Parameters<typeof loadSingleSkillDirectory>[0] & { canonicalSkillDir?: string },
+  params: Parameters<typeof loadSingleSkillDirectory>[0] & {
+    canonicalSkillDir?: string;
+    diagnostics?: ReturnType<typeof createSkillLoadDiagnostics>;
+  },
 ): LoadedSkillRecord | null {
   const loaded = loadSingleSkillDirectory({
     ...params,
-    onDiagnostic:
-      params.onDiagnostic ?? ((diagnostic) => warnInvalidSkill(params.source, diagnostic)),
+    onDiagnostic: (diagnostic) => {
+      params.diagnostics?.add(diagnostic);
+      if (params.onDiagnostic) {
+        params.onDiagnostic(diagnostic);
+      } else {
+        warnInvalidSkill(params.source, diagnostic);
+      }
+    },
   });
   if (!loaded) {
     return null;
@@ -97,6 +107,7 @@ export function loadSkillRootRecords(params: {
   rejectHardlinks?: boolean;
   mode?: "audit";
   onDiagnostic?: (diagnostic: LocalSkillLoadDiagnostic) => void;
+  diagnostics?: ReturnType<typeof createSkillLoadDiagnostics>;
 }): LoadedSkillRecord[] {
   const discoveryRoot = {
     path: path.resolve(params.dir),
@@ -134,7 +145,12 @@ export function loadSkillRootRecords(params: {
     source: params.source,
     limits,
     allowedSymlinkTargetRealPaths: resolveAllowedSkillSymlinkTargetRealPaths(params.config),
-    onDiagnostic: params.onDiagnostic,
+    onDiagnostic: params.diagnostics
+      ? (diagnostic) => {
+          params.diagnostics?.add(diagnostic);
+          params.onDiagnostic?.(diagnostic);
+        }
+      : params.onDiagnostic,
   });
   const maxSkillsLoadedPerSource = Math.max(0, limits.maxSkillsLoadedPerSource);
   const loadCandidate = (candidate: CandidateSkillDir) => {
@@ -149,6 +165,7 @@ export function loadSkillRootRecords(params: {
           : canonicalSkillDirForSource(params.source, candidate.skillDirRealPath),
       rejectHardlinks,
       onDiagnostic: params.onDiagnostic,
+      diagnostics: params.diagnostics,
     });
     if (record) {
       record.skill.discoveryRoot = discoveryRoot;
@@ -184,6 +201,7 @@ function loadGeneratedPluginSkillRecords(params: {
   pluginSkillRoots: readonly PluginSkillRoot[];
   source: string;
   limits: ResolvedSkillDiscoveryLimits;
+  diagnostics?: ReturnType<typeof createSkillLoadDiagnostics>;
 }): LoadedSkillRecord[] {
   const candidates = discoverPluginSkills(params);
   const maxSkillsLoadedPerSource = Math.max(0, params.limits.maxSkillsLoadedPerSource);
@@ -195,6 +213,7 @@ function loadGeneratedPluginSkillRecords(params: {
       source: params.source,
       maxBytes: params.limits.maxSkillFileBytes,
       rejectHardlinks: candidate.rejectHardlinks,
+      diagnostics: params.diagnostics,
     });
     if (record) {
       record.skill.discoveryRoot = { path: path.resolve(params.pluginSkillsDir), worktree: false };
@@ -214,13 +233,14 @@ function loadGeneratedPluginSkillRecords(params: {
 /** Scan selected roots on their owning host, retaining native precedence and file rules. */
 export function loadWorkspaceSkillSourceEntries(
   plan: WorkspaceSkillSourcePlan,
+  diagnostics: ReturnType<typeof createSkillLoadDiagnostics>,
   config?: OpenClawConfig,
   collisions?: SkillCollision[],
 ): WorkspaceSkillSources["entries"] {
   const grouped = new Map<string, Array<LoadedSkillRecord & { sourceOrder?: number }>>();
   for (const root of plan.roots) {
     const records = grouped.get(root.tier) ?? [];
-    for (const record of loadSkillRootRecords({ ...root, config })) {
+    for (const record of loadSkillRootRecords({ ...root, config, diagnostics })) {
       records.push({ ...record, sourceOrder: root.order });
     }
     grouped.set(root.tier, records);
@@ -232,6 +252,7 @@ export function loadWorkspaceSkillSourceEntries(
       pluginSkillRoots: plan.pluginSkillRoots,
       source: "openclaw-extra",
       limits: resolveSkillDiscoveryLimits(config),
+      diagnostics,
     })) {
       extra.push({
         ...record,
@@ -261,12 +282,13 @@ export function loadWorkspaceSkillSourceEntries(
 
 export function loadExecutionSkillEntries(
   executionWorkspaceDir: string,
+  diagnostics: ReturnType<typeof createSkillLoadDiagnostics>,
   config?: OpenClawConfig,
   collisions?: SkillCollision[],
 ): SkillEntry[] {
   return mergeSkillRecords(
     resolveWorkspaceSkillDirectories(executionWorkspaceDir).flatMap((root) =>
-      loadSkillRootRecords({ ...root, config }),
+      loadSkillRootRecords({ ...root, config, diagnostics }),
     ),
     JSON.stringify(["execution", executionWorkspaceDir]),
     collisions,

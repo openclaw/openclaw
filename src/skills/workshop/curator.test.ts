@@ -84,6 +84,12 @@ describe("skill curator usage tracking", () => {
       skillFile,
       "---\nname: daily-brief\ndescription: Synthetic usage proof.\n---\n# Daily brief\n",
     );
+    const rejectedFile = path.join(path.dirname(skillDir), "rejected", "SKILL.md");
+    await fs.mkdir(path.dirname(rejectedFile), { recursive: true });
+    await fs.writeFile(
+      rejectedFile,
+      "---\nname: rejected\ndescription: First line\ncontinued at column zero\n---\n",
+    );
     openOpenClawStateDatabase({ env: testState.env });
     await recordSkillExperienceReviewOutcome(
       "main",
@@ -109,6 +115,17 @@ describe("skill curator usage tracking", () => {
       await unregister();
       const status = await getSkillCuratorStatus({ config, env: testState.env });
       expect(status.skills).toEqual([expect.objectContaining({ skillFile, useCount: 1 })]);
+      expect(status.counts.active).toBe(1);
+      expect(status.diagnostics).toEqual({
+        items: [
+          {
+            kind: "invalid",
+            path: rejectedFile,
+            message: expect.stringContaining("invalid frontmatter: MISSING_CHAR"),
+          },
+        ],
+        omitted: 0,
+      });
       expect(
         Object.values(expectDefined(status.experienceReview, "curator review outcomes")),
       ).toEqual([{ attemptedAtMs: 1200, outcome: "nothing" }]);
