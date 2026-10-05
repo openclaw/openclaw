@@ -2315,7 +2315,6 @@ src/infra/sqlite-schema-contract.ts	7
 src/infra/sqlite-snapshot.ts	2
 src/infra/sqlite-strict.ts	6
 src/infra/sqlite-wal.ts	3
-src/infra/state-migrations.acp-replay.ts	1
 src/infra/state-migrations.audit-backup.ts	1
 src/infra/state-migrations.audit-records.ts	4
 src/infra/state-migrations.audit-recovery-protocol.ts	3
@@ -2333,12 +2332,10 @@ src/infra/state-migrations.meeting-transcripts-detection.ts	4
 src/infra/state-migrations.meeting-transcripts-files.ts	5
 src/infra/state-migrations.meeting-transcripts.ts	2
 src/infra/state-migrations.node-host.ts	2
-src/infra/state-migrations.runtime-state.ts	1
 src/infra/state-migrations.session-store.ts	5
 src/infra/state-migrations.shared-auth-store.ts	1
 src/infra/state-migrations.state-dir.ts	1
 src/infra/state-migrations.tui-last-session.ts	2
-src/infra/state-migrations.update-check.ts	2
 src/infra/state-migrations.workspace-setup-store.ts	1
 src/infra/state-migrations.workspace-setup.ts	1
 src/infra/system-presence.ts	1

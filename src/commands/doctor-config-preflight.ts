@@ -6,6 +6,7 @@ import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { throwIfDoctorStateMigrationRefused } from "../infra/state-migrations.messages.js";
 import { assertNoRetiredStateFiles } from "../infra/state-migrations.retired-files.js";
+import { assertNoRetiredRuntimeStateFiles } from "../infra/state-migrations.retired-runtime-files.js";
 import type {
   LegacyStateMigrationStepReceipt,
   MigrationMessages,
@@ -69,6 +70,7 @@ export async function runDoctorConfigPreflight(
 async function runDoctorConfigPreflightOperation(
   options: DoctorConfigPreflightOptions,
 ): Promise<DoctorConfigPreflightResult> {
+  assertNoRetiredRuntimeStateFiles(resolveStateDir(process.env));
   assertNoRetiredOAuthSidecarsBeforeConfigRecovery({ env: process.env });
   const { env: inspectionEnv } = readCurrentConfigForResolution();
   assertNoRetiredStateFiles(

@@ -418,13 +418,10 @@ export async function startGatewaySidecars(params: {
           return;
         }
         if (!(await hasRestartSentinel(restartSentinelContext.workerContext.environment))) {
-          const { detectLegacyRestartSentinel } =
+          const { assertNoRetiredRestartSentinelFiles } =
             await import("../infra/state-migrations.restart-sentinel.js");
-          if (
-            !detectLegacyRestartSentinel({ stateDir: restartSentinelContext.stateDir }).hasLegacy
-          ) {
-            return;
-          }
+          assertNoRetiredRestartSentinelFiles(restartSentinelContext.stateDir);
+          return;
         }
         if (isStopped()) {
           return;

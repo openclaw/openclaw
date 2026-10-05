@@ -865,19 +865,13 @@ update with no continuation does not wake the model to deliver the report.
 
 The sentinel's typed SQLite columns are authoritative for restart handling.
 Its `payload_json` value is a replay/debug shadow only. Runtime reads, writes,
-and clears SQLite state without a file fallback. Doctor and restart recovery
-share the bounded importer for `restart-sentinel.json`. Restart recovery imports
-only update notices, after readiness; unrelated legacy repair still requires Doctor.
-
-The `2026.6.1` RPC updater writes its notice after candidate Doctor finishes.
-Its managed updater can publish the final outcome after restart health succeeds.
-Recovery checks that same pending handoff through its existing retry window and
-preserves its delivery route and continuation. A final legacy outcome can replace
-only its own imported pending notification; newer canonical state wins.
-Recorded source generations are not replayed when their files reappear.
-Incomplete notices stay on disk for recovery or explicit Doctor repair.
-The `2026.6.34` and `2026.9.2` updaters write native SQLite state instead.
-For pre-June installations, use the [bridge upgrade procedure](/install/updating#upgrading-very-old-versions).
+and clears SQLite state without a file fallback. The pre-July
+`restart-sentinel.json` format and its `.doctor-importing` claim are retired.
+Doctor, update admission, and restart recovery leave these files and any current
+SQLite notification unchanged, and require an intermediate upgrade through
+`2026.9.7` with `openclaw doctor --fix` before retrying. Supported updaters,
+including `2026.6.34` and `2026.9.2`, write native SQLite state and retain their
+existing restart delivery and continuation behavior.
 
 ## Safety valves and observability
 

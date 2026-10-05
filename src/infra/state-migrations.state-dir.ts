@@ -27,6 +27,7 @@ import { resolveUserPath } from "./home-dir.js";
 import { migrationFileExists } from "./state-migrations.fs.js";
 import { listRetiredDeliveryQueueFiles } from "./state-migrations.retired-delivery-files.js";
 import { assertNoRetiredStateFiles } from "./state-migrations.retired-files.js";
+import { assertNoRetiredRuntimeStateFiles } from "./state-migrations.retired-runtime-files.js";
 
 let autoMigrateStateDirChecked = false;
 
@@ -305,6 +306,7 @@ function migrateLegacyStateDirRoot(params: StateDirMigrationParams): StateDirMig
     );
     return result();
   }
+  assertNoRetiredRuntimeStateFiles(source, env, params.homedir);
   const configPath = resolveLegacyStateConfigPath(source);
   assertNoRetiredStateFiles("JSON delivery queues", listRetiredDeliveryQueueFiles(source));
   assertNoRetiredOAuthSidecarsBeforeConfigRecovery({ env, configPath });
