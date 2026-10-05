@@ -126,6 +126,84 @@ describe("web monitor inbox socket lifecycle", () => {
     await listener.close();
   });
 
+  it("socket session restores unavailable presence after each send in self-chat mode", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      selfChatMode: true,
+    });
+    try {
+      sock.sendPresenceUpdate.mockClear();
+
+      await listener.sendComposingTo("+1555");
+      await listener.sendMessage("+1555", "hello");
+
+      expect(sock.sendPresenceUpdate.mock.calls).toEqual([
+        ["composing", "1555@s.whatsapp.net"],
+        ["paused", "1555@s.whatsapp.net"],
+        ["unavailable"],
+      ]);
+      expect(sock.sendMessage.mock.invocationCallOrder[0]).toBeLessThan(
+        sock.sendPresenceUpdate.mock.invocationCallOrder[1],
+      );
+
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("self-chat-presence"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "ping",
+          timestamp: 1_700_000_000,
+          pushName: "Tester",
+        }),
+      );
+      await waitForMessageCalls(onMessage, 1);
+      sock.sendPresenceUpdate.mockClear();
+
+      await inboundMessage(onMessage).platform.reply("pong");
+
+      expect(sock.sendPresenceUpdate.mock.calls).toEqual([
+        ["paused", "999@s.whatsapp.net"],
+        ["unavailable"],
+      ]);
+    } finally {
+      await listener.close();
+    }
+  });
+
+  it("socket session restores unavailable presence when a self-chat send fails", async () => {
+    const { listener, sock } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage, {
+      selfChatMode: true,
+    });
+    try {
+      sock.sendPresenceUpdate.mockClear();
+      sock.sendMessage.mockRejectedValueOnce(new Error("bad request"));
+      sock.sendPresenceUpdate.mockRejectedValueOnce(new Error("presence failed"));
+
+      await expect(listener.sendMessage("+1555", "hello")).rejects.toThrow("bad request");
+
+      expect(sock.sendPresenceUpdate.mock.calls).toEqual([
+        ["paused", "1555@s.whatsapp.net"],
+        ["unavailable"],
+      ]);
+    } finally {
+      await listener.close();
+    }
+  });
+
+  it("socket session leaves presence alone after sends outside self-chat mode", async () => {
+    const { listener, sock } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage);
+    try {
+      expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "available");
+      sock.sendPresenceUpdate.mockClear();
+
+      await listener.sendMessage("+1555", "hello");
+
+      expect(sock.sendPresenceUpdate).not.toHaveBeenCalled();
+    } finally {
+      await listener.close();
+    }
+  });
+
   it("socket session uses a replacement socket for replies created before reconnect", async () => {
     const onMessage = vi.fn(async () => undefined);
     const socketRef: NonNullable<InboxMonitorOptions["socketRef"]> = { current: null };

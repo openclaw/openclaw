@@ -12,6 +12,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
 import { getWhatsAppConnectionController } from "../connection-controller-runtime-context.js";
 import { identitiesOverlap, type WhatsAppSelfIdentity } from "../identity.js";
+import { isWhatsAppNewsletterJid } from "../normalize-target.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
 import {
   DEFAULT_RECONNECT_POLICY,
@@ -317,7 +318,7 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     await assertCanSendToJid(jid, currentSock, { rememberReady: true });
   };
 
-  const sendTrackedMessage = async (
+  const sendTrackedMessageWithRetry = async (
     jid: string,
     content: AnyMessageContent,
     sendOptions?: MiscMessageGenerationOptions,
@@ -367,6 +368,47 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
       } catch {
         throw lastError;
       }
+    }
+  };
+
+  // Sending from this linked device marks it active again, which mutes phone
+  // pushes. Self-chat sessions clear the chat's typing state and re-assert the
+  // connect-time `unavailable` after every send, best effort.
+  const restoreIdlePresence = async (jid: string) => {
+    if (presence !== "unavailable") {
+      return;
+    }
+    const currentSock = getCurrentSock();
+    if (!currentSock) {
+      return;
+    }
+    const presenceOperations = createWhatsAppSocketOperationTimeoutAdapter(
+      currentSock,
+      sendOperationTimeoutMs,
+    );
+    if (!isWhatsAppNewsletterJid(jid)) {
+      try {
+        await presenceOperations.sendPresenceUpdate("paused", jid);
+      } catch (error) {
+        options.logVerbose(`Failed to send 'paused' presence after send: ${String(error)}`);
+      }
+    }
+    try {
+      await presenceOperations.sendPresenceUpdate("unavailable");
+    } catch (error) {
+      options.logVerbose(`Failed to restore 'unavailable' presence after send: ${String(error)}`);
+    }
+  };
+
+  const sendTrackedMessage = async (
+    jid: string,
+    content: AnyMessageContent,
+    sendOptions?: MiscMessageGenerationOptions,
+  ) => {
+    try {
+      return await sendTrackedMessageWithRetry(jid, content, sendOptions);
+    } finally {
+      await restoreIdlePresence(jid);
     }
   };
 
