@@ -21,6 +21,7 @@ import {
   type LocalSkillLoadDiagnostic,
 } from "./local-loader.js";
 import type { PluginSkillRoot } from "./plugin-skill-root.js";
+import { SKILL_SOURCE_ORIGIN_RELATIVE_PATH } from "./skill-entry-metadata-path.js";
 import { createSkillEntry } from "./skill-entry-metadata.js";
 import { compactSkillPath } from "./skill-paths.js";
 import { mergeSkillRecords, type SkillCollision } from "./skill-precedence.js";
@@ -124,6 +125,24 @@ function collectDiscoveryDependencies(
     dependencies.set(dependency.target, dependency);
   }
   return [...dependencies.values()];
+}
+
+// The watcher classifies writes by path; an aliased discovery file (symlink or
+// extra hardlink) can change through a name it treats as a supporting file.
+function hasAliasedDiscoveryFile(skillDir: string): boolean {
+  for (const relative of ["SKILL.md", ".openclaw", SKILL_SOURCE_ORIGIN_RELATIVE_PATH]) {
+    try {
+      const stat = fs.lstatSync(path.join(skillDir, relative));
+      if (stat.isSymbolicLink() || (stat.isFile() && stat.nlink > 1)) {
+        return true;
+      }
+    } catch (error) {
+      if (!isMissingPathError(error)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 export function clearSkillRootRecordsCache(): void {
@@ -273,7 +292,11 @@ export function loadSkillRootRecords(params: {
   });
   // Rejected and non-directory links count too: retargeting one can admit a skill.
   const dependencies =
-    cacheKey === undefined || unresolved
+    cacheKey === undefined ||
+    unresolved ||
+    [...discovered.candidates, discovered.configuredRootCandidate].some(
+      (candidate) => candidate && hasAliasedDiscoveryFile(candidate.skillDir),
+    )
       ? undefined
       : collectDiscoveryDependencies([...inspectedDirs], linkOnlyPaths);
   const remember = (records: LoadedSkillRecord[]) => {

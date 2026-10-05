@@ -207,6 +207,27 @@ it("reuses quiet roots across unrelated invalidations and rescans changed or unv
   await vi.advanceTimersByTimeAsync(250);
   await observer.readyAll();
 
+  // An aliased SKILL.md changes through a name the watcher treats as a supporting file.
+  const aliased = path.join(shared, "aliased");
+  await fs.mkdir(aliased);
+  const body = (name: string) => `---\nname: ${name}\ndescription: Aliased\n---\nbody\n`;
+  await fs.writeFile(path.join(aliased, "body.md"), body("alias-v1"));
+  await fs.symlink("body.md", path.join(aliased, "SKILL.md"));
+  observer.forRoot(shared).change(aliased, "structural");
+  await vi.advanceTimersByTimeAsync(250);
+  await observer.readyAll();
+  bumpSkillsSnapshotVersion({ reason: "remote-node" });
+  expect(load()).toContain("alias-v1");
+  await fs.writeFile(path.join(aliased, "body.md"), body("alias-v2"));
+  observer.forRoot(shared).change(path.join(aliased, "body.md"), "content");
+  await vi.advanceTimersByTimeAsync(250);
+  bumpSkillsSnapshotVersion({ reason: "remote-node" });
+  expect(load()).toContain("alias-v2");
+  await fs.rm(aliased, { recursive: true });
+  observer.forRoot(shared).change(aliased, "structural");
+  await vi.advanceTimersByTimeAsync(250);
+  await observer.readyAll();
+
   const beforeFailure = discoveryCount();
   observer.forRoot(shared).fail(new Error("boom"), { operation: "scan" });
   expect(load()).toEqual(expect.arrayContaining(["real", "added"]));
