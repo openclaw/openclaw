@@ -192,7 +192,7 @@ async function readGatewayServiceStateWithBinding(
       ? await service.readCommand(baseEnv, {
           timeoutMs: remainingTimeoutMs(),
           requireEffective: true,
-          ...(!args.requireLoadedCommand
+          ...(!args.requireLoadedCommand || service.readCommand === readScheduledTaskCommand
             ? {
                 onCommandInspection: (inspection: GatewayServiceCommandInspection) => {
                   commandInspection = inspection;
@@ -201,12 +201,15 @@ async function readGatewayServiceStateWithBinding(
             : {}),
           ...(systemdReadBinding ? { systemdReadBinding } : {}),
           ...(systemdReadTarget ? { systemdReadTarget } : {}),
-          ...(args.requireLoadedCommand ? { requireLoaded: true } : {}),
+          ...(args.requireLoadedCommand || service.readCommand === readScheduledTaskCommand
+            ? { requireLoaded: true }
+            : {}),
           ...(args.loadForInspection ? { loadForInspection: args.loadForInspection } : {}),
         })
       : await service
           .readCommand(baseEnv, {
             timeoutMs: remainingTimeoutMs(),
+            ...(service.readCommand === readScheduledTaskCommand ? { requireLoaded: true } : {}),
             ...(systemdReadTarget ? { systemdReadTarget } : {}),
             onCommandInspection: (inspection) => {
               commandInspection = inspection;

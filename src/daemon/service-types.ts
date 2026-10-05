@@ -183,7 +183,8 @@ export type SystemdServiceReadBinding = {
 };
 
 export type GatewayServiceCommandInspection =
-  | { kind: "absent" | "present" }
+  | { kind: "absent" }
+  | { kind: "present"; command?: GatewayServiceCommandConfig }
   | { kind: "unavailable"; error: unknown };
 
 /** Selected native unit for one inspection; never a service mutation grant. */

@@ -14,7 +14,60 @@ import {
 } from "./schtasks.stop.test-support.js";
 import { schtasksCalls, schtasksResponses } from "./test-helpers/schtasks-fixtures.js";
 
+const { stopRegisteredScheduledTask } = await import("./schtasks-control.js");
+
 describe("Scheduled Task settlement", () => {
+  it.each(["capture", "end"])(
+    "preserves a registration changed during native %s",
+    async (phase) => {
+      await withPreparedGatewayTask(async ({ env, stdout }) => {
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        let changed = false;
+        let exited = false;
+        readGatewayOwnerLease.mockImplementation(() => (exited ? undefined : GATEWAY_OWNER));
+        spawnSync.mockImplementation((exe, args) => {
+          if (args?.includes("-EncodedCommand")) {
+            if (phase === "capture") {
+              changed = true;
+            }
+            return scheduledTaskProbeResult(
+              schtasksCalls.some(([action]) => action === "/End") ? 3 : 4,
+            );
+          }
+          return spawnSyncResult(
+            exe.endsWith("tasklist.exe") && !exited
+              ? '"node.exe","4242","Console","1","1 K"'
+              : "No tasks",
+          );
+        });
+        callGatewayCli.mockImplementation(async (options) => {
+          options.assertDispatchCurrent();
+          exited = true;
+          if (phase === "end") {
+            changed = true;
+          }
+          return { ok: true, pid: GATEWAY_OWNER.pid, status: "scheduled" };
+        });
+        await expect(
+          stopRegisteredScheduledTask({
+            env,
+            stdout,
+            beforeMutation: async () => {
+              if (changed) {
+                throw new Error("Original registration changed");
+              }
+            },
+          }),
+        ).rejects.toThrow("Original registration changed");
+        expect(schtasksCalls.some(([action]) => action === "/End" || action === "/Run")).toBe(
+          false,
+        );
+        if (phase === "capture") {
+          expect(callGatewayCli).not.toHaveBeenCalled();
+        }
+      });
+    },
+  );
   it.each([
     { name: "graceful shutdown", native: false, end: false, delayedResult: false, settles: true },
     {
