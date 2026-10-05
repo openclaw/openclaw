@@ -397,6 +397,17 @@ describe("exec approvals", () => {
     expect(run.cwd).toBe("/Users/vv");
   });
 
+  it("suppresses node exit notifications for inline runs that return output synchronously", async () => {
+    const node = nodeFixture();
+    mockGateway({ "node.invoke": node.handle });
+    const tool = createExecTool({ host: "node", ask: "off", security: "full", notifyOnExit: true });
+    const result = await tool.execute("call-node-inline-notify", { command: "/bin/echo ok" });
+    expect(result.details.status).toBe("completed");
+    expect(node.runs).toHaveLength(1);
+    const run = requireRecord(node.runs[0], "system.run params");
+    expect(run.suppressNotifyOnExit).toBe(true);
+  });
+
   it("keeps the background fallback warning when node exec actually runs inline", async () => {
     mockGateway({ "node.invoke": nodeFixture("node-ok").handle });
     const tool = createExecTool({

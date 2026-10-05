@@ -614,6 +614,8 @@ export async function executeNodeHostCommand(
     approvalDecision: inlineApprovalSource ? null : inlineApprovalDecision,
     approvalSource: inlineApprovalSource,
     runId: inlineApprovalId,
+    // Inline runs return output as the tool result; an exit event would replay it as a wake.
+    suppressNotifyOnExit: true,
     notifyOnExit: params.notifyOnExit,
     systemRunPlan: prepared.plan,
   });
