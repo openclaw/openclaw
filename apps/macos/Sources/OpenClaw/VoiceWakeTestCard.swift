@@ -1,5 +1,15 @@
 import SwiftUI
 
+enum VoiceWakeTestState: Equatable, Sendable {
+    case idle
+    case requesting
+    case listening
+    case hearing(String)
+    case finalizing
+    case detected(String)
+    case failed(String)
+}
+
 struct VoiceWakeTestCard: View {
     @Binding var testState: VoiceWakeTestState
     @Binding var isTesting: Bool
