@@ -170,6 +170,27 @@ async function interruptedPublication() {
   const f = await createPackageSwapFixture(fixtureRoot);
   const stageRoot = f.params.stage.packageRoot;
   fs.writeFileSync(
+    path.join(stageRoot, "package.json"),
+    JSON.stringify({
+      name: "openclaw",
+      version: "2.0.0",
+      type: "module",
+      main: "dist/index.js",
+      exports: {
+        ".": { import: "./dist/index.js", default: ["./dist/index.js", null] },
+        "./nested": "./dist/nested/index.js",
+      },
+      bin: { openclaw: "dist/index.js" },
+    }),
+  );
+  fs.mkdirSync(path.join(stageRoot, "dist/nested"));
+  fs.writeFileSync(path.join(stageRoot, "dist/nested/index.js"), "export {};\n");
+  fs.mkdirSync(path.join(stageRoot, "dist/scoped"));
+  fs.writeFileSync(
+    path.join(stageRoot, "dist/scoped/package.json"),
+    JSON.stringify({ type: "module" }),
+  );
+  fs.writeFileSync(
     path.join(stageRoot, "dist/build-info.json"),
     JSON.stringify({ version: "2.0.0" }),
   );
@@ -258,6 +279,9 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
     );
     expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining("dist/index.js.bak"));
     expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining("dist/extra-link"));
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Root package.json was field-verified, not content-verified."),
+    );
     expect(getUpdateRun(f.record.descriptor.operationId)).toMatchObject({
       status: "succeeded",
       reason: "publication-settled-external-change",
@@ -268,6 +292,13 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
         }),
       ]),
     });
+    expect(getUpdateRun(f.record.descriptor.operationId)?.steps).toContainEqual(
+      expect.objectContaining({
+        detail: expect.stringContaining(
+          "Root package.json was field-verified, not content-verified.",
+        ),
+      }),
+    );
     await prepareNextPackage(f);
     expect(f.journal.read().phase).toBe("prepared");
     expect(f.journal.read().descriptor.operationId).not.toBe(f.record.descriptor.operationId);
@@ -289,6 +320,50 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
     await prepareNextPackage(f);
     expect(f.journal.read().phase).toBe("prepared");
   });
+
+  it.each(["dist/package.json", "dist/nested/package.json", "lib/nested/package.json"])(
+    "keeps recovery armed when an extra %s can change module loading",
+    async (relative) => {
+      const f = await interruptedPublication();
+      const file = path.join(f.packageRoot, relative);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify({ type: "commonjs" }));
+      const journal = fs.readFileSync(resolvePackageActivationJournalPath(f.anchor));
+      await expect(repair()).rejects.toThrow(relative);
+      expect(fs.readFileSync(resolvePackageActivationJournalPath(f.anchor))).toEqual(journal);
+      expect(f.journal.read().phase).toBe("publishing");
+      expect(fs.existsSync(resolvePackageActivationHelper(f.anchor))).toBe(true);
+      expect(mocks.finalize).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { field: "name", value: "other-package" },
+    { field: "version", value: "1.0.0" },
+    { field: "type", value: "commonjs" },
+    { field: "main", value: "unverified.js" },
+    { field: "exports", value: { ".": { import: "./dist/index.js", default: "./unverified.js" } } },
+    { field: "bin", value: { openclaw: "openclaw.mjs" } },
+    { field: "parse", value: null },
+  ])(
+    "keeps recovery armed for an unverified root package.json $field",
+    async ({ field, value }) => {
+      const f = await interruptedPublication();
+      const manifestPath = path.join(f.packageRoot, "package.json");
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      fs.writeFileSync(path.join(f.packageRoot, "unverified.js"), "export {};\n");
+      fs.writeFileSync(path.join(f.packageRoot, "openclaw.mjs"), "export {};\n");
+      fs.writeFileSync(
+        manifestPath,
+        field === "parse" ? "{" : JSON.stringify({ ...manifest, [field]: value }),
+      );
+      const journal = fs.readFileSync(resolvePackageActivationJournalPath(f.anchor));
+      await expect(repair()).rejects.toThrow("package.json");
+      expect(fs.readFileSync(resolvePackageActivationJournalPath(f.anchor))).toEqual(journal);
+      expect(f.journal.read().phase).toBe("publishing");
+      expect(mocks.finalize).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { boundary: "anchor", lease: "current" },

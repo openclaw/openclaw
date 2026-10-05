@@ -10,6 +10,7 @@ import {
   PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
 } from "../../scripts/lib/package-dist-inventory-contract.mts";
+import { readRootJsonObjectSync } from "./json-files.js";
 import {
   packageActivationIdentity,
   resolvePackageActivationHelper,
@@ -109,6 +110,61 @@ export async function verifyPackagePublicationSettlement(
       `Package settlement requires build-info version ${descriptor.candidate.version}.`,
     );
   }
+  const manifest = readRootJsonObjectSync({
+    rootDir: live,
+    relativePath: "package.json",
+    boundaryLabel: "Package settlement",
+    rejectHardlinks: false,
+    maxBytes: 16 * 1024 * 1024,
+  });
+  if (
+    !manifest.ok ||
+    manifest.value.name !== "openclaw" ||
+    manifest.value.version !== descriptor.candidate.version ||
+    manifest.value.type !== "module"
+  ) {
+    throw new Error(
+      `Package settlement requires package.json with name openclaw, version ${descriptor.candidate.version}, and type module.`,
+    );
+  }
+  const contentPaths = new Set(inventoried);
+  const assertTarget = (field: string, target: unknown) => {
+    if (
+      typeof target !== "string" ||
+      !target ||
+      target.includes("\\") ||
+      (field === "exports" && !target.startsWith("./")) ||
+      !contentPaths.has(path.relative(live, path.resolve(live, target)).split(path.sep).join("/"))
+    ) {
+      throw new Error(
+        `Package settlement refused: package.json ${field} must reference an inventoried file${typeof target === "string" ? `: ${target}` : "."}`,
+      );
+    }
+  };
+  if (manifest.value.main !== undefined) {
+    assertTarget("main", manifest.value.main);
+  }
+  if (manifest.value.bin !== undefined) {
+    const bins = asOptionalRecord(manifest.value.bin);
+    for (const target of bins ? Object.values(bins) : [manifest.value.bin]) {
+      assertTarget("bin", target);
+    }
+  }
+  const exportTargets = [manifest.value.exports];
+  while (exportTargets.length) {
+    const target = exportTargets.pop();
+    if (target === undefined || target === null) {
+      continue;
+    }
+    const conditions = asOptionalRecord(target);
+    if (Array.isArray(target)) {
+      exportTargets.push(...target);
+    } else if (conditions) {
+      exportTargets.push(...Object.values(conditions));
+    } else {
+      assertTarget("exports", target);
+    }
+  }
   const reader = createPackageIntegrityReader();
   for (const entry of descriptor.launchers) {
     const launcher = path.join(descriptor.binDir, entry.name);
@@ -150,20 +206,37 @@ export async function verifyPackagePublicationSettlement(
     }
   };
   assertUnchanged();
-  // Extras are diagnostics, not inventory authority: never follow links or open their contents.
-  const extraInspection = await walkDirectory(path.join(live, "dist"), { symlinks: "include" });
+  // Package scopes can change loading without changing any inventoried module bytes.
+  const extraInspection = await walkDirectory(live, {
+    symlinks: "include",
+    descend: (entry) => {
+      if (!observed.has(entry.path)) {
+        observed.set(entry.path, fs.lstatSync(entry.path, { bigint: true }));
+      }
+      return true;
+    },
+  });
   const inventoryPaths = new Set([...inventory, PACKAGE_DIST_INVENTORY_RELATIVE_PATH]);
+  const extraManifests = extraInspection.entries
+    .filter((entry) => entry.name.toLowerCase() === "package.json")
+    .map((entry) => entry.relativePath.replace(/\\/gu, "/"))
+    .filter((file) => file !== "package.json" && !contentPaths.has(file));
+  if (extraManifests.length || extraInspection.failedDirs.length) {
+    throw new Error(
+      `Package settlement refused: unverified package.json scopes: ${[
+        ...extraManifests,
+        ...extraInspection.failedDirs.map((entry) => `${entry.relativePath || "."} (unreadable)`),
+      ].join(", ")}.`,
+    );
+  }
   const extras = extraInspection.entries
     .filter((entry) => entry.kind !== "directory")
-    .map((entry) => `dist/${entry.relativePath.replace(/\\/gu, "/")}`)
-    .filter((file) => !inventoryPaths.has(file))
+    .map((entry) => entry.relativePath.replace(/\\/gu, "/"))
+    .filter((file) => file.startsWith("dist/") && !inventoryPaths.has(file))
     .toSorted();
-  const uninspected = extraInspection.failedDirs.map(
-    (entry) => `dist/${entry.relativePath.replace(/\\/gu, "/")}`,
-  );
   assertUnchanged();
   return {
     assertUnchanged,
-    detail: `Inventoried dist content mismatches: none. Extra dist paths: ${extras.length ? extras.join(", ") : "none"}. Original per-path metadata is not retained in the sealed tree digest.${uninspected.length ? ` Extra directories whose contents could not be inspected: ${uninspected.join(", ")}.` : ""}`,
+    detail: `Root package.json was field-verified, not content-verified. Inventoried dist content mismatches: none. Extra dist paths: ${extras.length ? extras.join(", ") : "none"}. Original per-path metadata is not retained in the sealed tree digest.`,
   };
 }

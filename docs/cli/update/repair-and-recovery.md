@@ -257,12 +257,17 @@ For a publication stranded at `publishing` after an external write, repair can
 close it as `publication-settled-external-change` when the installed build-info
 reports the exact candidate version, every file in the package's own dist content
 inventory still matches, the original helper's seal verifies, and no updater owns
-the installation. Extra dist files are reported without failing that inventory
-check. Restore any changed inventoried file to its packaged bytes before retrying;
-a working Gateway alone does not waive an inventory failure. Repair preserves the
+the installation. The root `package.json` must parse with name `openclaw`, the
+candidate version, and type `module`; every `main`, `exports`, and `bin` target must
+resolve to an inventoried file. Extra `package.json` files anywhere under the
+package root refuse settlement because they can change Node's module loading.
+Other extra dist files remain warnings. Restore any changed inventoried file to
+its packaged bytes before retrying; a working Gateway alone does not waive an
+inventory failure. Repair preserves the
 previous package and sealed helper, leaves the installed package and launchers in
-place, and records the warning and extra paths in update history. The sealed tree
-digest cannot identify old per-file metadata differences. Use a CLI containing
+place, and records the warning and extra paths in update history. The warning and
+receipt identify the root manifest as field-verified, not content-verified. The
+sealed tree digest cannot identify old per-file metadata differences. Use a CLI containing
 this fix; the original sealed helper keeps its original recovery checks.
 
 For a package update stranded by an older updater's launcher ownership checks,
