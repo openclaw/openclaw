@@ -68,6 +68,102 @@ it("keeps persisted subagent wait selection off the calling thread", async () =>
   );
 });
 
+it("reports the persisted pause age of a yielded leaf, never of a parent with a persisted-only announced child", async () => {
+  await withOpenClawTestState(
+    { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
+    async () => {
+      const now = Date.UTC(2026, 9, 5, 12, 0, 0);
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(now);
+      const ownerKey = "agent:main:main";
+      const pausedAt = now - (43 * 3_600_000 + 12 * 60_000);
+      const base = {
+        generation: 1,
+        requesterSessionKey: ownerKey,
+        requesterAgentId: "main",
+        completion: { required: false },
+        delivery: { status: "not_required" },
+      } as const;
+      const leaf = createSubagentRunRecord({
+        ...base,
+        runId: "parked-leaf",
+        childSessionKey: "agent:main:subagent:parked-leaf",
+        pauseReason: "sessions_yield",
+        execution: { status: "terminal", startedAt: pausedAt - 60_000, endedAt: pausedAt },
+      });
+      const finished = createSubagentRunRecord({
+        ...base,
+        runId: "finished-run",
+        childSessionKey: "agent:main:subagent:finished-run",
+        execution: { status: "terminal", startedAt: now - 90_000, endedAt: now - 60_000 },
+      });
+      const orchestrator = createSubagentRunRecord({
+        ...base,
+        runId: "waiting-orchestrator",
+        childSessionKey: "agent:main:subagent:waiting-orchestrator",
+        pauseReason: "sessions_yield",
+        execution: { status: "terminal", startedAt: pausedAt - 60_000, endedAt: pausedAt },
+      });
+      const announcedChild = createSubagentRunRecord({
+        ...base,
+        runId: "announced-child",
+        childSessionKey: "agent:main:subagent:announced-child",
+        requesterSessionKey: orchestrator.childSessionKey,
+        expectsCompletionMessage: true,
+        execution: { status: "running", startedAt: now - 60_000 },
+      });
+      persistRegistryFixture(
+        new Map([
+          [leaf.runId, leaf],
+          [finished.runId, finished],
+          [orchestrator.runId, orchestrator],
+          [announcedChild.runId, announcedChild],
+        ]),
+      );
+      // The announced child exists only in persisted rows, never in the in-memory registry.
+      clearSubagentRunsReadCacheForTest();
+      try {
+        const tool = createSubagentsTool({ agentSessionKey: ownerKey, config: {} });
+        const wait = await tool.execute("wait", {
+          action: "wait",
+          runIds: [leaf.runId, finished.runId, orchestrator.runId],
+          timeoutSeconds: 0,
+        });
+        const runs = (wait.details as { runs: Array<{ runId: string; pausedForMs?: number }> })
+          .runs;
+        const waitedLeaf = runs.find((run) => run.runId === leaf.runId);
+        expect(waitedLeaf).toMatchObject({ status: "waiting" });
+        expect(waitedLeaf?.pausedForMs).toBe(43 * 3_600_000 + 12 * 60_000);
+        expect(runs.find((run) => run.runId === finished.runId)).not.toHaveProperty("pausedForMs");
+        expect(runs.find((run) => run.runId === orchestrator.runId)).toMatchObject({
+          status: "waiting",
+        });
+        expect(runs.find((run) => run.runId === orchestrator.runId)).not.toHaveProperty(
+          "pausedForMs",
+        );
+
+        const list = await tool.execute("list", { action: "list", recentMinutes: 60 });
+        const details = list.details as {
+          active: Array<{ runId: string; pausedForMs?: number }>;
+          recent: Array<{ runId: string; pausedForMs?: number }>;
+          text: string;
+        };
+        const listed = details.active.find((run) => run.runId === leaf.runId);
+        expect(listed?.pausedForMs).toBe(43 * 3_600_000 + 12 * 60_000);
+        expect(details.text).toContain("waiting for external continuation, paused 1d 19h");
+        for (const run of [...details.active, ...details.recent]) {
+          if (run.runId === finished.runId || run.runId === orchestrator.runId) {
+            expect(run).not.toHaveProperty("pausedForMs");
+          }
+        }
+      } finally {
+        vi.useRealTimers();
+        clearSubagentRunsReadCacheForTest();
+      }
+    },
+  );
+});
+
 it.each([
   "run preparation",
   "run publication",

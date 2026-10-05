@@ -29,6 +29,30 @@ function isYieldedSubagentRun(entry: SubagentRunRecord): boolean {
   );
 }
 
+/**
+ * Age of a pause that only an external continuation can end. The yield records
+ * the pause as `execution.endedAt`, so the age is read from that persisted fact.
+ * Absent unless the run is a continuable yielded leaf: orchestrators waiting on
+ * children, collectors, running runs, and ordinary finished runs report nothing.
+ */
+export function resolveYieldedLeafPausedForMs(
+  entry: SubagentRunRecord,
+  observation: SubagentExecutionObservation,
+  now: number,
+): number | undefined {
+  const pausedAt = entry.execution.endedAt;
+  if (
+    observation.wait?.kind !== "external" ||
+    entry.collect ||
+    entry.execution.status !== "terminal" ||
+    typeof pausedAt !== "number" ||
+    !Number.isFinite(pausedAt)
+  ) {
+    return undefined;
+  }
+  return Math.max(0, now - pausedAt);
+}
+
 /** Project recorded execution separately from completion and requester delivery. */
 export function observeSubagentExecution(
   entry: SubagentRunRecord,

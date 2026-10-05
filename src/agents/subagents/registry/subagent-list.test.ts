@@ -3,7 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
@@ -145,6 +145,79 @@ describe("buildSubagentList", () => {
     expect(
       (await buildSubagentList({ cfg: {}, runs: [killed], recentMinutes: 30 })).active,
     ).toEqual([]);
+  });
+
+  it("shows how long a continuable yielded leaf has been paused", async () => {
+    const now = Date.UTC(2026, 9, 5, 12, 0, 0);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now);
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const leaf: SubagentRunRecord = {
+      runId: "paused-leaf",
+      childSessionKey: "agent:main:subagent:paused-leaf",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "Wait for remote evidence",
+      cleanup: "keep",
+      createdAt: now - 3 * 86_400_000,
+      pauseReason: "sessions_yield",
+      execution: {
+        status: "terminal",
+        endedAt: now - (42 * 3_600_000 + 5 * 60_000),
+        outcome: { status: "ok" },
+      },
+    };
+    const running: SubagentRunRecord = {
+      ...leaf,
+      runId: "running-run",
+      childSessionKey: "agent:main:subagent:running-run",
+      pauseReason: undefined,
+      execution: { status: "running", startedAt: now - 60_000 },
+    };
+    const finished: SubagentRunRecord = {
+      ...running,
+      runId: "finished-run",
+      childSessionKey: "agent:main:subagent:finished-run",
+      execution: { status: "terminal", startedAt: now - 120_000, endedAt: now - 60_000 },
+    };
+    const orchestrator: SubagentRunRecord = {
+      ...leaf,
+      runId: "orchestrator",
+      childSessionKey: "agent:main:subagent:orchestrator",
+    };
+    const child: SubagentRunRecord = {
+      ...running,
+      runId: "orchestrator-child",
+      childSessionKey: "agent:main:subagent:orchestrator-child",
+      requesterSessionKey: orchestrator.childSessionKey,
+      expectsCompletionMessage: true,
+    };
+    const collector: SubagentRunRecord = {
+      ...leaf,
+      runId: "collector",
+      childSessionKey: "agent:main:subagent:collector",
+      collect: true,
+    };
+    const runs = [leaf, running, finished, orchestrator, child, collector];
+    for (const run of runs) {
+      await addSubagentRunForTests(run);
+    }
+    const list = await buildSubagentList({ cfg: {}, runs, recentMinutes: 30 });
+    const byRunId = new Map([...list.active, ...list.recent].map((entry) => [entry.runId, entry]));
+    expect(byRunId.get(leaf.runId)).toMatchObject({
+      status: "waiting for external continuation",
+      line: expect.stringContaining("waiting for external continuation, paused 1d 18h"),
+    });
+    expect(byRunId.get(leaf.runId)?.pausedForMs).toBe(42 * 3_600_000 + 5 * 60_000);
+    for (const runId of [running.runId, finished.runId, orchestrator.runId, collector.runId]) {
+      const entry = byRunId.get(runId);
+      expect(entry, runId).toBeDefined();
+      expect(entry, runId).not.toHaveProperty("pausedForMs");
+      expect(entry?.line, runId).not.toContain("paused");
+    }
+    expect(byRunId.get(orchestrator.runId)?.status).toBe("waiting on 1 child");
   });
 
   it("builds the subagent list without decoding unrelated session metadata or saved prompts", async () => {

@@ -457,6 +457,15 @@ and delivery status. A yielded child remains `waiting` until its continuation.
 For an external wait, its controlling parent can send a continuation with
 `sessions_send`; yielding itself does not schedule external work.
 
+A yielded child that only an external continuation can resume also reports
+`pausedForMs`, the milliseconds since it yielded, in list entries and in
+`action: "wait"` run snapshots. The list text appends it, for example
+`waiting for external continuation, paused 1d 18h`. The age comes from the
+recorded yield time (`endedAt`). It is absent for running or finished runs,
+parents waiting on children, and collectors. It is read-only: it does not expire
+the wait, change when anything settles, or say whether a continuation was sent
+or received.
+
 Use `action: "cancel"` with a returned `runId` to stop that native run and its
 descendants. Cancellation requires current controller authority; read access to
 history or completion results does not grant control. ACP session controls,
