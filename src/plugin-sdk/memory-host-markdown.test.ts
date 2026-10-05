@@ -87,6 +87,76 @@ describe("replaceManagedMarkdownBlock", () => {
     ).toBe(original.replace("stale", "current"));
   });
 
+  it("does not let an unmatched inline delimiter hide a balanced managed end", () => {
+    const original = [
+      "## Generated",
+      "<!-- start -->",
+      "stale text with an unmatched ` delimiter",
+      "<!-- end -->",
+    ].join("\n");
+
+    expect(
+      replaceManagedMarkdownBlock({
+        original,
+        heading: "## Generated",
+        startMarker: "<!-- start -->",
+        endMarker: "<!-- end -->",
+        body: "current",
+      }),
+    ).toBe(["## Generated", "<!-- start -->", "current", "<!-- end -->"].join("\n"));
+  });
+
+  it("preserves inline recovery markers inside indented code", () => {
+    const original = [
+      "<!-- start -->",
+      "stale",
+      "<!-- end -->",
+      "",
+      "    literal example<!-- end -->",
+      "\tliteral example<!-- end -->",
+    ].join("\n");
+
+    expect(
+      replaceManagedMarkdownBlock({
+        original,
+        startMarker: "<!-- start -->",
+        endMarker: "<!-- end -->",
+        body: "current",
+        recoverInlineOrphanEnds: true,
+      }),
+    ).toBe(
+      [
+        "<!-- start -->",
+        "current",
+        "<!-- end -->",
+        "",
+        "    literal example<!-- end -->",
+        "\tliteral example<!-- end -->",
+      ].join("\n"),
+    );
+  });
+
+  it("keeps an unterminated trailing fence as code during recovery", () => {
+    const original = [
+      "<!-- start -->",
+      "stale",
+      "<!-- end -->",
+      "",
+      "```markdown",
+      "literal<!-- end -->",
+    ].join("\n");
+
+    expect(
+      replaceManagedMarkdownBlock({
+        original,
+        startMarker: "<!-- start -->",
+        endMarker: "<!-- end -->",
+        body: "current",
+        recoverInlineOrphanEnds: true,
+      }),
+    ).toBe(original.replace("stale", "current"));
+  });
+
   it("removes surplus end marker bytes only after finding a balanced block", () => {
     const original = [
       "Outside history.",

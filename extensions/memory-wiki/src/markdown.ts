@@ -14,7 +14,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import YAML from "yaml";
-import { extractWikiLinks } from "./markdown-links.js";
+import { extractWikiLinks, forEachMarkdownCodeRange } from "./markdown-links.js";
 
 export { WIKI_RELATED_END_MARKER, WIKI_RELATED_START_MARKER } from "./markdown-links.js";
 
@@ -414,35 +414,26 @@ function findNotesHumanBlock(page: string): { start: number; end: number } | nul
 
 function findNotesSectionRange(page: string): { start: number; end: number } | null {
   const searchFrom = afterSourceContentFence(page);
-  const heading = /(?:^|\r?\n)(## Notes[\t ]*(?:\r?\n|$))/u.exec(page.slice(searchFrom));
-  if (!heading) {
-    return null;
-  }
-  const linePrefixLength = heading[0].startsWith("\r\n") ? 2 : heading[0].startsWith("\n") ? 1 : 0;
-  const start = searchFrom + heading.index + linePrefixLength;
-  let lineStart = searchFrom + heading.index + heading[0].length;
-  let fence: { marker: string; length: number } | undefined;
+  const codeRanges: Array<{ start: number; end: number }> = [];
+  forEachMarkdownCodeRange(page, (start, end) => codeRanges.push({ start, end }));
+  const isCode = (offset: number) =>
+    codeRanges.some((range) => offset >= range.start && offset < range.end);
+  let start = -1;
+  let lineStart = searchFrom;
   while (lineStart < page.length) {
     const newline = page.indexOf("\n", lineStart);
     const lineEnd = newline === -1 ? page.length : newline;
     const line = page.slice(lineStart, lineEnd).replace(/\r$/u, "");
-    const fenceMarker = /^ {0,3}(\x60{3,}|~{3,})/u.exec(line)?.[1];
-    if (fence) {
-      const closeMarker = /^ {0,3}(\x60+|~+)[\t ]*$/u.exec(line)?.[1];
-      if (closeMarker?.startsWith(fence.marker) && closeMarker.length >= fence.length) {
-        fence = undefined;
+    if (!isCode(lineStart)) {
+      if (start === -1 && /^## Notes[\t ]*$/u.test(line)) {
+        start = lineStart;
+      } else if (start !== -1 && /^ {0,3}##[\t ]+/u.test(line)) {
+        return { start, end: lineStart };
       }
-    } else if (fenceMarker) {
-      fence = {
-        marker: fenceMarker.startsWith("~") ? "~" : "\x60",
-        length: fenceMarker.length,
-      };
-    } else if (/^ {0,3}##[\t ]+/u.test(line)) {
-      return { start, end: lineStart };
     }
     lineStart = newline === -1 ? page.length : newline + 1;
   }
-  return { start, end: page.length };
+  return start === -1 ? null : { start, end: page.length };
 }
 
 export function extractHumanNotesBlock(page: string): string | null {

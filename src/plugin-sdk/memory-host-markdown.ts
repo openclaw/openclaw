@@ -1,4 +1,4 @@
-import { buildCodeSpanIndex } from "../../packages/markdown-core/src/code-spans.js";
+import { findMarkdownCodeSpans } from "../../packages/markdown-core/src/reasoning-tags.js";
 /**
  * Public SDK helpers for maintaining generated blocks inside Markdown files.
  */
@@ -12,7 +12,7 @@ export type ManagedMarkdownBlockParams = {
   heading?: string;
   /** Enable trailing inline-end recovery only when the caller can identify unowned content. */
   recoverInlineOrphanEnds?: boolean;
-  /** Original ranges excluded from inline orphan-end recovery (for example human Notes). */
+  /** Original ranges excluded from managed-marker scanning and recovery (for example human Notes). */
   protectedRanges?: ReadonlyArray<{ start: number; end: number }>;
 };
 
@@ -49,14 +49,26 @@ export function replaceManagedMarkdownBlock(params: ManagedMarkdownBlockParams):
           "(?:[ \\t]*(?:\\r\\n|\\n|\\r))+[ \\t]*)$",
       )
     : undefined;
-  const originalCode = buildCodeSpanIndex(params.original);
+  const originalCode = findMarkdownCodeSpans(params.original);
+  const isInOriginalCode = (offset: number) =>
+    originalCode.some(([start, end]) => offset >= start && offset < end);
+  const isProtected = (start: number, end: number) =>
+    params.protectedRanges?.some((range) => start < range.end && end > range.start) ?? false;
   const matches: Array<{ start: number; end: number }> = [];
   const orphanEnds: Array<{ start: number; end: number }> = [];
   let depth = 0;
   let start = 0;
   // A non-greedy block regex stops at the first inner end marker and strands the outer tail.
   for (const marker of params.original.matchAll(markerPattern)) {
-    if (originalCode.isInside(marker.index)) {
+    const markerText = marker[1];
+    if (!markerText) {
+      continue;
+    }
+    const markerStart = marker.index + marker[0].indexOf(markerText);
+    if (
+      isInOriginalCode(marker.index) ||
+      isProtected(markerStart, markerStart + markerText.length)
+    ) {
       continue;
     }
     if (marker[1] === params.startMarker) {
@@ -67,8 +79,11 @@ export function replaceManagedMarkdownBlock(params: ManagedMarkdownBlockParams):
       depth += 1;
     } else {
       if (depth === 0) {
-        const markerStart = marker.index + marker[0].indexOf(params.endMarker);
-        orphanEnds.push({ start: markerStart, end: markerStart + params.endMarker.length });
+        const markerEnd = markerStart + params.endMarker.length;
+        orphanEnds.push({ start: markerStart, end: markerEnd });
+        continue;
+      }
+      if (depth === 1 && isProtected(start, marker.index + marker[0].length)) {
         continue;
       }
       depth -= 1;
@@ -104,11 +119,9 @@ export function replaceManagedMarkdownBlock(params: ManagedMarkdownBlockParams):
           isLineWhitespace(prefix) ||
           /\s|\\/.test(prefix.slice(-1)) ||
           prefix.includes(params.startMarker) ||
-          originalCode.isInside(markerStart) ||
+          isInOriginalCode(markerStart) ||
           matches.some((match) => markerStart >= match.start && markerStart < match.end) ||
-          params.protectedRanges?.some(
-            (range) => markerStart >= range.start && markerStart < range.end,
-          )
+          isProtected(markerStart, markerStart + params.endMarker.length)
         ) {
           continue;
         }
