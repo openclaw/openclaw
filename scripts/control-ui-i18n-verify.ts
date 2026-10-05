@@ -339,21 +339,10 @@ export async function verifyRuntimeLocaleConfig() {
   }
 }
 
-export async function verifyControlUiGeneratedCatalogs(options: {
-  checkOnly: boolean;
-  write: boolean;
-}) {
+export async function verifyControlUiGeneratedCatalogs() {
   await verifyRuntimeLocaleConfig();
-  await syncControlUiRawCopyBaseline(options);
-  await syncControlUiCatalogFallbackBaseline(options);
-}
-
-async function verifyControlUiContributorCatalogs(options: { checkOnly: boolean; write: boolean }) {
-  await verifyRuntimeLocaleConfig();
-  await syncControlUiRawCopyBaseline(options);
-  // Foreign catalogs may be stale after an English rename, deletion, or
-  // placeholder change. The post-merge locale workflow owns that repair.
-  await verifyControlUiSourceCatalogShape();
+  await syncControlUiRawCopyBaseline({ checkOnly: true, write: false });
+  await syncControlUiCatalogFallbackBaseline({ checkOnly: true, write: false });
 }
 
 function usage(): never {
@@ -366,18 +355,16 @@ async function main() {
   if ((command !== "verify" && command !== "baseline") || rest.length > 0) {
     usage();
   }
-  await verifyControlUiContributorCatalogs({
+  await verifyRuntimeLocaleConfig();
+  await syncControlUiRawCopyBaseline({
     checkOnly: command === "verify",
     write: command === "baseline",
   });
+  // Foreign catalogs are repaired by the post-merge locale workflow.
+  await verifyControlUiSourceCatalogShape();
 }
 
-function isCliEntrypoint() {
-  const entrypoint = process.argv[1];
-  return Boolean(entrypoint && import.meta.url === pathToFileURL(path.resolve(entrypoint)).href);
-}
-
-if (isCliEntrypoint()) {
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   await main().catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);

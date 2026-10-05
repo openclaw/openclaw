@@ -10,6 +10,7 @@ import type {
 import type { WorkerTaskChannel } from "../infra/worker-task-server.js";
 import type { CliHistoryReaders } from "./cli-session-history.js";
 import { projectChatHistoryWithReplies } from "./server-methods/chat-history-reply-messages.js";
+import type { IncognitoSessionHistoryReader } from "./session-history-snapshot.js";
 import type {
   SessionTranscriptPageOptions,
   SessionTranscriptPageReader,
@@ -33,16 +34,24 @@ type Request =
 export async function readProcessHeldCliHistory(
   params: ChatHistoryPageParams,
   signal?: AbortSignal,
+  incognito?: IncognitoSessionHistoryReader,
 ): Promise<ChatHistoryPage> {
-  const result = await readProcessHeldCliHistoryQuery({ kind: "rpc", params }, signal);
+  const result = await readProcessHeldCliHistoryQuery({ kind: "rpc", params }, signal, incognito);
   if (result.kind !== "rpc") {
     throw new Error("Unexpected process-held history page");
   }
   return result.page;
 }
 
-export async function readProcessHeldCliHistoryMessage(params: ChatHistoryMessageParams) {
-  const result = await readProcessHeldCliHistoryQuery({ kind: "rpc-message", params });
+export async function readProcessHeldCliHistoryMessage(
+  params: ChatHistoryMessageParams,
+  incognito?: IncognitoSessionHistoryReader,
+) {
+  const result = await readProcessHeldCliHistoryQuery(
+    { kind: "rpc-message", params },
+    undefined,
+    incognito,
+  );
   if (result.kind !== "rpc-message") {
     throw new Error("Unexpected process-held history message");
   }
@@ -52,13 +61,14 @@ export async function readProcessHeldCliHistoryMessage(params: ChatHistoryMessag
 async function readProcessHeldCliHistoryQuery(
   input: ChatHistoryDisplayRequest,
   signal?: AbortSignal,
+  incognito?: IncognitoSessionHistoryReader,
 ): Promise<ChatHistoryDisplayResult> {
   const history = structuredClone(input);
   const params = history.params;
   params.encodeResponse = false;
   const [{ runProcessHeldHistoryTask }, readers] = await Promise.all([
     import("../config/sessions/session-transcript-worker-runtime.js"),
-    import("./session-transcript-readers.js"),
+    incognito?.readers ?? import("./session-transcript-readers.js"),
   ]);
   const scope = {
     agentId: params.sessionAgentId,
@@ -67,21 +77,26 @@ async function readProcessHeldCliHistoryQuery(
     storePath: params.storePath,
     sessionEntry: params.entry,
   };
-  const current = captureNativeSessionEntryCurrentRead(scope);
-  const initial = current.readCurrent();
+  const current = incognito ? undefined : captureNativeSessionEntryCurrentRead(scope);
+  const initial = current?.readCurrent();
   if (
-    !initial ||
-    initial.sessionId !== scope.sessionId ||
-    initial.lifecycleRevision !== params.entry?.lifecycleRevision
+    !incognito &&
+    (!initial ||
+      initial.sessionId !== scope.sessionId ||
+      initial.lifecycleRevision !== params.entry?.lifecycleRevision)
   ) {
     throw new Error("Incognito history session is no longer current");
   }
   const assertCurrent = () => {
     signal?.throwIfAborted();
-    const entry = current.readCurrent();
+    if (incognito) {
+      incognito.assertCurrent();
+      return;
+    }
+    const entry = current?.readCurrent();
     if (
-      entry?.sessionId !== initial.sessionId ||
-      entry?.lifecycleRevision !== initial.lifecycleRevision
+      entry?.sessionId !== initial?.sessionId ||
+      entry?.lifecycleRevision !== initial?.lifecycleRevision
     ) {
       throw new Error("Incognito history session generation is no longer current");
     }

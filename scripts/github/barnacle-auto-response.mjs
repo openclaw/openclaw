@@ -18,25 +18,21 @@ const thirdPartyExtensionMessage =
 const rules = [
   {
     label: skillCloseLabel,
-    close: true,
     message:
       "Thanks for the contribution! New skills should be published on [ClawHub](https://clawhub.ai) for everyone to use. We’re keeping the core lean on skills, so I’m closing this out.",
   },
   {
     label: "r: support",
-    close: true,
     message:
       "Please use [our support server](https://discord.gg/clawd) and ask in #help or #users-helping-users to resolve this, or follow the stuck FAQ at https://docs.openclaw.ai/help/faq-first-run#i-am-stuck-fastest-way-to-get-unstuck.",
   },
   {
     label: "r: false-positive",
-    close: true,
     message:
       "Closing this because it looks like a false positive or reclassification-only report rather than an actionable OpenClaw bug. If this is still a real issue, please open a fresh report with concrete reproduction steps and current-version details.",
   },
   {
     label: "r: no-ci-pr",
-    close: true,
     message:
       "Please don't make PRs for test failures on main.\n\n" +
       "The team is aware of those and will handle them directly on the codebase, not only fixing the tests but also investigating what the root cause is. Having to sift through test-fix-PRs (including some that have been out of date for weeks...) on top of that doesn't help. There are already way too many PRs for humans to manage; please don't make the flood worse.\n\n" +
@@ -44,32 +40,27 @@ const rules = [
   },
   {
     label: "r: too-many-prs",
-    close: true,
     message:
       `Closing this PR because the author has more than ${activePrLimit} active PRs in this repo. ` +
       "Please reduce the active PR queue and reopen or resubmit once it is back under the limit. You can close your own PRs to get back under the limit.",
   },
   {
     label: "r: testflight",
-    close: true,
     commentTriggers: ["testflight"],
     message: "Not available, build from source.",
   },
   {
     label: "r: third-party-extension",
-    close: true,
     message: thirdPartyExtensionMessage,
   },
   {
     label: "r: bluebubbles",
-    close: true,
     commentTriggers: ["bluebubbles", "blue bubbles"],
     message:
       "BlueBubbles is deprecated and no longer ships as a bundled OpenClaw channel. Use iMessage via `imsg` instead: https://docs.openclaw.ai/channels/imessage. If this needs to stay BlueBubbles-backed, publish it as a third-party plugin on ClawHub instead of adding it back to core.",
   },
   {
     label: "r: moltbook",
-    close: true,
     lock: true,
     lockReason: "off-topic",
     commentTriggers: ["moltbook"],
@@ -244,7 +235,7 @@ const candidateActionRules = Object.entries({
     "Closing this PR because it is refactor/cleanup-only without maintainer context. We avoid churn in core unless it unlocks a concrete fix, architecture change, or owned cleanup.",
   [candidateLabels.blankTemplate]:
     "Closing this PR because the template is mostly blank and does not describe a concrete OpenClaw problem, fix, or test plan. Please reopen or resubmit with the missing context filled in.",
-}).map(([label, message]) => ({ label, message, close: true }));
+}).map(([label, message]) => ({ label, message }));
 
 const normalizeLogin = (login) => login.toLowerCase();
 const automationPrHeadPrefixes = ["clawsweeper/", "clownfish/"];
@@ -843,15 +834,13 @@ async function applyResponseRule(github, context, issueNumber, rule) {
   if (rule.message) {
     await github.rest.issues.createComment({ ...target, body: rule.message });
   }
-  if (rule.close) {
-    await github.rest.issues.update({
-      ...target,
-      state: "closed",
-      ...(rule.stateReason ? { state_reason: rule.stateReason } : {}),
-    });
-  }
+  await github.rest.issues.update({
+    ...target,
+    state: "closed",
+    ...(rule.stateReason ? { state_reason: rule.stateReason } : {}),
+  });
   if (rule.lock) {
-    await github.rest.issues.lock({ ...target, lock_reason: rule.lockReason ?? "resolved" });
+    await github.rest.issues.lock({ ...target, lock_reason: rule.lockReason });
   }
 }
 
@@ -1064,20 +1053,18 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
     if (labelSet.has(dirtyLabel)) {
       await applyResponseRule(github, context, pullRequest.number, {
         message: noisyPrMessage,
-        close: true,
       });
       return;
     }
     if (labelSet.has(spamLabel)) {
       await applyResponseRule(github, context, pullRequest.number, {
-        close: true,
         lock: true,
         lockReason: "spam",
       });
       return;
     }
     if (labelSet.has(invalidLabel)) {
-      await applyResponseRule(github, context, pullRequest.number, { close: true });
+      await applyResponseRule(github, context, pullRequest.number, {});
       return;
     }
 
@@ -1096,7 +1083,6 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
 
   if (issue && labelSet.has(spamLabel)) {
     await applyResponseRule(github, context, issue.number, {
-      close: true,
       stateReason: "not_planned",
       lock: true,
       lockReason: "spam",
@@ -1106,7 +1092,6 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
 
   if (issue && labelSet.has(invalidLabel)) {
     await applyResponseRule(github, context, issue.number, {
-      close: true,
       stateReason: "not_planned",
     });
     return;

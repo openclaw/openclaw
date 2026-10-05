@@ -50,21 +50,6 @@ type SystemRunApprovalRuntimeContext =
       details?: Record<string, unknown>;
     };
 
-function normalizeCommandText(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function normalizeCommandPreview(
-  value: string | null | undefined,
-  authoritative: string,
-): string | null {
-  const preview = normalizeNonEmptyString(value);
-  if (!preview || preview === authoritative) {
-    return null;
-  }
-  return preview;
-}
-
 function normalizePreparedRunExecPolicy(raw: unknown): PreparedRunExecPolicy | undefined {
   if (!isRecord(raw)) {
     return undefined;
@@ -130,13 +115,14 @@ export function resolveSystemRunApprovalRequestContext(params: {
   const normalizedPlan =
     host === "node" ? normalizeSystemRunApprovalPlan(params.systemRunPlan) : null;
   const fallbackArgv = normalizeStringArray(params.commandArgv);
-  const fallbackCommand = normalizeCommandText(params.command);
+  const fallbackCommand = typeof params.command === "string" ? params.command : "";
   const commandText = normalizedPlan
     ? normalizedPlan.commandText || formatExecCommand(normalizedPlan.argv)
     : fallbackCommand;
-  const commandPreview = normalizedPlan
-    ? normalizeCommandPreview(normalizedPlan.commandPreview ?? fallbackCommand, commandText)
+  const preview = normalizedPlan
+    ? normalizeNonEmptyString(normalizedPlan.commandPreview ?? fallbackCommand)
     : null;
+  const commandPreview = preview && preview !== commandText ? preview : null;
   const plan = normalizedPlan ? { ...normalizedPlan, commandPreview } : null;
   return {
     plan,

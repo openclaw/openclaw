@@ -39,11 +39,7 @@ import {
 import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
 import { isSerializedEventPayload, type SerializedEventPayload } from "./node-event-payload.js";
 import { sendNodeWebSocketEvent } from "./node-event-send.js";
-import {
-  buildNodeInvokeCancel,
-  buildNodeInvokeInput,
-  serializeNodeEvent,
-} from "./node-invoke-request.js";
+import { serializeNodeEvent } from "./node-invoke-request.js";
 import type { NodeInvokeParams, NodeInvokeResult } from "./node-invoke.types.js";
 import {
   createRegisteredNodePluginToolDescriptorMap,
@@ -209,11 +205,10 @@ export class NodeRegistry {
       ) {
         return;
       }
-      this.sendEventToSession(
-        node,
-        "node.invoke.cancel",
-        buildNodeInvokeCancel({ invokeId: requestId, nodeId: pending.nodeId }),
-      );
+      this.sendEventToSession(node, "node.invoke.cancel", {
+        invokeId: requestId,
+        nodeId: pending.nodeId,
+      });
     },
     isConnectionActive: (pending) => {
       const node = this.nodesById.get(pending.nodeId);
@@ -227,16 +222,12 @@ export class NodeRegistry {
     sendInput: (invokeId, pending, seq, payloadJSON) => {
       const node = this.nodesById.get(pending.nodeId);
       return node
-        ? this.sendEventToSession(
-            node,
-            "node.invoke.input",
-            buildNodeInvokeInput({
-              invokeId,
-              nodeId: pending.nodeId,
-              seq,
-              payloadJSON,
-            }),
-          )
+        ? this.sendEventToSession(node, "node.invoke.input", {
+            id: invokeId,
+            nodeId: pending.nodeId,
+            seq,
+            payloadJSON,
+          })
         : false;
     },
     onFailedResult: (pending) => {
