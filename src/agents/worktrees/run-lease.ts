@@ -7,6 +7,7 @@ import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
+import { sleep } from "../../utils/sleep.js";
 import { lockWorktreeForProcess, unlockWorktree } from "./git-lock.js";
 import { worktreePathExists } from "./git.js";
 import { readRegistryWorktree } from "./registry-read.js";
@@ -192,9 +193,7 @@ async function deleteRunLeaseRowWithRetries(cleanup: LeaseCleanup): Promise<bool
         `failed to release worktree run lease for ${cleanup.id} (attempt ${attempt}): ${errorMessage(error)}`,
       );
       if (attempt < RELEASE_MAX_ATTEMPTS) {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 25 * attempt);
-        });
+        await sleep(25 * attempt);
       }
     }
   }

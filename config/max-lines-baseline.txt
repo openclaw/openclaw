@@ -121,7 +121,6 @@ extensions/migrate-hermes/config.test.ts
 extensions/migrate-hermes/secrets.test.ts
 extensions/msteams/src/channel.ts
 extensions/mxc/test/mxc-backend.test.ts
-extensions/oc-path/src/oc-path/universal.ts
 extensions/ollama/index.test.ts
 extensions/ollama/index.ts
 extensions/ollama/src/stream-runtime.test.ts
@@ -181,7 +180,6 @@ extensions/telegram/src/bot/delivery.replies.ts
 extensions/telegram/src/channel.ts
 extensions/telegram/src/draft-stream.test.ts
 extensions/telegram/src/draft-stream.ts
-extensions/telegram/src/fetch.ts
 extensions/telegram/src/message-cache.ts
 extensions/telegram/src/polling-session.test.ts
 extensions/telegram/src/webhook.test.ts
@@ -245,7 +243,6 @@ src/agents/cli-runner/prepare.ts
 src/agents/command/attempt-execution.cli.test.ts
 src/agents/command/attempt-execution.ts
 src/agents/command/cli-compaction.test.ts
-src/agents/command/delivery.test.ts
 src/agents/command/delivery.ts
 src/agents/embedded-agent-runner-extraparams.test.ts
 src/agents/embedded-agent-runner.cache.live.test.ts
@@ -379,7 +376,6 @@ src/commands/doctor-state-integrity.ts
 src/commands/doctor-state-migrations.test.ts
 src/commands/doctor/repair-sequencing.test.ts
 src/commands/doctor/shared/codex-route-warnings.test.ts
-src/commands/doctor/shared/legacy-config-core-normalizers.ts
 src/commands/doctor/shared/legacy-config-migrate.test.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts
 src/commands/doctor/shared/missing-configured-plugin-install.test.ts

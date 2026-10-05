@@ -309,7 +309,7 @@ export function createSubagentRegistrySweeper(params: {
               clearPendingLifecycleTimeout: params.clearPendingLifecycleTimeout,
               discardTerminalDelivery: params.discardTerminalDelivery,
               completeCleanupBookkeeping: params.completeCleanupBookkeeping,
-              isCurrent: () => params.isCleanupOwnerCurrent(runId, entry),
+              isCurrent: () => params.isCleanupOwnerCurrent(entry),
               sessionEffectsHostCurrent: params.sessionEffectsHostCurrent,
               shouldSuppressSessionEffects: params.shouldSuppressSessionEffects,
               shouldEmitEndedHookForRun: params.shouldEmitEndedHookForRun,

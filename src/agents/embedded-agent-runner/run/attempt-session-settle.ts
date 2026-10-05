@@ -109,8 +109,6 @@ type CleanupEmbeddedAttemptSessionInput = EmbeddedAttemptSessionResources & {
   bundleMcpRuntime?: DisposableRuntime;
   bundleLspRuntime?: DisposableRuntime;
   toolSearchCatalogRef?: ToolSearchCatalogRef;
-  sandboxSessionKey?: string;
-  sessionAgentId: string;
   trajectoryEndRecorded: boolean;
   deferredLifecycleOwner?: EmbeddedAttemptDeferredLifecycleOwner;
   emitDiagnosticRunCompleted?: EmitDiagnosticRunCompleted;

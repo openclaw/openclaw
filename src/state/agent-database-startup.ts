@@ -11,6 +11,7 @@ import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createPermitPool } from "../shared/permit-pool.js";
 import {
   createAgentDatabaseInspectionRefusal,
@@ -29,6 +30,7 @@ import {
   createOpenClawAgentDatabasePathMatcher,
   isSameOpenClawAgentDatabasePath,
 } from "./openclaw-agent-db.paths.js";
+import type { AgentSchemaInspection } from "./openclaw-agent-schema-inspection.js";
 import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
@@ -85,12 +87,13 @@ function recoveryTiming(recovery: PendingRecovery, now = performance.now()) {
   };
 }
 type SchemaSourceWitness = Array<FileMutationFingerprint | undefined>;
+type PreparedSchemaHeader = Pick<
+  AgentSchemaInspection,
+  "version" | "writerAppVersion" | "agentSchemaMeta"
+>;
 type PreparedSchemaHeaders = {
   statePath: string;
-  headers: Map<
-    string,
-    { version: typeof OPENCLAW_AGENT_SCHEMA_VERSION; witness: SchemaSourceWitness }
-  >;
+  headers: Map<string, { inspection: PreparedSchemaHeader; witness: SchemaSourceWitness }>;
 };
 
 function readSchemaSourceWitness(pathname: string): SchemaSourceWitness | undefined {
@@ -194,7 +197,7 @@ class AgentDatabaseStartupAdmission {
     this.preparedSchemaHeaders = prepared;
     return (pathname: string) => {
       const before = readSchemaSourceWitness(pathname);
-      return (version: number) => {
+      return ({ version, writerAppVersion, agentSchemaMeta }: PreparedSchemaHeader) => {
         if (
           !this.stopped &&
           this.preparedSchemaHeaders === prepared &&
@@ -202,7 +205,10 @@ class AgentDatabaseStartupAdmission {
           version === OPENCLAW_AGENT_SCHEMA_VERSION &&
           matchesSchemaSourceWitness(before, readSchemaSourceWitness(pathname))
         ) {
-          prepared.headers.set(pathname, { version, witness: before });
+          prepared.headers.set(pathname, {
+            inspection: { version, writerAppVersion, agentSchemaMeta },
+            witness: before,
+          });
         }
       };
     };
@@ -215,9 +221,9 @@ class AgentDatabaseStartupAdmission {
       const header = prepared?.headers.get(pathname);
       return !this.stopped &&
         prepared?.statePath === resolveOpenClawStateSqlitePath(env) &&
-        header?.version === supportedVersion &&
+        header?.inspection.version === supportedVersion &&
         matchesSchemaSourceWitness(header.witness, readSchemaSourceWitness(pathname))
-        ? { version: header.version }
+        ? header.inspection
         : undefined;
     };
   }
@@ -344,7 +350,8 @@ class AgentDatabaseStartupAdmission {
       // Observe failures immediately, but publish their outcome only after startup
       // records the pending decisions and the Gateway accepts their lifetime.
       const checked = Promise.allSettled(inspections.map(({ result }) => result));
-      const work = (async () => {
+      // Gateway-owned recovery outlives the caller's temporary discovery snapshot.
+      const work = runInDetachedAsyncContext(async () => {
         const publicationComplete = createDeferredCore();
         try {
           const results = await checked;
@@ -471,7 +478,7 @@ class AgentDatabaseStartupAdmission {
           }
           publicationComplete.resolve();
         }
-      })();
+      });
       this.track(work);
     }
     return refusals;

@@ -7,7 +7,7 @@ import {
 } from "../../infra/fs-observation-mode.js";
 import { observationPrefixKind } from "../../infra/fs-observation-root.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { WatchTarget } from "./refresh-watch-targets.js";
+import type { WatchTarget } from "./refresh-watch-targets.types.js";
 
 /** Observe a blocking link entry, never an implicit recursive target admission. */
 export async function skillsObservationScope(

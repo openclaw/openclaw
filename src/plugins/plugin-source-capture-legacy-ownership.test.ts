@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as usage from "../infra/temp-directory-usage.js";
+import { prunePluginNativeCaptureDirectories } from "./plugin-source-capture-directory.js";
 import { sweepPluginSourceCapturesForTest } from "./plugin-source-capture-directory.test-support.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
@@ -83,12 +84,23 @@ it.each([
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.now() + 2 * 60 * 60 * 1_000);
     const lstat = fsPromises.lstat.bind(fsPromises);
-    const inspected = new Set<string>();
+    const lstatSync = fs.lstatSync.bind(fs);
+    const inspected = new Set<number | bigint>();
+    const applyFixtureUid = (target: unknown, stat: fs.Stats | fs.BigIntStats) => {
+      if ((typeof target === "string" && roots.includes(target)) || inspected.has(stat.ino)) {
+        Object.assign(stat, { uid: changed && inspected.has(stat.ino) ? peerUid : captureUid });
+        inspected.add(stat.ino);
+      }
+    };
     vi.spyOn(fsPromises, "lstat").mockImplementation(async (target, options) => {
       const stat = await lstat(target, options);
-      if (typeof target === "string" && roots.includes(target)) {
-        Object.assign(stat, { uid: changed && inspected.has(target) ? peerUid : captureUid });
-        inspected.add(target);
+      applyFixtureUid(target, stat);
+      return stat;
+    });
+    vi.spyOn(fs, "lstatSync").mockImplementation((target, options) => {
+      const stat = lstatSync(target, options);
+      if (stat) {
+        applyFixtureUid(target, stat);
       }
       return stat;
     });
@@ -101,3 +113,58 @@ it.each([
     }
   },
 );
+
+it.each([
+  ["rename", "revocation"],
+  ["removal", "revocation"],
+  ["rename", "replacement"],
+  ["removal", "replacement"],
+] as const)("preserves tokenless payloads across %s authority %s", async (phase, change) => {
+  const root = path.join(stateDir, "tmp", "plugin-captures", "tokenless");
+  const parked = path.join(stateDir, "original-payload");
+  fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(path.join(root, "payload"), "owned bytes");
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(Date.now() + 2 * 60 * 60 * 1_000);
+  vi.spyOn(usage, "inspectTemporaryDirectoryUsage").mockReturnValue({ kind: "inactive" });
+  let candidateInspected = false;
+  const lstat = fsPromises.lstat.bind(fsPromises);
+  vi.spyOn(fsPromises, "lstat").mockImplementation(async (target, options) => {
+    const stat = await lstat(target, options);
+    if (target === root) {
+      candidateInspected = true;
+    }
+    return stat;
+  });
+  let retired: string | undefined;
+  const rename = fsPromises.rename.bind(fsPromises);
+  vi.spyOn(fsPromises, "rename").mockImplementation(async (source, target) => {
+    await rename(source, target);
+    retired = String(target);
+  });
+  const refusal = new Error("fixture maintenance authority revoked");
+  let guardedPath: string | undefined;
+  const assertCurrent = async () => {
+    const target = phase === "rename" ? root : retired;
+    if (!candidateInspected || !target || guardedPath) {
+      return;
+    }
+    guardedPath = target;
+    await Promise.resolve();
+    if (change === "revocation") {
+      throw refusal;
+    }
+    fs.renameSync(target, parked);
+    fs.mkdirSync(target);
+    fs.writeFileSync(path.join(target, "payload"), "replacement bytes");
+  };
+  const result = await prunePluginNativeCaptureDirectories(stateDir, new Set(), assertCurrent);
+  const preserved = change === "replacement" ? parked : (retired ?? root);
+  expect(fs.readFileSync(path.join(preserved, "payload"), "utf8")).toBe("owned bytes");
+  if (change === "revocation") {
+    expect(result.warnings).toEqual([refusal.message]);
+  } else {
+    expect(fs.readFileSync(path.join(guardedPath!, "payload"), "utf8")).toBe("replacement bytes");
+    expect(result.warnings).toEqual([]);
+  }
+});

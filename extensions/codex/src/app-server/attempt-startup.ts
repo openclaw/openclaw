@@ -68,14 +68,12 @@ import {
   type CodexAppServerClientOptions,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
+import type { CodexContextEngineThreadBootstrapProjection } from "./thread-context-engine.js";
 import {
   CODEX_APP_SERVER_CONTEXT_RESTART_SELECTION_CHANGED,
   CodexThreadClientReplacementError,
 } from "./thread-lifecycle-errors.js";
-import {
-  startOrResumeThread,
-  type CodexContextEngineThreadBootstrapProjection,
-} from "./thread-lifecycle.js";
+import { startOrResumeThread } from "./thread-lifecycle-run.js";
 import { isCodexWebSocketOpenFailure } from "./transport-websocket.js";
 import { getCodexAppServerTurnRouter, type CodexThreadRouteReservation } from "./turn-router.js";
 import type { CodexNativeWebSearchSupport } from "./web-search.js";

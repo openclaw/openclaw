@@ -397,10 +397,18 @@ export async function streamAgentResponse(
             // Record one provider terminal, with its original usage, after tool outcomes settle.
             await executions;
           }
+          const tail = remainingFragment(result);
           const finalMessage = prepareAssistantMessage(
             ensureToolTurnIdentity(
               removeNonExecutableToolCalls({
-                ...remainingFragment(result),
+                ...tail,
+                // The provider stop covers the whole response. Its calls were committed
+                // with earlier fragments, so a call-free tail is the response's end.
+                ...(committedContentCount > 0 &&
+                tail.stopReason === "toolUse" &&
+                !tail.content.some((item) => item.type === "toolCall")
+                  ? { stopReason: "stop" as const }
+                  : {}),
                 ...(streamedTurnId ? { turnId: streamedTurnId } : {}),
                 ...(outputLimit && signal?.aborted
                   ? { stopReason: "aborted" }

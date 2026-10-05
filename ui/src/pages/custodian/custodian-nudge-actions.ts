@@ -1,6 +1,6 @@
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import {
-  reconcileCustodianEventNudge,
+  classifyCustodianHealthNudge,
   shouldConsumeNudge,
   type CustodianEventNudge,
   type CustodianSendOutcome,
@@ -22,11 +22,9 @@ export function receiveEventNudge(owner: CustodianNudgeOwner, event: GatewayEven
   if (owner.activeVariant !== "caretaker" || owner.eventNudgeClosed) {
     return;
   }
-  [owner.eventNudge, owner.eventNudgePending] = reconcileCustodianEventNudge(
-    owner.eventNudge,
-    owner.eventNudgePending,
-    event,
-  );
+  if (event.event === "health") {
+    owner.eventNudge = classifyCustodianHealthNudge(event.payload);
+  }
   owner.requestNudgeUpdate();
 }
 

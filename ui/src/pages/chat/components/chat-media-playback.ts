@@ -1,4 +1,4 @@
-import { sleepWithAbort } from "@openclaw/retry";
+import { raceWithTimeout, sleepWithAbort } from "@openclaw/retry";
 
 export type ChatMediaPlaybackMode = "native" | "transcode";
 
@@ -47,38 +47,29 @@ async function fetchPlaybackHead(params: {
   timeoutMs: number;
 }): Promise<Response> {
   const controller = new AbortController();
-  let rejectDeadline: ((error: Error) => void) | undefined;
-  const deadline = new Promise<never>((_resolve, reject) => {
-    rejectDeadline = reject;
-  });
-  const onAbort = () => {
-    const error = playbackAbortError(params.signal);
-    controller.abort(error);
-    rejectDeadline?.(error);
-  };
-  params.signal.addEventListener("abort", onAbort, { once: true });
-  if (params.signal.aborted) {
-    onAbort();
-  }
-  const timer = setTimeout(() => {
-    const error = new DOMException("playback readiness request timed out", "TimeoutError");
-    controller.abort(error);
-    rejectDeadline?.(error);
-  }, params.timeoutMs);
-  try {
-    return await Promise.race([
+  return await raceWithTimeout(
+    () =>
       fetch(params.source, {
         method: "HEAD",
         headers: params.headers,
         credentials: "same-origin",
         signal: controller.signal,
       }),
-      deadline,
-    ]);
-  } finally {
-    clearTimeout(timer);
-    params.signal.removeEventListener("abort", onAbort);
-  }
+    params.timeoutMs,
+    () => {
+      const error = new DOMException("playback readiness request timed out", "TimeoutError");
+      controller.abort(error);
+      throw error;
+    },
+    {
+      signal: params.signal,
+      onAbort: (signal) => {
+        const error = playbackAbortError(signal);
+        controller.abort(error);
+        throw error;
+      },
+    },
+  );
 }
 
 export async function waitForChatMediaPlayback(params: {

@@ -14,7 +14,7 @@ import { createCodexTestHostCapabilities } from "./host-capability.test-support.
 import type { CodexThreadStartParams } from "./protocol.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import { createCodexTestModel } from "./test-support.js";
-import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
+import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
 import { createAppServerOptions as createBaseAppServerOptions } from "./thread-lifecycle.test-fixtures.js";
 
 function startOrResumeThread(
@@ -51,7 +51,6 @@ function createAppServerOptions(): Parameters<typeof startOrResumeThread>[0]["ap
   return {
     ...createBaseAppServerOptions(),
     connectionClass: "local-loopback",
-    remoteAppsSubstrate: "preconfigured",
   };
 }
 

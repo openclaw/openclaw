@@ -12,8 +12,6 @@
   background-size: cover;
   background-repeat: no-repeat;
 
-  --shell-pad: 16px;
-  --shell-gap: 16px;
   --shell-nav-expanded-width: 258px;
   --shell-nav-width: var(--shell-nav-expanded-width);
   --shell-chrome-controls-inset: 10px;
@@ -161,23 +159,8 @@
   color: var(--text);
 }
 
-.shell-chrome-controls__button:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .shell-chrome-controls__button:is(:disabled, [aria-disabled="true"]) {
   opacity: 0.42;
-}
-
-.shell-chrome-controls__button svg {
-  width: 17px;
-  height: 17px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .shell.shell--home-control {
@@ -386,30 +369,10 @@ html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrom
     color var(--duration-fast) ease;
 }
 
-.settings-sidebar__back:hover {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  color: var(--text);
-}
-
-.settings-sidebar__back:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .settings-sidebar__back-icon {
   display: inline-flex;
   width: 15px;
   height: 15px;
-}
-
-.settings-sidebar__back-icon svg {
-  width: 15px;
-  height: 15px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .settings-sidebar__esc {
@@ -523,15 +486,12 @@ html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrom
   pointer-events: none;
 }
 
+.settings-sidebar__back-icon svg,
 .settings-sidebar__search-icon svg,
 .settings-sidebar__search-clear svg {
   width: 15px;
   height: 15px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .settings-sidebar__search-input {
@@ -582,16 +542,6 @@ html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrom
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-}
-
-.settings-sidebar__search-clear:hover {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  color: var(--text);
-}
-
-.settings-sidebar__search-clear:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .settings-sidebar__nav {
@@ -686,23 +636,6 @@ html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrom
     color var(--duration-fast) ease;
 }
 
-.settings-sidebar__item:hover {
-  color: var(--text);
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  border-color: color-mix(in srgb, var(--border) 72%, transparent);
-}
-
-.settings-sidebar__item:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.settings-sidebar__item--active {
-  color: var(--text-strong);
-  background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
-  border-color: color-mix(in srgb, var(--accent) 16%, transparent);
-}
-
 .settings-sidebar__item-icon {
   display: flex;
   align-items: center;
@@ -721,16 +654,6 @@ html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrom
 
 .settings-sidebar__item--active .settings-sidebar__item-icon {
   color: var(--accent);
-}
-
-.settings-sidebar__item-icon svg {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .settings-sidebar__item-label {
@@ -758,11 +681,6 @@ html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrom
 .settings-sidebar__subitem--active {
   color: var(--text-strong);
   background: color-mix(in srgb, var(--accent-subtle) 72%, transparent);
-}
-
-.settings-sidebar__subitem:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .settings-sidebar__subitem-label {
@@ -986,20 +904,6 @@ openclaw-settings-save-indicator:empty {
   color: var(--text);
 }
 
-.topbar-search:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.topbar-search svg {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
 .topbar-icon-btn {
   display: inline-flex;
   align-items: center;
@@ -1017,26 +921,11 @@ openclaw-settings-save-indicator:empty {
     color var(--duration-fast) ease;
 }
 
-.topbar-icon-btn:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  color: var(--text);
-}
-
-.topbar-icon-btn:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-/* Without explicit sizing/stroke the Lucide-style icon renders as a filled
-   blob at the browser's default svg size (e.g. the terminal toggle glyph). */
+.shell-chrome-controls__button svg,
 .topbar-icon-btn svg {
   width: 17px;
   height: 17px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .topbar .topbar-nav-toggle {
@@ -1197,24 +1086,16 @@ openclaw-settings-save-indicator:empty {
   color: var(--text);
 }
 
-.sidebar-brand__icon:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .sidebar-brand__icon:is(:disabled, [aria-disabled="true"]) {
   cursor: not-allowed;
   opacity: 0.42;
 }
 
+.topbar-search svg,
 .sidebar-brand__icon svg {
   width: 16px;
   height: 16px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .sidebar-brand__new-thread svg {
@@ -1364,12 +1245,6 @@ openclaw-settings-save-indicator:empty {
     color var(--duration-fast) ease;
 }
 
-.sidebar-session-filter-summary:hover,
-.sidebar-session-filter-summary:focus-visible {
-  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
-  color: var(--text);
-}
-
 /* The lead slot stacks the filter glyph (owner avatar or archive mark) under the
    clear icon; hover swaps them so the summary spends no width on a second control. */
 .sidebar-session-filter-summary__lead {
@@ -1393,16 +1268,6 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-session-filter-summary:is(:hover, :focus-visible) .sidebar-session-filter-summary__clear {
   opacity: 1;
-}
-
-.sidebar-session-filter-summary__lead svg {
-  width: 12px;
-  height: 12px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .sidebar-session-filter-summary .viewer-avatar {
@@ -1450,11 +1315,7 @@ openclaw-settings-save-indicator:empty {
 .sidebar-session-group-actions svg {
   width: 14px;
   height: 14px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .sidebar-session-error {
@@ -1538,18 +1399,6 @@ openclaw-settings-save-indicator:empty {
 .sidebar-recent-sessions__group--session-drop {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
-}
-
-.sidebar-recent-sessions__group--dragging {
-  opacity: 0.45;
-}
-
-.sidebar-recent-sessions__group--section-drop-before {
-  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--accent) 75%, transparent);
-}
-
-.sidebar-recent-sessions__group--section-drop-after {
-  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent) 75%, transparent);
 }
 
 .sidebar-recent-sessions__head {
@@ -1664,8 +1513,6 @@ openclaw-settings-save-indicator:empty {
 .sidebar-child-session-toggle__icon svg {
   width: 11px;
   height: 11px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.8px;
 }
 
@@ -1695,18 +1542,9 @@ openclaw-settings-save-indicator:empty {
   opacity: 0.7;
 }
 
-.sidebar-session-group-count--error {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--warn);
-}
-
 .sidebar-session-group-count--error svg {
   width: 12px;
   height: 12px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.8px;
 }
 
@@ -1758,12 +1596,6 @@ openclaw-settings-save-indicator:empty {
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
   text-align: left;
-}
-
-.sidebar-session-catalog-load-more:hover:not(:disabled),
-.sidebar-session-catalog-load-more:focus-visible {
-  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
-  color: var(--text);
 }
 
 .sidebar-session-catalog-load-more:disabled,
@@ -1977,6 +1809,7 @@ openclaw-settings-save-indicator:empty {
   text-align: right;
 }
 
+.sidebar-session-group-count--error,
 .sidebar-session-catalog-host__count--error {
   display: inline-flex;
   align-items: center;
@@ -2003,6 +1836,10 @@ openclaw-settings-save-indicator:empty {
     color var(--duration-fast) ease;
 }
 
+.sidebar-session-filter-summary:hover,
+.sidebar-session-filter-summary:focus-visible,
+.sidebar-session-catalog-load-more:hover:not(:disabled),
+.sidebar-session-catalog-load-more:focus-visible,
 .sidebar-session-catalog-project__head:hover,
 .sidebar-session-catalog-project__head:focus-visible {
   background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
@@ -2020,8 +1857,6 @@ openclaw-settings-save-indicator:empty {
 .sidebar-session-catalog-project__icon svg {
   width: 10px;
   height: 10px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.8px;
 }
 
@@ -2103,10 +1938,6 @@ openclaw-settings-save-indicator:empty {
   display: inline-flex;
   margin-right: 5px;
   vertical-align: -2px;
-}
-
-.sidebar-recent-session--dragging {
-  opacity: 0.45;
 }
 
 /* Every sidebar session source renders a thread. Keep density and text styling
@@ -2386,10 +2217,6 @@ openclaw-settings-save-indicator:empty {
 .sidebar-child-session__status svg {
   width: 12px;
   height: 12px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
   stroke-width: 1.8px;
 }
 
@@ -2465,16 +2292,6 @@ openclaw-settings-save-indicator:empty {
   width: 16px;
   height: 16px;
   color: inherit;
-}
-
-.nav-collapse-toggle__icon svg {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .nav-section__items {
@@ -2681,11 +2498,6 @@ openclaw-settings-save-indicator:empty {
   text-align: left;
 }
 
-.sidebar-online__retry:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 @media (hover: none), (pointer: coarse) {
   .sidebar-online__person {
     min-height: 44px;
@@ -2719,14 +2531,18 @@ openclaw-settings-save-indicator:empty {
   }
 }
 
+.sidebar-recent-sessions__group--dragging,
+.sidebar-recent-session--dragging,
 .sidebar-zone-entry--dragging {
   opacity: 0.45;
 }
 
+.sidebar-recent-sessions__group--section-drop-before,
 .sidebar-zone-entry--drop-before {
   box-shadow: inset 0 2px 0 color-mix(in srgb, var(--accent) 75%, transparent);
 }
 
+.sidebar-recent-sessions__group--section-drop-after,
 .sidebar-zone-entry--drop-after {
   box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent) 75%, transparent);
 }
@@ -3018,11 +2834,6 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   box-shadow: inset 0 0 0 1px var(--border);
 }
 
-.session-menu__color-swatch svg {
-  width: 12px;
-  height: 12px;
-}
-
 .session-menu__icon-picker {
   padding: 2px;
 }
@@ -3073,11 +2884,6 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 .session-menu__icon-choice:hover,
 .session-menu__icon-choice:focus-visible {
   background: var(--bg-hover);
-}
-
-.session-menu__icon-choice:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
-  outline-offset: -2px;
 }
 
 .session-menu__icon-choice[aria-pressed="true"] {
@@ -3229,6 +3035,7 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   line-height: 1.35;
 }
 
+.session-menu__icon-choice:focus-visible,
 .session-menu__icon-remove:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
   outline-offset: -2px;
@@ -3260,7 +3067,7 @@ a:is(
   align-items: center;
   justify-content: flex-start;
   gap: 8px;
-  min-height: 32px;
+  min-height: var(--sidebar-nav-row-height);
   padding: 0 8px;
   border-radius: var(--radius-md);
   border: 1px solid transparent;
@@ -3302,6 +3109,8 @@ a:is(
   flex-basis: 16px;
 }
 
+.settings-sidebar__item-icon svg,
+.nav-collapse-toggle__icon svg,
 .nav-item__icon svg {
   width: 16px;
   height: 16px;
@@ -3318,6 +3127,7 @@ a:is(
   white-space: nowrap;
 }
 
+.settings-sidebar__item:hover,
 .nav-item:hover {
   color: var(--text);
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
@@ -3328,6 +3138,7 @@ a:is(
   opacity: 1;
 }
 
+.settings-sidebar__item--active,
 .nav-item.active,
 .nav-item--active {
   color: var(--text-strong);
@@ -3538,11 +3349,7 @@ a:is(
 .sidebar-agent-card__chevron svg {
   width: 12px;
   height: 12px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .sidebar-agent-card__subtitle-row {
@@ -3574,16 +3381,23 @@ a:is(
   box-shadow: 0 0 0 2px var(--sidebar-bg);
 }
 
-/* "Pages" section head: zone-style label plus the pin-editor affordance. */
-.sidebar-nav__head {
-  position: absolute;
-  z-index: 1;
-  top: 5px;
-  right: 0;
+.sidebar-nav__lead {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+  padding-inline-end: 8px;
+}
+
+.sidebar-nav__lead > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sidebar-nav__head-slot {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  padding: 0 8px 0 12px;
+  flex: none;
+  block-size: var(--sidebar-nav-row-height);
 }
 
 .sidebar-nav__head-action {
@@ -3616,10 +3430,6 @@ a:is(
   .sidebar-nav__head-action {
     opacity: 1;
   }
-
-  .sidebar-home-session-states {
-    transform: translateX(-25px);
-  }
 }
 
 .sidebar-nav__head-action:hover,
@@ -3631,11 +3441,7 @@ a:is(
 .sidebar-nav__head-action svg {
   width: 13px;
   height: 13px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 /* Home keeps run state plus outbox/draft counts together at the row edge. */
@@ -3648,14 +3454,6 @@ a:is(
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  transition: transform var(--duration-fast) ease;
-}
-
-/* The Pages editor shares Home's row. Move every trailing state together so
-   its hover/focus hitbox never covers progress, warning, or draft status. */
-.sidebar-nav:hover .sidebar-home-session-states,
-.sidebar-nav:focus-within .sidebar-home-session-states {
-  transform: translateX(-25px);
 }
 
 /* Zone 5: product chrome in one slim footer bar. The shell footer's top
@@ -3707,15 +3505,13 @@ openclaw-sidebar-attention {
   cursor: var(--cursor-action);
 }
 
+.settings-sidebar__back:hover,
+.settings-sidebar__search-clear:hover,
+.topbar-icon-btn:hover:not(:disabled),
 .sidebar-issues-button:hover,
 .sidebar-issues-button[aria-expanded="true"] {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
   color: var(--text);
-}
-
-.sidebar-issues-button:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .sidebar-issues-button__icon,
@@ -3845,11 +3641,6 @@ openclaw-sidebar-attention {
   display: inline-flex;
 }
 
-.sidebar-gateway-check svg {
-  width: 12px;
-  height: 12px;
-}
-
 openclaw-tooltip.sidebar-hover-tooltip {
   --openclaw-tooltip-max-width: min(340px, calc(100vw - 24px));
   --openclaw-tooltip-open-animation: openclaw-tooltip-hover-card-in 140ms var(--ease-out);
@@ -3931,16 +3722,6 @@ openclaw-tooltip.sidebar-hover-tooltip {
   color: var(--text);
 }
 
-.sidebar-build-hover-card__copy:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.sidebar-build-hover-card__copy svg {
-  width: 12px;
-  height: 12px;
-}
-
 .sidebar-build-hover-card__copy-idle,
 .sidebar-build-hover-card__copy-done {
   display: inline-flex;
@@ -4015,6 +3796,9 @@ button.gateway-status:focus-visible {
   color: var(--warn);
 }
 
+.session-menu__color-swatch svg,
+.sidebar-gateway-check svg,
+.sidebar-build-hover-card__copy svg,
 .gateway-status__icon svg {
   width: 12px;
   height: 12px;
@@ -4455,14 +4239,11 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   flex: 0 0 auto;
 }
 
+.sidebar-session-filter-summary__lead svg,
 .sidebar-footer-branch__icon svg {
   width: 12px;
   height: 12px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .sidebar-footer-branch__name {
@@ -4504,6 +4285,17 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }
 
+.shell-chrome-controls__button:focus-visible,
+.settings-sidebar__back:focus-visible,
+.settings-sidebar__search-clear:focus-visible,
+.settings-sidebar__item:focus-visible,
+.settings-sidebar__subitem:focus-visible,
+.topbar-search:focus-visible,
+.topbar-icon-btn:focus-visible,
+.sidebar-brand__icon:focus-visible,
+.sidebar-online__retry:focus-visible,
+.sidebar-issues-button:focus-visible,
+.sidebar-build-hover-card__copy:focus-visible,
 .theme-mode-toggle:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
@@ -4512,11 +4304,7 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 .theme-mode-toggle svg {
   width: 16px;
   height: 16px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.75px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .content {
@@ -4606,13 +4394,6 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   margin-top: 0;
 }
 
-.content--chat > openclaw-router-outlet {
-  display: flex;
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 0;
-}
-
 .session-route-not-found {
   width: min(440px, 100%);
 }
@@ -4630,13 +4411,6 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 
 .content--custodian > * + * {
   margin-top: 0;
-}
-
-.content--custodian > openclaw-router-outlet {
-  display: flex;
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 0;
 }
 
 .content--workboard {
@@ -4680,6 +4454,8 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   margin-top: 0;
 }
 
+.content--chat > openclaw-router-outlet,
+.content--custodian > openclaw-router-outlet,
 .content.content--plugin-embed > openclaw-router-outlet {
   display: flex;
   flex: 1 1 0;
@@ -4937,8 +4713,6 @@ html.openclaw-native-macos:not(.openclaw-native-nav):not(.openclaw-native-web-ch
 
 @media (max-width: 900px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .shell--mobile-nav {
-    --shell-pad: 12px;
-    --shell-gap: 12px;
     grid-template-columns: 1fr;
     grid-template-rows: auto auto 1fr;
     grid-template-areas:
@@ -5131,11 +4905,7 @@ html.openclaw-native-macos:not(.openclaw-native-nav):not(.openclaw-native-web-ch
 .sidebar-session-attention__icon svg {
   width: 15px;
   height: 15px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 1.8px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .sidebar-recent-session.sidebar-recent-session--attention-amber .sidebar-recent-session__name,

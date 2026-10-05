@@ -5,10 +5,7 @@ import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
-import {
-  bindGatewayContextResolver,
-  getGatewayContextResolver as getEntryGatewayContextResolver,
-} from "../../../plugins/runtime/gateway-request-scope.js";
+import { getGatewayContextResolver as getEntryGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   runWithGatewayIndependentRootWorkAdmission,
   GatewayDrainingError,
@@ -28,14 +25,12 @@ import { updateSubagentArchiveAtMs } from "./subagent-registry-helpers.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import {
   getCurrentSubagentRunOwner,
-  subagentRuns,
   waitForSubagentRetirementPublication,
 } from "./subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
   mutateSubagentRuns,
   restoreSubagentRunsFromDisk,
-  SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
 import { getLatestSubagentRunForChild } from "./subagent-registry-queries.js";
 import { isRetiredSubagentSessionOwner } from "./subagent-registry-restart-recovery-helpers.js";
@@ -57,42 +52,6 @@ type RequesterRestoreOwner = {
 
 export function isRestoredQueuedFailureSettlementClaimed(entry: SubagentRunRecord): boolean {
   return restoredQueuedFailureSettlementClaims.has(getSubagentRunRuntimeKey(entry));
-}
-
-/** A closed Gateway's durable terminal wake acquires fresh host custody, never its old aliases. */
-export async function recoverSubagentRunGatewayOwner(
-  expected: SubagentRunRecord,
-  resolver: GatewayContextResolver,
-  onRecovered: (entry: SubagentRunRecord) => void,
-): Promise<boolean> {
-  const previousResolver = getEntryGatewayContextResolver(expected);
-  const gateway = resolver();
-  if (!previousResolver || previousResolver() !== undefined || !gateway) {
-    return false;
-  }
-  return mutateSubagentRuns(
-    [expected.runId],
-    (rows) => {
-      const current = rows.get(expected.runId);
-      if (!current) {
-        throw new SubagentRegistryMutationRejectedError(
-          "Subagent Gateway recovery row disappeared",
-        );
-      }
-      return { value: true, postimages: new Map([[current.runId, structuredClone(current)]]) };
-    },
-    {
-      gatewayRecovery: { expected, previousResolver, resolver, gateway },
-      onPublished: (postimages) => {
-        const row = postimages.get(expected.runId);
-        if (row) {
-          bindGatewayContextResolver(row, resolver);
-          onRecovered(row);
-          subagentRuns.commitOwnership(row);
-        }
-      },
-    },
-  );
 }
 
 export function createSubagentRegistryRestorer(config: {
@@ -248,6 +207,7 @@ export function createSubagentRegistryRestorer(config: {
       stateContext,
       assertCurrent,
       settleRequesterTurn,
+      warn,
     });
     assertCurrent();
     if (!runsResumed) {

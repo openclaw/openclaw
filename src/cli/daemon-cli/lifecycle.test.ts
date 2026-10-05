@@ -531,7 +531,7 @@ describe("runDaemonRestart health checks", () => {
       if (outcome === "timeout") {
         expect(waitForGatewayHealthyRestart).toHaveBeenCalledWith(
           expect.objectContaining({
-            attempts: 360,
+            attempts: 10_800,
             delayMs: 500,
             port: 18789,
           }),
@@ -703,7 +703,7 @@ describe("runDaemonRestart health checks", () => {
       expect(writeGatewayRestartIntentSync).not.toHaveBeenCalled();
       expect(clearGatewayRestartIntentSync).not.toHaveBeenCalled();
       expectListenerHealth(
-        platform === "win32" ? 960 : 720,
+        platform === "win32" ? 11_400 : 720,
         createGatewayLockIdentity(),
         process.env,
       );
@@ -753,7 +753,7 @@ describe("runDaemonRestart health checks", () => {
       intent: { waitMs: 30_000 },
     });
     expect(clearGatewayRestartIntentSync).not.toHaveBeenCalled();
-    expectListenerHealth(420, createGatewayLockIdentity({ ownerId: undefined }), process.env);
+    expectListenerHealth(10_860, createGatewayLockIdentity({ ownerId: undefined }), process.env);
   });
 
   it("restarts and verifies the active unmanaged port despite a config edit", async () => {

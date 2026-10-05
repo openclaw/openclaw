@@ -442,13 +442,14 @@ async function withSqliteSessionMutations<T>(
           }),
         );
       }
-      const settleReceiptOnlyDeletions = receiptSource
-        ? await prepareSqliteSessionReceiptDeletions(receiptSource, receiptOnlyTargets, {
-            env: scope.env,
-            assertCurrent,
-            assertRepositoryCurrent: () => repositorySource?.admission.assertCurrent(),
-          })
-        : undefined;
+      const settleReceiptOnlyDeletions =
+        receiptSource && receiptOnlyTargets.length > 0
+          ? await prepareSqliteSessionReceiptDeletions(receiptSource, receiptOnlyTargets, {
+              env: scope.env,
+              assertCurrent,
+              assertRepositoryCurrent: () => repositorySource?.admission.assertCurrent(),
+            })
+          : undefined;
       return await deletions.run(
         new Map(
           targets.map((target) => [
@@ -524,10 +525,10 @@ async function withSqliteSessionMutations<T>(
                   throw new Error("Repository workspace session changed before deletion");
                 }
               };
-              await receiptDeletions.get(workspace.workspaceId)!(
-                assertSessionAbsent,
+              await receiptDeletions.get(workspace.workspaceId)!({
+                assertCurrent: assertSessionAbsent,
                 sessionEntryCurrent,
-              );
+              });
               await repositories?.delete({
                 workspaceId: workspace.workspaceId,
                 sessionEntryCurrent,

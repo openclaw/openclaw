@@ -76,14 +76,10 @@ function resolveEnvNodeProxyTarget(
   } else if (target.protocol === "wss:") {
     target.protocol = "https:";
   }
-  let protocol: NodeProxyProtocol;
-  if (target.protocol === "http:") {
-    protocol = "http";
-  } else if (target.protocol === "https:") {
-    protocol = "https";
-  } else {
+  if (target.protocol !== "http:" && target.protocol !== "https:") {
     return undefined;
   }
+  const protocol = target.protocol === "https:" ? "https" : "http";
   if (matchesNoProxy(target, env)) {
     return undefined;
   }

@@ -19,6 +19,7 @@ import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-
 import { VERSION } from "../version.js";
 import { isTruthyEnvValue } from "./env.js";
 import { pruneMapToMaxSize } from "./map-size.js";
+import type { TelemetryWorkerOperations } from "./telemetry-store.worker.js";
 import type { SuccessfulTelemetryState, TelemetryState } from "./telemetry-worker-contract.js";
 
 const DEFAULT_TELEMETRY_ENDPOINT = "https://telemetry.openclaw.ai/api/latest-version";
@@ -117,24 +118,25 @@ function isDoNotTrackEnabled(): boolean {
   return value === "1" || value === "true";
 }
 
-async function countRecentSessions(context: TelemetryStorage, nowMs: number): Promise<number> {
+async function readTelemetry<Type extends "telemetry.readState" | "telemetry.countRecentSessions">(
+  context: TelemetryStorage,
+  type: Type,
+  input: TelemetryWorkerOperations[Type]["input"],
+  fallback: TelemetryWorkerOperations[Type]["output"],
+): Promise<TelemetryWorkerOperations[Type]["output"]> {
   if (!context.worker) {
-    return 0;
+    return fallback;
   }
   try {
     return (
       (await runOpenClawStateWorkerOperation(
         context.worker,
-        (scope) =>
-          scope.execute({
-            type: "telemetry.countRecentSessions",
-            input: { sinceMs: nowMs - TELEMETRY_CHECK_INTERVAL_MS },
-          }),
+        (scope) => scope.execute({ type, input }),
         { existingOnly: true },
-      )) ?? 0
+      )) ?? fallback
     );
   } catch {
-    return 0;
+    return fallback;
   }
 }
 
@@ -146,21 +148,8 @@ export function buildTelemetryUserAgent(surface: TelemetrySurface): string {
   return `openclaw/${VERSION} (${process.platform}; node/${process.versions.node}; ${process.arch}; ${surface})`;
 }
 
-async function readTelemetryState(context: TelemetryStorage): Promise<TelemetryState> {
-  if (!context.worker) {
-    return {};
-  }
-  try {
-    return (
-      (await runOpenClawStateWorkerOperation(
-        context.worker,
-        (scope) => scope.execute({ type: "telemetry.readState", input: undefined }),
-        { existingOnly: true },
-      )) ?? {}
-    );
-  } catch {
-    return {};
-  }
+function readTelemetryState(context: TelemetryStorage): Promise<TelemetryState> {
+  return readTelemetry(context, "telemetry.readState", undefined, {});
 }
 
 async function persistTelemetrySuccess(
@@ -281,7 +270,12 @@ async function prepareTelemetryPayload(
       providerFamilies,
       plugins,
       pluginsEnabled: enabledPlugins.length,
-      sessionsLast24h: await countRecentSessions(context, Date.now()),
+      sessionsLast24h: await readTelemetry(
+        context,
+        "telemetry.countRecentSessions",
+        { sinceMs: Date.now() - TELEMETRY_CHECK_INTERVAL_MS },
+        0,
+      ),
     },
   };
 }

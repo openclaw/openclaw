@@ -69,7 +69,7 @@ it.for([
             default: "guest",
             definitions: {
               guest: {
-                sessions: { others: "none" },
+                sessions: { others: change === "revocation after context read" ? "view" : "none" },
                 agents: "*",
                 scopes: ["operator.read", "operator.write"],
               },

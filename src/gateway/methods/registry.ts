@@ -44,6 +44,16 @@ function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethod
       `session-scoped gateway methods require operator.write and an authenticated profile: ${name}`,
     );
   }
+  if (
+    input.shareKey &&
+    (input.sessionAccess ||
+      input.controlPlaneWrite ||
+      input.lifetime === "observation" ||
+      (input.shareMaxAgeMs !== undefined &&
+        (!Number.isFinite(input.shareMaxAgeMs) || input.shareMaxAgeMs <= 0)))
+  ) {
+    throw new Error(`gateway response sharing requires a bounded read-only method: ${name}`);
+  }
   return {
     ...input,
     name,
@@ -83,6 +93,16 @@ export function createGatewayMethodRegistry(
         .map((descriptor) => descriptor.name),
     getScope: (name) => byName.get(name)?.scope,
     getSessionAccess: (name) => byName.get(name)?.sessionAccess,
+    getReadSharing: (name) => {
+      const descriptor = byName.get(name);
+      return descriptor?.shareKey
+        ? {
+            shareKey: descriptor.shareKey,
+            shareInvalidationEvents: descriptor.shareInvalidationEvents ?? [],
+            shareMaxAgeMs: descriptor.shareMaxAgeMs ?? 1_000,
+          }
+        : undefined;
+    },
     isStartupUnavailable: (name) => byName.get(name)?.startup === "unavailable-until-sidecars",
     isObservation: (name) => byName.get(name)?.lifetime === "observation",
     isControlPlaneWrite: (name) => byName.get(name)?.controlPlaneWrite === true,

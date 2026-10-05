@@ -32,6 +32,7 @@ import {
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
+import { sleep } from "../../utils/sleep.js";
 import { buildAgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.types.js";
 import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-approval-output.js";
@@ -194,9 +195,7 @@ export async function claudeCliSessionTranscriptHasContent(
   if (first.hasAssistant) {
     return true;
   }
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS);
-  });
+  await sleep(CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS);
   const second = await scanJsonlFile(expectedPath);
   if (second.hasAssistant) {
     return true;

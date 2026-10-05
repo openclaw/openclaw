@@ -194,6 +194,48 @@ describe("createAcpReplyProjector", () => {
   });
 
   it.each(["live", "final_only"] as const)(
+    "bounds output and reports truncation once in %s mode",
+    async (deliveryMode) => {
+      vi.useFakeTimers();
+      try {
+        const { deliveries, projector } = createStreamHarness(deliveryMode);
+        const inputText = Array.from({ length: 4_001 }, (_, index) =>
+          String(index).padStart(6, "0"),
+        ).join("");
+        await emitText(projector, inputText);
+        await emitText(projector, "discarded after the limit");
+        await projector.flush();
+
+        const output = deliveries.filter(({ kind }) => kind !== "tool");
+        expect(output.map(({ text }) => text).join("")).toBe(inputText.slice(0, 24_000));
+        if (deliveryMode === "live") {
+          for (const { kind, text } of output) {
+            expect(kind).toBe("block");
+            expect(text?.length).toBeLessThanOrEqual(1800);
+          }
+        } else {
+          expect(output).toHaveLength(1);
+        }
+        expect(deliveries.filter(({ kind }) => kind === "tool")).toEqual([
+          { kind: "tool", text: prefixSystemMessage("output truncated") },
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("bounds visible status text before adding the system prefix", async () => {
+    const { deliveries, projector } = createStreamHarness("live", {
+      tagVisibility: { available_commands_update: true },
+    });
+    await emitStatus(projector, "s".repeat(500), "available_commands_update");
+    expect(deliveries).toEqual([
+      { kind: "tool", text: prefixSystemMessage(`${"s".repeat(319)}…`) },
+    ]);
+  });
+
+  it.each(["live", "final_only"] as const)(
     "uses finalized and refreshed owner context to redact split private prompts in %s mode",
     async (deliveryMode) => {
       const marker = "[Current message - respond to this]";

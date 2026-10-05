@@ -30,6 +30,46 @@ export function executeSessionStateCommand(
   command: SqliteWorkerCommand<SessionStateWorkerOperations>,
   options: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
 ): SessionStateWorkerOperations[keyof SessionStateWorkerOperations]["output"] {
+  if (command.type === "sessionState.sweep") {
+    const { cursors, now, sessionEntryCurrentSources } = command.input;
+    const admit = (stage: "transaction" | "commit") =>
+      requestSessionEntriesCurrentAdmission(sessionEntryCurrentSources, {
+        stage,
+        facts: undefined,
+      });
+    return runOpenClawStateWriteTransaction(({ db }) => {
+      admit("transaction");
+      const notices: SessionStateNotice[] = [];
+      for (const { watcherSessionKey, targetSessionKey, watcherStorePath } of cursors) {
+        const row = readCursor(db, watcherSessionKey, targetSessionKey);
+        if (!row || (row.watcher_store_path ?? null) !== watcherStorePath) {
+          continue;
+        }
+        const material = normalizeSqliteNumber(row.material_sequence) ?? 0;
+        const lastSeen = normalizeSqliteNumber(row.last_seen_sequence) ?? 0;
+        if (material <= lastSeen) {
+          continue;
+        }
+        executeSqliteQuerySync(
+          db,
+          getSessionStateKysely(db)
+            .updateTable("session_watch_cursors")
+            .set({ notified_sequence: material, updated_at: now })
+            .where("watcher_session_key", "=", watcherSessionKey)
+            .where("target_session_key", "=", targetSessionKey),
+        );
+        notices.push({
+          watcherSessionKey,
+          watcherStorePath,
+          targetSessionKey,
+          lastSeenSequence: lastSeen,
+          queueOnly: isAmbientGroupWatchCursor(row),
+        });
+      }
+      admit("commit");
+      return notices;
+    }, options);
+  }
   if (command.type === "sessionState.registerWatch") {
     const input = command.input;
     const admit = (stage: "prepare" | "transaction" | "commit") =>

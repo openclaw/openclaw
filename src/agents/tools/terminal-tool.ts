@@ -72,7 +72,6 @@ type TerminalToolOptions = {
   config?: OpenClawConfig;
   execSession?: ExecSessionDefaults;
   execOverrides?: ExecPolicyOverrides & { mode?: ExecMode };
-  runId?: string;
   approvalReviewerDeviceIds?: string[];
   getGatewayContext?: () => TerminalToolGatewayContext | undefined;
 };

@@ -6,11 +6,7 @@ import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-on
 import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
 import { DEFAULT_RESTART_HEALTH_TIMEOUT_MS } from "../cli/daemon-cli/restart-health.constants.js";
 import { withProgress } from "../cli/progress.js";
-import {
-  createConfigReadError,
-  formatInvalidConfigDetails,
-  isConfigReadFailure,
-} from "../config/io.invalid-config.js";
+import { createConfigReadError, isConfigReadFailure } from "../config/io.invalid-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildGatewayConnectionDetails,
@@ -425,7 +421,7 @@ export async function readNonObservingHealthConfig(): Promise<OpenClawConfig> {
     pluginValidation: "core-only",
   });
   if (isConfigReadFailure(snapshot)) {
-    throw createConfigReadError(snapshot.path, formatInvalidConfigDetails(snapshot.issues));
+    throw createConfigReadError(snapshot);
   }
   return snapshot.runtimeConfig ?? snapshot.config;
 }

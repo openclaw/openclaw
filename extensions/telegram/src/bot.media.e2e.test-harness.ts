@@ -122,6 +122,7 @@ type ApiStub = {
   getChat: Mock;
   sendChatAction: Mock;
   sendMessage: Mock;
+  deleteMyCommands: () => Promise<void>;
   setMyCommands: (commands: Array<{ command: string; description: string }>) => Promise<void>;
 };
 
@@ -130,6 +131,7 @@ const apiStub: ApiStub = {
   getChat: vi.fn(async () => undefined),
   sendChatAction: sendChatActionSpy,
   sendMessage: vi.fn(async () => ({ message_id: 1 })),
+  deleteMyCommands: vi.fn(async () => undefined),
   setMyCommands: vi.fn(async () => undefined),
 };
 

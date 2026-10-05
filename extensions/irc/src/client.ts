@@ -1,6 +1,8 @@
 import net from "node:net";
 import tls from "node:tls";
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -83,7 +85,7 @@ export type IrcClient = {
   isReady: () => boolean;
   sendRaw: (line: string) => void;
   join: (channel: string) => void;
-  sendPrivmsg: (target: string, text: string, replyTo?: string) => void;
+  sendPrivmsg: (target: string, text: string, replyTo?: string) => Promise<void>;
   quit: (reason?: string) => void;
   close: () => void;
 };
@@ -224,7 +226,8 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
     sendRaw(`JOIN ${target}`);
   };
 
-  const sendPrivmsg = (target: string, text: string, replyTo?: string) => {
+  const sendPrivmsg = async (target: string, text: string, replyTo?: string) => {
+    const effect = captureEffectAuthority();
     const normalizedTarget = sanitizeIrcTarget(target);
     const cleaned = sanitizeIrcOutboundText(text);
     if (!cleaned) {
@@ -234,11 +237,33 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
     const maxChunkBytes = IRC_MAX_LINE_BYTES - lineOverheadBytes;
     // Encode the original text with the reference so escapes are not decoded twice.
     let remaining = replyTo ? sanitizeIrcOutboundText(`${text}\n\n[reply:${replyTo}]`) : cleaned;
+    const chunks: string[] = [];
     while (remaining.length > 0) {
       const chunk = takeIrcPrivmsgChunk(remaining, messageChunkMaxChars, maxChunkBytes).trim();
-      sendRaw(`PRIVMSG ${normalizedTarget} :${chunk}`);
+      chunks.push(chunk);
       remaining = remaining.slice(chunk.length).trimStart();
     }
+    let sent = false;
+    await effect
+      .initiate(() => {
+        for (const chunk of chunks) {
+          options.abortSignal?.throwIfAborted();
+          if (!ready || closed) {
+            throw new Error("IRC connection closed before send");
+          }
+          sendRaw(`PRIVMSG ${normalizedTarget} :${chunk}`);
+          sent = true;
+        }
+      })
+      .catch((error: unknown) => {
+        if (sent) {
+          throw createChannelPartialDeliveryError(error, {
+            messageIds: [],
+            visibleReplySent: true,
+          });
+        }
+        throw error;
+      });
   };
 
   const quit = (reason?: string) => {

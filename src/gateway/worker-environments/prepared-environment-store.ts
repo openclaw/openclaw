@@ -221,7 +221,7 @@ export function isPreparedReservationWithinCapacity(
 export function createPreparedEnvironmentStoreOps(options: {
   db: DatabaseSync;
   now: () => number;
-  createIntent: (db: DatabaseSync, input: WorkerEnvironmentIntentInput) => WorkerEnvironmentRecord;
+  createIntent: (input: WorkerEnvironmentIntentInput) => WorkerEnvironmentRecord;
   get: (db: DatabaseSync, environmentId: string) => WorkerEnvironmentRecord | undefined;
 }) {
   const { db } = options;
@@ -318,7 +318,7 @@ export function createPreparedEnvironmentStoreOps(options: {
       if (snapshotProjectKey(input.intent.profileSnapshot) !== input.projectKey) {
         throw new Error("Prepared worker capacity does not match the admitted project");
       }
-      return options.createIntent(db, input.intent);
+      return options.createIntent(input.intent);
     },
 
     requestPreparedDestroy(

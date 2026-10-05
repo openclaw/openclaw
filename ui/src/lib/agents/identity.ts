@@ -3,6 +3,7 @@ import { registerListener } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentIdentityResult } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
+import { resolveGatewayReadRetryDelayMs } from "../gateway-availability.ts";
 
 type AgentIdentityGatewaySnapshot = {
   client: GatewayBrowserClient | null;
@@ -17,7 +18,9 @@ type AgentIdentityGateway = {
 
 type AgentIdentityCacheEntry = {
   pending: Promise<AgentIdentityResult | null>;
-  result?: { identity: AgentIdentityResult | null; cachedAt: number };
+  result?: { identity: AgentIdentityResult | null };
+  refreshAt: number;
+  failures: number;
 };
 
 const AGENT_IDENTITY_CACHE_LIMIT = 128;
@@ -44,7 +47,7 @@ function invalidateAgentIdentityCache(
 }
 
 function hasFreshAgentIdentityResult(entry: AgentIdentityCacheEntry | undefined): boolean {
-  return Boolean(entry?.result && Date.now() - entry.result.cachedAt < AGENT_IDENTITY_CACHE_TTL_MS);
+  return Boolean(entry?.result && Date.now() < entry.refreshAt);
 }
 
 export function fetchAgentIdentity(
@@ -58,13 +61,17 @@ export function fetchAgentIdentity(
   }
   const key = agentId.trim();
   const cached = cache.get(key);
-  if (cached && (!cached.result || hasFreshAgentIdentityResult(cached))) {
+  if (cached && Date.now() < cached.refreshAt) {
     cache.delete(key);
     cache.set(key, cached);
     return cached.pending;
   }
   cache.delete(key);
-  const entry: AgentIdentityCacheEntry = { pending: Promise.resolve(null) };
+  const entry: AgentIdentityCacheEntry = {
+    pending: Promise.resolve(null),
+    refreshAt: Infinity,
+    failures: cached?.failures ?? 0,
+  };
   entry.pending = client
     .request<AgentIdentityResult | null>("agent.identity.get", { agentId: key })
     .then(
@@ -72,24 +79,27 @@ export function fetchAgentIdentity(
         if (identityRequests.get(client) !== cache || cache.get(key) !== entry) {
           return null;
         }
-        entry.result = { identity, cachedAt: Date.now() };
-        for (const [id, candidate] of cache) {
-          if (cache.size <= AGENT_IDENTITY_CACHE_LIMIT) {
-            break;
-          }
-          if (candidate.result) {
-            cache.delete(id);
-          }
-        }
+        entry.result = { identity };
+        entry.refreshAt = Date.now() + AGENT_IDENTITY_CACHE_TTL_MS;
+        entry.failures = 0;
         return identity;
       },
       (error: unknown) => {
-        if (cache.get(key) === entry) {
-          cache.delete(key);
-        }
+        // Renders share the rejected request until the retry window opens.
+        entry.refreshAt = Date.now() + resolveGatewayReadRetryDelayMs(error, entry.failures++);
         throw error;
       },
-    );
+    )
+    .finally(() => {
+      for (const [id, candidate] of cache) {
+        if (cache.size <= AGENT_IDENTITY_CACHE_LIMIT) {
+          break;
+        }
+        if (Number.isFinite(candidate.refreshAt)) {
+          cache.delete(id);
+        }
+      }
+    });
   cache.set(key, entry);
   return entry.pending;
 }

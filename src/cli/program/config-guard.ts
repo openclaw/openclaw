@@ -323,13 +323,10 @@ export async function ensureConfigReady(
           : await getConfigSnapshot(configSnapshotOptions, params.measure);
         if (retrySnapshot.exists && !retrySnapshot.valid) {
           const retryIssues = renderConfigValidationIssueLines(retrySnapshot);
-          const createError = isConfigReadFailure(retrySnapshot)
-            ? createConfigReadError
-            : createInvalidConfigError;
-          throw createError(
-            retrySnapshot.path,
-            retryIssues.join("\n") || "Unknown validation issue.",
-          );
+          const details = retryIssues.join("\n") || "Unknown validation issue.";
+          throw isConfigReadFailure(retrySnapshot)
+            ? createConfigReadError(retrySnapshot, details)
+            : createInvalidConfigError(retrySnapshot.path, details);
         }
         setRuntimeConfigSnapshot(
           retrySnapshot.runtimeConfig ?? retrySnapshot.config,

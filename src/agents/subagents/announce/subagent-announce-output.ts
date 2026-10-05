@@ -11,6 +11,7 @@ import { resolveFreshSessionTotalTokens } from "../../../config/sessions/types.j
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
 import { isContractToolCallBlock } from "../../../shared/tool-block-contract.js";
+import { sleep } from "../../../utils/sleep.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import type { getLatestSubagentRunByChildSessionKey } from "../registry/subagent-registry-read.js";
@@ -336,9 +337,7 @@ export async function buildCompactAnnounceStatsLine(params: {
       break;
     }
     if (!isFastTestRuntimeEnv()) {
-      await new Promise((resolve) => {
-        setTimeout(resolve, 150);
-      });
+      await sleep(150);
     }
     entry = readSubagentSessionEntry(storePath, params.sessionKey);
   }

@@ -426,10 +426,6 @@ function formatToolFailuresSection(failures: ToolFailure[]): string {
   return `\n\n## Tool Failures\n${lines.join("\n")}`;
 }
 
-function normalizeCompactionSuffix(suffix: string | CompactionSuffix): CompactionSuffix {
-  return typeof suffix === "string" ? { text: suffix, contextRanges: [] } : suffix;
-}
-
 function resolveSuffixTailStart(suffix: CompactionSuffix, tailBudget: number): number {
   const desiredStart = Math.max(0, suffix.text.length - tailBudget);
   const containingRange = suffix.contextRanges.find(
@@ -444,8 +440,7 @@ function resolveSuffixTailStart(suffix: CompactionSuffix, tailBudget: number): n
   );
 }
 
-function capCompactionSuffix(suffixInput: string | CompactionSuffix, maxChars: number): string {
-  const suffix = normalizeCompactionSuffix(suffixInput);
+function capCompactionSuffix(suffix: CompactionSuffix, maxChars: number): string {
   if (suffix.text.length <= maxChars) {
     return suffix.text;
   }
@@ -465,11 +460,10 @@ function capCompactionSuffix(suffixInput: string | CompactionSuffix, maxChars: n
 
 function budgetCompactionSummary(
   summaryBody: string,
-  suffixInput: string | CompactionSuffix,
+  suffix: CompactionSuffix,
   maxChars: number,
   qualityRetention?: SummaryQualityRetention,
 ) {
-  const suffix = normalizeCompactionSuffix(suffixInput);
   const joined = `${summaryBody}${suffix.text}`;
   // A body that fits still goes through the retention plan when it omits an
   // audited identifier or lets an audit section outgrow its cap; both would

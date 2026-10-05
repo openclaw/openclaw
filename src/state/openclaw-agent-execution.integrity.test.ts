@@ -7,7 +7,6 @@ import type { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { compareValidSemver } from "../infra/semver.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import {
   createOpenClawAgentDatabaseClaim,
@@ -56,7 +55,6 @@ import * as stateWorkerStore from "./openclaw-state-worker-store.js";
 const counter = vi.hoisted(() => ({
   path: "",
   checks: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2),
-  backfills: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
 }));
 vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/worker-cpu.js")>();
@@ -67,17 +65,12 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
     DatabaseSync.prototype.prepare = function(sql) {
       const statement = prepare.call(this, sql);
       const match = /^PRAGMA (integrity_check|foreign_key_check)(?:[(]'sqlite_schema'[)])?;?$/i.exec(sql.trim());
-      const backfill = /^PRAGMA +(?:main[.])?wal_checkpoint(?:[(] *(?:PASSIVE|FULL|RESTART|TRUNCATE) *[)])? *;?$/i.test(sql.trim());
-      if (this.location() === workerData.testIntegrityPath && (match || backfill)) {
+      if (this.location() === workerData.testIntegrityPath && match) {
         for (const method of ["all", "get", "iterate", "run"]) {
           const execute = statement[method].bind(statement);
           statement[method] = (...args) => {
-            if (match) {
-              Atomics.add(new Int32Array(workerData.testIntegrityChecks),
-                match[1].toLowerCase() === "integrity_check" ? 0 : 1, 1);
-            } else {
-              Atomics.add(new Int32Array(workerData.testIntegrityBackfills), 0, 1);
-            }
+            Atomics.add(new Int32Array(workerData.testIntegrityChecks),
+              match[1].toLowerCase() === "integrity_check" ? 0 : 1, 1);
             return execute(...args);
           };
         }
@@ -102,7 +95,6 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
           ...options?.workerData,
           testIntegrityPath: counter.path,
           testIntegrityChecks: counter.checks,
-          testIntegrityBackfills: counter.backfills,
         },
       });
     },
@@ -550,11 +542,11 @@ it.runIf(process.platform === "linux")(
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-process-death-") };
     const cases = [
       "same-boot",
+      "checkpointed-wal",
       "foreign-boot",
       "legacy-lease",
       "pid-reused",
       "dirty-receipt",
-      "missing-wal",
       "corrupt-page",
       "interrupted-admission",
     ];
@@ -589,13 +581,9 @@ it.runIf(process.platform === "linux")(
     expect(child.signalCode).toBe("SIGKILL");
     expect(fixtures.map((fixture) => fixture.agentId)).toEqual(cases);
     const shared = openOpenClawStateDatabase({ env });
-    // Supported older libraries lack a non-mutating WAL observation and must scan.
-    const sqliteVersion = shared.db.prepare("SELECT sqlite_version() AS version").get()?.version;
-    const supportsNoop =
-      typeof sqliteVersion === "string" && (compareValidSemver(sqliteVersion, "3.53.0") ?? -1) >= 0;
     for (const fixture of fixtures) {
       const { agentId, path: pathname } = fixture;
-      const deferred = agentId === "same-boot" && supportsNoop;
+      const deferred = agentId === "same-boot" || agentId === "checkpointed-wal";
       const held = shared.db
         .prepare(
           "SELECT lease_id, provenance, owner_pid, owner_start_time FROM agent_database_leases WHERE path=?",
@@ -612,7 +600,11 @@ it.runIf(process.platform === "linux")(
       } else {
         expect(readOpenClawAgentIntegrityVerification(pathname, env)?.clean_close).toBe(0);
       }
-      expect(fs.statSync(`${pathname}-wal`).size).toBeGreaterThan(32);
+      if (agentId === "checkpointed-wal") {
+        expect(fs.statSync(`${pathname}-wal`).size).toBe(0);
+      } else {
+        expect(fs.statSync(`${pathname}-wal`).size).toBeGreaterThan(32);
+      }
       if (agentId === "foreign-boot" || agentId === "corrupt-page") {
         shared.db
           .prepare("UPDATE agent_database_leases SET provenance=? WHERE path=?")
@@ -627,9 +619,6 @@ it.runIf(process.platform === "linux")(
           .run(process.pid, pathname);
       } else if (agentId === "dirty-receipt") {
         shared.db.prepare("DELETE FROM agent_database_leases WHERE path=?").run(pathname);
-      } else if (agentId === "missing-wal") {
-        fs.rmSync(`${pathname}-wal`);
-        fs.rmSync(`${pathname}-shm`);
       }
       if (agentId === "corrupt-page") {
         const file = fs.openSync(pathname, "r+");
@@ -643,7 +632,6 @@ it.runIf(process.platform === "linux")(
 
       counter.path = pathname;
       counter.checks = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
-      counter.backfills = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
       const context = captureOpenClawStateWorkerContext({ env });
       const assertCurrent = () => context.admission.assertCurrent();
       const source: AgentDatabaseRequestExecutionSource = {
@@ -681,9 +669,6 @@ it.runIf(process.platform === "linux")(
         const sessionKey = `agent:${agentId}:after-crash`;
         await expect(
           generation.run(source, (scope) => {
-            if (deferred) {
-              expect(Atomics.load(new Int32Array(counter.backfills), 0)).toBe(0);
-            }
             return scope.execute({
               type: "session.transcript.initialize",
               input: { sessionKey, sessionId: "after-crash" },
@@ -711,9 +696,9 @@ it.runIf(process.platform === "linux")(
       expect(reopened.prepare("SELECT store_json FROM auth_profile_store").all()).toEqual([
         { store_json: '{"ok":true}' },
       ]);
-      expect(reopened.prepare("SELECT state_key FROM auth_profile_state").all()).toEqual(
-        agentId === "missing-wal" ? [] : [{ state_key: "committed-wal" }],
-      );
+      expect(reopened.prepare("SELECT state_key FROM auth_profile_state").all()).toEqual([
+        { state_key: "committed-wal" },
+      ]);
     }
   },
 );

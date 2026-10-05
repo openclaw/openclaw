@@ -33,6 +33,10 @@ import type {
   SessionEntryPatchGuard,
   SessionEntryPatchSelection,
 } from "./session-entry-patch.types.js";
+import {
+  prepareSessionSourceAuthority,
+  type PreparedSessionSourceAuthority,
+} from "./session-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export async function patchSessionEntryInWorker(params: {
@@ -42,19 +46,36 @@ export async function patchSessionEntryInWorker(params: {
   selection: SessionEntryPatchSelection;
   assertCurrent: () => void;
   guard?: SessionEntryPatchGuard;
+  preparedSource?: PreparedSessionSourceAuthority;
   prepare(snapshot: SqliteLifecycleTargetSnapshot): Promise<SessionEntryPatchCommit | undefined>;
   onCommitted?: (entry: SessionEntry) => void;
 }): Promise<{ entry: SessionEntry | null; wrote: boolean }> {
-  return runSessionEntryWorkerOperation<
+  let source = params.preparedSource;
+  const sourceChecks = source?.checks ?? [];
+  const releaseSource = () => {
+    const held = source;
+    source = undefined;
+    return held?.release?.();
+  };
+  return await runSessionEntryWorkerOperation<
     SessionEntryPatchCommitted,
     { entry: SessionEntry | null; wrote: boolean }
   >({
     ...params,
+    releaseSource,
     candidateKind: "session-entry-patch",
-    assertPrepared: () => params.guard?.assertCurrent?.(),
+    assertPrepared: () => {
+      params.guard?.assertCurrent?.();
+      source?.assertCurrent();
+    },
     assertCandidate: (candidate) => {
+      if (candidate.refusedSource) {
+        sourceChecks[candidate.refusedSource.index]?.refuse(candidate.refusedSource.facts);
+        throw new Error("Session source refusal omitted its prepared assertion");
+      }
       if (candidate.entry !== null) {
         params.guard?.assertCurrent?.();
+        source?.assertCurrent();
       }
     },
     async run(worker, commit) {
@@ -67,11 +88,15 @@ export async function patchSessionEntryInWorker(params: {
       const input = await params.prepare(snapshot);
       params.assertCurrent();
       params.guard?.assertCurrent?.();
+      if (input && source) {
+        input.sources = sourceChecks.map((check) => check.predicate);
+        source.assertCurrent();
+      }
       return input
         ? commit(() => worker.execute({ type: "session.entry.patch.commit", input }))
         : { entry: null, wrote: false };
     },
-    onCommitted(committed, published, identity) {
+    async onCommitted(committed, published, identity) {
       try {
         if (committed.publication && committed.entry) {
           params.onCommitted?.(structuredClone(committed.entry));
@@ -86,6 +111,11 @@ export async function patchSessionEntryInWorker(params: {
             published.prepared,
           );
         }
+      }
+      await releaseSource();
+      if (committed.entry !== null && params.guard?.source) {
+        source = await prepareSessionSourceAuthority(params.guard.source);
+        source.assertCurrent();
       }
       return { entry: committed.entry, wrote: Boolean(committed.publication) };
     },
@@ -102,6 +132,7 @@ export async function runSessionEntryWorkerOperation<
   assertCurrent: () => void;
   assertPrepared?: () => void;
   assertCandidate?: (candidate: Candidate) => void;
+  releaseSource?: () => void | Promise<void>;
   candidateKind: Candidate["kind"];
   retainedExecution?: OpenClawAgentDatabaseExecution;
   prepareWorker?: SessionEntryWorkerPreparation;
@@ -314,5 +345,6 @@ export async function runSessionEntryWorkerOperation<
       }
     },
     params.nativeSettlement?.onAdmission,
+    params.releaseSource,
   );
 }

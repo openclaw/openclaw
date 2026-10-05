@@ -248,18 +248,14 @@ function parseOptionalSecurityRelease(value: unknown): ClawHubPackageSecurityRes
       "Malformed ClawHub security response: expected release to be an object or null.",
     );
   }
-  const result: NonNullable<ClawHubPackageSecurityResponse["release"]> = {};
   const releaseId = readClawHubStringField(value, "releaseId", "security release");
   const legacyId = readClawHubStringField(value, "id", "security release");
   const version = readClawHubStringField(value, "version", "security release");
   const id = releaseId ?? legacyId;
-  if (id !== undefined) {
-    result.id = id;
-  }
-  if (version !== undefined) {
-    result.version = version;
-  }
-  return result;
+  return {
+    ...(id !== undefined ? { id } : {}),
+    ...(version !== undefined ? { version } : {}),
+  };
 }
 
 export function parseClawHubPackageSecurityResponse(
@@ -301,17 +297,13 @@ export function parseClawHubPackageSecurityResponse(
   };
   const parsedPackage = parseOptionalSecurityPackage(value.package);
   const verdict = readClawHubStringField(value, "verdict", "security response");
-  if (verdict) {
-    result.verdict = verdict;
-  }
   const parsedRelease = parseOptionalSecurityRelease(value.release);
-  if (parsedPackage !== undefined) {
-    result.package = parsedPackage;
-  }
-  if (parsedRelease !== undefined) {
-    result.release = parsedRelease;
-  }
-  return result;
+  return {
+    ...result,
+    ...(verdict ? { verdict } : {}),
+    ...(parsedPackage !== undefined ? { package: parsedPackage } : {}),
+    ...(parsedRelease !== undefined ? { release: parsedRelease } : {}),
+  };
 }
 
 export async function fetchClawHubPackageDetail(

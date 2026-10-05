@@ -76,22 +76,14 @@ const googleMeetToolDeps: {
   platform: () => process.platform,
 };
 
-type GoogleMeetGatewayToolAction =
-  | "join"
-  | "create"
-  | "status"
-  | "transcript"
-  | "participation_context"
-  | "participate"
-  | "recover_current_tab"
-  | "setup_status"
-  | "leave"
-  | "end_active_conference"
-  | "speak"
-  | "test_speech"
-  | "test_listen";
-
-const googleMeetGatewayMethods: Partial<Record<GoogleMeetGatewayToolAction, string>> = {
+const googleMeetGatewayMethods = {
+  join: "googlemeet.join",
+  create: "googlemeet.create",
+  status: "googlemeet.status",
+  transcript: "googlemeet.transcript",
+  participate: "googlemeet.participate",
+  leave: "googlemeet.leave",
+  speak: "googlemeet.speak",
   participation_context: "googlemeet.participationContext",
   recover_current_tab: "googlemeet.recoverCurrentTab",
   setup_status: "googlemeet.setup",
@@ -171,11 +163,11 @@ export function assertGoogleMeetAgentToolActionSupported(params: {
 
 export async function callGoogleMeetGatewayFromTool(params: {
   config: GoogleMeetConfig;
-  action: GoogleMeetGatewayToolAction;
+  action: keyof typeof googleMeetGatewayMethods;
   raw: Record<string, unknown>;
   runtime?: OpenClawPluginApi["runtime"];
 }): Promise<unknown> {
-  const method = googleMeetGatewayMethods[params.action] ?? `googlemeet.${params.action}`;
+  const method = googleMeetGatewayMethods[params.action];
   try {
     if (params.runtime) {
       return await params.runtime.gateway.request(method, params.raw, {

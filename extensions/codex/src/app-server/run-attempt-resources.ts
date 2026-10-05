@@ -46,10 +46,10 @@ import {
   retainSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
 import type {
+  CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
   CodexThreadFinalConfigPatchDecision,
 } from "./thread-lifecycle-types.js";
-import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle.js";
 import {
   isSameCodexAppServerThreadOwner,
   retainCodexAppServerBindingSubscription,

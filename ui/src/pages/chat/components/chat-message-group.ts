@@ -262,7 +262,10 @@ export function renderActivityGroup(
           headline
             ? describeToolGroup(visibleActivity)
                 .outcomes.filter(({ kind }) => kind !== "failed" && kind !== "skipped")
-                .map(({ label }) => html`<span class="muted">${label}</span>`)
+                .map(
+                  ({ label }) =>
+                    html`<span class="chat-activity-group__outcome muted">${label}</span>`,
+                )
             : nothing
         }
         ${

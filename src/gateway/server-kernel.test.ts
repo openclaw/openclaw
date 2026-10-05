@@ -39,19 +39,7 @@ import { createMaintenanceHandles } from "./server-runtime-services.test-harness
 import { expectCoreAgentDatabaseReadiness } from "./server-startup-readiness.test-support.js";
 import { withPreparedSessionEventRow } from "./session-event-prepared-row.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
-
-const KERNEL_TEST_ENV = {
-  OPENCLAW_GATEWAY_PASSWORD: undefined,
-  OPENCLAW_GATEWAY_TOKEN: undefined,
-  OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-  OPENCLAW_SKIP_CANVAS_HOST: "1",
-  OPENCLAW_SKIP_CHANNELS: "1",
-  OPENCLAW_SKIP_CRON: "1",
-  OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-  OPENCLAW_SKIP_PROVIDERS: "1",
-  OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-  VITEST: "1",
-};
+import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 
 describe("createGatewayKernel", () => {
   it.each([false, true])(
@@ -942,7 +930,6 @@ describe("createGatewayKernel", () => {
         "config.auth.secrets-activate",
         "agents.github-profile-cleanup",
         "plugins.bootstrap-imports",
-        "startup.maintenance",
         "plugins.bootstrap",
         "gateway.kernel-state",
         "node-desktop.runtime-import",
@@ -965,9 +952,13 @@ describe("createGatewayKernel", () => {
         "runtime.early",
         "runtime.early.discovery",
         "gateway.request-runtime",
+        "gateway.chat-metadata-lifecycle",
         "gateway.config-revision-key",
         "gateway.request-context",
         "sessions.projection",
+        "sessions.materialize",
+        "gateway.lifetime-sidecars",
+        "gateway.instance-runtime-import",
       ]);
     } finally {
       try {

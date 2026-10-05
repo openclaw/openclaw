@@ -3,6 +3,7 @@
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/index.js";
 import {
   listConnectedNodePluginTools,
@@ -15,6 +16,7 @@ import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import { testing } from "./code-mode.test-support.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 import { createNodePluginTools } from "./node-plugin-tools.js";
+import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 import { isToolResultError } from "./tool-result-error.js";
 import { compactToolSearchCatalogEntry } from "./tool-search-catalog.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
@@ -115,6 +117,43 @@ afterEach(() => {
 });
 
 describe("createNodePluginTools", () => {
+  it.each(["responseId", "turnId"] as const)(
+    "scopes reused call IDs by %s and preserves replay keys",
+    async (identityField) => {
+      replaceNodePluginTools({ nodeId: "node-1", tools: [remoteEcho] });
+      vi.mocked(callGatewayTool).mockResolvedValue({ payload: { ok: true } });
+      const tool = expectDefined(createNodePluginTools({})[0], "remote echo tool");
+      const calls = ["first", "second"].map((text, index) => {
+        const toolCall = {
+          type: "toolCall" as const,
+          id: "exec_0",
+          name: tool.name,
+          arguments: { text },
+        };
+        return {
+          toolCall,
+          assistantMessage: makeAssistantMessageFixture({
+            [identityField]: `turn-${index + 1}`,
+            stopReason: "toolUse",
+            content: [toolCall],
+          }),
+        };
+      });
+      const first = expectDefined(calls[0], "first assistant turn");
+      for (const context of [...calls, first]) {
+        await runWithAgentToolExecutionContext(context, () =>
+          tool.execute(context.toolCall.id, context.toolCall.arguments),
+        );
+      }
+
+      expect(vi.mocked(callGatewayTool).mock.calls.map((call) => call[2])).toMatchObject([
+        { idempotencyKey: "turn-1:exec_0", params: { text: "first" } },
+        { idempotencyKey: "turn-2:exec_0", params: { text: "second" } },
+        { idempotencyKey: "turn-1:exec_0", params: { text: "first" } },
+      ]);
+    },
+  );
+
   it("materializes connected node plugin tools and invokes their node command", async () => {
     replaceNodePluginTools({
       nodeId: "node-1",

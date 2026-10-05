@@ -57,9 +57,9 @@ import {
   resolveAgentRestartRecoveryContext,
   resolveAgentRestartRecoveryExecutionIdentityAdmission,
 } from "./agent-restart-recovery-context.js";
+import { dispatchAgentRunWithCommentaryMedia } from "./agent-run-commentary-media.js";
 import { createAgentRunDiagnostics } from "./agent-run-diagnostics.js";
 import { withAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
-import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
 import { resolveExecutionIdentitySpawnFacts } from "./agent-run-execution-lineage.js";
 import type { StartAgentRunExecutionParams } from "./agent-run-execution-types.js";
 import { settleUnstartedGatewayFollowup } from "./agent-run-subagent.js";
@@ -171,12 +171,12 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
       }
     };
     const dispatchAdmittedAgentRun = (
-      dispatch: Parameters<typeof dispatchAgentRunFromGateway>[0],
+      dispatch: Parameters<typeof dispatchAgentRunWithCommentaryMedia>[0],
     ) => {
       const run = () =>
         withPreparedModelRuntimePluginGenerationScope(
           replyDispatchRuntime.pluginGeneration,
-          () => dispatchAgentRunFromGateway(dispatch),
+          () => dispatchAgentRunWithCommentaryMedia(dispatch, params),
           () => (leaseActive ? preparedModelRuntimeLease?.snapshot : undefined),
         );
       const recorder = prepared.userTurn.recorder;

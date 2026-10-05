@@ -130,7 +130,13 @@ function requireUnifiedDistGraph(): TsdownConfigEntry {
 }
 
 function readGatewayRunLoopSource(): string {
-  return readFileSync(new URL("../../src/cli/gateway-cli/run-loop.ts", import.meta.url), "utf8");
+  return ["run-loop.ts", "run-loop-startup.ts"]
+    .map((file) =>
+      stripNodeTypeScriptTypes(
+        readFileSync(new URL(`../../src/cli/gateway-cli/${file}`, import.meta.url), "utf8"),
+      ),
+    )
+    .join("\n");
 }
 
 function readAgentAuthDiscoverySource(): string {
@@ -442,7 +448,7 @@ describe("tsdown config", () => {
 
   it("routes gateway run-loop lifecycle imports through the stable runtime boundary", () => {
     const importSpecifiers = [
-      ...readGatewayRunLoopSource().matchAll(/import\(["']([^"']+)["']\)/gu),
+      ...readGatewayRunLoopSource().matchAll(/\bimport\s*\(\s*["']([^"']+)["']/gu),
     ].map((match) => match[1]);
 
     expect(new Set(importSpecifiers)).toEqual(new Set(["./lifecycle.runtime.js"]));

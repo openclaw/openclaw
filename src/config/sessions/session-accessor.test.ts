@@ -1041,7 +1041,7 @@ describe("session accessor seam", () => {
       updatedAt: 10,
       ...initial,
     });
-    const snapshot = loadReplySessionInitializationSnapshot({
+    const snapshot = await loadReplySessionInitializationSnapshot({
       agentId: "main",
       ...scope,
     });
@@ -1088,7 +1088,7 @@ describe("session accessor seam", () => {
       },
     );
 
-    const snapshot = loadMainInitializationSnapshot(sessionKey);
+    const snapshot = await loadMainInitializationSnapshot(sessionKey);
     if (!snapshot.currentEntry) {
       throw new Error("expected reply session initialization snapshot");
     }
@@ -1134,7 +1134,7 @@ describe("session accessor seam", () => {
       },
     );
 
-    const snapshot = loadMainInitializationSnapshot(sessionKey);
+    const snapshot = await loadMainInitializationSnapshot(sessionKey);
 
     const current = loadSessionEntry({ sessionKey, storePath });
     if (!current) {
@@ -1179,9 +1179,9 @@ describe("session accessor seam", () => {
     expect(persisted?.pendingFinalDelivery).toBeUndefined();
   });
 
-  it("rejects a reply initialization key scoped to another explicit agent", () => {
+  it("rejects a reply initialization key scoped to another explicit agent", async () => {
     try {
-      loadReplySessionInitializationSnapshot({
+      await loadReplySessionInitializationSnapshot({
         agentId: "main",
         sessionKey: "agent:ops:main",
         storePath,
@@ -1263,7 +1263,7 @@ describe("session accessor seam", () => {
         updatedAt: 10,
       },
     );
-    const snapshot = loadMainInitializationSnapshot(sessionKey);
+    const snapshot = await loadMainInitializationSnapshot(sessionKey);
 
     const committed = await commitReplySessionInitialization({
       activeSessionKey: sessionKey,

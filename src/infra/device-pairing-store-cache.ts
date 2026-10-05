@@ -56,7 +56,9 @@ export function readCachedDevicePairingStoreSnapshot(
   if (cached?.connection === db && cached.path === path && cached.dataVersion === dataVersion) {
     return cached;
   }
-  const state = runSqliteDeferredTransactionSync(db, read);
+  const state = runSqliteDeferredTransactionSync(db, read, {
+    operationLabel: "devicePairing.snapshot",
+  });
   const revision = resolveDevicePairingStoreRevision(state.pairedByDeviceId);
   cache.value = { connection: db, path, state, dataVersion, revision };
   return cache.value;

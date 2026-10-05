@@ -183,15 +183,35 @@ export async function prepareAgentNativeBindingOperation(
 
 export async function loadAgentTrajectoryOperations() {
   const kernel = await import("../trajectory/runtime-store.sqlite.js");
+  const retention = await import("../trajectory/runtime-retention.sqlite.js");
   return {
     "trajectory.events.append": (
-      input: Parameters<typeof kernel.appendSqliteTrajectoryRuntimeEventsInTransaction>[1],
+      input: Parameters<typeof kernel.appendSqliteTrajectoryRuntimeEventsWithWriter>[0],
       { writeTransaction, admit },
     ) =>
-      writeTransaction("trajectory.runtime.append", "Trajectory append", (current) => {
-        kernel.appendSqliteTrajectoryRuntimeEventsInTransaction(current, input);
-        deferSqliteWorkerCommitReceipt(current.db, { kind: "trajectory-runtime-append" });
+      kernel.appendSqliteTrajectoryRuntimeEventsWithWriter(input, (label, write) =>
+        writeTransaction(label, "Trajectory append", (current) => {
+          const result = write(current);
+          deferSqliteWorkerCommitReceipt(current.db, { kind: "trajectory-runtime-append" });
+          admit("commit");
+          return result;
+        }),
+      ).revision,
+    "trajectory.retention.delete": (
+      input: {
+        plan: Parameters<typeof retention.deleteTrajectoryRuntimeRetention>[1];
+        revision: Parameters<typeof retention.deleteTrajectoryRuntimeRetention>[2];
+      },
+      { writeTransaction, admit },
+    ) =>
+      writeTransaction("trajectory.runtime.retention.delete", "Trajectory retention", (current) => {
+        const result = retention.deleteTrajectoryRuntimeRetention(
+          current,
+          input.plan,
+          input.revision,
+        );
         admit("commit");
+        return result;
       }),
   } satisfies Handlers;
 }

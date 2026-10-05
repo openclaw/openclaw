@@ -4789,10 +4789,7 @@ function classifyTarget(arg: string, cwd: string, beforeDatabaseWorkerOwnership 
   if (relative.endsWith(".e2e.test.ts")) {
     return "e2e";
   }
-  if (
-    relative === "src/gateway/gateway.test.ts" ||
-    relative === "src/gateway/server.startup-matrix-migration.integration.test.ts"
-  ) {
+  if (relative === "src/gateway/gateway.test.ts") {
     return "e2e";
   }
   const channelContractKind = resolveChannelContractTargetKind(relative);

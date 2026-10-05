@@ -224,8 +224,6 @@ export async function migrateLegacySessions(
     agentId: detected.targetAgentId,
     mainKey: detected.targetMainKey,
     scope: detected.targetScope,
-    skipCrossAgentRemap: detected.sessions.preserveAmbiguousKeys,
-    preserveCanonicalAgentOwner: true,
     preserveAmbiguousKeys: detected.sessions.preserveAmbiguousKeys,
     preserveForeignMainAliases: detected.sessions.preserveForeignMainAliases,
     legacySessionSurfaces: options.legacySessionSurfaces.surfaces,

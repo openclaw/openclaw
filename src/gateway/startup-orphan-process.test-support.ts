@@ -18,7 +18,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { runStartupSessionMigration } from "./server-startup-session-migration.js";
+import { runStartupSessionMaintenanceForTest } from "./server-startup-session-migration.test-support.js";
 
 const stateRoot = process.env.OPENCLAW_STATE_DIR!;
 const generation = process.argv[2];
@@ -241,7 +241,7 @@ async function runLayout(stateDir: string, layout: string, mode: string) {
           path.join(stateDir, "before-startup.json"),
           JSON.stringify({ rows: rows(), owners: durableOwners() }),
         );
-        await runStartupSessionMigration({
+        await runStartupSessionMaintenanceForTest({
           cfg,
           env: process.env,
           log: { info: console.error, warn: console.error },

@@ -42,6 +42,30 @@ type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps & {
   workspaceConflict?: WorkspaceResultConflict | null;
 };
 
+function renderStatusNotice(
+  className: string,
+  tone: "info" | "warn" | "danger",
+  title: string,
+  body: string,
+  tooltip: string | typeof nothing = nothing,
+) {
+  return html`
+    <div
+      class="chat-composer-neighbor-card chat-composer-neighbor-card--${tone} ${className}"
+      role=${tone === "danger" ? "alert" : "status"}
+      title=${tooltip}
+    >
+      <span class="chat-composer-neighbor-card__icon" aria-hidden="true"
+        >${tone === "info" ? icons.info : icons.alertTriangle}</span
+      >
+      <div class="chat-composer-neighbor-card__copy">
+        <strong>${title}</strong>
+        <span>${body}</span>
+      </div>
+    </div>
+  `;
+}
+
 function renderDiskSpaceNotice(diskSpace: SessionPlacementDiskSpace | undefined) {
   if (!diskSpace || diskSpace.status === "ok") {
     return nothing;
@@ -51,29 +75,15 @@ function renderDiskSpaceNotice(diskSpace: SessionPlacementDiskSpace | undefined)
       ? Math.round(((diskSpace.totalBytes - diskSpace.availableBytes) / diskSpace.totalBytes) * 100)
       : 0;
   const critical = diskSpace.status === "critical";
-  return html`
-    <div
-      class="chat-composer-neighbor-card chat-composer-neighbor-card--${
-        critical ? "danger" : "warn"
-      } chat-cloud-disk-space-notice"
-      role=${critical ? "alert" : "status"}
-    >
-      <span class="chat-composer-neighbor-card__icon" aria-hidden="true"
-        >${icons.alertTriangle}</span
-      >
-      <div class="chat-composer-neighbor-card__copy">
-        <strong
-          >${t(critical ? "chat.diskSpace.criticalTitle" : "chat.diskSpace.warningTitle")}</strong
-        >
-        <span>
-          ${t(critical ? "chat.diskSpace.criticalBody" : "chat.diskSpace.warningBody", {
-            percent: String(usedPercent),
-            free: formatBytes(diskSpace.availableBytes),
-          })}
-        </span>
-      </div>
-    </div>
-  `;
+  return renderStatusNotice(
+    "chat-cloud-disk-space-notice",
+    critical ? "danger" : "warn",
+    t(critical ? "chat.diskSpace.criticalTitle" : "chat.diskSpace.warningTitle"),
+    t(critical ? "chat.diskSpace.criticalBody" : "chat.diskSpace.warningBody", {
+      percent: String(usedPercent),
+      free: formatBytes(diskSpace.availableBytes),
+    }),
+  );
 }
 
 function renderWorkerRuntimeInstallNotice(
@@ -92,25 +102,15 @@ function renderWorkerRuntimeInstallNotice(
     ? t("chat.workerRuntimeInstall.installingBody")
     : t("chat.workerRuntimeInstall.transferringBody", progress);
   // Topbar notices render as compact pills that hide the body, so the title carries progress.
-  return html`
-    <div
-      class="chat-composer-neighbor-card chat-composer-neighbor-card--info chat-worker-runtime-install-notice"
-      role="status"
-      title=${body}
-    >
-      <span class="chat-composer-neighbor-card__icon" aria-hidden="true">${icons.info}</span>
-      <div class="chat-composer-neighbor-card__copy">
-        <strong
-          >${
-            installing
-              ? t("chat.workerRuntimeInstall.installingTitle")
-              : t("chat.workerRuntimeInstall.transferringTitle", progress)
-          }</strong
-        >
-        <span>${body}</span>
-      </div>
-    </div>
-  `;
+  return renderStatusNotice(
+    "chat-worker-runtime-install-notice",
+    "info",
+    installing
+      ? t("chat.workerRuntimeInstall.installingTitle")
+      : t("chat.workerRuntimeInstall.transferringTitle", progress),
+    body,
+    body,
+  );
 }
 
 function renderErrorNotice(
@@ -219,20 +219,12 @@ function renderProviderPolicyNotice(notice: ProviderPolicyNotice | null | undefi
     namesModel && !model
       ? t("chat.providerPolicy.fallbackUnknownBody")
       : t(`chat.providerPolicy.${notice.state}Body`, { model: model ?? "" });
-  return html`
-    <div
-      class="chat-composer-neighbor-card chat-composer-neighbor-card--${blocked ? "danger" : "warn"} chat-provider-policy-notice"
-      role=${blocked ? "alert" : "status"}
-    >
-      <span class="chat-composer-neighbor-card__icon" aria-hidden="true"
-        >${icons.alertTriangle}</span
-      >
-      <div class="chat-composer-neighbor-card__copy">
-        <strong>${t(`chat.providerPolicy.${notice.state}Title`)}</strong>
-        <span>${body}</span>
-      </div>
-    </div>
-  `;
+  return renderStatusNotice(
+    "chat-provider-policy-notice",
+    blocked ? "danger" : "warn",
+    t(`chat.providerPolicy.${notice.state}Title`),
+    body,
+  );
 }
 
 function renderPlacementStartupError(

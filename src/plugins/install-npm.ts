@@ -255,7 +255,6 @@ export async function installPluginFromNpmSpec(
       logger,
       mode,
       dryRun,
-      skipPolicyPreflight: true,
       expectedPluginId,
       expectedReplacementPluginId: params.expectedReplacementPluginId,
       onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,

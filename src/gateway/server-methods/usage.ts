@@ -434,13 +434,12 @@ export const usageHandlers: GatewayRequestHandlers = {
       }
       const profiles = await prepareSessionSharingProfiles(client ?? null);
       const currentConfig = context.getRuntimeConfig();
-      const sharing = prepareProjectedSessionSharing({
+      const { entryFilter: currentFilter } = prepareProjectedSessionSharing({
         cfg: currentConfig,
         client: client ?? null,
         profiles,
         isMember: () => false,
       });
-      const currentFilter = sharing.sessionCap === "none" ? sharing.entryFilter : undefined;
       const sessions = result.sessions.map((session) => {
         if (!session.hasContextWeight) {
           return session;

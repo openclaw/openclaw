@@ -28,7 +28,11 @@ import type { RuntimeContextFragment } from "../internal-runtime-context.js";
 import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery/main-session-recovery-store.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
-import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
+import type {
+  AgentRunTranscriptContext,
+  AgentStreamParams,
+  ClientToolDefinition,
+} from "./shared-types.js";
 
 export type ImageContent = Pick<LlmImageContent, "type" | "data" | "mimeType">;
 
@@ -232,6 +236,8 @@ export type AgentCommandOpts = {
   ) => void | Promise<void>;
   /** Gateway joins terminal transcript writes before delivery or failed-command cleanup. */
   beforeTerminalDelivery?: () => Promise<void>;
+  /** Gateway-owned preparation of runtime-appended assistant transcript messages. */
+  prepareAssistantTranscriptMessage?: AgentRunTranscriptContext["prepareAssistantTranscriptMessage"];
   /** Called when the actual run model is selected, including fallback retries. */
   onActiveModelSelected?: (ctx: { provider: string; model: string }) => void | Promise<void>;
   /** Called when every candidate in the run's model fallback chain failed. */
@@ -272,6 +278,7 @@ type AgentCommandGatewayOnlyKey =
   | "onAdmittedRunContext"
   | "onPostAdmittedRunContext"
   | "beforeTerminalDelivery"
+  | "prepareAssistantTranscriptMessage"
   | "internalDeliverySuppressErrors";
 
 /** Restricted option surface for external ingress callsites. */

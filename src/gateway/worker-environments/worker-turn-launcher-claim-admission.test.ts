@@ -6,7 +6,7 @@ import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { completeWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import { placementTurnOwner } from "./placement-record.js";
-import { completeReclaimedWorkspaceTeardown } from "./placement-teardown.js";
+import { completeWorkerWorkspaceTeardown } from "./placement-teardown.js";
 import {
   createPlacementTurnClaimFixtureOps,
   seedAttachedPlacementEnvironment,
@@ -372,7 +372,7 @@ describe("worker turn launcher claim admission", () => {
         manifestRef: MANIFEST_REF,
       });
       await placements.acceptWorkspaceResult(priorClaim);
-      await completeReclaimedWorkspaceTeardown({
+      await completeWorkerWorkspaceTeardown({
         placements,
         turnClaim: priorClaim,
         environmentId: active.environmentId,

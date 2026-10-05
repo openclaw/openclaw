@@ -53,6 +53,24 @@ describe("legacy state dir auto-migration", () => {
         fs.mkdirSync(legacyDir, { recursive: true });
         fs.mkdirSync(path.dirname(sidecarPath), { recursive: true });
         fs.writeFileSync(sidecarPath, sidecarBytes);
+        const authStorePath = path.join(stateDir, "agents/main/agent/auth-profiles.json");
+        fs.mkdirSync(path.dirname(authStorePath), { recursive: true });
+        fs.writeFileSync(
+          authStorePath,
+          JSON.stringify({
+            profiles: {
+              "openai-codex:default": {
+                type: "oauth",
+                provider: "openai-codex",
+                oauthRef: {
+                  source: "openclaw-credentials",
+                  provider: "openai-codex",
+                  id: "a".repeat(32),
+                },
+              },
+            },
+          }),
+        );
         const configPath =
           selector === "selected-config"
             ? path.join(root, "selected-config.json")
