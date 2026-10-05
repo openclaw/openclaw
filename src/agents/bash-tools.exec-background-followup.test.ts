@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type * as HeartbeatWake from "../infra/heartbeat-wake.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { waitForExecScope } from "./bash-process-registry.js";
@@ -26,6 +26,7 @@ afterEach(() => {
   resetProcessRegistryForTests();
   resetSystemEventsForTest();
 });
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function nodeCommand(source: string): string {
   const quote = (value: string) =>
@@ -34,65 +35,125 @@ function nodeCommand(source: string): string {
   return process.platform === "win32" ? `& ${command}` : command;
 }
 
+const RUNNING_CAUTION =
+  "Running means the process was started and was alive when this result was written; it says nothing about progress, waiting for input, or a later exit or failure. Do not report progress from this result alone.";
+const UNDELIVERABLE_WAKE = "The completion turn may not be allowed to message the user";
+const PROMISE_CAUTION =
+  "do not promise the user updates unless you poll this session until it finishes and report the outcome yourself.";
+const NO_WAKE_FOLLOW_UP = "Automatic completion wake is disabled";
+
 test.each([
-  { label: "explicit background", args: { background: true } },
-  { label: "elapsed yield window", args: { yieldMs: 10 } },
-])("provides a usable structured follow-up route after $label", async ({ label, args }) => {
-  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "exec-followup-")));
-  const releasePath = path.join(directory, "release");
-  const scopeKey = `agent:main:followup-${label}`;
-  const exec = createExecTool({
-    host: "gateway",
-    security: "full",
-    ask: "off",
-    allowBackground: true,
+  {
+    label: "explicit background",
+    args: { background: true },
+    mode: "wake on every exit",
+    notifyOnExit: true,
+    notifyOnExitEmptySuccess: true,
+  },
+  {
+    label: "explicit background",
+    args: { background: true },
+    mode: "silent empty success",
+    notifyOnExit: true,
+    notifyOnExitEmptySuccess: false,
+  },
+  {
+    label: "explicit background",
+    args: { background: true },
+    mode: "no wake",
     notifyOnExit: false,
-    timeoutSec: 5,
-    scopeKey,
-  });
-  const processTool = createProcessTool({ scopeKey });
-  // A parent-owned file releases the child only after the background result is observed.
-  const command = nodeCommand(
-    `const fs = require("node:fs"); const timer = setInterval(() => {
+    notifyOnExitEmptySuccess: false,
+  },
+  {
+    label: "elapsed yield window",
+    args: { yieldMs: 10 },
+    mode: "wake on every exit",
+    notifyOnExit: true,
+    notifyOnExitEmptySuccess: true,
+  },
+  {
+    label: "elapsed yield window",
+    args: { yieldMs: 10 },
+    mode: "silent empty success",
+    notifyOnExit: true,
+    notifyOnExitEmptySuccess: false,
+  },
+  {
+    label: "elapsed yield window",
+    args: { yieldMs: 10 },
+    mode: "no wake",
+    notifyOnExit: false,
+    notifyOnExitEmptySuccess: false,
+  },
+])(
+  "provides a usable structured follow-up route after $label with $mode",
+  async ({ label, args, mode, notifyOnExit, notifyOnExitEmptySuccess }) => {
+    const directory = await fs.realpath(tempDirs.make("exec-followup-"));
+    const releasePath = path.join(directory, "release");
+    const scopeKey = `agent:main:followup-${label}-${mode}`;
+    const exec = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      allowBackground: true,
+      notifyOnExit,
+      notifyOnExitEmptySuccess,
+      timeoutSec: 5,
+      scopeKey,
+    });
+    const processTool = createProcessTool({ scopeKey });
+    // A parent-owned file releases the child only after the background result is observed.
+    const command = nodeCommand(
+      `const fs = require("node:fs"); const timer = setInterval(() => {
       if (fs.existsSync(${JSON.stringify(releasePath)})) {
         clearInterval(timer); process.stdout.write("FOLLOWUP_COMPLETE");
       }
     }, 10);`,
-  );
-  try {
-    const started = await exec.execute("followup-start", { command, ...args });
-    expect(started.details.status).toBe("running");
-    if (started.details.status !== "running") {
-      throw new Error("Expected a background process handle");
-    }
-    expect(started.details).toMatchObject({ followUp: expect.stringContaining("Use process") });
-    const followUp = started.details.followUp;
-    expect(followUp).toContain("poll");
-    if (!followUp) {
-      throw new Error("Expected a structured follow-up route");
-    }
-    expect(started.content).toContainEqual({
-      type: "text",
-      text: expect.stringContaining(followUp),
-    });
+    );
+    try {
+      const started = await exec.execute("followup-start", { command, ...args });
+      expect(started.details.status).toBe("running");
+      if (started.details.status !== "running") {
+        throw new Error("Expected a background process handle");
+      }
+      expect(started.details).toMatchObject({ followUp: expect.stringContaining("Use process") });
+      const followUp = started.details.followUp;
+      expect(followUp).toContain("poll");
+      if (!followUp) {
+        throw new Error("Expected a structured follow-up route");
+      }
+      // A live session proves neither progress nor a later report; the model
+      // must read that before it relays "running" or promises to report back.
+      const visible = started.content[0];
+      const text = visible?.type === "text" ? visible.text : "";
+      expect(text).toContain(`${RUNNING_CAUTION} ${followUp}`);
+      // A wake may land in a turn that cannot message the user. The default
+      // chat-channel mode tells the model to stop polling, so it must drop the
+      // promise instead of being told to poll for it.
+      expect(followUp.includes(UNDELIVERABLE_WAKE)).toBe(notifyOnExit);
+      expect(followUp.includes("without promising to report back")).toBe(
+        notifyOnExit && notifyOnExitEmptySuccess,
+      );
+      expect(followUp.includes(PROMISE_CAUTION)).toBe(!(notifyOnExit && notifyOnExitEmptySuccess));
+      expect(followUp.includes(NO_WAKE_FOLLOW_UP)).toBe(!notifyOnExit);
 
-    await fs.writeFile(releasePath, "release");
-    await waitForExecScope(scopeKey);
-    const completed = await processTool.execute("followup-poll", {
-      action: "poll",
-      sessionId: started.details.sessionId,
-    });
-    expect(completed.details).toMatchObject({
-      status: "completed",
-      sessionId: started.details.sessionId,
-      aggregated: "FOLLOWUP_COMPLETE",
-    });
-  } finally {
-    await fs.writeFile(releasePath, "release");
-    await waitForExecScope(scopeKey);
-    await fs.rm(directory, { recursive: true, force: true });
-  }
-});
+      await fs.writeFile(releasePath, "release");
+      await waitForExecScope(scopeKey);
+      const completed = await processTool.execute("followup-poll", {
+        action: "poll",
+        sessionId: started.details.sessionId,
+      });
+      expect(completed.details).toMatchObject({
+        status: "completed",
+        sessionId: started.details.sessionId,
+        aggregated: "FOLLOWUP_COMPLETE",
+      });
+    } finally {
+      await fs.writeFile(releasePath, "release");
+      await waitForExecScope(scopeKey);
+    }
+  },
+);
 
 test("does not advertise detached continuation when process is unavailable", async () => {
   const exec = createExecTool({

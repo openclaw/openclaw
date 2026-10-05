@@ -349,7 +349,7 @@ it("tracks a deferred command and its poll through namespaced dynamic tools", as
         content: [
           {
             type: "text",
-            text: "Command still running (session bounded-command, pid 3128). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
+            text: "Command still running (session bounded-command, pid 3128). Running means the process was started and was alive when this result was written; it says nothing about progress, waiting for input, or a later exit or failure. Do not report progress from this result alone. Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up. Completion wakes this conversation on output or failure; empty successful jobs are silent (tools.exec.notifyOnExitEmptySuccess=false). Arrange continuation or collect the result before ending the turn if empty success matters. The completion turn may not be allowed to message the user, so do not promise the user updates unless you poll this session until it finishes and report the outcome yourself.",
           },
         ],
         details: { status: "running", sessionId: "bounded-command" },
