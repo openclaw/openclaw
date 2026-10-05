@@ -146,7 +146,9 @@ export async function classifyAttachmentBytes(params: {
     if (
       detectedClass === "text" &&
       !charset &&
-      ![params.declaredMime, ...(params.additionalMimeHints ?? [])].some(normalizeMimeType) &&
+      ![params.declaredMime, ...(params.additionalMimeHints ?? [])].some((hint) =>
+        /;\s*charset\s*=/i.test(hint ?? ""),
+      ) &&
       sniffTextCharset(params.buffer) === "windows-1252"
     ) {
       // A text filename identifies the MIME, not its encoding. Preserve the same
