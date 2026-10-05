@@ -137,7 +137,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.kind === "notice" &&
         previous.text === next.text &&
         previous.label === next.label &&
-        previous.sessionsYield === next.sessionsYield &&
+        previous.handoffBoundary === next.handoffBoundary &&
         previous.startsTurn === next.startsTurn &&
         previous.boundaryId === next.boundaryId &&
         previous.timestamp === next.timestamp
@@ -167,6 +167,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
       return (
         previous.kind === "reading-indicator" &&
         previous.startedAt === next.startedAt &&
+        previous.waitingOn === next.waitingOn &&
         previous.runId === next.runId &&
         previous.boundaryId === next.boundaryId
       );
@@ -311,6 +312,9 @@ function sameChatItemsStructuralInput(
     previous.persistCommentary === next.persistCommentary &&
     previous.runWorking === next.runWorking &&
     previous.runActive === next.runActive &&
+    previous.subagentWait?.startedAt === next.subagentWait?.startedAt &&
+    previous.subagentWait?.runId === next.subagentWait?.runId &&
+    (previous.subagentWait === undefined) === (next.subagentWait === undefined) &&
     previous.questionPrompts === next.questionPrompts &&
     previous.loading === next.loading &&
     sameEntries(previous.replyPeople, next.replyPeople) &&

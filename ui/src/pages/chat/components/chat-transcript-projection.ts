@@ -61,7 +61,7 @@ import type { ChatTranscriptSession, TranscriptHeader } from "./chat-transcript-
 import { projectTurnVideoMessages } from "./chat-turn-video-gallery.ts";
 import { renderChatTypingIndicator } from "./chat-typing-indicator.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
-import { renderChatWorkingIndicator, renderTurnRecapRow } from "./chat-working-indicator.ts";
+import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
 const workPreviewCache =
@@ -96,6 +96,13 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
   const recoveryKey = (messageId: string) =>
     messageRecoveryKey(props.fullMessageAgentId, messageId);
   pruneTranscriptExpansions(expandedAssistantMessages, props);
+  const subagentWait = resolveChatSubagentWait(props);
+  // A wait behind a loaded handoff is that run's own status. Any other wait
+  // follows a turn that already ended, so it stays a row after the transcript.
+  const placedSubagentWait =
+    subagentWait?.runId && subagentWait.startedAt !== null && !searchFiltering
+      ? { startedAt: subagentWait.startedAt, runId: subagentWait.runId }
+      : undefined;
   const chatItemsInput = {
     paneId: props.paneId,
     sessionKey: props.sessionKey,
@@ -125,6 +132,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     persistCommentary: props.persistCommentary,
     runWorking: Boolean(props.runWorking),
     runActive: Boolean(props.runActive),
+    subagentWait: placedSubagentWait,
     questionPrompts: props.questionPrompts,
     loading: props.loading,
     replyPeople: [...sessionPeople].toSorted(),
@@ -229,16 +237,16 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
   };
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
   const hasTypingActors = (props.typingActors?.length ?? 0) > 0;
-  const subagentWait = resolveChatSubagentWait(props);
   const hasLiveContent = Boolean(subagentWait || hasTypingActors || hasRealtimeTalkConversation);
-  const isEmpty = chatItems.length === 0 && !props.loading && !hasLiveContent;
+  // Rows, not items: a handoff boundary is structure and draws nothing.
+  const isEmpty = transcriptItems.length === 0 && !props.loading && !hasLiveContent;
   transcript.setContentReady(!props.loading);
   const { isDirectThread, avatarPlacement } = resolveTranscriptAvatarPlacement(
     props,
     chatItems,
     isGlobalAliasKey,
   );
-  const showLoadingSkeleton = props.loading && chatItems.length === 0 && !hasTypingActors;
+  const showLoadingSkeleton = props.loading && transcriptItems.length === 0 && !hasTypingActors;
   const presented =
     typeof props.presented === "object" ? props.presented.isPresented() : (props.presented ?? true);
   const threadContextWindow =
@@ -286,6 +294,8 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     assistant: assistantIdentity,
     startupLabel: props.startupLabel,
     waitingApproval: props.waitingApproval,
+    waitingSubagents: subagentWait ?? undefined,
+    onOpenSession: props.onOpenSession,
     runOutputTokens,
     questionPrompts,
   } satisfies StreamGroupOptions;
@@ -358,9 +368,15 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       searchResult: searchFiltering,
     } satisfies Parameters<typeof renderMessageGroup>[1];
   };
-  // Only the working indicator shows live usage, so rows without one keep
-  // memoizing across usage patches.
-  const workingUsageKey = JSON.stringify([runOutputTokens]);
+  // Only the working indicator shows live usage and the subagent wait, so rows
+  // without one keep memoizing across usage and child-roster patches.
+  const workingUsageKey = JSON.stringify([
+    runOutputTokens,
+    subagentWait?.startedAt,
+    subagentWait?.runningCount,
+    subagentWait?.child?.key,
+    subagentWait?.child?.label,
+  ]);
   const liveStatusSignature = (item: ChatRenderItem): string => {
     if (item.kind === "agent-run-frame") {
       const hasWorkingIndicator = item.parts.some(
@@ -533,21 +549,20 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       content: renderTurnRecapRow(turnRecap),
     });
   }
-  if (subagentWait && !searchFiltering) {
+  if (subagentWait && !placedSubagentWait && !searchFiltering) {
     transcriptRows.push({
       kind: "content",
       key: "waiting-subagents",
-      content: renderChatWorkingIndicator(
-        {
-          kind: "reading-indicator",
-          key: `waiting-subagents:${props.sessionKey}`,
-          startedAt: subagentWait.startedAt,
-        },
-        {
-          mascot: props.branding?.mascot,
-          waitingSubagents: subagentWait,
-          onOpenSession: props.onOpenSession,
-        },
+      content: renderStreamGroup(
+        [
+          {
+            kind: "reading-indicator",
+            key: `waiting-subagents:${props.sessionKey}`,
+            startedAt: subagentWait.startedAt ?? 0,
+            waitingOn: "subagents",
+          },
+        ],
+        streamGroupOptions,
       ),
     });
   }

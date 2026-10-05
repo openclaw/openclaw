@@ -97,6 +97,8 @@ export type BuildChatItemsProps = ChatInputPlacementProps & {
   runWorking?: boolean;
   /** True while the current session has an abortable live run. */
   runActive?: boolean;
+  /** Set while a run that handed off is idle and its subagents are still running. */
+  subagentWait?: { startedAt: number; runId: string };
   questionPrompts?: readonly QuestionPrompt[];
   /** True while chat history is loading (initial load or background reload). */
   loading?: boolean;
@@ -633,6 +635,16 @@ export function buildChatItems(
       ...optionalRunIdentity(workingRunId),
       ...optionalBoundaryIdentity(activeBoundaryRunId ?? workingRunId),
     });
+  } else if (props.subagentWait && !initialHistoryLoad) {
+    // The handoff ended the parent's run, not its work. Carrying that run's
+    // identity keeps the claw in the same frame instead of opening another row.
+    appendActiveRunItem({
+      kind: "reading-indicator",
+      key: `waiting-subagents:${props.sessionKey}`,
+      startedAt: props.subagentWait.startedAt,
+      waitingOn: "subagents",
+      runId: props.subagentWait.runId,
+    });
   }
   // Place output against the complete transcript before search hides any rows.
   // Pending/local inputs contribute people and turn boundaries just like history;
@@ -642,13 +654,7 @@ export function buildChatItems(
       ? new Set([...hiddenHistoryKeys, ...hiddenKeys])
       : undefined;
   const projectYields = (source: ChatItem[]) =>
-    projectSessionsYieldItems(
-      source,
-      props.runActive || props.runWorking
-        ? { runId: currentRunId, startedAt: props.streamStartedAt }
-        : undefined,
-      props.showToolCalls,
-    );
+    projectSessionsYieldItems(source, props.showToolCalls);
   return groupMessages(projectYields(coalesceToolActivityMessages(items, hidden)), {
     items: hidden ? projectYields(coalesceToolActivityMessages(items)) : undefined,
     people: props.replyPeople,

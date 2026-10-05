@@ -88,6 +88,8 @@ type SwarmRead = "parent" | "children";
 
 export class SwarmRosterHydrator {
   rows: GatewaySessionRow[] = [];
+  /** True once the child query has filled `rows`; the seed can hold only some children. */
+  hydrated = false;
   private key = "";
   private generation = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -366,6 +368,7 @@ export class SwarmRosterHydrator {
         const parent = this.parentRow;
         this.childRows = rows;
         this.rows = parent ? mergeSwarmSessionRows(this.childRows, [parent]) : [];
+        this.hydrated = true;
         this.recovered("children");
         params.onRows(this.rows);
       })
@@ -393,6 +396,7 @@ export class SwarmRosterHydrator {
     this.parentRefreshQueued = false;
     this.parentRefreshForced = false;
     this.rows = [];
+    this.hydrated = false;
     this.key = key;
     this.generation += 1;
     this.recovered("parent");
