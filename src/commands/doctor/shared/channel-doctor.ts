@@ -28,10 +28,6 @@ type ChannelDoctorLookupContext = {
   env?: NodeJS.ProcessEnv;
 };
 
-type ChannelDoctorEmptyAllowlistLookupParams = ChannelDoctorEmptyAllowlistAccountContext & {
-  cfg?: OpenClawConfig;
-};
-
 const channelDoctorFunctionKeys = new Set<keyof ChannelDoctorAdapter>([
   "normalizeCompatibilityConfig",
   "collectPreviewWarnings",
@@ -179,23 +175,6 @@ function listChannelDoctorEntries(
   return entries;
 }
 
-function toPluginEmptyAllowlistContext({
-  cfg: _cfg,
-  ...params
-}: ChannelDoctorEmptyAllowlistLookupParams): ChannelDoctorEmptyAllowlistAccountContext {
-  return params;
-}
-
-function shouldSkipDefaultEmptyGroupAllowlistWarningForEntries(
-  entries: readonly ChannelDoctorEntry[],
-  params: ChannelDoctorEmptyAllowlistLookupParams,
-): boolean {
-  const pluginParams = toPluginEmptyAllowlistContext(params);
-  return entries.some(
-    (entry) => entry.doctor.shouldSkipDefaultEmptyGroupAllowlistWarning?.(pluginParams) === true,
-  );
-}
-
 function appendChannelDoctorMutation(
   mutations: ChannelDoctorConfigMutation[],
   currentCfg: OpenClawConfig,
@@ -239,19 +218,13 @@ export function createChannelDoctorEmptyAllowlistPolicyHooks(
     return entries;
   };
   return {
-    extraWarningsForAccount: (params) => {
-      const entries = entriesForChannel(params.channelName);
-      const pluginParams = toPluginEmptyAllowlistContext(params);
-      const warnings: string[] = [];
-      for (const entry of entries) {
-        warnings.push(...(entry.doctor.collectEmptyAllowlistExtraWarnings?.(pluginParams) ?? []));
-      }
-      return warnings;
-    },
+    extraWarningsForAccount: (params) =>
+      entriesForChannel(params.channelName).flatMap(
+        (entry) => entry.doctor.collectEmptyAllowlistExtraWarnings?.(params) ?? [],
+      ),
     shouldSkipDefaultEmptyGroupAllowlistWarning: (params) =>
-      shouldSkipDefaultEmptyGroupAllowlistWarningForEntries(
-        entriesForChannel(params.channelName),
-        params,
+      entriesForChannel(params.channelName).some(
+        (entry) => entry.doctor.shouldSkipDefaultEmptyGroupAllowlistWarning?.(params) === true,
       ),
   };
 }
@@ -387,16 +360,4 @@ export async function collectChannelDoctorRepairMutations(params: {
     nextCfg = appendChannelDoctorMutation(mutations, nextCfg, mutation);
   }
   return mutations;
-}
-
-/** Return true when a channel doctor owns empty group-allowlist warning behavior. */
-export function shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning(
-  params: ChannelDoctorEmptyAllowlistLookupParams,
-): boolean {
-  return shouldSkipDefaultEmptyGroupAllowlistWarningForEntries(
-    listChannelDoctorEntries([params.channelName], {
-      cfg: params.cfg ?? {},
-    }),
-    params,
-  );
 }

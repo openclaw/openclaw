@@ -2213,7 +2213,6 @@ describe("loadChatHistory retry handling", () => {
     });
 
     await loadChatHistory(state);
-
     expect(state.chatMessages).toHaveLength(2);
     expect(state.chatMessages[0]).toEqual(persistedUser);
     expectTextMessage(

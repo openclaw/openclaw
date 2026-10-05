@@ -3,7 +3,6 @@ import {
   type SessionEntryReadWorkerOwner,
 } from "../../config/sessions/session-entry-read-runtime.js";
 import type { IncognitoSessionAuthority } from "../../config/sessions/session-incognito-contract.js";
-import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
@@ -84,7 +83,7 @@ export async function withAcpSessionEntryRead<T>(
   const { cfg, env, databasePath, assertCurrent } = await captureAcpSessionReadContext(input);
   assertCurrent();
   const target = resolveSessionStorePathForAcp({ ...input, sessionKey, cfg, env });
-  const storeSessionKey = normalizeStoreSessionKey(target.storeSessionKey);
+  const storeSessionKey = target.storeSessionKey;
   if (isIncognitoSessionKey(storeSessionKey)) {
     // Incognito retains its process-held native owner and nonyielding join until its cutover.
     const stored = readSessionEntryFromStore({ ...input, sessionKey, cfg, env });

@@ -139,6 +139,7 @@ packages/worker-runtime/src/lifecycle.ts
 packages/worker-runtime/src/retained-operation.ts
 packages/worker-runtime/src/worker-task-capacity.ts
 packages/worker-runtime/src/worker-task-context.ts
+packages/worker-runtime/src/worker-task-error.ts
 packages/worker-runtime/src/worker-task-host.ts
 packages/worker-runtime/src/worker-task-native-sections.ts
 packages/worker-runtime/src/worker-task-pool-bootstrap.ts
@@ -603,6 +604,7 @@ src/acp/runtime/session-meta-readonly.ts
 src/acp/runtime/session-meta-read.types.ts
 src/config/sessions/session-incognito-actor.ts
 src/config/sessions/session-incognito-admission.ts
+src/config/sessions/session-incognito-authority.ts
 src/config/sessions/session-collaboration-scope.ts
 src/config/sessions/session-incognito-compute-contract.ts
 src/config/sessions/session-incognito-compute.ts
@@ -614,6 +616,7 @@ src/config/sessions/session-incognito-manager-contract.ts
 src/config/sessions/session-incognito-pending-input-contract.ts
 src/config/sessions/cli-session-binding.ts
 src/config/sessions/session-incognito-side-data-contract.ts
+src/config/sessions/session-row-facts.types.ts
 src/config/sessions/session-incognito-transcript-contract.ts
 src/state/incognito-session-error.ts
 src/config/sessions/session-model-context-projection.ts
@@ -826,6 +829,7 @@ src/infra/errno.ts
 src/infra/error-graph-internal.ts
 src/infra/errors.ts
 src/infra/exec-allowlist-pattern.ts
+src/infra/exec-approval-action.types.ts
 src/infra/exec-approvals-core.ts
 src/infra/exec-command-resolution.ts
 src/infra/exec-safe-bin-policy-profiles.ts
@@ -1127,6 +1131,7 @@ src/infra/worker-native-lifecycle.ts
 src/infra/worker-native-port.ts
 src/infra/worker-native-resource.ts
 src/infra/worker-native-task-port.ts
+src/infra/worker-request-diagnostics.ts
 src/infra/worker-task-capacity.ts
 src/infra/worker-task-host.ts
 src/infra/worker-task-pool-registry.ts
@@ -1565,6 +1570,7 @@ src/skills/discovery/agent-filter.ts
 src/skills/discovery/filter.ts
 src/skills/skill-library-error.ts
 src/skills/lifecycle/upload-store-error.ts
+src/skills/runtime/refresh-watch-targets.types.ts
 src/state/agent-creation-claim.ts
 src/state/agent-database-admission.ts
 src/state/agent-database-startup.ts

@@ -1,3 +1,4 @@
+import { DatabaseSync } from "node:sqlite";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -9,7 +10,6 @@ import { buildAssistantMessage, buildUsageWithNoCost } from "../../agents/stream
 import {
   copyReplyPayloadMetadata,
   setReplyPayloadMetadata,
-  type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
@@ -17,6 +17,7 @@ import {
   appendTranscriptMessageSync,
   publishTranscriptUpdate,
   readActiveTranscriptEntryAnchor,
+  resolveSessionTranscriptDatabasePath,
   replaceSessionEntry,
   rewriteTranscriptMessageAtAnchor,
   SessionTranscriptProjectionUnavailableError,
@@ -34,20 +35,18 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
 import * as sessionTranscriptReaders from "../session-transcript-readers.js";
+import * as sessionStoreReaders from "../session-utils-store-worker.js";
 import { loadSessionEntry } from "../session-utils.js";
 import {
-  buildAssistantReplyContent,
   buildAssistantReplyContentFromInputs,
   extractAssistantDisplayText,
 } from "./chat-assistant-content.js";
 import {
+  buildTranscriptReplyTextFromInputs,
   readChatSendReplyPayload,
   selectChatSendFinalReplyInputs,
 } from "./chat-send-command-replies.js";
-import {
-  buildTranscriptReplyTextFromInputs,
-  createChatSendReplyDispatch,
-} from "./chat-send-reply-dispatch.js";
+import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
 
 async function createReplyTranscriptFixture(sessionKey = "agent:main:receipt") {
   const runId = "receipt-run";
@@ -97,6 +96,7 @@ async function createReplyTranscriptFixture(sessionKey = "agent:main:receipt") {
     logGateway: { ...createSubsystemLogger("test/chat-send-reply-dispatch"), warn: vi.fn() },
     session: {
       ...scope,
+      entry: sessionEntry,
       backingSessionId: scope.sessionId,
       cfg: {},
       clientRunId: runId,
@@ -115,10 +115,6 @@ async function createReplyTranscriptFixture(sessionKey = "agent:main:receipt") {
       current = false;
     },
   };
-}
-
-function buildRawTranscriptReplyText(payloads: ReplyPayload[]): string {
-  return buildTranscriptReplyTextFromInputs(payloads.map((payload) => ({ kind: "raw", payload })));
 }
 
 function createReplyDispatchSession(clientRunId: string) {
@@ -146,61 +142,6 @@ function createReplyDispatch(
     ...overrides,
   });
 }
-
-describe("buildTranscriptReplyTextFromInputs", () => {
-  it.each([
-    ...["NO_REPLY", "ANNOUNCE_SKIP", "REPLY_SKIP"].map((controlText) => ({
-      name: `suppressed ${controlText}`,
-      payloads: [{ text: "First instruction" }, { text: controlText }, { text: "Done" }],
-      expected: "First instruction\n\nDone",
-      project: true,
-    })),
-    {
-      name: "split fenced-code indentation",
-      payloads: [
-        { text: "Here is the YAML:\n\n```yaml\nroot:\n" },
-        { text: "  nested:\n    value: true\n```" },
-      ],
-      expected: "Here is the YAML:\n\n```yaml\nroot:\n  nested:\n    value: true\n```",
-      project: false,
-    },
-    {
-      name: "CRLF boundaries and whitespace-only chunks",
-      payloads: [
-        { text: "```yaml\r\nroot:\r\n" },
-        { text: "  \t\n" },
-        { text: "  nested: true\r\n```" },
-      ],
-      expected: "```yaml\r\nroot:\r\n  nested: true\r\n```",
-      project: false,
-    },
-    {
-      name: "reply directives and safe media without reasoning",
-      payloads: [
-        { text: "hidden", isReasoning: true },
-        { text: "Hello", replyToId: "message-1", mediaUrls: ["https://example.test/photo.png"] },
-        { text: "Listen", audioAsVoice: true, mediaUrl: "https://example.test/clip.mp3" },
-        { text: "private", sensitiveMedia: true, mediaUrl: "https://example.test/private.png" },
-      ],
-      expected: [
-        "[[reply_to:message-1]]\nHello\nAttachment: https://example.test/photo.png",
-        "Listen\nAttachment: https://example.test/clip.mp3\n[[audio_as_voice]]",
-        "private",
-      ].join("\n\n"),
-      project: false,
-    },
-  ])("preserves $name in transcript reply text", async ({ payloads, expected, project }) => {
-    expect(buildRawTranscriptReplyText(payloads)).toBe(expected);
-    if (project) {
-      const { assistantContent } = await buildAssistantReplyContent({
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        payloads,
-      });
-      expect(assistantContent).toEqual([{ type: "text", text: expected }]);
-    }
-  });
-});
 
 describe("chat delivery watermark preparation", () => {
   it("consumes the committed manager boundary without caller transcript SQL", async () => {
@@ -322,7 +263,7 @@ describe("chat delivery watermark preparation", () => {
   });
 
   it.each([false, true])(
-    "keeps watermark SQLite with its owner (incognito=%s)",
+    "keeps watermark and current-session SQLite with their owner (incognito=%s)",
     async (incognito) => {
       await withOpenClawTestState({ label: "chat-watermark-owner" }, async () => {
         const { dispatch, append } = await createReplyTranscriptFixture(
@@ -331,7 +272,17 @@ describe("chat delivery watermark preparation", () => {
         await dispatch.runAgentMediaTranscript(
           { run: async (operation) => operation() },
           async () => {
-            dispatch.captureAgentTranscriptStart();
+            const startingSql = observeHostDataSql();
+            try {
+              dispatch.captureAgentTranscriptStart();
+              expect(
+                startingSql.queries.filter((query) =>
+                  /\bfrom\s+"?session_(?:nodes|participants)\b/i.test(query),
+                ),
+              ).toEqual([]);
+            } finally {
+              startingSql.restore();
+            }
             await append("answer", { role: "assistant", content: "Committed answer." });
             const sql = observeHostDataSql();
             try {
@@ -342,6 +293,10 @@ describe("chat delivery watermark preparation", () => {
                   query.includes('from "transcript_rewrite_watermarks"'),
               );
               expect(watermarks.length > 0).toBe(incognito);
+              const sessionReads = sql.queries.filter((query) =>
+                /\bfrom\s+"?session_(?:nodes|participants)\b/i.test(query),
+              );
+              expect(sessionReads.length > 0).toBe(incognito);
             } finally {
               sql.restore();
             }
@@ -886,6 +841,7 @@ describe("createChatSendReplyDispatch", () => {
     "retired",
     "aborted",
     "lifecycle",
+    "foreign-lifecycle",
     "branch",
     "answer-rewrite",
     "input-rewrite",
@@ -913,6 +869,17 @@ describe("createChatSendReplyDispatch", () => {
               lifecycleRevision: "replacement",
               updatedAt: 2,
             });
+          } else if (change === "foreign-lifecycle") {
+            const foreign = new DatabaseSync(resolveSessionTranscriptDatabasePath(scope));
+            try {
+              foreign
+                .prepare(
+                  "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.lifecycleRevision', ?) WHERE session_key = ?",
+                )
+                .run("foreign-replacement", scope.sessionKey);
+            } finally {
+              foreign.close();
+            }
           } else if (change === "branch") {
             await append("other-branch", { role: "assistant", content: "NO_REPLY" }, inputId);
           } else {
@@ -934,6 +901,58 @@ describe("createChatSendReplyDispatch", () => {
           expect(await dispatch.resolveReplyDelivery()).toBe(
             change === "input-rewrite" ? "delivered" : "missing",
           );
+        },
+      );
+    });
+  });
+
+  it("rechecks transcript anchors after the final session lookup yields", async () => {
+    await withOpenClawTestState({ label: "webchat-receipt-final-lookup" }, async () => {
+      const { dispatch, append, inputId } = await createReplyTranscriptFixture();
+      await dispatch.runAgentMediaTranscript(
+        { run: async (operation) => operation() },
+        async () => {
+          dispatch.captureAgentTranscriptStart();
+          await append("answer", { role: "assistant", content: "Committed answer." });
+          const readMessage = sessionTranscriptReaders.readSessionMessageByIdAsync;
+          const readWatermark = sessionTranscriptReaders.readSessionTranscriptWatermarkAsync;
+          const readSession = sessionStoreReaders.loadGatewaySessionEntryReadOnlyInWorker;
+          let answerRead = false;
+          let finalWatermarkRead = false;
+          let branchChanged = false;
+          const selectedRead = vi
+            .spyOn(sessionTranscriptReaders, "readSessionMessageByIdAsync")
+            .mockImplementation(async (...args) => {
+              const result = await readMessage(...args);
+              answerRead = true;
+              return result;
+            });
+          const watermarkRead = vi
+            .spyOn(sessionTranscriptReaders, "readSessionTranscriptWatermarkAsync")
+            .mockImplementation(async (...args) => {
+              const result = await readWatermark(...args);
+              finalWatermarkRead = answerRead;
+              return result;
+            });
+          const sessionRead = vi
+            .spyOn(sessionStoreReaders, "loadGatewaySessionEntryReadOnlyInWorker")
+            .mockImplementation(async (...args) => {
+              const result = await readSession(...args);
+              if (finalWatermarkRead && !branchChanged) {
+                branchChanged = true;
+                await append("other-branch", { role: "assistant", content: "NO_REPLY" }, inputId);
+              }
+              return result;
+            });
+          try {
+            const delivery = await dispatch.resolveReplyDelivery();
+            expect(branchChanged).toBe(true);
+            expect(delivery).toBe("missing");
+          } finally {
+            sessionRead.mockRestore();
+            watermarkRead.mockRestore();
+            selectedRead.mockRestore();
+          }
         },
       );
     });

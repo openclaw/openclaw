@@ -45,7 +45,6 @@ const SEARCH_QUERY_MAX_CHARS = 4096;
 
 function toFtsQuery(query: string, match: SessionTranscriptSearchParams["match"]): string {
   return query
-    .trim()
     .split(/\s+/u)
     .map(
       (token, index, tokens) =>

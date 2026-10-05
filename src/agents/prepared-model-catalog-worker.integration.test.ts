@@ -521,7 +521,7 @@ describe("prepared model catalog worker boundary", () => {
       fixture.agentDir,
     );
 
-    const catalog = await fixture.snapshot.loadFullModelCatalog?.();
+    const catalog = await loadCompletedFullCatalog(fixture.snapshot);
 
     expect(catalog?.entries).toContainEqual(
       expect.objectContaining({

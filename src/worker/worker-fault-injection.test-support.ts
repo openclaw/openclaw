@@ -492,7 +492,7 @@ export class ComposedGatewayHarness {
     this.turnSources.clear();
     this.unsubscribeLive?.();
     this.unsubscribeLive = undefined;
-    this.chat.dispose();
+    await this.chat.dispose();
     await new Promise<void>((resolve) => {
       this.webSocketServer.close(() => resolve());
     });

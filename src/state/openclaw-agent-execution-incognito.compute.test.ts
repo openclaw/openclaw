@@ -290,6 +290,39 @@ it("composes empty and multi-session store compute without holding its actor FIF
   });
 });
 
+it("refuses new compute work through a released borrow", async () => {
+  const target = await create("released-borrow");
+  const reference = await captureOpenClawAgentDatabaseExecution({
+    kind: "ephemeral",
+    agentId: "main",
+    env,
+    authority,
+    existingOnly: true,
+  });
+  assert(reference);
+  await reference.release();
+  const operation = vi.fn(async () => "late compute");
+  await expect(
+    Promise.resolve().then(() => reference.sessions.withCompute(authority, target, operation)),
+  ).rejects.toThrow("Incognito execution reference is released");
+  expect(operation).not.toHaveBeenCalled();
+});
+
+it("captures the selected compute target before accepting deferred work", async () => {
+  const selected = await create("captured-target");
+  const replacement = await create("replacement-target");
+  await append(selected, "selected transcript");
+  const target = { ...selected };
+  const read = actor.sessions.withCompute(authority, target, (compute) =>
+    compute.execute({
+      type: "session.compute.usage.stats",
+      input: { ...selected, request: {} },
+    }),
+  );
+  Object.assign(target, replacement);
+  await expect(read).resolves.toMatchObject({ eventCount: 2 });
+});
+
 describe("cross-actor compute", () => {
   let otherActor: IncognitoAgentDatabaseExecution;
   let otherWorker: Worker;

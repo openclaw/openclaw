@@ -1,5 +1,6 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { probePathSuffixAliasesSync, resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
 import { resolveStateDir } from "../config/paths.js";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -82,16 +83,15 @@ export function isIncognitoOpenClawAgentSqlitePath(
   );
 }
 
-type AgentDatabasePathIdentity = {
-  lexicalPath: string;
-  realPath?: string;
-  device?: bigint | number;
-  inode?: bigint | number;
-  parentDevice?: bigint | number;
-  parentInode?: bigint | number;
-  parentRealPath?: string;
-  unresolvedSuffix?: string;
-};
+type AgentDatabasePathIdentity = { lexicalPath: string } & (
+  | { realPath: string; device: bigint; inode: bigint }
+  | {
+      parentDevice: bigint;
+      parentInode: bigint;
+      parentRealPath: string;
+      unresolvedSuffix: string;
+    }
+);
 
 const missingSuffixAliasCache = new Map<string, boolean>();
 
@@ -116,15 +116,12 @@ function shouldProbeUnicodeCaseVariants(left: string, right: string): boolean {
 }
 
 function areMissingSuffixAliases(params: {
-  left: string | undefined;
-  right: string | undefined;
-  parentDevice: bigint | number;
-  parentInode: bigint | number;
+  left: string;
+  right: string;
+  parentDevice: bigint;
+  parentInode: bigint;
   parentRealPath: string;
 }): boolean {
-  if (params.left === undefined || params.right === undefined) {
-    return false;
-  }
   if (params.left === params.right) {
     return true;
   }
@@ -235,33 +232,25 @@ function areSameAgentDatabasePathIdentities(
   if (leftIdentity.lexicalPath === rightIdentity.lexicalPath) {
     return true;
   }
-  if (leftIdentity.realPath && leftIdentity.realPath === rightIdentity.realPath) {
-    return true;
+  if ("realPath" in leftIdentity) {
+    return (
+      "realPath" in rightIdentity &&
+      (leftIdentity.realPath === rightIdentity.realPath ||
+        (leftIdentity.device === rightIdentity.device &&
+          leftIdentity.inode === rightIdentity.inode))
+    );
   }
-  const parentDevice = leftIdentity.parentDevice;
-  const parentInode = leftIdentity.parentInode;
-  const sameMissingParent =
-    parentDevice !== undefined &&
-    parentInode !== undefined &&
-    parentDevice === rightIdentity.parentDevice &&
-    parentInode === rightIdentity.parentInode;
-  const sameMissingSuffix =
-    leftIdentity.unresolvedSuffix === rightIdentity.unresolvedSuffix ||
-    (sameMissingParent &&
-      leftIdentity.parentRealPath !== undefined &&
-      areMissingSuffixAliases({
-        left: leftIdentity.unresolvedSuffix,
-        right: rightIdentity.unresolvedSuffix,
-        parentDevice,
-        parentInode,
-        parentRealPath: leftIdentity.parentRealPath,
-      }));
   return (
-    (leftIdentity.device !== undefined &&
-      leftIdentity.inode !== undefined &&
-      leftIdentity.device === rightIdentity.device &&
-      leftIdentity.inode === rightIdentity.inode) ||
-    (sameMissingParent && sameMissingSuffix)
+    !("realPath" in rightIdentity) &&
+    leftIdentity.parentDevice === rightIdentity.parentDevice &&
+    leftIdentity.parentInode === rightIdentity.parentInode &&
+    areMissingSuffixAliases({
+      left: leftIdentity.unresolvedSuffix,
+      right: rightIdentity.unresolvedSuffix,
+      parentDevice: leftIdentity.parentDevice,
+      parentInode: leftIdentity.parentInode,
+      parentRealPath: leftIdentity.parentRealPath,
+    })
   );
 }
 
@@ -290,15 +279,7 @@ export function createOpenClawAgentDatabasePathMatcher(): {
         for (const previous of identities.values()) {
           const current = resolveAgentDatabasePathIdentity(previous.lexicalPath);
           // Equal locators alone cannot validate a snapshot after replacement.
-          if (
-            previous.realPath !== current.realPath ||
-            previous.device !== current.device ||
-            previous.inode !== current.inode ||
-            previous.parentDevice !== current.parentDevice ||
-            previous.parentInode !== current.parentInode ||
-            previous.parentRealPath !== current.parentRealPath ||
-            previous.unresolvedSuffix !== current.unresolvedSuffix
-          ) {
+          if (!isDeepStrictEqual(previous, current)) {
             return false;
           }
         }
@@ -318,11 +299,8 @@ export function isSameOpenClawAgentDatabasePath(left: string, right: string): bo
 
 function canonicalPathForRegistryBoundary(pathname: string): string {
   const identity = resolveAgentDatabasePathIdentity(pathname);
-  if (identity.realPath) {
+  if ("realPath" in identity) {
     return identity.realPath;
-  }
-  if (!identity.parentRealPath || !identity.unresolvedSuffix) {
-    return identity.parentRealPath ?? path.resolve(pathname);
   }
   const unresolvedSegments = identity.unresolvedSuffix.split(path.sep);
   return unresolvedSegments.includes("..")

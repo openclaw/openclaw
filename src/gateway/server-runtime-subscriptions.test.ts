@@ -62,7 +62,9 @@ const auditTestState = vi.hoisted(() => ({
 }));
 const agentEventHandlerMocks = vi.hoisted(() => ({
   create: vi.fn(),
-  persistLifecycle: vi.fn(async () => {}),
+  persistLifecycle: vi.fn<
+    typeof import("./session-lifecycle-state.js").persistGatewaySessionLifecycleEvent
+  >(async () => {}),
   resolveSession: vi.fn(() => ({ sessionKey: "agent:main:main", agentId: "main" })),
 }));
 const transcriptBroadcastMocks = vi.hoisted(() => ({
@@ -136,8 +138,17 @@ vi.mock("./server-chat.js", () => ({
   createAgentEventHandler: (...args: unknown[]) => agentEventHandlerMocks.create(...args),
 }));
 
+// mock-isolation: Subscription custody tests control persistence without a database.
 vi.mock("./session-lifecycle-state.js", () => ({
   persistGatewaySessionLifecycleEvent: agentEventHandlerMocks.persistLifecycle,
+  prepareGatewaySessionLifecycleEvent:
+    (
+      params: Parameters<
+        typeof import("./session-lifecycle-state.js").persistGatewaySessionLifecycleEvent
+      >[0],
+    ) =>
+    () =>
+      agentEventHandlerMocks.persistLifecycle(params),
 }));
 
 vi.mock("./server-session-key.js", () => ({
@@ -545,13 +556,22 @@ describe("startGatewayEventSubscriptions", () => {
           stream: "lifecycle",
           data: { phase: "end", endedAt },
         });
-      let firstDrain: Promise<{ ok: boolean; error?: unknown }> | undefined;
+      let firstSettled = false;
+      let firstDrain: Promise<{ ok: true } | { ok: false; error: unknown }> | undefined;
       try {
         emitTerminal(2_000);
+        expect(entry.projectSessionTerminalPending).toBe(true);
+        expect(entry.projectSessionTerminalPersisted).toBe(false);
         expect(entry.projectSessionTerminalPersistence).toBeInstanceOf(Promise);
         firstDrain = waitForChatAbortTerminalPersistence(entry).then(
-          () => ({ ok: true }),
-          (error: unknown) => ({ ok: false, error }),
+          () => {
+            firstSettled = true;
+            return { ok: true as const };
+          },
+          (error: unknown) => {
+            firstSettled = true;
+            return { ok: false as const, error };
+          },
         );
         const recovery = {
           runId,
@@ -585,6 +605,7 @@ describe("startGatewayEventSubscriptions", () => {
           firstDrain,
           "Terminal ownership settled before its held dispatch was released",
         );
+        expect(firstSettled).toBe(false);
         if (change !== "removed") {
           await successorDispatchEntered.promise;
         }
@@ -743,7 +764,7 @@ describe("startGatewayEventSubscriptions", () => {
               if (dispatchFails) {
                 throw dispatchFailure;
               }
-              handler(event);
+              await handler(event);
             } finally {
               dispatchFinished.resolve();
             }

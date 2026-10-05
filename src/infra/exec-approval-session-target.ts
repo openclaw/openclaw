@@ -105,10 +105,6 @@ export function resolveExecApprovalSessionTarget(params: {
   turnSourceAccountId?: string | null;
   turnSourceThreadId?: string | number | null;
 }): ExecApprovalSessionTarget | null {
-  const sessionKey = normalizeOptionalString(params.request.request.sessionKey);
-  if (!sessionKey) {
-    return null;
-  }
   const persisted = resolvePersistedApprovalRequestSessionEntry({
     cfg: params.cfg,
     request: params.request,

@@ -1,7 +1,7 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -49,6 +49,73 @@ async function fixture(name: string, source = authority) {
   });
   return { target, store };
 }
+
+it("joins an accepted Board consumer and its dependent write before releasing the borrow", async () => {
+  const { target } = await fixture("consumer-lifetime");
+  const borrowed = await captureOpenClawAgentDatabaseExecution({
+    kind: "ephemeral",
+    agentId: actor.agentId,
+    env,
+    authority,
+    existingOnly: true,
+  });
+  assert(borrowed);
+  const store = new SqliteBoardStore({
+    env,
+    resolveSession: () => ({
+      ...target,
+      agentId: borrowed.agentId,
+      path: borrowed.path,
+      incognito: { actor: borrowed, authority },
+    }),
+  });
+  const entered = createDeferredCore();
+  const resume = createDeferredCore();
+  const published = createDeferredCore();
+  const stop = sessionChanges.subscribe((change) => {
+    if (!("all" in change) && change.sessionKey === target.sessionKey) {
+      published.resolve();
+    }
+  });
+  const pending = store.useSnapshot(target, async () => {
+    entered.resolve();
+    await resume.promise;
+    await store.putWidget({
+      ...target,
+      name: "retained",
+      content: { kind: "html", html: "<p>Accepted</p>" },
+    });
+  });
+  const rejected = expect(pending).rejects.toThrow("reference is released");
+  let releasing: Promise<void> | undefined;
+  try {
+    await awaitGateBeforeSettlement(entered.promise, pending, "Board consumer was not reached");
+    let released = false;
+    releasing = borrowed.release().then(() => {
+      released = true;
+    });
+    await Promise.resolve();
+    expect(released).toBe(false);
+    resume.resolve();
+    await awaitGateBeforeSettlement(
+      published.promise,
+      pending,
+      "Dependent Board write was abandoned",
+    );
+    await rejected;
+    await releasing;
+    expect(
+      await actor.sessions.sideData(authority, {
+        type: "session.boards.readSnapshot",
+        input: { sessionKey: target.sessionKey },
+      }),
+    ).toMatchObject({ snapshot: { widgets: [{ name: "retained" }] } });
+  } finally {
+    resume.resolve();
+    stop();
+    await Promise.allSettled([pending, releasing, borrowed.release()]);
+  }
+});
 
 it("composes Board writes, grants and reads on the actor with FIFO and zero caller SQL", async () => {
   const { target, store } = await fixture("board");
@@ -98,6 +165,87 @@ it("composes Board writes, grants and reads on the actor with FIFO and zero call
     stop();
   }
 });
+
+it.each(["read", "write", "prepared-write"] as const)(
+  "rechecks Board caller after %s composition settles",
+  async (operation) => {
+    let current = true;
+    const { target, store } = await fixture(`settled-${operation}`, {
+      assertCurrent() {
+        if (!current) {
+          throw new Error("Board caller retired after settlement");
+        }
+      },
+    });
+    await store.putWidget({
+      ...target,
+      name: "private",
+      content: { kind: "html", html: "<p>Stored private content</p>" },
+    });
+    const changes: SessionRowChange[] = [];
+    const stop = sessionChanges.subscribe((change) => {
+      if (!("all" in change) && change.sessionKey === target.sessionKey) {
+        changes.push(change);
+      }
+    });
+    const retain = actor.sessions.withSharedState.bind(actor.sessions);
+    let first = true;
+    const completed = vi
+      .spyOn(actor.sessions, "withSharedState")
+      .mockImplementation(<T>(work: () => Promise<T>) => {
+        const revoke = first;
+        first = false;
+        return retain(work).then((result) => {
+          if (revoke) {
+            current = false;
+          }
+          return result;
+        });
+      });
+    try {
+      let result: Promise<unknown>;
+      if (operation === "read") {
+        result = store.getSnapshot(target);
+      } else if (operation === "write") {
+        result = store.putWidget({
+          ...target,
+          name: "accepted",
+          content: { kind: "html", html: "<p>Committed</p>" },
+        });
+      } else {
+        result = store.putWidget(
+          {
+            ...target,
+            name: "accepted",
+            content: {
+              kind: "mcp-app",
+              interactive: true,
+              descriptor: {
+                serverName: "server",
+                toolName: "tool",
+                uiResourceUri: "ui://app",
+                toolCallId: "call",
+              },
+            },
+          },
+          { resolveMcpAppInteraction: async () => true },
+        );
+      }
+      await expect(result).rejects.toThrow("Board caller retired after settlement");
+      actor.assertReadable();
+      expect(changes).toHaveLength(operation === "read" ? 0 : 1);
+      expect(
+        await actor.sessions.sideData(authority, {
+          type: "session.boards.readSnapshot",
+          input: { sessionKey: target.sessionKey },
+        }),
+      ).toMatchObject({ snapshot: { revision: operation === "read" ? 1 : 2 } });
+    } finally {
+      completed.mockRestore();
+      stop();
+    }
+  },
+);
 
 it.each(["transaction", "commit"] as const)(
   "refuses revoked Board policy at %s",

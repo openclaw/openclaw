@@ -31,7 +31,6 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
-import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import type {
   QualifiedSessionEntryAccessTarget,
   SessionEntryReadScope,
@@ -57,7 +56,10 @@ import {
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
 import { withQualifiedGatewaySessionStoreTarget } from "./session-utils-store-retained.js";
-import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
+import {
+  findCanonicalStoreMatch,
+  omitInternalSessionEffectsEntries,
+} from "./session-utils-store-selection.js";
 import type { GatewayAgentRow, SessionListModelCatalog } from "./session-utils.types.js";
 import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
@@ -163,11 +165,7 @@ function loadSessionEntryWithMode(
   const storePath = target.storePath;
   const store = target.store;
   if (!readOnly) {
-    for (const storeKey of target.storeKeys) {
-      if (isInternalSessionEffectsKey(storeKey)) {
-        delete store[storeKey];
-      }
-    }
+    omitInternalSessionEffectsEntries(store, target.storeKeys);
   }
   const canonicalMatch = findCanonicalStoreMatch(store, target.storeKeys);
   const legacyKey = canonicalMatch?.key !== target.canonicalKey ? canonicalMatch?.key : undefined;
@@ -233,11 +231,7 @@ export async function withGatewaySessionEntry<T>(
   return withGatewaySessionStoreTarget(
     { cfg, key: sessionKey, ...opts },
     (target, membership, assertSourceCurrent) => {
-      for (const key of target.storeKeys) {
-        if (isInternalSessionEffectsKey(key)) {
-          delete target.store[key];
-        }
-      }
+      omitInternalSessionEffectsEntries(target.store, target.storeKeys);
       const canonicalMatch = findCanonicalStoreMatch(target.store, target.storeKeys);
       const assertCurrent = () => {
         assertSourceCurrent();

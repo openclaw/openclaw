@@ -210,15 +210,9 @@ function createRuntime(registry: ApiRegistry, transportHost?: Partial<AiTranspor
     if (completion) {
       if (!supportsScopedAiTransportHosts()) {
         let producerSettled = false;
-        const observedCompletion = completion.then(
-          () => {
-            producerSettled = true;
-          },
-          (error: unknown) => {
-            producerSettled = true;
-            throw error;
-          },
-        );
+        const observedCompletion = completion.finally(() => {
+          producerSettled = true;
+        });
         void runWithStreamHost(() => observedCompletion);
         const result = runWithStreamHost(() => started.result());
         return bindAssistantMessageEventStream(

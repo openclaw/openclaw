@@ -401,7 +401,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     );
   });
 
-  it("classifies active entries through cron parentage chains", async () => {
+  it("classifies active entries through cron parentage chains and cycles", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     fsSync.mkdirSync(sessionsDir, { recursive: true });
     const cronPath = path.join(sessionsDir, "cron-run.jsonl");
@@ -448,10 +448,26 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         spawnedBy: "agent:main:chat:manual",
         updatedAt: 1,
       },
+      "agent:main:subagent:cycle-a": {
+        sessionId: "cycle-a",
+        parentSessionKey: "agent:main:subagent:cycle-b",
+        spawnedBy: "agent:main:cron:job-1:run:missing",
+        updatedAt: 1,
+      },
+      "agent:main:subagent:cycle-b": {
+        sessionId: "cycle-b",
+        parentSessionKey: "agent:main:subagent:cycle-a",
+        updatedAt: 1,
+      },
     });
 
     const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
-    expect(entries.filter((entry) => entry.generatedByCronRun)).toHaveLength(4);
+    expect(
+      entries
+        .filter((entry) => entry.generatedByCronRun)
+        .map((entry) => entry.sessionId)
+        .toSorted(),
+    ).toEqual(["cron-run", "cycle-a", "cycle-b", "keyed-child", "orphan-child", "spawned-child"]);
   });
 
   it("keeps archive classification when the active transcript is missing", async () => {

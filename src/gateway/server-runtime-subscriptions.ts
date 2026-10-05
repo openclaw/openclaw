@@ -178,8 +178,10 @@ export function startGatewayEventSubscriptions(params: {
   const stopSessionBackgroundWork = (): void => {
     if (!sessionBackgroundStop) {
       sessionCompanion.dispose();
-      sessionObserver.dispose();
-      sessionBackgroundStop = sessionActivitySummaries.dispose();
+      sessionBackgroundStop = Promise.all([
+        sessionObserver.disposeAsync(),
+        sessionActivitySummaries.dispose(),
+      ]).then(() => undefined);
       void sessionBackgroundStop.catch((error: unknown) => {
         params.log.warn(`session background cleanup failed: ${String(error)}`);
       });
@@ -437,7 +439,9 @@ export function startGatewayEventSubscriptions(params: {
     let failedDispatchCleanup: (() => void) | undefined;
     let terminalPreparation: Promise<void> | undefined;
     let terminalEntries: ChatAbortControllerEntry[] | undefined;
-    sessionObserver.handleEvent(evt);
+    void sessionObserver
+      .handleEventAsync(evt)
+      .catch((error: unknown) => params.log.warn("Session observer event failed", { error }));
     sessionActivitySummaries.handleEvent(evt);
     auditRecorder.record(evt);
     const lifecyclePhase =

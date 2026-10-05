@@ -9,3 +9,9 @@ export type IncognitoSessionFacts = {
   sharing: CommittedSessionSharingFacts | undefined;
   expiresAt?: number;
 };
+
+export type IncognitoSessionAuthority = {
+  assertCurrent(): void;
+  /** Synchronous host policy only. Never query the actor from a native grant. */
+  authorize?(stage: "transaction" | "commit", facts: IncognitoSessionFacts): void;
+};

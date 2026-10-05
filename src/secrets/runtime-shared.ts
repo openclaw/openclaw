@@ -14,7 +14,7 @@ import {
   canonicalizeSecretRefsForOwnerContract,
   digestSecretOwnerContract,
 } from "./runtime-owner-contract.js";
-import { assertExpectedResolvedSecretValue } from "./secret-value.js";
+import { isExpectedResolvedSecretValue } from "./secret-value.js";
 import { isRecord } from "./shared.js";
 
 export type SecretResolverWarningCode =
@@ -237,18 +237,12 @@ export function applyResolvedAssignments(params: {
       throw new Error(`Secret reference "${key}" resolved to no value.`);
     }
     const value = params.resolved.get(key);
-    try {
-      assertExpectedResolvedSecretValue({
-        value,
-        expected: assignment.expected,
-        errorMessage:
-          assignment.expected === "string"
-            ? `${assignment.path} resolved to a non-string or empty value.`
-            : `${assignment.path} resolved to an unsupported value type.`,
-      });
-    } catch (error) {
-      const validationError = error instanceof Error ? error : new Error(String(error));
-      firstValidationError ??= validationError;
+    if (!isExpectedResolvedSecretValue(value, assignment.expected)) {
+      firstValidationError ??= new Error(
+        assignment.expected === "string"
+          ? `${assignment.path} resolved to a non-string or empty value.`
+          : `${assignment.path} resolved to an unsupported value type.`,
+      );
       failures.push({
         ownerKind: assignment.ownerKind,
         ownerId: assignment.ownerId,

@@ -16,6 +16,8 @@ export type ResourceOwningPool = {
   startCloseResources(key?: string): RetainedOperation<void>;
 };
 
+export type WorkerTaskObservation = { started(): void; completed(): void };
+
 /** Host facts and resource owners are supplied once, before a pool admits work. */
 export type WorkerTaskHost = {
   /** Internal served workers acknowledge initialization; arbitrary SDK Workers do not. */
@@ -29,6 +31,7 @@ export type WorkerTaskHost = {
   prepareResources(): Promise<unknown>;
   releaseTemporaryDirectory(directory: string): Promise<void>;
   captureTaskContext(): unknown;
+  createTaskObserver?(url: URL, sharedCompute?: boolean): () => WorkerTaskObservation;
   receiveMessage(worker: WorkerLifecycle, message: unknown): boolean;
   workerStarted(worker: WorkerLifecycle, pool: object): void;
   workerRetiring(worker: WorkerLifecycle, reason: WorkerRetirementReason): void;

@@ -127,8 +127,8 @@ export function resolveSafeBrokenOfficialInstallRemovalPath(params: {
 
 export function recordMatchesBundledPackage(
   record: PluginInstallRecord,
-  bundled: { name?: string; packageName?: string },
+  bundled: { packageName?: string },
 ): boolean {
-  const packageName = bundled.packageName?.trim() || bundled.name?.trim();
+  const packageName = bundled.packageName?.trim();
   return Boolean(packageName && collectInstalledRecordPackageNames(record).has(packageName));
 }

@@ -25,10 +25,6 @@ import {
   type PersistedClawPackageRef,
 } from "./package-extension-provenance.js";
 import { updateClawPackageRefStatusInDatabase } from "./package-status.kernel.js";
-import {
-  persistClawMigrationOwnershipWithInstallRecordReader,
-  releaseAdoptedClawInstallRecordWithInstallRecordReader,
-} from "./provenance-adopted.js";
 import { encodeClawAgentOwnership, type ClawAgentOrigin } from "./provenance-agent-origin.js";
 import {
   readClawInstallRecordFromDatabase,
@@ -43,7 +39,10 @@ import {
 import * as installRecordSchema from "./provenance-schema-version.js";
 import type { ClawInstallStatus, PersistedClawInstall } from "./provenance-types.js";
 import type { ClawAddPlan, ResolvedClawPackage } from "./types.js";
-import type { PersistedClawWorkspaceFile } from "./workspace.js";
+export {
+  persistClawMigrationOwnership,
+  releaseAdoptedClawInstallRecord,
+} from "./provenance-adopted.js";
 export {
   CLAW_PACKAGE_REF_SCHEMA_VERSION,
   type PersistedClawPackageRef,
@@ -88,32 +87,6 @@ export function clawInstallRecordMatchesPlan(
     stableStringify(record.agentOwnedPaths) === stableStringify(agentOwnedPaths(plan)) &&
     record.bootstrap?.sourcePath === bootstrap?.sourcePath &&
     record.bootstrap?.contentDigest === bootstrap?.contentDigest
-  );
-}
-
-export function persistClawMigrationOwnership(
-  plan: ClawAddPlan,
-  workspaceFiles: PersistedClawWorkspaceFile[],
-  options: OpenClawStateDatabaseOptions & { nowMs?: number } = {},
-): PersistedClawInstall {
-  return persistClawMigrationOwnershipWithInstallRecordReader(
-    plan,
-    workspaceFiles,
-    readClawInstallRecordFromDatabase,
-    options,
-  );
-}
-
-export function releaseAdoptedClawInstallRecord(
-  agentId: string,
-  expectedPlanIntegrity: string,
-  options: OpenClawStateDatabaseOptions = {},
-): void {
-  releaseAdoptedClawInstallRecordWithInstallRecordReader(
-    agentId,
-    expectedPlanIntegrity,
-    readClawInstallRecordFromDatabase,
-    options,
   );
 }
 
@@ -293,9 +266,7 @@ export function updateClawInstallRecord(
   const updatedAtMs = options.nowMs ?? Date.now();
   const status = options.status ?? "complete";
   const agentConfigDigest = options.agentConfigDigest ?? digestClawValue(plan.agent.config);
-  const ownedAgentPaths = plan.actions
-    .filter((action) => action.kind === "agent")
-    .map((action) => action.target);
+  const ownedAgentPaths = agentOwnedPaths(plan);
   const record = runOpenClawStateWriteTransaction((database) => {
     assertAgentDeletionAllowsMutation(database, plan.agent.finalId);
     const { db } = database;
@@ -496,21 +467,13 @@ export function readClawPackageRefs(
   return readClawPackageRefsInDatabase(openOpenClawStateDatabase(options).db, options);
 }
 
-function upgradeClawInstallSchema<
-  TRecord extends {
-    schemaVersion: installRecordSchema.ClawInstallRecordSchemaVersion;
-    planIntegrity: string;
-    agentConfigDigest: string;
-  },
->(
+function upgradeClawInstallSchema(
   database: OpenClawStateDatabase,
   agentId: string,
-  record: TRecord,
-  expectedRecord: TRecord | undefined,
-  replacement?: Pick<TRecord, "planIntegrity" | "agentConfigDigest">,
-): Omit<TRecord, "schemaVersion"> & {
-  schemaVersion: typeof installRecordSchema.CLAW_INSTALL_RECORD_SCHEMA_VERSION;
-} {
+  record: PersistedClawInstall,
+  expectedRecord: PersistedClawInstall | undefined,
+  replacement: Pick<PersistedClawInstall, "planIntegrity" | "agentConfigDigest">,
+): PersistedClawInstall {
   assertAgentDeletionAllowsMutation(database, agentId);
   if (!expectedRecord || stableStringify(record) !== stableStringify(expectedRecord)) {
     throw new Error(
@@ -525,8 +488,8 @@ function upgradeClawInstallSchema<
     )
     .run(
       installRecordSchema.CLAW_INSTALL_RECORD_SCHEMA_VERSION,
-      replacement?.planIntegrity ?? record.planIntegrity,
-      replacement?.agentConfigDigest ?? record.agentConfigDigest,
+      replacement.planIntegrity,
+      replacement.agentConfigDigest,
       agentId,
     );
   return {

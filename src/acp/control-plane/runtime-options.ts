@@ -201,12 +201,14 @@ export function normalizeRuntimeOptions(
   return normalized;
 }
 
-export function mergeRuntimeOptions(params: {
+/** Inputs have already passed manager validation and metadata normalization. */
+export function mergeRuntimeOptions({
+  current = {},
+  patch = {},
+}: {
   current?: AcpSessionRuntimeOptions;
   patch?: Partial<AcpSessionRuntimeOptions>;
 }): AcpSessionRuntimeOptions {
-  const current = normalizeRuntimeOptions(params.current);
-  const patch = validateRuntimeOptionPatch(params.patch);
   return normalizeRuntimeOptions({
     ...current,
     ...patch,
@@ -253,13 +255,9 @@ export function reconcileAcceptedRuntimeOptions(
 }
 
 export function resolveRuntimeOptionsFromMeta(meta: SessionAcpMeta): AcpSessionRuntimeOptions {
-  const normalized = normalizeRuntimeOptions(meta.runtimeOptions);
-  if (normalized.cwd || !meta.cwd) {
-    return normalized;
-  }
   return normalizeRuntimeOptions({
-    ...normalized,
-    cwd: meta.cwd,
+    ...meta.runtimeOptions,
+    cwd: normalizeText(meta.runtimeOptions?.cwd) ?? meta.cwd,
   });
 }
 
@@ -271,16 +269,15 @@ export function runtimeOptionsEqual(
 }
 
 export function buildRuntimeControlSignature(options: AcpSessionRuntimeOptions): string {
-  const normalized = normalizeRuntimeOptions(options);
-  const extras = Object.entries(normalized.backendExtras ?? {}).toSorted(([a], [b]) =>
+  const extras = Object.entries(options.backendExtras ?? {}).toSorted(([a], [b]) =>
     a.localeCompare(b),
   );
   return JSON.stringify({
-    runtimeMode: normalized.runtimeMode ?? null,
-    model: normalized.model ?? null,
-    thinking: normalized.thinking ?? null,
-    permissionProfile: normalized.permissionProfile ?? null,
-    timeoutSeconds: normalized.timeoutSeconds ?? null,
+    runtimeMode: options.runtimeMode ?? null,
+    model: options.model ?? null,
+    thinking: options.thinking ?? null,
+    permissionProfile: options.permissionProfile ?? null,
+    timeoutSeconds: options.timeoutSeconds ?? null,
     backendExtras: extras,
   });
 }
@@ -289,28 +286,27 @@ export function buildRuntimeConfigOptionPairs(
   options: AcpSessionRuntimeOptions,
   advertisedConfigOptionKeys?: readonly string[],
 ): Array<[string, string]> {
-  const normalized = normalizeRuntimeOptions(options);
   const pairs = new Map<string, string>();
   const advertisedKeys = buildAdvertisedConfigOptionKeyMap(advertisedConfigOptionKeys);
   const resolveKey = (key: string) => resolveRuntimeConfigOptionKeyFromMap(key, advertisedKeys);
   const shouldEmit = (aliases: readonly string[]) =>
     advertisedKeys.size === 0 || aliases.some((alias) => advertisedKeys.has(alias));
-  if (normalized.model) {
-    pairs.set(resolveKey("model"), normalized.model);
+  if (options.model) {
+    pairs.set(resolveKey("model"), options.model);
   }
-  if (normalized.thinking && shouldEmit(RUNTIME_CONFIG_OPTION_ALIASES.thinking)) {
-    pairs.set(resolveKey("thinking"), normalized.thinking);
+  if (options.thinking && shouldEmit(RUNTIME_CONFIG_OPTION_ALIASES.thinking)) {
+    pairs.set(resolveKey("thinking"), options.thinking);
   }
-  if (normalized.permissionProfile) {
-    pairs.set(resolveKey("approval_policy"), normalized.permissionProfile);
+  if (options.permissionProfile) {
+    pairs.set(resolveKey("approval_policy"), options.permissionProfile);
   }
   if (
-    typeof normalized.timeoutSeconds === "number" &&
+    options.timeoutSeconds !== undefined &&
     shouldEmit(RUNTIME_CONFIG_OPTION_ALIASES.timeoutSeconds)
   ) {
-    pairs.set(resolveKey("timeout"), String(normalized.timeoutSeconds));
+    pairs.set(resolveKey("timeout"), String(options.timeoutSeconds));
   }
-  for (const [key, value] of Object.entries(normalized.backendExtras ?? {})) {
+  for (const [key, value] of Object.entries(options.backendExtras ?? {})) {
     const wireKey = resolveKey(key);
     if (!pairs.has(wireKey)) {
       pairs.set(wireKey, value);
@@ -325,22 +321,11 @@ function buildAdvertisedConfigOptionKeyMap(
   const advertisedKeys = new Map<string, string>();
   for (const rawKey of advertisedConfigOptionKeys ?? []) {
     const key = normalizeText(rawKey);
-    const normalizedKey = normalizeLowercaseStringOrEmpty(key);
-    if (key && normalizedKey && !advertisedKeys.has(normalizedKey)) {
-      advertisedKeys.set(normalizedKey, key);
+    if (key && !advertisedKeys.has(key.toLowerCase())) {
+      advertisedKeys.set(key.toLowerCase(), key);
     }
   }
   return advertisedKeys;
-}
-
-function resolveRuntimeConfigOptionAliases(key: string): readonly string[] {
-  const normalizedKey = normalizeLowercaseStringOrEmpty(key);
-  for (const aliases of Object.values(RUNTIME_CONFIG_OPTION_ALIASES)) {
-    if (aliases.some((alias) => alias === normalizedKey)) {
-      return aliases;
-    }
-  }
-  return [key];
 }
 
 export function resolveRuntimeConfigOptionKey(
@@ -358,7 +343,7 @@ function resolveRuntimeConfigOptionKeyFromMap(
   advertisedKeys: ReadonlyMap<string, string>,
 ): string {
   const normalizedKey = normalizeText(key) ?? "";
-  const normalizedLookupKey = normalizeLowercaseStringOrEmpty(normalizedKey);
+  const normalizedLookupKey = normalizedKey.toLowerCase();
   if (!normalizedKey || advertisedKeys.size === 0) {
     return normalizedKey;
   }
@@ -366,8 +351,11 @@ function resolveRuntimeConfigOptionKeyFromMap(
   if (exactAdvertisedKey) {
     return exactAdvertisedKey;
   }
-  for (const alias of resolveRuntimeConfigOptionAliases(normalizedKey)) {
-    const advertisedAlias = advertisedKeys.get(normalizeLowercaseStringOrEmpty(alias));
+  const aliases = Object.values(RUNTIME_CONFIG_OPTION_ALIASES).find((group) =>
+    group.some((alias) => alias === normalizedLookupKey),
+  );
+  for (const alias of aliases ?? []) {
+    const advertisedAlias = advertisedKeys.get(alias);
     if (advertisedAlias) {
       return advertisedAlias;
     }
@@ -379,26 +367,25 @@ export function inferRuntimeOptionPatchFromConfigOption(
   key: string,
   value: string,
 ): Partial<AcpSessionRuntimeOptions> {
-  const validated = validateRuntimeConfigOptionInput(key, value);
-  const normalizedKey = normalizeLowercaseStringOrEmpty(validated.key);
+  const normalizedKey = key.toLowerCase();
   if (normalizedKey === "model") {
-    return { model: validateRuntimeModelInput(validated.value) };
+    return { model: validateRuntimeModelInput(value) };
   }
   if (isThinkingConfigKey(normalizedKey)) {
-    return { thinking: validateRuntimeThinkingInput(validated.value) };
+    return { thinking: validateRuntimeThinkingInput(value) };
   }
   if (RUNTIME_CONFIG_OPTION_ALIASES.permissionProfile.some((alias) => alias === normalizedKey)) {
-    return { permissionProfile: validateRuntimePermissionProfileInput(validated.value) };
+    return { permissionProfile: validateRuntimePermissionProfileInput(value) };
   }
   if (RUNTIME_CONFIG_OPTION_ALIASES.timeoutSeconds.some((alias) => alias === normalizedKey)) {
-    return { timeoutSeconds: parseRuntimeTimeoutSecondsInput(validated.value) };
+    return { timeoutSeconds: parseRuntimeTimeoutSecondsInput(value) };
   }
   if (normalizedKey === "cwd") {
-    return { cwd: validateRuntimeCwdInput(validated.value) };
+    return { cwd: validateRuntimeCwdInput(value) };
   }
   return {
     backendExtras: {
-      [validated.key]: validated.value,
+      [key]: value,
     },
   };
 }

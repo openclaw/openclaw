@@ -117,7 +117,7 @@ export async function handleAcpDoctorAction(
     }
     lines.push(`next: ${installHint}`);
     lines.push(`next: openclaw config set plugins.entries.${backendId}.enabled true`);
-    if (normalizeLowercaseStringOrEmpty(backendId) === "acpx") {
+    if (normalizedBackendId === "acpx") {
       lines.push("next: verify acpx is installed (`acpx --help`).");
     }
     return commandReply(lines.join("\n"));

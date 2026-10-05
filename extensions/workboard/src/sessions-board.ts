@@ -19,7 +19,7 @@ import { freezeCardList } from "./store-read.js";
 
 type Gateway = Pick<
   OpenClawPluginApi["runtime"]["gateway"],
-  "request" | "readSessionFacts" | "subscribeSessionChanges"
+  "request" | "readSessionFacts" | "subscribeSessionChanges" | "withSessionReadScope"
 >;
 type SessionsBoardServiceParams = {
   store: WorkboardBoardStore;
@@ -81,6 +81,7 @@ async function listSessions(
 ) {
   const sessions = new Map<string, WorkboardSessionFacts>();
   let people: WorkboardSessionsBoardRead["people"];
+  let expires = Infinity;
   let offset = 0;
   for (;;) {
     const payload = await gateway.request<{
@@ -88,6 +89,7 @@ async function listSessions(
       hasMore?: boolean;
       nextOffset?: number;
       people?: WorkboardSessionsBoardRead["people"];
+      activityExpiresAt?: number;
     }>(
       "sessions.list",
       {
@@ -117,6 +119,7 @@ async function listSessions(
     if (offset === 0 && view?.includePeople) {
       people = payload.people;
     }
+    expires = Math.min(expires, payload.activityExpiresAt ?? Infinity);
     for (const session of payload.sessions) {
       if (
         isRecord(session) &&
@@ -147,7 +150,7 @@ async function listSessions(
       }
     }
     if (payload.hasMore !== true) {
-      return { sessions, people };
+      return { sessions, people, expires };
     }
     const next = payload.nextOffset;
     if (typeof next !== "number" || !Number.isSafeInteger(next) || next <= offset) {
@@ -174,7 +177,6 @@ function createOwner(
   isCurrent: () => boolean,
 ): Owner {
   const lastKnown = new Map<string, CachedFacts>();
-  const boards = new Map<string, Promise<WorkboardSessionsBoard>>();
   const projections = new Map<string, PreparedProjection>();
   let revision = params.store.sessionsRevision;
   const now = params.now ?? Date.now;
@@ -379,57 +381,59 @@ function createOwner(
     id: string,
     view?: WorkboardSessionsBoardView,
     caller?: CallerAuthority,
-  ): Promise<WorkboardSessionsBoardRead> => {
-    const assertReadCurrent = interactiveAuthority(caller);
-    assertReadCurrent();
-    hasRead = true;
-    if (revision !== params.store.sessionsRevision) {
-      boards.clear();
-      projections.clear();
-      revision = params.store.sessionsRevision;
-    }
-    const admittedRevision = revision;
-    let boardRead = boards.get(id);
-    if (!boardRead) {
-      const pending = params.store.getSessionsBoard(id).catch((error: unknown) => {
-        if (boards.get(id) === pending) {
-          boards.delete(id);
+  ): Promise<WorkboardSessionsBoardRead> =>
+    params.gateway.withSessionReadScope(async (scope) => {
+      const assertReadCurrent = interactiveAuthority(caller);
+      assertReadCurrent();
+      hasRead = true;
+      if (revision !== params.store.sessionsRevision) {
+        projections.clear();
+        revision = params.store.sessionsRevision;
+      }
+      const admittedRevision = revision;
+      const load = async () => {
+        const board = await params.store.getSessionsBoard(id);
+        return { board, ...(await listSessions(params.gateway, board, view)) };
+      };
+      // Tool callers without a reusable scope still establish their exact authorized roster.
+      const roster = scope ? undefined : await load();
+      assertReadCurrent();
+      const key = JSON.stringify([
+        id,
+        view,
+        scope ?? [...roster!.sessions.values()],
+        roster?.people,
+      ]);
+      const cacheable = params.store.sessionsRevision === admittedRevision;
+      const admittedAt = now();
+      let projection = cacheable ? projections.get(key) : undefined;
+      let preparedFacts: Map<string, CachedFacts> | undefined;
+      if (projection && (projection.expires < admittedAt || projection.retryAt <= admittedAt)) {
+        // Reuse facts only from this exact authorized roster and revision.
+        if (projection.expires >= admittedAt) {
+          preparedFacts = projection.facts;
         }
-        throw error;
-      });
-      if (boards.size >= 64) {
-        boards.delete(boards.keys().next().value!);
+        projections.delete(key);
+        projection = undefined;
       }
-      boards.set(id, pending);
-      boardRead = pending;
-    }
-    const board = await boardRead;
-    const { sessions, people } = await listSessions(params.gateway, board, view);
-    assertReadCurrent();
-    // Roster membership and facets remain invocation-bound; only equal authorized inputs share work.
-    const key = JSON.stringify([id, view, [...sessions.values()], people]);
-    const cacheable = params.store.sessionsRevision === admittedRevision;
-    let projection = cacheable ? projections.get(key) : undefined;
-    let preparedFacts: Map<string, CachedFacts> | undefined;
-    if (projection && (projection.expires < now() || projection.retryAt <= now())) {
-      // Reuse facts only from this exact authorized roster and revision.
-      if (projection.expires >= now()) {
-        preparedFacts = projection.facts;
-      }
-      projections.delete(key);
-      projection = undefined;
-    }
-    const joined = Boolean(projection);
-    if (!projection) {
-      const prepared: PreparedProjection = {
-        expires: Infinity,
-        retryAt: Infinity,
-        read: project(board, sessions, people, admittedRevision, caller, preparedFacts).then(
-          ({ snapshot: result, complete, facts }) => {
+      const joined = Boolean(projection);
+      if (!projection) {
+        const prepared: PreparedProjection = {
+          expires: Infinity,
+          retryAt: Infinity,
+          read: Promise.resolve().then(async () => {
+            const { board, sessions, people, expires } = roster ?? (await load());
+            assertReadCurrent();
+            prepared.expires = expires;
+            const {
+              snapshot: result,
+              complete,
+              facts,
+            } = await project(board, sessions, people, admittedRevision, caller, preparedFacts);
             const maxAge = (board.sessions.scope?.maxAgeHours ?? 72) * 3_600_000;
             prepared.expires = result.sessions.reduce(
-              (expires, row) => Math.min(expires, row.lastActivityAt + maxAge),
-              Infinity,
+              (deadline, row) => Math.min(deadline, row.lastActivityAt + maxAge),
+              expires,
             );
             prepared.facts = complete ? facts : undefined;
             prepared.retryAt = result.sessions.reduce(
@@ -442,41 +446,45 @@ function createOwner(
             };
             freezeCardList(snapshot);
             return { snapshot, complete };
-          },
-        ),
-      };
-      // Bound arbitrary filters and aging roster windows; eviction only causes a cold read.
-      if (cacheable) {
-        if (projections.size >= 64) {
-          projections.delete(projections.keys().next().value!);
+          }),
+        };
+        // Bound arbitrary filters and aging roster windows; eviction only causes a cold read.
+        if (cacheable) {
+          if (projections.size >= 64) {
+            projections.delete(projections.keys().next().value!);
+          }
+          projections.set(key, prepared);
         }
-        projections.set(key, prepared);
+        projection = prepared;
       }
-      projection = prepared;
-    }
-    try {
-      const { snapshot, complete } = await projection.read;
-      assertReadCurrent();
-      // Complete an admitted read under its captured revision even during continuous churn.
-      // Retire incomplete and superseded work rather than retrying until writers become idle.
-      if (
-        (!complete || params.store.sessionsRevision !== admittedRevision) &&
-        projections.get(key) === projection
-      ) {
-        projections.delete(key);
+      try {
+        const { snapshot, complete } = await projection.read;
+        assertReadCurrent();
+        const expired = projection.expires < admittedAt;
+        // Complete an admitted read under its captured revision even during continuous churn.
+        // Retire incomplete, expired or superseded work without waiting for writers to become idle.
+        if (
+          (!complete || expired || params.store.sessionsRevision !== admittedRevision) &&
+          projections.get(key) === projection
+        ) {
+          projections.delete(key);
+        }
+        // A joiner may have arrived after a pending roster's yet-unknown age deadline.
+        if (joined && expired) {
+          return await read(id, view, caller);
+        }
+        return snapshot;
+      } catch (error) {
+        if (projections.get(key) === projection) {
+          projections.delete(key);
+        }
+        assertReadCurrent();
+        if (joined) {
+          return await read(id, view, caller);
+        }
+        throw error;
       }
-      return snapshot;
-    } catch (error) {
-      if (projections.get(key) === projection) {
-        projections.delete(key);
-      }
-      assertReadCurrent();
-      if (joined) {
-        return await read(id, view, caller);
-      }
-      throw error;
-    }
-  };
+    });
   const cancel = () => {
     stopped = true;
     unsubscribe();
@@ -485,7 +493,6 @@ function createOwner(
     }
     timer = undefined;
     lastKnown.clear();
-    boards.clear();
     projections.clear();
   };
   return {

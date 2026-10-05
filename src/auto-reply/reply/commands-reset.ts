@@ -143,6 +143,7 @@ export async function maybeHandleResetCommand(
         (params.opts as InternalResetCommandOptions | undefined)?.onSessionPrepared?.({
           sessionKey: resetResult.sessionKey ?? boundAcpKey,
           sessionId: resetResult.sessionId,
+          lifecycleRevision: resetResult.lifecycleRevision,
           storePath: resetResult.storePath,
         });
       }

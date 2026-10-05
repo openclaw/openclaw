@@ -90,11 +90,10 @@ type SessionTranscriptReconcileWorkerCommand = {
   yield?: true;
 };
 
-function parseWorkerInput(value: unknown): SessionTranscriptReconcileWorkerInput | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+function parseWorkerInput(input: unknown): SessionTranscriptReconcileWorkerInput | undefined {
+  if (!isRecord(input)) {
     return undefined;
   }
-  const input = value as Record<string, unknown>;
   if (
     input.mode === "memory" &&
     Array.isArray(input.sessionIds) &&

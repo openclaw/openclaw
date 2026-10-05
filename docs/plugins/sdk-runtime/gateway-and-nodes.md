@@ -258,6 +258,18 @@ applicable policy also requires fresh publication admission.
     Retained handles reject after their owner closes; no new SDK barrel export
     is needed.
 
+    `api.runtime.gateway.withSessionReadScope(async (scope) => result)` admits a
+    session-derived read through the same caller and lifecycle checks. Eligible
+    human readers receive an opaque scope shared across equal viewers and
+    published session, profile, access, and configuration revisions. A plugin
+    may reuse an immutable result for that scope and its own query/revision;
+    the token is not authority and must only be consumed inside this callback.
+    Agent, synthetic, and unscoped service callers receive `undefined` and
+    retain a fresh caller-scoped roster read. The host rechecks authority after
+    the callback settles. Ordinary session progress can finish the admitted
+    snapshot, but a subsequent invocation receives the new scope. Plugins own
+    their result bounds and domain invalidation; this adds no expiry timer.
+
     `await api.runtime.gateway.resolveGitHubAccount({ login, signal? })` resolves a
     public GitHub login to `{ accountId, login }` using the Gateway's configured
     GitHub API credential, with no anonymous retry. Bundled and trusted official

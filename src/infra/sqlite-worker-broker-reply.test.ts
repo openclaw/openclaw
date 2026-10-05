@@ -15,6 +15,7 @@ it("hydrates cached-context execute-frame errors without an explicit request con
     throw new Error("Failed continuation must not dispatch or finish successfully");
   };
   const job: Job = {
+    observation: { started() {}, completed() {} },
     request: { type: "execute-frame", id: 1, actor: 1, input: new Uint8Array() },
     bytes: 0,
     resolve: unexpected,

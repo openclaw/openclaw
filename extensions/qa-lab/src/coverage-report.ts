@@ -14,28 +14,8 @@ import {
 } from "./scorecard-taxonomy.js";
 import { shellQuote } from "./shell-quote.js";
 
-type QaCoverageScenarioSummary = {
-  id: string;
-  title: string;
-  sourcePath: string;
-  theme: string;
-  surfaces: string[];
-  risk: string;
-};
-
-type QaScenarioSearchMatch = QaCoverageScenarioSummary & {
-  channel?: string;
-  coverageIds: string[];
-  docsRefs: string[];
-  codeRefs: string[];
-  executionKind: QaSeedScenarioWithSource["execution"]["kind"];
-  executionPath?: string;
-  runtimePairLane?: string;
-  requiredChannelDriver?: string;
-  requiredProviderMode?: string;
-  requiredProvider?: string;
-  requiredModel?: string;
-};
+type QaCoverageScenarioSummary = ReturnType<typeof summarizeScenario>;
+type QaScenarioSearchMatch = ReturnType<typeof summarizeScenarioSearchMatch>;
 
 type QaCoverageIntent = "primary" | "secondary";
 
@@ -71,7 +51,7 @@ function assertUniqueQaScenarioIds(
   }
 }
 
-function summarizeScenario(scenario: QaSeedScenarioWithSource): QaCoverageScenarioSummary {
+function summarizeScenario(scenario: QaSeedScenarioWithSource) {
   return {
     id: scenario.id,
     title: scenario.title,
@@ -116,7 +96,7 @@ function scenarioSearchText(scenario: QaSeedScenarioWithSource) {
 function summarizeScenarioSearchMatch(
   scenario: QaSeedScenarioWithSource,
   tokens: readonly string[],
-): QaScenarioSearchMatch {
+) {
   const config = scenario.execution.config ?? {};
   const channels = scenario.execution.channels ?? [];
   return {

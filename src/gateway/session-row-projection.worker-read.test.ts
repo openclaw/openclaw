@@ -18,12 +18,12 @@ import {
 } from "../config/sessions/session-accessor.js";
 import * as entryCache from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { updateSessionGroupCategoriesInWorker } from "../config/sessions/session-group-categories.js";
+import type { SessionRowDatabaseFacts } from "../config/sessions/session-row-facts.types.js";
 import {
   addSessionMember,
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
-import type { SessionRowDatabaseFacts } from "../config/sessions/session-transcript-worker.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
 import {

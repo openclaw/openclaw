@@ -78,23 +78,6 @@ function listPotentialEnabledChannelIds(
   return sortUniquePluginIds(enabledSignals);
 }
 
-function resolveGatewayStartupDreamingEngineId(config: OpenClawConfig): string | undefined {
-  const dreamingConfig = resolveMemoryDreamingConfig({
-    pluginConfig: resolveMemoryDreamingPluginConfig(config),
-    cfg: config,
-  });
-  return dreamingConfig.enabled && resolveGatewayStartupDreamingSelectedPluginId(config)
-    ? DEFAULT_MEMORY_DREAMING_PLUGIN_ID
-    : undefined;
-}
-
-function resolveGatewayStartupDreamingSelectedPluginId(config: OpenClawConfig): string | undefined {
-  const selectedPluginId = normalizeOptionalLowercaseString(resolveMemoryDreamingPluginId(config));
-  return selectedPluginId && selectedPluginId !== DEFAULT_MEMORY_DREAMING_PLUGIN_ID
-    ? selectedPluginId
-    : undefined;
-}
-
 export function blocksPluginStartup(params: {
   pluginId: string;
   pluginsConfig: NormalizedPluginsConfig;
@@ -121,9 +104,21 @@ export function resolveAuthorizedGatewayStartupDreamingPluginIds(params: {
   index: { plugins: readonly InstalledPluginIndexRecord[] };
   platform?: NodeJS.Platform;
 }): Set<string> {
-  const engineId = resolveGatewayStartupDreamingEngineId(params.config);
-  const dreamingSelectedPluginId = resolveGatewayStartupDreamingSelectedPluginId(params.config);
-  if (!engineId || !params.pluginsConfig.enabled || !params.activationSourcePlugins.enabled) {
+  const dreamingConfig = resolveMemoryDreamingConfig({
+    pluginConfig: resolveMemoryDreamingPluginConfig(params.config),
+    cfg: params.config,
+  });
+  const dreamingSelectedPluginId = normalizeOptionalLowercaseString(
+    resolveMemoryDreamingPluginId(params.config),
+  );
+  const engineId = DEFAULT_MEMORY_DREAMING_PLUGIN_ID;
+  if (
+    !dreamingConfig.enabled ||
+    !dreamingSelectedPluginId ||
+    dreamingSelectedPluginId === engineId ||
+    !params.pluginsConfig.enabled ||
+    !params.activationSourcePlugins.enabled
+  ) {
     return new Set();
   }
   if (

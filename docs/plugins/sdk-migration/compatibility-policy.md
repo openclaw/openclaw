@@ -199,6 +199,24 @@ core consumes them. New producers should construct `terminal`; consumers of
 the union must narrow the result before reading it. The current
 `EmbeddedRunAttemptResult` contract keeps `terminal` required.
 
+### Session observer and progress visibility
+
+The October 4, 2026 `session-observer-progress-sync-reads` record retains the
+synchronous observer methods and progress visibility contracts shipped in
+2026.9.8. `context.sessionObserver.handleEvent`, `getCompanionSnapshot`, and
+`dispose` retain their synchronous signatures and completion behavior.
+`PluginHookReplyDispatchEvent.shouldSendToolSummaries` remains a live boolean
+getter, `shouldSendFullToolDetails` remains a dispatch-time boolean, and
+`GetReplyOptions.onVerboseProgressVisibility` still receives a synchronous getter.
+
+Core and bundled callers use the [awaited replacements](/plugins/sdk-migration/how-to-migrate#await-session-observer-and-progress-visibility).
+The released ACP hook helper still accepts boolean-only events from external
+callers; host-created events provide fresh awaited predicates. Deprecated native
+reads remain compatibility debt until the next Plugin SDK major and explicit
+breaking-release approval. JSDoc and the compatibility registry record the
+deprecation without runtime warnings. Schemas, retained data, and update behavior
+are unchanged.
+
 ### Mention Inbox persistence
 
 The October 3, 2026 `mention-inbox-sync-persistence` record retains the

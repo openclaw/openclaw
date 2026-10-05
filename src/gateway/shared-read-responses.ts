@@ -46,6 +46,8 @@ function captureRevision(context: GatewayRequestContext): Pick<Entry, "current" 
   const policy = context.getCommittedRuntimeConfig?.();
   const access = readGatewayAccessRevision();
   const projection = getSessionRowProjection(context);
+  const runners = context.workerPlacementRunnerAvailabilityReader;
+  const runnerRevision = runners?.version();
   let rows = projection?.sharingRevision;
   return {
     publishRows: () => {
@@ -56,6 +58,8 @@ function captureRevision(context: GatewayRequestContext): Pick<Entry, "current" 
       context.getCommittedRuntimeConfig?.() === policy &&
       readGatewayAccessRevision() === access &&
       getSessionRowProjection(context) === projection &&
+      context.workerPlacementRunnerAvailabilityReader === runners &&
+      runners?.version() === runnerRevision &&
       projection?.sharingRevision === rows,
   };
 }

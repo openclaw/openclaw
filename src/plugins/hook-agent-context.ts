@@ -41,7 +41,6 @@ function stripConversationPrefix(
 function resolveAgentHookChannel(params: {
   messageChannel?: string | null;
   messageProvider?: string | null;
-  agentAccountId?: string | null;
 }): string | undefined {
   const messageChannel = normalizeOptionalString(params.messageChannel);
   const provider = normalizeOptionalString(params.messageProvider);

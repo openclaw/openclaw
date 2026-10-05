@@ -272,6 +272,31 @@ legacy hook for supported older consumers. The awaited Gemini helper propagates
 metadata write failures; the legacy adapter retains its historical best-effort
 metadata behavior.
 
+## Await session observer and progress visibility
+
+Use `await context.sessionObserver.handleEventAsync(event)` to join event
+admission, `await getCompanionSnapshotAsync(sessionKey, agentId?)` for a current
+companion snapshot, and `await disposeAsync()` to join accepted observer work
+during shutdown. Connection visibility and removal remain synchronous.
+
+Reply-dispatch hooks should await `event.shouldSendToolSummariesAsync()` and
+`event.shouldSendFullToolDetailsAsync()` at each visibility decision. Current
+hosts supply both methods; they remain optional in the original event type so
+external callers can still construct released boolean-only events. Plugins that
+require worker-backed visibility should report a missing capability on older
+hosts rather than substitute a cached dispatch-start boolean.
+
+Channels should register `onVerboseProgressVisibilityAsync` instead of
+`onVerboseProgressVisibility`. The callback receives `() => Promise<boolean>`;
+dispatch awaits registration before selecting commentary ownership. Await the
+getter before rendering progress and recheck cancellation after that await.
+Commentary ownership remains frozen for a turn where the existing commentary
+delivery policy requires it; ordinary live visibility reads remain fresh.
+When both callbacks are supplied, the async callback takes precedence.
+
+The deprecated methods, booleans, and synchronous callback remain available
+until the next Plugin SDK major and explicit breaking-release approval.
+
 ## Managed node workspace acquisition
 
 Node-host commands should await `context.acquireManagedWorkspaceAsync(request)`

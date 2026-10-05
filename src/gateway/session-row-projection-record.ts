@@ -3,7 +3,8 @@ import { resolveSessionParentSessionKey } from "../channels/plugins/session-conv
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-model-sources.js";
 import type { SessionEntryPublicationSource } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
-import type { SessionRowDatabaseFacts } from "../config/sessions/session-transcript-worker.types.js";
+import type { SessionTitleFields } from "../config/sessions/session-history-read.types.js";
+import type { SessionRowDatabaseFacts } from "../config/sessions/session-row-facts.types.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import type {
   InternalSessionEntry as SessionEntry,
@@ -84,6 +85,8 @@ export type Row = {
   preparedPrivate?: {
     entries: Record<string, SessionEntry>;
     databaseFacts: PreparedSessionRowDatabaseFacts;
+    titleFields?: SessionTitleFields;
+    terminalModel?: { modelProvider: string; model: string };
   };
 };
 
@@ -302,6 +305,8 @@ export function createIncognitoSessionRow(params: {
   prepared?: {
     relatedEntries?: Record<string, NonNullable<Row["storedEntry"]>>;
     databaseFacts: PreparedSessionRowDatabaseFacts;
+    titleFields?: SessionTitleFields;
+    terminalModel?: { modelProvider: string; model: string };
   };
 }): Row {
   const { cfg, key, agentId, storePath, source, entry: storedEntry } = params;
@@ -320,6 +325,8 @@ export function createIncognitoSessionRow(params: {
           preparedPrivate: {
             entries: { ...params.prepared.relatedEntries, [key]: storedEntry },
             databaseFacts: params.prepared.databaseFacts,
+            titleFields: params.prepared.titleFields,
+            terminalModel: params.prepared.terminalModel,
           },
         }
       : {}),

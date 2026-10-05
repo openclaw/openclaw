@@ -5,10 +5,17 @@ import {
   createDefaultWorkboardSessionsBoardSpec,
   type WorkboardSessionFacts,
   type WorkboardSessionsBoardSpec,
-  type WorkboardSessionsColumn,
 } from "@openclaw/workboard-contract";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWorkboardSessionsBoardService } from "./sessions-board.js";
+import {
+  BOARD_ID,
+  DEFAULT_COLUMNS,
+  facts,
+  FOCUS_COLUMN,
+  NOW,
+  OTHER_COLUMN,
+} from "./sessions-board.test-support.js";
 import { WorkboardBoardStore } from "./store-boards.js";
 import { createKernelStores } from "./test/sqlite-kernel.js";
 
@@ -26,39 +33,11 @@ beforeAll(() => {
 afterAll(() => fs.rmSync(tempDir, { recursive: true, force: true }));
 
 type ServiceParams = Parameters<typeof createWorkboardSessionsBoardService>[0];
-const BOARD_ID = "sessions";
-const NOW = 10_000_000;
-const FOCUS_COLUMN: WorkboardSessionsColumn = {
-  id: "focus",
-  label: "Focus",
-  description: "Active sessions.",
-  match: { run: ["active"] },
-};
-const OTHER_COLUMN: WorkboardSessionsColumn = {
-  id: "other",
-  label: "Other",
-  description: "Remaining sessions.",
-  fallback: true,
-};
-const DEFAULT_COLUMNS = ["needs-input", "stuck", "working", "in-review", "merged", "done"];
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   vi.setSystemTime(NOW);
 });
 afterEach(() => vi.useRealTimers());
-function facts(id: string, overrides: Partial<WorkboardSessionFacts> = {}): WorkboardSessionFacts {
-  return {
-    key: `agent:main:${id}`,
-    sessionId: `session-${id}`,
-    agentId: "main",
-    label: id,
-    run: "idle",
-    pullRequests: [],
-    archived: false,
-    lastActivityAt: NOW,
-    ...overrides,
-  };
-}
 async function withService(
   options: Parameters<typeof createFixture>[0],
   run: (fixture: Awaited<ReturnType<typeof createFixture>>) => Promise<void>,
@@ -88,7 +67,11 @@ async function createFixture(options: {
     columns: [FOCUS_COLUMN, OTHER_COLUMN],
     ...options.spec,
   });
-  const state = { facts: options.facts, roster: options.facts };
+  const state: {
+    facts: WorkboardSessionFacts[];
+    roster: WorkboardSessionFacts[];
+    readScope?: string;
+  } = { facts: options.facts, roster: options.facts };
   const request = vi
     .fn()
     .mockImplementation(async () => ({ sessions: state.roster, hasMore: false }));
@@ -104,6 +87,8 @@ async function createFixture(options: {
   const gateway = {
     request,
     readSessionFacts,
+    withSessionReadScope: <T>(run: (scope: string | undefined) => Promise<T>): Promise<T> =>
+      run(state.readScope),
     subscribeSessionChanges: (callback: NonNullable<typeof listener>) => {
       listener = callback;
       return unsubscribe;
@@ -603,10 +588,11 @@ describe("Sessions board rules and live facts", () => {
     });
   });
 
-  it("shares one projection for 25 authorized rosters and retains unchanged facts", async () => {
+  it("shares the roster and frozen projection for 25 current read scopes", async () => {
     await withService(
       { facts: Array.from({ length: 81 }, (_, index) => facts(String(index))) },
-      async ({ service, store, request, readSessionFacts, emit }) => {
+      async ({ service, store, state, request, readSessionFacts, emit }) => {
+        state.readScope = "shared-scope";
         const placements = vi.spyOn(store, "listSessionPlacements");
         const boards = vi.spyOn(store, "getSessionsBoard");
         const changes = vi.fn();
@@ -619,9 +605,10 @@ describe("Sessions board rules and live facts", () => {
         const first = readers[0]!;
         expect(readers.every((read) => read === first)).toBe(true);
         expect(first.sessions).toHaveLength(81);
-        expect(request).toHaveBeenCalledTimes(25);
+        expect(request).toHaveBeenCalledOnce();
         expect(boards).toHaveBeenCalledOnce();
         expect(placements).toHaveBeenCalledOnce();
+        expect(request).toHaveBeenCalledOnce();
         expect(Object.isFrozen(first.sessions[0])).toBe(true);
         emit(facts("0").key, "category");
         await vi.advanceTimersByTimeAsync(5_000);
@@ -646,6 +633,12 @@ describe("Sessions board rules and live facts", () => {
         );
         expect(placements).toHaveBeenCalledTimes(2);
         expect(boards).toHaveBeenCalledTimes(2);
+        expect(request).toHaveBeenCalledTimes(2);
+        state.readScope = "new-roster-scope";
+        const refreshed = await service.read(BOARD_ID);
+        expect(request).toHaveBeenCalledTimes(3);
+        expect(refreshed.sessions).toEqual(next.sessions);
+        expect(refreshed.revision!.scope).not.toBe(next.revision!.scope);
       },
     );
   });
@@ -683,20 +676,85 @@ describe("Sessions board rules and live facts", () => {
     );
   });
 
-  it("expires a cached projection when a session leaves the board's age window", async () => {
-    await withService(
-      { facts: [facts("one")], spec: { scope: { maxAgeHours: 1 } } },
-      async ({ service }) => {
-        const first = await service.read(BOARD_ID);
-        vi.setSystemTime(NOW + 3_600_000);
-        expect(await service.read(BOARD_ID)).toBe(first);
-        vi.setSystemTime(NOW + 3_600_001);
-        const expired = await service.read(BOARD_ID);
-        expect(expired.sessions).toEqual([]);
-        expect(expired.revision!.scope).not.toBe(first.revision!.scope);
-      },
-    );
-  });
+  it.each(["session", "people"] as const)(
+    "expires cached %s at the exact activity deadline",
+    async (kind) => {
+      await withService(
+        { facts: [facts("one")], spec: { scope: { maxAgeHours: 1 } } },
+        async ({ service, state, request }) => {
+          state.readScope = "shared-scope";
+          const deadline = NOW + (kind === "people" ? 1_000 : 3_600_000);
+          const person = { identity: { type: "profile", id: "one" }, label: "One" };
+          if (kind === "people") {
+            // A session outside the selected view can still contribute to the people facet.
+            request
+              .mockResolvedValueOnce({
+                sessions: [],
+                people: [{ ...person, sessionCount: 1 }],
+                activityExpiresAt: deadline,
+              })
+              .mockResolvedValueOnce({ sessions: [], people: [] });
+          }
+          const view = { includePeople: true };
+          const first = await service.read(BOARD_ID, view);
+          vi.setSystemTime(deadline);
+          expect(await service.read(BOARD_ID, view)).toBe(first);
+          vi.setSystemTime(deadline + 1);
+          const expired = await service.read(BOARD_ID, view);
+          expect(expired.sessions).toEqual([]);
+          if (kind === "people") {
+            expect(first.people).toEqual([{ ...person, sessionCount: 1 }]);
+            expect(expired.people).toEqual([]);
+          }
+          expect(expired.revision!.scope).not.toBe(first.revision!.scope);
+        },
+      );
+    },
+  );
+
+  it.each(["roster", "placements"] as const)(
+    "refreshes expired people for a reader joining pending %s work",
+    async (pending) => {
+      await withService({ facts: [] }, async ({ service, store, state, request }) => {
+        state.readScope = "shared-scope";
+        const entered = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        const joined = Promise.withResolvers<void>();
+        const people = [
+          { identity: { type: "profile", id: "one" }, label: "One", sessionCount: 1 },
+        ];
+        const roster = { sessions: [], people, activityExpiresAt: NOW + 100 };
+        request.mockResolvedValue({ sessions: [], people: [] });
+        using placements = vi.spyOn(store, "listSessionPlacements");
+        if (pending === "roster") {
+          request.mockImplementationOnce(async () => {
+            entered.resolve();
+            await release.promise;
+            return roster;
+          });
+        } else {
+          request.mockResolvedValueOnce(roster);
+          placements.mockImplementationOnce(async () => {
+            entered.resolve();
+            await release.promise;
+            return [];
+          });
+        }
+        const view = { includePeople: true, involvingProfileId: "selected" };
+        const first = service.read(BOARD_ID, view);
+        await entered.promise;
+        vi.setSystemTime(NOW + 101);
+        const second = service.read(BOARD_ID, view, { assertCurrent: () => joined.resolve() });
+        await joined.promise;
+        release.resolve();
+        const [before, after] = await Promise.all([first, second]);
+        expect(before.people).toEqual(people);
+        expect(after.people).toEqual([]);
+        expect(after.revision!.scope).not.toBe(before.revision!.scope);
+        expect(request).toHaveBeenCalledTimes(2);
+      });
+    },
+  );
 
   it("checks authority after the caller's roster read even with a warm projection", async () => {
     await withService({ facts: [facts("one")] }, async ({ service, request }) => {
