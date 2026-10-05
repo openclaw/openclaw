@@ -35,6 +35,7 @@ import {
   recordUpdateRunStep,
 } from "./update-run-ledger.js";
 import { finishUpdateRun } from "./update-run-write.js";
+import { recordUpgradeRecipeMaintenanceInWorker } from "./upgrade-recipes/maintenance-store.js";
 
 async function createRestoreFixture(state: OpenClawTestState, linked = false) {
   expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
@@ -108,6 +109,98 @@ async function createRestoreFixture(state: OpenClawTestState, linked = false) {
 }
 
 type RestoreFixture = Awaited<ReturnType<typeof createRestoreFixture>>;
+
+it.each(["commit-intent", "committed"] as const)(
+  "preserves admitted state instead of restoring after recipe %s",
+  async (phase) => {
+    await withFixture(async (fixture) => {
+      const binding = {
+        protocol: 1 as const,
+        runId: fixture.run.runId,
+        planDigest: "a".repeat(64),
+        targetArtifactId: "exact-target",
+        installationKey: fixture.state.path("installation"),
+        stateRootKey: fixture.state.stateDir,
+      };
+      const options = { path: fixture.shared.path, env: fixture.state.env };
+      let receipt = recordUpgradeRecipeMaintenanceInWorker(
+        { binding, expectedRevision: null, phase: "maintenance-required" },
+        options,
+        () => undefined,
+      );
+      receipt = recordUpgradeRecipeMaintenanceInWorker(
+        { binding, expectedRevision: receipt.revision, phase: "commit-intent" },
+        options,
+        () => undefined,
+      );
+      if (phase === "committed") {
+        recordUpgradeRecipeMaintenanceInWorker(
+          { binding, expectedRevision: receipt.revision, phase },
+          options,
+          () => undefined,
+        );
+      }
+      fixture.agent.db.exec("UPDATE restore_witness SET value = 'accepted-work'");
+      await expect(fixture.restore()).rejects.toThrow("external work is possible");
+      const agent = openOpenClawAgentDatabase({
+        agentId: "main",
+        path: fixture.agent.path,
+        env: fixture.state.env,
+      });
+      expect(agent.db.prepare("SELECT value FROM restore_witness").get()).toEqual({
+        value: "accepted-work",
+      });
+    });
+  },
+);
+
+it("retains exact recipe recovery evidence during pre-intent compensation", async () => {
+  await withFixture(async (fixture) => {
+    const rows: Array<[string, string, number]> = [
+      [
+        "update.recipe-maintenance.active",
+        JSON.stringify({
+          binding: {
+            protocol: 1,
+            runId: fixture.run.runId,
+            planDigest: "a".repeat(64),
+            targetArtifactId: "target",
+            installationKey: "/installation",
+            stateRootKey: fixture.state.stateDir,
+          },
+          phase: "maintenance-required",
+          revision: 1,
+          updatedAtMs: 41,
+        }),
+        41,
+      ],
+      ["update.recipe-step.opaque", '{"opaque":"retain raw bytes"}', 42],
+    ];
+    const insert = fixture.shared.db.prepare(
+      "INSERT INTO config_machine_state (state_key,value_json,updated_at_ms) VALUES (?,?,?)",
+    );
+    for (const row of rows) {
+      insert.run(...row);
+    }
+    await fixture.restore();
+    const shared = openOpenClawStateDatabase({ env: fixture.state.env });
+    const actual = shared.db
+      .prepare(
+        "SELECT state_key,value_json,updated_at_ms FROM config_machine_state WHERE substr(state_key,1,14) = 'update.recipe-' ORDER BY state_key",
+      )
+      .all();
+    expect(actual).toEqual(
+      rows.map(([state_key, value_json, updated_at_ms]) => ({
+        state_key,
+        value_json,
+        updated_at_ms,
+      })),
+    );
+    expect(shared.db.prepare("SELECT value FROM restore_witness").get()).toEqual({
+      value: "baseline",
+    });
+  });
+});
 
 function withFixture(run: (fixture: RestoreFixture) => Promise<void>, linked = false) {
   return withOpenClawTestState(
@@ -662,7 +755,7 @@ it("refuses replacement while a foreign process owns state maintenance", async (
       ).toEqual({
         ready: true,
       });
-      await expect(fixture.restore()).rejects.toThrow("failed to acquire gateway state ownership");
+      await expect(fixture.restore()).rejects.toThrow("undergoing offline maintenance");
       await assertUnchanged();
       child.send({ release: true });
       expect(await withinTest(closed, signal)).toEqual([0, null]);

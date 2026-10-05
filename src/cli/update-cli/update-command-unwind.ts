@@ -6,7 +6,10 @@ import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
+import {
+  UpdateCommandRecoveryPendingError,
+  hasUpdateCommandRecipeReconciliationPendingError,
+} from "./update-command-recovery-error.js";
 import {
   createUpdateCommandFailureResult,
   UpdateCommandFailure,
@@ -94,6 +97,7 @@ export async function withUpdateCommandRecoveryUnwind(
     }
     if (
       error instanceof UpdateCommandRecoveryPendingError ||
+      hasUpdateCommandRecipeReconciliationPendingError(error) ||
       error instanceof UpdateRecoveryRequiredError ||
       opts.recovery
     ) {

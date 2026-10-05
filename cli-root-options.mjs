@@ -189,3 +189,80 @@ function parseCommandArgsWithRootOptions(argv, options, returnTail, returnOption
       ? { rootOptions, commandOptions }
       : positionals;
 }
+
+export function rewriteUpdateFlagArgv(argv) {
+  // Preserve the old root --update spelling by rewriting before Commander registration.
+  // Only rewrite --update while scanning the root-option prefix; once a command
+  // or `--` appears, later --update tokens belong to that command's arguments.
+  const updateIndex = argv.indexOf("--update");
+  if (updateIndex === -1) {
+    return argv;
+  }
+
+  for (let i = 2; i < argv.length; i++) {
+    const arg = argv[i];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      return argv;
+    }
+    if (i === updateIndex) {
+      return argv.toSpliced(updateIndex, 1, "update");
+    }
+    const consumed = consumeRootOptionToken(argv, i);
+    if (consumed > 0) {
+      i += consumed - 1;
+      continue;
+    }
+    if (!arg.startsWith("-")) {
+      return argv;
+    }
+  }
+  return argv;
+}
+
+// Update option roles must be identical in the installed launcher and Commander.
+export const UPDATE_OPTION_SPECS = [
+  ["--json", "Output result as JSON", false],
+  ["--no-restart", "Skip restarting the gateway service after a successful update"],
+  ["--dry-run", "Preview update actions without making changes", false],
+  [
+    "--admission <auto|installed>",
+    "Select candidate or installed admission checks (default: auto)",
+  ],
+  ["--channel <stable|extended-stable|beta|dev>", "Persist update channel (git + npm)"],
+  [
+    "--tag <dist-tag|version|spec>",
+    "Override the package target for this update (dist-tag, version, or package spec)",
+  ],
+  ["--timeout <seconds>", "Set a per-step deadline in seconds"],
+  ["--drain-timeout <seconds>", "Set the immutable activation drain budget before interruption"],
+  ["--sha <commit>", "Prepare an exact official commit for an adopted immutable installation"],
+  ["--yes", "Skip confirmation prompts (non-interactive)", false],
+  [
+    "--reapply-local-overrides",
+    "Replay trusted packaged dist edits when the target baseline is unchanged",
+    false,
+  ],
+  ["--accept-capabilities", "Accept widened plugin capabilities", false],
+];
+
+/** Resolve update children without mistaking parent option values for commands. */
+export function getUpdateCommandPath(argv) {
+  const [command] = getRootOptionAwareCommandPath(argv, 1);
+  if (command !== "update") {
+    return null;
+  }
+  const booleanFlags = UPDATE_OPTION_SPECS.filter(([flags]) => !flags.includes("<")).map(
+    ([flags]) => flags,
+  );
+  const valueFlags = UPDATE_OPTION_SPECS.filter(([flags]) => flags.includes("<")).map(([flags]) =>
+    flags.slice(0, flags.indexOf(" ")),
+  );
+  const child = getCommandPositionalsWithRootOptions(argv, {
+    commandPath: [command],
+    booleanFlags,
+    valueFlags,
+    maxPositionals: 1,
+    mode: "command-path",
+  })?.[0];
+  return child ? [command, child] : [command];
+}

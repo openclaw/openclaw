@@ -16,7 +16,7 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import {
   formatUpdateDoctorConfigWriteRefusal,
   getUpdateDoctorConfigFailureReason,
-} from "../../infra/update-doctor-config.js";
+} from "../../infra/update-doctor-config-format.js";
 import {
   consumeUpdatePostInstallDoctorResult,
   createUpdatePostInstallDoctorResultPath,

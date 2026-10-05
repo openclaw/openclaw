@@ -13,9 +13,9 @@ import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import type { RootHelpRenderOptions } from "./cli/program/root-help.js";
 import { isNativeHookRelayArgv } from "./cli/respawn-policy.js";
 import {
-  isUpdateAdmissionInvocation,
-  tryRunUpdateAdmissionBeforeStartup,
-} from "./cli/run-main-update-admission.js";
+  isPassiveUpdateInvocation,
+  tryRunPassiveUpdateBeforeStartup,
+} from "./cli/run-main-passive-update.js";
 import {
   configureGatewayStartupTraceConsoleFormatting,
   createGatewayDispatchStartupTrace,
@@ -129,8 +129,8 @@ if (isEntryMain) {
 }
 if (!isEntryMain) {
   // Imported as a dependency — skip all entry-point side effects.
-} else if (isUpdateAdmissionInvocation(resolveCliArgvInvocation(process.argv))) {
-  await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(process.argv));
+} else if (isPassiveUpdateInvocation(resolveCliArgvInvocation(process.argv))) {
+  await tryRunPassiveUpdateBeforeStartup(resolveCliArgvInvocation(process.argv));
 } else {
   const entryFile = fileURLToPath(import.meta.url);
   const installRoot = resolveEntryInstallRoot(entryFile);

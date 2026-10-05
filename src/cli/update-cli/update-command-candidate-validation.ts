@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { resolveStateDir } from "../../config/paths.js";
 import { validateUpdateCandidateCanary } from "../../infra/update-candidate-canary.js";
-import { createUpdateDoctorConfigWarningStep } from "../../infra/update-doctor-config.js";
+import { createUpdateDoctorConfigWarningStep } from "../../infra/update-doctor-config-format.js";
 import { isFailedUpdateStep } from "../../infra/update-run-step.js";
 import { recordUpdateRunStepAsync } from "../../infra/update-run-write.async.js";
 import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js";

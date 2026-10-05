@@ -38,6 +38,8 @@ export type ManagedHandoffLeaseStoreOptions = {
   serviceManagerEnv: NodeJS.ProcessEnv;
   existingIdentity?: ManagedUpdateLeaseDatabaseIdentity;
   originalUpdateKey?: string;
+  /** Stable recipe lineage; permits only positively dead exact-owner CAS replacement. */
+  originalRecoveryOwner?: string;
   onProcessIdentityWarning?: (pid: number, message: string) => void;
 };
 

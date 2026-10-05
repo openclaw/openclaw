@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -7,20 +6,21 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
 import { hasErrnoCode } from "./errors.js";
 import {
+  assertPackageActivationInventory,
   completePackageActivationCustody,
-  packageActivationIdentityOrAbsent as entryIdentity,
   inspectPackageActivationCustody,
+  packageActivationIdentityOrAbsent as entryIdentity,
+  resolvePackageActivationCustodyPath,
 } from "./package-update-activation-custody.js";
 import {
   packageActivationIdentity,
-  resolvePackageActivationHelper,
   type PackageActivationIntent,
   type PackageActivationJournal,
   type PackageActivationPhase,
   type PackageActivationRecord,
   isPackageActivationComplete,
 } from "./package-update-activation-journal.js";
-import { decodePackageActivationLauncher } from "./package-update-activation-launcher.js";
+import { matchesPackageActivationLauncher } from "./package-update-activation-launcher.js";
 import {
   readPackageActivationRecordStatus as packageActivationStatus,
   selectedPackageRetirementGeneration,
@@ -33,8 +33,6 @@ import {
 } from "./package-update-filesystem.js";
 import {
   createPackageIntegrityReader,
-  packageLauncherDifferences,
-  type PackageLauncherFingerprint,
   type PackageIntegrityFingerprint,
 } from "./package-update-integrity.js";
 import {
@@ -44,14 +42,6 @@ import {
 import { assertManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-database.js";
 
 const log = createSubsystemLogger("update/package-integrity");
-
-function matchesLauncher(actual: PackageLauncherFingerprint | null, encoded: string | null) {
-  return actual === null || encoded === null
-    ? actual === null && encoded === null
-    : packageLauncherDifferences(decodePackageActivationLauncher(encoded), actual, {
-        checkMode: true,
-      }).length === 0;
-}
 
 export function createPublicationOwner(
   anchor: string,
@@ -72,18 +62,8 @@ export function createPublicationOwner(
   // Creation can lose its acknowledgement before custody is journaled. Keep
   // that empty staging object outside the anchor so recovery can still abort.
   const copyRoot = `${anchor}.copy-${descriptor.operationId}`;
-  const custodyPath = (name: "anchor" | "helper") => {
-    if (record.phase !== "preparing") {
-      return name === "anchor" ? anchor : resolvePackageActivationHelper(anchor);
-    }
-    const entry = inspectPackageActivationCustody(anchor, record).find(
-      (item) => item.name === name,
-    );
-    if (!entry) {
-      throw new Error("Package bootstrap custody is missing.");
-    }
-    return entry.moved ? entry.destination : entry.source;
-  };
+  const custodyPath = (name: "anchor" | "helper") =>
+    resolvePackageActivationCustodyPath(anchor, record, name);
   const helper = () => custodyPath("helper");
   const artifactNames = [
     "previous",
@@ -93,21 +73,7 @@ export function createPublicationOwner(
     "previous-launchers",
   ] as const;
   const assertInventory = (allowed: readonly string[] = artifactNames) => {
-    let entries: string[];
-    try {
-      entries = fs.readdirSync(custodyPath("anchor"));
-    } catch (error) {
-      if (
-        hasErrnoCode(error, "ENOENT") &&
-        (record.phase === "anchor-retired" || record.intent?.kind === "remove-anchor")
-      ) {
-        return;
-      }
-      throw error;
-    }
-    if (entries.some((name) => !allowed.includes(name))) {
-      throw new Error("Unknown package recovery artifacts require operator inspection.");
-    }
+    assertPackageActivationInventory(custodyPath("anchor"), record, allowed);
     const expected =
       record.intent?.kind === "copy-previous"
         ? record.intent.identity
@@ -142,7 +108,7 @@ export function createPublicationOwner(
       const fingerprint = (await reader.exists(destination))
         ? await reader.launcher(destination)
         : null;
-      if (!matchesLauncher(fingerprint, entry[selected])) {
+      if (!matchesPackageActivationLauncher(fingerprint, entry[selected])) {
         throw new Error("Selected package launcher fingerprint changed.");
       }
     }
@@ -231,7 +197,7 @@ export function createPublicationOwner(
       const source = root(`launchers/${entry.name}`);
       if (
         packageActivationIdentity(source, "launcher") !== entry.candidateIdentity ||
-        !matchesLauncher(await reader.launcher(source), entry.candidate)
+        !matchesPackageActivationLauncher(await reader.launcher(source), entry.candidate)
       ) {
         throw new Error("Candidate launcher assets changed.");
       }
@@ -239,11 +205,14 @@ export function createPublicationOwner(
       const present = await reader.exists(destination);
       const id = present ? packageActivationIdentity(destination, "launcher") : null;
       const fingerprint = present ? await reader.launcher(destination) : null;
-      if (id === entry.previousIdentity && matchesLauncher(fingerprint, entry.previous)) {
+      if (
+        id === entry.previousIdentity &&
+        matchesPackageActivationLauncher(fingerprint, entry.previous)
+      ) {
         launcherStates.set(entry.name, "previous");
       } else if (
         id === published.get(entry.name) &&
-        matchesLauncher(fingerprint, entry.candidate)
+        matchesPackageActivationLauncher(fingerprint, entry.candidate)
       ) {
         launcherStates.set(entry.name, "candidate");
       } else {
@@ -255,6 +224,13 @@ export function createPublicationOwner(
   const verifyClosure = async () => {
     assertInventory();
     assertManagedUpdateLeaseDatabaseIdentity(descriptor.authority);
+    // A recorded unlink can outlive its acknowledgment. Only the exact terminal
+    // absence permits continuing without the retired helper; the selected tree
+    // and launchers are still verified by retirement preflight.
+    if (isPackageActivationComplete(anchor, record)) {
+      assertCurrent();
+      return;
+    }
     if (packageActivationIdentity(helper(), false) !== descriptor.helperIdentity) {
       throw new Error("Sealed package recovery helper identity changed.");
     }
@@ -565,6 +541,9 @@ export function createPublicationOwner(
     await verifySelectedLaunchers(selected);
     retirementSelected = selected;
     assertCurrent();
+    if (isPackageActivationComplete(anchor, record)) {
+      return await persistRetirement();
+    }
     if (!["retiring", "anchor-retired"].includes(record.phase)) {
       const publications =
         record.phase === "aborted"
@@ -658,6 +637,26 @@ export function createPublicationOwner(
     retire,
     persistRetirement,
     preflight,
+    async assertCandidateRetirement() {
+      if (selectedPackageRetirementGeneration(record) !== "candidate") {
+        throw new Error("Original recipe retirement did not select the authenticated candidate.");
+      }
+      await preflight("retire");
+    },
+    /** Passive original-run continuation check; never turn untouched preparation into replay. */
+    async assertPublicationStarted() {
+      assertActionAllowed("repair");
+      if (record.phase === "preparing") {
+        throw new Error("Original publication preparation has not established forward effects.");
+      }
+      const observed = await inspect();
+      assertCurrent();
+      if (observed.selected === "previous" && !observed.previous) {
+        throw new Error(
+          "Original publication is untouched; verified preparation progression requires its original owner.",
+        );
+      }
+    },
     async disarmRollback() {
       assertCurrent();
       await discardIncompleteCopy();

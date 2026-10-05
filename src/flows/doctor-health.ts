@@ -17,7 +17,7 @@ import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
-import { formatUpdateDoctorConfigChange } from "../infra/update-doctor-config.js";
+import { formatUpdateDoctorConfigChange } from "../infra/update-doctor-config-format.js";
 import { retainUpdateDoctorProcesses } from "../infra/update-doctor-process-custody.js";
 import {
   captureUpdateDoctorConfigWrites,

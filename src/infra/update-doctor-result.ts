@@ -18,14 +18,14 @@ import type {
   UpdateDatabaseGenerations,
   UpdateDatabaseWriteReceipt,
 } from "./update-database-generations.js";
+import type {
+  UpdateDoctorConfigChange,
+  UpdateDoctorConfigWriteRefusal,
+} from "./update-doctor-config-format.js";
 import {
   UpdateDoctorConfigChangeSchema,
   UpdateDoctorConfigWriteRefusalSchema,
 } from "./update-doctor-config-schema.js";
-import type {
-  UpdateDoctorConfigChange,
-  UpdateDoctorConfigWriteRefusal,
-} from "./update-doctor-config.js";
 import { normalizeUpdateFailureFacts, type UpdateFailureFact } from "./update-failure-facts.js";
 import { UpdateFailureFactSchema } from "./update-run-schema.js";
 

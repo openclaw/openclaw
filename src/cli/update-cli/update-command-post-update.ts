@@ -25,7 +25,11 @@ import {
   preparePostUpdateService,
   resumePostUpdateWindowsAutoStart,
 } from "./update-command-post-update-maintenance.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
+import {
+  prepareRecipeUpdateFinalization,
+  restartPostUpdateGateway,
+} from "./update-command-post-update-recipe.js";
+import { isPostUpdatePending } from "./update-command-recovery-error.js";
 import { assertUpdateCommandPackageFinalization } from "./update-command-recovery.js";
 import { prepareUpdateRestart } from "./update-command-restart-context.js";
 import {
@@ -45,7 +49,6 @@ import {
   refuseUnsettledDoctorRecovery,
 } from "./update-command-service-recovery.js";
 import {
-  maybeRestartService,
   maybeRestartServiceAfterFailedMutableUpdate,
   type PreManagedServiceStop,
 } from "./update-command-service.js";
@@ -66,16 +69,15 @@ import {
   recordUpdatePackageCompletion,
 } from "./update-command-terminal.js";
 
-type FinishUpdateOptions = { candidateRuntime?: boolean; onGatewayStartAttempted?: () => void };
+type FinishUpdateOptions = {
+  candidateRuntime?: boolean;
+  onGatewayStartAttempted?: () => void;
+  beforeFinalization?: () => Promise<void>;
+};
 
 export async function finishUpdate(
   params: FinishUpdateParams,
-  {
-    beforeFinalization,
-    ...options
-  }: FinishUpdateOptions & {
-    beforeFinalization?: () => Promise<void>;
-  } = {},
+  { beforeFinalization, ...options }: FinishUpdateOptions = {},
 ): Promise<UpdateRunResult> {
   const captured = captureUpdateFinalization(params);
   return await withUpdateProgressSettlement(params, beforeFinalization, (settled, failure) =>
@@ -558,42 +560,40 @@ async function finishSettledUpdate(
         writeRestartSentinel(
           buildControlPlaneUpdateRestartHealthPendingResult(resultWithPostUpdate),
         );
+      const recipeFinalization = await prepareRecipeUpdateFinalization({
+        params,
+        postUpdateRoot,
+        shouldRestart,
+        restartContext,
+        configSnapshot: restartConfigSnapshot,
+        assertCurrent,
+        onGatewayStartAttempted,
+        onVerified: recordVerifiedDowntime,
+      });
       if (!params.coreAlreadyCurrent) {
         await notifyRestart();
         await restoreWindowsAutoStart(resultWithPostUpdate);
       }
       let verificationFailure = "restart-unhealthy";
       const restart = async () => {
-        const restarted = await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
-          maybeRestartService({
+        const restarted = await restartPostUpdateGateway({
+          params,
+          restartContext,
+          result: resultWithPostUpdate,
+          shouldRestart,
+          definitionRecovery,
+          requireRunningServiceAfterRestart: currentServiceStop()?.stopped === true,
+          callbacks: {
             onGatewayStartAttempted,
-            originalManagedServiceRuntime: params.originalManagedServiceRuntime,
-            shouldRestart: shouldRestart && restartContext.serviceMutationAllowed,
-            result: resultWithPostUpdate,
-            opts: params.opts,
-            refreshServiceEnv: restartContext.refreshGatewayServiceEnv,
-            definitionRecovery,
-            serviceUpdateVerdict: restartContext.serviceUpdateVerdict,
-            serviceManagerUid: restartContext.serviceManagerUid,
-            serviceRuntimeRefreshRequired: params.serviceRuntimeRefreshRequired,
-            serviceEnv: restartContext.gatewayServiceEnv,
-            serviceInstallEnv: restartContext.gatewayServiceInstallEnv,
-            gatewayPort: restartContext.gatewayPort,
-            invocationCwd: params.invocationCwd,
-            nodeRunner: params.packageUpdateNodeRunner,
-            skipLegacyServiceRestart: restartContext.skipLegacyServiceRestart,
-            requireRunningServiceAfterRestart: currentServiceStop()?.stopped === true,
-            serviceMutationSkipMessage: restartContext.serviceMutationSkipMessage,
-            timeoutMs: params.updateStepTimeoutMs,
             onVerificationFailure: (reason) => {
               verificationFailure = reason;
             },
             onPluginWarnings: (warnings) => {
               resultWithPostUpdate = appendPluginUpdateWarnings(resultWithPostUpdate, warnings);
             },
-            onVerified: recordVerifiedDowntime,
-          }),
-        );
+            ...(recipeFinalization?.restartCallbacks ?? { onVerified: recordVerifiedDowntime }),
+          },
+        });
         if (restarted !== "failed" && restarted !== "restart-health-failed") {
           return restarted === "ok";
         }
@@ -631,6 +631,7 @@ async function finishSettledUpdate(
       if (!params.coreAlreadyCurrent) {
         await restart();
       }
+      await recipeFinalization?.completeService();
       if (deferPluginConvergence) {
         ({ resultWithPostUpdate, postUpdateConfigSnapshot } = await convergePlugins(async () => {
           const stopped = await parkPostUpdateService(params, {
@@ -703,10 +704,7 @@ async function finishSettledUpdate(
 
       return resultWithPostUpdate;
     } catch (error) {
-      if (
-        params.originalManagedServiceRuntime &&
-        error instanceof UpdateCommandRecoveryPendingError
-      ) {
+      if (isPostUpdatePending(error, params)) {
         throw new UpdateCommandPendingRecoveryFailure(pendingResult, formatErrorMessage(error), {
           cause: error,
         });

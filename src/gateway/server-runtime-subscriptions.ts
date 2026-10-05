@@ -95,6 +95,7 @@ function dispatchEventHandler<TEvent>(params: {
 
 /** Register gateway runtime event subscriptions and return unsubscribe handles. */
 export function startGatewayEventSubscriptions(params: {
+  maintenanceStartup?: boolean;
   scheduler: GatewayScheduler;
   signal: AbortSignal;
   log: SubsystemLogger;
@@ -112,6 +113,48 @@ export function startGatewayEventSubscriptions(params: {
   refreshConnectedUserProfiles: () => void;
   getSessionRowProjection?: () => SessionRowProjection | undefined;
 }) {
+  if (params.maintenanceStartup) {
+    const unavailable = (): never => {
+      throw new Error("Business observers are unavailable during upgrade maintenance.");
+    };
+    const noop = () => {};
+    // Do not construct model-backed observers, schedule companion sweeps, install
+    // audit sinks, or subscribe to events from another runtime while pre-commit.
+    const sessionCompanion: ReturnType<typeof createSessionCompanion> = {
+      ask: async () => unavailable(),
+      state: unavailable,
+      reset: unavailable,
+      dispose: noop,
+    };
+    const sessionObserver: ReturnType<typeof createSessionObserver> = {
+      handleEvent: unavailable,
+      setConnectionVisibility: unavailable,
+      removeConnection: unavailable,
+      getCompanionSnapshot: unavailable,
+      dispose: noop,
+    };
+    const sessionActivitySummaries: ReturnType<typeof createSessionActivitySummaries> = {
+      ensure: unavailable,
+      handleEvent: unavailable,
+      handleTranscript: unavailable,
+      handleLifecycle: unavailable,
+      dispose: async () => {},
+    };
+    const channelAdmissionAudit = createChannelAdmissionAudit({ enabled: false });
+    return {
+      channelAdmissionAudit,
+      sessionCompanion,
+      sessionObserver,
+      sessionActivitySummaries,
+      reconcileAuditPolicy: noop,
+      agentUnsub: async () => {
+        channelAdmissionAudit.close();
+      },
+      heartbeatUnsub: noop,
+      transcriptUnsub: noop,
+      lifecycleUnsub: noop,
+    };
+  }
   // Collection changes gate new work; the writer retains accepted work and maintenance.
   const auditRecorder = createAuditEventRecorder({
     getConfig: getRuntimeConfig,

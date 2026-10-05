@@ -77,6 +77,9 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
       fs.realpathSync(path.join(path.dirname(require.resolve("ws/package.json")), "wrapper.mjs")),
     ).href;
   const playwrightRoot = fs.realpathSync(path.resolve(rootDir, "node_modules/playwright-core"));
+  const windowsSecurityCommandPath = fs.realpathSync(
+    path.resolve(rootDir, "node_modules/@openclaw/fs-safe/dist/windows-security-command.js"),
+  );
   const coreBundlePath = fs.realpathSync(path.join(playwrightRoot, "lib/coreBundle.js"));
   const photonRuntimePath = fs.realpathSync(
     path.resolve(rootDir, "node_modules/@silvia-odwyer/photon-node/photon_rs.js"),
@@ -143,6 +146,13 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
         resolvedId = fs.realpathSync(path.resolve(id));
       } catch {
         return null;
+      }
+      if (resolvedId === windowsSecurityCommandPath) {
+        const helperUrl = 'new URL("./owner-dacl-batch-worker.js", import.meta.url)';
+        if (code.split(helperUrl).length !== 2) {
+          this.error("fs-safe Windows security helper changed; update the worker deploy transform");
+        }
+        return code.replace(helperUrl, 'new URL("./owner-dacl-batch-worker.mjs", import.meta.url)');
       }
       if (resolvedId === browserRuntimeBridgePath) {
         return WORKER_BROWSER_RUNTIME_COMPOSITION;

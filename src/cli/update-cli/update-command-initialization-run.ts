@@ -4,6 +4,7 @@ import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js
 import { formatErrorMessage } from "../../infra/errors.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
+import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { redactSupportString } from "../../logging/diagnostic-support-redaction.js";
@@ -55,6 +56,13 @@ import {
   withUpdateCommandTerminalResult,
 } from "./update-command-terminal.js";
 import { prepareUpdateCommandFailureTriage } from "./update-command-triage.js";
+import {
+  assertRecipeUpdateBinding,
+  assertRecipeUpdateEnvironment,
+  verifyRecipeUpdateArchive,
+  verifyRecipeUpdateConfig,
+  verifyRecipeUpdateInstallation,
+} from "./update-recipe-context.js";
 
 export async function initializeAndRunUpdate(
   opts: UpdateCommandOptions,
@@ -67,7 +75,17 @@ export async function initializeAndRunUpdate(
   executorOptions?: UpdateCommandExecutorOptions,
 ): Promise<void> {
   const targetEnv = resolveUpdateTargetEnv({ baseEnv: env, nodeRunner: process.execPath });
-  const runId = env.OPENCLAW_UPDATE_RUN_ID?.trim() || randomUUID();
+  if (opts.recipe && env.OPENCLAW_UPDATE_RUN_ID?.trim()) {
+    throw new Error("Fresh recipe initialization cannot inherit another updater's run.");
+  }
+  const runId =
+    opts.recipe?.maintenance.binding.runId ?? (env.OPENCLAW_UPDATE_RUN_ID?.trim() || randomUUID());
+  if (opts.recipe) {
+    assertRecipeUpdateBinding(opts.recipe, prepared.discoveredRoot, runId);
+    assertRecipeUpdateEnvironment(opts.recipe, env);
+    assertRecipeUpdateEnvironment(opts.recipe, targetEnv);
+    await verifyRecipeUpdateConfig(opts.recipe, env);
+  }
   let handleFailure: Awaited<ReturnType<typeof prepareUpdateCommandFailureTriage>> | undefined;
   let disposePresentation: (() => void) | undefined;
   try {
@@ -126,6 +144,25 @@ export async function initializeAndRunUpdate(
                   ? selection.refusal.report.serviceRoot
                   : selection.target.managedServiceRoot,
               };
+              const verifyRecipeInitialization = async (
+                fence: UpdateRecoveryFence,
+                candidateRoot?: string,
+              ) => {
+                if (!opts.recipe) {
+                  return;
+                }
+                assertRecipeUpdateBinding(opts.recipe, root, runId, fence);
+                assertRecipeUpdateEnvironment(opts.recipe, env);
+                assertRecipeUpdateEnvironment(opts.recipe, targetEnv);
+                await verifyRecipeUpdateConfig(opts.recipe, env);
+                fence.assertCurrent();
+                await verifyRecipeUpdateArchive(opts.recipe);
+                fence.assertCurrent();
+                if (candidateRoot) {
+                  await verifyRecipeUpdateInstallation(opts.recipe, candidateRoot, "target");
+                  fence.assertCurrent();
+                }
+              };
               const originalCaptureWarnings: string[] = [];
               const initialization: InitializedUpdate = {
                 ...selection,
@@ -180,7 +217,7 @@ export async function initializeAndRunUpdate(
               };
               let originalCaptureAttempted = false;
               const captureOriginal = async () => {
-                if (!policy.captureOriginal || originalCaptureAttempted) {
+                if ((!policy.captureOriginal && !opts.recipe) || originalCaptureAttempted) {
                   return;
                 }
                 if (selectedTarget?.downgradeRisk && !initialization.downgradeConfirmed) {
@@ -196,6 +233,7 @@ export async function initializeAndRunUpdate(
                   ...packageAdmission,
                 });
                 const authority = captureUpdateCommandExecutorAuthority(fence, runId);
+                await verifyRecipeInitialization(fence);
                 const assertCurrent = () => {
                   fence.assertCurrent();
                   assertUpdatePackageActivationAdmission(root, packageAdmission);
@@ -224,6 +262,7 @@ export async function initializeAndRunUpdate(
                     env,
                     drivers: [driver],
                     assertCurrent,
+                    ...(opts.recipe ? { recipeExecutor: fence } : {}),
                     nodeRunner: selectedTarget?.packageUpdateNodeRunner,
                     timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
                   });
@@ -237,7 +276,7 @@ export async function initializeAndRunUpdate(
                   }
                 } catch (error) {
                   assertCurrent();
-                  if (hasCommandProcessCleanupError(error)) {
+                  if (opts.recipe || hasCommandProcessCleanupError(error)) {
                     throw error;
                   }
                   warn(`Original state capture is unavailable: ${formatErrorMessage(error)}`);
@@ -283,6 +322,7 @@ export async function initializeAndRunUpdate(
                 managedServiceEnv: env,
                 invocationCwd,
                 honorPackageRoot:
+                  opts.recipe !== undefined ||
                   target.managedServiceRootRedirect !== null ||
                   target.managedServiceNodeRunner !== undefined,
                 nodeRunner: target.packageUpdateNodeRunner,
@@ -293,7 +333,7 @@ export async function initializeAndRunUpdate(
                 }),
                 installTarget: target.packageInstallTarget,
                 requirePackageReplacement: target.managedServiceRoot !== undefined,
-                ...(candidateAdmissionEnabled
+                ...(candidateAdmissionEnabled || opts.recipe
                   ? {
                       resolveLifecycleNodeRunner: () => target.packageUpdateNodeRunner,
                       beforeVerifyCandidate: async (candidateRoot: string) => {
@@ -305,6 +345,10 @@ export async function initializeAndRunUpdate(
                           fence.assertCurrent();
                           assertUpdatePackageActivationAdmission(target.root, packageAdmission);
                         };
+                        await verifyRecipeInitialization(fence, candidateRoot);
+                        if (!candidateAdmissionEnabled) {
+                          return;
+                        }
                         try {
                           initialization.candidateAdmission =
                             await inspectStagedUpdateCandidateAdmission({
@@ -348,6 +392,13 @@ export async function initializeAndRunUpdate(
               });
               const runSelectedTarget = async () => {
                 assertUpdatePackageActivationAdmission(target.root, packageAdmission);
+                if (opts.recipe) {
+                  const fence = await executor.enter(root, {
+                    preflight: true,
+                    ...packageAdmission,
+                  });
+                  await verifyRecipeInitialization(fence, initialization.stagedPackage?.root);
+                }
                 if (target.updateInstallKind !== "package") {
                   return await runCapturedInitialization();
                 }
@@ -427,6 +478,14 @@ export async function initializeAndRunUpdate(
                     runtime.recoverySteps,
                   );
                 }
+                if (
+                  opts.recipe &&
+                  runtime.value.nodeRunner !== opts.recipe.maintenance.expected.runtimeExecutable
+                ) {
+                  throw new Error(
+                    "Recipe initialization cannot substitute its approved runtime executable.",
+                  );
+                }
                 target.packageUpdateNodeRunner = runtime.value.nodeRunner;
                 if (schemas.state >= OPENCLAW_STATE_SCHEMA_VERSION) {
                   return await runCapturedInitialization();
@@ -436,6 +495,7 @@ export async function initializeAndRunUpdate(
                   serviceRoot: target.managedServiceRoot,
                 });
                 const { stagePackageInstallUpdate } = await import("./update-command-package.js");
+                await verifyRecipeInitialization(fence);
                 fence.assertCurrent();
                 assertUpdatePackageActivationAdmission(target.root, packageAdmission);
                 const legacyFence = acquireLegacyUpdateInitializationFence({
@@ -457,12 +517,17 @@ export async function initializeAndRunUpdate(
                         await checkSchemas();
                         assertCurrent();
                         if (!target.packageAlreadyCurrent && !initialization.stagedPackage) {
+                          await verifyRecipeInitialization(fence);
                           initializationStage = await stagePackageInstallUpdate(
                             stageParams(presentation),
                           );
                           initialization.stagedPackage = initializationStage;
                         }
                         assertCurrent();
+                        await verifyRecipeInitialization(
+                          fence,
+                          initialization.stagedPackage?.root ?? target.root,
+                        );
                         await initializeUpdateStateFromTarget({
                           root: initialization.stagedPackage?.root ?? target.root,
                           env,
@@ -488,6 +553,13 @@ export async function initializeAndRunUpdate(
                 );
               };
               const runWithSelectedProfile = async () => {
+                if (opts.recipe) {
+                  const fence = await executor.enter(root, {
+                    preflight: true,
+                    ...packageAdmission,
+                  });
+                  await verifyRecipeInitialization(fence);
+                }
                 if (!policy.needsInitialization) {
                   return await runCapturedInitialization();
                 }

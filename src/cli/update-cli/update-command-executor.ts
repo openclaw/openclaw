@@ -40,7 +40,10 @@ import {
   childOwners,
 } from "./update-command-executor-state.js";
 import { createUpdateIdentityWarningReporter } from "./update-command-identity-warning.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
+import {
+  UpdateCommandRecoveryPendingError,
+  hasUpdateCommandRecipeReconciliationPendingError,
+} from "./update-command-recovery-error.js";
 import { createUpdateOperationDeadline } from "./update-operation-deadline.js";
 
 export * from "./update-command-executor-capabilities.js";
@@ -58,6 +61,12 @@ export async function withUpdateCommandExecutor<T>(
   operation: (executor: UpdateCommandExecutor) => Promise<T>,
   options?: UpdateCommandExecutorOptions,
 ): Promise<T> {
+  if (
+    options?.originalRecipeOwner &&
+    (!options.existingAuthority || options.originalRecipeOwner.runId !== runId)
+  ) {
+    throw new UpdateCommandRecoveryPendingError("Original recipe executor lineage changed.");
+  }
   let originalFence: UpdateRecoveryFence | undefined;
   const activation = createUpdateOperationDeadline((cause) => {
     if (originalFence) {
@@ -278,6 +287,9 @@ export async function withUpdateCommandExecutor<T>(
               existingIdentity,
               originalUpdateKey:
                 !options?.legacyManagedParent && !options?.legacyPackageParent ? key : undefined,
+              ...(options?.originalRecipeOwner
+                ? { originalRecoveryOwner: options.originalRecipeOwner.owner }
+                : {}),
               onProcessIdentityWarning: identityWarnings.warn,
             });
             const found = store.read(key);
@@ -333,7 +345,11 @@ export async function withUpdateCommandExecutor<T>(
               borrowed = true;
               managedHandoff = true;
             } else {
-              const acquired = store.acquire(key, randomUUID(), { kind: "update" });
+              const acquired = store.acquire(
+                key,
+                options?.originalRecipeOwner?.owner ?? randomUUID(),
+                { kind: "update" },
+              );
               if (acquired.kind !== "acquired") {
                 throw new UpdateCommandRecoveryPendingError(
                   "Another update executor owns this installation.",
@@ -467,9 +483,15 @@ export async function withUpdateCommandExecutor<T>(
       childOwners.delete(fence);
       slotReservations.delete(fence);
       admittedAuthorities.delete(fence);
-      if ("error" in outcome && hasCommandProcessCleanupError(outcome.error)) {
+      if (
+        "error" in outcome &&
+        (hasCommandProcessCleanupError(outcome.error) ||
+          hasUpdateCommandRecipeReconciliationPendingError(outcome.error))
+      ) {
         throw new UpdateCommandRecoveryPendingError(
-          "Command cleanup is unconfirmed; update ownership remains retained.",
+          hasCommandProcessCleanupError(outcome.error)
+            ? "Command cleanup is unconfirmed; update ownership remains retained."
+            : "Update reconciliation is pending; original update ownership remains retained.",
           { cause: outcome.error },
         );
       }

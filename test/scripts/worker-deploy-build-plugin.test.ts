@@ -813,6 +813,7 @@ export async function createAttachedBrowserToolRuntime(params) {
         rootDir = tempDirs.make("openclaw-worker-build-plugin-");
         for (const name of [
           "playwright-core",
+          "@openclaw/fs-safe",
           "web-tree-sitter",
           "tree-sitter-bash",
           "@silvia-odwyer/photon-node",

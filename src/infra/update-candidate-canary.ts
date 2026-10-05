@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isDeepStrictEqual, stripVTControlCharacters } from "node:util";
+import { stripVTControlCharacters } from "node:util";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -32,10 +32,15 @@ import {
   type CanaryReceiptCallbacks,
 } from "./update-candidate-canary-receipts.js";
 import {
+  collectUpdateCandidateRehearsalStateObservation,
+  type UpdateCandidateRehearsalStateObservation,
+} from "./update-candidate-rehearsal-observation.js";
+import {
   prepareUpdateCandidateRehearsal,
   type UpdateCandidateRehearsal,
 } from "./update-candidate-rehearsal.js";
-import type { UpdateDoctorConfigChange } from "./update-doctor-config.js";
+import type { UpdateDoctorConfigChange } from "./update-doctor-config-format.js";
+import { observeUpdateDoctorConfigChanges } from "./update-doctor-config.js";
 import {
   applyUpdateDoctorLintReport,
   parseUpdateDoctorLintReport,
@@ -67,6 +72,7 @@ type CanaryResult = {
   logTail: string[];
   steps: UpdateStepResult[];
   candidateSchemaVersions?: OpenClawSchemaVersions;
+  stateObservation?: UpdateCandidateRehearsalStateObservation;
   gatewayRestartCompletion?: boolean;
   doctorConfigWrites?: boolean;
   doctorConfigChanges?: UpdateDoctorConfigChange[];
@@ -95,6 +101,8 @@ export async function validateUpdateCandidateCanary(
     assertCurrent?: () => void;
     /** Startup-only callers must prove the preserved input boots without Doctor repair. */
     migrationPolicy?: "rehearse" | "startup-only";
+    /** Optional executable-planning evidence from actual private post-migration state. */
+    observeStateVersions?: boolean;
   } & CanaryReceiptCallbacks,
 ): Promise<CanaryResult> {
   const started = Date.now();
@@ -375,18 +383,11 @@ export async function validateUpdateCandidateCanary(
             code = 1;
           }
           doctorConfigChanges = doctorReceipt?.configChanges ?? [];
-          // Shipped Doctors predate typed receipts; observe only their private write window.
-          if (!doctorReceipt?.configChanges && isRecord(configBeforeDoctor)) {
-            const after: unknown = JSON5.parse(await fs.readFile(rehearsal.configPath, "utf8"));
-            if (isRecord(after)) {
-              doctorConfigChanges = [
-                ...new Set([...Object.keys(configBeforeDoctor), ...Object.keys(after)]),
-              ]
-                .filter((key) => !isDeepStrictEqual(configBeforeDoctor[key], after[key]))
-                .toSorted()
-                .map((key) => ({ kind: "key", key }));
-            }
-          }
+          doctorConfigChanges = await observeUpdateDoctorConfigChanges(
+            rehearsal.configPath,
+            configBeforeDoctor,
+            doctorReceipt?.configChanges,
+          );
           if (
             code === UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE &&
             doctorReceipt?.status === "advisory"
@@ -603,6 +604,11 @@ export async function validateUpdateCandidateCanary(
           : {}),
       };
       await recordStep(step);
+      if (params.observeStateVersions && probeFailure) {
+        throw new Error(
+          "Executable recipe rehearsal requires actual candidate readiness, not an advisory timeout.",
+        );
+      }
     } catch (error) {
       startupFailure = error;
       throw error;
@@ -616,8 +622,12 @@ export async function validateUpdateCandidateCanary(
         primaryFailure: startupFailure,
       });
     }
+    const stateObservation = params.observeStateVersions
+      ? await collectUpdateCandidateRehearsalStateObservation({ rehearsal, ...params })
+      : undefined;
     return {
       status: "ok",
+      ...(stateObservation ? { stateObservation } : {}),
       phase: progress.phase,
       durationMs: Date.now() - started,
       logTail,

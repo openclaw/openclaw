@@ -1,6 +1,6 @@
 import { hashConfigRaw } from "../../config/io.read-helpers.js";
 import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
-import type { UpdateDoctorConfigChange } from "../../infra/update-doctor-config.js";
+import type { UpdateDoctorConfigChange } from "../../infra/update-doctor-config-format.js";
 import type { UpdateRecoveryBaselineRef } from "../../infra/update-recovery-baseline-capture.js";
 import type { UpdateRequester } from "../../infra/update-requester-authority.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";

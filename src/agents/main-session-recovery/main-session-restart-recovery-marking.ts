@@ -304,7 +304,8 @@ async function markOrphanedMainSessionStore(
   const updatedBeforeMs = asFiniteNumber(params.updatedBeforeMs);
 
   const orphanChecks: Array<() => boolean> = [];
-  return await markRecoveryStore({
+  let cutoffRejected = 0;
+  const result = await markRecoveryStore({
     ...params.target,
     statuses: params.target.sessionKey ? undefined : ["running"],
     assertCommitAllowed: () => {
@@ -326,6 +327,7 @@ async function markOrphanedMainSessionStore(
       }
       const updatedAt = asFiniteNumber(entry.updatedAt);
       if (updatedBeforeMs !== undefined && updatedAt !== undefined && updatedAt > updatedBeforeMs) {
+        cutoffRejected += 1;
         return undefined;
       }
       const writerRunIds = [
@@ -376,6 +378,10 @@ async function markOrphanedMainSessionStore(
         : { action: "mark", resetRuntime: entry.status !== "running" };
     },
   });
+  mainSessionRecoveryLog.debug(
+    `restart recovery orphan marking: marked=${result.marked} skipped=${result.skipped} cutoffRejectedEvaluations=${cutoffRejected}`,
+  );
+  return result;
 }
 
 /** Reconcile one exact session through the same owner used by startup. */
@@ -407,9 +413,11 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
     ...params,
     statuses: ["running"],
   });
+  let alreadyChecked = 0;
   for (const target of storeTargets) {
     const key = restartRecoveryStoreTargetKey(target);
     if (params.startupCheckedStorePaths?.has(key)) {
+      alreadyChecked += 1;
       continue;
     }
     try {
@@ -442,5 +450,8 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
       `marked ${result.marked} startup-orphaned main session(s) for restart recovery`,
     );
   }
+  mainSessionRecoveryLog.debug(
+    `restart recovery marking selection: selected=${storeTargets.length} alreadyChecked=${alreadyChecked} checked=${params.startupCheckedStorePaths?.size ?? 0} marked=${result.marked} skipped=${result.skipped} failed=${failedTargets.length}`,
+  );
   return { ...result, ...(failedTargets.length > 0 ? { failedTargets } : {}) };
 }

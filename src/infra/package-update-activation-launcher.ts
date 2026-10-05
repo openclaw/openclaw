@@ -1,5 +1,8 @@
 import { z } from "zod";
-import type { PackageLauncherFingerprint } from "./package-update-integrity.js";
+import {
+  packageLauncherDifferences,
+  type PackageLauncherFingerprint,
+} from "./package-update-integrity.js";
 
 const launcherSchema = z.tuple([
   z.enum(["symlink", "file"]),
@@ -14,7 +17,18 @@ export function encodePackageActivationLauncher(value: PackageLauncherFingerprin
   return JSON.stringify([value.type, value.mode, value.uid, value.gid, value.contents]);
 }
 
-export function decodePackageActivationLauncher(encoded: string): PackageLauncherFingerprint {
+function decodePackageActivationLauncher(encoded: string): PackageLauncherFingerprint {
   const [type, mode, uid, gid, contents] = launcherSchema.parse(JSON.parse(encoded));
   return { type, mode, uid, gid, contents };
+}
+
+export function matchesPackageActivationLauncher(
+  actual: PackageLauncherFingerprint | null,
+  encoded: string | null,
+) {
+  return actual === null || encoded === null
+    ? actual === null && encoded === null
+    : packageLauncherDifferences(decodePackageActivationLauncher(encoded), actual, {
+        checkMode: true,
+      }).length === 0;
 }

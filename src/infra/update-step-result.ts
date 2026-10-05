@@ -2,7 +2,7 @@ import type { UpdateRecoveryStep } from "../shared/update-outcome.js";
 import type {
   UpdateDoctorConfigChange,
   UpdateDoctorConfigWriteRefusal,
-} from "./update-doctor-config.js";
+} from "./update-doctor-config-format.js";
 import type { UpdateDoctorLintFinding } from "./update-doctor-lint-schema.js";
 import type { PackageUpdateStepAdvisory } from "./update-doctor-result.js";
 import type { UpdateFailureFact } from "./update-failure-facts.js";

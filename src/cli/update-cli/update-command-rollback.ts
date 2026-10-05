@@ -34,6 +34,7 @@ import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import { assertUpgradeRecipeRollbackAllowed } from "../../infra/upgrade-recipes/maintenance.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -108,6 +109,15 @@ export async function rollbackFailedUpdate(params: {
     assertCurrent,
   });
   const env = before?.serviceEnv ?? opts.run?.env ?? process.env;
+  const assertRecipeRollbackAllowed = async () => {
+    assertCurrent();
+    await assertUpgradeRecipeRollbackAllowed(run?.runId, { env });
+    assertCurrent();
+    if (run && resolveOpenClawStateSqlitePath(run.env) !== resolveOpenClawStateSqlitePath(env)) {
+      await assertUpgradeRecipeRollbackAllowed(run.runId, { env: run.env });
+      assertCurrent();
+    }
+  };
   const pendingRecovery = (result: UpdateRunResult, pendingRecoveryReason: string) => ({
     result: {
       ...result,
@@ -120,6 +130,14 @@ export async function rollbackFailedUpdate(params: {
     rolledBack: false,
     pendingRecoveryReason,
   });
+  try {
+    await assertRecipeRollbackAllowed();
+  } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    return pendingRecovery(params.result, formatErrorMessage(error));
+  }
   if (!opts.recovery) {
     try {
       assertCurrent();
@@ -405,6 +423,8 @@ export async function rollbackFailedUpdate(params: {
         if (!packageTransaction) {
           throw new Error("The retained package transaction is unavailable.");
         }
+        assertRestorationCurrent();
+        await assertRecipeRollbackAllowed();
         assertRestorationCurrent();
         result.rollbackOutcome = {
           status: "failed",

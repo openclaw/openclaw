@@ -25,6 +25,9 @@ import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-contex
 import { persistInterruptedUpdateObservation } from "../infra/update-run-interruption-store.js";
 import { recordUpdateRunMutationInWorker } from "../infra/update-run-mutation.worker.js";
 import { reconcileUpdateRunCandidatesInWorker } from "../infra/update-run-reconciliation.worker.js";
+import { recordUpgradeRecipeMaintenanceInWorker } from "../infra/upgrade-recipes/maintenance-store.js";
+import { recordUpgradeRecipeStepInWorker } from "../infra/upgrade-recipes/receipts-store.js";
+import { recordRetainedUpgradeRecipeRunInWorker } from "../infra/upgrade-recipes/retained-run.worker.js";
 import { writeSecretStoreEntryForConfigRefInDatabase } from "../secrets/store/secret-store-config-ref.kernel.js";
 import { purgeExpiredSecretStoreEntriesInDatabase } from "../secrets/store/secret-store-expiry.kernel.js";
 import {
@@ -86,6 +89,21 @@ export function executeSharedStateCommand(
   });
   if (stateWorkerRegistry.has(command)) {
     return stateWorkerRegistry.execute(command, { open, stateOptions });
+  }
+  if (command.type === "upgradeMaintenance.record") {
+    return recordUpgradeRecipeMaintenanceInWorker(command.input, stateOptions(), (stage) =>
+      requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+    );
+  }
+  if (command.type === "upgradeRecipeRuns.retain") {
+    return recordRetainedUpgradeRecipeRunInWorker(command.input, stateOptions(), (stage) =>
+      requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+    );
+  }
+  if (command.type === "upgradeRecipeSteps.record") {
+    return recordUpgradeRecipeStepInWorker(command.input, stateOptions(), (stage) =>
+      requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+    );
   }
   if (command.type === "updateRuns.recordStep" || command.type === "updateRuns.recordPhase") {
     return recordUpdateRunMutationInWorker(

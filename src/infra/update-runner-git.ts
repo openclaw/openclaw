@@ -2,7 +2,7 @@ import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import { readPackageVersion } from "./package-json.js";
 import { DEV_BRANCH, type UpdateChannel } from "./update-channels.js";
-import { getUpdateDoctorConfigFailureReason } from "./update-doctor-config.js";
+import { getUpdateDoctorConfigFailureReason } from "./update-doctor-config-format.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
 import {
   readBuiltGatewayBuildId,

@@ -32,6 +32,7 @@ import { readUpdateDatabaseGenerationsIsolated } from "./update-candidate-state.
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
 import type { UpdateDatabaseBackup } from "./update-database-backup.js";
 import type { UpdateDatabaseGenerations } from "./update-database-generations.js";
+import { assertUpgradeRecipeRollbackAllowed } from "./upgrade-recipes/maintenance.js";
 
 async function existingFile(file: string) {
   try {
@@ -88,6 +89,7 @@ async function withDatabaseExclusion<T>(
   const drain = async (index: number): Promise<T> => {
     const pathname = sourcePaths[index];
     if (pathname === undefined) {
+      assertOwned();
       return acquire(0);
     }
     // Local handles retain lexical ownership even when discovery canonicalizes a directory link.
@@ -139,6 +141,9 @@ export async function restoreUpdateDatabaseBackup(params: {
   if (!/^[a-zA-Z0-9_-]{1,128}$/u.test(params.runId)) {
     throw new Error("Database rollback requires its original update run identity.");
   }
+  params.assertCurrent();
+  await assertUpgradeRecipeRollbackAllowed(params.runId, { env: params.env });
+  params.assertCurrent();
   const { backup, assertCurrent } = params;
   const paths = [
     ...new Set([...backup.databases.map((entry) => entry.path), ...backup.missingPaths]),
@@ -211,6 +216,7 @@ export async function restoreUpdateDatabaseBackup(params: {
               databases,
               input: {
                 mode: "database-restore-preparation",
+                runId: params.runId,
                 stateDir: resolveStateDir(params.env),
                 config: {},
                 baseline: shared,

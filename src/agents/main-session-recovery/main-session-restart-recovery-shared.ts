@@ -67,9 +67,20 @@ export async function discoverRestartRecoveryStoreTargets(params: {
     const inventory = prepareSessionStoreTargetInventoryRead(
       prepareSessionStoreTargetInventory(params.cfg, configuredAgentIds, env, "recovery"),
     );
-    const targets = await inventory.withRead(async (snapshot) =>
-      snapshot.agents.flatMap(({ result }) => (result.available ? result.targets : [])),
-    );
+    const targets = await inventory.withRead(async (snapshot) => {
+      const reasons = { "database-missing": 0, "schema-missing": 0, "read-failed": 0 };
+      const selected = snapshot.agents.flatMap(({ result }) => {
+        if (result.available) {
+          return result.targets;
+        }
+        reasons[result.reason] += 1;
+        return [];
+      });
+      mainSessionRecoveryLog.debug(
+        `restart recovery inventory: configured=${configuredAgentIds.length} entries=${snapshot.agents.length} selected=${selected.length} databaseMissing=${reasons["database-missing"]} schemaMissing=${reasons["schema-missing"]} readFailed=${reasons["read-failed"]}`,
+      );
+      return selected;
+    });
     if (params.shouldContinue?.() === false) {
       return [];
     }
@@ -95,11 +106,14 @@ export async function discoverRestartRecoveryStoreTargets(params: {
     }
   }
   const eligibleTargets: SessionStoreTarget[] = [];
+  let refused = 0;
+  let statusExcluded = 0;
   for (const target of storeTargets) {
     if (params.shouldContinue?.() === false) {
       return [];
     }
     if (readAgentDatabaseAdmissionRefusal(target.agentId, { env })) {
+      refused += 1;
       continue;
     }
     const hasStatus =
@@ -110,8 +124,13 @@ export async function discoverRestartRecoveryStoreTargets(params: {
     }
     if (hasStatus) {
       eligibleTargets.push(target);
+    } else {
+      statusExcluded += 1;
     }
   }
+  mainSessionRecoveryLog.debug(
+    `restart recovery discovery: stores=${storeTargets.length} eligible=${eligibleTargets.length} refused=${refused} statusExcluded=${statusExcluded}`,
+  );
   return eligibleTargets
     .filter((target) => !readAgentDatabaseAdmissionRefusal(target.agentId, { env }))
     .toSorted(

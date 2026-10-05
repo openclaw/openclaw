@@ -50,6 +50,8 @@ import { resolveNodeRunner } from "./node-runner.js";
 export { resolveNodeRunner } from "./node-runner.js";
 
 export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"> & {
+  /** Exact approved recipe facts; execution still belongs to the native updater. */
+  recipe?: import("./update-recipe-context.js").RecipeUpdateContext;
   /** Doctor's accepted source update targets dev without changing the saved channel. */
   sourceUpdate?: { root: string };
   /** In-process reporting only, after the update owner settles. Never serialized. */

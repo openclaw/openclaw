@@ -63,7 +63,7 @@ import {
 import type { UpdateDatabaseGenerations } from "./update-database-generations.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 
-const UpdateStateSchemaVersionsSchema = z.array(
+export const UpdateStateSchemaVersionsSchema = z.array(
   z.object({
     path: z.string(),
     userVersion: z.number().nullable(),
@@ -71,8 +71,14 @@ const UpdateStateSchemaVersionsSchema = z.array(
   }),
 );
 export type UpdateStateSchemaVersion = z.infer<typeof UpdateStateSchemaVersionsSchema>[number];
+export const UpdateCandidateDatabaseMappingSchema = z.strictObject({
+  sourcePath: z.string().min(1),
+  privatePath: z.string().min(1),
+});
+export type UpdateCandidateDatabaseMapping = z.infer<typeof UpdateCandidateDatabaseMappingSchema>;
 export const UpdateCandidateStateSnapshotSchema = z.object({
   versions: UpdateStateSchemaVersionsSchema,
+  databaseMappings: z.array(UpdateCandidateDatabaseMappingSchema).optional(),
   pluginPaths: z.record(z.string(), z.string()),
   pluginCodeLinks: UpdateCandidatePluginCodeLinkReceiptSchema.optional(),
 });
@@ -635,6 +641,7 @@ export async function snapshotUpdateCandidateState(
   // Physical copies dedupe on projection identity; the published versions
   // keep every raw alias so released rollback baselines still match.
   const files = await collectStateDatabasePaths(input);
+  const databaseMappings: UpdateCandidateDatabaseMapping[] = [];
   const inspected = new Map<string, Omit<UpdateStateSchemaVersion, "path">>();
   for (const [identity, discovery] of files) {
     if (!admittedDatabases.has(identity)) {
@@ -643,11 +650,14 @@ export async function snapshotUpdateCandidateState(
       );
     }
     const file = discovery.spellings[0];
+    const target = targetPath(file);
+    for (const sourcePath of discovery.spellings) {
+      databaseMappings.push({ sourcePath, privatePath: target });
+    }
     if (!(await fileExists(file))) {
       inspected.set(identity, { userVersion: null });
       continue;
     }
-    const target = targetPath(file);
     let contentVersion: number | undefined;
     await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
     const progress = createUpdateStateSnapshotReporter(file, "database snapshot", input.onProgress);
@@ -734,6 +744,7 @@ export async function snapshotUpdateCandidateState(
   });
   return {
     versions,
+    databaseMappings,
     pluginPaths,
     pluginCodeLinks: await sealUpdateCandidatePluginCodeLinks(
       input.pluginPlanPath,

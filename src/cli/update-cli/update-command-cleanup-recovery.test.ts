@@ -11,6 +11,7 @@ import {
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { UpdatePreMutationError } from "./shared.js";
+import { UpdateCommandRecipeReconciliationPendingError } from "./update-command-recovery-error.js";
 import { resolveMutableUpdateFailure, UpdateCommandFailure } from "./update-command-result.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
 
@@ -26,6 +27,54 @@ vi.mock("./update-command-terminal.js", () => ({
   prepareUnexpectedUpdateCommandFailure: boundary.prepareFailure,
 }));
 afterEach(() => vi.clearAllMocks());
+
+it("retains semantic reconciliation failures without compensation or invented cleanup uncertainty", async () => {
+  const cause = new AggregateError(
+    [
+      new UpdateCommandRecipeReconciliationPendingError(
+        "Package receipt needs original-owner reconciliation",
+      ),
+    ],
+    "Recipe publication outcome unresolved",
+  );
+  const originalRecovery = vi.fn();
+  await expect(
+    resolveMutableUpdateFailure({
+      cause,
+      durationMs: 1,
+      mode: "npm",
+      root: "/synthetic",
+      originalRecovery,
+    }),
+  ).rejects.toBe(cause);
+  expect(originalRecovery).not.toHaveBeenCalled();
+  const restore = vi.fn();
+  const complete = vi.fn();
+  const error = await withUpdateCommandRecoveryUnwind(
+    { run: { runId: "synthetic", env: {}, executorFence: { assertCurrent: () => {} } } },
+    {
+      triageTarget: { root: "/synthetic", env: {} },
+      windowsTaskAutoStartRecovery: {
+        restore,
+        complete,
+        suspended: Promise.resolve(true),
+        beginMutation: () => {},
+        assertRecoveryCurrent: () => {},
+        handoff: () => {},
+        interrupted: () => false,
+      },
+    },
+    async () => {
+      throw cause;
+    },
+  ).catch((caught: unknown) => caught);
+  expect(collectNestedErrorCandidates(error)).toContain(cause);
+  expect(hasCommandProcessCleanupError(error)).toBe(false);
+  expect(restore).not.toHaveBeenCalled();
+  expect(complete).toHaveBeenCalledExactlyOnceWith(false, { preserveState: true });
+  expect(boundary.admission).not.toHaveBeenCalled();
+  expect(boundary.prepareFailure).not.toHaveBeenCalled();
+});
 
 it.each(["forced", "uncertain"] as const)(
   "joins command cleanup before updater compensation (%s)",

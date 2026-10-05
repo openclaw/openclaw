@@ -1,5 +1,4 @@
-import { performance } from "node:perf_hooks";
-import { setImmediate as nextTurn, setTimeout as sleep } from "node:timers/promises";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { loadGetReplyFromConfigRuntime } from "../auto-reply/reply/dispatch-from-config.runtime-loaders.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -35,6 +34,7 @@ import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js"
 import type { GatewayClient, GatewayContextResolver } from "./server-methods/shared-types.js";
 import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
+import { waitForAcpRuntimeBackendReady } from "./server-startup-acp-readiness.js";
 import { scheduleGatewayPrewarm } from "./server-startup-handler-prewarm.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
 import {
@@ -58,13 +58,12 @@ import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace
 import { scheduleTranscriptsSidecar } from "./server-startup-transcripts.js";
 import { createDeferredGatewayUpdateCheck } from "./server-startup-update-check.js";
 import type { prepareLatestUpdateRestartSentinel } from "./server-update-sentinel.js";
+import { isGatewayRestrictedUpgradeStartup } from "./server-upgrade-startup-mode.js";
 import type { ReadinessChecker } from "./server/readiness.js";
 import {
   beginMacOSSystemCaWarmupOnce,
   type warmMacOSSystemCaOffMainThread,
 } from "./system-ca-warmup.js";
-const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
-const ACP_BACKEND_READY_POLL_MS = 50;
 type Awaitable<T> = T | Promise<T>;
 
 const loadMainSessionRestartRecoveryModule = createLazyRuntimeModule(
@@ -86,27 +85,6 @@ const loadInternalHooksModule = createLazyRuntimeModule(() => import("../hooks/i
 async function hasGatewayStartupInternalHookListeners(): Promise<boolean> {
   const { hasInternalHookListeners } = await loadInternalHooksModule();
   return hasInternalHookListeners("gateway", "startup");
-}
-
-async function waitForAcpRuntimeBackendReady(backendId?: string): Promise<boolean> {
-  const { getAcpRuntimeBackend } = await import("../acp/runtime/registry.js");
-  const deadline = performance.now() + ACP_BACKEND_READY_TIMEOUT_MS;
-
-  do {
-    const backend = getAcpRuntimeBackend(backendId);
-    if (backend) {
-      try {
-        if (!backend.healthy || backend.healthy()) {
-          return true;
-        }
-      } catch {
-        // Treat transient backend health probe errors like "not ready yet".
-      }
-    }
-    await sleep(ACP_BACKEND_READY_POLL_MS, undefined, { ref: false });
-  } while (performance.now() < deadline);
-
-  return false;
 }
 
 /** Start post-ready sidecars such as channels, hooks, plugin services, and cleanup tasks. */
@@ -600,6 +578,7 @@ export async function startGatewayPostAttachRuntime(
     scheduler: GatewayScheduler;
     minimalTestGateway: boolean;
     updateCanary?: boolean;
+    upgradeMaintenance?: boolean;
     cfgAtStart: OpenClawConfig;
     getConfig: () => OpenClawConfig;
     port: number;
@@ -669,7 +648,7 @@ export async function startGatewayPostAttachRuntime(
   const restartSentinelContext = captureDeliveryQueueStateContext();
   // The CLI's hidden capability flag supplies this typed internal handoff.
   // Rehearsal loads plugins without resuming copied jobs, services, or notices.
-  const candidateCanary = params.updateCanary === true;
+  const candidateCanary = isGatewayRestrictedUpgradeStartup(params);
   const controlUiRootLifecycle = params.controlUiRootLifecycle;
   const mainSessionRecoveryStartupCheckedStorePaths = new Set<string>();
   const controlUiAssetsSidecar =
@@ -844,7 +823,12 @@ export async function startGatewayPostAttachRuntime(
             }
             params.unlockStartupMethods();
             params.onSidecarsReady?.();
-            logGatewayReady(params, "candidate gateway ready; autonomous sidecars suppressed");
+            logGatewayReady(
+              params,
+              params.upgradeMaintenance
+                ? "upgrade maintenance gateway ready; business services withheld until native commit"
+                : "candidate gateway ready; autonomous sidecars suppressed",
+            );
             return pluginRegistry;
           }
           const startupOutcomes = createGatewayStartupOutcomeRecorder({

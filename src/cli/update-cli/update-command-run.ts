@@ -26,7 +26,6 @@ import {
   createFreeBsdPkgOwnershipInspection,
   type FreeBsdPkgOwnershipInspection,
 } from "../../infra/update-freebsd-pkg-ownership.js";
-import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
 import {
   POST_CORE_UPDATE_CHANNEL_ENV,
   POST_CORE_UPDATE_ENV,
@@ -51,11 +50,7 @@ import {
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord, UpdateRunStep } from "../../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
-import {
-  inspectUpdateRecoveries,
-  loadUpdateRecovery,
-  type UpdateRecoveryFence,
-} from "../../infra/update-run-recovery.js";
+import { inspectUpdateRecoveries, loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import {
   AUTO_UPDATE_STEP_TIMEOUT_MS,
@@ -63,7 +58,6 @@ import {
   UPDATE_RUNNER_TIMEOUT_MS,
 } from "../../infra/update-run-timeouts.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
-import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
@@ -90,7 +84,6 @@ import {
 import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
 import {
   resolveOwnedManagedUpdateEnv,
-  withOwnedManagedUpdateEnv,
   resolveServiceRefreshEnv,
 } from "./update-command-service-env.js";
 import {
@@ -132,19 +125,7 @@ export function recordUpdateCommandTarget(
   }
 }
 
-/** Admission follows the managed service root before a redirect or discovered install. */
-export function resolveUpdateCommandAdmissionRoot(
-  prepared: Pick<
-    Awaited<ReturnType<typeof prepareUpdateCommand>>,
-    "servicePlan" | "discoveredRoot"
-  >,
-): string {
-  return (
-    prepared.servicePlan?.serviceRoot ??
-    prepared.servicePlan?.rootRedirect?.root ??
-    prepared.discoveredRoot
-  );
-}
+export { resolveUpdateCommandAdmissionRoot } from "./update-command-admission-root.js";
 
 export async function resolveUpdateCommandAdmissionEnv(params: {
   opts: UpdateCommandOptions;
@@ -270,9 +251,19 @@ export async function admitUpdateCommandRun(params: {
     busyTimeoutMs: parseUpdateTimeoutMs(params.opts.timeout) ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
   };
   params.assertCurrent?.();
+  const recipeRunId = params.opts.recipe?.maintenance.binding.runId;
+  if (
+    recipeRunId &&
+    (env[UPDATE_RUN_ID_ENV]?.trim() ||
+      meta?.handoffId ||
+      (params.initialization?.runId && params.initialization.runId !== recipeRunId))
+  ) {
+    throw new Error("Fresh recipe admission cannot inherit another updater's run or handoff.");
+  }
   const created = createUpdateRun(
     {
-      runId: env[UPDATE_RUN_ID_ENV]?.trim() || params.initialization?.runId,
+      runId: recipeRunId ?? (env[UPDATE_RUN_ID_ENV]?.trim() || params.initialization?.runId),
+      ...(recipeRunId ? { requireNewRun: true as const } : {}),
       trigger: "cli",
       preview: params.opts.dryRun === true,
       origin: { driver, admission: { owner: "installed" } },
@@ -608,7 +599,15 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
 
   // The shim can move during preparation; the loaded module owns the executing generation.
   const executingRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
-  const discoveredRoot = opts.sourceUpdate?.root ?? (await resolveUpdateRoot());
+  if (opts.recipe && (opts.sourceUpdate || opts.recovery || postCoreUpdateResume)) {
+    throw new Error(
+      "Recipe execution cannot reuse a source-update, legacy recovery, or inherited post-core selector.",
+    );
+  }
+  const discoveredRoot =
+    opts.recipe?.maintenance.expected.installationRoot ??
+    opts.sourceUpdate?.root ??
+    (await resolveUpdateRoot());
   const installKind = await resolveMutableUpdateInstallKind(discoveredRoot, opts, timeoutMs);
   if (!postCoreUpdateResume && opts.dryRun !== true && isGatewayExternallySupervised()) {
     throw new Error(formatExternalSupervisorUpdateRequired());
@@ -690,23 +689,4 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   };
 }
 
-/** Prepare mutable runtime state only under the admitted installation owner. */
-export async function prepareMutableUpdateRuntime(
-  env: NodeJS.ProcessEnv | undefined,
-  fence: UpdateRecoveryFence,
-) {
-  return await withOwnedManagedUpdateEnv(env, async () => {
-    fence.assertCurrent();
-    await cleanupStaleManagedServiceUpdateHandoffs().catch(() => undefined);
-    fence.assertCurrent();
-    await assertOpenClawStateWriteAllowedAtPath({
-      databasePath: resolveOpenClawStateSqlitePath(process.env),
-    });
-    fence.assertCurrent();
-    await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
-    fence.assertCurrent();
-    const records = await loadInstalledPluginIndexInstallRecords();
-    fence.assertCurrent();
-    return records;
-  });
-}
+export { prepareMutableUpdateRuntime } from "./update-command-mutable-runtime.js";

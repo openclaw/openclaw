@@ -4,7 +4,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
-import type { UpdateDoctorConfigChange } from "./update-doctor-config.js";
+import type { UpdateDoctorConfigChange } from "./update-doctor-config-format.js";
 import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { expectRuntime, runFixtureGit } from "./update-runner-git-candidate.test-support.js";
 import type { CommandRunner, UpdateRunResult, UpdateRunnerOptions } from "./update-runner-types.js";

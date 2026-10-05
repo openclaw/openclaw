@@ -53,6 +53,8 @@ export type GatewayServer = {
    * Closing never forces settlement. Direct callers may safely ignore this pre-handled promise.
    */
   startupSettled: Promise<void>;
+  /** Native maintenance owner only; ordinary clients cannot invoke this closure. */
+  getUpgradeMaintenanceReadiness?: import("./server/readiness.js").ReadinessChecker;
 };
 
 export type GatewayServerOptions = {
@@ -108,6 +110,13 @@ export type GatewayServerOptions = {
   sidecarStartup?: GatewaySidecarStartupMode;
   /** Internal update rehearsal: load plugins without starting autonomous work. */
   updateCanary?: boolean;
+  /** Native-only plugin-free upgrade startup. Never supplied through environment or RPC. */
+  upgradeMaintenance?: import("./server-upgrade-maintenance.js").GatewayUpgradeMaintenanceStartup;
+  /** Exact durable intent authorization retained by the existing executor for normal activation. */
+  upgradeActivation?: Pick<
+    import("./server-upgrade-maintenance.js").GatewayUpgradeMaintenanceStartup,
+    "owner"
+  >;
   channelAutostartSuppression?: ChannelAutostartSuppression;
   /** Internal lifecycle callback that re-proves and records crash-loop recovery. */
   tryRecoverChannelAutostartSuppression?: () => boolean;

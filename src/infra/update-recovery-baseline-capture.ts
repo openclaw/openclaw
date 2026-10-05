@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { captureUpdateCommandExecutorAuthority } from "../cli/update-cli/update-command-executor-capabilities.js";
 import {
   parseUpdateRecoveryBackupManifest,
   type UpdateRecoveryBackupManifest,
@@ -52,6 +53,7 @@ import { readUpdateDatabaseGenerations } from "./update-database-generations.js"
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 import { readUpdateRunDriver, type UpdateRunDriver } from "./update-run-driver.js";
 import { getUpdateRunAsync } from "./update-run-reader.js";
+import type { UpdateRecoveryFence } from "./update-run-recovery.js";
 
 declare const SEALED_RUNTIME_BUILD: boolean;
 
@@ -141,10 +143,19 @@ export function captureUpdateRecoveryBaseline(params: {
   nodeRunner?: string;
   timeoutMs?: number;
   acquisition?: UpdateRecoveryCaptureAcquisition;
+  /** Explicit original recipe admission, never inferred from runtime flags or a run ID. */
+  recipeExecutor?: UpdateRecoveryFence;
 }) {
   // Sealed helpers consume retained evidence; the installed CLI owns fresh capture.
-  if (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD) {
+  if (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD && !params.recipeExecutor) {
     throw new Error("Fresh original-state capture requires the installed CLI.");
+  }
+  if (params.recipeExecutor) {
+    const authority = captureUpdateCommandExecutorAuthority(params.recipeExecutor, params.runId);
+    if (authority.installKey !== params.installRoot) {
+      throw new Error("Original recipe capture differs from its admitted native installation.");
+    }
+    params.recipeExecutor.assertCurrent();
   }
   return withArtifactPreservingStateReads(async () => {
     const runId = params.runId;
@@ -158,6 +169,7 @@ export function captureUpdateRecoveryBaseline(params: {
     const assertCurrent = () => {
       params.signal?.throwIfAborted();
       assertCaller();
+      params.recipeExecutor?.assertCurrent();
       rehearsal?.assertCurrent();
     };
     assertCurrent();

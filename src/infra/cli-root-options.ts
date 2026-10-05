@@ -1,5 +1,7 @@
 export {
   FLAG_TERMINATOR,
+  getUpdateCommandPath,
+  rewriteUpdateFlagArgv,
   consumeRootOptionToken,
   consumeRootCommandOptionToken,
   getRootOptionAwareCommandPath,

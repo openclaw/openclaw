@@ -61,6 +61,7 @@ import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import type { OwnedManagedUpdateContext } from "./update-command-managed-context.js";
+import { hasUpdateCommandRecipeReconciliationPendingError } from "./update-command-recovery-error.js";
 import type {
   OriginalManagedServiceRuntime,
   ManagedGatewayUpdateVerdict,
@@ -300,6 +301,7 @@ export async function resolveMutableUpdateFailure(params: {
 }): Promise<{ result: UpdateRunResult; failure: { cause: unknown; detail: string } }> {
   if (
     hasCommandProcessCleanupError(params.cause) ||
+    hasUpdateCommandRecipeReconciliationPendingError(params.cause) ||
     params.cause instanceof UpdateCommandPendingRecoveryFailure
   ) {
     throw params.cause;

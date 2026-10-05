@@ -238,6 +238,39 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     });
 
   update
+    .command("plan")
+    .description("Inspect a local upgrade recipe plan without network access or live changes")
+    .option("--installation <path>", "Installation root (default: invoking CLI installation)")
+    .option("--target <release-id>", "Exact target release identity")
+    .option("--catalog <path>", "Local unauthenticated recipe catalog for report-only preview")
+    .option("--json", "Output the report-only plan as JSON", false)
+    .action(
+      createUpdateLeafAction(async (opts, command) => {
+        for (const key of [
+          "channel",
+          "tag",
+          "timeout",
+          "restart",
+          "acceptCapabilities",
+          "yes",
+          "admission",
+        ]) {
+          const source = update.getOptionValueSource(key);
+          if (source && source !== "default") {
+            throw new Error(`The parent option ${key} is not supported for openclaw update plan.`);
+          }
+        }
+        const { updateRecipePlanCommand } = await import("./update-cli/plan.js");
+        await updateRecipePlanCommand({
+          installation: typeof opts.installation === "string" ? opts.installation : undefined,
+          target: typeof opts.target === "string" ? opts.target : undefined,
+          catalog: typeof opts.catalog === "string" ? opts.catalog : undefined,
+          json: Boolean(opts.json) || inheritedUpdateJson(command),
+        });
+      }),
+    );
+
+  update
     .command("adopt-immutable")
     .description("Explicitly record ownership of an existing sealed release installation")
     .requiredOption("--root <path>", "Stable installation root containing current and releases")

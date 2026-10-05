@@ -3,6 +3,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
 import { isBunRuntime } from "../daemon/runtime-binary.js";
 
+const sealedWorkers = new Map<string, string>();
+
+/** Sealed owners register verified siblings; explicit installed roots remain authoritative. */
+export function registerSealedRuntimeWorkerUrl(distWorkerPath: string, url: URL): void {
+  sealedWorkers.set(distWorkerPath, url.href);
+}
+
 /** Resolve an explicit installed root, source sibling, or stable packaged worker path. */
 export function resolveRuntimeWorkerUrl(params: {
   currentModuleUrl: string;
@@ -14,6 +21,10 @@ export function resolveRuntimeWorkerUrl(params: {
 }): URL {
   if (params.root !== undefined) {
     return pathToFileURL(path.join(params.root, "dist", params.distWorkerPath));
+  }
+  const sealed = sealedWorkers.get(params.distWorkerPath);
+  if (sealed) {
+    return new URL(sealed);
   }
   const currentPath = fileURLToPath(params.currentModuleUrl);
   const normalized = currentPath.replaceAll(path.sep, "/");

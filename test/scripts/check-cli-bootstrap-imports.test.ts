@@ -11,6 +11,7 @@ import {
   GATEWAY_RUN_CHUNK_METADATA_PATH,
   readGatewayRunChunks,
 } from "../../scripts/lib/gateway-run-chunk-metadata.mts";
+import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../../src/shared/worker-bundle-hash.js";
 
 function snapshotAcornParserPrototype() {
   return Reflect.ownKeys(Parser.prototype).map((key) => [
@@ -29,19 +30,6 @@ const {
 } = await import("../../scripts/check-cli-bootstrap-imports.mts");
 
 const tempRoots: string[] = [];
-const workerDeployArtifactNames = [
-  "code-mode-node.worker.mjs",
-  "file-tool-planning.worker.mjs",
-  "github-exec-launcher.mjs",
-  "image-processor.worker.mjs",
-  "openclaw-state-read.worker.mjs",
-  "service-child-group-anchor.mjs",
-  "service-child-relay.mjs",
-  "sqlite-store.worker.mjs",
-  "worker-native-lifecycle.worker.mjs",
-  "worker.mjs",
-  "workspace-rsync-receiver.mjs",
-];
 
 function makeTempRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "openclaw-cli-bootstrap-imports-"));
@@ -371,7 +359,7 @@ describe("check-cli-bootstrap-imports", () => {
       'const interpolated = `require("template-only") ${import("node:fs")}`;',
       'import "node:os"',
     ].join("\n");
-    for (const artifact of workerDeployArtifactNames) {
+    for (const artifact of WORKER_BUNDLE_ARTIFACT_PATHS) {
       writeFixture(root, `dist/worker/${artifact}`, source);
     }
 
@@ -484,7 +472,7 @@ describe("check-cli-bootstrap-imports", () => {
     },
   ])("preserves module syntax validation for $label", ({ source, message }) => {
     const root = makeTempRoot();
-    for (const artifact of workerDeployArtifactNames) {
+    for (const artifact of WORKER_BUNDLE_ARTIFACT_PATHS) {
       writeFixture(
         root,
         `dist/worker/${artifact}`,
@@ -518,7 +506,7 @@ describe("check-cli-bootstrap-imports", () => {
 
   it("validates every split worker chunk and rejects missing or external dependencies", () => {
     const root = makeTempRoot();
-    for (const artifact of workerDeployArtifactNames) {
+    for (const artifact of WORKER_BUNDLE_ARTIFACT_PATHS) {
       writeFixture(root, `dist/worker/${artifact}`, "export {};\n");
     }
     writeFixture(root, "dist/worker/worker.mjs", 'import "./worker-chunk-start.mjs";');
@@ -542,7 +530,7 @@ describe("check-cli-bootstrap-imports", () => {
 
   it("rejects worker package imports and dependency manifests", () => {
     const root = makeTempRoot();
-    for (const artifact of workerDeployArtifactNames) {
+    for (const artifact of WORKER_BUNDLE_ARTIFACT_PATHS) {
       writeFixture(root, `dist/worker/${artifact}`, "export {};\n");
     }
     writeFixture(
@@ -622,7 +610,7 @@ describe("check-cli-bootstrap-imports", () => {
       const root = makeTempRoot();
       const artifacts =
         contract === "default"
-          ? workerDeployArtifactNames
+          ? [...WORKER_BUNDLE_ARTIFACT_PATHS]
           : ["worker.mjs", "workspace-rsync-receiver.mjs"];
       if (contract === "three") {
         artifacts.push("github-exec-launcher.mjs");

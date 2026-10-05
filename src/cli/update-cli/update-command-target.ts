@@ -44,7 +44,6 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { VERSION } from "../../version.js";
-import { CLI_NAME } from "../cli-name.js";
 import {
   DEFAULT_PACKAGE_NAME,
   normalizeTag,
@@ -69,9 +68,20 @@ import { inspectNpmGlobalDestination } from "./update-command-package-destinatio
 import { UnreportedUpdateAdmissionOutcome, type RefuseUpdate } from "./update-command-result.js";
 import { recordUpdateCommandTarget, type prepareUpdateCommand } from "./update-command-run.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
+import { printManagedServicePackageUpdatePlan } from "./update-command-service-plan-print.js";
 import { resolveManagedServicePackageUpdatePlan } from "./update-command-service-plan.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 import { reportPreMutationUpdateResult } from "./update-command-terminal.js";
+import {
+  assertRecipeUpdateBinding,
+  assertRecipeUpdateConfig,
+  assertRecipeUpdateEnvironment,
+  assertRecipeUpdatePackageOwner,
+  resolveRecipeUpdatePackageTarget,
+  verifyRecipeUpdateArchive,
+  verifyRecipeUpdateConfig,
+  verifyRecipeUpdateInstallation,
+} from "./update-recipe-context.js";
 
 /** A fresh profile must be initialized by an identified, schema-declaring target. */
 export async function resolveFreshUpdateMetadata(target: {
@@ -87,50 +97,6 @@ export async function resolveFreshUpdateMetadata(target: {
   );
   await target.refuseUpdate("target-metadata-preflight", failure.message, failure.failureFacts);
   return undefined;
-}
-
-/** Describe the selected plan without changing roots, runtime, or service authority. */
-function printManagedServicePackageUpdatePlan(params: {
-  rootRedirect: ManagedServiceRootRedirect | null;
-  serviceRoot?: string;
-  nodeRunner?: string;
-}): void {
-  const { rootRedirect, nodeRunner } = params;
-  if (rootRedirect) {
-    defaultRuntime.log(
-      theme.muted(`Targeting managed gateway service package root: ${rootRedirect.root}`),
-    );
-    defaultRuntime.log(
-      theme.warn(
-        `Shell OpenClaw root differs from the managed gateway service root: ${rootRedirect.previousRoot}`,
-      ),
-    );
-    defaultRuntime.log(
-      theme.muted(
-        `After the update, make sure \`${CLI_NAME}\` on PATH resolves to the managed service root or reinstall the gateway service from the shell install you want to use.`,
-      ),
-    );
-    if (nodeRunner) {
-      defaultRuntime.log(theme.muted(`Managed gateway service runtime: ${nodeRunner}`));
-    }
-  } else if (params.serviceRoot) {
-    defaultRuntime.log(
-      theme.muted(
-        `Updating this installation and rebinding the managed Gateway from ${params.serviceRoot} after ownership and runtime verification.`,
-      ),
-    );
-  } else if (nodeRunner) {
-    defaultRuntime.log(
-      theme.warn(
-        `Current runtime (${resolveNodeRunner()}) differs from the managed gateway service runtime (${nodeRunner}).`,
-      ),
-    );
-    defaultRuntime.log(
-      theme.muted(
-        "Using the managed service runtime for this update so the gateway can start after the upgrade.",
-      ),
-    );
-  }
 }
 
 export async function resolveUpdateCommandTarget(
@@ -156,6 +122,27 @@ export async function resolveUpdateCommandTarget(
       await pkgOwnership.assertUnowned(discoveredRoot);
       let { devTarget } = prepared;
       let root = prepared.servicePlan?.rootRedirect?.root ?? discoveredRoot;
+      const selectedRunId = opts.run?.runId ?? opts.recipe?.maintenance.binding.runId;
+      let selectionFence = opts.run?.executorFence;
+      if (opts.recipe) {
+        assertRecipeUpdateBinding(opts.recipe, root, selectedRunId);
+        assertRecipeUpdateEnvironment(opts.recipe, opts.run?.env ?? process.env);
+        if (
+          installKind !== "package" ||
+          opts.sourceUpdate ||
+          opts.sha ||
+          opts.tag ||
+          opts.channel !== undefined ||
+          opts.reapplyLocalOverrides === true ||
+          opts.restart === false
+        ) {
+          throw new Error(
+            "Recipe execution requires the selected package installation and verified restart.",
+          );
+        }
+        await verifyRecipeUpdateArchive(opts.recipe);
+        await verifyRecipeUpdateInstallation(opts.recipe, root, "source");
+      }
       let updateInstallKind = installKind;
       let managedServiceRoot = prepared.servicePlan?.serviceRoot;
       let packageManager: ResolvedGlobalInstallTarget["manager"] | undefined;
@@ -270,6 +257,11 @@ export async function resolveUpdateCommandTarget(
         defaultRuntime.error(`Warning: ${inspectionWarning}`);
       }
       const { configSnapshot, configReadFailure, legacyConfigPlan, storedChannel } = channelConfig;
+      if (opts.recipe) {
+        assertRecipeUpdateConfig(opts.recipe, configSnapshot);
+        await verifyRecipeUpdateConfig(opts.recipe, opts.run?.env ?? process.env);
+        selectionFence?.assertCurrent();
+      }
 
       if (
         opts.channel &&
@@ -301,6 +293,7 @@ export async function resolveUpdateCommandTarget(
       // package path; only an explicitly requested dev channel outranks it.
       const explicitTag = normalizeTag(opts.tag);
       const switchToGit =
+        !opts.recipe &&
         installKind !== "git" &&
         (requestedChannel === "dev" || (channel === "dev" && explicitTag === null));
       const switchToPackage =
@@ -324,7 +317,7 @@ export async function resolveUpdateCommandTarget(
         await refuseUpdate(failure.reason, failure.message, failure.failureFacts);
         return undefined;
       }
-      if (channel === "dev" && requestedChannel !== "dev" && !opts.sourceUpdate) {
+      if (channel === "dev" && requestedChannel !== "dev" && !opts.sourceUpdate && !opts.recipe) {
         try {
           devTarget = readDevUpdateTarget();
         } catch (error) {
@@ -376,11 +369,20 @@ export async function resolveUpdateCommandTarget(
         managedServiceRoot = servicePlan.serviceRoot;
         managedServiceNodeRunner = servicePlan.nodeRunner;
         root = managedServiceRootRedirect?.root ?? discoveredRoot;
+        if (opts.recipe) {
+          assertRecipeUpdateBinding(opts.recipe, root, selectedRunId);
+          if (managedServiceRoot && managedServiceRoot !== root) {
+            throw new Error(
+              "Recipe execution cannot acquire an unapproved distinct service installation.",
+            );
+          }
+        }
         if (!opts.json) {
           printManagedServicePackageUpdatePlan(servicePlan);
         }
-        packageUpdateNodeRunner =
-          managedServiceRoot && !process.versions.bun
+        packageUpdateNodeRunner = opts.recipe
+          ? opts.recipe.maintenance.expected.runtimeExecutable
+          : managedServiceRoot && !process.versions.bun
             ? resolveNodeRunner()
             : managedServiceNodeRunner;
       }
@@ -393,6 +395,10 @@ export async function resolveUpdateCommandTarget(
           preflight: true,
           serviceRoot: managedServiceRoot,
         });
+        selectionFence = fence;
+        if (opts.recipe) {
+          assertRecipeUpdateBinding(opts.recipe, root, selectedRunId, fence);
+        }
         if (opts.run) {
           opts.run.executorFence = fence;
         }
@@ -436,6 +442,11 @@ export async function resolveUpdateCommandTarget(
             throw new UnreportedUpdateAdmissionOutcome(report, { exitCode: 0 });
           });
           packageManager = manager;
+          if (opts.recipe && manager !== opts.recipe.route.installKind) {
+            throw new Error(
+              "Recipe package manager differs from its approved qualified installation.",
+            );
+          }
           recordUpdateCommandTarget(opts.run, {
             target: { kind: updateInstallKind, tag, installationMethod: `${manager}-global` },
           });
@@ -448,12 +459,23 @@ export async function resolveUpdateCommandTarget(
             timeoutMs: updateStepTimeoutMs,
             pkgRoot: root,
             honorPackageRoot:
+              opts.recipe !== undefined ||
               managedServiceRootRedirect !== null ||
               managedServiceRoot !== undefined ||
               managedServiceNodeRunner !== undefined,
             packageName: installedPackageName,
             pkgOwnership,
           });
+          if (opts.recipe) {
+            packageInstallTarget = await resolveRecipeUpdatePackageTarget(
+              packageInstallTarget,
+              root,
+              updateStepTimeoutMs,
+              opts.run?.env ?? process.env,
+            );
+            assertRecipeUpdatePackageOwner(opts.recipe, packageInstallTarget);
+            selectionFence?.assertCurrent();
+          }
           if (packageInstallTarget.manager === "npm") {
             const destination = await inspectNpmGlobalDestination(root, packageInstallTarget);
             if (destination.kind !== "owned" && destination.kind !== "empty") {
@@ -509,7 +531,21 @@ export async function resolveUpdateCommandTarget(
             env: packageInstallEnv,
           });
         let targetMetadata: Awaited<ReturnType<typeof fetchNpmPackageTargetStatus>> | undefined;
-        if (channel === "extended-stable") {
+        if (opts.recipe) {
+          assertRecipeUpdateBinding(
+            opts.recipe,
+            root,
+            selectedRunId,
+            opts.run?.executorFence ?? selectionFence,
+          );
+          await verifyRecipeUpdateArchive(opts.recipe);
+          opts.run?.executorFence?.assertCurrent();
+          targetVersion = opts.recipe.maintenance.expected.version;
+          tag = targetVersion;
+          packageInstallSpec = opts.recipe.localArchivePath;
+          packageTargetSchemaVersions = opts.recipe.targetSchemaVersions;
+          packageRuntimeTarget = { version: targetVersion, nodeEngine: null };
+        } else if (channel === "extended-stable") {
           const extendedStable = await resolveExtendedStablePackage({
             installKind: updateInstallKind,
             timeoutMs,
@@ -559,7 +595,7 @@ export async function resolveUpdateCommandTarget(
           !fallbackToLatest &&
           currentVersion != null &&
           (targetVersion == null ? tag !== "latest" : cmp != null && cmp > 0);
-        if (targetVersion) {
+        if (targetVersion && !opts.recipe) {
           // A package-spec override may select a different artifact or a mutable tag.
           if (packageSpec(targetVersion) !== `${DEFAULT_PACKAGE_NAME}@${targetVersion}`) {
             targetMetadata = undefined;

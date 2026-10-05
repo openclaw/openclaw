@@ -57,6 +57,7 @@ import {
   getCoreCliCommandNamesCore,
 } from "./program/core-command-descriptors.js";
 import { getSubCliEntriesCore } from "./program/subcli-descriptors.js";
+import { tryRunPassiveUpdateBeforeStartup } from "./run-main-passive-update.js";
 import { withCliPluginInvocation } from "./run-main-plugin-cache.js";
 import {
   isAgentExecInvocation,
@@ -72,7 +73,6 @@ import {
   shouldUseRootHelpFastPath,
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
-import { tryRunUpdateAdmissionBeforeStartup } from "./run-main-update-admission.js";
 import type {
   BareRootLaunchTarget,
   GatewayLaunchTarget,
@@ -773,7 +773,7 @@ export async function runCli(
 ) {
   const runtimeRecoveryEnv = options.runtimeRecoveryEnv ?? { ...process.env };
   const originalArgv = normalizeWindowsArgv(argv);
-  if (await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(originalArgv))) {
+  if (await tryRunPassiveUpdateBeforeStartup(resolveCliArgvInvocation(originalArgv))) {
     return;
   }
   const builtInMachineOutput = resolveBuiltInMachineOutput(originalArgv);

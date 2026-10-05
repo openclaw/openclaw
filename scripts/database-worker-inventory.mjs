@@ -1874,6 +1874,9 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/infra/upgrade-recipes/maintenance-store.ts", // Shared-state write runtime and read registry; restore-source is invoked only by update-candidate-state.worker.ts.
+  "src/infra/upgrade-recipes/receipts-store.ts", // Shared-state write runtime and sqlite-readonly operation registry exclusively execute receipt SQL.
+
   "src/skills/library/import.kernel.ts", // Upload commands execute only in the shared-state writer.
   "src/skills/library/service.kernel.ts", // Library catalog and revision reads use the shared-state read registry.
   "src/config/sessions/conversation-delivery-store.kernel.ts", // Agent execution registry writes and session transcript worker reads only.

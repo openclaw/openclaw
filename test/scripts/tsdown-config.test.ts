@@ -46,6 +46,11 @@ function hasWorkerEntry(config: TsdownConfig, name: string, source: string): boo
 }
 
 const workerBuildTargets = [
+  [
+    "owner-dacl-batch",
+    "worker/owner-dacl-batch-worker",
+    "node_modules/@openclaw/fs-safe/dist/owner-dacl-batch-worker.js",
+  ],
   ["worker", "worker/worker", "src/worker/worker-deploy-entry.ts"],
   ["code-mode-node", "worker/code-mode-node.worker", "src/agents/code-mode-node.worker.ts"],
   [

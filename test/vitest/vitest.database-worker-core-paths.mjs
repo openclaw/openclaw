@@ -1025,6 +1025,10 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugin-sdk/session-store-runtime.conversation.test.ts",
   "src/plugin-sdk/session-store-runtime.maintenance.test.ts",
   "src/plugin-sdk/session-transcript-runtime-visible-delta.test.ts",
+  "src/infra/upgrade-recipes/maintenance-store.test.ts",
+  "src/infra/upgrade-recipes/receipts.test.ts",
+  "src/infra/upgrade-recipes/retained-run.test.ts",
+  "src/infra/update-run-ledger-fresh.test.ts",
 ];
 
 const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);

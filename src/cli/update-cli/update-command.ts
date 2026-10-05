@@ -30,6 +30,7 @@ import type { InitializedUpdate } from "./update-command-initialization.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
 import type { StagedPackageInstallUpdate } from "./update-command-package.js";
+import { UpdateCommandRecipeReconciliationPendingError } from "./update-command-recovery-error.js";
 import {
   UpdateCommandFailure,
   UpdateCommandPendingRecoveryFailure,
@@ -171,7 +172,7 @@ async function updateCommandInternal(
 
   let target = initialization?.target;
   let reselected = false;
-  if (target && initialization && !opts.channel && !opts.sourceUpdate) {
+  if (target && initialization && !opts.recipe && !opts.channel && !opts.sourceUpdate) {
     const config =
       target.legacyConfigPlan?.config ??
       (target.configSnapshot.valid
@@ -611,9 +612,25 @@ async function runResolvedUpdate(
     recoveryState.ledgerHandoffOwned = true;
     const assertRollbackCurrent = createUpdateCommandFinalizationFence(finalization);
     const continued = await continueMigratedUpdateInFreshProcess(
-      { ...finalization, rollbackBlockedReason },
+      {
+        ...finalization,
+        rollbackBlockedReason: opts.recipe ? "state-migrated-no-rollback" : rollbackBlockedReason,
+      },
       progress.pendingSteps,
-    );
+    ).catch((cause: unknown) => {
+      if (opts.recipe) {
+        throw new UpdateCommandRecipeReconciliationPendingError(
+          "Recipe target finalization requires original-owner reconciliation; compensation is not admitted.",
+          { cause },
+        );
+      }
+      throw cause;
+    });
+    if (opts.recipe && (continued.exitCode !== 0 || continued.databaseRollbackAvailable)) {
+      throw new UpdateCommandRecipeReconciliationPendingError(
+        "Recipe target finalization did not settle successfully; preserve original ownership and current state.",
+      );
+    }
     if (continued.databaseRollbackAvailable && finalization.databaseBackup) {
       const restored = await restoreFailedUpdateDatabases({
         backup: finalization.databaseBackup,

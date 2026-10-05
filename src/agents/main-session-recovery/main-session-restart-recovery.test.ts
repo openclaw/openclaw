@@ -20,7 +20,6 @@ import * as configSessions from "../../config/sessions.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
-  listSessionEntriesCore,
   loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
@@ -116,7 +115,13 @@ import {
 } from "./main-session-recovery-store.js";
 import { dispatchRestartRecoveryUntilStarted } from "./main-session-restart-dispatch-start.js";
 import { readStartupRecoveryWarning } from "./main-session-restart-recovery-diagnostics.js";
-import { createRestartRecoveryTranscriptFixture } from "./main-session-restart-recovery-fixture.test-support.js";
+import {
+  createRestartRecoveryTranscriptFixture,
+  readStore,
+  runningSessionEntry,
+  writeStore,
+  writeStorePath,
+} from "./main-session-restart-recovery-fixture.test-support.js";
 import { discoverRestartRecoveryStoreTargets } from "./main-session-restart-recovery-shared.js";
 import { recoverStore } from "./main-session-restart-recovery-store.js";
 import {
@@ -253,24 +258,6 @@ async function makeSessionsDir(agentId = "main"): Promise<string> {
   return sessionsDir;
 }
 
-async function writeStorePath(
-  storePath: string,
-  store: Record<string, SessionEntryFixture>,
-): Promise<void> {
-  await Promise.all(
-    Object.entries(store).map(([sessionKey, entry]) =>
-      replaceSessionEntry({ storePath, sessionKey }, createSessionEntry(entry)),
-    ),
-  );
-}
-
-async function writeStore(
-  sessionsDir: string,
-  store: Record<string, SessionEntryFixture>,
-): Promise<void> {
-  await writeStorePath(path.join(sessionsDir, "sessions.json"), store);
-}
-
 function mainSessionEntry(overrides: SessionEntryFixture = {}): SessionEntry {
   return createSessionEntry({
     sessionId: "main-session",
@@ -278,15 +265,6 @@ function mainSessionEntry(overrides: SessionEntryFixture = {}): SessionEntry {
     updatedAt: Date.now() - 10_000,
     status: "running",
     abortedLastRun: true,
-    ...overrides,
-  });
-}
-
-function runningSessionEntry(sessionId: string, overrides: SessionEntryFixture = {}): SessionEntry {
-  return createSessionEntry({
-    sessionId,
-    updatedAt: Date.now() - 10_000,
-    status: "running",
     ...overrides,
   });
 }
@@ -380,12 +358,6 @@ async function writeMainSession({
   ...entry
 }: SessionEntryFixture & { sessionsDir: string; sessionKey?: string }): Promise<void> {
   await writeStore(sessionsDir, mainSessionStore(entry, sessionKey));
-}
-
-function readStore(storePath: string): Record<string, SessionEntry> {
-  return Object.fromEntries(
-    listSessionEntriesCore({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-  );
 }
 
 async function writePreparedMainSessionTranscript(

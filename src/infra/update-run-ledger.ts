@@ -73,6 +73,8 @@ export function createUpdateRun(
   input: RunPatch & {
     runId?: string;
     trigger: UpdateRunRecord["trigger"];
+    /** A fresh approved recipe cannot adopt a prior invocation with the same identifier. */
+    requireNewRun?: true;
     supersedeStaleIdentityless?: boolean;
     /** Preview history must not repair canonical task data. */
     preview?: boolean;
@@ -118,6 +120,9 @@ export function createUpdateRun(
       };
       const existing = readRun(db, row.run_id);
       if (existing) {
+        if (input.requireNewRun) {
+          throw new Error("Fresh recipe admission cannot adopt an existing update run.");
+        }
         return recoveryChanges.length > 0
           ? persistRun(db, recordRecovery(existing), options)
           : existing;

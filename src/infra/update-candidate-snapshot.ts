@@ -248,6 +248,8 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
   snapshotDiagnostics: string[];
   snapshotWarnings: string[];
   cleanupDirectories: string[];
+  databaseMappings?: import("./update-candidate-state.js").UpdateCandidateDatabaseMapping[];
+  sourceStateVersions: import("./update-candidate-state.js").UpdateStateSchemaVersion[];
 }> {
   let { capacity } = await measureInitialUpdateSnapshotState(params);
   params.signal?.throwIfAborted();
@@ -456,15 +458,18 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
     directory = await allocateSnapshotRoot(capacity, { root: selectedRoot.directory, directory });
     selectedRoot = capacity.selection!;
     const pluginPlanPath = path.join(inventoryDirectory, inventory.pluginPlan);
-    const { pluginPaths, pluginCodeLinks } = UpdateCandidateStateSnapshotSchema.parse(
-      await run({
-        mode: "snapshot",
-        pluginPlanPath,
-        databaseInventory: [...inventory.databases.keys()],
-      }),
-    );
+    const { versions, databaseMappings, pluginPaths, pluginCodeLinks } =
+      UpdateCandidateStateSnapshotSchema.parse(
+        await run({
+          mode: "snapshot",
+          pluginPlanPath,
+          databaseInventory: [...inventory.databases.keys()],
+        }),
+      );
     return {
       stateDir: directory,
+      sourceStateVersions: versions,
+      ...(databaseMappings ? { databaseMappings } : {}),
       pluginPaths,
       pluginCodeLinks: pluginCodeLinks
         ? await readUpdateCandidatePluginCodeLinks(pluginPlanPath, pluginCodeLinks)

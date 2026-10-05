@@ -76,7 +76,10 @@ export async function refuseImmutableUpdateActivation(
 
 /** Dispatch before the mutable updater admits state, retains runtime, or inspects services. */
 export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): Promise<boolean> {
-  const root = opts.sourceUpdate?.root ?? (await resolveUpdateRoot());
+  const root =
+    opts.recipe?.maintenance.expected.installationRoot ??
+    opts.sourceUpdate?.root ??
+    (await resolveUpdateRoot());
   let installation: Awaited<ReturnType<typeof inspectImmutableInstall>>;
   try {
     installation = await inspectImmutableInstall(root);
@@ -89,6 +92,10 @@ export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): 
     }
     return false;
   }
+  if (opts.recipe) {
+    throw new Error("Recipe execution has not qualified immutable installation activation.");
+  }
+
   let result: Awaited<ReturnType<typeof prepareImmutableUpdate>>;
   let drainTimeoutMs: number | undefined;
   try {

@@ -195,6 +195,8 @@ describe("resolveRuntimeProcessEntrypointUrl", () => {
       const { registerSealedRuntimeProcessEntrypoint, resolveRuntimeProcessEntrypointUrl } =
         await import("./runtime-process-url.js");
       const { runtimeProcessEntrypoints } = await import("./runtime-process-entrypoints.js");
+      const { resolveRuntimeWorkerUrl: resolveCurrentWorker } =
+        await import("./runtime-worker-url.js");
       expect(resolveRuntimeProcessEntrypointUrl("githubExec")).toEqual(
         resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.githubExec),
       );
@@ -202,6 +204,28 @@ describe("resolveRuntimeProcessEntrypointUrl", () => {
       const sealedUrl = new URL("file:///worker-bundle/github-exec-launcher.mjs");
       registerSealedRuntimeProcessEntrypoint("githubExec", sealedUrl);
       expect(resolveRuntimeProcessEntrypointUrl("githubExec")).toEqual(sealedUrl);
+      expect(resolveCurrentWorker(runtimeProcessEntrypoints.githubExec)).toEqual(sealedUrl);
+      expect(
+        fileURLToPath(
+          resolveCurrentWorker({
+            ...runtimeProcessEntrypoints.githubExec,
+            root: "/explicit-installation",
+          }),
+        ),
+      ).toBe(
+        path.join(
+          "/explicit-installation",
+          "dist",
+          runtimeProcessEntrypoints.githubExec.distWorkerPath,
+        ),
+      );
+      sealedUrl.pathname = "/substituted-worker.mjs";
+      const observed = resolveRuntimeProcessEntrypointUrl("githubExec");
+      expect(observed.pathname).toBe("/worker-bundle/github-exec-launcher.mjs");
+      observed.pathname = "/another-substitution.mjs";
+      expect(resolveRuntimeProcessEntrypointUrl("githubExec").pathname).toBe(
+        "/worker-bundle/github-exec-launcher.mjs",
+      );
       expect(resolveRuntimeProcessEntrypointUrl("sqliteReadOnly")).toEqual(sqliteUrl);
     } finally {
       vi.resetModules();

@@ -6,6 +6,7 @@ import module from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { getUpdateCommandPath, rewriteUpdateFlagArgv } from "./cli-root-options.mjs";
 import {
   maintainOpenClawCompileCache,
   resolveOpenClawCompileCacheDirectory,
@@ -632,7 +633,16 @@ const isBrowserNativeHostInvocation =
   process.argv[3] === "extension" &&
   process.argv[4] === "native-host";
 
-if (isBrowserNativeHostInvocation) {
+const launcherCommandPath = getUpdateCommandPath(rewriteUpdateFlagArgv(process.argv));
+const isPassiveRecipePlanInvocation =
+  launcherCommandPath?.[0] === "update" && launcherCommandPath?.[1] === "plan";
+
+if (isPassiveRecipePlanInvocation) {
+  // Inspection cannot repair the runtime, replay installation scripts, or write compile caches.
+  if (!(await tryImport("./dist/entry.js")) && !(await tryImport("./dist/entry.mjs"))) {
+    throw new Error(await buildMissingEntryErrorMessage());
+  }
+} else if (isBrowserNativeHostInvocation) {
   try {
     // A browser-owned pipe must never launch an interactive runtime installer.
     const supported = process.versions.bun

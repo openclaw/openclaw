@@ -10,6 +10,10 @@ import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 import { resolveUpdateCandidateStatePath } from "./update-candidate-paths.js";
 import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
+import type {
+  UpdateCandidateDatabaseMapping,
+  UpdateStateSchemaVersion,
+} from "./update-candidate-state.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
   UPDATE_RUN_ID_ENV,
@@ -36,6 +40,8 @@ export type UpdateCandidateRehearsal = {
   env: NodeJS.ProcessEnv;
   port: number;
   snapshotCapacity: UpdateSnapshotCapacity;
+  databaseMappings?: UpdateCandidateDatabaseMapping[];
+  sourceStateVersions?: UpdateStateSchemaVersion[];
   snapshotDiagnostics?: string[];
   snapshotWarnings?: string[];
   cleanupDirectories: string[];
@@ -213,6 +219,8 @@ export async function prepareUpdateCandidateRehearsal(params: {
     snapshotDiagnostics,
     snapshotWarnings,
     cleanupDirectories,
+    databaseMappings,
+    sourceStateVersions,
   } = await prepareUpdateCandidateStateSnapshot({
     ...params,
     env: sourceEnv,
@@ -266,6 +274,8 @@ export async function prepareUpdateCandidateRehearsal(params: {
       env,
       port,
       snapshotCapacity,
+      ...(databaseMappings ? { databaseMappings } : {}),
+      sourceStateVersions,
       snapshotDiagnostics,
       snapshotWarnings,
       cleanupDirectories,

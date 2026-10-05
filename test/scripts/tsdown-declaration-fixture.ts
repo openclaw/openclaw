@@ -75,7 +75,18 @@ export function runFixtureModule(
   source: string,
   privateQa = false,
 ) {
-  return runFixture(command, root, ["--input-type=module", "--eval", source], privateQa);
+  return runFixture(
+    command,
+    root,
+    [
+      "--import",
+      pathToFileURL(path.join(root, "scripts/tsx.mjs")).href,
+      "--input-type=module",
+      "--eval",
+      source,
+    ],
+    privateQa,
+  );
 }
 
 type ConfigEntries = {

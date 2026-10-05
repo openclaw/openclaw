@@ -4,6 +4,8 @@ import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-co
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import { assertNoPendingUpdateRecovery } from "./update-run-recovery.js";
+import { mayUpgradeRecipeExternalWorkHaveOccurred } from "./upgrade-recipes/maintenance-contract.js";
+import { readUpgradeRecipeMaintenanceReceipt } from "./upgrade-recipes/maintenance.js";
 
 /** Read-only admission; neither a missing nor a replaced DB retires old recovery. */
 export async function assertUpdateRecoveryAdmission(
@@ -16,6 +18,14 @@ export async function assertUpdateRecoveryAdmission(
     return;
   }
   assertNoPendingUpdateRecovery({ ...options, path: databasePath });
+  const maintenance = await readUpgradeRecipeMaintenanceReceipt({ ...options, path: databasePath });
+  if (maintenance && maintenance.phase !== "committed") {
+    throw new Error(
+      mayUpgradeRecipeExternalWorkHaveOccurred(maintenance)
+        ? "An unresolved upgrade owns this state family and external work may have occurred. Resume its original owner; historical snapshot restoration is not automatic."
+        : "An unresolved upgrade maintenance owner holds this state family. Resume that original update before admitting another mutating update.",
+    );
+  }
 }
 
 /** Check publication before an admitted row reader; false means the parent is absent. */

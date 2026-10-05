@@ -1,0 +1,42 @@
+[package]
+name = "openclaw-update-bootstrap"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.93"
+publish = false
+license = "MIT"
+description = "Independent TUF-authenticated OpenClaw retained updater launcher"
+
+[workspace]
+
+[[bin]]
+name = "openclaw-updater"
+path = "src/main.rs"
+
+[features]
+qualification = []
+
+[[test]]
+name = "first_hop"
+path = "tests/first_hop.rs"
+required-features = ["qualification"]
+
+[dependencies]
+tough = { version = "=0.24.0", features = ["http"] }
+tokio = { version = "=1.53.2", features = ["macros", "rt-multi-thread"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+sha2 = "=0.11.0"
+hex = "=0.4.3"
+url = "=2.5.8"
+futures-util = "=0.3.34"
+rustix = { version = "=1.1.5", features = ["process", "fs"] }
+rusqlite = { version = "=0.40.2", features = ["bundled"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dev-dependencies]
+tempfile = "=3.27.0"
+ring = "=0.17.14"
+olpc-cjson = "=0.1.4"

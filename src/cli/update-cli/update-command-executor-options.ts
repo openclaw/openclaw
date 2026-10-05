@@ -7,18 +7,22 @@ import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-err
 export type UpdateCommandExecutorOptions =
   | {
       existingAuthority: Omit<ManagedUpdateLeaseAuthority, "owner">;
+      /** Original recipe coordinator supplies this only after durable custody verification. */
+      originalRecipeOwner?: { runId: string; owner: string };
       legacyManagedParent?: never;
       legacyPackageParent?: never;
       legacyPackageHandoff?: never;
     }
   | {
       existingAuthority?: never;
+      originalRecipeOwner?: never;
       legacyManagedParent: { runId: string; handoffId: string; root: string };
       legacyPackageParent?: never;
       legacyPackageHandoff?: never;
     }
   | {
       existingAuthority?: never;
+      originalRecipeOwner?: never;
       legacyManagedParent?: never;
       legacyPackageParent: Extract<LegacyUpdateExecutorParent, { kind: "package" }>["identity"];
       legacyPackageHandoff?: { handoffId: string; root: string };

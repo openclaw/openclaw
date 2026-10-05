@@ -5,7 +5,10 @@ import {
   leaseQueries,
   type ManagedUpdateLeaseDatabaseIdentity,
 } from "./update-managed-service-handoff-database.js";
-import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease-types.js";
+import type {
+  ManagedHandoffLease,
+  ManagedHandoffLeaseStoreOptions,
+} from "./update-managed-service-handoff-lease-types.js";
 import type { createManagedHandoffProcessIdentityReader } from "./update-managed-service-handoff-process.js";
 import {
   parseManagedHandoffLeasePayload,
@@ -16,6 +19,30 @@ export type ManagedHandoffOriginalAdmission = {
   database: ManagedUpdateLeaseDatabaseIdentity;
   original: ManagedHandoffLease;
 };
+
+/** Reusing a stable recipe owner still replaces a dead exact native generation,
+ * never admits through a live row, foreign owner, or an unpinned store. */
+export function canReplaceManagedHandoffOwner(
+  options: ManagedHandoffLeaseStoreOptions,
+  root: string,
+  owner: string,
+  destination: ManagedHandoffLease | null,
+  reclaimable: (lease: ManagedHandoffLease) => boolean,
+) {
+  const selectedOriginal =
+    options.existingIdentity &&
+    options.originalUpdateKey === root &&
+    options.originalRecoveryOwner !== undefined;
+  if (
+    selectedOriginal &&
+    (options.originalRecoveryOwner !== owner || (destination && destination.owner !== owner))
+  ) {
+    return false;
+  }
+  return (
+    !destination || ((destination.owner !== owner || selectedOriginal) && reclaimable(destination))
+  );
+}
 
 /** Validate the unchanged acquisition object, never a decoded or copied row. */
 export function readManagedHandoffOriginalAdmission(

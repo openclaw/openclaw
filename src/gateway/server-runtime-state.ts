@@ -33,6 +33,7 @@ import type { ControlUiRootState } from "./server-control-ui-root.js";
 import { attachGatewayUpgradeHandler } from "./server-http-upgrades.js";
 import { createGatewayHttpServer } from "./server-http.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { isGatewayRestrictedUpgradeStartup } from "./server-upgrade-startup-mode.js";
 import type { HookClientIpConfig, HooksRequestHandler } from "./server/hooks-request-handler.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
 import { runWithGatewayHttpWorkAdmission } from "./server/http-work-admission.js";
@@ -80,6 +81,7 @@ export async function createGatewayHttpTransport(params: {
   /** Test-instance listener held since allocation; caller closes it if construction fails. */
   testListener?: HttpServer;
   updateCanary?: boolean;
+  upgradeMaintenance?: boolean;
   controlUiEnabled?: boolean;
   controlUiBasePath: string;
   controlUiRoot?: ControlUiRootState;
@@ -350,6 +352,7 @@ export async function createGatewayHttpTransport(params: {
       handleWorkerBootstrapArtifactTransferRequest:
         params.handleWorkerBootstrapArtifactTransferRequest,
       handleNodeWorkspaceTransferRequest: params.handleNodeWorkspaceTransferRequest,
+      upgradeMaintenance: params.upgradeMaintenance,
       getReadiness: params.getReadiness,
       getStartup: params.getStartup,
       getRuntimeConfig: loadRuntimeConfig,
@@ -360,6 +363,10 @@ export async function createGatewayHttpTransport(params: {
       ingressTransport,
       reportUnattributableProxy,
     });
+    if (params.upgradeMaintenance) {
+      httpServer.on("upgrade", (_req, socket) => socket.destroy());
+      return httpServer;
+    }
     attachGatewayUpgradeHandler({
       httpServer,
       wss,
@@ -410,7 +417,7 @@ export async function createGatewayHttpTransport(params: {
   let startListeningPromise: Promise<void> | null = null;
   let startListeningComplete = false;
   const startSandboxHost = async (): Promise<number> => {
-    if (params.updateCanary) {
+    if (isGatewayRestrictedUpgradeStartup(params)) {
       throw new Error("Sandbox host is disabled during update validation");
     }
     if (sandboxHostStartPromise) {
@@ -559,14 +566,14 @@ export async function createGatewayHttpTransport(params: {
       if (httpBindHosts.length === 0) {
         throw new Error("Gateway HTTP server failed to start");
       }
-      if (!params.updateCanary) {
+      if (!isGatewayRestrictedUpgradeStartup(params)) {
         await portalService.startIngress();
       }
       // Published updaters retain the live sandbox port but already pass --update-canary.
-      if (!params.updateCanary && params.cfg.mcp?.apps?.enabled === true) {
+      if (!isGatewayRestrictedUpgradeStartup(params) && params.cfg.mcp?.apps?.enabled === true) {
         await startSandboxHost();
       }
-      if (!params.updateCanary) {
+      if (!isGatewayRestrictedUpgradeStartup(params)) {
         startPluginLegacyListeners({
           gatewayServer: httpServer,
           httpServers,

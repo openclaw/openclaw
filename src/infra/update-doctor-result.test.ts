@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
-import type { UpdateDoctorConfigChange } from "./update-doctor-config.js";
+import type { UpdateDoctorConfigChange } from "./update-doctor-config-format.js";
 import {
   captureUpdateDoctorConfigWrites,
   consumeUpdatePostInstallDoctorResult,

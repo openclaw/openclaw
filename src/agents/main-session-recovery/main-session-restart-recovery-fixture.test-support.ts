@@ -1,18 +1,25 @@
 import path from "node:path";
 import { afterAll } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptMessage,
+  listSessionEntriesCore,
+  replaceSessionEntry,
   applySessionEntryLifecycleMutation,
 } from "../../config/sessions/session-accessor.js";
 import {
   cleanupSessionStateForTest,
   drainSessionStateForTest,
 } from "../../test-utils/session-state-cleanup.js";
+import {
+  createSessionEntry,
+  type SessionEntryFixture,
+} from "../subagent-test-fixtures.test-helpers.js";
 
-/** Default-main fixture lifecycle for main-session-restart-recovery.test.ts only. */
+/** Default-main transcript fixture lifecycle for restart recovery tests. */
 export function createRestartRecoveryTranscriptFixture(
-  readStore: (storePath: string) => Record<string, { sessionId: string }>,
+  readFixtureStore: (storePath: string) => Record<string, { sessionId: string }>,
 ) {
   let preparedRoot: string | undefined;
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -30,7 +37,7 @@ export function createRestartRecoveryTranscriptFixture(
     messages: readonly unknown[],
   ): Promise<void> {
     const storePath = path.join(sessionsDir, "sessions.json");
-    const sessionKey = Object.entries(readStore(storePath)).find(
+    const sessionKey = Object.entries(readFixtureStore(storePath)).find(
       ([, entry]) => entry.sessionId === sessionId,
     )?.[0];
     if (!sessionKey) {
@@ -66,4 +73,40 @@ export function createRestartRecoveryTranscriptFixture(
       await drainSessionStateForTest({ stateDir });
     },
   };
+}
+
+export async function writeStorePath(
+  storePath: string,
+  store: Record<string, SessionEntryFixture>,
+): Promise<void> {
+  await Promise.all(
+    Object.entries(store).map(([sessionKey, entry]) =>
+      replaceSessionEntry({ storePath, sessionKey }, createSessionEntry(entry)),
+    ),
+  );
+}
+
+export async function writeStore(
+  sessionsDir: string,
+  store: Record<string, SessionEntryFixture>,
+): Promise<void> {
+  await writeStorePath(path.join(sessionsDir, "sessions.json"), store);
+}
+
+export function runningSessionEntry(
+  sessionId: string,
+  overrides: SessionEntryFixture = {},
+): SessionEntry {
+  return createSessionEntry({
+    sessionId,
+    updatedAt: Date.now() - 10_000,
+    status: "running",
+    ...overrides,
+  });
+}
+
+export function readStore(storePath: string): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    listSessionEntriesCore({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
 }

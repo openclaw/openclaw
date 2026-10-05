@@ -31,8 +31,57 @@ function fixture() {
     ...options,
     existingIdentity: acquired.originalDatabaseIdentity,
   });
-  return { root, databasePath, original: acquired.lease, store };
+  return {
+    root,
+    databasePath,
+    original: acquired.lease,
+    nativeIdentity: acquired.originalDatabaseIdentity,
+    store,
+  };
 }
+
+it("re-admits only exact dead original recipe lineage without weakening ordinary same-owner refusal", () => {
+  const f = fixture();
+  const recovery = createManagedHandoffLeaseStore({
+    databasePath: f.databasePath,
+    existingIdentity: f.nativeIdentity,
+    originalUpdateKey: f.root,
+    originalRecoveryOwner: f.original.owner,
+    serviceManagerEnv: process.env,
+  });
+  expect(recovery.acquire(f.root, f.original.owner, { kind: "update" }).kind).toBe("busy");
+  const deadPayload = JSON.parse(f.original.payload);
+  deadPayload.helper.pid = 2147483647;
+  deadPayload.executor = structuredClone(deadPayload.helper);
+  const database = createManagedHandoffLeaseDatabase(f.databasePath, f.nativeIdentity);
+  database(true, (db) =>
+    database.transact(
+      db,
+      () => {
+        return executeSqliteQuerySync(
+          db,
+          leaseQueries(db)
+            .updateTable("managed_update_handoffs")
+            .set({ payload_json: JSON.stringify(deadPayload) })
+            .where("install_root", "=", f.root),
+        );
+      },
+      {},
+    ),
+  );
+  expect(f.store.acquire(f.root, f.original.owner, { kind: "update" }).kind).toBe("busy");
+  expect(recovery.acquire(f.root, "foreign", { kind: "update" }).kind).toBe("busy");
+  const resumed = recovery.acquire(f.root, f.original.owner, { kind: "update" });
+  expect(resumed.kind).toBe("acquired");
+  if (resumed.kind !== "acquired") {
+    throw new Error("Original recipe recovery was not admitted");
+  }
+  expect(resumed.lease.owner).toBe(f.original.owner);
+  expect(resumed.lease.executor.pid).toBe(process.pid);
+  expect(resumed.lease.payload).not.toBe(JSON.stringify(deadPayload));
+  expect(recovery.current(resumed.lease)).toBe(true);
+  expect(recovery.release(resumed.lease)).toBe(true);
+});
 
 it("accepts cancellation only from the unchanged original acquisition object", () => {
   const { root, original, store } = fixture();

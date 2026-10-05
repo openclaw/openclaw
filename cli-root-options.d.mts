@@ -25,3 +25,12 @@ export function getCommandOptionsWithRootOptions(
   argv: readonly string[],
   options: Omit<CommandPositionalsParseOptions, "maxPositionals">,
 ): { rootOptions: string[]; commandOptions: string[] } | null;
+
+export function rewriteUpdateFlagArgv(argv: string[]): string[];
+
+export const UPDATE_OPTION_SPECS: readonly [
+  flags: string,
+  description: string,
+  defaultValue?: boolean,
+][];
+export function getUpdateCommandPath(argv: readonly string[]): string[] | null;

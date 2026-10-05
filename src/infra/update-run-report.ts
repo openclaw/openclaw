@@ -10,7 +10,7 @@ import {
 import { formatDurationPrecise } from "./format-time/format-duration.ts";
 import type { RestartSentinelPayload } from "./restart-sentinel-store.js";
 import { UPDATE_DESTINATION_RECOVERY } from "./update-destination-failure.js";
-import { formatUpdateDoctorConfigWriteRefusal } from "./update-doctor-config.js";
+import { formatUpdateDoctorConfigWriteRefusal } from "./update-doctor-config-format.js";
 import {
   formatUpdateFailureFact,
   selectUpdateFailureReportSteps,

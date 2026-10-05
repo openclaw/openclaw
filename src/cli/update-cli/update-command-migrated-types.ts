@@ -62,6 +62,7 @@ export type MigratedUpdateFinalizationInput = Partial<UpdateTimeoutHandoff> & {
 };
 
 export type MigratedUpdateFinalizationResult = {
+  recipeUpdate?: typeof import("./update-recipe-context.js").UPDATE_RECIPE_UPDATE_CAPABILITY;
   result: UpdateRunResult;
   exitCode: number;
   /** Missing on older workers; only explicit false permits pre-start database restoration. */

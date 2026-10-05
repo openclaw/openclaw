@@ -19,6 +19,7 @@ import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { CLI_NAME } from "../cli-name.js";
+import { admitReleaseQualificationChildInspector } from "./recipe-qualification.js";
 import { resolveNodeRunner } from "./shared.js";
 import {
   requiresRetainedUpdateCommandOwner,
@@ -40,6 +41,11 @@ import {
 } from "./update-command-service-env.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
 import { recordUpdatePackageCompletion } from "./update-command-terminal.js";
+import {
+  UPDATE_RECIPE_UPDATE_CAPABILITY,
+  assertRecipeUpdateBinding,
+  verifyRecipeUpdateInstallation,
+} from "./update-recipe-context.js";
 
 /** Inspect private state copies without reopening migrated state through the previous runtime. */
 export async function inspectActivatedUpdateState(
@@ -152,7 +158,7 @@ export async function continueMigratedUpdateInFreshProcess(
     if (!root) {
       throw new Error("The active installation root is unknown; update finalization is unsafe.");
     }
-    const workerCommand = [
+    const workerCommand: [string, string] = [
       params.packageUpdateNodeRunner ?? resolveNodeRunner(),
       path.join(root, "dist", runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath),
     ];
@@ -168,6 +174,11 @@ export async function continueMigratedUpdateInFreshProcess(
       TEMP: scratchDir,
     };
     if (run.executorFence || run.completionOwner) {
+      if (params.opts.recipe) {
+        assertRecipeUpdateBinding(params.opts.recipe, root, run.runId, run.executorFence);
+        await verifyRecipeUpdateInstallation(params.opts.recipe, root, "target");
+        assertCurrent();
+      }
       assertCurrent();
       const requiresRetainedOwner = run.executorFence
         ? requiresRetainedUpdateCommandOwner(run.executorFence)
@@ -200,6 +211,7 @@ export async function continueMigratedUpdateInFreshProcess(
         check.cleanup !== "normal" ||
         !isRecord(contract) ||
         (run.executorFence && contract.executorDelegation !== "pid-start-v1") ||
+        (params.opts.recipe && contract.recipeUpdate !== UPDATE_RECIPE_UPDATE_CAPABILITY) ||
         (requiresRetainedOwner && contract.retainedOwnerBinding !== true)
       ) {
         throw new UpdateCommandRecoveryPendingError(
@@ -275,11 +287,22 @@ export async function continueMigratedUpdateInFreshProcess(
       ...(windowsRecovery ? { windowsTaskAutoStartSuspended: true } : {}),
       resultPath,
     };
+    let admittedWorkerCommand: string[] = workerCommand;
+    let inspectChild = false;
     const runChild = (
       grant?: UpdateCommandChildGrant,
       bindChild?: (pid: number, argv?: readonly string[]) => void,
     ) =>
-      runUtf8CommandWithTimeout(workerCommand, {
+      runUtf8CommandWithTimeout(admittedWorkerCommand, {
+        ...(inspectChild
+          ? {
+              onOutputChunk: (chunk: Buffer, stream: string) => {
+                if (stream === "stderr") {
+                  process.stderr.write(chunk);
+                }
+              },
+            }
+          : {}),
         cwd: root,
         baseEnv: {},
         env: workerEnv,
@@ -294,10 +317,26 @@ export async function continueMigratedUpdateInFreshProcess(
         maxOutputBytes: 1024 * 1024,
       });
     await releaseLegacySourceLock(root, run.sourceArtifactLock);
+    assertCurrent();
+    if (params.opts.recipe) {
+      if (!executorFence) {
+        throw new UpdateCommandRecoveryPendingError(
+          "Recipe finalization requires its original live executor.",
+        );
+      }
+      const inspector = await admitReleaseQualificationChildInspector(
+        params.opts.recipe,
+        executorFence,
+      );
+      inspectChild = inspector !== undefined;
+      admittedWorkerCommand = inspector
+        ? [workerCommand[0], inspector, workerCommand[1]]
+        : workerCommand;
+    }
     const child = executorFence
       ? await withUpdateCommandExecutorChild(executorFence, root, runChild)
       : await runChild();
-    if (child.stderr) {
+    if (child.stderr && !inspectChild) {
       process.stderr.write(child.stderr);
     }
     const response = JSON.parse(
@@ -308,6 +347,7 @@ export async function continueMigratedUpdateInFreshProcess(
       child.code !== 0 ||
       child.cleanup !== "normal" ||
       (executorFence && response.executorDelegation !== "pid-start-v1") ||
+      (params.opts.recipe && response.recipeUpdate !== UPDATE_RECIPE_UPDATE_CAPABILITY) ||
       (response.terminalRunId !== run.runId &&
         !(
           run.completionOwner === "gateway-restart" &&
@@ -356,11 +396,12 @@ export async function continueMigratedUpdateInFreshProcess(
         { cause },
       );
     }
-    const cleanupFailure = await recordUpdatePackageCompletion(
-      params,
-      response.result,
-      assertCurrent,
-    );
+    // Recipe target finalization retires its exact native journal before the
+    // terminal row. Its old parent closure must not replay retirement afterward.
+    const cleanupFailure =
+      params.opts.recipe && response.result.status === "ok" && response.terminalRunId === run.runId
+        ? undefined
+        : await recordUpdatePackageCompletion(params, response.result, assertCurrent);
     if (cleanupFailure) {
       throw cleanupFailure;
     }

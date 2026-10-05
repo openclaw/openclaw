@@ -6,7 +6,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { disableExitUnsafeCompilers } from "./bootstrap/node-exit-safe-compilers.js";
 import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
-import { tryRunUpdateAdmissionBeforeStartup } from "./cli/run-main-update-admission.js";
+import { tryRunPassiveUpdateBeforeStartup } from "./cli/run-main-passive-update.js";
 import {
   configureGatewayStartupTraceConsoleFormatting,
   createGatewayDispatchStartupTrace,
@@ -21,7 +21,7 @@ if (isMain) {
   disableExitUnsafeCompilers();
 }
 const handledAdmission =
-  isMain && (await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(process.argv)));
+  isMain && (await tryRunPassiveUpdateBeforeStartup(resolveCliArgvInvocation(process.argv)));
 const packageRootUrl = new URL("../", import.meta.url);
 if (
   !handledAdmission &&

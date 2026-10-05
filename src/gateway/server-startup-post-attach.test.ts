@@ -48,6 +48,7 @@ import { registerGatewayStartupAdmissionTests } from "./server-startup-admission
 import { restartSentinelMocks } from "./server-startup-background.test-support.js";
 import "./server-startup-outcomes.test-support.js";
 import { registerGatewayStartupReadinessTests } from "./server-startup-readiness.test-support.js";
+import { createStartupTraceRecorder } from "./server-startup-trace.test-support.js";
 import { transcriptSidecarMocks } from "./server-startup-transcripts.test-support.js";
 
 type PluginHookGatewayStartEvent = Parameters<PluginHookHandlerMap["gateway_start"]>[0];
@@ -420,32 +421,6 @@ function createPluginServicesOwner() {
       current = services;
     },
   });
-}
-
-function createStartupTraceRecorder() {
-  const details: Array<{
-    name: string;
-    metrics: ReadonlyArray<readonly [string, number | string]>;
-  }> = [];
-  const marks: string[] = [];
-  const measures: string[] = [];
-  return {
-    details,
-    marks,
-    measures,
-    startupTrace: {
-      detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => {
-        details.push({ name, metrics });
-      },
-      mark: (name: string) => {
-        marks.push(name);
-      },
-      measure: async <T>(name: string, run: () => T | Promise<T>) => {
-        measures.push(name);
-        return await run();
-      },
-    },
-  };
 }
 
 function firstGatewayStartCall(
@@ -1266,6 +1241,12 @@ describe("startGatewayPostAttachRuntime", () => {
   });
 
   it("adopts a winning plugin generation without publishing stale deferred startup state", async () => {
+    // This fixture owns diagnostic-chat only; ambient host credentials are unrelated.
+    for (const key of Object.keys(process.env)) {
+      if (key.startsWith("DISCORD_")) {
+        vi.stubEnv(key, undefined);
+      }
+    }
     const { logGatewayStartup } =
       await vi.importActual<typeof import("./server-startup-log.js")>("./server-startup-log.js");
     const log = { info: vi.fn(), warn: vi.fn() };

@@ -8,6 +8,7 @@ import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { GatewayStartupCleanupError, rethrowGatewayStartupError } from "./server-shutdown.js";
+import { isGatewayRestrictedUpgradeStartup } from "./server-upgrade-startup-mode.js";
 
 export { truncateCloseReason } from "./server/close-reason.js";
 export type { GatewayServer, GatewayServerOptions } from "./server-public.js";
@@ -99,7 +100,7 @@ async function startGatewayServerWithRuntime(
             opts.gatewayStateOwner?.assertDatabaseAccess(resolveOpenClawStateSqlitePath());
             return mod.startGatewayServerCore(port, { ...opts, startupStartedAt });
           },
-          { deferInspections: !opts.updateCanary },
+          { deferInspections: !isGatewayRestrictedUpgradeStartup(opts) },
         ),
       );
       return {

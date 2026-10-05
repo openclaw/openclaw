@@ -516,6 +516,13 @@ export function registerCanaryReadinessBudgetTests(
         message: expect.stringContaining("ECONNREFUSED"),
       },
     ]);
+    const executable = await validateUpdateCandidateCanary({
+      ...params,
+      observeStateVersions: true,
+    });
+    expect(executable.status).toBe("error");
+    expect(executable.stateObservation).toBeUndefined();
+    expect(executable.logTail.join("\n")).toContain("requires actual candidate readiness");
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {

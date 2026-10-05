@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { retainCliProcessJobUntilExit, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
+import { UPDATE_RECIPE_RESUME_CAPABILITY } from "../cli/update-cli/recipe-resume-contract.js";
 import type { UpdateCommandOptions } from "../cli/update-cli/shared.js";
 import {
   captureUpdateCommandExecutorAuthority,
@@ -22,6 +23,7 @@ import {
 import { createWindowsTaskAutoStartGuard } from "../cli/update-cli/update-command-service-maintenance.js";
 import { withUpdateCommandTerminalResult } from "../cli/update-cli/update-command-terminal.js";
 import { createWindowsTaskAutoStartRecovery } from "../cli/update-cli/update-command-windows-task.js";
+import { UPDATE_RECIPE_UPDATE_CAPABILITY } from "../cli/update-cli/update-recipe-context.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
@@ -30,6 +32,7 @@ import { defaultRuntime } from "../runtime.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { resolveEnvironmentValue } from "./process-env.js";
@@ -79,6 +82,8 @@ async function finalizeMigratedUpdate(): Promise<void> {
         retainedOwnerBinding: true,
         doctorConfigWrites: "pid-start-v1",
         gatewayRestartCompletion: true,
+        recipeUpdate: UPDATE_RECIPE_UPDATE_CAPABILITY,
+        recipeResume: UPDATE_RECIPE_RESUME_CAPABILITY,
         state: OPENCLAW_STATE_SCHEMA_VERSION,
         agent: OPENCLAW_AGENT_SCHEMA_VERSION,
       }),
@@ -94,6 +99,11 @@ async function finalizeMigratedUpdate(): Promise<void> {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   const text = Buffer.concat(chunks).toString("utf8");
+  if (process.argv[2] === "--recipe-resume") {
+    routeLogsToStderr();
+    const { runRecipeResumeTarget } = await import("../cli/update-cli/recipe-resume-target.js");
+    return await runRecipeResumeTarget(JSON.parse(text) as unknown, import.meta.url);
+  }
   if (process.argv[2] === "--post-core") {
     // SAFETY: The parent binds this receiver before releasing its private input.
     return await runDelegatedPostCore(JSON.parse(text) as UpdatePostCoreInput);
@@ -216,6 +226,7 @@ async function finalizeMigratedUpdate(): Promise<void> {
       ? { restartRunId: terminal.runId }
       : { terminalRunId: terminal.runId }),
     executorDelegation: "pid-start-v1",
+    ...(input.params.opts.recipe ? { recipeUpdate: UPDATE_RECIPE_UPDATE_CAPABILITY } : {}),
     automaticTriage: finalized.automaticTriage,
   };
   // Private response publication follows executor settlement and terminal history.
@@ -453,12 +464,30 @@ async function finalizeInput(
   let candidateStartAttempted = false;
   let automaticTriage: MigratedUpdateFinalizationResult["automaticTriage"];
   try {
+    const recipeTransaction = input.params.opts.recipe
+      ? await (
+          await import("../cli/update-cli/recipe-resume-target.js")
+        ).recoverRecipeTargetTransaction({
+          runId: run.runId,
+          ledgerPath: resolveOpenClawStateSqlitePath(run.env),
+          entryUrl: import.meta.url,
+          fence: executorFence,
+        })
+      : undefined;
+    executorFence.assertCurrent();
+    // Recipe retirement belongs to this target-schema finalizer before terminal
+    // publication, not the migrated parent's old-schema cleanup path.
     // This worker already loaded the candidate; the local flag conveys no authority.
     result = await finishUpdate(
       {
         ...input.params,
         result: { ...input.params.result, runId: run.runId },
-        opts: { ...input.params.opts, run },
+        opts: {
+          ...input.params.opts,
+          run,
+          ...(recipeTransaction ? { recipe: recipeTransaction.recipe } : {}),
+        },
+        ...(recipeTransaction ? { packageTransaction: recipeTransaction.transaction } : {}),
         ...(stopped
           ? { preManagedServiceStop: { ...stopped, windowsTaskAutoStartRecovery: windowsRecovery } }
           : {}),

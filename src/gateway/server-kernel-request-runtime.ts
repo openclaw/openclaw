@@ -10,6 +10,7 @@ import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import { attachInitialGatewayLifetimeSidecars } from "./server-lifetime-sidecars.js";
 import { readPreparedServerMethodModelCatalogs } from "./server-methods/optional-model-catalog.js";
 import type { GatewayHostLifecycle } from "./server-public.js";
+import { isGatewayRestrictedUpgradeStartup } from "./server-upgrade-startup-mode.js";
 
 type GatewayCoreRuntime = Awaited<ReturnType<typeof startGatewayCoreRuntime>>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
@@ -58,7 +59,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       logHealth,
     });
   });
-  const projectionReady = runtime.opts.updateCanary
+  const projectionReady = isGatewayRestrictedUpgradeStartup(runtime.opts)
     ? Promise.resolve(undefined)
     : startupTrace.measure("sessions.projection", async () => {
         const { createSessionRowProjection } = await import("./session-row-projection.js");
@@ -107,7 +108,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   }
   gatewayRequestContext.requestEntryLifetime = runtime.requestEntryLifetime;
   bindApprovalPublicationContext(gatewayRequestContext);
-  if (!runtime.opts.updateCanary) {
+  if (!isGatewayRestrictedUpgradeStartup(runtime.opts)) {
     await attachInitialGatewayLifetimeSidecars({
       scheduler: runtime.scheduler,
       chatMetadataLifecycle,

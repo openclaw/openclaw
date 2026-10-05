@@ -18,7 +18,7 @@ import {
   resolveDevUpdateTargetRevision,
   type DevUpdateTarget,
 } from "../../infra/update-dev-target.js";
-import { getUpdateDoctorConfigFailureReason } from "../../infra/update-doctor-config.js";
+import { getUpdateDoctorConfigFailureReason } from "../../infra/update-doctor-config-format.js";
 import { createFreeBsdPkgOwnershipInspection } from "../../infra/update-freebsd-pkg-ownership.js";
 import type { CommandRunner as GlobalCommandRunner } from "../../infra/update-global-command-runner.js";
 import {

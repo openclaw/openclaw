@@ -1,6 +1,6 @@
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
-import type { ChildOperation, ChildPurpose } from "./update-command-executor-children.js";
+import type { ChildOperation, ChildPurpose } from "./update-command-executor-child-contract.js";
 import {
   originalCancellations,
   admittedAuthorities,

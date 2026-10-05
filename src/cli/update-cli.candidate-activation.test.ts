@@ -8,7 +8,7 @@ import { sanitizeTriageUpdateFailure } from "../commands/triage-update.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { UpdateDoctorConfigChange } from "../infra/update-doctor-config.js";
+import type { UpdateDoctorConfigChange } from "../infra/update-doctor-config-format.js";
 import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   writeUpdatePostInstallDoctorResult,

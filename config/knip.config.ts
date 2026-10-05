@@ -374,6 +374,11 @@ function compileShellConsumers(source: string, filePath: string): string {
 
 const rootEntries = [
   ...repositoryScriptEntries,
+  // build-upgrade-runner.mts seals these entries from their runtime URLs.
+  "src/cli/update-cli/standalone-updater-entry.ts!",
+  "src/cli/update-cli/release-qualification-entry.ts!",
+  // Release owners invoke this exact-file assembly CLI with --input.
+  "scripts/compose-upgrade-runner-bundle.mts!",
   ...listScriptShimEntries(),
   // Runtime launchers resolve these by URL rather than a static import edge.
   ...[

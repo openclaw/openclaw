@@ -36,6 +36,11 @@ type GatewayRootWorkAdmission = {
 };
 
 type GatewayWorkAdmissionState = {
+  upgradeMaintenance?: {
+    owner: GatewayUpgradeMaintenanceOwner;
+    binding: GatewayUpgradeMaintenanceBinding;
+    generation: number;
+  };
   restartDrainReason: GatewayDrainReason | undefined;
   restartDrainController: AbortController;
   shutdownCleanupController: AbortController;
@@ -76,6 +81,9 @@ const GATEWAY_WORK_ADMISSION_STATE = resolveGlobalSingleton(
 );
 
 function gatewayWorkAdmissionMessage(): string {
+  if (GATEWAY_WORK_ADMISSION_STATE.upgradeMaintenance) {
+    return "Gateway upgrade maintenance has not committed. Business work remains unavailable.";
+  }
   if (GATEWAY_WORK_ADMISSION_STATE.restartDrainReason?.startsWith("stop (")) {
     return "Gateway is shutting down. Please try again once it is back online.";
   }
@@ -232,13 +240,96 @@ function resolveSuspendOpenWaiters(): void {
 
 /** True while restart signal/drain or host suspension rejects new process work. */
 export function isGatewayWorkAdmissionClosed(): boolean {
-  return isGatewayRestartDraining() || GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting";
+  return (
+    GATEWAY_WORK_ADMISSION_STATE.upgradeMaintenance !== undefined ||
+    isGatewayRestartDraining() ||
+    GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting"
+  );
+}
+
+/** A resolved identity, not an authority token or an environment-variable gate. */
+export type GatewayUpgradeMaintenanceBinding = Readonly<{
+  protocol: 1;
+  runId: string;
+  planDigest: string;
+  targetArtifactId: string;
+  installationKey: string;
+  stateRootKey: string;
+}>;
+
+/** Closure-bound authority supplied by the existing update executor. */
+export type GatewayUpgradeMaintenanceOwner = {
+  binding: GatewayUpgradeMaintenanceBinding;
+  assertCurrent: () => void;
+  /** Must check a durable COMMIT_INTENT for this exact binding under live executor authority. */
+  verifyCommitIntent: (binding: GatewayUpgradeMaintenanceBinding) => Promise<void>;
+};
+
+/**
+ * Startup installs this gate before admitting any business work. Suspension expiry,
+ * restart-signal rollback, and lifecycle reset cannot release it. There is no
+ * token-only unlock or automatic rollback; commit belongs to the live executor.
+ */
+export function beginGatewayUpgradeMaintenance(owner: GatewayUpgradeMaintenanceOwner): {
+  commit: () => Promise<void>;
+  failClosed: () => void;
+} {
+  owner.assertCurrent();
+  const existing = GATEWAY_WORK_ADMISSION_STATE.upgradeMaintenance;
+  if (existing && existing.owner !== owner) {
+    throw new GatewayDrainingError("Gateway upgrade maintenance belongs to another executor.");
+  }
+  if (GATEWAY_WORK_ADMISSION_STATE.activeRootWork.size !== 0) {
+    throw new GatewayDrainingError("Gateway upgrade maintenance requires settled business work.");
+  }
+  const maintenance = existing ?? {
+    owner,
+    binding: Object.freeze({ ...owner.binding }),
+    generation: 0,
+  };
+  GATEWAY_WORK_ADMISSION_STATE.upgradeMaintenance = maintenance;
+  const generation = maintenance.generation;
+  const assertHeld = () => {
+    owner.assertCurrent();
+    if (
+      GATEWAY_WORK_ADMISSION_STATE.upgradeMaintenance !== maintenance ||
+      maintenance.generation !== generation ||
+      isGatewayRestartDraining()
+    ) {
+      throw new GatewayDrainingError("Gateway upgrade maintenance authority changed.");
+    }
+  };
+  return {
+    // A failed activation may already have admitted business work. Restore only
+    // this handle's exclusion, without canceling accepted work or requiring an
+    // executor that may have been lost. This is not new mutation authority.
+    failClosed: () => {
+      const current = GATEWAY_WORK_ADMISSION_STATE.upgradeMaintenance;
+      if (current && current !== maintenance) {
+        return; // Another maintenance owner already keeps admission closed.
+      }
+      maintenance.generation += 1;
+      GATEWAY_WORK_ADMISSION_STATE.upgradeMaintenance = maintenance;
+    },
+    commit: async () => {
+      assertHeld();
+      await owner.verifyCommitIntent(maintenance.binding);
+      assertHeld();
+      GATEWAY_WORK_ADMISSION_STATE.upgradeMaintenance = undefined;
+      // Independent suspension still controls admission after upgrade commit.
+      resolveSuspendOpenWaiters();
+    },
+  };
+}
+
+export function getGatewayUpgradeMaintenanceBinding(): GatewayUpgradeMaintenanceBinding | null {
+  return GATEWAY_WORK_ADMISSION_STATE.upgradeMaintenance?.binding ?? null;
 }
 
 /** Existing admitted roots may finish spawning subordinate command/session work.
  * New async chains still see the global fence, preserving refuse-only suspension. */
 export function isGatewaySubordinateWorkAdmissionClosed(): boolean {
-  if (isGatewayRestartDraining()) {
+  if (GATEWAY_WORK_ADMISSION_STATE.upgradeMaintenance || isGatewayRestartDraining()) {
     return true;
   }
   const current = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
@@ -362,6 +453,9 @@ export function beginGatewayRestartSignalAdmission(): GatewayRestartSignalAdmiss
 export function tryBeginGatewayRootWorkAdmission(
   origin = "gateway",
 ): GatewayRootWorkAdmissionLease | null {
+  if (GATEWAY_WORK_ADMISSION_STATE.upgradeMaintenance) {
+    return null;
+  }
   const current = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
   if (current && !current.released) {
     return {
@@ -380,7 +474,11 @@ export function tryBeginGatewayRootWorkAdmission(
  * The caller still owns frame/auth validation; this lease grants no method authority.
  */
 export function tryBeginGatewayRestartStartupRootWorkAdmission(): GatewayRootWorkAdmissionLease | null {
-  if (!isGatewayRestartDraining() || GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting") {
+  if (
+    GATEWAY_WORK_ADMISSION_STATE.upgradeMaintenance ||
+    !isGatewayRestartDraining() ||
+    GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting"
+  ) {
     return null;
   }
   return createGatewayRootWorkAdmission("restart-startup");
@@ -392,6 +490,7 @@ export function tryBeginGatewayRestartStartupRootWorkAdmission(): GatewayRootWor
  */
 export function tryBeginGatewayPreparedRestartRootWorkAdmission(): GatewayRootWorkAdmissionLease | null {
   if (
+    GATEWAY_WORK_ADMISSION_STATE.upgradeMaintenance ||
     isGatewayRestartDraining() ||
     GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "prepared" ||
     GATEWAY_WORK_ADMISSION_STATE.activeRootWork.size > 0
@@ -682,6 +781,10 @@ export function tryBeginGatewaySuspendAdmission(
 
 /** Clears restart/suspend admission during SIGUSR2 and isolated tests. */
 export function resetGatewayWorkAdmission(): void {
+  // A reset retires an in-flight commit handle, never the durable maintenance gate.
+  if (GATEWAY_WORK_ADMISSION_STATE.upgradeMaintenance) {
+    GATEWAY_WORK_ADMISSION_STATE.upgradeMaintenance.generation += 1;
+  }
   // SIGUSR2 can abandon old async chains before their finally blocks run.
   // Retire their ALS records so surviving chains must re-enter admission.
   GATEWAY_WORK_ADMISSION_STATE.restartDrainController.abort(

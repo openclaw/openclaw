@@ -46,6 +46,7 @@ update failure report.
 ```bash
 openclaw update
 openclaw update status
+openclaw update plan --json
 openclaw update repair
 openclaw update cleanup --dry-run
 openclaw update wizard
@@ -63,6 +64,96 @@ openclaw --update
 
 `openclaw --update` rewrites to `openclaw update` (useful for shells and
 launcher scripts).
+
+## Recipe planning (passive preview)
+
+`openclaw update plan` inspects local installation metadata and reports the
+evidence still needed for a release-qualified upgrade recipe. It does not start
+the Gateway, read configuration hooks, load plugins, run package-manager or Git
+commands, contact the network, or reconcile recovery records. The installed
+launcher bypasses runtime repair, pending package lifecycle scripts, and compile
+cache writes for this command, including `--update plan` and planning help.
+The launcher still needs an installed application runtime capable of loading the
+planner. Recovery without the installed application runtime uses the separate
+native bootstrap described below.
+
+```bash
+openclaw update plan --json
+openclaw update plan --installation /path/to/openclaw --json
+openclaw update plan --catalog ./catalog.json --target exact-release-id --json
+```
+
+The default installation is the invoking CLI package, not the current working
+directory. A local catalog is an **unauthenticated report input**, never permission
+to execute adapters. Targets are exact catalog release IDs, not moving selectors
+such as `latest` or `stable`. Preview selection supports only unique direct
+routes qualified for the complete installation class; bridge routes are not
+implemented. Recipe steps must have consistent dependencies and resource
+declarations and follow fixed engine phases. Only parameter-free adapter
+contracts are supported by this initial preview.
+
+Reports have `kind: "report-only"`, `mutationEnabled: false`, and
+`outcome: "blocked"`. Successful inspection still exits nonzero because recipe
+this installed-CLI preview never grants execution authority. No production catalog
+or historical upgrade coverage is shipped here. Unknown source provenance,
+installation/service ownership, recovery ownership, and actual live-state
+contracts are reported explicitly. A version string or declared package schema
+does not establish those facts. Git modifications, worktrees, remotes, ignored
+files, and local plugin links are not verified by this initial inventory.
+
+Complete reports include a deterministic digest of the observations and selected
+metadata. It identifies the report; it is neither an approval token nor an
+executable plan. Catalog read failures instead return a blocked error envelope.
+No staging, rehearsal, snapshot, migration, service change, or rollback has been
+performed. Verified planning and recipe `apply`/`resume` belong to the independent
+updater, not this passive command.
+Ordinary `openclaw update` behavior is unchanged.
+
+### Independent verified execution and recovery
+
+The native `openclaw-updater` launches a sealed, authenticated runner and private
+Node runtime outside the installation being replaced. It does not import the
+old CLI or repair its runtime. The installation/release owner must first provision
+the bootstrap, trusted TUF root, exact artifact catalog, runner bundle, and signed
+historical qualification evidence. There is no unsigned or unqualified mutation
+fallback.
+
+Initial mutation support is limited to explicitly qualified Linux/npm installations
+with one verified systemd-managed Gateway. Architecture, source and target artifacts,
+runtime, service ownership, and state-contract class must all match the qualification.
+Other installation classes remain report-only or refused.
+
+Use the bootstrap's `-- plan --verify --executable` command with the exact source,
+target, qualification, state/configuration, service port, retained artifacts and
+runner selectors. `--output` writes a new private plan and displays its digest and
+original run UUID. This step authenticates artifacts, checks ownership and capacity,
+stages a private candidate, and rehearses the state transition; it is **not passive**.
+It does not publish the live package or approve execution.
+
+After reviewing that plan, pass its exact digest to the same provisioned bootstrap:
+
+```bash
+# Include the same provisioned trust/artifact selectors before --.
+/path/to/openclaw-updater <bootstrap-options> -- \
+  apply --plan /owner-private/artifacts/plan.json --approve <displayed-sha256>
+```
+
+Apply uses the existing update engine, records original-run reconstruction evidence
+before mutation, keeps maintenance admission closed through target verification,
+and requires actual exact-version/build service readiness before completing.
+Changed approval facts cause refusal rather than silent replanning.
+
+After an interruption, use `--retained-run <original-uuid>` and
+`--retained-ledger <original-operational-sqlite>` on the bootstrap, followed by
+`-- resume`. Recovery reuses the same retained run, artifacts, and native custody;
+it does not create a new update, resolve a new target, replay a verified activation,
+or automatically restore a snapshot. `-- status` reports original-run and
+maintenance state without executing update effects. Unresolved foreign owners or
+changed retained evidence require owner inspection, not deletion of their records.
+
+Production distribution, signing and historical route activation remain release-owned.
+The implementation and synthetic regression fixtures do not advertise a support
+window or substitute for authenticated historical transition qualification.
 
 Invalid configuration reports `invalid-config` before database schema inspection.
 An unreadable configuration file or failed configuration loading step instead

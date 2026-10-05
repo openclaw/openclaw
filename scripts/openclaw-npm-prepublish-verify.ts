@@ -9,6 +9,7 @@ import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { type NpmVerifyCommandInvocation, runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
+import { validateTargetUpgradeRelease } from "./lib/upgrade-release-validation.mts";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mts";
 import {
   collectInstalledPackageErrors,
@@ -113,12 +114,18 @@ function readPackedPackageJson(tarballPath: string): PackedPackageJson {
   ) as PackedPackageJson;
 }
 
-function main(argv = process.argv.slice(2)): void {
+async function main(argv = process.argv.slice(2)): Promise<void> {
   const args = parseOpenClawNpmPrepublishVerifyArgs(argv);
   if (args.help) {
     console.log(openClawNpmPrepublishVerifyUsage());
     return;
   }
+
+  await validateTargetUpgradeRelease({
+    packageJson: readPackedPackageJson(args.tarballPath),
+    targetRoot: process.cwd(),
+    targetArtifactPath: args.tarballPath,
+  });
 
   const workingDir = mkdtempSync(join(tmpdir(), "openclaw-prepublish-"));
   const prefixDir = join(workingDir, "prefix");
@@ -214,7 +221,7 @@ function main(argv = process.argv.slice(2)): void {
 const entrypoint = process.argv[1] ? pathToFileURL(process.argv[1]).href : null;
 if (entrypoint !== null && import.meta.url === entrypoint) {
   try {
-    main();
+    await main();
   } catch (error) {
     console.error(`openclaw-npm-prepublish-verify: ${formatErrorMessage(error)}`);
     process.exitCode = 1;

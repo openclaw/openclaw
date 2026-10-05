@@ -28,6 +28,10 @@ import {
   withUpdateCommandExecutorChild,
   type UpdateCommandExecutor,
 } from "./update-command-executor.js";
+import {
+  UpdateCommandRecoveryPendingError,
+  UpdateCommandRecipeReconciliationPendingError,
+} from "./update-command-recovery-error.js";
 import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
 import { createUpdateOperationDeadline } from "./update-operation-deadline.js";
 
@@ -555,4 +559,17 @@ it("preserves activation timeout provenance without a cause cycle after uncertai
     }
   };
   visit(result);
+});
+
+it("retains original native custody for semantic reconciliation without claiming process cleanup uncertainty", async () => {
+  const pending = new UpdateCommandRecipeReconciliationPendingError(
+    "Recipe postcondition remains unverified.",
+  );
+  const error = await runWithExecutorFence("direct", async (fence) => {
+    fence.assertCurrent();
+    throw new AggregateError([pending], "Recipe reconciliation pending", { cause: pending });
+  }).catch((cause: unknown) => cause);
+  expect(error).toBeInstanceOf(UpdateCommandRecoveryPendingError);
+  expect(hasCommandProcessCleanupError(error)).toBe(false);
+  expect(rows.has(root)).toBe(true);
 });

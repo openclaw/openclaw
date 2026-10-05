@@ -34,7 +34,6 @@ const result = () => ({
   durationMs: 0,
 });
 class GatewayRestartHealthError extends Error {}
-class UpdateCommandRecoveryPendingError extends Error {}
 class UpdateActivationTimeoutError extends Error {}
 
 async function fixture({
@@ -155,7 +154,6 @@ async function fixture({
     formatCliCommand: (value) => value,
     GatewayRestartHealthError,
     z,
-    UpdateCommandRecoveryPendingError,
     UpdateActivationTimeoutError,
     GatewayServiceUpdateOwnershipError: class extends Error {},
     DEFINITION_DENIAL: /fixture-definition-denial/,
@@ -262,6 +260,8 @@ async function fixture({
   const realNames = [
     "update-command-service",
     "update-command-post-update",
+    "update-command-post-update-recipe",
+    "update-command-recovery-error",
     "update-command-mutable-signals",
     "update-command-execution-guards",
     "update-command-result",

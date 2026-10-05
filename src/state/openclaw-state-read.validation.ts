@@ -81,7 +81,8 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
           typeof input.command.input.redactedOnly === "boolean")) ||
       input.command.type === "acpSessions.list" ||
       input.command.type === "backup.runs" ||
-      ((input.command.type === "restartSentinel.current" ||
+      ((input.command.type === "upgradeMaintenance.read" ||
+        input.command.type === "restartSentinel.current" ||
         input.command.type === "restartSentinel.snapshot" ||
         input.command.type === "restartSentinel.installReceipt") &&
         "input" in input.command &&

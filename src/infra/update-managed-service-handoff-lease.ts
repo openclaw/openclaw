@@ -33,6 +33,7 @@ import { createManagedHandoffMutationReader } from "./update-managed-service-han
 import { createManagedHandoffOriginalAcquisition } from "./update-managed-service-handoff-original-acquisition.js";
 import {
   hasOriginalUpdateExecutorCustody,
+  canReplaceManagedHandoffOwner,
   readOriginalUpdateDependents,
   type ManagedHandoffOriginalAdmission,
 } from "./update-managed-service-handoff-original-owner.js";
@@ -178,8 +179,9 @@ export function createManagedHandoffLeaseStore(
       // Probe liveness before taking the write lock; commit only if both observations still match.
       const observed = row(db, root);
       const destination = admissionLease(root, observed, handle, processState);
-      const canReplace =
-        !destination || (destination.owner !== owner && reclaimable(destination, db));
+      const canReplace = canReplaceManagedHandoffOwner(options, root, owner, destination, (lease) =>
+        reclaimable(lease, db),
+      );
       const reclaim = canReplace
         ? observeManagedHandoffReclamation(root, destination ?? undefined, db, {
             handle,

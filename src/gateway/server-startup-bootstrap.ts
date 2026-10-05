@@ -60,6 +60,7 @@ import {
 } from "./restart-trace.js";
 import type { GatewayServerOptions } from "./server-public.js";
 import { createGatewayStartupTrace } from "./server-startup-trace.js";
+import { isGatewayRestrictedUpgradeStartup } from "./server-upgrade-startup-mode.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
 
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
@@ -165,6 +166,11 @@ export async function prepareGatewayServerBootstrap(input: {
     if (databaseSchemas.incompatible.length > 0) {
       throw new OpenClawDatabaseSchemaPreflightError(databaseSchemas.incompatible);
     }
+    if (opts.upgradeMaintenance && databaseSchemas.indeterminate.length > 0) {
+      throw new Error(
+        "Upgrade maintenance requires determinate read-only database preflight; real-open fallback is forbidden.",
+      );
+    }
     for (const database of databaseSchemas.indeterminate) {
       log.warn("database schema preflight could not inspect database; continuing to real open", {
         kind: database.kind,
@@ -192,7 +198,7 @@ export async function prepareGatewayServerBootstrap(input: {
     key: "OPENCLAW_RAW_STREAM_PATH",
     description: "raw stream log path override",
   });
-  if (!minimalTestGateway && !opts.updateCanary) {
+  if (!minimalTestGateway && !isGatewayRestrictedUpgradeStartup(opts)) {
     await startupTrace.measure("runtime.agent-cli", () => prepareGatewayAgentCliShim());
   }
   const startupConfigModulePromise = startupTrace.measure(
@@ -216,16 +222,17 @@ export async function prepareGatewayServerBootstrap(input: {
   const startupTailscaleOverride = opts.tailscale ? structuredClone(opts.tailscale) : undefined;
   // Seed before secrets activation so every active/rollback snapshot carries
   // the same runtime-only browser origin baseline.
-  const controlUiSeed = minimalTestGateway
-    ? { config: configSnapshot.config, seededAllowedOrigins: false }
-    : await startupTrace.measure("control-ui.seed", () =>
-        maybeSeedControlUiAllowedOriginsAtStartup({
-          config: configSnapshot.config,
-          log,
-          runtimeBind: opts.bind,
-          runtimePort: port,
-        }),
-      );
+  const controlUiSeed =
+    minimalTestGateway || isGatewayRestrictedUpgradeStartup(opts)
+      ? { config: configSnapshot.config, seededAllowedOrigins: false }
+      : await startupTrace.measure("control-ui.seed", () =>
+          maybeSeedControlUiAllowedOriginsAtStartup({
+            config: configSnapshot.config,
+            log,
+            runtimeBind: opts.bind,
+            runtimePort: port,
+          }),
+        );
   if (controlUiSeed.seededAllowedOrigins) {
     copyConfigResolutionFacts(configSnapshot.config, controlUiSeed.config);
   }
@@ -285,7 +292,7 @@ export async function prepareGatewayServerBootstrap(input: {
   );
   const cfgAtStart = authBootstrap.cfg;
   startupTrace.setConfig(cfgAtStart);
-  if (!opts.updateCanary) {
+  if (!isGatewayRestrictedUpgradeStartup(opts)) {
     try {
       const cleanup = await startupTrace.measure("agents.github-profile-cleanup", async () => {
         const { cleanupRetiredManagedGitHubProfiles } =
@@ -464,7 +471,7 @@ export async function prepareGatewayServerBootstrap(input: {
     preserveExistingOwnership: true,
   });
   const workerEnvironmentStartup =
-    minimalTestGateway || opts.updateCanary
+    minimalTestGateway || isGatewayRestrictedUpgradeStartup(opts)
       ? undefined
       : await startupTrace.measure("worker-environments.store-import", async () => {
           const workerModule = await loadWorkerEnvironmentStartupModule();
@@ -479,7 +486,7 @@ export async function prepareGatewayServerBootstrap(input: {
     current: import("./server-methods/types.js").GatewayRequestContext | undefined;
   } = { current: undefined };
   const resolvePluginGatewayContext = () => pluginGatewayContext.current;
-  if (opts.updateCanary) {
+  if (isGatewayRestrictedUpgradeStartup(opts)) {
     log.warn("candidate gateway: session catalogs and maintenance deferred until activation");
   } else {
     await startupTrace.measure("startup.maintenance", () =>
@@ -493,7 +500,7 @@ export async function prepareGatewayServerBootstrap(input: {
   }
   publishSystemEventStoreConfig(cfgAtStart);
   const pluginBootstrap = await startupTrace.measure("plugins.bootstrap", async () => {
-    if (!opts.updateCanary) {
+    if (!isGatewayRestrictedUpgradeStartup(opts)) {
       const { initSubagentRegistry } =
         await import("../agents/subagents/registry/subagent-registry.js");
       await initSubagentRegistry();

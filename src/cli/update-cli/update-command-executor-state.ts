@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ManagedUpdateLeaseDatabaseIdentity } from "../../infra/update-managed-service-handoff-database.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
-import type { ChildOperation, ChildPurpose } from "./update-command-executor-children.js";
+import type { ChildOperation, ChildPurpose } from "./update-command-executor-child-contract.js";
 
 export type ManagedUpdateLeaseAuthority = ManagedUpdateLeaseDatabaseIdentity &
   Readonly<{ installKey: string; owner: string }>;

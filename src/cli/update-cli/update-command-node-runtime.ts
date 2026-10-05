@@ -19,6 +19,10 @@ import {
   type PackageRuntimePreflight,
 } from "./update-command-runtime-preflight.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
+import {
+  assertRecipeUpdateBinding,
+  assertRecipeUpdateEnvironment,
+} from "./update-recipe-context.js";
 
 /** Only a live updater may provision; discovery never reads dotenv-selected paths. */
 export function createPackageRuntimeRecovery(params: {
@@ -149,6 +153,30 @@ export async function preparePackageUpdateRuntime(params: {
   });
   if (params.opts.run) {
     params.opts.run.executorFence = fence;
+  }
+  if (params.opts.recipe) {
+    const recipe = params.opts.recipe;
+    assertRecipeUpdateBinding(
+      recipe,
+      params.root,
+      params.opts.run?.runId ?? recipe.maintenance.binding.runId,
+      fence,
+    );
+    assertRecipeUpdateEnvironment(recipe, params.opts.run?.env ?? process.env);
+    const frozen = await resolvePackageRuntimePreflight({
+      root: params.root,
+      timeoutMs: params.timeoutMs,
+      target: params.packageRuntimeTarget,
+      nodeRunner: recipe.maintenance.expected.runtimeExecutable,
+      shouldRestart: false,
+    });
+    fence.assertCurrent();
+    if (frozen.ok && frozen.value.nodeRunner !== recipe.maintenance.expected.runtimeExecutable) {
+      throw new Error(
+        "Recipe runtime selection differs from its exact approved authenticated runtime.",
+      );
+    }
+    return frozen;
   }
   const result = await resolvePackageRuntimePreflight({
     root: params.root,

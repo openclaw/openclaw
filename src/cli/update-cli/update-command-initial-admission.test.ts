@@ -6,11 +6,19 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
-import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
+import {
+  createUpgradeRecipeMaintenanceOwner,
+  readUpgradeRecipeMaintenanceReceipt,
+} from "../../infra/upgrade-recipes/maintenance.js";
+import * as recipeBoundaries from "./recipe-execution-boundaries.js";
+import * as recipeRetention from "./recipe-execution-retention.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import * as recipeContext from "./update-recipe-context.js";
+import { approvedContext } from "./update-recipe-context.test-support.js";
 
 const { bindExecutionGuards, executionParams, mocks, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
@@ -189,5 +197,124 @@ it.each([
         expect(mocks.serviceStopped).toBe(false);
       },
     );
+  },
+);
+
+// Artifact admission and retention have independent owner coverage. Keep the real
+// executor, phase writer, maintenance worker, and service/publication ordering here.
+it.each([
+  { timeoutMs: undefined, conflict: false, label: "default timeout" },
+  { timeoutMs: 30_000, conflict: false, label: "explicit timeout" },
+  { timeoutMs: undefined, conflict: true, label: "conflicting maintenance" },
+])(
+  "persists recipe maintenance before activation and service preparation: $label",
+  async ({ timeoutMs, conflict }) => {
+    const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
+    const recipe = approvedContext();
+    recipe.maintenance.binding = {
+      ...recipe.maintenance.binding,
+      runId,
+      installationKey: root,
+      stateRootKey: env.OPENCLAW_STATE_DIR!,
+    };
+    recipe.maintenance.expected = {
+      ...recipe.maintenance.expected,
+      installationRoot: root,
+      stateRoot: env.OPENCLAW_STATE_DIR!,
+      configPath: env.OPENCLAW_CONFIG_PATH!,
+    };
+    const params = {
+      ...executionParams("package"),
+      root,
+      timeoutMs,
+      opts: { json: true, recipe, run: { runId, env } },
+    };
+    vi.spyOn(recipeBoundaries, "verifyRecipeExecutionSelection").mockResolvedValue(undefined);
+    vi.spyOn(recipeRetention, "retainRecipeExecution").mockResolvedValue(undefined);
+    vi.spyOn(recipeContext, "verifyRecipeUpdateInstallation").mockResolvedValue({
+      root,
+      releaseId: recipe.targetReleaseId,
+      buildId: recipe.maintenance.expected.buildId,
+      manifestArtifactId: "target-installation-manifest",
+      manifestDigest: "1".repeat(64),
+      fileCount: 1,
+    });
+    vi.spyOn(recipeContext, "verifyRecipeUpdateConfig").mockResolvedValue(undefined);
+    const observed: string[] = [];
+    const assertMaintenance = async (boundary: string) => {
+      expect(await readUpgradeRecipeMaintenanceReceipt({ env })).toMatchObject({
+        binding: recipe.maintenance.binding,
+        phase: "maintenance-required",
+      });
+      observed.push(boundary);
+    };
+    vi.spyOn(recipeBoundaries, "prepareRecipePublicationBoundary").mockImplementation(async () => {
+      await assertMaintenance("publication");
+    });
+    const execution = await bindExecutionGuards(params);
+    const recordPhase = execution.executionGuards.recordPhase;
+    execution.executionGuards.recordPhase = async (phase, patch) => {
+      if (phase === "activating") {
+        await assertMaintenance("activating");
+      }
+      await recordPhase(phase, patch);
+    };
+    let servicePrepared = false;
+    mocks.maybeStopService.mockImplementation(async ({ phase }) => {
+      if (phase === "prepare") {
+        await assertMaintenance("service-prepare");
+        expect(getUpdateRun(runId, { env })?.phase).toBe("activating");
+        servicePrepared = true;
+      }
+      return { stopped: false, inspected: true, runtimeInspected: true, running: false };
+    });
+    mocks.runPackageUpdate.mockImplementation(
+      async (
+        options: Parameters<
+          typeof import("./update-command-package.js").runPackageInstallUpdate
+        >[0],
+      ) => {
+        await options.validateCandidate(root);
+        await options.beforeActivate();
+        return successfulUpdate;
+      },
+    );
+    await withUpdateCommandExecutor(runId, async (executor) => {
+      let admitted: UpdateRecoveryFence | undefined;
+      mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admitExecutor) => {
+        admitted ??= await executor.enter(root);
+        admitExecutor(admitted);
+        if (conflict && !(await readUpgradeRecipeMaintenanceReceipt({ env }))) {
+          const owner = createUpgradeRecipeMaintenanceOwner(
+            { ...recipe.maintenance.binding, planDigest: "f".repeat(64) },
+            {
+              ...execution.executionGuards.captureWriteOptions(),
+              assertCurrent: execution.executionGuards.assertCurrent,
+            },
+          );
+          await owner.requireMaintenance(null);
+        }
+      });
+      const result = await executeMutableUpdate(execution);
+      if (conflict) {
+        expect(result?.result.status).toBe("error");
+        expect(String(result?.failure?.cause)).toContain(
+          "Recipe preparation cannot replace another pending maintenance owner",
+        );
+        expect(result?.mutationStarted).toBe(false);
+        expect(servicePrepared).toBe(false);
+        expect(observed).toEqual([]);
+        expect(getUpdateRun(runId, { env })?.phase).not.toBe("activating");
+        expect(await readUpgradeRecipeMaintenanceReceipt({ env })).toMatchObject({
+          binding: { ...recipe.maintenance.binding, planDigest: "f".repeat(64) },
+          phase: "maintenance-required",
+        });
+      } else {
+        expect(result?.result.status, JSON.stringify(mocks.runtimeError.mock.calls)).toBe("ok");
+        expect(result?.mutationStarted).toBe(true);
+        expect(servicePrepared).toBe(true);
+        expect(observed).toEqual(["activating", "service-prepare", "publication"]);
+      }
+    });
   },
 );

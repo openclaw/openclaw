@@ -182,6 +182,43 @@ export async function completePackageActivationCustody(
   journal.transition(record, "prepared", null, assertCurrent);
 }
 
+export function assertPackageActivationInventory(
+  directory: string,
+  record: PackageActivationRecord,
+  allowed: readonly string[],
+) {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(directory);
+  } catch (error) {
+    if (
+      hasErrnoCode(error, "ENOENT") &&
+      (record.phase === "anchor-retired" || record.intent?.kind === "remove-anchor")
+    ) {
+      return;
+    }
+    throw error;
+  }
+  if (entries.some((name) => !allowed.includes(name))) {
+    throw new Error("Unknown package recovery artifacts require operator inspection.");
+  }
+}
+
+export function resolvePackageActivationCustodyPath(
+  anchor: string,
+  record: PackageActivationRecord,
+  name: "anchor" | "helper",
+) {
+  if (record.phase !== "preparing") {
+    return name === "anchor" ? anchor : resolvePackageActivationHelper(anchor);
+  }
+  const entry = inspectPackageActivationCustody(anchor, record).find((item) => item.name === name);
+  if (!entry) {
+    throw new Error("Package bootstrap custody is missing.");
+  }
+  return entry.moved ? entry.destination : entry.source;
+}
+
 export async function supersedePackageActivationCustody(
   anchor: string,
   journal: PackageActivationJournal,

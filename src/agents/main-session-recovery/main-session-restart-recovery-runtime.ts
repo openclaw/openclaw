@@ -1,3 +1,5 @@
+import { resolveStateDir } from "../../config/paths.js";
+import { listConfiguredSessionStoreAgentIds } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { waitForAbortSignal } from "../../infra/abort-signal.js";
@@ -7,6 +9,11 @@ import {
 } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
+import {
+  sessionChanges,
+  isSessionStoreTopologyChange,
+} from "../../sessions/session-row-changes.js";
+import { listAgentDatabaseAdmissionRefusals } from "../../state/agent-database-admission.js";
 import { runWithMainSessionRecoveryAdmission } from "./main-session-recovery-admission.js";
 import { createMainSessionRecoveryCapacity } from "./main-session-recovery-capacity.js";
 import { getMainSessionRecoveryRetryCount } from "./main-session-recovery-state.js";
@@ -287,6 +294,9 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
           gatewayRuntime: params.gatewayRuntime,
           recoveryCapacity,
         });
+        mainSessionRecoveryLog.debug(
+          `restart recovery pass: generationCurrent=${isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)} aborted=${abortController.signal.aborted} marked=${marking.marked} markSkipped=${marking.skipped} markFailed=${marking.failedTargets?.length ?? 0} checked=${startupCheckedStorePaths.size} started=${result.started} settled=${result.settled} failed=${result.failed} skipped=${result.skipped}`,
+        );
         result.failed += marking.failedTargets?.length ?? 0;
         return result;
       },
@@ -330,39 +340,127 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
       }
     }
   };
+  // Admission owns readiness. Remember only startup-pending roster entries;
+  // their topology publication wakes this same serialized recovery owner.
+  const env = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: params.stateDir ?? resolveStateDir(process.env),
+  };
+  const pendingAgentIds = new Set<string>();
+  const capturePendingAgents = () => {
+    const configured = listConfiguredSessionStoreAgentIds(params.getConfig());
+    const refusals = new Map(
+      listAgentDatabaseAdmissionRefusals({ env }).map((refusal) => [refusal.agentId, refusal]),
+    );
+    for (const agentId of configured) {
+      if (refusals.get(agentId)?.code === "agent-database-inspection-pending") {
+        pendingAgentIds.add(agentId);
+      }
+    }
+    mainSessionRecoveryLog.debug(
+      `restart recovery pending capture: configured=${configured.length} pending=${pendingAgentIds.size} generationCurrent=${isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)} aborted=${abortController.signal.aborted}`,
+    );
+  };
+  let requested = false;
+  let wake: (() => void) | undefined;
+  capturePendingAgents();
+  const unsubscribe = sessionChanges.subscribe((change) => {
+    mainSessionRecoveryLog.debug(
+      `restart recovery publication: topology=${isSessionStoreTopologyChange(change)} generationCurrent=${isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)} aborted=${abortController.signal.aborted} pending=${pendingAgentIds.size} requested=${requested}`,
+    );
+    if (!shouldContinue() || !isSessionStoreTopologyChange(change)) {
+      return;
+    }
+    const configured = new Set(listConfiguredSessionStoreAgentIds(params.getConfig()));
+    // A preparation can publish intermediate topology inside its borrowed admission
+    // scope. Observe the owner's decisions, not the emitter's temporary permission.
+    const refusals = new Map(
+      listAgentDatabaseAdmissionRefusals({ env }).map((refusal) => [refusal.agentId, refusal]),
+    );
+    for (const agentId of pendingAgentIds) {
+      if (!configured.has(agentId)) {
+        pendingAgentIds.delete(agentId);
+        continue;
+      }
+      const refusal = refusals.get(agentId);
+      if (refusal?.code === "agent-database-inspection-pending") {
+        continue;
+      }
+      pendingAgentIds.delete(agentId);
+      if (!refusal) {
+        requested = true;
+      }
+    }
+    mainSessionRecoveryLog.debug(
+      `restart recovery publication settled: configured=${configured.size} pending=${pendingAgentIds.size} requested=${requested} waiting=${Boolean(wake)}`,
+    );
+    wake?.();
+  });
+  const aborted = waitForAbortSignal(abortController.signal);
   let exhaustedTargets = new Map<string, ExhaustedRestartRecoveryTarget>();
   const run = Promise.resolve().then(async () => {
-    if (params.waitForStart) {
-      await Promise.race([params.waitForStart(), waitForAbortSignal(abortController.signal)]);
+    try {
+      if (params.waitForStart) {
+        await Promise.race([params.waitForStart(), aborted]);
+      }
+      capturePendingAgents();
+      let initialPass = true;
+      while (shouldContinue()) {
+        requested = false;
+        await runRecoveryRetries({
+          initialDelayMs: initialPass ? (params.delayMs ?? DEFAULT_RECOVERY_DELAY_MS) : 0,
+          maxRetries: Math.max(1, params.maxRetries ?? MAX_RECOVERY_RETRIES),
+          shouldContinue,
+          signal: abortController.signal,
+          attempt: async (finalAttempt) => {
+            exhaustedTargets = new Map();
+            const result = await runRecoveryAttempt(exhaustedTargets);
+            if (result.failed === 0) {
+              return true;
+            }
+            if (finalAttempt && exhaustedTargets.size > 0) {
+              await reconcileExhaustedTargets(exhaustedTargets.values());
+            }
+            return false;
+          },
+          onError: async (err, finalAttempt) => {
+            if (finalAttempt) {
+              mainSessionRecoveryLog.warn(`main-session restart recovery gave up: ${String(err)}`);
+              await reconcileExhaustedTargets(exhaustedTargets.values());
+            } else {
+              mainSessionRecoveryLog.warn(`main-session restart recovery failed: ${String(err)}`);
+            }
+          },
+        });
+        initialPass = false;
+        mainSessionRecoveryLog.debug(
+          `restart recovery pass settled: generationCurrent=${isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)} aborted=${abortController.signal.aborted} pending=${pendingAgentIds.size} requested=${requested}`,
+        );
+        if (!shouldContinue() || (!requested && pendingAgentIds.size === 0)) {
+          break;
+        }
+        const waitingForAdmission = () =>
+          shouldContinue() && !requested && pendingAgentIds.size > 0;
+        while (waitingForAdmission()) {
+          await Promise.race([
+            new Promise<void>((resolve) => {
+              wake = resolve;
+            }),
+            aborted,
+          ]);
+          wake = undefined;
+        }
+        if (!requested && pendingAgentIds.size === 0) {
+          break;
+        }
+      }
+    } finally {
+      unsubscribe();
     }
-    await runRecoveryRetries({
-      initialDelayMs: params.delayMs ?? DEFAULT_RECOVERY_DELAY_MS,
-      maxRetries: Math.max(1, params.maxRetries ?? MAX_RECOVERY_RETRIES),
-      shouldContinue,
-      signal: abortController.signal,
-      attempt: async (finalAttempt) => {
-        exhaustedTargets = new Map();
-        const result = await runRecoveryAttempt(exhaustedTargets);
-        if (result.failed === 0) {
-          return true;
-        }
-        if (finalAttempt && exhaustedTargets.size > 0) {
-          await reconcileExhaustedTargets(exhaustedTargets.values());
-        }
-        return false;
-      },
-      onError: async (err, finalAttempt) => {
-        if (finalAttempt) {
-          mainSessionRecoveryLog.warn(`main-session restart recovery gave up: ${String(err)}`);
-          await reconcileExhaustedTargets(exhaustedTargets.values());
-        } else {
-          mainSessionRecoveryLog.warn(`main-session restart recovery failed: ${String(err)}`);
-        }
-      },
-    });
   });
   return {
     stop: async () => {
+      unsubscribe();
       // Restart recovery belongs to its startup generation; stale timers must
       // never claim a session after that gateway begins draining.
       abortController.abort();

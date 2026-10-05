@@ -12,6 +12,7 @@ import type { GatewayDiscovery } from "./server-discovery-runtime.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
+import { isGatewayRestrictedUpgradeStartup } from "./server-upgrade-startup-mode.js";
 
 type StartGatewayMaintenanceTimers =
   typeof import("./server-maintenance.js").startGatewayMaintenanceTimers;
@@ -25,6 +26,7 @@ export async function startGatewayEarlyRuntime(params: {
   minimalTestGateway: boolean;
   isClosing: () => boolean;
   updateCanary?: boolean;
+  upgradeMaintenance?: boolean;
   cfgAtStart: OpenClawConfig;
   port: number;
   gatewayTls: { enabled: boolean; fingerprintSha256?: string };
@@ -64,7 +66,8 @@ export async function startGatewayEarlyRuntime(params: {
   startupTrace?: GatewayStartupTrace;
 }) {
   await setSessionMcpRuntimeScheduler(params.scheduler);
-  const startSideRuntimes = !params.minimalTestGateway && !params.updateCanary;
+  const startSideRuntimes =
+    !params.minimalTestGateway && !isGatewayRestrictedUpgradeStartup(params);
   // Startup failure can occur immediately after discovery; publish its owner first.
   params.swapDiscovery(
     await measureStartup(params.startupTrace, "runtime.early.discovery", async () => {

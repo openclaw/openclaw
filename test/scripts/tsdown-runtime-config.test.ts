@@ -243,6 +243,7 @@ describe("tsdown config", () => {
       requireStandaloneRuntimeGraph("worker/code-mode-node.worker"),
       requireStandaloneRuntimeGraph("worker/file-tool-planning.worker"),
       requireStandaloneRuntimeGraph("worker/image-processor.worker"),
+      requireStandaloneRuntimeGraph("worker/owner-dacl-batch-worker"),
       requireStandaloneRuntimeGraph("worker/sqlite-store.worker"),
       requireStandaloneRuntimeGraph("worker/openclaw-state-read.worker"),
       requireStandaloneRuntimeGraph("worker/worker-native-lifecycle.worker"),

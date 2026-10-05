@@ -74,6 +74,9 @@ export const runtimeProcessEntrypoints = {
   ),
   updateRepair: runtimeProcessEntrypoint("infra/update-repair.worker"),
   updateMigratedFinalize: runtimeProcessEntrypoint("infra/update-migrated-finalize.worker"),
+  updateRecipeMaintenance: runtimeProcessEntrypoint(
+    "cli/update-cli/update-recipe-maintenance.worker",
+  ),
   updateCandidateState: runtimeProcessEntrypoint("infra/update-candidate-state.worker"),
   doctorLint: runtimeProcessEntrypoint("commands/doctor-lint.worker"),
   doctor: runtimeProcessEntrypoint("commands/doctor.worker"),

@@ -18,6 +18,7 @@ export const WORKER_BUNDLE_ARTIFACT_PATHS = [
   "service-child-group-anchor.mjs",
   "service-child-relay.mjs",
   WORKER_BUNDLE_SQLITE_STORE_PATH,
+  "owner-dacl-batch-worker.mjs",
   WORKER_BUNDLE_ENTRY_PATH,
   WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
 ] as const;

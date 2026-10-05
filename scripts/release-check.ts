@@ -34,6 +34,7 @@ import { collectPackUnpackedSizeFindings } from "./lib/npm-pack-budget.mts";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import { isLegacyPluginDependencyInstallStagePath } from "./lib/package-dist-inventory.ts";
 import { collectBundledPluginPackageDependencySpecs } from "./lib/plugin-package-dependencies.mts";
+import { validateTargetUpgradeRelease } from "./lib/upgrade-release-validation.mts";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mts";
 import { resolveNpmRunner, type NpmRunnerParams } from "./npm-runner.mts";
 import {
@@ -1283,6 +1284,11 @@ async function main() {
     if (packedPackage.name !== "openclaw" || packedPackage.version !== rootPackage.version) {
       throw new Error("release-check: prepared tarball does not match the target package version.");
     }
+    await validateTargetUpgradeRelease({
+      packageJson: packedPackage,
+      targetRoot: process.cwd(),
+      targetArtifactPath: tarballPath,
+    });
     await verifyPackedContents(results, packedRoot, tarballPath);
     runPackedBundledChannelEntrySmoke(tarballPath, packedRoot);
     console.log("release-check: final npm tarball contents and installed runtime look OK.");

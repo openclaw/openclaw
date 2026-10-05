@@ -146,6 +146,8 @@ export function createGatewayHttpServer(opts: {
   handleWorkerBootstrapArtifactTransferRequest?: ArtifactTransferHttpCallback;
   /** Authenticator/dispatcher for the reserved node workspace transfer namespace. */
   handleNodeWorkspaceTransferRequest?: NodeWorkspaceTransferHttpCallback;
+  /** Native maintenance exposes liveness only; business/control dispatch is never constructed. */
+  upgradeMaintenance?: boolean;
   getReadiness?: ReadinessChecker;
   getStartup?: StartupChecker;
   getRuntimeConfig?: () => OpenClawConfig;
@@ -181,6 +183,17 @@ export function createGatewayHttpServer(opts: {
     res: ServerResponse,
     expectation?: "continue" | "reject",
   ) => {
+    if (opts.upgradeMaintenance) {
+      const liveness = (req.method === "GET" || req.method === "HEAD") && req.url === "/healthz";
+      const readiness = (req.method === "GET" || req.method === "HEAD") && req.url === "/readyz";
+      const ready = getReadiness?.().ready === true;
+      res.writeHead(liveness || (readiness && ready) ? 200 : 503, {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-store",
+      });
+      res.end(req.method === "HEAD" ? undefined : JSON.stringify({ maintenance: true, ready }));
+      return;
+    }
     markGatewayIngressTransport(req, opts.ingressTransport ?? { kind: "ordinary" });
     void runHttpConnectionRequest(
       req,
