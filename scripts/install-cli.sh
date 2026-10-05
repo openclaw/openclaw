@@ -39,7 +39,11 @@ source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}./install-policy.sh"
 installer_node() { "$(node_bin)" "$@"; }
 installer_npm() { "$(npm_bin)" "$@"; }
 installer_step() { shift; "$@"; }
-installer_error() { fail "$@"; }
+installer_error() {
+  local msg="$1"
+  emit_json error message "$msg"
+  log "ERROR: $msg"
+}
 installer_npm_version_error() {
   log "ERROR: unable to determine npm version; no package changes were made"
 }
@@ -250,9 +254,7 @@ emit_json() {
 }
 
 fail() {
-  local msg="$1"
-  emit_json error message "$msg"
-  log "ERROR: $msg"
+  installer_error "$@"
   exit 1
 }
 
