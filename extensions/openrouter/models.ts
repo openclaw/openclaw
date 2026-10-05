@@ -1,3 +1,4 @@
+import { isOpenAIMessageEndCachedModelId } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const OPENROUTER_MISTRAL_MODEL_PREFIXES = [
@@ -50,6 +51,15 @@ export function isOpenRouterMistralModelId(modelId: unknown): boolean {
   const normalized = normalizeOpenRouterModelFamilyId(modelId);
   return Boolean(
     normalized && OPENROUTER_MISTRAL_MODEL_PREFIXES.some((prefix) => normalized.startsWith(prefix)),
+  );
+}
+
+/** OpenAI GPT-5.6+ through OpenRouter, including `~openai/...` refs and `:nitro`-style variants. */
+export function isOpenRouterMessageEndCachedOpenAIModelId(modelId: unknown): boolean {
+  const normalized = normalizeOpenRouterModelFamilyId(modelId);
+  return Boolean(
+    normalized?.startsWith("openai/") &&
+    isOpenAIMessageEndCachedModelId(normalized.slice("openai/".length)),
   );
 }
 
