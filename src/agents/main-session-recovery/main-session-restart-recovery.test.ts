@@ -137,6 +137,7 @@ import {
   scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease,
   scheduleRestartAbortedMainSessionRecovery as scheduleRestartAbortedMainSessionRecoveryBase,
 } from "./main-session-restart-recovery.js";
+import { registerStartupSessionRepairCases } from "./main-session-startup-repair.test-harness.js";
 
 const transcriptMocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn(),
@@ -2741,6 +2742,19 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:already-marked"]?.abortedLastRun).toBe(false);
   });
 
+  registerStartupSessionRepairCases(() => ({
+    tmpDir,
+    makeSessionsDir,
+    writeStore,
+    writeTranscript,
+    runningSessionEntry,
+    makePendingFinalDelivery,
+    readStore,
+    expectRecovery,
+    gatewayRuntime: mockRecoveryRuntime,
+    dispatchSettlement,
+  }));
+
   it("does not create empty agent databases while scanning startup recovery", async () => {
     const agentIds = Array.from({ length: 12 }, (_, index) => `agent-${index + 1}`);
     const databasePaths = await Promise.all(
@@ -4247,27 +4261,6 @@ describe("main-session-restart-recovery", () => {
       restartRecoveryDeliverySourceRunId: "replacement-source",
       sessionId: "replacement-session",
     });
-  });
-
-  it("does not dispatch an archived durable recovery claim", async () => {
-    const sessionsDir = await makeSessionsDir();
-    await writeStore(sessionsDir, {
-      "agent:main:main": {
-        sessionId: "archived-session",
-        updatedAt: Date.now() - 10_000,
-        archivedAt: Date.now() - 5_000,
-        status: "running",
-        abortedLastRun: true,
-        restartRecoveryDeliveryRunId: "archived-recovery",
-        restartRecoveryDeliverySourceRunId: "archived-source",
-      },
-    });
-    await writeTranscript(sessionsDir, "archived-session", [
-      { role: "user", content: "do not recover while archived" },
-    ]);
-
-    await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
-    expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("completes an interrupted turn whose exact terminal source reply was delivered", async () => {

@@ -7,6 +7,7 @@ import {
 import {
   parsePluginReleaseSelection,
   parsePluginReleaseSelectionMode,
+  type NpmLatestVersionResolver,
   type PluginReleaseSelectionMode,
 } from "./plugin-npm-release.ts";
 
@@ -354,6 +355,7 @@ export async function buildOpenClawReleaseClawHubPlan(
     rootDir?: string;
     fetchImpl?: typeof fetch;
     registryBaseUrl?: string;
+    resolveLatestVersion?: NpmLatestVersionResolver;
   } = {},
 ): Promise<OpenClawReleaseClawHubPlan> {
   const bootstrapWorkflowRef = requireBootstrapWorkflowRef(args.bootstrapWorkflowRef);
@@ -396,6 +398,7 @@ export async function buildOpenClawReleaseClawHubPlan(
           selectionMode: args.pluginPublishScope,
           fetchImpl: options.fetchImpl,
           registryBaseUrl: options.registryBaseUrl,
+          resolveLatestVersion: options.resolveLatestVersion,
         });
 
   const normalPackages = packageNames(plan.candidates);

@@ -83,7 +83,7 @@ describe("AppSidebar session attention details", () => {
           ?.getAttribute("aria-label"),
       ).toBe(ownsRequest ? "Waiting for your answer\nReview the changes?" : undefined);
       expect(sidebar.querySelector('[data-session-key="global"]')).toBeNull();
-      await toggleRoster(sidebar);
+      await toggleRoster(sidebar, agentId);
       const header = () =>
         sidebar.querySelector(`[data-agent-group="${agentId}"] .sidebar-agent-roster__header`);
       await waitForFast(() => expect(header()).not.toBeNull());
@@ -99,7 +99,7 @@ describe("AppSidebar session attention details", () => {
       expect(header()?.querySelector("[data-session-attention]")?.getAttribute("aria-label")).toBe(
         ownsRequest ? "Waiting for approval\ngit status --short" : undefined,
       );
-      await toggleRoster(sidebar);
+      await toggleRoster(sidebar, agentId);
       await waitForFast(() => expect(sidebar.querySelector(".nav-item--home")).not.toBeNull());
       sessionsHarness.publishList({ result: { ...result, count: 0, sessions: [] } });
       await sidebar.updateComplete;

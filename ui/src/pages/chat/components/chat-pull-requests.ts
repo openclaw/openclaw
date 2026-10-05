@@ -397,8 +397,9 @@ export function renderChatPullRequests(props: {
 }
 
 function renderPublicationRecovery(publication: GitHubPublicationView) {
+  const failed = publication.result?.status === "failed";
   const content = html`<div class="chat-pr__publication-recovery">
-    ${renderGitHubPublicationDetails(publication)}
+    ${renderGitHubPublicationDetails(publication, { inline: failed })}
     ${
       publication.result?.status !== "published"
         ? html`<div>${renderGitHubPublicationAction(publication)}</div>`
@@ -407,7 +408,7 @@ function renderPublicationRecovery(publication: GitHubPublicationView) {
   </div>`;
   // A session attempt has no proven relationship to any listed PR. Keep its
   // failed receipt inspectable without presenting it as that PR’s current state.
-  return publication.result?.status === "failed"
+  return failed
     ? html`<details class="chat-pr__publication-history">
         <summary>${t("githubPublication.failedAttempt")}</summary>
         ${content}

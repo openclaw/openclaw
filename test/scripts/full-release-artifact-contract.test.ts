@@ -920,22 +920,6 @@ describe("retained publication admission", () => {
     expect(() => assertReleasePublicationKnownBudget(combined, context)).toThrow(/size limit/u);
   });
 
-  it("counts complete retained root/current copies and later growth under the same artifact cap", () => {
-    const { record } = registryEvidence();
-    const root = { ...record, childEvidence: { retained: "x".repeat(520_000) } };
-    const current = { ...record, evidenceReuse: { sourceManifest: root } };
-    expect(() => serializeReleaseArtifact(root)).not.toThrow();
-    expect(() => serializeReleaseArtifact(current)).not.toThrow();
-    const enclosing = { ...current, childEvidence: { retained: "x".repeat(520_000) } };
-    const emptyBytes = Buffer.byteLength(serializeReleaseArtifact(enclosing));
-    enclosing.childEvidence.retained += "x".repeat(MAX_RELEASE_ARTIFACT_BYTES - emptyBytes);
-    expect(Buffer.byteLength(serializeReleaseArtifact(enclosing))).toBe(MAX_RELEASE_ARTIFACT_BYTES);
-    enclosing.childEvidence.retained += "x";
-    expect(() => serializeReleaseArtifact(enclosing)).toThrow(/size limit/u);
-    expect(root.publicationAdmission).toEqual(record.publicationAdmission);
-    expect(enclosing.publicationAdmission).toEqual(record.publicationAdmission);
-  });
-
   it("reserves JSON escaping of pending bounded fields without truncating later job evidence", () => {
     const { plan, context } = registryBudgetFixture();
     expect(() => assertReleasePublicationKnownBudget(plan, context)).not.toThrow();

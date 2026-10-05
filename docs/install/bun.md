@@ -106,6 +106,10 @@ On macOS, run `brew install sqlite` for native vector search. Bun 1.4.2 can reta
 
 Some package scripts hardcode `pnpm` internally (for example `check:docs`, `ui:*`, `protocol:check`). Running them via `bun run` still shells out to `pnpm`, so just run those via `pnpm` directly.
 
+Repository npm packaging helpers run the packaged npm CLI directly under Bun,
+including on Windows. They do not require npm beside the Bun executable. An
+explicitly selected Node toolchain still uses its own adjacent npm installation.
+
 Gateway process inspection recognizes Bun's `--watch` and `--hot` flags. ACP bridge detection recognizes Bun and the current runtime executable, including custom filenames. Portable cloud worker archives target Node when built with either runtime, and worker inference errors omit runtime stack properties from their bounded diagnostic messages.
 
 ## Known limitations

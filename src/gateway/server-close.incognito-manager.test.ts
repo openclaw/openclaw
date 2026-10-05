@@ -71,15 +71,13 @@ it("settles accepted actor appends across the real close prelude before closing 
             const writing = manager.appendMessageAsync(makeUserMessage("accepted before close", 1));
             accepted.resolve();
             await prelude.promise;
-            try {
-              await expect(manager.appendCustomEntryAsync("too-late")).rejects.toThrow();
-            } finally {
-              release.resolve();
-            }
+            const tooLate = manager.appendCustomEntryAsync("too-late");
+            release.resolve();
+            await expect(tooLate).rejects.toThrow();
             const id = await writing;
-            const reopened = await SessionManager.openAsync(target);
-            expect(reopened.getEntries()).toMatchObject([{ id, type: "message" }]);
-            expect(reopened.getEntries()).toHaveLength(1);
+            await expect(SessionManager.openAsync(target)).rejects.toThrow();
+            expect(manager.getEntries()).toMatchObject([{ id, type: "message" }]);
+            expect(manager.getEntries()).toHaveLength(1);
             verified.resolve();
           },
           kernel.scheduler.signal,

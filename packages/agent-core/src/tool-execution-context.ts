@@ -16,6 +16,12 @@ export function getAgentToolExecutionContext(): AgentToolExecutionContext | unde
   return activeToolExecution.getStore();
 }
 
+// Provider tool-call ids are only unique within one assistant response.
+export function getAgentToolAssistantTurnId(): string | undefined {
+  const message = getAgentToolExecutionContext()?.assistantMessage;
+  return message?.responseId?.trim() || message?.turnId?.trim() || undefined;
+}
+
 export function runWithAgentToolExecutionContext<T>(
   context: AgentToolExecutionContext,
   run: () => T,

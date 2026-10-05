@@ -547,6 +547,7 @@ it("rebinds global chat metadata immediately on agent selection and follows late
       expect(request).toHaveBeenCalledWith("chat.metadata", {
         agentId: "main",
         sessionKey: "global",
+        includeModels: false,
       }),
     );
     ready = true;
@@ -684,6 +685,7 @@ describe.each(["command-metadata", "patch", "reset"])("session metadata event %s
         expect(request.mock.calls.findLast(([method]) => method === "chat.metadata")?.[1]).toEqual({
           agentId,
           sessionKey: key,
+          includeModels: false,
         });
         expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(
           catalogsBefore + 1,

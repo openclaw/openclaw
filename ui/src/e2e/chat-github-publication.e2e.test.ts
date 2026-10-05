@@ -704,7 +704,7 @@ suite.define(() => {
       await expect.poll(() => details.textContent()).toContain("alice/demo · feature/original");
       await details.getByText("Original accepted snapshot", { exact: true }).click();
       await expect
-        .poll(() => details.locator("details").textContent())
+        .poll(() => details.locator(".chat-pr__publication-note details").textContent())
         .toContain(confirmation.workspaceTree);
       await expect
         .poll(() => details.textContent())
@@ -766,7 +766,9 @@ suite.define(() => {
     });
     await page.goto(`${suite.server.baseUrl}chat`);
     await showPublicationBranch(gateway);
-    await page.getByText("The original publication is still running.", { exact: true }).waitFor();
+    await page
+      .getByText("The original publication is still running.", { exact: true })
+      .waitFor({ state: "attached" });
     // The same profile's writer completes the request; this connection only reads it.
     await gateway.setMethodResponse("sessions.github.status", {
       result: {
@@ -781,7 +783,7 @@ suite.define(() => {
       confirmation: null,
     });
     await gateway.setMethodResponse("sessions.github.options", publicationOptions);
-    await page.getByRole("button", { name: "Refresh publication", exact: true }).click();
+    await page.getByRole("button", { name: "Check publication", exact: true }).click();
     const statusRequest = await gateway.waitForRequest("sessions.github.status");
     expect(statusRequest.params).toEqual({
       sessionKey: "agent:main:main",

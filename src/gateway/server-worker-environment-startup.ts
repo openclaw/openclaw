@@ -42,7 +42,6 @@ import {
   type WorkerPlacementRuntimeInstallReader,
 } from "./worker-environments/placement-projector.js";
 import { resolveDefaultWorkerPlacementExecutionMode } from "./worker-environments/placement-session-runtime.js";
-import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import {
   readPreparedPoolPresenceDemand,
   writePreparedPoolPresenceDemand,
@@ -53,19 +52,13 @@ import type { WorkerEnvironmentServiceOptions } from "./worker-environments/serv
 import type { WorkerTunnelManager } from "./worker-environments/tunnel.js";
 import { listRetainedWorkerBundleHashes } from "./worker-environments/worker-bundle-retention.js";
 
-type WorkerEnvironmentStore = Awaited<
-  ReturnType<typeof import("./worker-environments/store.js").createWorkerEnvironmentStore>
->;
 type WorkerEnvironmentLogger = {
   child: (name: string) => { info: (message: string) => void; warn: (message: string) => void };
 };
 
-export type GatewayWorkerEnvironmentStartupState = {
-  durableProviderIds: string[];
-  listDurableProviderIds: () => string[];
-  store: WorkerEnvironmentStore;
-  placementStore: WorkerSessionPlacementStore;
-};
+export type GatewayWorkerEnvironmentStartupState = Awaited<
+  ReturnType<typeof loadGatewayWorkerEnvironmentStartupState>
+>;
 
 export type GatewayWorkerEnvironmentRuntime = {
   workerEnvironmentService?: WorkerEnvironmentService;
@@ -93,7 +86,7 @@ const loadWorkerSessionToolExecutorModule = createLazyRuntimeModule(
   () => import("./worker-environments/worker-session-tool-executor.js"),
 );
 
-export async function loadGatewayWorkerEnvironmentStartupState(): Promise<GatewayWorkerEnvironmentStartupState> {
+export async function loadGatewayWorkerEnvironmentStartupState() {
   const [{ createWorkerEnvironmentStore }, { createWorkerSessionPlacementStore }] =
     await Promise.all([
       import("./worker-environments/store.js"),
@@ -621,13 +614,13 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       await params.startup.store.revokeEnvironmentCredential(environmentId);
     }
     await Promise.all(
-      environmentIds.map(async (environmentId) => {
-        await workerEnvironmentService.reconcileEnvironment(environmentId).catch(() => {
+      environmentIds.map((environmentId) =>
+        workerEnvironmentService.reconcileEnvironment(environmentId).catch(() => {
           workerEnvironmentLog.warn(
             `Device worker reconcile failed (${deviceId}, ${environmentId}); periodic cleanup will retry`,
           );
-        });
-      }),
+        }),
+      ),
     );
     return environmentIds;
   });

@@ -1357,14 +1357,17 @@ describe("anthropic provider replay hooks", () => {
       name: "rejects invalid setup-token expiry during non-interactive preflight",
       opts: { tokenExpiresIn: "nope" },
       error: "Invalid --token-expires-in",
-      partialError: true,
+    },
+    {
+      name: "rejects missing setup-token input during non-interactive preflight",
+      opts: { token: "" },
+      error: "Anthropic setup-token auth requires --token with a valid setup-token.",
     },
   ] as Array<{
     name: string;
     opts: Record<string, string>;
     error?: string;
-    partialError?: boolean;
-  }>)("$name", async ({ opts, error, partialError }) => {
+  }>)("$name", async ({ opts, error }) => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
     const setupTokenAuth = provider.auth.find((entry) => entry.id === "setup-token");
     if (!setupTokenAuth?.validateNonInteractive) {
@@ -1372,7 +1375,7 @@ describe("anthropic provider replay hooks", () => {
     }
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-    const valid = await setupTokenAuth.validateNonInteractive({
+    const validation = setupTokenAuth.validateNonInteractive({
       authChoice: "setup-token",
       config: {},
       baseConfig: {},
@@ -1381,15 +1384,13 @@ describe("anthropic provider replay hooks", () => {
       resolveApiKey: vi.fn(async () => null),
     });
 
-    expect(valid).toBe(!error);
     if (error) {
-      expect(runtime.error).toHaveBeenCalledWith(
-        partialError ? expect.stringContaining(error) : error,
-      );
-      expect(runtime.exit).toHaveBeenCalledWith(1);
+      await expect(validation).rejects.toThrow(error);
     } else {
-      expect(runtime.error).not.toHaveBeenCalled();
+      await expect(validation).resolves.toBe(true);
     }
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("omits setup-token expiry when duration overflows the Date range", async () => {

@@ -19,6 +19,7 @@ async function loadCallGateway() {
 const DEFAULT_RAW_SCHEMA_ERROR =
   "400 The following tools cannot be used with reasoning.effort 'minimal': web_search.";
 const GATEWAY_SCHEMA_ERRORS = [
+  String.raw`LLM request rejected: The following tools cannot be used with reasoning\.effort \'minimal\'\: web\_search\.`,
   "provider rejected the request schema or tool payload",
   "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.",
 ];

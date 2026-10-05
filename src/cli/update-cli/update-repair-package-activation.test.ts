@@ -103,6 +103,7 @@ async function manualInstall(f: Awaited<ReturnType<typeof preparedOwnershipMisma
 const supersessionReasons = [
   "superseded-by-manual-install",
   "recovery-lease-identity-changed",
+  "recovery-lease-missing",
 ] as const;
 
 async function obsoleteRecovery(
@@ -113,9 +114,13 @@ async function obsoleteRecovery(
     return manualInstall(f);
   }
   const databasePath = f.descriptor.authority.databasePath;
-  fs.renameSync(databasePath, `${databasePath}.previous`);
-  fs.copyFileSync(`${databasePath}.previous`, databasePath);
-  fs.chmodSync(databasePath, 0o600);
+  if (reason === "recovery-lease-missing") {
+    fs.unlinkSync(databasePath);
+  } else {
+    fs.renameSync(databasePath, `${databasePath}.previous`);
+    fs.copyFileSync(`${databasePath}.previous`, databasePath);
+    fs.chmodSync(databasePath, 0o600);
+  }
   return packageActivationIdentity(f.packageRoot, true);
 }
 
@@ -246,11 +251,15 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
     },
   );
 
-  it.each(["anchor", "helper"] as const)(
-    "resumes supersession after losing the %s rename acknowledgement",
-    async (boundary) => {
+  it.each(
+    (["superseded-by-manual-install", "recovery-lease-missing"] as const).flatMap((reason) =>
+      (["anchor", "helper"] as const).map((boundary) => ({ reason, boundary })),
+    ),
+  )(
+    "resumes $reason after losing the $boundary rename acknowledgement",
+    async ({ reason, boundary }) => {
       const f = await preparedOwnershipMismatch();
-      await manualInstall(f);
+      await obsoleteRecovery(f, reason);
       const rename = fsp.rename.bind(fsp);
       const interruption = vi
         .spyOn(fsp, "rename")
@@ -264,17 +273,57 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
       interruption.mockRestore();
       expect(openPackageActivationJournal(f.anchor).read()).toMatchObject({
         phase: "superseded",
-        intent: { kind: "superseded-by-manual-install", settled: false },
+        intent: { kind: reason, settled: false },
       });
       expect(() => assertNoPendingPackageActivation(f.packageRoot)).toThrow();
 
+      if (reason === "recovery-lease-missing") {
+        // Model inode reuse deterministically, including on filesystems that
+        // happen to allocate a different inode for the recreated lease store.
+        const { descriptor } = openPackageActivationJournal(f.anchor).read();
+        descriptor.authority.databaseIdentity = packageActivationIdentity(
+          descriptor.authority.databasePath,
+          false,
+        );
+        const db = new DatabaseSync(f.journal);
+        try {
+          db.prepare("UPDATE package_activation SET descriptor_json = ?").run(
+            JSON.stringify(descriptor),
+          );
+        } finally {
+          db.close();
+        }
+      }
+
       await repair();
 
+      expect(openPackageActivationJournal(f.anchor).read().intent).toMatchObject({
+        kind: reason,
+        settled: true,
+      });
       expect(readPackageActivationReceipt(f.packageRoot)).toMatchObject({ phase: "complete" });
       expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
       expect(fs.readFileSync(path.join(f.retained, "recovery.mjs"))).toEqual(f.helperBytes);
     },
   );
+
+  it("does not treat a dangling lease database symlink as a missing database", async () => {
+    const f = await preparedOwnershipMismatch();
+    const databasePath = f.descriptor.authority.databasePath;
+    fs.unlinkSync(databasePath);
+    const target = `${databasePath}.absent`;
+    fs.symlinkSync(target, databasePath);
+    const journal = fs.readFileSync(f.journal);
+
+    await expect(repair()).rejects.toThrow(/ENOENT/);
+
+    expect(fs.readlinkSync(databasePath)).toBe(target);
+    expect(fs.existsSync(target)).toBe(false);
+    expect(fs.readFileSync(f.journal)).toEqual(journal);
+    expect(fs.readFileSync(f.helper)).toEqual(f.helperBytes);
+    expect(fs.existsSync(f.retained)).toBe(false);
+    expect(mocks.finalize).not.toHaveBeenCalled();
+  });
 
   it.each(supersessionReasons)(
     "does not settle %s while another executor owns the installation",

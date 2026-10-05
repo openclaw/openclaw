@@ -74,14 +74,16 @@ export function collectReclamationChangedSessionKeys(
         ...(plan.kind === "lifecycle-projection-commit"
           ? plan.input.projected.upsertedEntries.map(({ sessionKey }) => sessionKey)
           : []),
-        ...result.value.maintenancePlans.flatMap((maintenance) => maintenance.archivedSessionKeys),
+        ...result.value.maintenancePlans.flatMap((maintenance) =>
+          maintenance.archivedEntries.map(({ sessionKey }) => sessionKey),
+        ),
       ];
     case "deletion-plan":
     case "lifecycle-projection-plan":
     case "lifecycle-projection-count":
       return [];
     case "maintenance-plan":
-      return result.value.archivedSessionKeys;
+      return result.value.archivedEntries.map(({ sessionKey }) => sessionKey);
     case "maintenance-finalize":
       return result.value.committedEntries.map(({ sessionKey }) => sessionKey);
     case "maintenance-preservation-required":

@@ -3,7 +3,7 @@
  * tool search/call/yield support.
  */
 import { Type } from "typebox";
-import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
+import { getAgentToolAssistantTurnId } from "../../packages/agent-core/src/tool-execution-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
@@ -256,7 +256,6 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       // cancellation so sessions_yield can still finish its initiating handoff.
       ctx.abortSignal?.throwIfAborted();
       const input = readCode(args);
-      const executionContext = getAgentToolExecutionContext();
       let runtime: ToolSearchRuntime | undefined;
       const result = await runCodeModeExec({
         toolCallId,
@@ -264,9 +263,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
         config,
         resultBudget,
         code: input.code,
-        assistantTurnId:
-          executionContext?.assistantMessage.responseId?.trim() ||
-          executionContext?.assistantMessage.turnId?.trim(),
+        assistantTurnId: getAgentToolAssistantTurnId(),
         restartSafe: ctx.forceRestartSafeTools === true || input.restartSafe,
         awaitResults: input.awaitResults,
         signal,

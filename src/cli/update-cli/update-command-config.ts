@@ -463,7 +463,7 @@ export async function maybeRepairLegacyConfigForUpdateChannel(params: {
     defaultRuntime.error(`Warning: ${warning}`);
   }
   if (!params.jsonMode && repaired) {
-    defaultRuntime.log(theme.muted("Migrated legacy config before changing update channel."));
+    defaultRuntime.log(theme.muted("Migrated legacy config for the update."));
   }
   return snapshot;
 }

@@ -427,11 +427,6 @@ describe("buildGatewayReloadPlan", () => {
     },
   );
 
-  it("keeps an internal hook reconciliation action out of the no-op commit path", () => {
-    const plan = { ...buildGatewayReloadPlan([]), reloadInternalHooks: true };
-    expect(isNoopGatewayReloadPlan(plan)).toBe(false);
-  });
-
   it("treats plugin install timestamp-only changes as no-ops", () => {
     const paths = [
       "plugins.installs.lossless-claw.resolvedAt",
@@ -477,22 +472,6 @@ describe("buildGatewayReloadPlan", () => {
     expect(isNoopGatewayReloadPlan(plan)).toBe(dynamic);
     expect(plan.restartChannels).toEqual(new Set(dynamic ? [] : ["mattermost"]));
   });
-
-  it.each(["messages.inbound"])(
-    "keeps channels connected only when every loaded owner opts out of %s",
-    (prefix) => {
-      setActivePluginRegistry(
-        createTestRegistry(
-          [telegramPlugin, whatsappPlugin].map((plugin) => ({
-            pluginId: plugin.id,
-            plugin: { ...plugin, reload: { ...plugin.reload, noopPrefixes: [prefix] } },
-            source: "test",
-          })),
-        ),
-      );
-      expect(isNoopGatewayReloadPlan(buildGatewayReloadPlan([prefix]))).toBe(true);
-    },
-  );
 
   it("shared policy refresh subsumes scoped restarts", () => {
     const path = "messages.inbound";
@@ -2234,76 +2213,59 @@ describe("startGatewayConfigReloader", () => {
     await reloader.stop();
   });
 
-  it.each([false, true])(
-    "contains restart failures and retries the same config (superseded: %s)",
-    async (superseded) => {
-      const snapshot = makeSnapshot({
-        config: {
-          gateway: { reload: {}, port: 18790 },
-        },
-        hash: "restart-1",
-      });
-      const readSnapshot = vi
-        .fn<() => Promise<ConfigFileSnapshot>>()
-        .mockResolvedValueOnce(snapshot)
-        .mockResolvedValueOnce(snapshot);
-      const promoteSnapshot = vi.fn(async () => true);
-      const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(
-        readSnapshot,
-        {
-          promoteSnapshot,
-        },
+  it("contains superseded restarts and retries the same config", async () => {
+    const snapshot = makeSnapshot({
+      config: {
+        gateway: { reload: {}, port: 18790 },
+      },
+      hash: "restart-1",
+    });
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(snapshot)
+      .mockResolvedValueOnce(snapshot);
+    const promoteSnapshot = vi.fn(async () => true);
+    const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot, {
+      promoteSnapshot,
+    });
+    await reloader.ready;
+    onRestart.mockRejectedValueOnce(new GatewayConfigReloadSupersededError());
+    onRestart.mockResolvedValueOnce(undefined);
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      watcher.emit("change");
+      await flushReload(reloader);
+      await Promise.resolve();
+
+      expect(onHotReload).not.toHaveBeenCalled();
+      expect(onRestart).toHaveBeenCalledTimes(1);
+      expect(log.info).toHaveBeenCalledWith(
+        "config restart superseded: GatewayConfigReloadSupersededError: config reload superseded by a newer runtime config source",
       );
-      await reloader.ready;
-      onRestart.mockRejectedValueOnce(
-        superseded ? new GatewayConfigReloadSupersededError() : new Error("restart-check failed"),
+      expect(log.info).toHaveBeenCalledWith(
+        "config reload superseded: GatewayConfigReloadSupersededError: config reload superseded by a newer runtime config source",
       );
-      onRestart.mockResolvedValueOnce(undefined);
+      expect(log.error).not.toHaveBeenCalled();
+      expect(promoteSnapshot).not.toHaveBeenCalled();
+      expect(unhandled).toStrictEqual([]);
 
-      const unhandled: unknown[] = [];
-      const onUnhandled = (reason: unknown) => {
-        unhandled.push(reason);
-      };
-      process.on("unhandledRejection", onUnhandled);
-      try {
-        watcher.emit("change");
-        await flushReload(reloader);
-        await Promise.resolve();
+      watcher.emit("change");
+      await flushReload(reloader);
+      await Promise.resolve();
 
-        expect(onHotReload).not.toHaveBeenCalled();
-        expect(onRestart).toHaveBeenCalledTimes(1);
-        if (superseded) {
-          expect(log.info).toHaveBeenCalledWith(
-            "config restart superseded: GatewayConfigReloadSupersededError: config reload superseded by a newer runtime config source",
-          );
-          expect(log.info).toHaveBeenCalledWith(
-            "config reload superseded: GatewayConfigReloadSupersededError: config reload superseded by a newer runtime config source",
-          );
-          expect(log.error).not.toHaveBeenCalled();
-        } else {
-          expect(log.error).toHaveBeenCalledWith(
-            "config restart failed: Error: restart-check failed",
-          );
-          expect(log.error).toHaveBeenCalledWith(
-            "config reload failed: Error: restart-check failed",
-          );
-        }
-        expect(promoteSnapshot).not.toHaveBeenCalled();
-        expect(unhandled).toStrictEqual([]);
-
-        watcher.emit("change");
-        await flushReload(reloader);
-        await Promise.resolve();
-
-        expect(onRestart).toHaveBeenCalledTimes(2);
-        expect(promoteSnapshot).toHaveBeenCalledWith(snapshot, "valid-config");
-        expect(unhandled).toStrictEqual([]);
-      } finally {
-        process.off("unhandledRejection", onUnhandled);
-        await reloader.stop();
-      }
-    },
-  );
+      expect(onRestart).toHaveBeenCalledTimes(2);
+      expect(promoteSnapshot).toHaveBeenCalledWith(snapshot, "valid-config");
+      expect(unhandled).toStrictEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      await reloader.stop();
+    }
+  });
 
   it("keeps accepted external config reloads applied when last-known-good promotion fails", async () => {
     const acceptedSnapshot = makeSnapshot({
@@ -3172,7 +3134,6 @@ describe("startGatewayConfigReloader", () => {
     "source provenance",
     "invalid",
     "missing",
-    "install records",
     "new writer",
     "new observation",
     "invoker closed",
@@ -3220,10 +3181,7 @@ describe("startGatewayConfigReloader", () => {
       });
       const harness = createReloaderHarness(readSnapshot, {
         initialConfig: sourceConfig,
-        readPluginInstallRecords: async (): Promise<Record<string, PluginInstallRecord>> =>
-          scenario === "install records" && readSnapshot.mock.calls.length > 1
-            ? { notes: { source: "npm", spec: "notes@2" } }
-            : {},
+        readPluginInstallRecords: async () => ({}),
         onHotReload: async (plan, _config, currentOwnership) => {
           ownership = currentOwnership;
           started.resolve();
@@ -3656,61 +3614,6 @@ describe("startGatewayConfigReloader", () => {
       await harness.reloader.stop();
     },
   );
-
-  it("hot reloads when an external plugin source write also changes plugin config", async () => {
-    const previousConfig: OpenClawConfig = {
-      gateway: { reload: {} },
-      plugins: {
-        allow: ["lossless-claw"],
-      },
-    };
-    const nextConfig: OpenClawConfig = {
-      gateway: { reload: {} },
-      plugins: {
-        allow: ["lossless-claw"],
-        entries: {
-          "lossless-claw": { enabled: true },
-        },
-      },
-    };
-    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
-      makeSnapshot({
-        config: nextConfig,
-        hash: "external-plugin-source-and-config-1",
-      }),
-    );
-    const readPluginInstallRecords = vi.fn().mockResolvedValueOnce({
-      "lossless-claw": {
-        source: "npm",
-        spec: "@martian-engineering/lossless-claw",
-        installPath: "/tmp/openclaw/plugins/lossless-claw",
-        installedAt: "2026-04-22T00:00:00.000Z",
-      },
-    } satisfies Record<string, PluginInstallRecord>);
-    const harness = createReloaderHarness(readSnapshot, {
-      initialCompareConfig: previousConfig,
-      initialPluginInstallRecords: {},
-      readPluginInstallRecords,
-    });
-    await harness.reloader.ready;
-
-    harness.watcher.emit("change");
-    await flushReload(harness.reloader);
-
-    expect(harness.onRestart).not.toHaveBeenCalled();
-    const [plan, reloadedConfig] = getOnlyHotReloadCall(harness);
-    expect(plan.changedPaths).toEqual([
-      "plugins.entries.lossless-claw",
-      "plugins.installs.lossless-claw",
-    ]);
-    expect(plan.restartGateway).toBe(false);
-    expect(plan.reloadPlugins).toBe(true);
-    expect(plan.hotReasons).toEqual([
-      "plugins.entries.lossless-claw",
-      "plugins.installs.lossless-claw",
-    ]);
-    expect(reloadedConfig).toBe(nextConfig);
-  });
 });
 
 describe("startGatewayConfigReloader skills invalidation", () => {

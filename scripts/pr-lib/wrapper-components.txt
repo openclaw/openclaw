@@ -1534,6 +1534,7 @@ src/shared/path-array-index.ts
 src/shared/permit-pool.ts
 src/shared/pid-alive.ts
 src/shared/regexp.ts
+src/shared/rosetta-translation.ts
 src/shared/sandbox-workspace-paths.ts
 src/shared/settle-within.ts
 src/shared/store-writer-queue.ts

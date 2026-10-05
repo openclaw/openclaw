@@ -490,6 +490,9 @@ JSON error; add `--non-interactive --accept-risk` for automation.
 With `--modern`, JSON is a one-shot OpenClaw overview and exits after that
 single result. Use `--non-interactive` for other scripts. Invalid existing
 configuration also returns one JSON failure; repair guidance remains on stderr.
+Non-interactive provider setup failures, including an unreachable local model
+server or missing credentials, return a JSON error on stdout and a nonzero exit
+status. Without `--json`, the same recovery guidance is printed as readable text.
 </Note>
 
 ## Provider prefiltering

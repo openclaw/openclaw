@@ -8,6 +8,10 @@ import type { SessionTranscriptReadScope } from "../config/sessions/session-acce
 import type { SessionTranscriptBoundedMessageTailOptions } from "../config/sessions/session-accessor.sqlite-projection-read.js";
 import { bindSessionTranscriptStoreScope } from "../config/sessions/session-accessor.transcript-target.js";
 import { readRestoredSessionTranscript } from "../config/sessions/session-cold-storage-read.js";
+import {
+  prepareIncognitoSessionHistoryRead,
+  type IncognitoSessionHistoryBinding,
+} from "../config/sessions/session-incognito-history-read.js";
 import { readSessionTranscriptAccountingFromProjection } from "../config/sessions/session-transcript-accounting.js";
 import type { SessionTranscriptAccountingOptions } from "../config/sessions/session-transcript-accounting.types.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
@@ -23,6 +27,11 @@ import {
   resolveTranscriptReadTarget,
   toTranscriptReadScope,
 } from "./session-transcript-read-target.js";
+import type {
+  ReadSessionMessagesAsyncOptions,
+  SessionTranscriptReadOptions,
+} from "./session-transcript-read.types.js";
+import { collectSessionTranscriptMessages } from "./session-transcript-source-pages.js";
 import type {
   SessionTranscriptSummaryQuery,
   SessionTranscriptSummaryResult,
@@ -71,9 +80,13 @@ function captureHistoryReadScope(scope: SessionTranscriptReadScope): SessionTran
 }
 
 export async function readSessionMessagesAsync(
-  ...args: Parameters<typeof sessionTranscriptReader.readSessionMessagesAsync>
+  scope: SessionTranscriptReadScope,
+  options: ReadSessionMessagesAsyncOptions & SessionTranscriptReadOptions,
 ): Promise<unknown[]> {
-  return (await readSessionMessagesWithSourceAsync(...args)).messages;
+  if (options.mode === "recent") {
+    return (await readRecentSessionMessagesWithStatsAsync(scope, options)).messages;
+  }
+  return collectSessionTranscriptMessages(readSessionMessagesWithSourceAsync, scope, options);
 }
 
 function createHistoryPageReader<Options, Result>(
@@ -109,10 +122,11 @@ function createHistoryPageReader<Options, Result>(
 
 export const readSessionMessagesWithSourceAsync = createHistoryPageReader(
   sessionTranscriptReader.readSessionMessagesWithSourceAsync,
-  (read, target, options) => read({ kind: "source-messages", params: { target, options } }),
+  (read, target, options, signal) =>
+    read({ kind: "source-messages", params: { target, options } }, signal),
 );
 
-export const readSessionTranscriptAccountingAsync = createHistoryPageReader(
+const readSessionTranscriptAccounting = createHistoryPageReader(
   async (target, options: SessionTranscriptAccountingOptions) =>
     withCurrentProjectionSnapshot(target, (projection) =>
       readSessionTranscriptAccountingFromProjection(projection, options),
@@ -121,7 +135,28 @@ export const readSessionTranscriptAccountingAsync = createHistoryPageReader(
     read({ kind: "active-accounting", params: { target, options } }, signal),
 );
 
-export const readSessionTranscriptBoundedMessageTailPageAsync = createHistoryPageReader(
+export async function readSessionTranscriptAccountingAsync(
+  scope: SessionTranscriptReadScope,
+  options: SessionTranscriptAccountingOptions,
+  signal?: AbortSignal,
+  incognito?: IncognitoSessionHistoryBinding,
+) {
+  if (incognito) {
+    const { actor, authority, target } = prepareIncognitoSessionHistoryRead(
+      incognito,
+      scope,
+      signal,
+    );
+    return actor.sessions.history(
+      authority,
+      { type: "session.history.accounting", input: { ...target, options } },
+      signal,
+    );
+  }
+  return readSessionTranscriptAccounting(scope, options, signal);
+}
+
+const readSessionTranscriptBoundedMessageTailPage = createHistoryPageReader(
   async (target, options: SessionTranscriptBoundedMessageTailOptions) =>
     withCurrentProjectionSnapshot(
       target,
@@ -131,6 +166,27 @@ export const readSessionTranscriptBoundedMessageTailPageAsync = createHistoryPag
     ),
   (read, target, options) => read({ kind: "bounded-tail", params: { target, options } }),
 );
+
+export async function readSessionTranscriptBoundedMessageTailPageAsync(
+  scope: SessionTranscriptReadScope,
+  options: SessionTranscriptBoundedMessageTailOptions,
+  signal?: AbortSignal,
+  incognito?: IncognitoSessionHistoryBinding,
+) {
+  if (incognito) {
+    const { actor, authority, target } = prepareIncognitoSessionHistoryRead(
+      incognito,
+      scope,
+      signal,
+    );
+    return actor.sessions.history(
+      authority,
+      { type: "session.history.bounded-tail", input: { ...target, options } },
+      signal,
+    );
+  }
+  return readSessionTranscriptBoundedMessageTailPage(scope, options, signal);
+}
 
 export const readRecentSessionMessagesWithStatsAsync = createHistoryPageReader(
   sessionTranscriptReader.readRecentSessionMessagesWithStatsAsync,

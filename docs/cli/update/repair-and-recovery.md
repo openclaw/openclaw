@@ -271,6 +271,15 @@ original recovery checks; another live update owner still prevents settlement.
 No recovery artifacts are deleted. An older installed CLI cannot obtain this fix
 from a candidate it has not yet staged; use the manual installation hop above.
 
+The same repair handles `ENOENT` when the recorded handoff lease database is
+missing, for example after a reboot clears a temporary filesystem. Its storage
+owner recreates the lease database, and repair acquires fresh update ownership
+before closing the orphaned package operation as `recovery-lease-missing`.
+The installed package, launchers, and retained recovery evidence keep the same
+protections. Repair then continues through Doctor and plugin convergence;
+plugin data/settings warnings clear only when their migration owners complete
+the required work. Remaining warnings name the next repair action.
+
 Rerun update finalization after the core package already changed but later
 repair work did not finish cleanly. This is the supported recovery path when
 `openclaw update` installed the new core package but post-core plugin sync,

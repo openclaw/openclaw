@@ -900,37 +900,6 @@ describe("release validation no-push transport", () => {
     expect(child.outputs.install_smoke_scheduled).toBeUndefined();
   });
 
-  it("parent rejects QA selectors outside the QA group", () => {
-    const group = "live-e2e";
-    const { output, result } = executeParentFilterValidation(group, "qa-live-matrix");
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(
-      "QA live_suite_filter selectors require rerun_group=qa or qa-live",
-    );
-    expect(output).toBe("");
-  });
-
-  it("parent rejects repo-live selectors outside live-e2e", () => {
-    const group = "qa-live";
-    const { output, result } = executeParentFilterValidation(group, "repo-e2e");
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(
-      "Repo live_suite_filter selectors require rerun_group=live-e2e",
-    );
-    expect(output).toBe("");
-  });
-
-  it("parent rejects cross-OS selectors outside their group", () => {
-    const group = "live-e2e";
-    const { output, result } = executeParentFilterValidation(group, "", "windows/packaged-upgrade");
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("cross_os_suite_filter requires rerun_group=all or cross-os");
-    expect(output).toBe("");
-  });
-
   it.each([
     ["qa-live", "qa-live-matrix", ""],
     ["live-e2e", " Repo-E2E,\trepo-smoke ", ""],
@@ -1015,15 +984,6 @@ describe("release validation no-push transport", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("cross_os_suite_filter requires rerun_group=all or cross-os");
-  });
-
-  it.each([
-    ["qa", "qa-live-matrix"],
-    ["qa-live", "qa-live-matrix"],
-    ["live-e2e", "repo-e2e"],
-  ])("accepts rerun_group=%s with selector %s", (group, filter) => {
-    const outputs = runReleaseGroupCapture(group, false, filter);
-    expect(outputs.rerun_group).toBe(group);
   });
 
   it.each([

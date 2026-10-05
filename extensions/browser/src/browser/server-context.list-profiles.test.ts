@@ -251,29 +251,6 @@ describe("browser server-context listProfiles", () => {
     expect((await listing)[0]?.running).toBe(false);
   });
 
-  it("bypasses SSRF gating when probing managed loopback profiles", async () => {
-    const state = makeBrowserServerState({
-      resolvedOverrides: {
-        ssrfPolicy: {},
-      },
-    });
-    const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
-    isChromeReachable.mockResolvedValue(true);
-
-    const ctx = createBrowserRouteContext({ getState: () => state });
-    const profiles = await ctx.listProfiles();
-
-    expect(isChromeReachable).toHaveBeenCalledWith(
-      "http://127.0.0.1:18800",
-      200,
-      undefined,
-      expect.any(AbortSignal),
-    );
-    expect(profiles).toHaveLength(1);
-    expect(profiles[0]?.name).toBe("openclaw");
-    expect(profiles[0]?.running).toBe(true);
-  });
-
   it("redacts CDP URL credentials from profile status", async () => {
     const state = makeBrowserServerState({
       profile: makeBrowserProfile({

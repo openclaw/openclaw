@@ -551,12 +551,23 @@ Copying one does not grant permission to restart a service.
 
 ## How interrupted work is detected
 
-Startup reconciles older subagent session rows that still say `running` but have
-no live run, task, admission, or recovery owner. It records a diagnostic transcript
+Startup reconciles older spawned session rows, including dashboard-shaped children,
+that still say `running` but have no live run, task, admission, or recovery owner.
+An abort flag or safe-tools hint alone does not establish a recovery owner.
+Completed child history stops retaining its requester only after delivery and
+cleanup finish with no outstanding requester, wake, collector, or recovery claim.
+Incomplete or unreadable child records still retain ownership.
+It records a diagnostic transcript
 receipt and marks the row `interrupted` in one transaction. The end timestamp records when
 startup observed the interruption, rather than an inferred execution finish time;
 the original activity timestamps remain intact. A failed receipt write becomes a
 warning and leaves the row eligible for a later repair.
+
+Archiving cancels the session's work and settles a remaining `running` status as
+`killed`. Startup applies the same settlement to older archived rows after excluding
+live work. Existing terminal outcomes, recovery receipts, and pending delivery
+metadata remain intact; restoring an archived session does not resume its cancelled
+execution. Unarchived main sessions retain their separate resume path below.
 
 Three complementary mechanisms mark sessions whose turn did not finish:
 
