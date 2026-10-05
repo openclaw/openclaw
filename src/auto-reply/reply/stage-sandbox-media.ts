@@ -67,12 +67,17 @@ export async function stageSandboxMedia(params: {
     fact.path ? [{ index, path: fact.path }] : [],
   );
   if (pathEntries.length === 0 || !sessionKey) {
+    if (pathEntries.length === 0 && media.length > 0) {
+      console.warn(`Staging skipped: ${media.length} media fact(s) have no path`);
+    }
     return EMPTY_STAGE_RESULT;
   }
 
   const remoteWorkspace = getAgentWorkspaceAccess(workspaceDir, "prepareTurnAttachments");
   if (remoteWorkspace?.prepareTurnAttachments && !ctx.MediaRemoteHost) {
     // Keep managed originals on Gateway; the admitted turn transfers them to the Harness.
+    // This is an intentional handoff, not a failure — keep it at debug level.
+    logVerbose("Inbound media staging skipped: remote workspace owns attachment preparation");
     return EMPTY_STAGE_RESULT;
   }
   const forceRemoteCache =
@@ -109,6 +114,7 @@ export async function stageSandboxMedia(params: {
     : null;
   const effectiveWorkspaceDir = sandbox?.workspaceDir ?? remoteMediaCacheDir ?? workspaceDir;
   if (!effectiveWorkspaceDir) {
+    console.warn("Inbound media staging skipped: no workspace directory resolved");
     return EMPTY_STAGE_RESULT;
   }
 
@@ -151,6 +157,7 @@ export async function stageSandboxMedia(params: {
     abortSignal?.throwIfAborted();
     const source = await resolveStageableMediaSource(entry.path);
     if (!source) {
+      console.warn(`Staging skipped for ${entry.path}: unable to resolve a stageable source`);
       continue;
     }
     const allowed = await isAllowedSourcePath({
@@ -159,6 +166,7 @@ export async function stageSandboxMedia(params: {
       remoteAttachmentRoots,
     });
     if (!allowed) {
+      console.warn(`Inbound media staging skipped for ${source}: source path is not allowed`);
       continue;
     }
     const fileName = allocateStagedFileName(source, usedNames);
@@ -233,7 +241,7 @@ export async function stageSandboxMedia(params: {
       if (err instanceof FsSafeError && err.code === "too-large") {
         console.warn(`Inbound media staging skipped for ${fileName}: ${err.message}`);
       } else {
-        logVerbose(`Failed to stage inbound media path ${source}: ${String(err)}`);
+        console.warn(`Failed to stage inbound media path ${source}: ${String(err)}`);
       }
       continue;
     }

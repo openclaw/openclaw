@@ -12,7 +12,10 @@ import { getAgentRunContext, listAgentRunsForSession } from "../../../infra/agen
 import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../../../state/openclaw-state-db-readonly.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
-import { hasRetainedRequiredCompletionDelivery } from "./subagent-delivery-state.js";
+import {
+  hasRetainedRequiredCompletionDelivery,
+  isSettledSubagentRequesterHistory,
+} from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
@@ -231,7 +234,7 @@ export async function resolveSubagentSessionStartedAt(params: {
   );
 }
 
-/** Startup may only settle session-only rows; any run/task generation retains ownership. */
+/** Child records retain their session; completed descendant history does not own its requester. */
 export function hasSubagentSessionRecoveryOwner(params: {
   sessionKey: string;
   sessionId: string;
@@ -244,8 +247,8 @@ export function hasSubagentSessionRecoveryOwner(params: {
   for (const run of subagentRuns.values()) {
     if (
       run.childSessionKey === key ||
-      run.requesterSessionKey === key ||
-      run.controllerSessionKey === key
+      ((run.requesterSessionKey === key || run.controllerSessionKey === key) &&
+        !isSettledSubagentRequesterHistory(run))
     ) {
       return true;
     }

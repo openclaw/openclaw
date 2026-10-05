@@ -62,27 +62,9 @@ func segmentID(relPath, textHash string) string {
 }
 
 func splitWhitespace(text string) (string, string, string) {
-	if text == "" {
-		return "", "", ""
-	}
-	start := 0
-	for start < len(text) && isWhitespace(text[start]) {
-		start++
-	}
-	end := len(text)
-	for end > start && isWhitespace(text[end-1]) {
-		end--
-	}
-	return text[:start], text[start:end], text[end:]
-}
-
-func isWhitespace(b byte) bool {
-	switch b {
-	case ' ', '\t', '\n', '\r':
-		return true
-	default:
-		return false
-	}
+	withoutPrefix := strings.TrimLeft(text, " \t\n\r")
+	core := strings.TrimRight(withoutPrefix, " \t\n\r")
+	return text[:len(text)-len(withoutPrefix)], core, withoutPrefix[len(core):]
 }
 
 func validateNoTranslationTranscriptArtifacts(source, translated string) error {

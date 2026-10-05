@@ -11,6 +11,7 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import type { WorkerPlacementSessionWorkCancellation } from "./server-worker-placement-cancel.js";
 import {
+  resolveWorkerPlacementSessionStoreTarget,
   resolveWorkerPlacementSessionTarget,
   WorkerDispatchTargetChangedError,
   type WorkerPlacementSessionRuntime,
@@ -37,13 +38,9 @@ export function createGatewayWorkerPlacementReclaimBarriers(
   }: WorkerPlacementReclaimRequest) => {
     const sessionRuntime = await params.loadSessionRuntime();
     const resolveTarget = () =>
-      sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
-        cfg: getRuntimeConfig(),
-        key: sessionKey,
+      resolveWorkerPlacementSessionStoreTarget(sessionRuntime, getRuntimeConfig(), {
+        sessionKey,
         agentId,
-        preserveQualifiedAddress: true,
-        clone: false,
-        exactRead: true,
       });
     const target = resolveTarget();
     const lifecycleIdentities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];

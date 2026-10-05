@@ -224,17 +224,24 @@ export function pruneAgentConfig(
     if (normalizeAgentId(entry.id) === id) {
       continue;
     }
-    nextAgentsList.push(
-      entry.subagents?.allowAgents
-        ? {
-            ...entry,
-            subagents: {
-              ...entry.subagents,
-              allowAgents: pruneAllowAgents(entry.subagents.allowAgents),
-            },
-          }
-        : entry,
-    );
+    const nextEntry = { ...entry };
+    if (entry.subagents?.allowAgents) {
+      nextEntry.subagents = {
+        ...entry.subagents,
+        allowAgents: pruneAllowAgents(entry.subagents.allowAgents),
+      };
+    }
+    if (entry.tools?.agentToAgent?.send) {
+      nextEntry.tools = {
+        ...entry.tools,
+        agentToAgent: {
+          ...entry.tools.agentToAgent,
+          // Preserve []: removing the last destination must not restore inherited access.
+          send: pruneAllowAgents(entry.tools.agentToAgent.send),
+        },
+      };
+    }
+    nextAgentsList.push(nextEntry);
   }
   const nextAgents = nextAgentsList.length > 0 ? toAgentEntriesRecord(nextAgentsList) : undefined;
 

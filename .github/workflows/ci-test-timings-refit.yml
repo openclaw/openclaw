@@ -89,6 +89,7 @@ jobs:
             config/ci-test-timings.json
             scripts/ci-refit-test-timings.mts
             scripts/ci-run-timings.mjs
+            scripts/lib/arg-utils.runtime.mjs
             scripts/lib/ci-test-timings-refit.mts
             scripts/lib/ci-node-test-groups-codec.mts
             scripts/lib/ci-test-timings-schema.mts

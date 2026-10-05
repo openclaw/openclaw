@@ -1,13 +1,11 @@
 #!/usr/bin/env node
 
 // Advises on ineffective or suspicious dynamic import patterns.
-import { promises as fs } from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
-import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
-  collectTypeScriptFilesFromRoots,
+  collectFileViolations,
   runAsScript,
   toLine,
   visitModuleSpecifiers,
@@ -138,32 +136,17 @@ export function findDynamicImportAdvisories(
   return advisories;
 }
 
-async function collectDynamicImportAdvisories() {
-  using parser = createNativeTypeScriptParser({ cwd: repoRoot });
-  const files = await collectTypeScriptFilesFromRoots(defaultRoots, {
+function collectDynamicImportAdvisories() {
+  return collectFileViolations({
+    repoRoot,
+    sourceRoots: defaultRoots,
     extraTestSuffixes: [".suite.ts"],
+    skipFile: isIgnoredTestHelperPath,
+    findViolations: (content, filePath, sourceFile) =>
+      isIgnoredTestHelperContent(content)
+        ? []
+        : findDynamicImportAdvisories(content, filePath, sourceFile),
   });
-  const advisories: Array<DynamicImportAdvisory & { path: string }> = [];
-  for (const filePath of files) {
-    if (isIgnoredTestHelperPath(filePath)) {
-      continue;
-    }
-    const content = await fs.readFile(filePath, "utf8");
-    if (isIgnoredTestHelperContent(content)) {
-      continue;
-    }
-    for (const advisory of findDynamicImportAdvisories(
-      content,
-      filePath,
-      parser.parseSourceFile(filePath, content),
-    )) {
-      advisories.push({
-        path: path.relative(repoRoot, filePath),
-        ...advisory,
-      });
-    }
-  }
-  return advisories;
 }
 
 export async function main(argv = process.argv.slice(2)) {

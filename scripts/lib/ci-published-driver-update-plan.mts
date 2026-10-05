@@ -7,7 +7,13 @@ const PUBLISHED_DRIVER_UPDATE_INPUTS = [
   "src/gateway/server-startup-trace.ts",
 ] as const;
 
-export function shouldRunPublishedDriverUpdate(changedPaths: readonly string[] | null): boolean {
+export function shouldRunPublishedDriverUpdate(
+  changedPaths: readonly string[] | null,
+  workflowEventName = "",
+): boolean {
+  if (workflowEventName === "pull_request") {
+    return false;
+  }
   // An unavailable diff must retain the cross-version boundary proof.
   if (!changedPaths?.length) {
     return true;

@@ -97,6 +97,24 @@ describe("runCommand", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")("preserves signal termination diagnostics", async () => {
+    const result = await runCommand(
+      [process.execPath, "-e", "process.kill(process.pid, 'SIGTERM')"],
+      undefined,
+      undefined,
+      undefined,
+    );
+
+    expect(result).toMatchObject({
+      exitCode: undefined,
+      timedOut: false,
+      success: false,
+      stdout: "",
+      stderr: "",
+      error: "Command terminated by signal SIGTERM",
+    });
+  });
+
   it.runIf(process.platform !== "win32")("force-kills timed-out command trees", async () => {
     const startedAt = Date.now();
     const result = await runCommand(
@@ -122,7 +140,11 @@ describe("runCommand", () => {
         controller.signal,
       );
 
-      expect(result).toMatchObject({ timedOut: false, success: false, error: null });
+      expect(result).toMatchObject({
+        timedOut: false,
+        success: false,
+        error: expect.stringMatching(/^Command terminated by signal SIG(?:TERM|KILL)$/),
+      });
       expect(Date.now() - startedAt).toBeLessThan(2_000);
     } finally {
       clearTimeout(cancelling);

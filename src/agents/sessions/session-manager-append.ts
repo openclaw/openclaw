@@ -498,6 +498,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       },
       matchesUser,
       signal,
+      this,
     );
   }
 

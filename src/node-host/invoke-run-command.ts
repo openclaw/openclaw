@@ -67,7 +67,10 @@ export async function runCommand(
       success: exitCode === 0 && !timedOut,
       stdout: result.stdout,
       stderr: result.stderr,
-      error: null,
+      error:
+        result.termination === "signal" && result.signal
+          ? `Command terminated by signal ${result.signal}`
+          : null,
       truncated: Boolean(result.stdoutTruncatedBytes || result.stderrTruncatedBytes),
     };
   } catch (err) {
