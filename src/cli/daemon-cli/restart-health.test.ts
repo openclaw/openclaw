@@ -461,4 +461,26 @@ describe("restart health", () => {
       command: null,
     });
   });
+  it("returns promptly when a non-Gateway process holds the port while the service is stopped", async () => {
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const service = makeGatewayService({ status: "stopped" });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 4242, commandLine: "node unrelated-service.js" }],
+      hints: [],
+    });
+    readGatewayOwnerLease.mockReturnValue(undefined);
+    const snapshot = await waitForGatewayHealthyRestart({
+      service,
+      port: 18789,
+      attempts: 100,
+      delayMs: 1_000,
+      timeoutMs: 120_000,
+    });
+    expect(snapshot.waitOutcome).toBe("port-held");
+    expect(snapshot.elapsedMs).toBeLessThan(5_000);
+    expect(snapshot.probeError).toContain("held by another process");
+  });
+
 });
