@@ -242,10 +242,13 @@ can use the intermediate release above to remove it.
 OAuth credential sidecars under `credentials/auth-profiles/` are retired. Their
 last writer shipped in `2026.5.16-beta.3` on May 16, 2026; `2026.5.16-beta.4`
 removed that writer. Doctor detects these files without reading credentials or
-accessing encryption keys. Upgrade through `2026.9.7` and run
-`openclaw doctor --fix` on the original host before retrying. The supported
-`auth.json`, `auth-profiles.json`, SQLite credential, and migration-recovery
-contracts remain unchanged.
+accessing encryption keys. When a legacy `auth-profiles.json` still references
+one, upgrade through `2026.9.7` and run `openclaw doctor --fix` on the original
+host before retrying. Sidecars that no legacy profile references stay in place
+and do not block the upgrade; `2026.9.7` also keeps them, because agent
+directories outside its scan might still use them. The supported `auth.json`,
+`auth-profiles.json`, SQLite credential, and migration-recovery contracts
+remain unchanged.
 
 ## Cron ownership before roster migration
 

@@ -357,7 +357,6 @@ describe("candidate update admission", () => {
     "acp/event-ledger.json.doctor-import",
     "restart-sentinel.json",
     "restart-sentinel.json.doctor-importing",
-    `credentials/auth-profiles/${"b".repeat(32)}.json`,
   ])(
     "refuses retired %s before a published updater can activate the candidate",
     async (relative) => {
@@ -394,20 +393,30 @@ describe("candidate update admission", () => {
     },
   );
 
-  it.each(["environment", "config", "prefixed-config", "prefixed-include"])(
-    "refuses retired OAuth selected by %s without changing the live profile",
-    async (selector) => {
-      const oauthDir = path.join(home, "external-auth");
+  it.each([
+    { selector: "default", store: "referenced" },
+    { selector: "environment", store: "referenced" },
+    { selector: "config", store: "referenced" },
+    { selector: "prefixed-config", store: "referenced" },
+    { selector: "prefixed-include", store: "referenced" },
+    { selector: "default", store: "unreadable" },
+    { selector: "default", store: "other-id" },
+    { selector: "config", store: "other-id" },
+  ])(
+    "admits retired OAuth selected by $selector only when no legacy profile references it ($store store)",
+    async ({ selector, store: storeKind }) => {
+      const stateDir = path.dirname(configPath);
+      const oauthDir =
+        selector === "default"
+          ? path.join(stateDir, "credentials")
+          : path.join(home, "external-auth");
       const selected = { env: { vars: { OPENCLAW_OAUTH_DIR: "~/external-auth" } } };
       if (selector === "environment") {
         vi.stubEnv("OPENCLAW_OAUTH_DIR", oauthDir);
       } else if (selector === "prefixed-include") {
-        fs.writeFileSync(
-          path.join(path.dirname(configPath), "auth-selector.json"),
-          JSON.stringify(selected),
-        );
+        fs.writeFileSync(path.join(stateDir, "auth-selector.json"), JSON.stringify(selected));
         fs.writeFileSync(configPath, 'unexpected prefix\n{"$include":"auth-selector.json"}');
-      } else {
+      } else if (selector !== "default") {
         fs.writeFileSync(
           configPath,
           `${selector === "prefixed-config" ? "unexpected prefix\n" : ""}${JSON.stringify(selected)}`,
@@ -417,25 +426,56 @@ describe("candidate update admission", () => {
       const sidecar = path.join(oauthDir, "auth-profiles", `${"a".repeat(32)}.json`);
       fs.mkdirSync(path.dirname(sidecar), { recursive: true });
       fs.writeFileSync(sidecar, "unparsed retired credential bytes\n", { mode: 0o600 });
+      const store = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
+      if (storeKind === "unreadable") {
+        fs.mkdirSync(store, { recursive: true });
+      } else {
+        fs.mkdirSync(path.dirname(store), { recursive: true });
+        fs.writeFileSync(
+          store,
+          JSON.stringify({
+            version: 1,
+            profiles: {
+              "openai-codex:default": {
+                type: "oauth",
+                provider: "openai-codex",
+                oauthRef: {
+                  source: "openclaw-credentials",
+                  provider: "openai-codex",
+                  id: (storeKind === "referenced" ? "a" : "c").repeat(32),
+                },
+              },
+            },
+          }),
+        );
+      }
       const before = snapshotFiles();
 
       await updateAdmitCommand(contextPath);
 
-      expect(process.exitCode).toBe(3);
-      expect(readVerdict()).toMatchObject({
-        verdict: "refuse",
-        reasons: [
-          expect.objectContaining({
-            code: "retired-state-format",
-            message: expect.stringContaining("Upgrade through OpenClaw 2026.9.7"),
-          }),
-        ],
-        facts: {
-          checks: expect.arrayContaining([
-            { name: "state-format", status: "refuse", detail: expect.any(String) },
-          ]),
-        },
-      });
+      expect(process.exitCode).toBe(storeKind === "other-id" ? 0 : 3);
+      expect(readVerdict()).toMatchObject(
+        storeKind === "other-id"
+          ? { verdict: "admit", reasons: [] }
+          : {
+              verdict: "refuse",
+              reasons: [
+                expect.objectContaining({
+                  code: "retired-state-format",
+                  message: expect.stringContaining(
+                    storeKind === "referenced"
+                      ? "Upgrade through OpenClaw 2026.9.7"
+                      : `Cannot inspect potentially retired state at ${store}`,
+                  ),
+                }),
+              ],
+              facts: {
+                checks: expect.arrayContaining([
+                  { name: "state-format", status: "refuse", detail: expect.any(String) },
+                ]),
+              },
+            },
+      );
       expect(stderr).toBe("");
       expect(snapshotFiles()).toEqual(before);
       expect(fs.existsSync(resolveOpenClawStateSqlitePath())).toBe(false);
