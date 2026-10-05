@@ -10,12 +10,14 @@ describe("github_publish tool", () => {
   it.each(["responseId", "turnId"] as const)(
     "scopes reused call IDs by %s and keeps replays stable across runs",
     async (identityField) => {
-      const callGateway = vi.fn<InProcessGatewayCaller>().mockResolvedValue({
+      const callGatewayMock = vi.fn(async (_method: string, _params: Record<string, unknown>) => ({
         requestId: "publication-1",
-        status: "requested",
+        status: "requested" as const,
         message: "Publication was accepted.",
+      }));
+      const tool = createGitHubPublishTool({
+        callGateway: callGatewayMock as InProcessGatewayCaller,
       });
-      const tool = createGitHubPublishTool({ callGateway });
       const calls = ["First publication", "Second publication"].map((title, index) => {
         const toolCall = {
           type: "toolCall" as const,
@@ -50,7 +52,7 @@ describe("github_publish tool", () => {
         );
       }
 
-      expect(callGateway.mock.calls.map(([, params]) => params)).toEqual([
+      expect(callGatewayMock.mock.calls.map(([, params]) => params)).toEqual([
         {
           sessionKey: "agent:main:host-owned",
           idempotencyKey: "turn-1:github_publish_0",
