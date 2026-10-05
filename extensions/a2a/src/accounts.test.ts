@@ -130,6 +130,12 @@ describe("A2A account credential resolution", () => {
       expect(account.unresolvedPeers).toEqual(["lost"]);
       const withheld = await a2aChannelStatus.buildAccountSnapshot?.({ account, cfg });
       expect(withheld).toMatchObject({ peerCount: 1, unresolvedPeers: ["lost"] });
+      // The adapter must hand these snapshots to the collector so `channels status` warns.
+      expect(a2aChannelStatus.collectStatusIssues).toBeTypeOf("function");
+      const issues = a2aChannelStatus.collectStatusIssues?.([
+        { accountId: "default", enabled: true, configured: true, ...withheld },
+      ]);
+      expect(issues?.[0]?.message).toContain("lost");
 
       const clean = await a2aChannelStatus.buildAccountSnapshot?.({
         account: resolveA2aChannelAccount({
