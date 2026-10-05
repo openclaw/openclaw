@@ -48,7 +48,6 @@ import {
   resolveAgentIdForRequest,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
-  resolveSharedSecretHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import {
@@ -153,9 +152,6 @@ export async function handleOpenResponsesHttpRequest(
     ...opts,
     pathname: "/v1/responses",
     requiredOperatorMethod: "chat.send",
-    // Compat HTTP uses a different scope model from generic HTTP helpers:
-    // shared-secret bearer auth is treated as full operator access here.
-    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
     maxBodyBytes,
   });
   if (handled === false) {

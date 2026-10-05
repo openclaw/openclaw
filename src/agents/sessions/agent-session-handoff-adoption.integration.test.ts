@@ -63,27 +63,6 @@ describe("AgentSession handoff adoption integration", () => {
     const adopted = vi.fn();
     const abandoned = vi.fn();
     const lifecycleSettled = vi.fn();
-    const turnAdoptionLifecycle = {
-      admission: "exclusive" as const,
-      onDeferred: () => deferred(),
-      onAdopted: async () => adopted(),
-      onAbandoned: abandoned,
-      onSettled: lifecycleSettled,
-    };
-    const followupRun = createMockFollowupRun({
-      prompt: steerText,
-      messageId: "handoff-proof-message",
-      originatingChannel: "telegram",
-      originatingTo: "chat:handoff-proof",
-      turnAdoptionLifecycle,
-      run: {
-        sessionId,
-        sessionKey: queueKey,
-        messageProvider: "telegram",
-      },
-    });
-    const toolAuthorityFingerprint =
-      await prepareReplyToolAuthority(followupRun).fingerprintAsync();
     const finalDelivery = vi.fn(async (_text: string) => {});
     const followupRuns: string[] = [];
     const followupOperations: string[] = [];
@@ -175,6 +154,35 @@ describe("AgentSession handoff adoption integration", () => {
           options?.onQueueAccepted?.(accepted);
         },
       });
+    const followupRun = createMockFollowupRun({
+      prompt: steerText,
+      messageId: "handoff-proof-message",
+      originatingChannel: "telegram",
+      originatingTo: "chat:handoff-proof",
+      turnAdoptionLifecycle: {
+        admission: "exclusive",
+        onDeferred: () => deferred(),
+        onAdopted: async () => adopted(),
+        onAbandoned: abandoned,
+        onSettled: lifecycleSettled,
+      },
+      run: {
+        sessionId,
+        sessionKey: queueKey,
+        messageProvider: "telegram",
+      },
+    });
+    const activeOperation = createReplyOperation({
+      sessionKey: queueKey,
+      sessionId,
+      resetTriggered: false,
+    });
+    await activeOperation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(followupRun));
+    const toolAuthorityFingerprint = await activeOperation.bindToolAuthorityRouteAsync({
+      provider: followupRun.run.provider,
+      model: followupRun.run.model,
+    });
+    activeOperation.setPhase("running");
     const queueHandle: EmbeddedAgentQueueHandle = {
       kind: "embedded",
       runId: "handoff-proof-active-run",
@@ -189,12 +197,6 @@ describe("AgentSession handoff adoption integration", () => {
       cancel: () => {},
       abort: () => {},
     };
-    const activeOperation = createReplyOperation({
-      sessionKey: queueKey,
-      sessionId,
-      resetTriggered: false,
-    });
-    activeOperation.setPhase("running");
     const replyBackend: ReplyBackendHandle = {
       kind: "embedded",
       runId: queueHandle.runId,
@@ -266,7 +268,6 @@ describe("AgentSession handoff adoption integration", () => {
       touchActiveSessionEntry: vi.fn(async () => {}),
       typing,
       typingSignals,
-      toolAuthorityFingerprint,
     };
 
     try {

@@ -25,7 +25,7 @@ import {
   agentDatabaseLeaseStaleReason,
   mayShareAgentDatabaseFile,
   readAgentDatabaseLeaseProvenance,
-  isSameBootAgentDatabaseLease,
+  agentDatabaseLeaseProcessDeathRefusal,
 } from "./openclaw-agent-db-lease-provenance.js";
 import type { OpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
 import {
@@ -156,7 +156,7 @@ export type OpenClawAgentIntegrityVerificationReceiver = (
   record: OpenClawAgentIntegrityVerification | undefined,
   canReuseRuntimeIntegrity: boolean,
   invalidated: boolean,
-  processDeath: boolean,
+  because?: string,
 ) => void;
 
 export function claimOpenClawAgentDatabaseLease(
@@ -220,18 +220,14 @@ function claimAgentDatabaseLeaseInDatabase(
   }
   assertAgentDeletionPathFence(database, deletionFence);
   let invalidated = false;
-  let processDeath = true;
+  let processDeathRefusal: string | undefined;
   for (const held of readAgentDatabaseLeases(database.db)) {
     const staleReason = mayShareAgentDatabaseFile(held.path, owner.path)
       ? agentDatabaseLeaseStaleReason(held)
       : undefined;
     if (staleReason) {
-      processDeath &&=
-        staleReason === "owner-pid-dead" &&
-        held.opened_at > 0 &&
-        held.owner_start_time !== null &&
-        held.path === owner.path &&
-        isSameBootAgentDatabaseLease(held.provenance, owner.path);
+      const because = agentDatabaseLeaseProcessDeathRefusal(held, owner.path, staleReason);
+      processDeathRefusal ??= because;
       log.info(`agent database stale lease: ${staleReason}; previous release not observed`, {
         agentId: held.agent_id,
         leaseId: held.lease_id,
@@ -239,6 +235,7 @@ function claimAgentDatabaseLeaseInDatabase(
         staleReason,
         ownerPid: held.owner_pid,
         ownerStartTime: held.owner_start_time,
+        because: because ?? "same-boot-dead-owner",
       });
       clearAgentDatabaseLeaseVerifications(database.db, held.path, env);
       invalidated = true;
@@ -261,7 +258,7 @@ function claimAgentDatabaseLeaseInDatabase(
     verification && hasLiveLease ? { ...verification, clean_close: 0 } : verification,
     !hasOtherOwner,
     invalidated,
-    invalidated && processDeath && !hasOtherOwner,
+    processDeathRefusal ?? (hasOtherOwner ? "live-or-unknown-owner" : undefined),
   );
   executeSqliteQuerySync(
     database.db,

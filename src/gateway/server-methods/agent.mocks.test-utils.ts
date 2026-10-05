@@ -131,6 +131,13 @@ vi.mock("../../config/sessions.js", async () => {
   };
 });
 
+// mock-isolation: Handler fixtures supply lifecycle timestamps without opening transcript readers.
+vi.mock("../../config/sessions/lifecycle-read.js", () => ({
+  resolveSessionLifecycleTimestampsAsync: async (
+    params: Parameters<typeof mocks.resolveSessionLifecycleTimestamps>[0],
+  ) => mocks.resolveSessionLifecycleTimestamps(params),
+}));
+
 vi.mock("../../config/sessions/session-accessor.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
     "../../config/sessions/session-accessor.js",

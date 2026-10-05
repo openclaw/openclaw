@@ -1,5 +1,6 @@
 // ACP cleanup deadlines and fresh metadata preparation for Gateway reset/delete.
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { getAcpSessionResetControls } from "../acp/control-plane/manager.reset-controls.js";
 import { isAcpOwnerRepairRequired } from "../acp/control-plane/manager.runtime-owner.js";
@@ -19,18 +20,14 @@ const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
 async function runAcpCleanupStep(
   op: () => Promise<void>,
 ): Promise<{ status: "ok" } | { status: "timeout" } | { status: "error"; error: unknown }> {
-  let timer: NodeJS.Timeout | undefined;
-  const timeoutPromise = new Promise<{ status: "timeout" }>((resolve) => {
-    timer = setTimeout(() => resolve({ status: "timeout" }), ACP_RUNTIME_CLEANUP_TIMEOUT_MS);
-  });
-  const opPromise = op()
-    .then(() => ({ status: "ok" as const }))
-    .catch((error: unknown) => ({ status: "error" as const, error }));
-  const outcome = await Promise.race([opPromise, timeoutPromise]);
-  if (timer) {
-    clearTimeout(timer);
-  }
-  return outcome;
+  return raceWithTimeout(
+    () =>
+      op()
+        .then(() => ({ status: "ok" as const }))
+        .catch((error: unknown) => ({ status: "error" as const, error })),
+    ACP_RUNTIME_CLEANUP_TIMEOUT_MS,
+    () => ({ status: "timeout" as const }),
+  );
 }
 
 export async function closeAcpRuntimeForSession(params: {

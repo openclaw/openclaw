@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sleepWithAbort } from "@openclaw/retry";
 import type {
   SessionsAssignOwnerResult,
   SessionsPatchResult,
@@ -174,8 +175,8 @@ async function resolvePatchTarget(
   const isRequesterSession =
     resolved.key === context.effectiveRequesterKey && agentId === requesterAgentId;
   if (!isRequesterSession) {
-    // Session visibility is the configured read/write scope for session tools;
-    // the action only selects error copy. Owner gating remains separate.
+    // Session controls require status visibility, never an outbound-only send grant.
+    // Owner gating remains separate.
     const authorizationKey =
       agentId !== requesterAgentId && !parseAgentSessionKey(resolved.key)
         ? `agent:${agentId}:${resolved.key}`
@@ -656,12 +657,9 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                         25 * 2 ** Math.min(unobservedRunRetries, 8),
                         SELF_ARCHIVE_MAX_RETRY_DELAY_MS,
                       );
-                      await new Promise<void>((resolve) => {
-                        // A pending self-archive must not keep a shutting-down
-                        // gateway alive solely to retry its own transport.
-                        const retryTimer = setTimeout(resolve, retryDelayMs);
-                        retryTimer.unref?.();
-                      });
+                      // A pending self-archive must not keep a shutting-down
+                      // gateway alive solely to retry its own transport.
+                      await sleepWithAbort(retryDelayMs, undefined, { ref: false });
                       unobservedRunRetries = Math.min(unobservedRunRetries + 1, 8);
                     }
                   }

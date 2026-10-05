@@ -213,7 +213,7 @@ export function objectAdditionalPropertiesSchema(
 }
 
 function objectRepairIssueCount(schema: JsonSchema, value: Record<string, unknown>): number {
-  let issues = isSupportedConfigValueValid(schema, value) ? 0 : 1;
+  let issues = 1;
   const knownKeys = new Set(objectPropertyKeys(schema));
   for (const key of requiredPropertyKeys(schema)) {
     if (!Object.hasOwn(value, key)) {

@@ -1,6 +1,6 @@
 // Tests for gateway runtime subscription wiring.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { configureExecutionIdentityAdmissionSink } from "../audit/execution-identity-admission.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -477,10 +477,18 @@ describe("startGatewayEventSubscriptions", () => {
       stream: "lifecycle",
       data: { phase: "end", endedAt: 3_000 },
     });
+    const ownedPersistence = entry.projectSessionTerminalPersistence;
     transitions.push({ state: "Persisting", lifecycle: readLifecycleState(entry) });
 
-    terminalPersistence.resolve();
-    await waitForFast(() => expect(entry.projectSessionTerminalPersisted).toBe(true));
+    try {
+      expect(ownedPersistence).toBeInstanceOf(Promise);
+      terminalPersistence.resolve();
+      await waitForChatAbortTerminalPersistence(entry);
+      expect(entry.projectSessionTerminalPersisted).toBe(true);
+    } finally {
+      terminalPersistence.resolve();
+      await waitForChatAbortTerminalPersistence(entry);
+    }
     transitions.push({ state: "Persisted", lifecycle: readLifecycleState(entry) });
 
     registration.cleanup();
@@ -491,7 +499,7 @@ describe("startGatewayEventSubscriptions", () => {
       { state: "Start-normalized", lifecycle: lifecycleState(true, false) },
       {
         state: "Persisting",
-        lifecycle: lifecycleState(false, true, 3_000, expect.any(Promise), false),
+        lifecycle: lifecycleState(false, true, 3_000, ownedPersistence, false),
       },
       { state: "Persisted", lifecycle: lifecycleState(false, false, 3_000, undefined, true) },
       { state: "Removed" },
@@ -554,6 +562,7 @@ describe("startGatewayEventSubscriptions", () => {
         emitTerminal(2_000);
         expect(entry.projectSessionTerminalPending).toBe(true);
         expect(entry.projectSessionTerminalPersisted).toBe(false);
+        expect(entry.projectSessionTerminalPersistence).toBeInstanceOf(Promise);
         firstDrain = waitForChatAbortTerminalPersistence(entry).then(
           () => {
             firstSettled = true;
@@ -591,7 +600,11 @@ describe("startGatewayEventSubscriptions", () => {
           );
         }
         const currentState = readLifecycleState(current);
-        await firstDispatchEntered.promise;
+        await awaitGateBeforeSettlement(
+          firstDispatchEntered.promise,
+          firstDrain,
+          "Terminal ownership settled before its held dispatch was released",
+        );
         expect(firstSettled).toBe(false);
         if (change !== "removed") {
           await successorDispatchEntered.promise;

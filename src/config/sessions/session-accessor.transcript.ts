@@ -1,11 +1,11 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
-import { readTranscriptStatsSync } from "./session-accessor.sqlite-read.js";
 import { trimTranscriptForManualCompact } from "./session-accessor.sqlite-transcript-write.js";
 import type {
   SessionTranscriptRuntimeScope,
   SessionTranscriptManualTrimResult,
   SessionTranscriptManualTrimPreflightResult,
 } from "./session-accessor.types.js";
+import { readTranscriptStatsAsync } from "./session-transcript-stats.js";
 import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
@@ -69,7 +69,7 @@ export async function preflightSessionTranscriptForManualCompact(
   scope: SessionTranscriptRuntimeScope,
   params: { maxLines: number; sessionFile?: string },
 ): Promise<SessionTranscriptManualTrimPreflightResult> {
-  const eventCount = readTranscriptStatsSync(scope).eventCount;
+  const { eventCount } = await readTranscriptStatsAsync(scope);
   if (eventCount === 0) {
     return { compacted: false, reason: "no transcript" };
   }

@@ -282,11 +282,13 @@ export function handleAgentEnd(
   const runBeforeTerminalDelivery = ():
     | BeforeTerminalDeliveryDecision
     | Promise<BeforeTerminalDeliveryDecision> => {
+    // The acceptance hook inspects the answer this turn delivers, including a kept answer.
+    const answerAssistant = ctx.state.keptAnswer?.assistant ?? lastAssistant;
     return ctx.params.onBeforeTerminalDelivery?.({
       messages: evt?.messages ?? [],
       willRetry: evt?.willRetry === true,
       ...(evt?.assistantEntryId ? { assistantEntryId: evt.assistantEntryId } : {}),
-      ...(lastAssistant ? { lastAssistant } : {}),
+      ...(answerAssistant ? { lastAssistant: answerAssistant } : {}),
       assistantTexts: ctx.state.assistantTexts,
       hasAssistantVisibleText,
       isError,

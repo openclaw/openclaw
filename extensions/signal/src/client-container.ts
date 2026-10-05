@@ -1,5 +1,5 @@
 import { coerceErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
+import { captureEffectAuthority, resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   detectMime,
   extractOriginalFilename,
@@ -276,6 +276,7 @@ async function containerRestRequest<T = unknown>(
   method: "GET" | "POST" | "PUT" | "DELETE" = "GET",
   body?: unknown,
 ): Promise<T> {
+  const effect = captureEffectAuthority();
   const baseUrl = normalizeBaseUrl(opts.baseUrl);
   const url = `${baseUrl}${endpoint}`;
 
@@ -296,8 +297,10 @@ async function containerRestRequest<T = unknown>(
   }
 
   return await withSignalRestDeadline(timeoutMs, async ({ signal, timeoutMs: bodyTimeoutMs }) => {
-    opts.assertDirectAdapterHandoff?.();
-    const res = await fetchImpl(url, { ...init, signal });
+    const res = await effect.initiate(() => {
+      opts.assertDirectAdapterHandoff?.();
+      return fetchImpl(url, { ...init, signal });
+    });
     if (res.status === 204) {
       return undefined as T;
     }

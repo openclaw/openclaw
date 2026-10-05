@@ -45,11 +45,6 @@ enum ExecAllowlistPatternValidationReason: String, Codable, Equatable, Sendable 
     case empty
 }
 
-enum ExecAllowlistPatternValidation: Equatable {
-    case valid(String)
-    case invalid(ExecAllowlistPatternValidationReason)
-}
-
 struct ExecAllowlistUse: Sendable {
     let match: ExecAllowlistEntry
     let resolvedPath: String?
@@ -76,10 +71,8 @@ enum ExecApprovalsReadError: Error, Equatable, Sendable {
 }
 
 struct ExecApprovalsResolved: Sendable {
-    let url: URL
     let socketPath: String
     let token: String
-    let defaults: ExecApprovalsResolvedDefaults
     let agent: ExecApprovalsResolvedDefaults
     let allowlist: [ExecAllowlistEntry]
     var file: ExecApprovalsFile
@@ -93,12 +86,6 @@ struct ExecApprovalsResolvedDefaults: Codable, Sendable {
 }
 
 enum ExecApprovalHelpers {
-    static func validateAllowlistPattern(_ pattern: String?) -> ExecAllowlistPatternValidation {
-        let trimmed = pattern?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmed.isEmpty else { return .invalid(.empty) }
-        return .valid(trimmed)
-    }
-
     static func requiresAsk(
         ask: ExecAsk,
         security: ExecSecurity,
@@ -221,9 +208,7 @@ actor SkillBinsCache {
                     continue
                 }
 
-                var paths = pathsByName[name] ?? Set<String>()
-                paths.insert(normalizedPath)
-                pathsByName[name] = paths
+                pathsByName[name, default: []].insert(normalizedPath)
             }
         }
 

@@ -44,8 +44,8 @@ const loadStabilityBundleModule = createLazyPromise(
 const DEFAULT_GATEWAY_RPC_TIMEOUT_MS = 10_000;
 const SETUP_INFERENCE_DETECT_RPC_TIMEOUT_MS = 40_000;
 
-function gatewayCallOpts(cmd: Command, defaultTimeoutMs = DEFAULT_GATEWAY_RPC_TIMEOUT_MS): Command {
-  return addGatewayClientOptions(cmd, { timeoutMs: defaultTimeoutMs }).option(
+function gatewayCallOpts(cmd: Command): Command {
+  return addGatewayClientOptions(cmd, { timeoutMs: DEFAULT_GATEWAY_RPC_TIMEOUT_MS }).option(
     "--json",
     "Output JSON",
     false,
@@ -99,7 +99,7 @@ function gatewayAction(action: Parameters<Command["action"]>[0], label?: string)
   };
 }
 
-function parseDaysOption(raw: unknown, fallback = 30): number {
+function parseDaysOption(raw: unknown): number {
   if (typeof raw === "number" && Number.isFinite(raw)) {
     return Math.max(1, Math.floor(raw));
   }
@@ -113,7 +113,7 @@ function parseDaysOption(raw: unknown, fallback = 30): number {
     // way instead of silently defaulting.
     throw new Error(`Invalid --days. Use a positive integer, e.g. --days 30. Received: "${raw}".`);
   }
-  return fallback;
+  return 30;
 }
 
 async function renderCostUsageSummaryAsync(

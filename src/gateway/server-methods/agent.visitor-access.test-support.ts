@@ -37,6 +37,7 @@ export function createVisitorGatewayConfig(workspaceDir: string): OpenClawConfig
   return {
     agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } },
     gateway: {
+      controlUi: { github: { token: "synthetic-visitor-github-token" } },
       roles: {
         default: "guest",
         definitions: {
@@ -104,6 +105,9 @@ export function createAccessPolicyTransport(initialEmails: readonly string[] = [
     const url = new URL(input instanceof Request ? input.url : input);
     const method = init?.method ?? "GET";
     if (url.href === "https://api.github.com/users/fresh-account" && method === "GET") {
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        "Bearer synthetic-visitor-github-token",
+      );
       return Response.json({ id: 42, login: "fresh-account", email: null });
     }
     const collection = url.pathname === policiesPath;

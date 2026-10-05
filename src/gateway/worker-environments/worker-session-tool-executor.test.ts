@@ -862,6 +862,30 @@ describe("worker spawn startup composition", () => {
   );
 });
 
+describe("sender-restricted worker session creation", () => {
+  const getFixture = installWorkerSessionToolTestFixture(fixtureMocks, {
+    inheritedToolPolicySource: "sender",
+  });
+
+  it("refuses forced visible creation before child effects and replays the refusal", async () => {
+    const { setEntry, spawn } = getFixture();
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+    const first = await spawn("restricted-worker-spawn");
+    const replay = await spawn("restricted-worker-spawn");
+
+    expect(replay.resultJson).toBe(first.resultJson);
+    expect(JSON.parse(first.resultJson)).toMatchObject({
+      details: {
+        status: "forbidden",
+        error: "This sender may only start hidden helpers of the same agent.",
+      },
+    });
+    expect(gatewayCreate).not.toHaveBeenCalled();
+    expect(dispatchChild).not.toHaveBeenCalled();
+    expect(gatewayRequest).not.toHaveBeenCalled();
+  });
+});
+
 describe.each([false, true])(
   "worker spawn parent authority (audit=%s)",
   (collectExecutionIdentity) => {

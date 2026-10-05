@@ -915,10 +915,8 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                           if (!shouldHandleNavigationClick(e)) {
                             return;
                           }
-                          if (props.onNavigateToChat) {
-                            e.preventDefault();
-                            props.onNavigateToChat(row.key);
-                          }
+                          e.preventDefault();
+                          props.onNavigateToChat(row.key);
                         }}
                         >${friendlyKeyLabel ?? row.key}</a
                       >`

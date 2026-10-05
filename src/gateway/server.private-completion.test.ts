@@ -50,7 +50,10 @@ import { refusePendingInputCommit } from "./pending-input-commit.test-support.js
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { holdMetadataThroughSubagentStop } from "./server.private-completion.metadata-overlap.test-support.js";
-import { registerSessionsSendPrivateCompletionTests } from "./server.private-completion.sessions-send.test-support.js";
+import {
+  readPrivateCompletionRecorder,
+  registerSessionsSendPrivateCompletionTests,
+} from "./server.private-completion.sessions-send.test-support.js";
 import * as lifecycleState from "./session-lifecycle-state.js";
 import { createPreparedLifecycleWriteTracker } from "./session-lifecycle-state.test-support.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -143,16 +146,7 @@ describe("private subagent completion processing receipts", () => {
     await prepareGatewayReplyRuntimeForTest({ force: true });
     expect(kernel.gatewayRequestContext.dedupe).not.toBe(previousDedupe);
   }
-  function recorder(input: unknown) {
-    const command = input as AgentCommandOpts;
-    expect(command.deliver).toBe(false);
-    expect(command.privateCompletion).toBe(true);
-    expect(command.sessionId).toBe(sessionId);
-    return expectDefined(
-      command.userTurnTranscriptRecorder,
-      "Expected real private input recorder",
-    );
-  }
+  const recorder = (input: unknown) => readPrivateCompletionRecorder(input, sessionId);
 
   registerSessionsSendPrivateCompletionTests(() => ({
     context: kernel.gatewayRequestContext,
@@ -965,11 +959,14 @@ describe("private subagent completion processing receipts", () => {
           terminalWrite = active.projectSessionTerminalPersistence;
           expect(terminalWrite).toBeInstanceOf(Promise);
           await clock.advanceBy(60_000);
-          await inputRecorder.waitForPendingInputSettlement?.();
+          await awaitGateBeforeSettlement(
+            expectDefined(inputRecorder.waitForPendingInputSettlement?.(), "input settlement"),
+            expectDefined(active.projectSessionTerminalPersistence, "terminal persistence"),
+            "Terminal persistence settled before its held write was released",
+          );
           expect(kernel.gatewayRequestContext.chatAbortControllers.get(runId)).toBe(active);
           expect(active.executionSettlement?.status).toBe("pending");
           expect(active.projectSessionTerminalPending).toBe(true);
-          expect(active.projectSessionTerminalPersistence).toBe(terminalWrite);
           expect(JSON.parse(String(completions()[0]?.outcome_json))).toMatchObject({
             reason: "timed_out",
             status: "timeout",
@@ -1001,6 +998,7 @@ describe("private subagent completion processing receipts", () => {
         }),
       ).toBe(true);
       expect(kernel.gatewayRequestContext.chatAbortControllers.has(runId)).toBe(false);
+      expect(active.projectSessionTerminalPersisted).toBe(true);
       if (kind === "resolved") {
         expect(outcome).toMatchObject({
           reason: "hard_timeout",

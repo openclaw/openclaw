@@ -30,6 +30,7 @@ import {
   capturePreparedToolAuthorityReads,
   type PreparedToolAuthorityRead,
 } from "../host-private-capabilities.js";
+import { assertLegacyPreparedToolAuthority } from "../tool-authority-preparation.js";
 
 export type NativeSessionBindingRead = {
   agentId: string;
@@ -53,6 +54,7 @@ type NativePreparedPolicy = ReplyToolAuthorityPreparation & {
 type CapturedNativePolicy = {
   preparation: NativePreparedPolicy;
   reads: PreparedToolAuthorityRead[];
+  assertCompatibility?: () => void;
 };
 export type NativeSessionBindingAuthority = {
   readonly lineage: readonly NativeSessionBindingLineage[];
@@ -135,9 +137,6 @@ export function readNativeSessionBindingEntries<T>(
             read.assertPrepared(prepared.slice(currentOffset, currentOffset + read.reads.length));
             currentOffset += read.reads.length;
           }
-          if (!policyReads.length) {
-            preparation.compatAssertCurrent();
-          }
           preparation.assertCurrent();
         };
         try {
@@ -153,7 +152,7 @@ export function readNativeSessionBindingEntries<T>(
           }
         }
       }
-      // Refusal callbacks can revoke earlier survivors; legacy SQL runs only in this final pass.
+      // Refusal callbacks can revoke earlier survivors; recheck them before the effect.
       for (const assertPolicyCurrent of finalPolicyChecks) {
         assertPolicyCurrent();
       }
@@ -185,6 +184,24 @@ export function createNativeSessionBindingAuthority(
       entry.previousSessionId !== expected.previousSessionId
     ) {
       throw expected.createSupersededError(expected.sessionId);
+    }
+  };
+  const assertLegacyCurrent = () => {
+    assertCurrent();
+    for (const expected of lineage) {
+      let entry: Pick<SessionEntry, "sessionId" | "previousSessionId"> | undefined;
+      try {
+        entry = isIncognitoSessionKey(expected.read.sessionKey)
+          ? readNativeBindingLineage(captureNativeSessionEntryCurrentRead(expected.read))
+          : loadSessionEntryReadOnly({
+              ...expected.read,
+              readConsistency: "latest",
+              hydrateSkillPromptRefs: false,
+            });
+      } catch {
+        throw expected.createSupersededError(expected.sessionId);
+      }
+      assertEntry(expected, entry);
     }
   };
   return {
@@ -231,7 +248,7 @@ export function createNativeSessionBindingAuthority(
         try {
           policies.push({
             preparation,
-            reads: await capturePreparedToolAuthorityReads(preparation),
+            ...(await capturePreparedToolAuthorityReads(preparation)),
           });
         } catch (error) {
           if (preparation.onRefused?.(error) !== "discarded") {
@@ -241,6 +258,35 @@ export function createNativeSessionBindingAuthority(
       }
       for (const check of sources) {
         check();
+      }
+      if (policies.some((policy) => policy.assertCompatibility)) {
+        // Released synchronous policies may read this same database. Keep their
+        // complete final check outside worker grants, with no await before the effect.
+        return withSessionEntriesFromStoresInWorker([], () => {
+          const survivors: CapturedNativePolicy[] = [];
+          for (const policy of policies) {
+            try {
+              policy.preparation.assertCurrent();
+              survivors.push(policy);
+            } catch (error) {
+              if (policy.preparation.onRefused?.(error) !== "discarded") {
+                throw error;
+              }
+            }
+          }
+          // A late compatibility refusal rejects the whole undispatched batch.
+          for (const policy of survivors) {
+            assertLegacyPreparedToolAuthority(policy.preparation, policy.reads);
+          }
+          for (const policy of survivors) {
+            policy.preparation.assertCurrent();
+          }
+          for (const check of sources) {
+            check();
+          }
+          assertLegacyCurrent();
+          return consume();
+        });
       }
       return readNativeSessionBindingEntries(
         lineage.map(({ read }) => read),
@@ -314,24 +360,7 @@ export function createNativeSessionBindingAuthority(
         : undefined;
       return { assertCurrent: assertMutationCurrent, sessionEntryCurrent: restriction };
     },
-    assertLegacyCurrent: () => {
-      assertCurrent();
-      for (const expected of lineage) {
-        let entry: Pick<SessionEntry, "sessionId" | "previousSessionId"> | undefined;
-        try {
-          entry = isIncognitoSessionKey(expected.read.sessionKey)
-            ? readNativeBindingLineage(captureNativeSessionEntryCurrentRead(expected.read))
-            : loadSessionEntryReadOnly({
-                ...expected.read,
-                readConsistency: "latest",
-                hydrateSkillPromptRefs: false,
-              });
-        } catch {
-          throw expected.createSupersededError(expected.sessionId);
-        }
-        assertEntry(expected, entry);
-      }
-    },
+    assertLegacyCurrent,
   };
 }
 

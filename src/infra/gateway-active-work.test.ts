@@ -1,6 +1,6 @@
 // Canonical Gateway active-work waiting must report the owners that block shutdown.
 import { Value } from "typebox/value";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewaySuspendPrepareResultSchema } from "../../packages/gateway-protocol/src/index.js";
 import type { EmbeddedAgentQueueHandle } from "../agents/embedded-agent-runner/run-state.js";
 import {
@@ -25,9 +25,42 @@ afterEach(() => {
   }
   activeRuns.clear();
   resetGatewayWorkAdmission();
+  vi.useRealTimers();
 });
 
 describe("waitForGatewayActiveWork", () => {
+  it.each([60, 600, undefined])(
+    "waits for process-owned work within the %s ms budget",
+    async (timeoutMs) => {
+      vi.useFakeTimers();
+      const admission = tryBeginGatewayRootWorkAdmission("ws:agent");
+      const onSnapshot = vi.fn();
+      let settled = false;
+      const waiting = waitForGatewayActiveWork(timeoutMs, { onSnapshot }).then((result) => {
+        settled = true;
+        return result;
+      });
+      try {
+        if (timeoutMs === undefined) {
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(settled).toBe(false);
+          admission?.release();
+          await vi.advanceTimersByTimeAsync(250);
+        } else {
+          await vi.advanceTimersByTimeAsync(timeoutMs - 1);
+          expect(settled).toBe(false);
+          await vi.advanceTimersByTimeAsync(1);
+        }
+        const result = await waiting;
+        expect(result.drained).toBe(timeoutMs === undefined);
+        expect(result.snapshot.counts.rootRequests).toBe(timeoutMs === undefined ? 0 : 1);
+        expect(onSnapshot).toHaveBeenLastCalledWith(result.snapshot);
+      } finally {
+        admission?.release();
+      }
+    },
+  );
+
   it.each([
     { agentRuns: 1, acpRuns: 0, mediaRuns: 0, kind: "agent-run" },
     { agentRuns: 0, acpRuns: 1, mediaRuns: 0, kind: "acp-run" },

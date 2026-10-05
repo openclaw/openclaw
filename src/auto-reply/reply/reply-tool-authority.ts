@@ -37,7 +37,10 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
-import { assertCapturedSessionEntryReadSource } from "../../config/sessions/session-accessor.sqlite-exact-read.js";
+import {
+  assertCapturedSessionEntryReadSource,
+  loadExactSessionEntryCandidates,
+} from "../../config/sessions/session-accessor.sqlite-exact-read.js";
 import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type {
   SessionEntryWorkerRead,
@@ -58,6 +61,7 @@ import type {
   ReplyToolAuthorityRoute,
   ReplyToolAuthoritySnapshot,
 } from "./reply-run-registry.contracts.js";
+import { prepareNativeReplyToolAuthorityRead } from "./reply-tool-authority.native-read.js";
 
 export type ReplyToolAuthorityInput = {
   operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -586,8 +590,18 @@ export function prepareReplyToolAuthority(
   bindReplyToolAuthorityCallerRead(
     result.projectAsync,
     async (caller, expected, route, assertActive) => {
-      // The existing process-native incognito owner has no file-backed batch reader.
       if (isIncognitoSessionKey(snapshot.run.runtimePolicySessionKey ?? snapshot.run.sessionKey)) {
+        if (!captured) {
+          await prepare(snapshot, route);
+        }
+        const original = captured;
+        if (!original) {
+          throw new Error("Tool authority classification source is unavailable");
+        }
+        recordPreparedToolAuthorityRead(
+          prepareNativeReplyToolAuthorityRead(original, assertActive),
+        );
+        // Published lineage is SQL-free; mutable native policy still uses compatibility.
         return undefined;
       }
       await prepare(snapshot, route);
@@ -676,7 +690,24 @@ export function prepareReplyToolAuthority(
             ?.entry,
         );
       };
-      recordPreparedToolAuthorityRead({ reads, assertPrepared });
+      recordPreparedToolAuthorityRead({
+        reads,
+        assertPrepared,
+        assertLegacyCurrent: () => {
+          assertSources();
+          const entry =
+            original && storePath
+              ? loadExactSessionEntryCandidates({
+                  readOnly: true,
+                  readSource: source ?? { agentId: original.agentId, path: storePath },
+                  expectedSource: source,
+                  env,
+                  sessionKeys: [original.canonicalKey],
+                })[0]?.entry
+              : undefined;
+          assertEntry(entry);
+        },
+      });
       return {
         prepareCurrent: async () => {
           await withSessionEntriesFromStoresInWorker(reads, assertPrepared);

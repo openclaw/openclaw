@@ -17,6 +17,10 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import {
+  prepareIncognitoSessionHistoryRead,
+  type IncognitoSessionHistoryBinding,
+} from "./session-incognito-history-read.js";
+import {
   assertSessionStoreReadCandidate,
   captureSessionStoreCandidateIdentities,
 } from "./session-store-read-candidates.js";
@@ -39,7 +43,21 @@ export async function readSessionTranscriptAnchorsAsync(
   signal?: AbortSignal,
   /** Consume only a current snapshot, while its original writer FIFO and reader remain retained. */
   onRead?: (facts: SessionTranscriptAnchorFacts) => void,
+  incognito?: IncognitoSessionHistoryBinding,
 ): Promise<SessionTranscriptAnchorFacts> {
+  if (incognito) {
+    const { actor, authority, target } = prepareIncognitoSessionHistoryRead(
+      incognito,
+      scope,
+      signal,
+    );
+    return actor.sessions.history(
+      authority,
+      { type: "session.history.anchors", input: { ...selection, ...target } },
+      signal,
+      onRead,
+    );
+  }
   const captured = {
     agentId: scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey),
     sessionId: scope.sessionId,
@@ -51,7 +69,14 @@ export async function readSessionTranscriptAnchorsAsync(
     entryIds: [...selection.entryIds],
     afterSeq: selection.afterSeq,
     includeSession: selection.includeSession,
+    includeHeader: selection.includeHeader,
     contextValidation: selection.contextValidation && structuredClone(selection.contextValidation),
+    contextAuthority: selection.contextAuthority && structuredClone(selection.contextAuthority),
+    replayValidation: selection.replayValidation && { ...selection.replayValidation },
+  };
+  const empty: SessionTranscriptAnchorFacts = {
+    anchors: [],
+    ...(request.replayValidation?.allowInitial ? { replayValidated: "initial" } : {}),
   };
   signal?.throwIfAborted();
   if (
@@ -65,7 +90,7 @@ export async function readSessionTranscriptAnchorsAsync(
       ? readOpenClawAgentDatabase(database, (reader) =>
           readSessionTranscriptAnchorFactsInDatabase(reader, resolved, request),
         ).value
-      : { anchors: [] };
+      : empty;
     onRead?.(facts);
     return facts;
   }
@@ -92,14 +117,14 @@ export async function readSessionTranscriptAnchorsAsync(
     assertCurrent();
     if (!identity) {
       if (!readDatabasePathIdentitySync(databasePath).key.startsWith("file:")) {
-        onRead?.({ anchors: [] });
-        return { anchors: [] };
+        onRead?.(empty);
+        return empty;
       }
       throw new Error("Transcript anchors changed their captured database owner");
     }
     if (!identity.key.startsWith("file:")) {
-      onRead?.({ anchors: [] });
-      return { anchors: [] };
+      onRead?.(empty);
+      return empty;
     }
     return withSessionHistoryWorkerDatabase(
       { ...options, requestedPath: storePath },
@@ -161,11 +186,14 @@ export async function readSessionTranscriptAnchorsAsync(
 export async function readActiveTranscriptEntryAnchorAsync(
   scope: AnchorScope & { entryId: string },
   signal?: AbortSignal,
+  incognito?: IncognitoSessionHistoryBinding,
 ) {
   const result = await readSessionTranscriptAnchorsAsync(
     scope,
     { entryIds: [scope.entryId] },
     signal,
+    undefined,
+    incognito,
   );
   return result.anchors[0];
 }

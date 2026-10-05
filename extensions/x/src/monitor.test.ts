@@ -1,195 +1,29 @@
-import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
-import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
-import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveXAccount, type ResolvedXAccount } from "./accounts.js";
 import { openXAllowlist } from "./allowlist.js";
-import type { XApiClient, XPage, XPost } from "./api.js";
-import { startXAccount } from "./monitor.js";
-import { setXRuntime } from "./runtime.js";
+import { createXApiClient } from "./api.js";
+import { openXGuestUsage } from "./guest-usage.js";
 import { sendXDelivery } from "./send.js";
-import { createKeyedState, createQueue } from "./test-support/monitor.js";
+import {
+  client,
+  config,
+  fixture,
+  page,
+  post,
+  type Payload,
+} from "./test-support/monitor-fixture.js";
+import { createQueue } from "./test-support/monitor.js";
 
-const client = vi.hoisted(() => ({ getXApi: vi.fn() }));
 vi.mock("./client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./client.js")>()),
-  getXApi: client.getXApi,
+  getXApi: vi.fn(),
   getXTokenState: () => "ready",
 }));
-
-type Payload = { version: number; rawEvent: string };
-type Plan = Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0];
-
-function post(id: string, authorId: string, text = "@roboclawbot please help"): XPost {
-  return {
-    id,
-    author_id: authorId,
-    conversation_id: "500",
-    text,
-    created_at: "2026-09-08T12:00:00Z",
-  };
-}
-function page(data: XPost[]): XPage {
-  return {
-    data,
-    includes: {
-      tweets: [],
-      users: [
-        { id: "10", username: "config_maintainer" },
-        { id: "30", username: "stored_maintainer" },
-      ],
-    },
-    meta: {},
-  };
-}
-const config: OpenClawConfig = {
-  agents: { entries: { maintainer: {} } },
-  bindings: [
-    {
-      agentId: "maintainer",
-      match: { channel: "x", accountId: "default", peer: { kind: "group", id: "500" } },
-    },
-  ],
-  channels: {
-    x: {
-      userId: "100",
-      username: "roboclawbot",
-      clientId: "test-client",
-      clientSecret: "test-secret",
-      refreshToken: "test-refresh",
-      allowFrom: ["x:10"],
-      groupPolicy: "allowlist",
-      events: { mode: "poll", pollSeconds: 60 },
-      replySignature: "",
-    },
-  },
-};
-
-function fixture(options: {
-  posts: XPost[];
-  queue?: ChannelIngressQueue<Payload>;
-  onCursor?: () => void;
-  cfg?: OpenClawConfig;
-}) {
-  const cfg = options.cfg ?? config;
-  const replies: Array<{ text: string; parent: string }> = [];
-  const api = {
-    getMentions: vi.fn(async (_params: Parameters<XApiClient["getMentions"]>[0]) =>
-      page(options.posts),
-    ),
-    getPosts: vi.fn(async (ids: string[]) =>
-      page(options.posts.filter((value) => ids.includes(value.id))),
-    ),
-    searchConversation: vi.fn(async () => page([post("500", "10", "Original thread")])),
-    getUserByUsername: vi.fn(async () => {
-      throw new Error("Unexpected user lookup");
-    }),
-    reply: vi.fn(async (params: Parameters<XApiClient["reply"]>[0]) => {
-      await params.assertActive?.();
-      replies.push({ text: params.text, parent: params.inReplyToId });
-      return String(900 + replies.length);
-    }),
-    ensureActivitySubscriptions: vi.fn(async () => {}),
-    openActivityStream: vi.fn(async () => {
-      throw new Error("Unexpected stream");
-    }),
-  } satisfies XApiClient;
-  client.getXApi.mockResolvedValue(api);
-  const resolveStable = vi.fn(resolveStableChannelMessageIngress);
-  const dispatch = vi.fn(async (plan: Plan) => {
-    plan.replyOptions?.onVisibleWorkSessions?.([
-      {
-        sessionKey: "agent:maintainer:work:example",
-        url: "https://example.test/work/42",
-        label: "Work session",
-      },
-    ]);
-    if (!plan.delivery.deliver) {
-      throw new Error("Missing X text delivery adapter");
-    }
-    await plan.delivery.deliver({ text: "I am on it." }, { kind: "final" });
-    await plan.turnAdoptionLifecycle?.onAdopted();
-    return {
-      admission: { kind: "dispatch" as const },
-      dispatched: true as const,
-      ctxPayload: plan.ctxPayload,
-      routeSessionKey: plan.route.sessionKey,
-      dispatchResult: { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } },
-    };
-  });
-  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
-  const openKeyedStore = createKeyedState((namespace, value) => {
-    if (namespace === "x.cursor" && value && typeof value === "object" && "sinceId" in value) {
-      options.onCursor?.();
-    }
-  });
-  const queue = options.queue ?? createQueue<Payload>();
-  // The host doubles expose only the runtime facilities this channel consumes.
-  const runtime = {
-    state: { openKeyedStore, openChannelIngressQueue: () => queue },
-    logging: { getChildLogger: () => logger },
-    channel: {
-      inbound: {
-        ingress: { resolveStable },
-        buildContext: buildChannelInboundEventContext,
-        dispatch,
-      },
-    },
-  } as unknown as PluginRuntime;
-  setXRuntime(runtime);
-  const running: Array<{ abort: AbortController; run: Promise<unknown> }> = [];
-  const start = () => {
-    const abort = new AbortController();
-    let status: ReturnType<ChannelGatewayContext<ResolvedXAccount>["getStatus"]> = {
-      accountId: "default",
-    };
-    const context: ChannelGatewayContext<ResolvedXAccount> = {
-      cfg,
-      accountId: "default",
-      account: resolveXAccount(cfg, "default"),
-      abortSignal: abort.signal,
-      runtime: {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: (code) => {
-          throw new Error(`Unexpected runtime exit: ${code}`);
-        },
-      },
-      getStatus: () => status,
-      setStatus: (next) => {
-        status = next;
-      },
-    };
-    const run = startXAccount(context);
-    running.push({ abort, run });
-    return { abort, run, status: () => status };
-  };
-  return {
-    api,
-    replies,
-    dispatch,
-    resolveStable,
-    logger,
-    runtime,
-    openKeyedStore,
-    start,
-    async stop() {
-      for (const item of running) {
-        item.abort.abort();
-      }
-      await Promise.all(running.map((item) => item.run));
-    },
-  };
-}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -201,6 +35,201 @@ afterEach(() => {
 });
 
 describe("X account monitor", () => {
+  it.each([
+    { pollSeconds: 15, backfillMs: 60_000 },
+    { pollSeconds: 60, backfillMs: 240_000 },
+  ])(
+    "backfills missed mentions every $backfillMs ms without admitting a streamed post twice",
+    async ({ pollSeconds, backfillMs }) => {
+      const mentions = [post("502", "10"), post("501", "10")];
+      const admitted: string[] = [];
+      const test = fixture({
+        posts: mentions,
+        queue: createQueue<Payload>({ onEnqueued: (id) => admitted.push(id) }),
+        cfg: {
+          ...config,
+          channels: {
+            ...config.channels,
+            x: {
+              ...config.channels?.x,
+              bearerToken: "test-bearer",
+              events: { mode: "stream", pollSeconds },
+            },
+          },
+        },
+      });
+      const cursor = test.openKeyedStore<{ userId: string; sinceId?: string }>({
+        namespace: "x.cursor",
+      });
+      await cursor.register("default", { userId: "100", sinceId: "500" });
+      test.api.getMentions
+        .mockResolvedValueOnce(page([]))
+        .mockImplementation(async ({ sinceId }) =>
+          page(mentions.filter((mention) => BigInt(mention.id) > BigInt(sinceId ?? "0"))),
+        );
+      const encoder = new TextEncoder();
+      let stream!: ReadableStreamDefaultController<Uint8Array>;
+      test.api.openActivityStream.mockImplementationOnce(
+        async () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                stream = controller;
+              },
+            }),
+          ),
+      );
+      const running = test.start();
+      let keepAlive: ReturnType<typeof setInterval> | undefined;
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        stream.enqueue(
+          encoder.encode(
+            `${JSON.stringify({
+              data: {
+                event_type: "post.mention.create",
+                payload: {
+                  ...mentions[0],
+                  entities: { mentions: [{ id: "100", username: "roboclawbot" }] },
+                },
+              },
+            })}\n`,
+          ),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        expect(admitted).toEqual(["502"]);
+        expect(test.replies.map((reply) => reply.parent)).toEqual(["502"]);
+        keepAlive = setInterval(() => stream.enqueue(encoder.encode("\n")), 20_000);
+        await vi.advanceTimersByTimeAsync(backfillMs - 1);
+        expect(test.api.getMentions).toHaveBeenCalledOnce();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(test.api.getMentions).toHaveBeenCalledTimes(2);
+        expect(test.api.getMentions.mock.calls[1]?.[0]).toMatchObject({ sinceId: "500" });
+        expect(admitted).toEqual(["502", "501"]);
+        expect(test.replies.map((reply) => reply.parent)).toEqual(["502", "501"]);
+        expect(test.dispatch).toHaveBeenCalledTimes(2);
+        expect(await cursor.lookup("default")).toEqual({ userId: "100", sinceId: "502" });
+        expect(test.api.openActivityStream).toHaveBeenCalledOnce();
+        expect(running.status()).toMatchObject({ connected: true, mode: "stream" });
+      } finally {
+        clearInterval(keepAlive);
+        await test.stop();
+      }
+    },
+  );
+
+  it.each([
+    { recipientId: "100", dispatches: 1, guest: false },
+    { recipientId: "99", dispatches: 0, guest: false },
+    { recipientId: "100", dispatches: 1, guest: true },
+    { recipientId: "99", dispatches: 0, guest: true },
+  ])(
+    "verifies pending recipient $recipientId (guest=$guest) before quota and dispatch after budget reset",
+    async ({ recipientId, dispatches, guest }) => {
+      vi.setSystemTime(new Date("2026-10-05T23:59:59Z"));
+      const completed = Promise.withResolvers<void>();
+      const blocked = Promise.withResolvers<void>();
+      const released: string[] = [];
+      const authorId = guest ? "20" : "10";
+      const queue = createQueue<Payload>({
+        onCompleted: () => completed.resolve(),
+        onReleased: (id) => released.push(id),
+      });
+      await queue.enqueue(
+        "501",
+        {
+          version: 1,
+          rawEvent: JSON.stringify({
+            post: post("501", authorId),
+            users: [],
+            recipientPending: true,
+          }),
+        },
+        { laneKey: "500" },
+      );
+      const test = fixture({
+        posts: [],
+        queue,
+        cfg: guest
+          ? {
+              ...config,
+              agents: {
+                entries: { maintainer: { skills: [], tools: { fs: { workspaceOnly: true } } } },
+              },
+              channels: {
+                x: {
+                  ...config.channels?.x,
+                  guests: { enabled: true, maxMentionsPerAuthorPerDay: 1 },
+                },
+              },
+            }
+          : config,
+      });
+      const guestUsage = openXGuestUsage(test.runtime);
+      await test.api.spend.charge(99_995_000);
+      let lookups = 0;
+      const api = createXApiClient({
+        spend: test.api.spend,
+        clientId: "client",
+        clientSecret: "secret",
+        refreshToken: "refresh",
+        saveRefreshToken: async () => {},
+        fetch: async (input) => {
+          if (input.endsWith("/oauth2/token")) {
+            return Response.json({ access_token: "access" });
+          }
+          lookups++;
+          return Response.json({
+            data: [
+              {
+                ...post("501", authorId),
+                entities: { mentions: [{ id: recipientId, username: "bot" }] },
+              },
+            ],
+            includes: {
+              users: [{ id: authorId, username: guest ? "guest" : "config_maintainer" }],
+            },
+          });
+        },
+      });
+      test.api.getPosts.mockImplementation(async (ids) => {
+        try {
+          return await api.getPosts(ids);
+        } catch (error) {
+          blocked.resolve();
+          throw error;
+        }
+      });
+      const running = test.start();
+      try {
+        await blocked.promise;
+        expect(test.dispatch).not.toHaveBeenCalled();
+        expect(lookups).toBe(0);
+        expect(await guestUsage.counts("default")).toEqual({
+          admittedToday: 0,
+          rateLimitedToday: 0,
+        });
+        expect(running.status()).toMatchObject({
+          spend: { dayUsd: 100, dailyLimitUsd: 100, monthlyLimitUsd: 1000 },
+        });
+        await vi.advanceTimersByTimeAsync(999);
+        expect(lookups).toBe(0);
+        await vi.advanceTimersByTimeAsync(1);
+        await completed.promise;
+        expect(lookups).toBe(1);
+        expect(test.dispatch).toHaveBeenCalledTimes(dispatches);
+        expect(await guestUsage.counts("default")).toEqual({
+          admittedToday: guest ? dispatches : 0,
+          rateLimitedToday: 0,
+        });
+        expect(released).toEqual([]);
+        expect(running.status()).toMatchObject({ spend: { dayUsd: 0.02 } });
+      } finally {
+        await test.stop();
+      }
+    },
+  );
+
   it("classifies unsupported inbound media as not dispatched", async () => {
     const completed = Promise.withResolvers<void>();
     const test = fixture({

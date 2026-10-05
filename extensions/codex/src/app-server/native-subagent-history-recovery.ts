@@ -52,19 +52,6 @@ export class CodexNativeSubagentHistoryRecovery {
     );
   }
 
-  private requestLatestThreadTurn(childThreadId: string) {
-    return this.client.request(
-      "thread/turns/list",
-      {
-        threadId: childThreadId,
-        limit: 1,
-        sortDirection: "desc",
-        itemsView: "full",
-      },
-      { timeoutMs: THREAD_READ_TIMEOUT_MS },
-    );
-  }
-
   async read(
     assignment: NativeSubagentAssignment,
     options: {
@@ -188,9 +175,13 @@ export class CodexNativeSubagentHistoryRecovery {
     ) {
       // The pinned protocol's paged history distinguishes the failed current
       // turn from earlier persisted results.
-      const turnsResponse = await this.requestLatestThreadTurn(childThreadId).catch(
-        () => undefined,
-      );
+      const turnsResponse = await this.client
+        .request(
+          "thread/turns/list",
+          { threadId: childThreadId, limit: 1, sortDirection: "desc", itemsView: "full" },
+          { timeoutMs: THREAD_READ_TIMEOUT_MS },
+        )
+        .catch(() => undefined);
       const data =
         isJsonObject(turnsResponse) && Array.isArray(turnsResponse.data) ? turnsResponse.data : [];
       const latestTurn = isJsonObject(data[0]) ? data[0] : undefined;
@@ -244,12 +235,9 @@ export class CodexNativeSubagentHistoryRecovery {
       resumable = false;
       threadState = "other";
     }
-    const lineage = {
+    return {
       parentThreadId: readThreadParentThreadId(thread),
       agentPath: normalizeOptionalString(readString(readThreadSpawnSource(thread), "agent_path")),
-    };
-    return {
-      ...lineage,
       nativeTurnId,
       nativeTurnState,
       observedPendingTurns,

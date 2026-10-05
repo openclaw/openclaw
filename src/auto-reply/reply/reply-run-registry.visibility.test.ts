@@ -7,6 +7,11 @@ import {
 } from "../../agents/harness/gateway-question-dispatch.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  MessageInjectionAcceptedUnconfirmedError,
+  MessageInjectionAuthorityError,
+  MessageInjectionTargetUnavailableError,
+} from "./message-injection-authority.js";
 import type {
   ReplyBackendMessageInjectionV2,
   ReplyBackendQueueMessageOptions,
@@ -158,26 +163,52 @@ it.each([
   { sink: "claim", failure: "accepted" },
   { sink: "claim", failure: "source-closed" },
   { sink: "image", failure: "generic" },
+  { sink: "claim", failure: "target-closed" },
+  { sink: "claim", failure: "target-accepted" },
+  { sink: "claim", failure: "target-source-closed" },
+  { sink: "claim", failure: "accepted-cleanup" },
+  { sink: "claim", failure: "wrapped-accepted-cleanup" },
+  { sink: "claim", failure: "accepted-generic" },
+  { sink: "claim", failure: "accepted-refused" },
 ] as const)("keeps $sink replay decisions bounded after $failure", async ({ sink, failure }) => {
   const unsupported = new QuestionDispatchUnsupportedError("legacy dispatcher");
+  const cleanup = new MessageInjectionAcceptedUnconfirmedError({ cause: new Error("cleanup") });
   const error =
-    failure === "refused"
+    failure === "refused" || failure === "accepted-refused"
       ? new QuestionDispatchRefusedError("owner refused", { cause: unsupported })
       : failure === "unconfirmed"
         ? new Error("runtime failure", { cause: new QuestionAnswerUnconfirmedError(unsupported) })
-        : failure === "generic"
-          ? new Error("unknown cancellation failure")
-          : unsupported;
+        : failure === "accepted-cleanup"
+          ? cleanup
+          : failure === "wrapped-accepted-cleanup"
+            ? new Error("backend completion failed", { cause: cleanup })
+            : failure.startsWith("target-")
+              ? new MessageInjectionAuthorityError({
+                  cause: new MessageInjectionTargetUnavailableError("Terminal delivery closed"),
+                })
+              : failure === "generic" || failure === "accepted-generic"
+                ? new Error("unknown cancellation failure")
+                : unsupported;
+  const reportsAccepted =
+    failure === "accepted" ||
+    failure === "target-accepted" ||
+    failure === "accepted-generic" ||
+    failure === "accepted-refused";
+  const indeterminate =
+    reportsAccepted ||
+    failure === "unconfirmed" ||
+    failure === "accepted-cleanup" ||
+    failure === "wrapped-accepted-cleanup";
   let sourceCurrent = true;
   const throwFromSink = (
     options: ReplyBackendQueueMessageOptions | undefined,
     assertCurrent: () => void,
   ): never => {
     assertCurrent();
-    if (failure === "accepted") {
+    if (reportsAccepted) {
       options?.onQueueAccepted?.(true);
     }
-    if (failure === "source-closed") {
+    if (failure === "source-closed" || failure === "target-source-closed") {
       sourceCurrent = false;
     }
     throw error;
@@ -212,17 +243,17 @@ it.each([
       } else {
         await expect(attempt.outcome).resolves.toMatchObject({
           status:
-            failure === "unsupported"
+            failure === "unsupported" || failure === "target-closed"
               ? "rejected"
-              : failure === "unconfirmed"
+              : indeterminate
                 ? "indeterminate"
                 : "failed",
-          ...(failure === "unsupported" ? { reason: "injection_unavailable" } : {}),
+          ...(failure === "unsupported" || failure === "target-closed"
+            ? { reason: "injection_unavailable" }
+            : {}),
         });
       }
-      await expect(attempt.acceptance).resolves.toBe(
-        failure === "accepted" || failure === "unconfirmed",
-      );
+      await expect(attempt.acceptance).resolves.toBe(indeterminate);
       expect(queueMessage).not.toHaveBeenCalled();
       expect(operation.result).toBeNull();
     },

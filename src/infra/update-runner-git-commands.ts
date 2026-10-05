@@ -109,15 +109,12 @@ function resolveBuildNodeOptions(baseOptions: string | undefined): string {
   return current.replace(/(?:^|\s)--max-old-space-size=\d+(?=\s|$)/, ` ${desired}`).trim();
 }
 
-export function resolveBuildEnv(
-  env: NodeJS.ProcessEnv = process.env,
-  buildCacheRoot?: string,
-): NodeJS.ProcessEnv {
+export function resolveBuildEnv(env: NodeJS.ProcessEnv, buildCacheRoot: string): NodeJS.ProcessEnv {
   return {
     ...env,
     OPENCLAW_UPDATE_IN_PROGRESS: "1",
     NODE_OPTIONS: resolveBuildNodeOptions(env.NODE_OPTIONS ?? process.env.NODE_OPTIONS),
-    ...(buildCacheRoot ? { BUILD_ALL_CACHE_ROOT: buildCacheRoot } : {}),
+    BUILD_ALL_CACHE_ROOT: buildCacheRoot,
   };
 }
 

@@ -106,10 +106,19 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     const parentSessionKey = normalizeOptionalString(p.parentSessionKey);
+    const creation = resolveOperatorSessionCreation(client, { allowTrustedHint: true });
+    if (p.surface && creation.via !== "operator") {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "Dock conversations require operator creation"),
+      );
+      return;
+    }
     const sessionCreation = await prepareSkillLibrarySessionCreation(
       client,
       context.getRuntimeConfig,
-      resolveOperatorSessionCreation(client, { allowTrustedHint: true }),
+      { ...creation, ...(p.surface ? { surface: p.surface } : {}) },
     );
     const spawnRequesterSessionKey =
       sessionCreation.via === "spawn"

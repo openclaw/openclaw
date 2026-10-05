@@ -459,7 +459,8 @@ vi.mock("./inbound/runtime-api.js", () => ({
   })),
 }));
 
-vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
+vi.mock("./auto-reply/monitor/runtime-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auto-reply/monitor/runtime-api.js")>()),
   buildHistoryContextFromEntries: (params: {
     entries: Array<{ sender?: string; body: string; timestamp?: number }>;
     currentMessage: string;
@@ -487,7 +488,7 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
   resolveChunkMode: () => undefined,
   resolveIdentityNamePrefix: resolveIdentityNamePrefixMock,
   resolveInboundLastRouteSessionKey: (params: { sessionKey: string }) => params.sessionKey,
-  resolveInboundSessionEnvelopeContext: (params: {
+  resolveInboundSessionEnvelopeContextAsync: async (params: {
     cfg: { session?: { store?: string } } & Parameters<typeof resolveEnvelopeOptionsMock>[0];
     agentId: string;
   }) => ({

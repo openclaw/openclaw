@@ -88,13 +88,9 @@ export function materializePluginAutoEnableCandidates(params: {
   });
 }
 
-export function applyPluginAutoEnable(params: {
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  manifestRegistry?: PluginManifestRegistry;
-  discovery?: PluginDiscoveryResult;
-  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
-}): PluginAutoEnableResult {
+export function applyPluginAutoEnable(
+  params: Parameters<typeof detectPluginAutoEnableCandidates>[0],
+): PluginAutoEnableResult {
   const config = params.config;
   const ambientEnvTriggers = params.ambientEnvTriggers ?? "allow";
   let discoveryCache: PluginAutoEnableDiscoveryCache | undefined;

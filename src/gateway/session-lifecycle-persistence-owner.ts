@@ -2,18 +2,20 @@ import {
   AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
   isDefinitiveRunLifecycle,
 } from "../agents/agent-run-terminal-outcome.js";
+import { getRuntimeConfig } from "../config/io.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { AgentEventRuntimePayload } from "../infra/agent-events.js";
 import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { getAgentRunContextOwnerStatus } from "../infra/agent-run-registry.js";
 import type { CapturedAgentRunTerminalWriteContext } from "../infra/agent-run-terminal-writes.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { runWithRetainedGatewayRootWork } from "../process/gateway-work-admission.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
-import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
+import { AsyncWorkScope, runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   prepareGatewaySessionLifecycleEvent,
   type persistGatewaySessionLifecycleEvent,
 } from "./session-lifecycle-state.js";
+import { resolveSessionStoreIdentity } from "./session-store-key.js";
 
 type LifecyclePersistenceParams = Parameters<typeof persistGatewaySessionLifecycleEvent>[0];
 type TerminalPersistenceAuthority = {
@@ -76,40 +78,45 @@ function terminalEventKey(event: {
 /** Owns each definitive lifecycle write before optional chat presentation code runs. */
 export function createSessionLifecyclePersistenceOwner(scheduler: GatewayScheduler) {
   const prepared = new Map<string, PreparedPersistence>();
-  const inFlight = new Set<Promise<void>>();
+  const work = new AsyncWorkScope();
   const pendingBySession = new Map<string, Promise<void>>();
-  let closed = false;
-  const enqueue = (params: LifecyclePersistenceParams) =>
-    runWithRetainedGatewayRootWork(() =>
-      runOutsideAsyncWorkScope(() => {
-        if (closed) {
-          throw createAgentRunStaleLifecycleError();
-        }
-        const persist = prepareGatewaySessionLifecycleEvent(params);
-        const key = JSON.stringify([
-          params.agentId ?? parseAgentSessionKey(params.sessionKey)?.agentId,
-          params.sessionKey,
-        ]);
-        const previous = pendingBySession.get(key);
-        const promise = previous ? previous.then(persist, persist) : persist();
-        pendingBySession.set(key, promise);
-        inFlight.add(promise);
-        const release = () => {
-          inFlight.delete(promise);
-          if (pendingBySession.get(key) === promise) {
-            pendingBySession.delete(key);
-          }
-        };
-        void promise.then(release, release);
-        return promise;
-      }),
+  let closing = false;
+  const track = (persist: () => Promise<void>) => {
+    if (closing) {
+      return Promise.reject(createAgentRunStaleLifecycleError());
+    }
+    return runWithRetainedGatewayRootWork(() =>
+      runOutsideAsyncWorkScope(() => work.track(persist)),
     );
+  };
+  const enqueue = (params: LifecyclePersistenceParams) => {
+    const target = resolveSessionStoreIdentity({
+      cfg: getRuntimeConfig(),
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+    });
+    const persist = prepareGatewaySessionLifecycleEvent(params);
+    const key = JSON.stringify([target.agentId, target.canonicalKey]);
+    const previous = pendingBySession.get(key);
+    const promise = previous ? previous.then(persist, persist) : persist();
+    pendingBySession.set(key, promise);
+    const release = () => {
+      if (pendingBySession.get(key) === promise) {
+        pendingBySession.delete(key);
+      }
+    };
+    void promise.then(release, release);
+    return promise;
+  };
 
   const observe = (params: ObservedTerminalPersistenceParams) => {
     const key = terminalEventKey(params.event);
     const existing = key ? prepared.get(key)?.promise : undefined;
     if (existing) {
       return existing;
+    }
+    if (closing) {
+      return Promise.reject(createAgentRunStaleLifecycleError());
     }
     const authority = params.authority;
     const persist = () =>
@@ -134,16 +141,16 @@ export function createSessionLifecyclePersistenceOwner(scheduler: GatewaySchedul
         },
         ...(authority || params.writeContext
           ? {
-              assertCommitAllowed: () => {
-                if (authority) {
-                  assertTerminalAuthority(authority);
-                }
-                params.writeContext?.assertCurrent();
-              },
+              assertCommitAllowed: composeSessionSourceAssertion([
+                authority ? () => assertTerminalAuthority(authority) : undefined,
+                params.writeContext?.assertCurrent,
+              ]),
             }
           : {}),
       });
-    const promise = params.writeContext ? params.writeContext.run(persist) : persist();
+    const promise = track(() =>
+      params.writeContext ? params.writeContext.run(persist) : persist(),
+    );
     let entry: PreparedPersistence | undefined;
     const settle = () => {
       if (!entry) {
@@ -212,14 +219,27 @@ export function createSessionLifecyclePersistenceOwner(scheduler: GatewaySchedul
         return Promise.reject(createAgentRunStaleLifecycleError());
       }
       const authority = terminalEventAuthority(params.event);
-      return enqueue({
-        ...params,
-        ...(authority ? { assertCommitAllowed: () => assertTerminalAuthority(authority) } : {}),
-      });
+      return track(() =>
+        enqueue({
+          ...params,
+          ...(authority
+            ? {
+                assertCommitAllowed: composeSessionSourceAssertion([
+                  () => assertTerminalAuthority(authority),
+                  params.assertCommitAllowed,
+                ]),
+              }
+            : {}),
+        }),
+      );
     },
     async drain(): Promise<void> {
-      closed = true;
-      await Promise.allSettled(inFlight);
+      closing = true;
+      // Accepted persistence owns its cancellation scope until its cleanup has joined.
+      await AsyncWorkScope.runWhenAllIdle(
+        () => [work],
+        () => work.drain(),
+      );
       for (const entry of prepared.values()) {
         entry.cancelExpiry();
       }

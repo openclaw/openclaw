@@ -1,5 +1,10 @@
-import { DatabaseSync, constants } from "node:sqlite";
+import { DatabaseSync, StatementSync, constants } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
+import {
+  admitSqliteSchema,
+  runSqliteReadOperationSync,
+  trackSqliteSchema,
+} from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { readExistingAgentSchemaMeta } from "./openclaw-agent-db-metadata.js";
 import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
@@ -127,6 +132,38 @@ it("keeps absent agent ownership separate from malformed metadata", () => {
       "CREATE TABLE schema_meta(meta_key TEXT PRIMARY KEY, role TEXT, schema_version INTEGER, agent_id TEXT)",
     );
     expect(readExistingAgentSchemaMeta(database)).toBeNull();
+  } finally {
+    database.close();
+  }
+});
+
+it("keeps admitted ownership current through local writes, rollback, and authorizers", () => {
+  const database = createMetadata("agent");
+  trackSqliteSchema(database, { DatabaseSync, StatementSync });
+  admitSqliteSchema(database);
+  const read = () =>
+    runSqliteReadOperationSync(database, () => readExistingAgentSchemaMeta(database), "fresh");
+  try {
+    const first = read();
+    expect(first?.agentId).toBe("main");
+    if (first) {
+      first.agentId = "caller-copy";
+    }
+    expect(read()?.agentId).toBe("main");
+    database.exec("UPDATE schema_meta SET agent_id = 'local'");
+    expect(read()?.agentId).toBe("local");
+    database.exec("BEGIN; UPDATE schema_meta SET agent_id = 'temporary'");
+    expect(read()?.agentId).toBe("temporary");
+    database.exec("ROLLBACK");
+    expect(read()?.agentId).toBe("local");
+    database.setAuthorizer((action, table) =>
+      action === constants.SQLITE_READ && table === "schema_meta"
+        ? constants.SQLITE_DENY
+        : constants.SQLITE_OK,
+    );
+    expect(read).toThrow();
+    database.setAuthorizer(null);
+    expect(read()?.agentId).toBe("local");
   } finally {
     database.close();
   }

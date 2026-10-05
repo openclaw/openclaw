@@ -62,7 +62,7 @@ it.each(["Doctor repair", "Gateway readiness"] as const)(
       const prepareSnapshot = snapshotSource.prepareSqliteReadOnlyLocation;
       let intercepted = false;
       let snapshotClosed = false;
-      const snapshotsClosedAtValidation: boolean[] = [];
+      const snapshotsClosedAtReadiness: boolean[] = [];
       const pendingRead = vi.spyOn(pendingMigrations, "readDeferredPluginMigrations");
       vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocation").mockImplementation(
         async (...args) => {
@@ -89,8 +89,9 @@ it.each(["Doctor repair", "Gateway readiness"] as const)(
         ? runStartupConfigPreflight({
             gateway: true,
             observe: false,
-            validateStartupConfig: () => {
-              snapshotsClosedAtValidation.push(snapshotClosed);
+            beforeStatePreparation: async () => {
+              snapshotsClosedAtReadiness.push(snapshotClosed);
+              return true;
             },
           })
         : runDoctorConfigPreflight({
@@ -112,8 +113,8 @@ it.each(["Doctor repair", "Gateway readiness"] as const)(
         expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(backup);
         release.resolve();
         const result = await operation;
-        expect(snapshotsClosedAtValidation.length > 0).toBe(gateway);
-        expect(snapshotsClosedAtValidation).not.toContain(false);
+        expect(snapshotsClosedAtReadiness.length > 0).toBe(gateway);
+        expect(snapshotsClosedAtReadiness).not.toContain(false);
         expect(pendingRead).toHaveBeenCalled();
         expect(snapshotClosed).toBe(true);
         expect(result.snapshot.valid).toBe(true);

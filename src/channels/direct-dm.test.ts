@@ -12,14 +12,17 @@ vi.mock("./inbound-event/context.js", () => ({
   buildChannelInboundEventContext: vi.fn(() => ({ Body: "envelope:hello" })),
 }));
 
-vi.mock("./inbound-event/envelope.js", () => ({
-  resolveChannelInboundRouteEnvelope: vi.fn(() => ({
-    route: {
-      agentId: "agent-1",
-      accountId: "account-1",
-      sessionKey: "agent:agent-1:nostr:direct:peer-1",
-    },
-    buildEnvelope: vi.fn(() => "envelope:hello"),
+vi.mock("./inbound-event/envelope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./inbound-event/envelope.js")>()),
+  createChannelInboundEnvelopeBuilderAsync: vi.fn(async () => () => "envelope:hello"),
+}));
+
+vi.mock("../routing/resolve-route.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../routing/resolve-route.js")>()),
+  resolveAgentRoute: vi.fn(() => ({
+    agentId: "agent-1",
+    accountId: "account-1",
+    sessionKey: "agent:agent-1:nostr:direct:peer-1",
   })),
 }));
 

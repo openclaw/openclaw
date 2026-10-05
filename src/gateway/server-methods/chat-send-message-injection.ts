@@ -4,6 +4,8 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { bindWorkerToolPreparation } from "../../agents/harness/host-private-capabilities.js";
+import { bindPreparedToolAuthority } from "../../agents/harness/tool-authority-preparation.js";
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import { resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
 import { buildInboundMediaNoteProjection } from "../../auto-reply/media-note.js";
@@ -21,6 +23,7 @@ import {
   type ReplyMessageInjectionTarget,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-tool-authority.js";
+import { prepareSteeringDelivery } from "../../auto-reply/reply/steering-delivery-preparation.js";
 import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveRestartRecoverySteeringBlockReason } from "../../config/sessions/restart-recovery-receipt.js";
@@ -48,7 +51,7 @@ export function createChatSendMessageInjectionStarter(params: {
   request: Pick<NormalizedChatSendRequest, "p" | "rawMessage" | "supportsTaskSuggestions">;
   session: Pick<
     PreparedChatSendSession,
-    "cfg" | "entry" | "sessionKey" | "storePath" | "clientRunId"
+    "agentId" | "cfg" | "entry" | "sessionKey" | "storePath" | "clientRunId"
   >;
   admittedSessionSettings?: Readonly<Pick<SessionEntry, "permissionMode" | "toolOverrides">>;
   turn: Pick<
@@ -65,7 +68,7 @@ export function createChatSendMessageInjectionStarter(params: {
   operatorAuthority?: AdmittedRunOperatorAuthority;
 }) {
   const { p, rawMessage, supportsTaskSuggestions } = params.request;
-  const { cfg, entry, sessionKey, storePath, clientRunId } = params.session;
+  const { agentId, cfg, entry, sessionKey, storePath, clientRunId } = params.session;
   const { ctx, isInternalTextSlashCommandTurn, replyOptionImages, replyOptionMedia } = params.turn;
   const assertCurrent = () => {
     params.abortSignal.throwIfAborted();
@@ -78,6 +81,15 @@ export function createChatSendMessageInjectionStarter(params: {
       return undefined;
     }
     assertCurrent();
+    const delivery = prepareSteeringDelivery({
+      agentId,
+      sessionKey,
+      storePath,
+      sessionId: entry?.sessionId,
+      sourceTurnId: normalizeOptionalString(target.sourceTurnId),
+      entry,
+      assertCurrent,
+    });
     let admissionRefused = false;
     const canAdmit = () => {
       assertCurrent();
@@ -194,6 +206,17 @@ export function createChatSendMessageInjectionStarter(params: {
           return !admissionRefused;
         },
         assertCurrent: params.assertCurrent || params.operatorAuthority ? assertCurrent : undefined,
+        toolAuthorityPreparation: bindPreparedToolAuthority(
+          bindWorkerToolPreparation({
+            authorityKind:
+              params.assertCurrent || params.operatorAuthority
+                ? ("source-bound" as const)
+                : ("run" as const),
+            assertCurrent,
+            compatAssertCurrent: assertCurrent,
+            prepareCurrent: delivery.prepareCurrent,
+          }),
+        ),
         inboundAudio: hasInboundAudio(ctx),
         steeringMode: "all",
         isInboundUserMessage: true,
@@ -255,6 +278,20 @@ export async function settleChatSendPreAckMessageInjection(params: {
     return { status: "handled" };
   }
   return { status: "continue", attempt: undefined };
+}
+
+/** Pre-ACK steering is already owned; join it before fallible source preparation. */
+export async function settleChatSendMessageInjection(
+  attempt: ReplyMessageInjectionAttempt | undefined,
+): Promise<boolean> {
+  if (!attempt) {
+    return false;
+  }
+  const outcome = await attempt.outcome;
+  if (outcome.status === "failed") {
+    throw outcome.error;
+  }
+  return outcome.status !== "rejected";
 }
 
 /** Finish an accepted steer without entering reply dispatch, or return false for fallback. */

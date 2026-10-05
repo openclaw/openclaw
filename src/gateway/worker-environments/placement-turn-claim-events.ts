@@ -23,6 +23,7 @@ import { safeEqualSecret } from "../../security/secret-equal.js";
 import { extractAssistantTranscriptSourceText } from "../../shared/chat-message-content.js";
 import type { FastMode } from "../../shared/fast-mode.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
+import { notifyListeners } from "../../shared/listeners.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js";
@@ -591,13 +592,7 @@ function closeWorkerTurnClaim(
       workerTurnOwners.delete(path);
     }
   }
-  for (const handler of workerTurnClaimClosedHandlers.get(path) ?? []) {
-    try {
-      handler(claim);
-    } catch {
-      // Settlement observation cannot roll back the authoritative store transition.
-    }
-  }
+  notifyListeners(workerTurnClaimClosedHandlers.get(path) ?? [], claim);
 }
 
 export function prepareWorkerTurnClaimClosed(

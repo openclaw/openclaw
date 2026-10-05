@@ -9,6 +9,7 @@ import type {
   EmbeddedAgentQueueMessageOutcome,
 } from "../agents/embedded-agent-runner/runs.js";
 import { bindWorkerToolPreparation } from "../agents/harness/host-private-capabilities.js";
+import { bindPreparedToolAuthority } from "../agents/harness/tool-authority-preparation.js";
 import type { ReplyToolAuthorityOverlay } from "../auto-reply/reply/reply-run-registry.contracts.js";
 import { isAbortError } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -271,27 +272,29 @@ export async function controlRealtimeVoiceAgentRun(
             steerText,
             options,
             canInject,
-            bindWorkerToolPreparation({
-              assertCurrent: () => {
-                if (!canInject()) {
-                  throw new Error("The original Talk run is no longer current");
-                }
-              },
-              compatAssertCurrent: () => {
-                const overlay = params.getToolAuthorityOverlay?.();
-                options.toolAuthorityOverlay = overlay;
-                if (overlay && legacyOwner && !legacyOwner.matchesCaller(overlay)) {
-                  throw new Error("The original Talk caller authority no longer matches");
-                }
-              },
-              prepareCurrent,
-              prepareMessage: deferMessagePreparation
-                ? async () => {
-                    await prepareCurrent();
-                    return prepareMessage();
+            bindPreparedToolAuthority(
+              bindWorkerToolPreparation({
+                assertCurrent: () => {
+                  if (!canInject()) {
+                    throw new Error("The original Talk run is no longer current");
                   }
-                : undefined,
-            }),
+                },
+                compatAssertCurrent: () => {
+                  const overlay = params.getToolAuthorityOverlay?.();
+                  options.toolAuthorityOverlay = overlay;
+                  if (overlay && legacyOwner && !legacyOwner.matchesCaller(overlay)) {
+                    throw new Error("The original Talk caller authority no longer matches");
+                  }
+                },
+                prepareCurrent,
+                prepareMessage: deferMessagePreparation
+                  ? async () => {
+                      await prepareCurrent();
+                      return prepareMessage();
+                    }
+                  : undefined,
+              }),
+            ),
           )
         : {
             queued: false,

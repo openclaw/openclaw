@@ -68,6 +68,19 @@ function runIdentity(row: GatewaySessionRow): string {
   return JSON.stringify([row.sessionId, row.lastRunId, row.activeRunIds, row.status]);
 }
 
+function createMetrics(identity: string): Metrics {
+  return {
+    identity,
+    calls: new Map(),
+    complete: false,
+    pending: false,
+    read: false,
+    liveToolObserved: false,
+    preparedCalls: new Set(),
+    unidentifiedCall: false,
+  };
+}
+
 /** Presentation-scoped child discovery. Shared owners retain wire subscriptions and roster facts. */
 export class SubagentsPanelData {
   rows: readonly SubagentsPanelRow[] = [];
@@ -301,16 +314,7 @@ export class SubagentsPanelData {
       for (const row of this.sessions) {
         const identity = runIdentity(row);
         if (this.metrics.get(row.key)?.identity !== identity) {
-          this.metrics.set(row.key, {
-            identity,
-            calls: new Map(),
-            complete: false,
-            pending: false,
-            read: false,
-            liveToolObserved: false,
-            preparedCalls: new Set(),
-            unidentifiedCall: false,
-          });
+          this.metrics.set(row.key, createMetrics(identity));
         }
       }
     }
@@ -425,16 +429,7 @@ export class SubagentsPanelData {
           areUiSessionKeysEquivalent(candidate.key, info.key),
         );
         if (row) {
-          this.metrics.set(row.key, {
-            identity: runIdentity(row),
-            calls: new Map(),
-            complete: false,
-            pending: false,
-            read: false,
-            liveToolObserved: false,
-            preparedCalls: new Set(),
-            unidentifiedCall: false,
-          });
+          this.metrics.set(row.key, createMetrics(runIdentity(row)));
           this.publish();
           this.readMetrics();
         }

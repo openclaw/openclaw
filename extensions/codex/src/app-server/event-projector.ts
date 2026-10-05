@@ -86,7 +86,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
   }
 
   buildSteeringTranscriptPrefix(): AgentMessage[] {
-    const snapshot = buildCodexSteeringMessagesSnapshot({
+    return buildCodexSteeringMessagesSnapshot({
       runParams: this.params,
       turnId: this.turnId,
       upstreamUserText: this.options.upstreamUserText,
@@ -94,15 +94,12 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       assistantProjection: this.assistantProjection,
       toolMessages: this.toolTranscriptProjection.transcriptMessages,
     });
-    this.pendingSteeringAssistantBoundaryItemId = snapshot.assistantBoundaryItemId;
-    return snapshot.messages;
   }
 
-  markSteeringTranscriptPersisted(): void {
-    const itemId = this.pendingSteeringAssistantBoundaryItemId;
-    if (itemId) {
-      this.assistantProjection.markAssistantBoundaryPersisted(itemId);
-      this.pendingSteeringAssistantBoundaryItemId = undefined;
+  markSteeringTranscriptMessagePersisted(mirrorIdentity: string): void {
+    const prefix = `${this.turnId}:assistant:`;
+    if (mirrorIdentity.startsWith(prefix)) {
+      this.assistantProjection.markSteeringMessagePersisted(mirrorIdentity.slice(prefix.length));
     }
   }
 

@@ -215,10 +215,19 @@ describe("trusted in-process Gateway session creation", () => {
       { agentId: "main" },
       expect.objectContaining({
         resolveGatewayContext: expect.any(Function),
-        sessionMutationCommitGuard,
+        sessionMutationCommitGuard: expect.any(Function),
         sessionCreation: workerCreation,
       }),
     );
+    const dispatchedOptions = mocks.dispatch.mock.calls[0]?.[2];
+    expect(dispatchedOptions.resolveGatewayContext()).toBe(admitted);
+    expect(() => dispatchedOptions.sessionMutationCommitGuard()).not.toThrow();
+    expect(sessionMutationCommitGuard).toHaveBeenCalledOnce();
+    const refusal = new Error("worker creation authority retired");
+    sessionMutationCommitGuard.mockImplementationOnce(() => {
+      throw refusal;
+    });
+    expect(() => dispatchedOptions.sessionMutationCommitGuard()).toThrow(refusal);
     expect(mocks.callGatewayTool).not.toHaveBeenCalled();
   });
 

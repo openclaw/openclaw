@@ -8,7 +8,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { runNativeHookRelayCliFromArgv } from "../../cli/native-hook-relay-cli.js";
+import { runNativeHookRelayCliFromArgvForTest } from "../../cli/native-hook-relay-cli.test-support.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
@@ -1138,7 +1138,7 @@ describe("native hook relay registry", () => {
         const stdout = new PassThrough();
         const stderr = new PassThrough();
         await expect(
-          runNativeHookRelayCliFromArgv(argv, {
+          runNativeHookRelayCliFromArgvForTest(argv, {
             stdin: Readable.from([
               JSON.stringify({
                 hook_event_name: "PreToolUse",

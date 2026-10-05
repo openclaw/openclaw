@@ -45,11 +45,7 @@ type CommandResult = {
   stdout: string;
 };
 
-export type CommandRunner = (
-  command: string,
-  args: readonly string[],
-  options: SpawnOptions,
-) => Promise<CommandResult>;
+export type CommandRunner = typeof defaultCommandRunner;
 
 export type CrabboxInspect = {
   host?: string;

@@ -22,7 +22,10 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { SESSION_ROLLOVER_LINEAGE_CASES } from "../../config/sessions/session-lineage.test-support.js";
+import {
+  createSessionRolloverSpawnLineage,
+  SESSION_ROLLOVER_LINEAGE_CASES,
+} from "../../config/sessions/session-lineage.test-support.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import { resolveWorkerPlacementSessionTarget } from "../../gateway/server-worker-placement-session-target.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "../../gateway/session-utils-store-lookup.js";
@@ -1605,18 +1608,7 @@ describe("initSessionState RawBody", () => {
       const sessionKey = testCase.sessionKey;
       const existingSessionId = "session-before-daily-reset-lineage";
       const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
-      const spawnLineage = {
-        spawnedBy: testCase.spawnedBy,
-        spawnedBySenderIsOwner: true,
-        spawnedBySessionId: "parent-session",
-        spawnedWorkspaceDir: "/tmp/child-workspace",
-        spawnedCwd: "/tmp/task-repo",
-        spawnDepth: 1,
-        ...(testCase.subagentRole ? { subagentRole: testCase.subagentRole } : {}),
-        ...(testCase.subagentControlScope
-          ? { subagentControlScope: testCase.subagentControlScope }
-          : {}),
-      };
+      const spawnLineage = createSessionRolloverSpawnLineage(testCase);
       const threadProvenance = {
         parentSessionKey: "agent:main:main",
         parentSessionId: "parent-session",

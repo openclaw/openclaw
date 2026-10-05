@@ -250,6 +250,8 @@ export type ReplyMessageInjectionResolution =
   | {
       backend: ReplyBackendHandle;
       injection: ReplyBackendMessageInjection;
+      /** Internal FIFO preflight for a released synchronous sink. */
+      prepareQueueMessage?: () => Promise<void>;
     };
 
 /** An adapter over one existing execution owner; it never acquires another run slot. */

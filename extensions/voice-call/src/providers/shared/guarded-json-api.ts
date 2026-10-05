@@ -4,7 +4,6 @@ import {
 } from "openclaw/plugin-sdk/response-limit-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { fetchWithSsrFGuard } from "../../../api.js";
-import type { GetCallStatusResult } from "../../types.js";
 const VOICE_CALL_PROVIDER_API_TIMEOUT_MS = 30_000;
 const PROVIDER_JSON_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 const PROVIDER_ERROR_RESPONSE_MAX_BYTES = 8 * 1024;
@@ -77,18 +76,5 @@ export async function guardedJsonApiRequest<T = unknown>(
     }
   } finally {
     await release();
-  }
-}
-
-/** Failed carrier probes keep calls alive; an empty or missing response is terminal. */
-export async function readProviderCallStatus<T>(
-  request: () => Promise<T>,
-  describe: (data: NonNullable<T>) => GetCallStatusResult,
-): Promise<GetCallStatusResult> {
-  try {
-    const data = await request();
-    return data ? describe(data) : { status: "not-found", isTerminal: true };
-  } catch {
-    return { status: "error", isTerminal: false, isUnknown: true };
   }
 }

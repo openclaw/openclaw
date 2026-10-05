@@ -100,6 +100,7 @@ function createSessionCandidateFilter(params: SessionListFilterParams) {
       selection.isCronRun ||
       (opts.excludeCron === true && selection.isCron) ||
       (opts.excludeSystem === true && selection.isSystem) ||
+      (opts.excludeDock === true && selection.isDock) ||
       (opts.excludeSubagents === true && selection.isSubagent) ||
       (!includeGlobal && storeKey === "global") ||
       (!includeUnknown && storeKey === "unknown")

@@ -9,11 +9,11 @@ import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
-import { createAbortError } from "../../infra/abort-signal.js";
+import { createAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
-import { projectWorkerSessionTurnClaim } from "./placement-record.js";
+import { placementTurnOwner, projectWorkerSessionTurnClaim } from "./placement-record.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
@@ -186,20 +186,7 @@ export async function waitForTurnOperation<T>(params: {
     signal.reason instanceof Error
       ? signal.reason
       : new Error("Cloud worker operation aborted", { cause: signal.reason });
-  if (signal.aborted) {
-    throw abortError();
-  }
-  // Never start for a cancelled caller; always observe a started operation.
-  return await new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(abortError());
-    signal.addEventListener("abort", onAbort, { once: true });
-    params
-      .start()
-      .then(resolve, reject)
-      .finally(() => {
-        signal.removeEventListener("abort", onAbort);
-      });
-  });
+  return await racePromiseWithAbortSignal(params.start, signal, abortError);
 }
 
 function resolvePlacementIdentityField(
@@ -358,11 +345,7 @@ export async function claimWorkerTurn(params: {
         ...params.identity,
         claimId: randomUUID(),
         runId: params.runId,
-        owner: {
-          kind: "worker",
-          environmentId: params.placement.environmentId,
-          ownerEpoch: params.placement.activeOwnerEpoch,
-        },
+        owner: placementTurnOwner(params.placement),
       },
       () => {
         params.signal?.throwIfAborted();
@@ -372,7 +355,10 @@ export async function claimWorkerTurn(params: {
   try {
     return { placement: params.placement, turnClaim: await claim() };
   } catch (error) {
-    if (!(error instanceof ActiveTurnClaimError)) {
+    if (
+      params.placement.executionMode === "remote-exec" ||
+      !(error instanceof ActiveTurnClaimError)
+    ) {
       throw error;
     }
     const pendingResults = await params.placements.listPendingWorkspaceResultsAsync(

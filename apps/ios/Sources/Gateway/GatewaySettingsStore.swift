@@ -515,10 +515,7 @@ enum GatewaySettingsStore {
         var seen = Set<GatewayStableIdentifier.Key>()
         let entries = registry.entries
             .compactMap(self.normalizedGatewayRegistryEntry)
-            .filter { entry in
-                guard let key = GatewayStableIdentifier.key(entry.stableID) else { return false }
-                return seen.insert(key).inserted
-            }
+            .filter { seen.insert($0.id).inserted }
             .sorted { lhs, rhs in
                 if lhs.name != rhs.name { return lhs.name < rhs.name }
                 return GatewayStableIdentifier.sortsBefore(lhs.stableID, rhs.stableID)
@@ -532,7 +529,7 @@ enum GatewaySettingsStore {
         let connectedStableIDs: [String] = registry.connectedStableIDs.compactMap { connectedID in
             guard let entry = entries.first(where: {
                 GatewayStableIdentifier.matches($0.stableID, connectedID)
-            }), let key = GatewayStableIdentifier.key(entry.stableID), seenConnected.insert(key).inserted
+            }), seenConnected.insert(entry.id).inserted
             else { return nil }
             return entry.stableID
         }
@@ -665,18 +662,10 @@ enum GatewaySettingsStore {
     }
 
     static func loadGatewaySelectedAgentId(stableID: String) -> String? {
-        self.loadGatewayDefault(prefix: self.selectedAgentDefaultsPrefix, stableID: stableID)
-    }
-
-    static func saveGatewaySelectedAgentId(stableID: String, agentId: String?) {
-        self.saveGatewayDefault(agentId, prefix: self.selectedAgentDefaultsPrefix, stableID: stableID)
-    }
-
-    private static func loadGatewayDefault(prefix: String, stableID: String) -> String? {
         guard let stableID = GatewayStableIdentifier.exact(stableID) else { return nil }
         let defaults = UserDefaults.standard
-        let key = self.gatewayDefaultsKey(prefix: prefix, stableID: stableID)
-        let legacyKey = prefix + stableID
+        let key = self.selectedAgentDefaultsKey(stableID: stableID)
+        let legacyKey = self.selectedAgentDefaultsPrefix + stableID
         let value = (defaults.string(forKey: key) ??
             (self.canSafelyReadLegacyRawStorageKey(stableID) ? defaults.string(forKey: legacyKey) : nil))?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -690,22 +679,22 @@ enum GatewaySettingsStore {
         return nil
     }
 
-    private static func saveGatewayDefault(_ value: String?, prefix: String, stableID: String) {
+    static func saveGatewaySelectedAgentId(stableID: String, agentId: String?) {
         guard let stableID = GatewayStableIdentifier.exact(stableID) else { return }
-        let key = self.gatewayDefaultsKey(prefix: prefix, stableID: stableID)
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let key = self.selectedAgentDefaultsKey(stableID: stableID)
+        let trimmed = agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if trimmed.isEmpty {
             UserDefaults.standard.removeObject(forKey: key)
         } else {
             UserDefaults.standard.set(trimmed, forKey: key)
         }
         if self.canSafelyReadLegacyRawStorageKey(stableID) {
-            UserDefaults.standard.removeObject(forKey: prefix + stableID)
+            UserDefaults.standard.removeObject(forKey: self.selectedAgentDefaultsPrefix + stableID)
         }
     }
 
-    private static func gatewayDefaultsKey(prefix: String, stableID: String) -> String {
-        "\(prefix)v2.\(GatewayStableIdentifier.storageComponent(stableID)!)"
+    private static func selectedAgentDefaultsKey(stableID: String) -> String {
+        "\(self.selectedAgentDefaultsPrefix)v2.\(GatewayStableIdentifier.storageComponent(stableID)!)"
     }
 
     private static func gatewayTokenAccount(instanceId: String) -> String {

@@ -183,14 +183,14 @@ export async function resolveSubagentCompletionOrigin(params: {
   const requesterConversation: ConversationRef | undefined =
     channel && conversationId ? { channel, accountId, conversationId } : undefined;
   for (const targetSessionKey of [params.requesterSessionKey, params.childSessionKey]) {
-    const route = await resolveBoundDeliveryDestination({
+    const binding = await resolveBoundDeliveryDestination({
       targetSessionKey,
       requester: requesterConversation,
     });
-    if (route.mode === "bound" && route.binding) {
+    if (binding) {
       return mergeAnnounceDeliveryContext(
         resolveBoundConversationOrigin({
-          bindingConversation: route.binding.conversation,
+          bindingConversation: binding.conversation,
           requesterConversation,
           requesterOrigin,
         }),

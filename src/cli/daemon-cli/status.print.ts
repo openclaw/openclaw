@@ -596,19 +596,16 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
           `- ${warnText(entry.pluginId)}: ${entry.installedVersion} (${sourceLabel}) → expected ${expectedVersion}${resolvedTarget}`,
         );
       }
-      const repairs = drift.drifts.map((entry) => ({
-        entry,
-        command: resolvePluginVersionDriftUpdateCommand(entry),
-      }));
-      const updateCommands = repairs
-        .map(({ command }) => command)
-        .filter((command): command is string => Boolean(command))
-        .map((command) => formatCliCommand(command));
-      const unresolvedRepairs = repairs.filter(
-        ({ entry, command }) => !command && !resolvePluginVersionDriftRegistryLag(entry),
-      );
-      for (const { entry } of repairs) {
+      const updateCommands: string[] = [];
+      const unresolvedRepairs: typeof drift.drifts = [];
+      for (const entry of drift.drifts) {
+        const command = resolvePluginVersionDriftUpdateCommand(entry);
         const registryLag = resolvePluginVersionDriftRegistryLag(entry);
+        if (command) {
+          updateCommands.push(formatCliCommand(command));
+        } else if (!registryLag) {
+          unresolvedRepairs.push(entry);
+        }
         if (registryLag) {
           defaultRuntime.log(
             `- ${entry.pluginId}: registry version ${registryLag.registryVersion} is already installed; no release reaches ${registryLag.expectedVersion} yet, so no update command applies.`,
@@ -617,7 +614,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       }
       if (unresolvedRepairs.length > 0) {
         printError("Plugin repair target resolution failed:");
-        for (const { entry } of unresolvedRepairs) {
+        for (const entry of unresolvedRepairs) {
           const targetResolution = entry.targetResolution;
           const detail =
             targetResolution?.status === "unresolved"

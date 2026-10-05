@@ -10,6 +10,7 @@ import type {
   ToolsEffectiveResult,
 } from "../../api/types.ts";
 import { pathForAgentPanel } from "../../app-route-paths.ts";
+import { togglePinnedAgent } from "../../app/bootstrap-navigation-preferences.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import {
   beginPanelRefresh,
@@ -71,7 +72,6 @@ import {
   saveIdentityDraft,
   selectIdentityAvatar,
   setIdentityDraftField,
-  togglePinnedAgent,
 } from "./identity-actions.ts";
 import { createAgentModelActions } from "./model-config.ts";
 import type { AgentIdentityDraft } from "./panels-overview.ts";

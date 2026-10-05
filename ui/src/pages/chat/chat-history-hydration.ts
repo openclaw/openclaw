@@ -123,7 +123,7 @@ export async function hydrateChatHistory(
         previousRunId,
         ...extra,
       },
-      { console: false, maxBufferedEventsForType: 30 },
+      { maxBufferedEventsForType: 30 },
     );
   recordTiming("start", { method });
   // Any pending input-history snapshot becomes invalid once we start reloading transcript state.

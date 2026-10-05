@@ -214,7 +214,10 @@ it("caps only the oldest eligible activity ties without decoding unrelated paylo
         }),
       { agentId: "main", path: database.path },
     );
-    expect(plan.archivedSessionKeys.toSorted()).toEqual(victims.toSorted());
+    expect(plan.archivedEntries).toEqual([
+      { sessionKey: key("oldest"), sessionId: "bounded-0" },
+      { sessionKey: key("tie-\u{10000}"), sessionId: "bounded-2" },
+    ]);
     expect(plan).toMatchObject({ archived: 2, capArchived: 2, capped: 2 });
     expect(parse.mock.calls.some(([serialized]) => serialized.includes(untouchedPayload))).toBe(
       false,

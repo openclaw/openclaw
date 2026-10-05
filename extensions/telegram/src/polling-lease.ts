@@ -1,4 +1,5 @@
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
 
 const TELEGRAM_POLLING_LEASES_KEY = Symbol.for("openclaw.telegram.pollingLeases");
@@ -69,28 +70,12 @@ async function waitForPreviousRelease(params: {
     return "timeout";
   }
 
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let abortListener: (() => void) | undefined;
-  try {
-    const waitMs = resolveTimerTimeoutMs(params.waitMs, DEFAULT_TELEGRAM_POLLING_LEASE_WAIT_MS, 0);
-    const timeout = new Promise<"timeout">((resolve) => {
-      timer = setTimeout(() => resolve("timeout"), waitMs);
-      timer.unref?.();
-    });
-    const aborted = new Promise<"aborted">((resolve) => {
-      abortListener = () => resolve("aborted");
-      params.signal?.addEventListener("abort", abortListener, { once: true });
-    });
-    const released = params.done.then(() => "released" as const);
-    return await Promise.race([released, timeout, aborted]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-    if (abortListener) {
-      params.signal?.removeEventListener("abort", abortListener);
-    }
-  }
+  return await raceWithTimeout(
+    params.done.then(() => "released" as const),
+    resolveTimerTimeoutMs(params.waitMs, DEFAULT_TELEGRAM_POLLING_LEASE_WAIT_MS, 0),
+    (): WaitForPreviousResult => "timeout",
+    { ref: false, signal: params.signal, onAbort: () => "aborted" },
+  );
 }
 
 function createLease(params: {

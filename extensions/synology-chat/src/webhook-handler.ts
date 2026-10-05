@@ -68,18 +68,19 @@ class InvalidTokenRateLimiter {
     pruneMapToMaxSize(this.state, INVALID_TOKEN_MAX_TRACKED_KEYS);
   }
 
-  isLocked(key: string, nowMs = Date.now()): boolean {
+  isLocked(key: string): boolean {
     if (!key) {
       return false;
     }
-    const existing = this.normalizeState(key, nowMs);
+    const existing = this.normalizeState(key, Date.now());
     return (existing?.count ?? 0) > this.limit;
   }
 
-  recordFailure(key: string, nowMs = Date.now()): boolean {
+  recordFailure(key: string): boolean {
     if (!key) {
       return false;
     }
+    const nowMs = Date.now();
     const existing = this.normalizeState(key, nowMs);
     const nextCount = (existing?.count ?? 0) + 1;
     const windowStartMs = existing?.windowStartMs ?? nowMs;

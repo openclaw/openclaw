@@ -9,6 +9,7 @@ import {
   worktreePathExists,
   WORKTREE_CHECKOUT_TIMEOUT_MS,
 } from "./git.js";
+import { setWorktreePreparationTemplate } from "./preparation-timing.js";
 import {
   deleteTemplateAsync,
   listTemplatesAsync,
@@ -109,12 +110,14 @@ export async function prepareWorktreeTemplate(params: {
     (await worktreePathExists(existing.path)) &&
     (await params.validate(existing))
   ) {
+    setWorktreePreparationTemplate("warm");
     await touchTemplateAsync(params.env, existing.id, params.now(), assertCurrent);
     return existing;
   }
   if (params.reuseOnly) {
     return undefined;
   }
+  setWorktreePreparationTemplate("cold");
   await params.requireSpace();
   if (existing) {
     await retireWorktreeTemplate(params.env, existing, params.options);

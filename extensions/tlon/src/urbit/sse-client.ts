@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -25,14 +24,11 @@ type UrbitSseOptions = {
   lookupFn?: LookupFn;
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   onReconnect?: (client: UrbitSSEClient) => Promise<void> | void;
-  autoReconnect?: boolean;
-  maxReconnectAttempts?: number;
-  reconnectDelay?: number;
-  maxReconnectDelay?: number;
   logger?: UrbitSseLogger;
 };
 
 const MAX_SSE_PAYLOAD_BYTES = 16 * 1024 * 1024;
+const MAX_RECONNECT_ATTEMPTS = 10;
 
 function parseUrbitSsePayload(data: string): { id?: number; json?: unknown; response?: string } {
   if (Buffer.byteLength(data, "utf8") > MAX_SSE_PAYLOAD_BYTES) {
@@ -77,11 +73,7 @@ export class UrbitSSEClient {
   aborted = false;
   streamController: AbortController | null = null;
   onReconnect: UrbitSseOptions["onReconnect"] | null;
-  autoReconnect: boolean;
   reconnectAttempts = 0;
-  maxReconnectAttempts: number;
-  reconnectDelay: number;
-  maxReconnectDelay: number;
   isConnected = false;
   logger: UrbitSseLogger;
   ssrfPolicy?: SsrFPolicy;
@@ -104,10 +96,6 @@ export class UrbitSSEClient {
     this.ship = ctx.ship;
     this.channelId = `${Math.floor(Date.now() / 1000)}-${randomUUID()}`;
     this.onReconnect = options.onReconnect ?? null;
-    this.autoReconnect = options.autoReconnect !== false;
-    this.maxReconnectAttempts = options.maxReconnectAttempts ?? 10;
-    this.reconnectDelay = resolveTimerTimeoutMs(options.reconnectDelay, 1000);
-    this.maxReconnectDelay = resolveTimerTimeoutMs(options.maxReconnectDelay, 30000);
     this.logger = options.logger ?? {};
     this.ssrfPolicy = options.ssrfPolicy;
     this.lookupFn = options.lookupFn;
@@ -333,7 +321,7 @@ export class UrbitSSEClient {
         await release();
       }
       this.streamController = null;
-      if (!this.aborted && this.autoReconnect) {
+      if (!this.aborted) {
         this.isConnected = false;
         this.logger.log?.("[SSE] Stream ended, attempting reconnection...");
         await this.attemptReconnect();
@@ -452,14 +440,14 @@ export class UrbitSSEClient {
   }
 
   async attemptReconnect() {
-    if (this.aborted || !this.autoReconnect) {
+    if (this.aborted) {
       this.logger.log?.("[SSE] Reconnection aborted or disabled");
       return;
     }
 
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+    if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
       this.logger.log?.(
-        `[SSE] Max reconnection attempts (${this.maxReconnectAttempts}) reached. Waiting 10s before resetting...`,
+        `[SSE] Max reconnection attempts (${MAX_RECONNECT_ATTEMPTS}) reached. Waiting 10s before resetting...`,
       );
       if (!(await this.waitForReconnectDelay(10_000)) || this.aborted) {
         return;
@@ -469,16 +457,13 @@ export class UrbitSSEClient {
     }
 
     this.reconnectAttempts += 1;
-    const delay = Math.min(
-      this.reconnectDelay * 2 ** (this.reconnectAttempts - 1),
-      this.maxReconnectDelay,
-    );
+    const delay = Math.min(1_000 * 2 ** (this.reconnectAttempts - 1), 30_000);
 
     this.logger.log?.(
-      `[SSE] Reconnection attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms...`,
+      `[SSE] Reconnection attempt ${this.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS} in ${delay}ms...`,
     );
 
-    if (!(await this.waitForReconnectDelay(delay)) || this.aborted || !this.autoReconnect) {
+    if (!(await this.waitForReconnectDelay(delay)) || this.aborted) {
       return;
     }
 

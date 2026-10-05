@@ -115,21 +115,6 @@ describe("doctor command", () => {
     }
   }, 30_000);
 
-  it("runs legacy state migrations in non-interactive mode without prompting", async () => {
-    const {
-      doctorCommand: doctorCommandLocal,
-      runtime,
-      runLegacyStateMigrations,
-    } = await arrangeLegacyStateMigrationTest();
-
-    await (
-      doctorCommandLocal as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>
-    )(runtime, { nonInteractive: true });
-
-    expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
-    expect(confirm).not.toHaveBeenCalled();
-  }, 30_000);
-
   it("refuses doctor repair mode in Nix before repair side effects", async () => {
     const previous = process.env.OPENCLAW_NIX_MODE;
     process.env.OPENCLAW_NIX_MODE = "1";

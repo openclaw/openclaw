@@ -13,7 +13,6 @@ import {
 } from "../agents/agent-scope.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { resolveAgentAvatarUrlFromSource } from "../agents/identity-avatar-file.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   buildModelAliasIndex,
@@ -397,7 +396,6 @@ function resolvedPermissionLabel(
 
 export async function listAgentsForGateway(
   cfg: OpenClawConfig,
-  modelCatalog?: ModelCatalogEntry[],
   options?: {
     modelCatalogByAgentId?: SessionListModelCatalog;
     includeSystem?: boolean;
@@ -486,20 +484,15 @@ export async function listAgentsForGateway(
     const hasAgentCatalog = options?.modelCatalogByAgentId?.has(id);
     // Unconfigured system rows inherit the default catalog; keep its provider
     // policy attached. A configured owner with no catalog must not inherit it.
-    const preparedCatalog = hasAgentCatalog
-      ? options?.modelCatalogByAgentId?.get(id)
-      : modelCatalog
-        ? undefined
-        : options?.modelCatalogByAgentId?.get(basic.defaultId);
-    const agentModelCatalog = hasAgentCatalog
-      ? preparedCatalog?.entries
-      : (modelCatalog ?? preparedCatalog?.entries);
+    const preparedCatalog = options?.modelCatalogByAgentId?.get(
+      hasAgentCatalog ? id : basic.defaultId,
+    );
     const thinkingProfile = resolveGatewayModelThinkingProfile({
       cfg,
       agentId: id,
       provider: resolvedModel.provider,
       model: resolvedModel.model,
-      modelCatalog: agentModelCatalog,
+      modelCatalog: preparedCatalog?.entries,
       sessionKey,
       providerPolicySource: preparedCatalog?.pluginRegistry,
     });

@@ -12,7 +12,7 @@ import {
 } from "../infra/sqlite-index-schema.js";
 import {
   assertSqliteIntegrity,
-  canDeferSqliteIntegrityAfterProcessDeath,
+  sqliteProcessDeathIntegrityRefusal,
   runSqliteIntegrityOperationSync,
   sqliteIntegrityCheckSteps,
   type SqliteIntegrityDiagnostics,
@@ -51,6 +51,7 @@ import {
   getOpenClawAgentMigrationSchema,
   assertExistingAgentSchemaOwner,
   assertOpenClawAgentCurrentRuntimeSchema,
+  assertOpenClawAgentSchemaContains,
   assertSupportedAgentSchemaVersion,
   assertAgentSchemaVersion,
   hasPendingCurrentVersionAgentDatabaseMigration,
@@ -130,9 +131,27 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
   const hasPendingCurrentVersionMigration =
     userVersion === OPENCLAW_AGENT_SCHEMA_VERSION &&
     hasPendingCurrentVersionAgentDatabaseMigration(database);
+  const startedAt = performance.now();
+  const processDeathRefusal = processDeath
+    ? migrationPending || hasPendingCurrentVersionMigration
+      ? "schema-migration-pending"
+      : sqliteProcessDeathIntegrityRefusal(database, pathname)
+    : undefined;
+  if (processDeath && diagnostics) {
+    diagnostics.because = processDeathRefusal;
+  }
+  if (diagnostics?.integrityGateReason === "stale-lease-full" && diagnostics.because) {
+    agentDbLog.info(
+      `agent database integrityGateReason=stale-lease-full because=${diagnostics.because}`,
+      {
+        agentId,
+        path: pathname,
+        ...diagnostics,
+      },
+    );
+  }
   if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
-    const startedAt = performance.now();
-    const deferred = processDeath && canDeferSqliteIntegrityAfterProcessDeath(database, pathname);
+    const deferred = processDeath && !processDeathRefusal;
     const reuseIntegrity =
       deferred ||
       reuseRuntimeIntegrity ||
@@ -169,6 +188,7 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
       diagnostics.integrityGateReason = "process-death";
       diagnostics.integrityGateMode = "deferred";
       diagnostics.integrityGateOutcome = "pending";
+      diagnostics.because = "same-boot-dead-owner-wal-recovered";
       diagnostics.integrityGateMs = Math.floor(performance.now() - startedAt);
     }
   } else if (
@@ -387,8 +407,16 @@ function ensureAgentSchema(
       if (previousVersion === AGENT_MEDIA_SCHEMA_VERSION) {
         ensureSessionAdditiveColumns(db);
         assertSqliteIntegrity(db, pathname);
-        // Index repair and whole-schema validation run in finishAgentSchemaMigration
-        // after legacy memory and participant shapes converge, in this transaction.
+        migrateMemoryChunkMetadataSchema(db);
+        // Validate before CREATE IF NOT EXISTS can conceal missing required storage.
+        // The finalizer repairs canonical indexes after the remaining migrations.
+        assertOpenClawAgentSchemaContains(
+          db,
+          pathname,
+          getOpenClawAgentMigrationSchema(previousVersion),
+          "legacy",
+          true,
+        );
       }
       migrateRetiredAgentStateLeaseSchema(db, pathname, targetVersion);
       if (previousVersion === targetVersion) {
@@ -431,7 +459,9 @@ function ensureAgentSchema(
       }
       maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent();
       db.exec(migrationSchemaSql);
-      migrateMemoryChunkMetadataSchema(db);
+      if (previousVersion !== AGENT_MEDIA_SCHEMA_VERSION) {
+        migrateMemoryChunkMetadataSchema(db);
+      }
       if (previousVersion < targetVersion) {
         ensureOpenClawAgentBoardSchemaInTransaction(db);
       }

@@ -15,17 +15,19 @@ import {
 import * as sessionArchive from "./session-accessor.sqlite-archive.js";
 import { cleanupSessionLifecycleArtifactsCore } from "./session-accessor.sqlite-artifact-cleanup.js";
 import {
+  runSqliteSessionDeletionTransaction,
   withSqliteSessionContextReset,
   withSqliteSessionDeletions,
 } from "./session-accessor.sqlite-deletion.js";
 import { seedPersonalGitHubDeletionReceipt } from "./session-accessor.sqlite-deletion.test-support.js";
+import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "./session-accessor.sqlite-entry.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
-import { resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
+import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -148,6 +150,32 @@ describe("SQLite session deletion receipts", () => {
 
     expect(read()).toBeUndefined();
     expect(receipt()).toEqual({ receipt: undefined, lifecycle: undefined });
+  });
+
+  it("settles only committed rows when a batch deletion fails partway through", async () => {
+    await seed(sessionKey);
+    await seed(baseKey);
+    const removedReceipt = await seedReceipt();
+    const retainedReceipt = await seedReceipt(baseKey);
+    const retainedBefore = retainedReceipt();
+    const scope = resolveSqliteScope({ sessionKey, storePath });
+    const entries = [sessionKey, baseKey].map((key) => ({ sessionKey: key, entry: read(key)! }));
+    const failure = new Error("batch deletion aborted after its first commit");
+
+    await expect(
+      withSqliteSessionDeletions(scope, entries, async () => {
+        runSqliteSessionDeletionTransaction(
+          (database) => deleteSessionEntryRows(database, sessionKey),
+          toDatabaseOptions(scope),
+        );
+        throw failure;
+      }),
+    ).rejects.toBe(failure);
+
+    expect(read()).toBeUndefined();
+    expect(removedReceipt()).toEqual({ receipt: undefined, lifecycle: undefined });
+    expect(read(baseKey)).toEqual(entries[1]!.entry);
+    expect(retainedReceipt()).toEqual(retainedBefore);
   });
 
   it("retains personal publication receipts when deletion aborts or the context resets", async () => {

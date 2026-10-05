@@ -270,9 +270,7 @@ function isUnknownAllowEscapeSequencesFlag(error) {
 }
 
 async function execGhRead(args, options = {}) {
-  const attempts = options.attempts ?? 4;
-  let lastError;
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+  for (let attempt = 1; ; attempt += 1) {
     const remaining =
       options.operationDeadline === undefined
         ? Number.MAX_SAFE_INTEGER
@@ -283,8 +281,7 @@ async function execGhRead(args, options = {}) {
         timeoutMs: Math.min(options.timeoutMs ?? 60_000, remaining),
       });
     } catch (error) {
-      lastError = error;
-      if (attempt === attempts || classifyReleaseGhTransportError(error) !== "transient") {
+      if (attempt === 4 || classifyReleaseGhTransportError(error) !== "transient") {
         throw error;
       }
       await sleep(
@@ -298,7 +295,6 @@ async function execGhRead(args, options = {}) {
       );
     }
   }
-  throw lastError;
 }
 
 function readGhApi(repository, path, args = [], options = {}, fresh = true) {
@@ -855,10 +851,6 @@ export function createClient(repository, dependencies = {}) {
           .map((line) => JSON.parse(line))
       : [];
   };
-  const attemptJobs =
-    dependencies.getAttemptJobs ??
-    ((runId, runAttempt, options) =>
-      readJobs(`actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`, options));
   const verify = async (runId, plan, operationDeadline, expectedRunAttempts) => {
     const sourceSha = plan.trustedWorkflow?.sha;
     return execute(
@@ -898,9 +890,10 @@ export function createClient(repository, dependencies = {}) {
       releaseEvidenceClient ??= createReleaseEvidenceClient(repository);
       return releaseEvidenceClient;
     },
-    getAttemptJobs(runId, runAttempt, options) {
-      return attemptJobs(runId, runAttempt, options);
-    },
+    getAttemptJobs:
+      dependencies.getAttemptJobs ??
+      ((runId, runAttempt, options) =>
+        readJobs(`actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`, options)),
     getRun(runId, options) {
       return apiJson(`actions/runs/${runId}`, options);
     },

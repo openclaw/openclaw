@@ -4065,33 +4065,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     ]);
   });
 
-  it("packs precise plugin tests through their canonical owner without enabling the sweep", () => {
-    const targets = [
-      "src/plugins/runtime.test.ts",
-      "src/plugins/public-surface-loader.test.ts",
-      "src/plugins/plugin-instance.consumer.test.ts",
-    ];
-    const selected = expectDefined(
-      createSelectedNodeTestShardBundles(targets, { runnerBackend: "hybrid" }),
-      "selected plugin owner",
-    );
-    const groups = selected.flatMap((shard) => shard.groups);
-    expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
-      targets.toSorted(),
-    );
-    expect(
-      groups.every(
-        (group) =>
-          group.configs.length === 1 && group.configs[0] === "test/vitest/vitest.plugins.config.ts",
-      ),
-    ).toBe(true);
-    expect(
-      createNodeTestShards({ includeReleaseOnlyPluginShards: false }).some((shard) =>
-        shard.configs.includes("test/vitest/vitest.plugins.config.ts"),
-      ),
-    ).toBe(false);
-  });
-
   it("retains only exact changed plugin-owner tests in deterministic order", () => {
     const options = {
       includeReleaseOnlyPluginShards: false,

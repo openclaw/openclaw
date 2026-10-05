@@ -188,7 +188,7 @@ async function withSession(
           },
         },
       },
-      plugins: { slots: { memory: "none" } },
+      plugins: { enabled: false, slots: { memory: "none" } },
     };
     await state.writeConfig(config);
     const target = {

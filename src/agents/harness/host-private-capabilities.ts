@@ -35,12 +35,14 @@ const callerReadPreparers = new WeakMap<object, CallerReadPreparer>();
 export type PreparedToolAuthorityRead = {
   reads: readonly SessionEntryWorkerRead[];
   assertPrepared: (reads: readonly PreparedSessionEntryWorkerRead[]) => void;
+  /** Ordinary legacy queue admission only; never call from a worker grant. */
+  assertLegacyCurrent: () => void;
 };
 const toolAuthorityReadScope = new AsyncLocalStorage<{
   reads: PreparedToolAuthorityRead[];
   complete: boolean;
 }>();
-const workerToolPreparations = new WeakSet<() => Promise<void>>();
+const workerToolPreparations = new WeakMap<() => Promise<void>, { complete: boolean }>();
 
 export function bindWorkerToolPreparation<
   T extends Pick<ReplyToolAuthorityPreparation, "prepareCurrent">,
@@ -48,9 +50,11 @@ export function bindWorkerToolPreparation<
   preparation: T,
   dependencies: readonly Pick<ReplyToolAuthorityPreparation, "prepareCurrent">[] = [],
 ): T {
-  if (dependencies.every((dependency) => workerToolPreparations.has(dependency.prepareCurrent))) {
-    workerToolPreparations.add(preparation.prepareCurrent);
-  }
+  workerToolPreparations.set(preparation.prepareCurrent, {
+    complete: dependencies.every(
+      (dependency) => workerToolPreparations.get(dependency.prepareCurrent)?.complete === true,
+    ),
+  });
   return preparation;
 }
 
@@ -65,17 +69,24 @@ export function recordPreparedToolAuthorityRead(read: PreparedToolAuthorityRead)
 export async function capturePreparedToolAuthorityReads(
   preparation: ReplyToolAuthorityPreparation,
 ) {
+  const metadata = workerToolPreparations.get(preparation.prepareCurrent);
   const scope: { reads: PreparedToolAuthorityRead[]; complete: boolean } = {
     reads: [],
-    complete: true,
+    complete: metadata?.complete ?? false,
   };
-  if (workerToolPreparations.has(preparation.prepareCurrent)) {
+  if (metadata) {
     await toolAuthorityReadScope.run(scope, preparation.prepareCurrent);
   } else {
     await preparation.prepareCurrent();
   }
   preparation.assertCurrent();
-  return scope.complete ? scope.reads : [];
+  return {
+    reads: scope.reads,
+    // Known wrappers retain their own reads even when a dependency still needs
+    // synchronous compatibility outside worker admission.
+    assertCompatibility:
+      !scope.complete || !scope.reads.length ? preparation.compatAssertCurrent : undefined,
+  };
 }
 
 export function bindReplyToolAuthorityCallerRead(

@@ -27,7 +27,6 @@ class ChatPdfPreview extends OpenClawLightDomContentsElement {
   @property() label = "";
   @property() mimeType = "";
   @property({ type: Number }) sizeBytes: number | undefined;
-  @property() downloadHref = "";
 
   @state() private status: "loading" | "ready" | "error" = "loading";
   @state() private previewUrl: string | null = null;
@@ -133,7 +132,7 @@ class ChatPdfPreview extends OpenClawLightDomContentsElement {
   }
 
   override render() {
-    const downloadHref = safeAttachmentHref(this.downloadHref || this.src);
+    const downloadHref = safeAttachmentHref(this.src);
     return html`
       <div class="sidebar-pdf-preview" aria-label=${this.label}>
         <div class="sidebar-pdf-preview__surface">

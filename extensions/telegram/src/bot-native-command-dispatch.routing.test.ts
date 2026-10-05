@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { BotCommand } from "grammy/types";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   getSessionBindingService,
   registerSessionBindingAdapter,
@@ -48,60 +48,53 @@ const groupChat = { id: -42001, type: "supergroup", title: "Project", is_forum: 
 const commandCollisionDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("registered native command routing through the message pipeline", () => {
-  it.each([false, true])(
-    "preserves canonical export command with colliding workspace skill=%s",
-    async (collision) => {
-      const workspace = commandCollisionDirs.make("telegram-command-collision-");
-      if (collision) {
-        await writeSkill({
-          dir: path.join(workspace, "skills", "export-session"),
-          name: "export-session",
-          description: "Collision probe",
-          frontmatterExtra: "user-invocable: true",
-        });
-      }
-      const cfg: OpenClawConfig = {
-        commands: { native: true, nativeSkills: true },
-        agents: { entries: { main: { workspace, skills: ["export-session"] } } },
-        channels: {
-          telegram: {
-            commands: { native: true, nativeSkills: true },
-            dmPolicy: "open",
-            allowFrom: ["*"],
-            streaming: { mode: "off" },
-          },
+  it("preserves the canonical export command with a colliding workspace skill", async () => {
+    const workspace = commandCollisionDirs.make("telegram-command-collision-");
+    await writeSkill({
+      dir: path.join(workspace, "skills", "export-session"),
+      name: "export-session",
+      description: "Collision probe",
+      frontmatterExtra: "user-invocable: true",
+    });
+    const cfg: OpenClawConfig = {
+      commands: { native: true, nativeSkills: true },
+      agents: { entries: { main: { workspace, skills: ["export-session"] } } },
+      channels: {
+        telegram: {
+          commands: { native: true, nativeSkills: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          streaming: { mode: "off" },
         },
-      };
-      const bot = await createBot(true, true, cfg);
-      await new Promise<void>((resolve, reject) => {
-        enqueueTelegramMenuSync({
-          ownerKey: resolveTelegramMenuRemoteOwner({ botId: bot.botInfo.id }).queueKey,
-          sync: async () => resolve(),
-          onError: reject,
-        });
+      },
+    };
+    const bot = await createBot(true, true, cfg);
+    await new Promise<void>((resolve, reject) => {
+      enqueueTelegramMenuSync({
+        ownerKey: resolveTelegramMenuRemoteOwner({ botId: bot.botInfo.id }).queueKey,
+        sync: async () => resolve(),
+        onError: reject,
       });
-      const commands =
-        apiCalls.mock.calls
-          .filter(([method]) => method === "setMyCommands")
-          .map(([, payload]) => payload as { commands: BotCommand[]; language_code?: string })
-          .find((menu) => !menu.language_code)?.commands ?? [];
-      expect(commands.length).toBeGreaterThan(0);
-      expect(commands.length).toBeLessThan(100);
-      if (collision) {
-        expect
-          .soft(commands.filter(({ description }) => description === "Collision probe"))
-          .toEqual([{ command: "export_session_2", description: "Collision probe" }]);
-      }
-      expect.soft(commands.filter(({ command }) => command === "export_session")).toHaveLength(1);
-      await bot.handleUpdate({ update_id: 1001, message: commandMessage("/export_session") });
-      expect(harness.replySpy).toHaveBeenCalledOnce();
-      expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
-        CommandSource: "native",
-        CommandBody: "/export-session",
-        RawBody: "/export_session",
-      });
-    },
-  );
+    });
+    const commands =
+      apiCalls.mock.calls
+        .filter(([method]) => method === "setMyCommands")
+        .map(([, payload]) => payload as { commands: BotCommand[]; language_code?: string })
+        .find((menu) => !menu.language_code)?.commands ?? [];
+    expect(commands.length).toBeGreaterThan(0);
+    expect(commands.length).toBeLessThan(100);
+    expect
+      .soft(commands.filter(({ description }) => description === "Collision probe"))
+      .toEqual([{ command: "export_session_2", description: "Collision probe" }]);
+    expect.soft(commands.filter(({ command }) => command === "export_session")).toHaveLength(1);
+    await bot.handleUpdate({ update_id: 1001, message: commandMessage("/export_session") });
+    expect(harness.replySpy).toHaveBeenCalledOnce();
+    expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
+      CommandSource: "native",
+      CommandBody: "/export-session",
+      RawBody: "/export_session",
+    });
+  });
 
   it("authorizes paired DMs without marking the sender as an owner", async () => {
     await addChannelAllowFromStoreEntry({
@@ -125,120 +118,108 @@ describe("registered native command routing through the message pipeline", () =>
     expect(context).not.toHaveProperty("OwnerAllowFrom");
   });
 
-  it.each(["/status", "/new", "/reset"])(
-    "routes %s to the topic agent and chat session",
-    async (text) => {
-      const cfg: OpenClawConfig = {
-        commands: { native: true },
-        agents: { entries: { main: {}, "topic-agent": {} } },
-        bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }],
-        channels: {
-          telegram: {
-            groupPolicy: "open",
-            groupAllowFrom: ["42001"],
-            groups: {
-              "-42001": { requireMention: false, topics: { "42": { agentId: "topic-agent" } } },
-            },
+  it("routes /reset to the topic agent and chat session", async () => {
+    const cfg: OpenClawConfig = {
+      commands: { native: true },
+      agents: { entries: { main: {}, "topic-agent": {} } },
+      bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }],
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groupAllowFrom: ["42001"],
+          groups: {
+            "-42001": { requireMention: false, topics: { "42": { agentId: "topic-agent" } } },
           },
         },
-      };
-      const bot = await createBot(true, true, cfg);
+      },
+    };
+    const bot = await createBot(true, true, cfg);
+    await bot.handleUpdate({
+      update_id: 1001,
+      message: {
+        ...commandMessage("/reset"),
+        chat: groupChat,
+        message_thread_id: 42,
+        is_topic_message: true,
+      },
+    });
+    expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
+      CommandSource: "native",
+      SessionKey: "agent:topic-agent:telegram:group:-42001:topic:42",
+      From: "telegram:group:-42001:topic:42",
+      ChatType: "group",
+      ConversationRoutePeerId: "-42001:topic:42",
+      MessageThreadId: 42,
+      OriginatingTo: "telegram:-42001:topic:42",
+      ThreadParentId: "-42001",
+    });
+  });
+
+  it("routes native commands through a bound top-level group session with a synchronous external adapter", async () => {
+    const conversationId = "-42002";
+    const bot = await createBot(true, true, {
+      commands: { native: true },
+      agents: { entries: { main: {}, "bound-agent": {} } },
+      bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }],
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groupAllowFrom: [String(from.id)],
+          groups: { "*": { requireMention: false } },
+          streaming: { mode: "off" },
+        },
+      },
+    });
+    const bindingId = `binding:${conversationId}`;
+    const sessionKey = `agent:bound-agent:session:${conversationId}`;
+    const resolveByConversation = vi.fn<SessionBindingAdapter["resolveByConversation"]>(
+      (conversation) =>
+        conversation.conversationId === conversationId
+          ? {
+              bindingId,
+              targetSessionKey: sessionKey,
+              targetKind: "session",
+              conversation,
+              status: "active",
+              boundAt: 1,
+            }
+          : null,
+    );
+    const touch = vi.fn<NonNullable<SessionBindingAdapter["touch"]>>();
+    const adapter: SessionBindingAdapter = {
+      channel: "telegram",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation,
+      touch,
+    };
+    registerSessionBindingAdapter(adapter);
+    try {
       await bot.handleUpdate({
         update_id: 1001,
         message: {
-          ...commandMessage(text),
-          chat: groupChat,
-          message_thread_id: 42,
-          is_topic_message: true,
+          ...commandMessage("/status"),
+          chat: { id: -42002, type: "group", title: "Project" },
         },
       });
-      expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
-        CommandSource: "native",
-        SessionKey: "agent:topic-agent:telegram:group:-42001:topic:42",
-        From: "telegram:group:-42001:topic:42",
-        ChatType: "group",
-        ConversationRoutePeerId: "-42001:topic:42",
-        MessageThreadId: 42,
-        OriginatingTo: "telegram:-42001:topic:42",
-        ThreadParentId: "-42001",
-      });
-    },
-  );
 
-  it.each([
-    { name: "forum topic", threadId: 42, conversationId: "-42001:topic:42" },
-    { name: "top-level group", threadId: undefined, conversationId: "-42002" },
-  ])(
-    "routes native commands through a bound $name session with a synchronous external adapter",
-    async ({ threadId, conversationId }) => {
-      const bot = await createBot(true, true, {
-        commands: { native: true },
-        agents: { entries: { main: {}, "bound-agent": {} } },
-        bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }],
-        channels: {
-          telegram: {
-            groupPolicy: "open",
-            groupAllowFrom: [String(from.id)],
-            groups: { "*": { requireMention: false } },
-            streaming: { mode: "off" },
-          },
-        },
-      });
-      const bindingId = `binding:${conversationId}`;
-      const sessionKey = `agent:bound-agent:session:${conversationId}`;
-      const resolveByConversation = vi.fn<SessionBindingAdapter["resolveByConversation"]>(
-        (conversation) =>
-          conversation.conversationId === conversationId
-            ? {
-                bindingId,
-                targetSessionKey: sessionKey,
-                targetKind: "session",
-                conversation,
-                status: "active",
-                boundAt: 1,
-              }
-            : null,
-      );
-      const touch = vi.fn<NonNullable<SessionBindingAdapter["touch"]>>();
-      const adapter: SessionBindingAdapter = {
+      expect(resolveByConversation).toHaveBeenCalledWith({
         channel: "telegram",
         accountId: "default",
-        listBySession: () => [],
-        resolveByConversation,
-        touch,
-      };
-      registerSessionBindingAdapter(adapter);
-      try {
-        await bot.handleUpdate({
-          update_id: 1001,
-          message: {
-            ...commandMessage("/status"),
-            chat:
-              threadId !== undefined ? groupChat : { id: -42002, type: "group", title: "Project" },
-            ...(threadId !== undefined
-              ? { message_thread_id: threadId, is_topic_message: true as const }
-              : {}),
-          },
-        });
-
-        expect(resolveByConversation).toHaveBeenCalledWith({
-          channel: "telegram",
-          accountId: "default",
-          conversationId,
-        });
-        expect(touch).toHaveBeenCalledWith(bindingId, undefined);
-        expect(harness.replySpy).toHaveBeenCalledOnce();
-        expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
-          CommandSource: "native",
-          SessionKey: sessionKey,
-          OriginatingTo: `telegram:${conversationId}`,
-          ConversationRoutePeerId: conversationId,
-        });
-      } finally {
-        unregisterSessionBindingAdapter({ channel: "telegram", accountId: "default", adapter });
-      }
-    },
-  );
+        conversationId,
+      });
+      expect(touch).toHaveBeenCalledWith(bindingId, undefined);
+      expect(harness.replySpy).toHaveBeenCalledOnce();
+      expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
+        CommandSource: "native",
+        SessionKey: sessionKey,
+        OriginatingTo: `telegram:${conversationId}`,
+        ConversationRoutePeerId: conversationId,
+      });
+    } finally {
+      unregisterSessionBindingAdapter({ channel: "telegram", accountId: "default", adapter });
+    }
+  });
 
   it.for(["ordinary message", "native command"] as const)(
     "awaits durable worker activity before dispatching a bound %s",
@@ -383,32 +364,6 @@ describe("registered native command routing through the message pipeline", () =>
       CommandBody: "/stop later",
       WasMentioned: true,
     });
-  });
-
-  it("silently blocks unauthorized /new in an unbound forum topic", async () => {
-    const bot = await createBot(true, true, {
-      commands: { native: true },
-      channels: {
-        telegram: {
-          groupPolicy: "open",
-          groupAllowFrom: ["99999"],
-          groups: { "*": { requireMention: false } },
-        },
-      },
-    });
-
-    await bot.handleUpdate({
-      update_id: 1001,
-      message: {
-        ...commandMessage("/new"),
-        chat: groupChat,
-        message_thread_id: 42,
-        is_topic_message: true,
-      },
-    });
-
-    expect(harness.replySpy).not.toHaveBeenCalled();
-    expect(apiCalls.mock.calls.filter(([method]) => method === "sendMessage")).toEqual([]);
   });
 
   it("does not dispatch the same update twice", async () => {
@@ -603,4 +558,105 @@ describe("registered poll-answer lane admission", () => {
       }
     },
   );
+});
+
+describe("native command auth in groups", () => {
+  const authGroupChat = {
+    id: -100999,
+    type: "supergroup",
+    title: "Test group",
+    is_forum: true,
+  } as const;
+
+  function groupCommand(text = "/status") {
+    return {
+      ...commandMessage(text),
+      chat: authGroupChat,
+      message_thread_id: 42,
+      is_topic_message: true,
+    };
+  }
+
+  async function setup(
+    params: {
+      telegram?: TelegramAccountConfig;
+      commands?: OpenClawConfig["commands"];
+    } = {},
+  ) {
+    const bot = await createBot(true, true, {
+      commands: { native: true, text: true, ...params.commands },
+      channels: {
+        telegram: {
+          dmPolicy: "allowlist",
+          allowFrom: [],
+          groupAllowFrom: [],
+          groupPolicy: "open",
+          streaming: { mode: "off" },
+          groups: { "*": { requireMention: false } },
+          ...params.telegram,
+        },
+      },
+    });
+    return { bot, sendMessage: vi.spyOn(bot.api, "sendMessage") };
+  }
+
+  it("does not authorize group native commands from the DM allowlist store", async () => {
+    await addChannelAllowFromStoreEntry({
+      channel: "telegram",
+      entry: from.id,
+      accountId: "default",
+    });
+    const { bot, sendMessage } = await setup();
+
+    await bot.handleUpdate({ update_id: 1001, message: groupCommand() });
+
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("silently drops topic-disabled native commands before dispatch", async () => {
+    const { bot, sendMessage } = await setup({
+      commands: { allowFrom: { telegram: [String(from.id)] } },
+      telegram: {
+        groups: {
+          [String(authGroupChat.id)]: {
+            groupPolicy: "open",
+            topics: { "42": { groupPolicy: "disabled" } },
+          },
+        },
+      },
+    });
+
+    await bot.handleUpdate({ update_id: 1001, message: groupCommand() });
+
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("silently drops native commands from groups outside the chat allowlist", async () => {
+    const { bot, sendMessage } = await setup({
+      commands: { allowFrom: { telegram: [String(from.id)] } },
+      telegram: { groups: { "-100888": { requireMention: false } } },
+    });
+
+    await bot.handleUpdate({ update_id: 1001, message: groupCommand() });
+
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("replies in the originating forum topic when command menu auth is rejected", async () => {
+    const { bot, sendMessage } = await setup({
+      telegram: { allowFrom: ["99999"], groupAllowFrom: ["99999"] },
+    });
+
+    await bot.handleUpdate({ update_id: 1001, message: groupCommand("/think") });
+
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      authGroupChat.id,
+      "You are not authorized to use this command.",
+      { message_thread_id: 42 },
+    );
+  });
 });

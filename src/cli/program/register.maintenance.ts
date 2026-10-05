@@ -119,7 +119,13 @@ export function registerMaintenanceCommands(
           opts.json === true,
         );
       }
-      if (hasSessionSqliteOnlyDoctorOptions(opts)) {
+      if (
+        typeof opts.sessionSqlite !== "string" &&
+        (typeof opts.sessionSqliteAgent === "string" ||
+          opts.githubIssue === true ||
+          opts.sessionSqliteAllAgents === true ||
+          typeof opts.sessionSqliteStore === "string")
+      ) {
         return exitDoctorError(
           "doctor session SQLite options require --session-sqlite. Use `openclaw doctor --session-sqlite dry-run ...`.",
           opts.json === true || (opts.lint === true && !process.stdout.isTTY),
@@ -178,7 +184,13 @@ export function registerMaintenanceCommands(
           opts.json === true || (opts.lint === true && !process.stdout.isTTY),
         );
       }
-      if (opts.lint !== true && hasLintOnlyDoctorOptions(opts)) {
+      if (
+        opts.lint !== true &&
+        (typeof opts.severityMin === "string" ||
+          opts.all === true ||
+          (Array.isArray(opts.skip) && opts.skip.length > 0) ||
+          (Array.isArray(opts.only) && opts.only.length > 0))
+      ) {
         return exitDoctorError(
           "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
           opts.json === true,
@@ -356,36 +368,6 @@ export function registerMaintenanceCommands(
         await uninstallCommand(defaultRuntime, opts);
       });
     });
-}
-
-function hasLintOnlyDoctorOptions(opts: {
-  readonly severityMin?: unknown;
-  readonly all?: boolean;
-  readonly skip?: unknown;
-  readonly only?: unknown;
-}): boolean {
-  return (
-    typeof opts.severityMin === "string" ||
-    opts.all === true ||
-    (Array.isArray(opts.skip) && opts.skip.length > 0) ||
-    (Array.isArray(opts.only) && opts.only.length > 0)
-  );
-}
-
-function hasSessionSqliteOnlyDoctorOptions(opts: {
-  readonly sessionSqlite?: unknown;
-  readonly sessionSqliteAgent?: unknown;
-  readonly sessionSqliteAllAgents?: unknown;
-  readonly githubIssue?: unknown;
-  readonly sessionSqliteStore?: unknown;
-}): boolean {
-  return (
-    typeof opts.sessionSqlite !== "string" &&
-    (typeof opts.sessionSqliteAgent === "string" ||
-      opts.githubIssue === true ||
-      opts.sessionSqliteAllAgents === true ||
-      typeof opts.sessionSqliteStore === "string")
-  );
 }
 
 function parseDoctorStateSqliteMode(value: unknown, json: boolean): "compact" | undefined {

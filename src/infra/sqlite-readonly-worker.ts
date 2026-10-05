@@ -536,11 +536,19 @@ export function runOneShotSqliteInspection<T>(params: {
   cwd?: string;
   stoppedFailure: string;
   interrupt?: (child: ChildProcess) => void;
-  read: (output: SqliteReadOnlyWorkerOutput, deadlineReached: boolean) => T;
+  read: (
+    output: Extract<SqliteReadOnlyWorkerOutput, { kind: "launched" }>,
+    deadlineReached: boolean,
+  ) => T;
 }): Promise<T> {
   const { timeoutMs, size } = readSqliteInspectionBudget(params.operation, params.pathname);
   return new Promise<T>((resolve, reject) => {
-    let output: SqliteReadOnlyWorkerOutput = { stderr: "", stdout: "" };
+    let output: Extract<SqliteReadOnlyWorkerOutput, { kind: "launched" }> = {
+      kind: "launched",
+      stderr: "",
+      stdout: "",
+      status: null,
+    };
     let stopped = false;
     let deadlineReached = false;
     const child = execFile(
@@ -560,6 +568,8 @@ export function runOneShotSqliteInspection<T>(params: {
           deadlineReached = true;
         }
         output = {
+          kind: "launched",
+          status: child.exitCode,
           failure: error
             ? stopped
               ? params.stoppedFailure
@@ -570,6 +580,7 @@ export function runOneShotSqliteInspection<T>(params: {
             : undefined,
           stderr,
           stdout,
+          cause: error ?? undefined,
         };
       },
     );
@@ -641,15 +652,26 @@ export function runSqliteReadOnlyWorkerSync(
   if (started !== undefined) {
     log.trace(`SQLite read-only snapshot child durationMs=${performance.now() - started}`);
   }
-  const failure = result.error
-    ? hasErrnoCode(result.error, "ETIMEDOUT")
-      ? sqliteInspectionTimeoutError("read-only snapshot", pathname, timeoutMs, size).message
-      : `failed to start: ${result.error.message}`
-    : result.status === 0
-      ? undefined
-      : `exited with ${result.signal ? `signal ${result.signal}` : `code ${result.status}`}`;
-  return readSqliteReadOnlyWorkerValue(
-    { failure, stderr: result.stderr, stdout: result.stdout },
-    mode,
-  );
+  // A spawnSync error does not carry a readable result; Node may not have created its pipes.
+  const output: SqliteReadOnlyWorkerOutput = result.error
+    ? {
+        kind: "launch-failed",
+        error: new Error(
+          hasErrnoCode(result.error, "ETIMEDOUT")
+            ? sqliteInspectionTimeoutError("read-only snapshot", pathname, timeoutMs, size).message
+            : `SQLite read-only worker failed to start for ${pathname}: ${result.error.message}`,
+          { cause: result.error },
+        ),
+      }
+    : {
+        kind: "launched",
+        stdout: result.stdout,
+        stderr: result.stderr,
+        status: result.status,
+        failure:
+          result.status === 0
+            ? undefined
+            : `exited with ${result.signal ? `signal ${result.signal}` : `code ${result.status}`}`,
+      };
+  return readSqliteReadOnlyWorkerValue(output, mode);
 }

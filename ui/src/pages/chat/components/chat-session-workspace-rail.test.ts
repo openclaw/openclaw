@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { renderSessionWorkspaceRail } from "./chat-session-workspace-rail.ts";
+import { getSessionWorkspace, loadSessionWorkspace } from "./chat-session-workspace-state.ts";
 import type { SessionWorkspaceProps } from "./chat-session-workspace-types.ts";
 import {
   createSessionWorkspaceProps,
@@ -19,7 +20,6 @@ function createWorkspace(overrides: Partial<SessionWorkspaceProps> = {}): Sessio
     filter: "all",
     browserPath: "",
     browserSearch: "",
-    onRefresh: vi.fn(),
     onBrowsePath: vi.fn(),
     onOpenFile: vi.fn(),
     onSearch: vi.fn(),
@@ -100,7 +100,7 @@ describe("session workspace path actions", () => {
     expect(container.querySelector(".chat-workspace-rail__file--active")?.textContent).toContain(
       "README.md",
     );
-    createSessionWorkspaceProps(state).onRefresh();
+    loadSessionWorkspace(state, getSessionWorkspace(state), true);
     await vi.waitFor(() => expect(createSessionWorkspaceProps(state).loading).toBe(false));
     renderRows();
     expect(container.querySelector(".chat-workspace-rail__file--active")?.textContent).toContain(

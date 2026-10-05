@@ -25,6 +25,7 @@ import {
   mutateRequesterSettleWakeBatch,
   settleRequesterCompletionBatch,
 } from "../completion/subagent-completion-admission.store.js";
+import { recoverSubagentRunGatewayOwner } from "./subagent-registry-gateway-owner.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
@@ -35,7 +36,6 @@ import {
   getSubagentRegistryPublicationRevision,
   subscribeSubagentRunChanges,
 } from "./subagent-registry-publication.js";
-import { recoverSubagentRunGatewayOwner } from "./subagent-registry-restore.js";
 import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import {

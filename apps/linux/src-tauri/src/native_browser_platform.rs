@@ -545,9 +545,7 @@ async fn snapshot_png(webview: &Webview) -> Result<String, String> {
 }
 
 #[cfg(target_os = "windows")]
-pub async fn download(webview: &Webview, generation: u64) -> Result<Value, String> {
-    windows_download::download(webview, generation).await
-}
+pub use windows_download::download;
 
 #[cfg(target_os = "windows")]
 mod windows_download {
@@ -1360,9 +1358,7 @@ pub async fn download(webview: &Webview, generation: u64) -> Result<Value, Strin
 }
 
 #[cfg(target_os = "macos")]
-pub async fn download(webview: &Webview, generation: u64) -> Result<Value, String> {
-    mac_download::download(webview, generation).await
-}
+pub use mac_download::download;
 
 fn download_url(webview: &Webview) -> Result<tauri::Url, String> {
     let url = webview.url().map_err(|e| e.to_string())?;

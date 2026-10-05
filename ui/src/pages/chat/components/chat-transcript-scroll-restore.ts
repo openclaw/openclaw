@@ -14,8 +14,7 @@ export type TranscriptScrollRestoreHost = {
   getRowCount(): number;
   readonly virtualizer: Pick<Virtualizer<HTMLDivElement, HTMLElement>, "scrollToOffset">;
   isConnected(): boolean;
-  getPendingScrollFrame(): number | null;
-  setPendingScrollFrame(frame: number | null): void;
+  pendingScrollFrame: number | null;
   onReaderScroll(): void;
 };
 
@@ -73,30 +72,28 @@ export function applyPendingScrollOffset(owner: TranscriptScrollRestoreHost): vo
 }
 
 function schedulePendingScrollRetry(owner: TranscriptScrollRestoreHost): void {
-  if (!owner.isConnected() || owner.getPendingScrollFrame() !== null) {
+  if (!owner.isConnected() || owner.pendingScrollFrame !== null) {
     return;
   }
-  owner.setPendingScrollFrame(
-    requestAnimationFrame(() => {
-      owner.setPendingScrollFrame(null);
-      const pending = owner.offsetState.pendingScrollOffset;
-      if (owner.isConnected() && pending) {
-        const maxOffset = maxTranscriptScrollOffset(owner.getScrollElement());
-        if (maxOffset === 0 && pending.offset > 0 && owner.isContentReady()) {
-          pending.zeroMaxFrames += 1;
-        } else if (
-          maxOffset !== null &&
-          maxOffset > 0 &&
-          maxOffset < pending.offset &&
-          maxOffset === pending.observedMaxOffset
-        ) {
-          pending.stableFrames += 1;
-        }
-        // Geometry notifications and settled reader policy own their renders.
-        applyPendingScrollOffset(owner);
+  owner.pendingScrollFrame = requestAnimationFrame(() => {
+    owner.pendingScrollFrame = null;
+    const pending = owner.offsetState.pendingScrollOffset;
+    if (owner.isConnected() && pending) {
+      const maxOffset = maxTranscriptScrollOffset(owner.getScrollElement());
+      if (maxOffset === 0 && pending.offset > 0 && owner.isContentReady()) {
+        pending.zeroMaxFrames += 1;
+      } else if (
+        maxOffset !== null &&
+        maxOffset > 0 &&
+        maxOffset < pending.offset &&
+        maxOffset === pending.observedMaxOffset
+      ) {
+        pending.stableFrames += 1;
       }
-    }),
-  );
+      // Geometry notifications and settled reader policy own their renders.
+      applyPendingScrollOffset(owner);
+    }
+  });
 }
 
 function settlePendingScroll(owner: TranscriptScrollRestoreHost, scrollTop: number): void {

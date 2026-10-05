@@ -83,14 +83,10 @@ export function createTypingController(params: {
     if (sealed) {
       return;
     }
-    if (typingTtlTimer) {
-      clearTimeout(typingTtlTimer);
-      typingTtlTimer = undefined;
-    }
-    if (dispatchIdleTimer) {
-      clearTimeout(dispatchIdleTimer);
-      dispatchIdleTimer = undefined;
-    }
+    clearTimeout(typingTtlTimer);
+    typingTtlTimer = undefined;
+    clearTimeout(dispatchIdleTimer);
+    dispatchIdleTimer = undefined;
     typingLoop.stop();
     // Notify the channel to stop its typing indicator (e.g., on NO_REPLY).
     // This fires only once (sealed prevents re-entry).
@@ -104,9 +100,7 @@ export function createTypingController(params: {
     if (sealed || typingIntervalMs <= 0) {
       return;
     }
-    if (typingTtlTimer) {
-      clearTimeout(typingTtlTimer);
-    }
+    clearTimeout(typingTtlTimer);
     typingTtlTimer = setTimeout(() => {
       if (!typingLoop.isRunning()) {
         return;
@@ -221,10 +215,8 @@ export function createTypingController(params: {
 
   const markDispatchIdle = () => {
     dispatchIdle = true;
-    if (dispatchIdleTimer) {
-      clearTimeout(dispatchIdleTimer);
-      dispatchIdleTimer = undefined;
-    }
+    clearTimeout(dispatchIdleTimer);
+    dispatchIdleTimer = undefined;
     maybeStopOnIdle();
   };
 

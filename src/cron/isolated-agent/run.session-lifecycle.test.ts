@@ -261,17 +261,20 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
         };
       });
       const patchWithAbort: typeof accessor.patchSessionEntryCore = (scope, update, options) => {
-        const assertCommitAllowed = options?.assertCommitAllowed;
+        const assertCommitAllowed = options?.workerGuard?.assertCurrent;
         return accessor.patchSessionEntryCore(scope, update, {
           ...options,
           ...(assertCommitAllowed
             ? {
-                assertCommitAllowed: () => {
-                  const isBase = scope.sessionKey === target.sessionKey;
-                  if ((failurePoint !== "continuation") === isBase) {
-                    interrupt();
-                  }
-                  assertCommitAllowed();
+                workerGuard: {
+                  ...options?.workerGuard,
+                  assertCurrent: () => {
+                    const isBase = scope.sessionKey === target.sessionKey;
+                    if ((failurePoint !== "continuation") === isBase) {
+                      interrupt();
+                    }
+                    assertCommitAllowed();
+                  },
                 },
               }
             : {}),

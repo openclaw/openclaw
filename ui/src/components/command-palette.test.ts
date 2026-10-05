@@ -829,6 +829,7 @@ describe("CommandPalette search", () => {
       excludeSubagents: true,
       excludeCron: true,
       excludeSystem: true,
+      excludeDock: true,
     });
     expect(palette.textContent).toContain("Visible planning");
   });

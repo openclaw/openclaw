@@ -55,7 +55,7 @@ describe("worker turn trajectory authority", () => {
         async ({ turnClaim }) => {
           const source = getWorkerTurnExecutionIdentityCapability(placements, turnClaim);
           assert(source, "expected the launcher to bind its real receipt authority");
-          const recorder = createWorkerLiveTrajectoryRecorder({ runId: input.runId, source });
+          const recorder = await createWorkerLiveTrajectoryRecorder({ runId: input.runId, source });
           assert(recorder, "expected a durable live trajectory recorder");
           recorder.recordEvent("session.started", { backend: "cloud-worker" });
           const options = toDatabaseOptions(resolveSqliteReadScope(source.sessionTarget));

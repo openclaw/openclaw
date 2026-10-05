@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import { sendHttpRequestRejection } from "../../infra/http-request-lifecycle.js";
+import { SystemEventQueueFullError } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../../security/external-content.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
@@ -381,7 +382,15 @@ export function createHooksRequestHandler(
       if (rejectChangedHooksConfig()) {
         return null;
       }
-      return dispatchWakeHook(dispatchValue, targetAgentId);
+      try {
+        return dispatchWakeHook(dispatchValue, targetAgentId);
+      } catch (error) {
+        if (!(error instanceof SystemEventQueueFullError)) {
+          throw error;
+        }
+        sendJson(res, 503, { ok: false, error: error.message, ...wakeResult });
+        return null;
+      }
     };
 
     if (subPath === "wake") {

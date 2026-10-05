@@ -91,7 +91,7 @@ import { shortenHomePath } from "../utils.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import {
   listAuthProfileRepairCandidates,
-  listLegacyOAuthSidecarPaths,
+  listReferencedLegacyOAuthSidecarPaths,
   resolveLegacyAuthStatePath as resolveAuthStatePath,
   resolveLegacyFlatAuthPath as resolveLegacyAuthStorePath,
   type AuthProfileRepairCandidate,
@@ -689,7 +689,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
   const env = params.env ?? process.env;
   assertNoRetiredStateFiles(
     "OAuth credential sidecars",
-    listLegacyOAuthSidecarPaths(env, params.cfg),
+    listReferencedLegacyOAuthSidecarPaths(env, params.cfg),
   );
   const loadMigratedStore =
     params.deps?.loadPersistedAuthProfileStore ?? loadPersistedAuthProfileStore;

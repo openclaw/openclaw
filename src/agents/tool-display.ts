@@ -48,7 +48,6 @@ const DETAIL_LABEL_OVERRIDES: Record<string, string> = {
   pollQuestion: "poll",
   maxChars: "max chars",
 };
-const MAX_DETAIL_ENTRIES = 8;
 
 /** Resolves the display model for a tool invocation. */
 export function resolveToolDisplay(params: {
@@ -71,7 +70,6 @@ export function resolveToolDisplay(params: {
     fallbackDetailKeys: FALLBACK.detailKeys,
     detailMode: "summary",
     toolDetailMode: params.detailMode,
-    detailMaxEntries: MAX_DETAIL_ENTRIES,
     detailFormatKey: (raw) => formatDetailKey(raw, DETAIL_LABEL_OVERRIDES),
   });
   return {

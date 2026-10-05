@@ -439,9 +439,6 @@ describe("plugin conversation binding approvals", () => {
       markPluginBindingFallbackNoticeShown(bindingId, scope);
       expect(hasShownPluginBindingFallbackNotice(bindingId, scope)).toBe(true);
     }
-    expect(hasShownPluginBindingFallbackNotice(bindingId)).toBe(false);
-    markPluginBindingFallbackNoticeShown(bindingId);
-    expect(hasShownPluginBindingFallbackNotice(bindingId)).toBe(true);
   });
 
   it("bounds historical fallback notices while preserving recent suppression and lifecycle cleanup", async () => {

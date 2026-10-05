@@ -10,6 +10,27 @@ import {
 } from "./send.handoff.test-support.js";
 import { createZalouserTool } from "./tool.js";
 
+const effectGate = vi.hoisted(() => ({ prepare: undefined as (() => Promise<void>) | undefined }));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    captureEffectAuthority: () => {
+      const authority = actual.captureEffectAuthority();
+      const prepare = effectGate.prepare;
+      return prepare
+        ? {
+            ...authority,
+            initiate: async <T>(effect: () => T | Promise<T>) => {
+              await prepare();
+              return authority.initiate(effect);
+            },
+          }
+        : authority;
+    },
+  };
+});
+
 vi.mock("./session-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-state.js")>()),
   clearStoredZaloCredentials: vi.fn(),
@@ -33,6 +54,60 @@ afterEach(async () => {
 });
 
 describe("Zalouser registered send handoff", () => {
+  it.each([false, true])(
+    "rechecks the SDK fetch caller after effect preparation (retired=%s)",
+    async (retired) => {
+      const preparation = harness.gate();
+      const response = harness.gate();
+      const caller = new AbortController();
+      effectGate.prepare = async () => {
+        preparation.entered.resolve();
+        await preparation.release.promise;
+      };
+      harness.response = async () => {
+        response.entered.resolve();
+        await response.release.promise;
+        return encryptResponse({ msgId: "prepared-send" });
+      };
+      const sending = harness.send("message.text", { signal: caller.signal }).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await Promise.race([
+          preparation.entered.promise,
+          response.entered.promise.then(() => {
+            throw new Error("dispatched before preparation");
+          }),
+          sending.then(() => {
+            throw new Error("settled before preparation");
+          }),
+        ]);
+        expect(harness.requests).toEqual([]);
+        if (retired) {
+          caller.abort(new Error("caller retired during effect preparation"));
+        }
+        preparation.release.resolve();
+        if (!retired) {
+          await response.entered.promise;
+          caller.abort(new Error("caller retired after dispatch"));
+        }
+        response.release.resolve();
+        expect(await sending).toMatchObject(
+          retired
+            ? { error: { message: "caller retired during effect preparation" } }
+            : { value: { messageId: "prepared-send" } },
+        );
+        expect(harness.requests).toHaveLength(retired ? 0 : 1);
+      } finally {
+        preparation.release.resolve();
+        response.release.resolve();
+        await sending;
+        effectGate.prepare = undefined;
+      }
+    },
+  );
+
   it.each(["SDK cookie preparation", "dispatch notification", "payload cancellation"] as const)(
     "stops a retired caller after %s",
     async (stage) => {

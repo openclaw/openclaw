@@ -240,19 +240,6 @@ async function selectTransferPaths(params: {
       sha256: "0".repeat(64),
     };
   };
-  const append = async (entry: WorkerWorkspaceManifestEntry) => {
-    const file = entry.path;
-    transferredPaths.add(file);
-    for (const ancestor of workspacePathAncestors(file)) {
-      budget.addEntry({ path: ancestor, type: "directory", mode: 0o700 });
-    }
-    budget.addEntry(entry);
-    budget.addTransferPath(file);
-    const pendingWrite = writer.append(file);
-    if (pendingWrite) {
-      await pendingWrite;
-    }
-  };
   async function* candidates() {
     yield* readBoundedGitPathCandidates(params.eligiblePath);
     const selected = readBoundedGitPathCandidates(params.selectedPath);
@@ -278,8 +265,18 @@ async function selectTransferPaths(params: {
   }
   for await (const file of candidates()) {
     const entry = await inspectFile(file);
-    if (entry) {
-      await append(entry);
+    if (!entry) {
+      continue;
+    }
+    transferredPaths.add(file);
+    for (const ancestor of workspacePathAncestors(file)) {
+      budget.addEntry({ path: ancestor, type: "directory", mode: 0o700 });
+    }
+    budget.addEntry(entry);
+    budget.addTransferPath(file);
+    const pendingWrite = writer.append(file);
+    if (pendingWrite) {
+      await pendingWrite;
     }
   }
   await writer.flush();

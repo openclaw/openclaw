@@ -61,8 +61,8 @@ export function createWorktreeCapacityOwner({
     maxCount: number,
     progress: WorktreeGcProgress,
     guard: WorktreeAllocationGuard,
-    ranked = new Map<string, WorktreeEvictionCandidate>(),
-    repositories = new Map<string, RepositoryInventory>(),
+    ranked: Map<string, WorktreeEvictionCandidate>,
+    repositories: Map<string, RepositoryInventory>,
   ): Promise<{ removed: string[]; attempted: number; more: boolean }> {
     const started = performance.now();
     let attempted = 0;
@@ -193,13 +193,13 @@ export function createWorktreeCapacityOwner({
     hasLiveLease: (id: string) => boolean;
     progress: WorktreeGcProgress;
     guard: WorktreeCapacityGuard;
-    checkpoint?: () => Promise<void>;
+    checkpoint: () => Promise<void>;
   }): Promise<void> {
     const { records, progress, guard, checkpoint } = params;
     const result = progress.result;
     const maxCount = configuredMaxCount();
     if (params.liveCount <= maxCount) {
-      progress.recordLimitState(true);
+      result.limitsSatisfied = true;
       return;
     }
     // Rank off the allocation lane; foreground creates may proceed between batches.
@@ -220,7 +220,7 @@ export function createWorktreeCapacityOwner({
       );
       result.removed.push(...batch.removed);
       for (let count = 0; count < Math.max(1, batch.attempted); count += 1) {
-        await checkpoint?.();
+        await checkpoint();
       }
       if (!batch.more) {
         break;

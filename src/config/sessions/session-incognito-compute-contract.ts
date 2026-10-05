@@ -13,7 +13,11 @@ type ProjectionOperations = Pick<
   TranscriptProjectionPublicationOperations,
   "claim" | "deleteChunk" | "appendChunk" | "finalize"
 >;
-export type IncognitoComputeTarget = Omit<IncognitoHistoryTarget, "admission">;
+export type IncognitoComputeTarget = Omit<IncognitoHistoryTarget, "admission"> & {
+  /** Store inventory may select a retained window under its current session owner. */
+  historical?: boolean;
+};
+export type IncognitoComputeInstance = IncognitoComputeTarget & { updatedAtMs: number };
 type Reads = {
   stats: {
     input: Record<never, never>;
@@ -28,7 +32,7 @@ type Reads = {
 };
 
 /** Every bounded extraction/publication gets its own actor FIFO turn. */
-export type IncognitoComputeOperations = {
+type SessionComputeOperations = {
   [Key in keyof Reads as `session.compute.usage.${Key}`]: {
     input: IncognitoComputeTarget & { request: Reads[Key]["input"] };
     output: Reads[Key]["output"];
@@ -51,6 +55,7 @@ export type IncognitoComputeOperations = {
     output: ProjectionOperations[Key]["output"];
   };
 } & {
+  "session.compute.status": { input: IncognitoComputeTarget; output: boolean };
   "session.compute.source.open": {
     input: IncognitoComputeTarget & {
       sourceId: string;
@@ -68,6 +73,38 @@ export type IncognitoComputeOperations = {
   };
 };
 
+type StoreUsageOperations = Omit<Reads, "stats"> & {
+  [
+    Key in keyof IncognitoUsageCacheOperations as Key extends `usageCache.${infer Name}`
+      ? Name
+      : never
+  ]: IncognitoUsageCacheOperations[Key];
+};
+export type IncognitoStoreComputeOperations = {
+  [Key in keyof StoreUsageOperations as `session.compute.store.${Key}`]: {
+    input: { request: StoreUsageOperations[Key]["input"] };
+    output: StoreUsageOperations[Key]["output"];
+  };
+} & {
+  "session.compute.store.status": { input: { sessionId: string }; output: boolean };
+  "session.compute.store.inventory": {
+    input: Record<never, never>;
+    output: IncognitoComputeInstance[];
+  };
+  "session.compute.store.preflight": {
+    input: Record<never, never>;
+    output: IncognitoComputeInstance[];
+  };
+  "session.compute.store.sweep": { input: Record<never, never>; output: null };
+};
+export type IncognitoComputeOperations = SessionComputeOperations & IncognitoStoreComputeOperations;
+
+export function isIncognitoStoreComputeCommand(command: {
+  type: string;
+}): command is SqliteWorkerCommand<IncognitoStoreComputeOperations> {
+  return command.type.startsWith("session.compute.store.");
+}
+
 export function isIncognitoComputeCommand(command: {
   type: string;
 }): command is SqliteWorkerCommand<IncognitoComputeOperations> {
@@ -81,6 +118,12 @@ export function isIncognitoComputeWrite(type: keyof IncognitoComputeOperations):
     type === "session.compute.usage.writeRollup" ||
     type === "session.compute.usage.prune" ||
     type === "session.compute.usage.acquireLock" ||
-    type === "session.compute.usage.releaseLock"
+    type === "session.compute.usage.releaseLock" ||
+    type === "session.compute.store.preflight" ||
+    type === "session.compute.store.sweep" ||
+    type === "session.compute.store.writeRollup" ||
+    type === "session.compute.store.prune" ||
+    type === "session.compute.store.acquireLock" ||
+    type === "session.compute.store.releaseLock"
   );
 }

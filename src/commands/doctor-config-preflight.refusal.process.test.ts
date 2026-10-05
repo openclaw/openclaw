@@ -335,12 +335,10 @@ describe("Doctor preflight refusal receipts", () => {
     expect(tail.map((receipt) => receipt.id)).toEqual([
       "commitments",
       "audit-logs",
-      "acp-replay-ledger",
       "managed-outgoing-images",
       "apns-registrations",
       "exec-approvals",
       "mcp-oauth",
-      "restart-sentinel",
       "workspace-state",
       "web-push",
       "node-host",

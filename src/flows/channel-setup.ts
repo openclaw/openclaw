@@ -1,6 +1,5 @@
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
-import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listActiveChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
 import type {
   ChannelOnboardingPostWriteHook,
@@ -592,9 +591,7 @@ export async function setupChannels(
           plugin,
         })
       : DEFAULT_ACCOUNT_ID;
-    const resolvedAccountId =
-      normalizeAccountId(accountId) ??
-      (plugin ? resolveChannelDefaultAccountId({ plugin, cfg: next }) : DEFAULT_ACCOUNT_ID);
+    const resolvedAccountId = normalizeAccountId(accountId);
     const accountLabel = formatAccountLabel(resolvedAccountId);
 
     if (action === "delete") {

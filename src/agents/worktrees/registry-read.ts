@@ -1,7 +1,7 @@
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { WorktreeRegistryListOptions } from "./registry-read.kernel.js";
+import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
 import type {
   CreateManagedWorktreeParams,
   ManagedWorktreeOwnerKind,
@@ -29,6 +29,17 @@ export async function readRegistryWorktree(
   return await executeOpenClawStateWorker(context, { type: "worktrees.get", input: { id } });
 }
 
+export async function readLiveRegistryWorktreeByPath(
+  context: OpenClawStateWorkerContext,
+  path: string,
+): Promise<ManagedWorktreeRecord | undefined> {
+  const { executeOpenClawStateWorker } = await import("../../state/openclaw-state-worker-store.js");
+  return await executeOpenClawStateWorker(context, {
+    type: "worktrees.findLiveByPath",
+    input: { path },
+  });
+}
+
 /** Resolve the exact target before lock admission without borrowing Gateway-thread SQLite. */
 export async function readRegistryWorktreeForMutation(
   params: { env: NodeJS.ProcessEnv; id: string } & Pick<
@@ -41,10 +52,7 @@ export async function readRegistryWorktreeForMutation(
     params.commitGuard?.();
   };
   assertCurrent();
-  const record = await readRegistryWorktree(
-    captureOpenClawStateWorkerContext({ env: params.env }),
-    params.id,
-  );
+  const record = await readRegistryWorktree(captureWorktreeRunEndContext(params.env), params.id);
   assertCurrent();
   return record;
 }
@@ -63,14 +71,14 @@ export async function readRegistryWorktrees(
   env: NodeJS.ProcessEnv,
   options: WorktreeRegistryListOptions = {},
 ): Promise<ManagedWorktreeRecord[]> {
-  const context = captureOpenClawStateWorkerContext({ env });
+  const context = captureWorktreeRunEndContext(env);
   const input = { liveOnly: options.liveOnly };
   const { executeOpenClawStateWorker } = await import("../../state/openclaw-state-worker-store.js");
   return await executeOpenClawStateWorker(context, { type: "worktrees.list", input });
 }
 
 export async function readLiveRegistryWorktreeIds(env: NodeJS.ProcessEnv): Promise<string[]> {
-  const context = captureOpenClawStateWorkerContext({ env });
+  const context = captureWorktreeRunEndContext(env);
   const { executeOpenClawStateWorker } = await import("../../state/openclaw-state-worker-store.js");
   return await executeOpenClawStateWorker(context, { type: "worktrees.liveIds", input: undefined });
 }
@@ -79,7 +87,7 @@ export async function getRegistryWorktreeProvisionedPaths(
   env: NodeJS.ProcessEnv,
   id: string,
 ): Promise<string[] | undefined> {
-  const context = captureOpenClawStateWorkerContext({ env });
+  const context = captureWorktreeRunEndContext(env);
   const { executeOpenClawStateWorker } = await import("../../state/openclaw-state-worker-store.js");
   return await executeOpenClawStateWorker(context, {
     type: "worktrees.provisionedPaths",
@@ -91,7 +99,7 @@ export async function getRegistryWorktreeProvisionedState(
   env: NodeJS.ProcessEnv,
   id: string,
 ): Promise<ProvisionedFileState[] | undefined> {
-  const context = captureOpenClawStateWorkerContext({ env });
+  const context = captureWorktreeRunEndContext(env);
   const { executeOpenClawStateWorker } = await import("../../state/openclaw-state-worker-store.js");
   return await executeOpenClawStateWorker(context, {
     type: "worktrees.provisionedState",
@@ -103,7 +111,7 @@ export async function getRegistryWorktreeProvisionedChunk(
   env: NodeJS.ProcessEnv,
   params: { worktreeId: string; path: string; chunkIndex: number },
 ): Promise<Uint8Array | undefined> {
-  const context = captureOpenClawStateWorkerContext({ env });
+  const context = captureWorktreeRunEndContext(env);
   const input = { ...params };
   const { executeOpenClawStateWorker } = await import("../../state/openclaw-state-worker-store.js");
   return await executeOpenClawStateWorker(context, {

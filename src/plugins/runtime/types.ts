@@ -166,6 +166,18 @@ export type PluginRuntime = PluginRuntimeCore & {
       },
       run: (assertCurrent: () => void) => Promise<T>,
     ) => Promise<T>;
+    /** Resolve public GitHub identity with the Gateway credential; never retry anonymously. */
+    resolveGitHubAccount?: (params: { login: string; signal?: AbortSignal }) => Promise<
+      | { accountId: number; login: string; error?: never }
+      | {
+          error: {
+            statusCode: number;
+            message: string;
+            retryAtMs?: number;
+            credentialConfigured: boolean;
+          };
+        }
+    >;
   };
   subagent: {
     /** Fresh, tool-free background inference under the existing subagent model policy. */
@@ -244,5 +256,5 @@ export type CreatePluginRuntimeOptions = {
 /** Checked contract for both the path-loaded factory and its implementation. */
 export type PluginRuntimeFactory = (
   options?: CreatePluginRuntimeOptions,
-  base?: Pick<PluginRuntime, "config" | "state" | "system">,
+  base?: Pick<PluginRuntime, "capabilities" | "config" | "state" | "system">,
 ) => PluginRuntime;

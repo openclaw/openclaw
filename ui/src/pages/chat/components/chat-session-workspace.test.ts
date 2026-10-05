@@ -8,6 +8,7 @@ import {
   createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
 } from "../chat-pane.test-support.ts";
+import { getSessionWorkspace, loadSessionWorkspace } from "./chat-session-workspace-state.ts";
 import {
   loadedSidebarContent,
   createSidebarContentRecorder,
@@ -197,7 +198,7 @@ describe("session workspace state", () => {
     expect(handleOpenSidebar).toHaveBeenLastCalledWith(
       expect.objectContaining({ kind: "loading" }),
     );
-    createSessionWorkspaceProps(state).onRefresh();
+    loadSessionWorkspace(state, getSessionWorkspace(state), true);
     await vi.waitFor(() => expect(client.request).toHaveBeenCalledTimes(2));
 
     (state as SessionWorkspaceHost & { connectionEpoch: number }).connectionEpoch = 2;
@@ -769,7 +770,7 @@ describe("openSessionWorkspaceFile", () => {
       await vi.waitFor(() => expect(getFile).toHaveBeenCalledTimes(2));
       expectSelectedRow();
       expect(state.sessionWorkspaceState?.previews).toHaveLength(1);
-      createSessionWorkspaceProps(state).onRefresh();
+      loadSessionWorkspace(state, getSessionWorkspace(state), true);
       await vi.waitFor(() => expect(listFiles).toHaveBeenCalledTimes(2));
       await vi.waitFor(() => expect(createSessionWorkspaceProps(state).loading).toBe(false));
       expectSelectedRow();

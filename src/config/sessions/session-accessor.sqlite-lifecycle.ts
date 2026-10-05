@@ -514,7 +514,9 @@ async function deleteSqliteSessionEntryLifecycleLocked(
               prepared.current.entry.sessionId,
               prepared.targetSnapshot.map((row) => row.sessionKey),
             );
-            await deleteReceipts(execution ? () => execution.assertCurrent() : undefined);
+            await deleteReceipts({
+              assertCurrent: execution ? () => execution.assertCurrent() : undefined,
+            });
           }
           result.archivedTranscripts = await publishSessionStateArchives(
             resolved,

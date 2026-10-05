@@ -1,15 +1,17 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
 import type { RunCliAgentParams } from "./types.js";
 
 /**
  * Translate the caller's runtime tool cap into the CLI run's exact tool availability.
- * A trusted completion handoff inherits the requester's persisted cap: native CLI tools
- * cannot enforce it, so its whole surface goes through the policy projection as mediated
- * MCP tools.
+ * Native CLI tools cannot enforce channel or inherited completion caps, so those
+ * runs expose their whole surface through the mediated MCP policy projection.
  */
 export function resolveCliRuntimeToolPolicy(input: {
   params: RunCliAgentParams;
+  policySessionKey: string | undefined;
+  policyAgentId: string;
   backendId: string;
   bundleMcp: boolean;
   canEnforceExactToolAvailability: boolean;
@@ -63,17 +65,40 @@ export function resolveCliRuntimeToolPolicy(input: {
       cliToolAvailability: { native: [], openClaw: [] },
     };
   }
-  if (params.trustedInternalHandoff && params.disableTools !== true) {
+  const requesterSessionKey = params.sessionKey ?? input.policySessionKey;
+  // Completion turns already require mediation. Ordinary resumes must derive the
+  // same restriction from the admitted child's policy, without guessing its sender.
+  const requesterPolicy =
+    params.disableTools === true || params.trustedInternalHandoff
+      ? undefined
+      : resolveConversationCapabilityProfile({
+          ...params,
+          agentId: input.policyAgentId,
+          sessionKey: input.policySessionKey,
+          sandboxSessionKey: requesterSessionKey,
+          preparedSessionEntry:
+            params.sessionEntry && requesterSessionKey
+              ? { sessionKey: requesterSessionKey, entry: params.sessionEntry }
+              : undefined,
+          modelProvider: params.modelProvider ?? params.provider,
+          modelId: params.model,
+        }).policy;
+  const senderRestricted = requesterPolicy?.inheritedToolPolicySource === "sender";
+  if ((params.trustedInternalHandoff || senderRestricted) && params.disableTools !== true) {
     if (
       !input.canEnforceExactToolAvailability ||
       !input.bundleMcp ||
       input.skipsTurnPreparation ||
       params.sessionEntry?.execHost === "node" ||
-      params.trustedInternalHandoff.settleBatch !== undefined
+      params.trustedInternalHandoff?.settleBatch !== undefined
     ) {
-      throw new Error(`CLI backend ${input.backendId} cannot enforce completion tool policy`);
+      throw new Error(
+        `CLI backend ${input.backendId} cannot enforce ${senderRestricted ? "conversation" : "completion"} tool policy`,
+      );
     }
-    runtimeToolsAllowPolicy ??= ["*"];
+    runtimeToolsAllowPolicy ??= senderRestricted
+      ? (params.cliToolAvailability?.openClaw ?? ["*"])
+      : ["*"];
     params = {
       ...params,
       toolsAllow: undefined,

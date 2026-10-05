@@ -85,7 +85,10 @@ describe("followup prompt metadata carrier", () => {
       resetTriggered: false,
     });
     await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
-    const toolAuthorityFingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
+    const toolAuthorityFingerprint = await operation.bindToolAuthorityRouteAsync({
+      provider: run.run.provider,
+      model: run.run.model,
+    });
     const reject = vi.fn(async () => {
       throw new Error("no active turn to steer");
     });
@@ -119,7 +122,6 @@ describe("followup prompt metadata carrier", () => {
           touchActiveSessionEntry: async () => {},
           typing,
           typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
-          toolAuthorityFingerprint,
         }),
       ).resolves.toBe("handled");
       expect(reject).toHaveBeenCalledOnce();

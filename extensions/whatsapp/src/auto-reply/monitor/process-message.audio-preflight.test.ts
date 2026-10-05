@@ -68,7 +68,8 @@ vi.mock("./message-line.js", () => ({
   buildInboundLine: (params: { msg: WebInboundMsg }) => params.msg.payload.body,
 }));
 
-vi.mock("./runtime-api.js", () => ({
+vi.mock("./runtime-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime-api.js")>()),
   buildHistoryContextFromEntries: (_p: { currentMessage: string }) => _p.currentMessage,
   createChannelMessageReplyPipeline: () => ({ onModelSelected: undefined }),
   formatInboundEnvelope: (p: { body: string }) => p.body,
@@ -78,7 +79,7 @@ vi.mock("./runtime-api.js", () => ({
   readStoreAllowFromForDmPolicy: async () => [],
   recordSessionMetaFromInbound: async () => {},
   resolveChannelContextVisibilityMode: () => "standard",
-  resolveInboundSessionEnvelopeContext: () => ({
+  resolveInboundSessionEnvelopeContextAsync: async () => ({
     storePath: "/tmp/sessions.json",
     envelopeOptions: {},
     previousTimestamp: undefined,

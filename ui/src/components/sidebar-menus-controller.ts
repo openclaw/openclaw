@@ -30,7 +30,7 @@ import type { SidebarMenusControllerHost } from "./sidebar-menus-controller-type
 
 const AGENT_MENU_HOVER_OPEN_DELAY_MS = 300;
 const AGENT_MENU_HOVER_CLOSE_DELAY_MS = 200;
-const AGENT_MENU_WIDTH_PX = 264;
+const AGENT_MENU_WIDTH_PX = 300;
 
 type AgentMenuInteractionState = "closed" | "hover-pending" | "open-hover" | "open-click";
 
@@ -71,6 +71,7 @@ export class SidebarMenusController implements ReactiveController {
   catalogViewMenuPosition: CatalogMenuPosition | null = null;
   filterMenuView: SidebarFilterMenuView = "root";
   agentMenuPosition: { x: number; top: number } | null = null;
+  agentMenuQuery = "";
   // Anchored by its bottom edge so the footer menu grows upward regardless of height.
   identityMenuPosition: { x: number; bottom: number; width: number } | null = null;
 
@@ -428,6 +429,16 @@ export class SidebarMenusController implements ReactiveController {
     if (this.agentMenuInteractionState === "open-hover") {
       this.agentMenuFocusBeforeHover = null;
       this.updateState("agentMenuInteractionState", "open-click");
+      // Promotion does not reopen the dropdown, so after-show will not move focus.
+      void this.host.updateComplete.then(() => {
+        if (this.agentMenuInteractionState !== "open-click" || this.agentMenuTrigger !== trigger) {
+          return;
+        }
+        const dropdown = this.host.querySelector<HTMLElement>(".sidebar-agent-menu");
+        if (dropdown) {
+          this.menuRenderer?.focusActiveAgentMenuItem(dropdown);
+        }
+      });
       return;
     }
     this.openAgentMenu(trigger, "open-click");
@@ -505,6 +516,9 @@ export class SidebarMenusController implements ReactiveController {
     if (this.agentMenuInteractionState !== "open-hover") {
       return;
     }
+    this.host
+      .querySelector<HTMLElement>(".sidebar-agent-menu__agent-switch--active")
+      ?.scrollIntoView?.({ block: "nearest" });
     const previous = this.agentMenuFocusBeforeHover;
     this.agentMenuFocusBeforeHover = null;
     if (previous && previous !== document.body && previous.isConnected) {
@@ -517,10 +531,15 @@ export class SidebarMenusController implements ReactiveController {
     }
   }
 
+  setAgentMenuQuery(query: string) {
+    this.updateState("agentMenuQuery", query);
+  }
+
   closeAgentMenu(options: { restoreFocus?: boolean } = {}) {
     const trigger = this.agentMenuTrigger;
     this.clearAgentMenuHoverTimers();
     this.agentMenuTrigger = null;
+    this.agentMenuQuery = "";
     this.agentMenuFocusBeforeHover = null;
     this.updateState("agentMenuInteractionState", "closed");
     this.updateState("agentMenuPosition", null);

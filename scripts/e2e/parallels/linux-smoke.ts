@@ -50,38 +50,10 @@ import {
   type SmokeCliOptions,
 } from "./smoke-common.ts";
 
-// Older published baselines predate this warning, but still need update coverage.
-const BAD_PLUGIN_DIAGNOSTIC_MIN_VERSION = "2026.5.7";
 // Restored Ubuntu snapshots may immediately run package maintenance for hours.
 // Reuse an existing downloader before touching apt, then bound the fallback.
 const APT_LOCK_RETRY_SECONDS = 900;
 const BOOTSTRAP_TIMEOUT_SECONDS = 1200;
-
-function parseOpenClawPackageVersion(value: string): string | null {
-  return value.match(/\b(\d{4}\.\d{1,2}\.\d{1,2}(?:-[A-Za-z0-9.]+)?)\b/u)?.[1] ?? null;
-}
-
-function compareOpenClawPackageVersions(left: string, right: string): number {
-  const parse = (value: string): [number, number, number] => {
-    const match = parseOpenClawPackageVersion(value)?.match(/^(\d{4})\.(\d+)\.(\d+)/u);
-    if (!match) {
-      return [0, 0, 0];
-    }
-    const [, year, month, patch] = match;
-    if (!year || !month || !patch) {
-      return [0, 0, 0];
-    }
-    return [Number(year), Number(month), Number(patch)];
-  };
-  const [leftYear, leftMonth, leftPatch] = parse(left);
-  const [rightYear, rightMonth, rightPatch] = parse(right);
-  for (const delta of [leftYear - rightYear, leftMonth - rightMonth, leftPatch - rightPatch]) {
-    if (delta !== 0) {
-      return delta;
-    }
-  }
-  return 0;
-}
 
 interface LinuxOptions extends SmokeCliOptions {
   vmNameExplicit: boolean;
@@ -250,12 +222,10 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
       }),
     );
     await this.phases.phase("fresh.onboard-ref", 420, () => this.runRefOnboard());
-    await this.phases.phase("fresh.inject-bad-plugin", 90, () =>
-      this.maybeInjectBadPluginFixture("fresh"),
-    );
+    await this.phases.phase("fresh.inject-bad-plugin", 90, () => this.injectBadPluginFixture());
     await this.phases.phase("fresh.gateway-start", 240, () => this.startGatewayBackground());
     await this.phases.phase("fresh.bad-plugin-diagnostic", 90, () =>
-      this.maybeVerifyBadPluginDiagnostic("fresh"),
+      this.verifyBadPluginDiagnostic("fresh"),
     );
     await this.phases.phase("fresh.gateway-status", 240, () => this.verifyGatewayStatus());
     this.status.freshGateway = "pass";
@@ -282,13 +252,11 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
     );
     this.status.upgradeVersion = await this.extractLastVersion("upgrade.install-main");
     await this.phases.phase("upgrade.verify-main-version", 90, () => this.verifyTargetVersion());
-    await this.phases.phase("upgrade.inject-bad-plugin", 90, () =>
-      this.maybeInjectBadPluginFixture("upgrade"),
-    );
+    await this.phases.phase("upgrade.inject-bad-plugin", 90, () => this.injectBadPluginFixture());
     await this.phases.phase("upgrade.onboard-ref", 420, () => this.runRefOnboard());
     await this.phases.phase("upgrade.gateway-start", 240, () => this.startGatewayBackground());
     await this.phases.phase("upgrade.bad-plugin-diagnostic", 90, () =>
-      this.maybeVerifyBadPluginDiagnostic("upgrade"),
+      this.verifyBadPluginDiagnostic("upgrade"),
     );
     await this.phases.phase("upgrade.gateway-status", 240, () => this.verifyGatewayStatus());
     this.status.upgradeGateway = "pass";
@@ -313,13 +281,12 @@ printf 'preflight.npmRoot=%s\n' "$(npm root -g 2>/dev/null || true)"`);
       if (
         run("prlctl", ["exec", this.options.vmName, "/usr/bin/env", "HOME=/root", "/bin/true"], {
           check: false,
-          quiet: true,
           timeoutMs: this.phases.remainingTimeoutMs(),
         }).status === 0
       ) {
         return;
       }
-      run("sleep", ["2"], { quiet: true });
+      run("sleep", ["2"]);
     }
     die(`guest did not become ready in ${this.options.vmName}`);
   }
@@ -334,7 +301,6 @@ printf 'preflight.npmRoot=%s\n' "$(npm root -g 2>/dev/null || true)"`);
     }
     say(`Restore snapshot ${this.options.snapshotHint} (${this.snapshot.id})`);
     run("prlctl", ["snapshot-switch", this.options.vmName, "--id", this.snapshot.id], {
-      quiet: true,
       timeoutMs: this.phases.remainingTimeoutMs(),
     });
     ensureVmRunning(this.options.vmName, 180, {
@@ -517,28 +483,6 @@ config_path.write_text(json.dumps(config, indent=2) + "\n")
 PY`);
   }
 
-  private versionForLane(lane: "fresh" | "upgrade"): string {
-    return lane === "fresh" ? this.status.freshVersion : this.status.upgradeVersion;
-  }
-
-  private shouldExpectBadPluginDiagnostic(lane: "fresh" | "upgrade"): boolean {
-    const version = parseOpenClawPackageVersion(this.versionForLane(lane));
-    if (!version) {
-      return true;
-    }
-    return compareOpenClawPackageVersions(version, BAD_PLUGIN_DIAGNOSTIC_MIN_VERSION) >= 0;
-  }
-
-  private maybeInjectBadPluginFixture(lane: "fresh" | "upgrade"): void {
-    if (!this.shouldExpectBadPluginDiagnostic(lane)) {
-      this.phases.append(
-        `Skipping bad plugin diagnostic fixture for ${lane}: installed ${this.versionForLane(lane)} predates ${BAD_PLUGIN_DIAGNOSTIC_MIN_VERSION}\n`,
-      );
-      return;
-    }
-    this.injectBadPluginFixture();
-  }
-
   private startGatewayBackground(): void {
     const bonjourEnv = this.disableBonjour ? " OPENCLAW_DISABLE_BONJOUR=1" : "";
     this.guest.bash(
@@ -554,23 +498,20 @@ setsid sh -lc ` +
     );
     const deadline = Date.now() + 240_000;
     while (Date.now() < deadline) {
-      if (this.showGatewayStatusCompat(false)) {
+      if (this.showGatewayStatusCompat()) {
         return;
       }
-      run("sleep", ["2"], { quiet: true });
+      run("sleep", ["2"]);
     }
     throw new Error("gateway did not become ready");
   }
 
-  private showGatewayStatusCompat(check = true): boolean {
+  private showGatewayStatusCompat(): boolean {
     const help = this.guest.exec(["openclaw", "gateway", "status", "--help"], { check: false });
     const args = help.includes("--require-rpc")
       ? ["openclaw", "gateway", "status", "--deep", "--require-rpc"]
       : ["openclaw", "gateway", "status", "--deep"];
     const result = this.guest.run(args, { check: false });
-    if (check && result.status !== 0) {
-      throw new Error("gateway status failed");
-    }
     return result.status === 0;
   }
 
@@ -585,19 +526,13 @@ setsid sh -lc ` +
       }
       if (attempt < 8) {
         warn(`gateway-status retry ${attempt}`);
-        run("sleep", ["5"], { quiet: true });
+        run("sleep", ["5"]);
       }
     }
     throw new Error("gateway status did not become RPC-ready");
   }
 
-  private async maybeVerifyBadPluginDiagnostic(lane: "fresh" | "upgrade"): Promise<void> {
-    if (!this.shouldExpectBadPluginDiagnostic(lane)) {
-      this.phases.append(
-        `Skipping bad plugin diagnostic assertion for ${lane}: installed ${this.versionForLane(lane)} predates ${BAD_PLUGIN_DIAGNOSTIC_MIN_VERSION}\n`,
-      );
-      return;
-    }
+  private async verifyBadPluginDiagnostic(lane: "fresh" | "upgrade"): Promise<void> {
     const warning =
       "channel plugin manifest declares test-bad-plugin without channelConfigs metadata";
     const gatewayStartLog = await readFile(

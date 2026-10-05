@@ -66,6 +66,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   createSession.mockReset();
   registerRun.mockReset();
@@ -474,8 +475,10 @@ async function createAttempt() {
     revoke: (error: Error) => {
       revocation = error;
     },
-    run: () =>
-      runAgentsApiAttempt(
+    run: () => {
+      // Cold workers must not consume this outcome fixture's execution budget.
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      return runAgentsApiAttempt(
         params,
         binding,
         async (next) => {
@@ -486,7 +489,8 @@ async function createAttempt() {
         target,
         () => ({}),
         promptHistories,
-      ),
+      );
+    },
   };
 }
 
