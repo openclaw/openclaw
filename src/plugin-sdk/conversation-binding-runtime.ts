@@ -1,6 +1,7 @@
 /**
  * Runtime SDK subpath for conversation binding routes and session binding records.
  */
+export { projectAdmissionRouteBindingFacts } from "../channels/conversation-binding-route-facts.js";
 export {
   ensureConfiguredBindingRouteReady,
   resolveConfiguredBindingRoute,

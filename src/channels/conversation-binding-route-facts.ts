@@ -183,6 +183,26 @@ export function matchesConversationBindingRouteFacts(
           expected.observedAgentId;
 }
 
+/**
+ * Source admission can use a different owner and session than the bound ACP target.
+ * The binding identity stays attached so a later removal or reassignment can still reject.
+ */
+export function projectAdmissionRouteBindingFacts<
+  T extends { sessionKey: string; agentId: string },
+>(runtimeRoute: T, admissionRoute: T): T {
+  const facts = readConversationBindingRouteFacts(runtimeRoute);
+  const projected = {
+    ...runtimeRoute,
+    ...admissionRoute,
+  };
+  if (!facts) {
+    return projected;
+  }
+  return Object.assign(projected, {
+    [BINDING_ROUTE_FACTS]: Object.freeze({ ...facts, agentId: admissionRoute.agentId }),
+  });
+}
+
 /** Configured routing changes the dispatch owner without changing the inspected selection. */
 export function projectConfiguredConversationBindingRouteFacts<
   T extends { sessionKey: string; agentId: string },

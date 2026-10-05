@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { projectAdmissionRouteBindingFacts } from "../../channels/conversation-binding-route-facts.js";
 import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
 import { inspectRuntimeConversationBindingRoute } from "../../channels/plugins/binding-routing.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
@@ -422,6 +423,80 @@ describe("channel-derived ACP route admission", () => {
       });
       expect(runtime.runTurn).toHaveBeenCalledOnce();
       expect(runtime.runTurn.mock.calls[0]?.[0].handle.sessionKey).toBe(target);
+    },
+  );
+
+  function prepareSourceAdmissionContext() {
+    const sourceRoute = {
+      agentId: "main",
+      channel: "discord",
+      accountId: "default",
+      sessionKey: "agent:main:discord:C123",
+      mainSessionKey: "agent:main:main",
+      lastRoutePolicy: "session" as const,
+      matchedBy: "default" as const,
+    };
+    const { route: boundRoute } = inspectRuntimeConversationBindingRoute({
+      route: sourceRoute,
+      inspection: { status: "available", binding },
+    });
+    const route = projectAdmissionRouteBindingFacts(boundRoute, sourceRoute);
+    return buildChannelInboundEventContext({
+      channel: "discord",
+      accountId: "default",
+      from: "discord:user:U1",
+      sender: { id: "U1" },
+      conversation: { kind: "channel", id: "C123" },
+      route: { ...route, routeSessionKey: route.sessionKey },
+      reply: { to: "discord:C123" },
+      message: { rawBody: "continue the work" },
+    });
+  }
+
+  it.each(["kept", "removed", "reassigned"] as const)(
+    "keeps ACP harness I/O on the bound target when admission stays on the source session (%s)",
+    async (change) => {
+      const ctx = prepareSourceAdmissionContext();
+      expect(ctx.SessionKey).toBe("agent:main:discord:C123");
+      const runtime = createAcpRuntime([{ type: "done" }]);
+      acpMocks.requireAcpRuntimeBackend.mockReturnValue({ id: "acpx", runtime });
+      let current: SessionBindingRecord | null = binding;
+      const started = createDeferred();
+      const release = createDeferred();
+      sessionBindingMocks.resolveByConversationAsync.mockImplementation(async () => current);
+      sessionBindingMocks.touch.mockImplementationOnce(async () => {
+        started.resolve();
+        await release.promise;
+      });
+      const dispatch = dispatchReplyFromConfig({
+        ctx,
+        cfg: { acp: { enabled: true, dispatch: { enabled: true } } },
+        dispatcher: createDispatcher(),
+      });
+      const result = dispatch.then(
+        () => ({ error: undefined as unknown }),
+        (error: unknown) => ({ error }),
+      );
+      await Promise.race([started.promise, result]);
+      if (change === "removed") {
+        current = null;
+      } else if (change === "reassigned") {
+        current = {
+          ...binding,
+          boundAt: 2,
+          targetSessionKey: "agent:main:acp:after",
+        };
+      }
+      release.resolve();
+      const outcome = await result;
+      if (change === "kept") {
+        expect(outcome.error).toBeUndefined();
+        expect(runtime.runTurn).toHaveBeenCalledOnce();
+        expect(runtime.runTurn.mock.calls[0]?.[0].handle.sessionKey).toBe(binding.targetSessionKey);
+        return;
+      }
+      expect(outcome.error).toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+      expect(runtime.runTurn).not.toHaveBeenCalled();
     },
   );
 });

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { ChannelType, MessageType, type APIMessage } from "discord-api-types/v10";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -312,6 +312,41 @@ describe("Discord native recent history through process context", () => {
     expect(result?.ctxPayload.InboundHistory).toBeUndefined();
     expect(result?.ctxPayload.Body).toContain("addressed current turn");
     expect(result?.ctxPayload.Body).not.toContain("stale discussion");
+  });
+
+  it("reads a cross-owner ACP reset boundary from the target store", async () => {
+    const storeRoot = tempDirs.make("discord-cross-owner-history-", sessionRoot);
+    const store = path.join(storeRoot, "{agentId}", "sessions.json");
+    const boundSessionKey = "agent:claude:acp:binding:discord:default:af00112233445566";
+    const ctx = await recentContext({
+      boundSessionKey,
+      route: {
+        agentId: "worker",
+        channel: "discord",
+        accountId: "default",
+        sessionKey: "agent:worker:discord:channel:thread",
+        mainSessionKey: "agent:worker:main",
+      },
+      cfg: { messages: { ackReaction: "👀" }, session: { store } },
+      client: {
+        rest: { get: vi.fn().mockResolvedValue([nativeMessage(900), nativeMessage(899)]) },
+      },
+    });
+    await upsertSessionEntry({
+      agentId: "claude",
+      storePath: resolveStorePath(store, { agentId: "claude" }),
+      sessionKey: boundSessionKey,
+      entry: {
+        sessionId: "claude-reset",
+        lifecycleRevision: "claude-revision",
+        updatedAt: startedAt + 9_000,
+        sessionStartedAt: startedAt + 9_000,
+      },
+    });
+    const result = await buildContext(ctx);
+
+    expect(result?.ctxPayload.InboundHistory?.map((entry) => entry.messageId)).toEqual(["900"]);
+    expect(result?.ctxPayload.Body).not.toContain("discussion-899");
   });
 
   it("excludes pre-reset messages using the bound session rather than the channel route", async () => {

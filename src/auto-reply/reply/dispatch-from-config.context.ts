@@ -10,7 +10,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding-metadata.js";
-import { isAcpSessionKey } from "../../routing/session-key.js";
+import { isAcpSessionKey, parseThreadSessionSuffix } from "../../routing/session-key.js";
 import { classifySessionStateActor } from "../../sessions/session-state-events.js";
 import {
   isNativeCommandTurn,
@@ -135,14 +135,25 @@ export async function resolveBoundAcpDispatchSessionKey(params: {
     );
   }
   const currentTargetSessionKey = normalizeOptionalString(currentBinding?.targetSessionKey);
-  return currentBinding &&
-    currentTargetSessionKey &&
-    isAcpSessionKey(currentTargetSessionKey) &&
-    !isPluginOwnedSessionBindingRecord(currentBinding)
-    ? preparedRoute
-      ? normalizeOptionalString(params.ctx.SessionKey)
-      : currentTargetSessionKey
-    : undefined;
+  if (
+    !currentBinding ||
+    !currentTargetSessionKey ||
+    !isAcpSessionKey(currentTargetSessionKey) ||
+    isPluginOwnedSessionBindingRecord(currentBinding)
+  ) {
+    return undefined;
+  }
+  if (!preparedRoute) {
+    return currentTargetSessionKey;
+  }
+  // A prepared route already names its execution session, including a thread derived from
+  // that target. Source admission can carry the same observation on a different session key.
+  const preparedBase = parseThreadSessionSuffix(
+    normalizeOptionalString(params.ctx.SessionKey),
+  ).baseSessionKey;
+  return preparedBase === currentTargetSessionKey
+    ? normalizeOptionalString(params.ctx.SessionKey)
+    : currentTargetSessionKey;
 }
 
 export function resolveDispatchResetAdmission(params: {

@@ -26,6 +26,7 @@ import {
   createDiscordPreflightArgs,
   createGuildEvent,
   createGuildTextClient,
+  createThreadClient,
 } from "./message-handler.preflight.test-helpers.js";
 import { resolveDiscordPreflightRoute } from "./message-handler.routing-preflight.js";
 import { resolveDiscordAutoThreadContext } from "./threading.js";
@@ -249,6 +250,144 @@ it.each(["plugin", "configured", "ignored-stale", "derived", "dm"])(
     release.resolve();
     expect(await settled).toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
     expect(read).toHaveBeenCalledWith(expect.objectContaining(conversation));
+    expect(adopted).not.toHaveBeenCalled();
+    expect(existsSync(mainWorkspace)).toBe(false);
+    expect(existsSync(workWorkspace)).toBe(false);
+  },
+);
+
+it.each(["removed", "reassigned", "kept"] as const)(
+  "keeps Discord source admission for a runtime ACP thread when the binding is %s during admission",
+  async (change) => {
+    const threadId = "thread-runtime-acp";
+    const parentId = "channel-parent";
+    const targetSessionKey = "agent:claude:acp:runtime:discord-thread";
+    const mainWorkspace = state.path(change, "runtime-acp-main");
+    const workWorkspace = state.path(change, "runtime-acp-work");
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: { workspace: mainWorkspace }, work: { workspace: workWorkspace } },
+        defaults: {
+          workspace: state.workspaceDir,
+          skipBootstrap: true,
+          model: { primary: "openai/gpt-5.4" },
+        },
+      },
+      plugins: { enabled: false },
+      channels: { discord: { enabled: true } },
+      bindings: [{ agentId: "main", match: scope }],
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const message = createDiscordMessage({
+      id: `m-runtime-acp-${change}`,
+      channelId: threadId,
+      content: "/help",
+      author: { id: "user-1", bot: false, username: "alice" },
+    });
+    const author = message.author;
+    if (!author) {
+      throw new Error("Expected a sender in the Discord fixture");
+    }
+    const conversation = {
+      ...scope,
+      conversationId: threadId,
+      parentConversationId: parentId,
+    };
+    let current: SessionBindingRecord | null = {
+      bindingId: "runtime-acp",
+      targetSessionKey,
+      targetKind: "session",
+      status: "active",
+      boundAt: 1,
+      conversation,
+      metadata: { agentId: "worker" },
+    };
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const lookup = (ref: Conversation) =>
+      ref.conversationId === conversation.conversationId ? current : null;
+    const read = vi.fn(async (ref: Conversation) => {
+      entered.resolve();
+      await release.promise;
+      return lookup(ref);
+    });
+    const preflight = createDiscordPreflightArgs({
+      cfg,
+      discordConfig: cfg.channels?.discord ?? {},
+      data: createGuildEvent({ channelId: threadId, guildId: "guild-1", author, message }),
+      client: createThreadClient({ threadId, parentId }),
+    });
+    const adapter: SessionBindingAdapter = {
+      ...scope,
+      listBySession: () => (current ? [current] : []),
+      resolveByConversation: lookup,
+      inspectByConversationAsync: read,
+      resolveByConversationAsync: read,
+      touchAsync: async () => {},
+    };
+    registerSessionBindingAdapter(adapter);
+    onTestFinished(() => unregisterSessionBindingAdapter({ ...scope, adapter }));
+    const routed = await resolveDiscordPreflightRoute({
+      preflight,
+      author,
+      isDirectMessage: false,
+      isGroupDm: false,
+      messageChannelId: threadId,
+      memberRoleIds: [],
+      earlyThreadParentId: parentId,
+    });
+    expect(routed.boundSessionKey).toBe(targetSessionKey);
+    expect(routed.boundAgentId).toBe("claude");
+    expect(routed.effectiveRoute.agentId).toBe("main");
+    expect(routed.effectiveRoute.sessionKey).toContain(threadId);
+    expect(routed.effectiveRoute.sessionKey).not.toContain(":acp:");
+
+    const ctx = buildChannelInboundEventContext({
+      ...scope,
+      messageId: `runtime-acp-${change}`,
+      from: `discord:channel:${threadId}`,
+      sender: { id: "user-1" },
+      conversation: { kind: "channel", id: threadId, parentId },
+      route: {
+        ...routed.effectiveRoute,
+        routeSessionKey: routed.effectiveRoute.sessionKey,
+        dispatchSessionKey: routed.effectiveRoute.sessionKey,
+      },
+      reply: { to: `channel:${threadId}` },
+      command: { kind: "text-slash", name: "help", authorized: true, body: "/help" },
+      access: { commands: { authorized: true } },
+      message: { rawBody: "/help", commandBody: "/help" },
+    });
+    expect(ctx.SessionKey).toBe(routed.effectiveRoute.sessionKey);
+    expect(ctx.AgentId).toBe("main");
+
+    const adopted = vi.fn(async () => {});
+    const settled = getReplyFromConfig(
+      ctx,
+      { turnAdoptionLifecycle: { onAdopted: adopted, onAbandoned: () => {} } },
+      cfg,
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await Promise.race([entered.promise, settled]);
+    if (change === "removed") {
+      current = null;
+    } else if (change === "reassigned") {
+      current = {
+        ...current,
+        boundAt: 2,
+        targetSessionKey: "agent:claude:acp:runtime:replacement",
+      };
+    }
+    release.resolve();
+    const outcome = await settled;
+    if (change === "kept") {
+      expect(outcome).not.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+      return;
+    }
+    expect(outcome).toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
     expect(adopted).not.toHaveBeenCalled();
     expect(existsSync(mainWorkspace)).toBe(false);
     expect(existsSync(workWorkspace)).toBe(false);
