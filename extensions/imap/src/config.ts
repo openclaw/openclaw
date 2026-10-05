@@ -27,6 +27,7 @@ export type ImapAccountConfig = {
   addressTokens: Array<{ token: string; senders: string[] }>;
   agentId: string;
   deliver: boolean;
+  delivery?: NonNullable<Parameters<HookDispatch>[0]["delivery"]>;
   includeBody: boolean;
   maxBytes: number;
   model?: string;
@@ -65,6 +66,27 @@ export function resolveImapConfig(
     }
     const watch = asOptionalRecord(account.watch);
     const senderAuth = asOptionalRecord(account.senderAuth);
+    // asOptionalRecord keeps an omitted delivery block undefined so absent-route
+    // accounts stay distinguishable from partially specified ones.
+    const delivery = asOptionalRecord(account.delivery);
+    const deliveryChannel = typeof delivery?.channel === "string" ? delivery.channel.trim() : "";
+    const deliveryTo = typeof delivery?.to === "string" ? delivery.to.trim() : "";
+    const deliveryAccountId =
+      typeof delivery?.accountId === "string" ? delivery.accountId.trim() : "";
+    const deliveryRoute =
+      deliveryChannel && deliveryTo
+        ? {
+            channel: deliveryChannel,
+            to: deliveryTo,
+            ...(deliveryAccountId ? { accountId: deliveryAccountId } : {}),
+          }
+        : undefined;
+    const deliver = account.deliver === true;
+    if (delivery && !deliveryRoute) {
+      throw new Error(
+        `IMAP account ${accountId} requires both delivery.channel and delivery.to when delivery is set`,
+      );
+    }
     const mode = watch?.mode;
     const min = senderAuth?.min;
     const thinking = [
@@ -110,7 +132,8 @@ export function resolveImapConfig(
               : [];
           })
         : [],
-      deliver: account.deliver === true,
+      deliver,
+      ...(deliveryRoute ? { delivery: deliveryRoute } : {}),
       includeBody: account.includeBody !== false,
       maxBytes: typeof account.maxBytes === "number" ? account.maxBytes : 20_000,
       ...(typeof account.model === "string" ? { model: account.model } : {}),
