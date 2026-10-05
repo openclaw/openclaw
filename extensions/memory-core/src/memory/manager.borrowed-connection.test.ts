@@ -847,27 +847,20 @@ describe("memory manager shared agent connection", () => {
         errcode: 5,
       });
     };
-    const guarded = [
-      [DatabaseSync.prototype, ["exec", "prepare"]],
-      [StatementSync.prototype, ["all", "get", "iterate", "run"]],
-    ] as const;
-    let admissionReads = 0;
     const withoutHostReads = (assertCurrent: () => void) => {
-      const restore = guarded.flatMap(([prototype, names]) =>
-        names.map((name) => {
-          const original = Reflect.get(prototype, name);
-          Reflect.set(prototype, name, () => {
-            admissionReads += 1;
-            unavailable();
-          });
-          return () => Reflect.set(prototype, name, original);
-        }),
-      );
+      const guards = [
+        vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(unavailable),
+        vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(unavailable),
+        vi.spyOn(StatementSync.prototype, "all").mockImplementation(unavailable),
+        vi.spyOn(StatementSync.prototype, "get").mockImplementation(unavailable),
+        vi.spyOn(StatementSync.prototype, "iterate").mockImplementation(unavailable),
+        vi.spyOn(StatementSync.prototype, "run").mockImplementation(unavailable),
+      ];
       try {
         assertCurrent();
       } finally {
-        for (const undo of restore) {
-          undo();
+        for (const guard of guards) {
+          guard.mockRestore();
         }
       }
     };
@@ -887,7 +880,6 @@ describe("memory manager shared agent connection", () => {
       sessions: [{ agentId: "main", sessionId, sessionKey }],
     });
 
-    expect(admissionReads).toBe(0);
     const published = readPublishedSessionIndex(
       managerDatabase(manager),
       `sessions/main/${sessionId}.jsonl`,

@@ -647,11 +647,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
           }
         }
         assertCurrent();
-        // Worker admission reruns assertCurrent while the publication may hold the agent
-        // database lock, which a rollback-journal cache spill makes EXCLUSIVE. Read
-        // tombstones here, before BEGIN, so the host never waits on its own Worker.
-        // The workspace lock remains held through the Worker reply. Forget's
-        // tombstone writer uses this same lock and bumps the publication revision.
+        // Read before BEGIN: Worker admission may hold an EXCLUSIVE rollback-journal lock.
+        // The workspace lock excludes Forget until the Worker reply.
         if (
           source === "sessions" &&
           hasMemorySessionTombstone(
