@@ -17,9 +17,9 @@ import {
 } from "./server.sessions.store-rpc.test-helpers.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 import { agentDiscoveryMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
-import { seedLinearSessionTranscript } from "./test/server-sessions.test-helpers.js";
 import {
   directSessionReq as directSessionHandlerReq,
+  seedLinearSessionTranscript,
   setupGatewaySessionsTestHarness,
   getGatewayConfigModule,
   getSessionsHandlers,
