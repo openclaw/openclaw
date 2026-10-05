@@ -658,10 +658,10 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createDeepSeekV4OpenAICompatibleThinkingWrapper({
       baseStreamFn: agent.streamFn,
       thinkingLevel,
-      shouldPatchModel: (model) =>
-        isDeepSeekV4OpenAICompletionsModel(model) &&
-        !isMicrosoftFoundryProviderId(model.provider) &&
-        deepSeekV4NativeThinkingAllowedByCompat(model),
+      shouldPatchModel: (candidateModel) =>
+        isDeepSeekV4OpenAICompletionsModel(candidateModel) &&
+        !isMicrosoftFoundryProviderId(candidateModel.provider) &&
+        deepSeekV4NativeThinkingAllowedByCompat(candidateModel),
     });
     agent.streamFn = createDeepSeekV4NonNativeCompatSanitizerWrapper(agent.streamFn);
 
@@ -670,15 +670,15 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createDeepSeekV4OpenAICompatibleThinkingWrapper({
       baseStreamFn: agent.streamFn,
       thinkingLevel,
-      shouldPatchModel: (model) =>
-        isMiMoOpenAICompatibleModel(model, MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS),
+      shouldPatchModel: (candidateModel) =>
+        isMiMoOpenAICompatibleModel(candidateModel, MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS),
     });
     // Legacy MiMo V2 can put final visible answers in reasoning_content. Apply
     // the response-side fallback here for custom Xiaomi-compatible proxy routes.
     agent.streamFn = createThinkingOnlyFinalTextWrapper({
       baseStreamFn: agent.streamFn,
-      shouldPatchModel: (model) =>
-        isMiMoOpenAICompatibleModel(model, MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS),
+      shouldPatchModel: (candidateModel) =>
+        isMiMoOpenAICompatibleModel(candidateModel, MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS),
     });
 
     // Guard Google-family payloads against invalid negative thinking budgets
@@ -720,4 +720,3 @@ export function applyExtraParamsToAgent(
 
   return { effectiveExtraParams, nativeWebSearchAllowedByToolPolicy };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

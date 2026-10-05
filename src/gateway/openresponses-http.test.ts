@@ -81,9 +81,7 @@ installGatewayTestHooks({
     enabledPort = started.port;
     enabledServer = started.server;
   },
-  cleanup: async () => {
-    await enabledServer?.close({ reason: "openresponses enabled suite done" });
-  },
+  cleanup: async () => enabledServer?.close({ reason: "openresponses enabled suite done" }),
 });
 
 beforeEach(() => {
