@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import type { AgentWaitResult } from "../agents/run-wait.types.js";
 import { createTerminalTool } from "../agents/tools/terminal-tool.js";
 import {
   getGlobalPluginRegistry,
@@ -2090,7 +2091,7 @@ describe("loadGatewayPlugins", () => {
     expect(request.params).not.toHaveProperty("toolsAllow");
   });
 
-  test.each([
+  test.each<{ name: string; result: AgentWaitResult; expected?: AgentWaitResult }>([
     {
       name: "pending queue observation",
       result: {
@@ -2116,9 +2117,8 @@ describe("loadGatewayPlugins", () => {
       },
     },
     {
-      name: "legacy completed status",
-      result: { status: "completed" },
-      expected: { status: "ok" },
+      name: "successful completion",
+      result: { status: "ok" },
     },
     {
       name: "legacy completed error",

@@ -231,9 +231,8 @@ export function readStoreChildSessionLinks(params: {
 }): SessionChildLink[] | undefined {
   const children: SessionChildLink[] = [];
   // One store pass discovers both persisted navigation and runtime-only controller links.
-  for (const key of Object.keys(params.store)) {
-    const entry = params.store[key];
-    if (!entry || key === params.key || !params.key) {
+  for (const [key, entry] of Object.entries(params.store)) {
+    if (key === params.key || !params.key) {
       continue;
     }
     const runs = params.subagentRunsByChildSessionKey.get(key.trim()) ?? [];

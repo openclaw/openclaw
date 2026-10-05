@@ -225,16 +225,15 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   const commitMessagingToolResult = (params: {
     toolName: string;
     target?: MessagingToolSend;
-    args?: Record<string, unknown>;
+    args: Record<string, unknown>;
     result?: unknown;
-    isError?: boolean;
+    isError: boolean;
   }) => {
     const deliveryFact = readEmbeddedMessageDeliveryFact(
       readToolResultDetails(params.result)?.messageDelivery,
     );
     const delivered = deliveryFact
-      ? deliveryFact.status === "settled" &&
-        (params.isError !== true || deliveryFact.partialDelivery)
+      ? deliveryFact.status === "settled" && (!params.isError || deliveryFact.partialDelivery)
       : isDeliveredMessagingToolResult(params);
     if (!delivered) {
       return;
@@ -244,7 +243,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     if (deliveryFact?.sourceReplyDelivered === true) {
       sourceReplyDelivered = true;
     }
-    const toolArgs = params.args ?? {};
+    const toolArgs = params.args;
     const isMessagingSend = isMessagingToolSendAction(params.toolName, toolArgs);
     const content = isMessagingSend ? extractCliMessagingContent(toolArgs, params.result) : {};
     const confirmedTarget =
@@ -441,7 +440,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         }
         const toolName = stripOpenClawMcpToolPrefix(call.toolName);
         const acceptedSessionSpawn =
-          toolName === "sessions_spawn" && call.outcome === "completed" && "result" in call
+          toolName === "sessions_spawn" && call.outcome === "completed"
             ? normalizeAcceptedSessionSpawnResult(call.result)
             : null;
         if (
@@ -458,7 +457,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
             result: "result" in call ? call.result : undefined,
             isError: call.outcome !== "completed",
           });
-        } else if (call.outcome === "completed" && "result" in call) {
+        } else if (call.outcome === "completed") {
           const artifact = extractToolResultMediaArtifact(call.result);
           const mediaUrls = artifact
             ? filterToolResultMediaUrls(toolName, artifact.mediaUrls, call.result)

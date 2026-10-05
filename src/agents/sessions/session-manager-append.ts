@@ -30,6 +30,7 @@ import {
   sessionManagerPrepareCurrentTurnReplay,
 } from "./session-manager-current-turn.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
+import { prepareSessionManagerSync } from "./session-manager-incognito-scope.js";
 import {
   canonicalizeSessionEntry,
   type PersistRecordResult,
@@ -44,7 +45,6 @@ import type {
 } from "./session-manager-types.js";
 import type { PreparedSessionTranscriptReload } from "./session-manager-view-types.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
-import { warnSessionPersistenceDeprecation } from "./session-persistence-deprecation.js";
 
 export class SessionManagerAppend extends SessionManagerSuffixPersistence {
   protected appendEntryAsync<T extends SessionEntry>(
@@ -454,6 +454,14 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
   ): string | null {
     this.assertTranscriptViewAvailable();
     const includeOmitted = options?.includeOmittedCustomMessages === true;
+    if (includeOmitted) {
+      prepareSessionManagerSync(
+        "resolveCurrentTurnEntryId",
+        this.persistenceTarget,
+        this,
+        "openAsync, then resolveCurrentTurnEntryId without includeOmittedCustomMessages",
+      );
+    }
     return resolveCurrentTurnEntryId(
       {
         target: this.persistenceTarget,
@@ -497,7 +505,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
   ): string {
-    warnSessionPersistenceDeprecation("SessionManager.appendMessage", "appendMessageAsync");
+    prepareSessionManagerSync("appendMessage", this.persistenceTarget, this);
     return this.appendMessageWithTranscriptAnchorSync(message, options).entryId;
   }
 
@@ -544,10 +552,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
   ) {
-    warnSessionPersistenceDeprecation(
-      "SessionManager.appendMessageWithTranscriptAnchor",
-      "appendMessageWithTranscriptAnchorAsync",
-    );
+    prepareSessionManagerSync("appendMessageWithTranscriptAnchor", this.persistenceTarget, this);
     return this.appendMessageWithTranscriptAnchorSync(message, options);
   }
 

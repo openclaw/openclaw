@@ -208,13 +208,26 @@ export async function prepareAgentCommandExecution(
         threadId: explicitRecipientSession.threadId,
       }
     : selectedCommandOpts;
-  const sessionResolution = resolveSession({
+  const assertPreparationCurrent = () => {
+    if (abortSignal?.aborted) {
+      throw createAbortError("Operation aborted", { cause: abortSignal.reason });
+    }
+    assertSourceCurrent?.();
+    operatorAuthority?.assertCurrent();
+    if (preparationLifecycleGeneration !== undefined) {
+      assertAgentRunLifecycleGenerationCurrent(preparationLifecycleGeneration);
+    }
+  };
+  const sessionResolution = await resolveSession({
     cfg,
     to: commandOpts.to,
     sessionId: commandOpts.sessionId,
     sessionKey: explicitSessionKey ?? explicitRecipientSession?.sessionKey,
     agentId: agentIdOverride,
+    signal: abortSignal,
+    assertCurrent: assertPreparationCurrent,
   });
+  assertPreparationCurrent();
   const {
     sessionId,
     sessionKey,
@@ -249,14 +262,7 @@ export async function prepareAgentCommandExecution(
   const { getAcpSessionManager } = await loadAcpManagerRuntime();
   const acpManager = getAcpSessionManager();
   const assertAcpPreparationCurrent = () => {
-    if (abortSignal?.aborted) {
-      throw createAbortError("Operation aborted", { cause: abortSignal.reason });
-    }
-    assertSourceCurrent?.();
-    operatorAuthority?.assertCurrent();
-    if (preparationLifecycleGeneration !== undefined) {
-      assertAgentRunLifecycleGenerationCurrent(preparationLifecycleGeneration);
-    }
+    assertPreparationCurrent();
     assertAgentDatabaseAdmitted(sessionAgentId);
   };
   const acpResolution = sessionKey

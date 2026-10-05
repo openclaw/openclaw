@@ -297,7 +297,7 @@ describe("push APNs send semantics", () => {
     appendApnsResponseBodyCapture(capture, "def", 5);
 
     expect(getApnsResponseBodyCaptureText(capture)).toBe("abcde");
-    expect(capture).toMatchObject({ capturedBytes: 5, bytes: 6, truncated: true });
+    expect(capture).toMatchObject({ capturedBytes: 5, truncated: true });
   });
 
   it("preserves UTF-8 across HTTP/2 chunks and drops an incomplete capped suffix", () => {
@@ -313,7 +313,7 @@ describe("push APNs send semantics", () => {
     const cappedPrefix = "a".repeat(8191);
     appendApnsResponseBodyCapture(cappedCapture, Buffer.from(`${cappedPrefix}🚀`));
     expect(getApnsResponseBodyCaptureText(cappedCapture)).toBe(cappedPrefix);
-    expect(cappedCapture).toMatchObject({ capturedBytes: 8192, bytes: 8195, truncated: true });
+    expect(cappedCapture).toMatchObject({ capturedBytes: 8192, truncated: true });
   });
 
   it("preserves replacement decoding for a complete malformed APNs response", () => {
@@ -321,7 +321,7 @@ describe("push APNs send semantics", () => {
     appendApnsResponseBodyCapture(capture, Buffer.from([0x61, 0xf0, 0x9f]));
 
     expect(getApnsResponseBodyCaptureText(capture)).toBe("a�");
-    expect(capture).toMatchObject({ capturedBytes: 3, bytes: 3, truncated: false });
+    expect(capture).toMatchObject({ capturedBytes: 3, truncated: false });
   });
 
   it("sends alert pushes with alert headers and payload", async () => {

@@ -24,6 +24,10 @@ import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js"
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
+import {
+  deferredPluginMigrationSchema,
+  type DeferredPluginMigration,
+} from "./deferred-plugin-migrations.contract.js";
 import { isTruthyEnvValue } from "./env.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
@@ -33,18 +37,9 @@ import { invalidateSuccessfulMigrationCheckpointsInTransaction } from "./startup
 import { withStateDatabaseSchemaMaintenance } from "./state-database-maintenance.js";
 import { recordLegacyMigrationRun } from "./state-migrations.receipts.js";
 
-const RUN_PREFIX = "deferred-plugin-migration:";
-const deferredPluginMigrationSchema = z.object({
-  pluginId: z.string().min(1),
-  reason: z.string().min(1),
-  command: z.string().min(1),
-  requiresStateMigration: z.literal(true).optional(),
-  requiresDoctorInspection: z.literal(true).optional(),
-  configPaths: z.array(z.array(z.string().min(1)).min(1)).optional(),
-  validationExcludedPaths: z.array(z.array(z.string().min(1)).min(1)).optional(),
-});
+export type { DeferredPluginMigration } from "./deferred-plugin-migrations.contract.js";
 
-export type DeferredPluginMigration = z.infer<typeof deferredPluginMigrationSchema>;
+const RUN_PREFIX = "deferred-plugin-migration:";
 
 type ConfigMigrationCompletion = {
   configPath: string;

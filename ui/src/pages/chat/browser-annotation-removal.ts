@@ -1,5 +1,5 @@
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import { showToast, type ToastOptions } from "../../lib/toast.ts";
+import { showToast } from "../../lib/toast.ts";
 import { releaseChatAttachmentPayload } from "./attachment-payload-store.ts";
 import { canAdmitBrowserAnnotation } from "./browser-annotation-admission.ts";
 
@@ -13,17 +13,11 @@ type BrowserAnnotationRemovalHost = {
   focusRestoredAnnotation: (attachmentId: string) => void;
 };
 
-type BrowserAnnotationRemovalDependencies = {
-  presentToast?: (options: ToastOptions) => boolean;
-  releasePayload?: (attachmentId: string) => void;
-};
-
 /** Removes one annotation package while the shared toast owns its bounded Undo lifetime. */
 export function removeBrowserAnnotationWithUndo(
   host: BrowserAnnotationRemovalHost,
   attachment: ChatAttachment,
   labels: { removed: string; undo: string; undoUnavailable: string },
-  dependencies: BrowserAnnotationRemovalDependencies = {},
 ): boolean {
   if (!attachment.browserAnnotation) {
     return false;
@@ -41,17 +35,15 @@ export function removeBrowserAnnotationWithUndo(
   host.requestUpdate();
   host.focusComposer();
 
-  const releasePayload = dependencies.releasePayload ?? releaseChatAttachmentPayload;
   let settled = false;
   const finalizeRemoval = () => {
     if (settled) {
       return;
     }
     settled = true;
-    releasePayload(attachment.id);
+    releaseChatAttachmentPayload(attachment.id);
   };
-  const presentToast = dependencies.presentToast ?? showToast;
-  const presented = presentToast({
+  const presented = showToast({
     message: labels.removed,
     actionLabel: labels.undo,
     onAction: () => {
@@ -69,7 +61,7 @@ export function removeBrowserAnnotationWithUndo(
       }
       if (!canAdmitBrowserAnnotation(latest, modelContext)) {
         finalizeRemoval();
-        presentToast({ message: labels.undoUnavailable });
+        showToast({ message: labels.undoUnavailable });
         return;
       }
       settled = true;

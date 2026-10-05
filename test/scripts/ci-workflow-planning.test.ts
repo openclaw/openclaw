@@ -500,6 +500,8 @@ function runCheckShardFixture(options: {
   scripts: string[];
   task?: "guards" | "npm-lock" | "prod-types" | "test-types";
   earlyGuards?: boolean;
+  madgeImportCycles?: boolean;
+  failPackageScript?: string;
   checkoutBase?: string;
   types?: {
     compose?: boolean;
@@ -629,6 +631,7 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
     preflightOutputs: {
       compatibility_target: String(options.frozenTarget),
       run_format_check: "false",
+      run_pr_madge_import_cycles: String(options.madgeImportCycles ?? false),
       changed_core_test_paths_json: options.types?.changedPathsJson ?? "",
       narrow_check_paths_json:
         options.types?.narrowPathsJson ?? (options.earlyGuards ? '["src/shared/runtime.ts"]' : ""),
@@ -701,6 +704,9 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
           PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
           PNPM_CALLS: callsPath,
           TASK: options.task ?? "guards",
+          RUN_PR_MADGE_IMPORT_CYCLES: String(
+            resolveValue(row.step.env?.RUN_PR_MADGE_IMPORT_CYCLES) ?? "",
+          ),
           ...(typeCheck || options.earlyGuards
             ? {
                 OPENCLAW_LOCAL_CHECK: undefined,
@@ -716,6 +722,7 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
                 ),
               }
             : {}),
+          FAIL_PACKAGE_SCRIPT: options.failPackageScript ?? options.types?.failPackageScript,
         },
       }),
       { name: row.name },
@@ -6658,6 +6665,40 @@ describe("ci workflow guards", () => {
           ? "[skip] historical target predates the transient npm lock contract"
           : "Current CI targets must provide the deps:npm-lock:check package script.",
       );
+    },
+  );
+
+  it.each([
+    { earlyGuards: false, selected: false, failure: "" },
+    { earlyGuards: true, selected: false, failure: "" },
+    { earlyGuards: false, selected: true, failure: "" },
+    { earlyGuards: true, selected: true, failure: "" },
+    { earlyGuards: false, selected: true, failure: "check:import-cycles" },
+    { earlyGuards: true, selected: true, failure: "check:import-cycles" },
+    { earlyGuards: false, selected: true, failure: "check:madge-import-cycles" },
+    { earlyGuards: true, selected: true, failure: "check:madge-import-cycles" },
+  ])(
+    "keeps cycle checks blocking in the existing guard row ($earlyGuards, $selected, $failure)",
+    ({ earlyGuards, selected, failure }) => {
+      const result = runCheckShardFixture({
+        frozenTarget: false,
+        earlyGuards,
+        madgeImportCycles: selected,
+        failPackageScript: failure,
+        scripts: [
+          "check:doctor-deprecation-registry",
+          "check:browser-inspect-script:swift",
+          "check:temp-path-guardrails",
+          "check:coercion-helpers",
+        ],
+      });
+      expect(result.status, result.output).toBe(failure ? 17 : 0);
+      expect(result.calls.filter((call) => call.includes("import-cycles"))).toEqual(
+        selected && failure !== "check:import-cycles"
+          ? ["check:import-cycles", "check:madge-import-cycles"]
+          : ["check:import-cycles"],
+      );
+      expect(result.calls).not.toContain("check:architecture");
     },
   );
 

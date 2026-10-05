@@ -91,7 +91,7 @@ async function collectReferencedAddedOverridePaths(params: {
   const scannedPathsByRoot = new Set<string>();
   const modifiedChangesByPath = new Map(
     params.changes
-      .filter((change) => change.kind === "modified" && change.savedPath)
+      .filter((change) => change.kind === "modified")
       .map((change) => [change.path, change]),
   );
   const queue: Array<
@@ -99,7 +99,7 @@ async function collectReferencedAddedOverridePaths(params: {
     | { path: string; rootPath: string; packageRelativePath: string }
   > = [
     ...params.changes.flatMap((change) =>
-      change.kind === "modified" && change.savedPath
+      change.kind === "modified"
         ? [{ path: change.path, rootPath: change.path, sourcePath: change.savedPath }]
         : [],
     ),
@@ -151,7 +151,7 @@ async function collectReferencedAddedOverridePaths(params: {
       const referencedScanKey = `${current.rootPath}\0${referencedPath}`;
       if (!scannedPathsByRoot.has(referencedScanKey)) {
         queue.push(
-          referencedModifiedChange?.savedPath
+          referencedModifiedChange
             ? {
                 path: referencedPath,
                 rootPath: current.rootPath,

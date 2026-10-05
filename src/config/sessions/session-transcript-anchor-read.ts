@@ -68,6 +68,7 @@ export async function readSessionTranscriptAnchorsAsync(
   const request = {
     entryIds: [...selection.entryIds],
     afterSeq: selection.afterSeq,
+    includeHeader: selection.includeHeader,
     contextValidation: selection.contextValidation && structuredClone(selection.contextValidation),
     replayValidation: selection.replayValidation && { ...selection.replayValidation },
   };

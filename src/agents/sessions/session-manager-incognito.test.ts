@@ -7,6 +7,7 @@ import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/sessions/session-accessor.sqlite-compaction-runtime.js";
+import { withIncognitoSessionActor } from "../../config/sessions/session-incognito-binding.js";
 import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
@@ -14,15 +15,16 @@ import { applyLoggingConfig, resetLogger } from "../../logging/logger.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { isRecordedModelFallbackStop } from "../model-fallback-stop.js";
+import { installSessionToolResultGuard } from "../session-tool-result-guard.js";
 import { withSessionCompactionPersistenceAsync } from "./session-compaction-persistence.js";
 import {
   sessionManagerReadInitialContext,
   sessionManagerPrepareCurrentTurnReplay,
 } from "./session-manager-current-turn.js";
-import { withSessionManagerIncognitoActor } from "./session-manager-incognito-scope.js";
 import { readSessionManagerModelContextAsync } from "./session-manager-incognito.js";
 import { SessionTranscriptMessageCommittedError } from "./session-manager-message-error.js";
 import {
@@ -74,9 +76,7 @@ async function create(name: string) {
 
 it("keeps manager reads and writes on the original actor outside its opening scope", async () => {
   const target = await create("retained-manager");
-  const manager = await withSessionManagerIncognitoActor(actor, () =>
-    SessionManager.openAsync(target),
-  );
+  const manager = await withIncognitoSessionActor(actor, () => SessionManager.openAsync(target));
   const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
   const exec = vi.spyOn(DatabaseSync.prototype, "exec");
   try {
@@ -84,14 +84,14 @@ it("keeps manager reads and writes on the original actor outside its opening sco
     assert(first);
     await manager.appendThinkingLevelChange("high");
     await manager.reloadPersistedTranscriptAsync();
-    const bounded = await withSessionManagerIncognitoActor(actor, () =>
+    const bounded = await withIncognitoSessionActor(actor, () =>
       SessionManager.openBoundedAsync(target, { maxEvents: 2, maxBytes: 8192 }),
     );
     expect((await bounded[sessionManagerReadInitialContext]()).messages).toMatchObject([
       { role: "user", content: "retained owner" },
     ]);
     const admission = new AbortController();
-    await withSessionManagerIncognitoActor(
+    await withIncognitoSessionActor(
       actor,
       async () => {
         admission.abort(new Error("initial context admission closed"));
@@ -134,11 +134,9 @@ it("refuses a released manager borrow even inside another live actor scope", asy
     existingOnly: true,
   });
   assert(borrowed);
-  const manager = await withSessionManagerIncognitoActor(borrowed, () =>
-    SessionManager.openAsync(target),
-  );
+  const manager = await withIncognitoSessionActor(borrowed, () => SessionManager.openAsync(target));
   await borrowed.release();
-  await withSessionManagerIncognitoActor(actor, async () => {
+  await withIncognitoSessionActor(actor, async () => {
     await expect(manager.reloadPersistedTranscriptAsync()).rejects.toThrow("reference is released");
     await expect(manager.setSessionTargetAsync(target)).rejects.toThrow("reference is released");
     await expect(
@@ -159,7 +157,7 @@ it("retargets another session on its retained actor outside the opening scope", 
   const source = await create("retarget-outside-source");
   const destination = await create("retarget-outside-destination");
   const admission = new AbortController();
-  const manager = await withSessionManagerIncognitoActor(
+  const manager = await withIncognitoSessionActor(
     actor,
     async () => {
       const seeded = await SessionManager.openAsync(destination);
@@ -217,7 +215,7 @@ it("retargets another session on its retained actor outside the opening scope", 
 it("settles accepted branch hydration after its retained admission closes", async () => {
   const target = await create("accepted-branch-hydration");
   const admission = new AbortController();
-  const { manager, first } = await withSessionManagerIncognitoActor(
+  const { manager, first } = await withIncognitoSessionActor(
     actor,
     async () => {
       const opened = await SessionManager.openAsync(target);
@@ -245,7 +243,7 @@ it("settles accepted branch hydration after its retained admission closes", asyn
     const destination = manager.getSessionTarget();
     assert(destination);
     expect(destination.sessionId).toBe(sessionId);
-    const reopened = await withSessionManagerIncognitoActor(actor, () =>
+    const reopened = await withIncognitoSessionActor(actor, () =>
       SessionManager.openAsync(destination),
     );
     expect(reopened.buildSessionContext().messages).toMatchObject([
@@ -259,7 +257,7 @@ it("settles accepted branch hydration after its retained admission closes", asyn
 
 it("reads full context without caller SQL and rejects a changed source after an awaited consumer", async () => {
   const target = await create("context-consumer");
-  await withSessionManagerIncognitoActor(actor, async () => {
+  await withIncognitoSessionActor(actor, async () => {
     const manager = await SessionManager.openAsync(target);
     await manager.appendMessageAsync(
       Object.assign(makeUserMessage("full fidelity", 1), {
@@ -317,7 +315,7 @@ it("rejects context disclosure after its consumer releases the original actor bo
   let releasing: Promise<void> | undefined;
   try {
     await expect(
-      withSessionManagerIncognitoActor(borrowed, () =>
+      withIncognitoSessionActor(borrowed, () =>
         SessionManager.readSessionContextAsync(target, () => {
           // Release joins this accepted callback, so its settlement is awaited after the read.
           releasing = borrowed.release();
@@ -333,7 +331,7 @@ it("rejects context disclosure after its consumer releases the original actor bo
 it("rejects context disclosure when its admission closes during the awaited consumer", async () => {
   const target = await create("closed-context-admission");
   const admission = new AbortController();
-  await withSessionManagerIncognitoActor(
+  await withIncognitoSessionActor(
     actor,
     async () => {
       const manager = await SessionManager.openAsync(target);
@@ -353,7 +351,7 @@ it("rejects context disclosure when its admission closes during the awaited cons
 
 it("publishes model context before following work enters its actor", async () => {
   const target = await create("model-context-publication");
-  await withSessionManagerIncognitoActor(actor, async () => {
+  await withIncognitoSessionActor(actor, async () => {
     const manager = await SessionManager.openAsync(target);
     await manager.appendMessageAsync(makeUserMessage("publish inside validation", 1));
     const order: string[] = [];
@@ -394,7 +392,7 @@ it("persists messages, metadata, suffixes, rewrites and branches on the actor wi
   const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
   const exec = vi.spyOn(DatabaseSync.prototype, "exec");
   try {
-    await withSessionManagerIncognitoActor(actor, async () => {
+    await withIncognitoSessionActor(actor, async () => {
       const manager = await SessionManager.openAsync(target);
       const fresh = vi.fn();
       const original = {
@@ -462,7 +460,7 @@ it("persists messages, metadata, suffixes, rewrites and branches on the actor wi
 
 it("rolls back fresh-message refusal and fences queued authority before mutation", async () => {
   const target = await create("authority");
-  await withSessionManagerIncognitoActor(actor, async () => {
+  await withIncognitoSessionActor(actor, async () => {
     const manager = await SessionManager.openAsync(target);
     await expect(
       manager.appendMessageAsync(makeUserMessage("refused", 1), {
@@ -509,7 +507,7 @@ it.each(["append", "persist"] as const)(
   "preserves an acknowledged %s after its caller is revoked before publication",
   async (method) => {
     const target = await create(`committed-${method}`);
-    await withSessionManagerIncognitoActor(actor, async () => {
+    await withIncognitoSessionActor(actor, async () => {
       const manager = await SessionManager.openAsync(target);
       await manager.appendCustomEntryAsync("before-revocation");
       let current = true;
@@ -595,7 +593,7 @@ it.each(["registry", "pattern"] as const)(
         }, attachment),
       );
     try {
-      await withSessionManagerIncognitoActor(actor, async () => {
+      await withIncognitoSessionActor(actor, async () => {
         await expect(appendSessionTranscriptNote(target, note)).rejects.toThrow(
           "Transcript message redaction changed before persistence",
         );
@@ -620,7 +618,7 @@ it.each(["registry", "pattern"] as const)(
 
 it("retains the static note message receipt after acknowledged actor authority loss", async () => {
   const target = await create("static-acknowledged");
-  await withSessionManagerIncognitoActor(actor, async () => {
+  await withIncognitoSessionActor(actor, async () => {
     let current = true;
     const original = workerAdmission.createSqliteWorkerOperationAdmission;
     const spy = vi
@@ -671,7 +669,7 @@ it("retains the static note message receipt after acknowledged actor authority l
 
 it("keeps acknowledged rewrite content out of error diagnostics", async () => {
   const target = await create("private-rewrite-receipt");
-  await withSessionManagerIncognitoActor(actor, async () => {
+  await withIncognitoSessionActor(actor, async () => {
     const manager = await SessionManager.openAsync(target);
     const source = await manager.appendMessageAsync(makeUserMessage("original", 1));
     assert(source);
@@ -724,7 +722,7 @@ it.each(["entry", "leaf"] as const)(
   "retains acknowledged %s failure when a public reload publishes its view during projection",
   async (method) => {
     const target = await create(`reload-race-${method}`);
-    await withSessionManagerIncognitoActor(actor, async () => {
+    await withIncognitoSessionActor(actor, async () => {
       const manager = await SessionManager.openAsync(target);
       const first = await manager.appendCustomEntryAsync("first");
       await manager.appendCustomEntryAsync("second");
@@ -806,11 +804,75 @@ it("installs confirmed actor facts when the acknowledgement observer throws", as
     ),
   ).rejects.toBe(failure);
   expect(() => before.assertCurrent()).toThrow("snapshot changed");
-  await withSessionManagerIncognitoActor(actor, async () => {
+  await withIncognitoSessionActor(actor, async () => {
     const reopened = await SessionManager.openAsync(target);
     expect(reopened.getEntries()).toMatchObject([
       { type: "message", message: { content: "committed despite observer failure" } },
     ]);
     expect(reopened.getEntries()).toHaveLength(1);
   });
+});
+
+it("refuses synchronous actor SDK access before SQL, view mutation, and tool-result hooks", async () => {
+  const target = await create("sync-preflight");
+  const manager = await withIncognitoSessionActor(actor, () => SessionManager.openAsync(target));
+  const id = await manager.appendMessageAsync(makeUserMessage("unchanged", 1));
+  assert(id);
+  const before = structuredClone(manager.getEntries());
+  const beforeTarget = manager.getSessionTarget();
+  const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+  const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+  const read = vi.fn();
+  const beforeWrite = vi.fn();
+  const reject = (run: () => unknown, replacement: string) => {
+    expect(run).toThrow(replacement);
+    expect(manager.getEntries()).toEqual(before);
+    expect(manager.getSessionTarget()).toEqual(beforeTarget);
+    expect(manager.getLeafId()).toBe(id);
+  };
+  try {
+    reject(() => manager.appendCustomEntry("forbidden", {}), "appendCustomEntryAsync");
+    reject(() => manager.branch("missing"), "branchAsync");
+    reject(() => manager.prepareTranscriptRewrite(), "prepareTranscriptRewriteAsync");
+    reject(() => manager.removeTrailingEntries(() => true), "removeTrailingEntriesAsync");
+    reject(() => manager.reloadPersistedTranscript(), "reloadPersistedTranscriptAsync");
+    reject(() => manager.setSessionTarget(target), "setSessionTargetAsync");
+    reject(
+      () =>
+        manager.setSessionTarget({
+          ...target,
+          sessionKey: "agent:main:dashboard:durable-retarget",
+          sessionId: "durable-retarget",
+          storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env }),
+        }),
+      "setSessionTargetAsync",
+    );
+    reject(
+      () => manager.resolveCurrentTurnEntryId(undefined, { includeOmittedCustomMessages: true }),
+      "openAsync",
+    );
+    expect(manager.resolveCurrentTurnEntryId()).toBe(id);
+    installSessionToolResultGuard(manager, { beforeMessageWriteHook: beforeWrite });
+    reject(() => manager.appendMessage(makeUserMessage("forbidden", 2)), "appendMessageAsync");
+    expect(beforeWrite).not.toHaveBeenCalled();
+    await withIncognitoSessionActor(actor, async () => {
+      const limits = { maxEvents: 2, maxBytes: 8192 };
+      reject(() => SessionManager.open(target), "openAsync");
+      reject(() => SessionManager.openBounded(target, limits), "openBoundedAsync");
+      reject(() => SessionManager.openDetachedBounded(target, limits), "openDetachedBoundedAsync");
+      reject(() => SessionManager.openModelContext(target), "openModelContextAsync");
+      reject(() => SessionManager.readSessionContext(target, read), "readSessionContextAsync");
+      reject(
+        () => SessionManager.appendMessageToTranscript(target, makeUserMessage("forbidden", 2)),
+        "appendMessageToTranscriptAsync",
+      );
+    });
+    expect(read).not.toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalled();
+    expect(exec).not.toHaveBeenCalled();
+  } finally {
+    prepare.mockRestore();
+    exec.mockRestore();
+  }
+  await manager.appendCustomEntryAsync("still writable", {});
 });

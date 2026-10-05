@@ -38,7 +38,34 @@ export function mutateLocalWorkspaceProjection(
   id: string,
   mutation: LocalWorkspaceMutation,
 ) {
-  const current = readLocalWorkspaceProjectionInDatabase(db, id);
+  // Mutation admission must not materialize manifests or recovery packs.
+  const current = tableExists(db, table)
+    ? executeSqliteQueryTakeFirstSync(
+        db,
+        query(db)
+          .selectFrom(table)
+          .select("revision")
+          .$if(mutation.kind === "delete", (builder) =>
+            builder.select((eb) =>
+              eb
+                .or([
+                  eb(
+                    eb.fn.coalesce(eb.fn<number>("octet_length", ["pending_ref"]), eb.val(0)),
+                    ">",
+                    0,
+                  ),
+                  eb(
+                    eb.fn.coalesce(eb.fn<number>("octet_length", ["journal_json"]), eb.val(0)),
+                    ">",
+                    0,
+                  ),
+                ])
+                .as("unsettled"),
+            ),
+          )
+          .where("worktree_id", "=", id),
+      )
+    : undefined;
   if (mutation.kind === "create") {
     if (current || mutation.row.worktree_id !== id) {
       throw new Error("Local workspace binding already exists");
@@ -59,7 +86,7 @@ export function mutateLocalWorkspaceProjection(
     throw new Error("Local workspace binding changed");
   }
   if (mutation.kind === "delete") {
-    if (current.pending_ref || current.journal_json) {
+    if (current.unsettled) {
       throw new Error("Local workspace has unsettled edits");
     }
     executeSqliteQueryTakeFirstSync(

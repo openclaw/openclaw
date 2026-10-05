@@ -58,7 +58,7 @@ export function createEmbeddedAttemptSessionSettleTracker(
 }
 
 type AttemptTranscriptLifecycle = ReturnType<typeof createEmbeddedAttemptTranscriptLifecycle>;
-type TrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
+type TrajectoryRecorder = Awaited<ReturnType<typeof createTrajectoryRuntimeRecorder>>;
 type DisposableRuntime = { dispose(): Promise<void> | void };
 
 export type EmbeddedAttemptSessionResources = {

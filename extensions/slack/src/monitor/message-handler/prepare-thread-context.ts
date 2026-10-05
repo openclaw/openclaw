@@ -46,27 +46,27 @@ type SlackSessionResetFreshness =
 
 type SlackSessionFreshnessRuntime = {
   session?: {
-    resolveEntryResetFreshness?: (params: {
+    resolveEntryResetFreshnessAsync?: (params: {
       agentId: string;
       storePath?: string;
       sessionKey: string;
       sessionCfg?: OpenClawConfig["session"];
       resetType: "thread";
       resetOverride?: ReturnType<typeof resolveChannelResetConfig>;
-    }) => SlackSessionResetFreshness;
+    }) => Promise<SlackSessionResetFreshness>;
   };
 };
 
-function resolveSlackThreadSessionFreshness(params: {
+async function resolveSlackThreadSessionFreshness(params: {
   ctx: SlackMonitorContext;
   agentId: string;
   storePath: string;
   sessionKey: string;
-}): SlackSessionResetFreshness | undefined {
+}): Promise<SlackSessionResetFreshness | undefined> {
   // Gateway startup supplies the full channel runtime, but the public surface
   // intentionally keeps non-context helpers untyped for external plugins.
   const runtime = params.ctx.channelRuntime as SlackSessionFreshnessRuntime | undefined;
-  return runtime?.session?.resolveEntryResetFreshness?.({
+  return runtime?.session?.resolveEntryResetFreshnessAsync?.({
     agentId: params.agentId,
     storePath: params.storePath,
     sessionKey: params.sessionKey,
@@ -138,13 +138,14 @@ export async function resolveSlackThreadContextData(params: {
   let threadStarterMedia: SlackMediaResult[] | null = null;
   const threadSessionFreshness =
     params.isThreadReply && params.threadTs
-      ? resolveSlackThreadSessionFreshness({
+      ? await resolveSlackThreadSessionFreshness({
           ctx: params.ctx,
           agentId: params.agentId,
           storePath: params.storePath,
           sessionKey: params.sessionKey,
         })
       : undefined;
+  params.assertHistoryCurrent?.();
   const threadSessionPreviousTimestamp =
     params.isThreadReply && params.threadTs && !threadSessionFreshness
       ? await readSessionUpdatedAtAsync({

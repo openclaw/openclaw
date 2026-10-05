@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   WORKTREE_CREATE_LEASE_SCOPE,
@@ -16,6 +18,10 @@ import type { OpenClawStateLeaseIdentity } from "../../state/openclaw-state-leas
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { readLocalWorkspaceProjection, withLocalWorkspaceStore } from "./local-workspace-store.js";
+import {
+  mutateLocalWorkspaceProjection,
+  readLocalWorkspaceProjectionInDatabase,
+} from "./local-workspace-store.kernel.js";
 import { localWorkspaceProjectionFixture } from "./local-workspace-store.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -31,6 +37,56 @@ beforeAll(() => {
   env = { ...process.env, OPENCLAW_STATE_DIR: root };
 });
 afterEach(() => vi.restoreAllMocks());
+
+it("keeps mutation preconditions small without trimming committed payloads", () => {
+  const database = new DatabaseSync(":memory:");
+  const worktreeId = randomUUID();
+  const baseline = JSON.stringify({ synthetic: "x".repeat(3 * 1024 * 1024) });
+  const journalPack = new Uint8Array(3 * 1024 * 1024).fill(7);
+  const initial = {
+    ...localWorkspaceProjectionFixture(worktreeId, root),
+    baseline_json: baseline,
+    baseline_ref: "sha256:synthetic",
+    journal_json: "{}",
+    journal_pack: journalPack,
+  };
+  try {
+    mutateLocalWorkspaceProjection(database, worktreeId, { kind: "create", row: initial });
+    const reads = trackSqliteStatementExecutions(database, ["precondition"], (sql) =>
+      /^select\b/i.test(sql) && sql.includes("local_workspace_projections") ? "precondition" : null,
+    );
+    try {
+      expect(() =>
+        mutateLocalWorkspaceProjection(database, worktreeId, { kind: "create", row: initial }),
+      ).toThrow("Local workspace binding already exists");
+      const updated = mutateLocalWorkspaceProjection(database, worktreeId, {
+        kind: "update",
+        revision: 0,
+        patch: { paused_runtimes_json: "[]" },
+      });
+      assert(updated);
+      expect(updated).toMatchObject({ revision: 1, paused_runtimes_json: "[]" });
+      expect(updated.baseline_json).toBe(baseline);
+      assert(updated.journal_pack);
+      expect(Buffer.from(updated.journal_pack).equals(journalPack)).toBe(true);
+      expect(() =>
+        mutateLocalWorkspaceProjection(database, worktreeId, { kind: "delete", revision: 1 }),
+      ).toThrow("Local workspace has unsettled edits");
+      mutateLocalWorkspaceProjection(database, worktreeId, {
+        kind: "update",
+        revision: 1,
+        patch: { journal_json: "", journal_pack: new Uint8Array(), pending_ref: "" },
+      });
+      mutateLocalWorkspaceProjection(database, worktreeId, { kind: "delete", revision: 2 });
+      expect(readLocalWorkspaceProjectionInDatabase(database, worktreeId)).toBeUndefined();
+      expect(reads.textBytes.precondition + reads.blobBytes.precondition).toBeLessThan(1024);
+    } finally {
+      reads.restore();
+    }
+  } finally {
+    database.close();
+  }
+});
 
 it("preserves the acknowledged row when a stale revision conflicts", async () => {
   const worktreeId = randomUUID();

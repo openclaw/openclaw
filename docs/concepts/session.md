@@ -220,6 +220,11 @@ When replaying an interrupted turn, recovery preserves its recorded tool calls
 and results, including nested tool activity, and reuses the original user message.
 A completed reply or a later user message closes that turn to replay.
 
+This also covers parent turns started by subagent completion or pause notices.
+An interrupted parent continues independently of later child completions, and a
+retry of the same notice joins that recovery instead of starting the turn again.
+Parents still waiting after yielding to children remain owned by their child batch.
+
 Messages sent while restart recovery is waiting to start stay pending. Once
 recovery starts, they follow the session's normal message queue policy. You do
 not need to resend a message just because recovery is waiting for capacity.

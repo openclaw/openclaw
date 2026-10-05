@@ -40,6 +40,7 @@ import {
 } from "./session-compaction-persistence.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
 import { SessionManagerCore } from "./session-manager-core.js";
+import { prepareSessionManagerSync } from "./session-manager-incognito-scope.js";
 import {
   adoptCommittedMessagePayload,
   canonicalizeSessionEntry,
@@ -59,7 +60,6 @@ import {
   withSessionManagerWrite,
   type SessionManagerWriteAdmission,
 } from "./session-manager-write-admission.js";
-import { warnSessionPersistenceDeprecation } from "./session-persistence-deprecation.js";
 
 export class SessionManagerPersistence extends SessionManagerCore {
   #initialWriter: InitialSessionTranscriptWriter | undefined;
@@ -428,7 +428,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
 
   /** @deprecated Await persistAsync. Removal: next Plugin SDK major. */
   public persist(entry: SessionEntry, options?: PersistRecordOptions): PersistRecordResult {
-    warnSessionPersistenceDeprecation("SessionManager.persist", "persistAsync");
+    prepareSessionManagerSync("persist", this.persistenceTarget, this);
     return this.persistRecord(entry, options);
   }
 

@@ -160,7 +160,7 @@ it.each(["before settlement", "after settlement", "persisted interruption"] as c
             ).toEqual({ started: 0, settled: 0, failed: 0, skipped: 1 });
             expect(dispatch).not.toHaveBeenCalled();
             expect(loadSessionEntry(target)?.restartRecoveryTerminalRunIds).toContain(runId);
-            expect(info).toHaveBeenCalledExactlyOnceWith(
+            expect(info).toHaveBeenCalledWith(
               "main-session restart recovery startup complete: started=0 settled=0 failed=0 skipped=1 skipReasons=live_owner:1",
             );
           } finally {

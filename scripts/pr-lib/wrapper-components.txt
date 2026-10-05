@@ -597,6 +597,7 @@ src/acp/runtime/session-meta-keys.ts
 src/acp/runtime/session-meta-readonly.ts
 src/acp/runtime/session-meta-read.types.ts
 src/config/sessions/session-incognito-actor.ts
+src/config/sessions/session-incognito-admission.ts
 src/config/sessions/session-collaboration-scope.ts
 src/config/sessions/session-incognito-compute-contract.ts
 src/config/sessions/session-incognito-compute.ts
@@ -839,7 +840,6 @@ src/infra/format-time/format-duration-exact.ts
 src/infra/format-time/format-duration-internal.ts
 src/infra/fs-safe-copy.worker.ts
 src/infra/fs-safe-env.ts
-src/infra/fs-safe-file-copy.ts
 src/infra/fs-safe-remove.ts
 src/infra/fs-safe.ts
 src/infra/gateway-lock-process.ts

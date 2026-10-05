@@ -279,8 +279,11 @@ describe("session observer", () => {
     await vi.advanceTimersByTimeAsync(3_000);
     await flushObserver();
     expect(completeModel).toHaveBeenCalledTimes(2);
+    const terminalPublished = createDeferred();
+    harness.broadcastToConnIds.mockImplementationOnce(() => terminalPublished.resolve());
     emitEvent(harness, "lifecycle", { phase: "end", endedAt: 30_000 });
-    await flushObserver();
+    expect(harness.completeModel.mock.calls[1]?.[0]?.abortSignal.aborted).toBe(true);
+    await terminalPublished.promise;
     expect(completeModel).toHaveBeenCalledTimes(3);
     expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({ health: "done" });
   });

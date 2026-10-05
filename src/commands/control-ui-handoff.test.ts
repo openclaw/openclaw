@@ -9,7 +9,7 @@ import type { PeerCertificate } from "node:tls";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
-import { fetchConfiguredLocalOriginWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import * as fetchGuard from "../infra/net/fetch-guard.js";
 import { resolveSystemBin } from "../infra/resolve-system-bin.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -17,11 +17,13 @@ import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { resolveControlUiHandoffTarget, waitForControlUiDocument } from "./control-ui-handoff.js";
 import { withLoopbackTestServer } from "./loopback-server.test-support.js";
 
+const { fetchConfiguredLocalOriginWithSsrFGuard } = fetchGuard;
 const documentUrl = "http://127.0.0.1:18789/dashboard/";
 const tempDirs = createTrackedTempDirs();
 const openssl = resolveSystemBin("openssl");
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
   await tempDirs.cleanup();
 });
 type GuardedDocumentRequest = Parameters<typeof fetchConfiguredLocalOriginWithSsrFGuard>[0];
@@ -164,7 +166,9 @@ describe("waitForControlUiDocument", () => {
     await fs.writeFile(certPath, TEST_TLS_CERT_PEM);
     const read = vi.spyOn(fs, "readFile");
     const open = vi.spyOn(fs, "open");
-    const fetch = vi.fn(async () => htmlHead());
+    const fetch = vi
+      .spyOn(fetchGuard, "fetchConfiguredLocalOriginWithSsrFGuard")
+      .mockImplementation(async () => htmlHead());
 
     const result = await waitForControlUiDocument({
       url: "https://127.0.0.1:32123/dashboard/",
@@ -174,7 +178,6 @@ describe("waitForControlUiDocument", () => {
         keyPath: path.join(root, "absent-key.pem"),
         caPath: path.join(root, "absent-ca.pem"),
       },
-      deps: { fetch },
     });
 
     expect(result.ready).toBe(true);
@@ -185,9 +188,11 @@ describe("waitForControlUiDocument", () => {
 
   it("probes the exact HTML document without credentials or redirects", async () => {
     const response = htmlHead();
-    const fetch = vi.fn(async () => response);
+    const fetch = vi
+      .spyOn(fetchGuard, "fetchConfiguredLocalOriginWithSsrFGuard")
+      .mockImplementation(async () => response);
 
-    await expect(waitForControlUiDocument({ url: documentUrl, deps: { fetch } })).resolves.toEqual({
+    await expect(waitForControlUiDocument({ url: documentUrl })).resolves.toEqual({
       ready: true,
     });
 
@@ -212,9 +217,8 @@ describe("waitForControlUiDocument", () => {
       new Response(null, { status: 200, headers: { "content-type": "application/json" } }),
     );
 
-    await expect(
-      waitForControlUiDocument({ url: documentUrl, deps: { fetch: async () => response } }),
-    ).resolves.toEqual({
+    vi.spyOn(fetchGuard, "fetchConfiguredLocalOriginWithSsrFGuard").mockResolvedValue(response);
+    await expect(waitForControlUiDocument({ url: documentUrl })).resolves.toEqual({
       ready: false,
       reason: "Control UI dashboard is unavailable (HTTP 200).",
       status: 200,
@@ -223,29 +227,23 @@ describe("waitForControlUiDocument", () => {
   });
 
   it("retries only explicitly preparing dashboards before starting the handoff clock", async () => {
-    let elapsedMs = 0;
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
     const preparing = guardedResponse(
       new Response(null, { status: 503, headers: { "retry-after": "1" } }),
     );
     const ready = htmlHead();
-    const fetch = vi.fn().mockResolvedValueOnce(preparing).mockResolvedValueOnce(ready);
+    const fetch = vi
+      .spyOn(fetchGuard, "fetchConfiguredLocalOriginWithSsrFGuard")
+      .mockResolvedValueOnce(preparing)
+      .mockResolvedValueOnce(ready);
     const onPending = vi.fn();
 
-    await expect(
-      waitForControlUiDocument({
-        url: documentUrl,
-        onPending,
-        deps: {
-          fetch,
-          now: () => elapsedMs,
-          sleep: async (ms) => {
-            elapsedMs += ms;
-          },
-        },
-      }),
-    ).resolves.toEqual({ ready: true });
+    const pending = waitForControlUiDocument({ url: documentUrl, onPending });
+    await vi.runAllTimersAsync();
+    await expect(pending).resolves.toEqual({ ready: true });
 
-    expect(elapsedMs).toBe(1_000);
+    expect(Date.now()).toBe(1_000);
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(onPending).toHaveBeenCalledOnce();
     expect(preparing.release).toHaveBeenCalledOnce();
@@ -256,7 +254,9 @@ describe("waitForControlUiDocument", () => {
     const preparing = guardedResponse(
       new Response(null, { status: 503, headers: { "retry-after": "1" } }),
     );
-    const fetch = vi.fn(async () => preparing);
+    const fetch = vi
+      .spyOn(fetchGuard, "fetchConfiguredLocalOriginWithSsrFGuard")
+      .mockImplementation(async () => preparing);
     const onPending = vi.fn();
 
     await expect(
@@ -264,7 +264,6 @@ describe("waitForControlUiDocument", () => {
         url: documentUrl,
         waitForPending: false,
         onPending,
-        deps: { fetch },
       }),
     ).resolves.toEqual({
       ready: false,
@@ -284,15 +283,18 @@ describe("waitForControlUiDocument", () => {
         headers: { "content-type": "text/plain; charset=utf-8" },
       }),
     );
-    const fetch = vi.fn().mockResolvedValueOnce(head).mockResolvedValueOnce(diagnostic);
+    const fetch = vi
+      .spyOn(fetchGuard, "fetchConfiguredLocalOriginWithSsrFGuard")
+      .mockResolvedValueOnce(head)
+      .mockResolvedValueOnce(diagnostic);
 
-    await expect(waitForControlUiDocument({ url: documentUrl, deps: { fetch } })).resolves.toEqual({
+    await expect(waitForControlUiDocument({ url: documentUrl })).resolves.toEqual({
       ready: false,
       reason: "Invalid configured root Run openclaw doctor --fix",
       status: 503,
     });
 
-    expect(fetch.mock.calls.map(([request]) => request.init.method)).toEqual(["HEAD", "GET"]);
+    expect(fetch.mock.calls.map(([request]) => request.init?.method)).toEqual(["HEAD", "GET"]);
     expect(head.release).toHaveBeenCalledOnce();
     expect(diagnostic.release).toHaveBeenCalledOnce();
   });
@@ -311,21 +313,21 @@ describe("waitForControlUiDocument", () => {
           { status: 503, headers: { "content-type": "text/plain" } },
         ),
       );
-      const fetch = vi.fn().mockResolvedValueOnce(head);
+      const fetch = vi
+        .spyOn(fetchGuard, "fetchConfiguredLocalOriginWithSsrFGuard")
+        .mockResolvedValueOnce(head);
       if (failure === "request") {
         fetch.mockRejectedValueOnce(new Error("diagnostic request failed"));
       } else {
         fetch.mockResolvedValueOnce(diagnostic);
       }
 
-      await expect(
-        waitForControlUiDocument({ url: documentUrl, deps: { fetch } }),
-      ).resolves.toEqual({
+      await expect(waitForControlUiDocument({ url: documentUrl })).resolves.toEqual({
         ready: false,
         reason: "Control UI dashboard is unavailable (HTTP 503).",
         status: 503,
       });
-      expect(fetch.mock.calls.map(([request]) => request.init.method)).toEqual(["HEAD", "GET"]);
+      expect(fetch.mock.calls.map(([request]) => request.init?.method)).toEqual(["HEAD", "GET"]);
       expect(head.release).toHaveBeenCalledOnce();
       expect(diagnostic.release).toHaveBeenCalledTimes(failure === "body" ? 1 : 0);
     },
@@ -355,26 +357,26 @@ describe("waitForControlUiDocument", () => {
           }
         });
         await withLoopbackTestServer(server, async (port) => {
+          vi.spyOn(fetchGuard, "fetchConfiguredLocalOriginWithSsrFGuard").mockImplementation(
+            async (request) => {
+              const guarded = await fetchConfiguredLocalOriginWithSsrFGuard(request);
+              const method = String(request.init?.method);
+              responses.push({ method, status: guarded.response.status });
+              if (method === "GET" && body === "broken") {
+                // Fault the real body only after guarded fetch has delivered its headers.
+                (await diagnosticSocket.promise).destroy();
+              }
+              return {
+                ...guarded,
+                release: async () => {
+                  await guarded.release();
+                  releases.push(method);
+                },
+              };
+            },
+          );
           const result = await waitForControlUiDocument({
             url: `http://127.0.0.1:${port}/dashboard/`,
-            deps: {
-              fetch: async (request) => {
-                const guarded = await fetchConfiguredLocalOriginWithSsrFGuard(request);
-                const method = String(request.init?.method);
-                responses.push({ method, status: guarded.response.status });
-                if (method === "GET" && body === "broken") {
-                  // Fault the real body only after guarded fetch has delivered its headers.
-                  (await diagnosticSocket.promise).destroy();
-                }
-                return {
-                  ...guarded,
-                  release: async () => {
-                    await guarded.release();
-                    releases.push(method);
-                  },
-                };
-              },
-            },
           });
           await diagnosticClosed.promise;
 
@@ -406,9 +408,11 @@ describe("waitForControlUiDocument", () => {
         headers: { "content-type": "text/html" },
       }),
     );
-    const fetch = vi.fn().mockResolvedValueOnce(head).mockResolvedValueOnce(repaired);
+    vi.spyOn(fetchGuard, "fetchConfiguredLocalOriginWithSsrFGuard")
+      .mockResolvedValueOnce(head)
+      .mockResolvedValueOnce(repaired);
 
-    await expect(waitForControlUiDocument({ url: documentUrl, deps: { fetch } })).resolves.toEqual({
+    await expect(waitForControlUiDocument({ url: documentUrl })).resolves.toEqual({
       ready: false,
       reason: "Control UI dashboard is unavailable (HTTP 503).",
       status: 503,
@@ -416,28 +420,21 @@ describe("waitForControlUiDocument", () => {
   });
 
   it("bounds the independent preparing deadline", async () => {
-    let elapsedMs = 0;
-    const fetch = vi.fn(async () =>
-      guardedResponse(new Response(null, { status: 503, headers: { "retry-after": "1" } })),
-    );
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const fetch = vi
+      .spyOn(fetchGuard, "fetchConfiguredLocalOriginWithSsrFGuard")
+      .mockImplementation(async () =>
+        guardedResponse(new Response(null, { status: 503, headers: { "retry-after": "1" } })),
+      );
 
-    await expect(
-      waitForControlUiDocument({
-        url: documentUrl,
-        timeoutMs: 2_500,
-        deps: {
-          fetch,
-          now: () => elapsedMs,
-          sleep: async (ms) => {
-            elapsedMs += ms;
-          },
-        },
-      }),
-    ).resolves.toEqual({
+    const pending = waitForControlUiDocument({ url: documentUrl, timeoutMs: 2_500 });
+    await vi.runAllTimersAsync();
+    await expect(pending).resolves.toEqual({
       ready: false,
       reason: "Control UI assets did not finish preparing in time.",
     });
-    expect(elapsedMs).toBe(2_500);
+    expect(Date.now()).toBe(2_500);
     expect(fetch).toHaveBeenCalledTimes(3);
   });
 
@@ -448,13 +445,14 @@ describe("waitForControlUiDocument", () => {
     const fingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256
       .replaceAll(":", "")
       .toLowerCase();
-    const fetch = vi.fn(async (_request: GuardedDocumentRequest) => htmlHead());
+    const fetch = vi
+      .spyOn(fetchGuard, "fetchConfiguredLocalOriginWithSsrFGuard")
+      .mockImplementation(async (_request: GuardedDocumentRequest) => htmlHead());
 
     await expect(
       waitForControlUiDocument({
         url: "https://127.0.0.1:32123/dashboard/",
         tlsConfig: { enabled: true, certPath, caPath: path.join(root, "absent-ca.pem") },
-        deps: { fetch },
       }),
     ).resolves.toEqual({ ready: true, tlsFingerprint: fingerprint });
 
@@ -484,7 +482,6 @@ describe("waitForControlUiDocument", () => {
       waitForControlUiDocument({
         url: "https://127.0.0.1:32123/dashboard/",
         tlsConfig: { enabled: true, certPath },
-        deps: { fetch },
       }),
     ).resolves.toEqual({
       ready: false,

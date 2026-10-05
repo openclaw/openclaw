@@ -105,11 +105,37 @@ describe("runReplyAgent media path normalization", () => {
       await runReplyAgent(params);
 
       expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).not.toHaveBeenCalled();
-      expect(parkSteerCandidateMock).not.toHaveBeenCalled();
-      expect(enqueueFollowupRunMock).toHaveBeenCalledOnce();
-      expect(enqueueFollowupRunMock.mock.calls[0]?.[1]).toBe(followupRun);
+      expect(parkedSteerFallbackMock).toHaveBeenCalledOnce();
+      expect(parkSteerCandidateMock).toHaveBeenCalledWith(
+        params.queueKey,
+        followupRun,
+        params.resolvedQueue,
+        expect.any(Function),
+      );
     },
   );
+
+  it("does not wait on a queued command source when the target has no reply operation", async () => {
+    const source = createRegisteredReplyOperation({
+      sessionKey: "agent:main:slash:source",
+      sessionId: "command-source",
+      resetTriggered: false,
+    });
+    await runReplyAgent(
+      makeRunReplyAgentParams({
+        replyOperation: source,
+        sessionKey: "main",
+        resolvedQueue: { mode: "steer" },
+        shouldSteer: true,
+        shouldFollowup: true,
+        isActive: true,
+      }),
+    );
+    expect(source.phase).toBe("queued");
+    expect(source.abortSignal.aborted).toBe(false);
+    expect(parkedSteerFallbackMock).toHaveBeenCalledOnce();
+    expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).not.toHaveBeenCalled();
+  });
 
   it("steers ordered current-turn images and quoted context with the active prompt", async () => {
     queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({

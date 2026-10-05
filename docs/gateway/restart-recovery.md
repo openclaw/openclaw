@@ -245,9 +245,15 @@ new work is fenced and admitted work gets the computed grace period, still cappe
 by the native shutdown deadline. Deferral time does not spend that shutdown budget.
 For a supervisor's SIGTERM restart, a shorter requested drain limits when active
 runs are interrupted, not when database cleanup must finish: cleanup can use the
-remaining native stop budget. The Gateway still exits before the supervisor's
-deadline. Clean database restart proof is published only after writer leases,
-checkpointing, and native connection closure settle.
+remaining native stop budget. After an interrupted external restart, the Gateway
+joins final chat persistence, drains Memory's database borrows, and closes agent
+databases before exiting. It skips plugin and channel teardown that could retain
+the process until the deadline. Database admission stays fenced through lock
+release and log flushing, which have a final five-second exit window. Shutdown
+logs report the elapsed time for these steps. The supervisor deadline remains
+the hard upper bound. Clean database restart proof is published only after writer
+leases, checkpointing, and native connection closure settle; one database's idle
+receipt alone does not authorize process exit.
 A restart without a supervisor handoff uses the existing shutdown
 deadline for cleanup. This includes foreground Gateways inside another service's
 cgroup, restarts with `OPENCLAW_NO_RESPAWN=1`, and standalone updates that must
@@ -717,6 +723,13 @@ Every retry reuses one durable dispatch identifier, so an ambiguous connection
 failure cannot start the same recovery twice. Completed Control UI turns also
 retain bounded durable idempotency tombstones, allowing a reconnecting outbox
 to retire them without re-executing the request.
+
+When a pending final has no remaining queue owner and its delivery outcome is
+uncertain, recovery records a notice for the next turn on the same route when
+the saved final has a delivery context and intent ID. Settling that turn clears
+its recovery ownership together with its delivery claim, so the next agent turn
+can proceed. The notice and terminal deduplication evidence survive another
+restart; completed work is not replayed.
 
 Message-tool-only replies use a second durable correlation. Before a terminal
 same-conversation send reaches the channel, the gateway records an unresolved

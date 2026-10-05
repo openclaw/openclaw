@@ -85,6 +85,29 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "Plugins can await full-fidelity SessionManager context reads and asynchronous consumers. Source validation follows consumption; the synchronous reader remains available until the next Plugin SDK major. Storage and update behavior are unchanged.",
   },
   {
+    code: "session-reset-freshness-sync-read",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-10-05",
+    deprecated: "2026-10-05",
+    warningStarts: "2026-10-05",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Await runtime.channel.session.resolveEntryResetFreshnessAsync. The released synchronous resolveEntryResetFreshness method retains its parameters and result until the next Plugin SDK major and explicit breaking-release approval.",
+    docsPath: "/plugins/sdk-migration#session-reset-freshness",
+    surfaces: ["api.runtime.channel.session.resolveEntryResetFreshness"],
+    diagnostics: [
+      "TypeScript @deprecated annotation and migration documentation; no runtime warnings",
+    ],
+    tests: [
+      "src/plugin-sdk/session-reset-freshness-compat.test.ts",
+      "src/config/sessions/entry-freshness.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Channel plugins can await session reset freshness through the transcript worker. Existing plugins retain the synchronous method and reset policy; stored data and update behavior are unchanged.",
+  },
+  {
     code: "agent-end-sync-side-effects",
     status: "deprecated",
     owner: "agent-runtime",

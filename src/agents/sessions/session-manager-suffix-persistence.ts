@@ -29,12 +29,12 @@ import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
+import { prepareSessionManagerSync } from "./session-manager-incognito-scope.js";
 import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
 import { receiveSessionManagerCommit } from "./session-manager-persistence-error.js";
 import { SessionManagerPersistence } from "./session-manager-persistence.js";
 import type { SessionEntry } from "./session-manager-types.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
-import { warnSessionPersistenceDeprecation } from "./session-persistence-deprecation.js";
 import {
   runSessionPersistenceAsync,
   runSessionPersistenceSync,
@@ -48,10 +48,7 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
     predicate: (entry: SessionEntry) => boolean,
     options?: { preserveTrailing?: (entry: SessionEntry) => boolean },
   ): number {
-    warnSessionPersistenceDeprecation(
-      "SessionManager.removeTrailingEntries",
-      "removeTrailingEntriesAsync",
-    );
+    prepareSessionManagerSync("removeTrailingEntries", this.persistenceTarget, this);
     return runSessionPersistenceSync(this.prepareTrailingEntriesRemoval(predicate, options));
   }
 

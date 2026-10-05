@@ -1,7 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { Insertable } from "kysely";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { hasUnjoinedWork } from "../../../scripts/lib/managed-child-process.mts";
 import * as sqliteQueries from "../../infra/kysely-sync.js";
 import {
   executeSqliteQuerySync,
@@ -9,35 +8,13 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
-import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../../state/openclaw-state-db.js";
-import {
-  createOpenClawTestState,
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createChannelIngressQueue } from "./ingress-queue.js";
+import { createTestIngressQueue, useRetainedIngressState } from "./ingress-queue.test-helpers.js";
 
 type ChannelIngressTestDatabase = Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">;
-
-function createTestIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
-  stateDir: string,
-  options: Omit<
-    Parameters<typeof createChannelIngressQueue>[0],
-    "channelId" | "accountId" | "stateDir"
-  > = {},
-) {
-  return createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
-    channelId: "test",
-    accountId: "account",
-    stateDir,
-    ...options,
-  });
-}
 
 async function withIsolatedState<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
   return await withOpenClawTestState(
@@ -46,80 +23,7 @@ async function withIsolatedState<T>(fn: (stateDir: string) => Promise<T>): Promi
   );
 }
 
-let retainedState: OpenClawTestState | undefined;
-let retainedFailure: { error: unknown } | undefined;
-
-afterAll(async () => {
-  if (retainedFailure) {
-    throw retainedFailure.error;
-  }
-  try {
-    await retainedState?.cleanup();
-    retainedState = undefined;
-  } catch (error) {
-    retainedFailure = { error };
-    throw error;
-  }
-});
-
-async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
-  if (retainedFailure) {
-    throw retainedFailure.error;
-  }
-  // The earlier cold/authority cases retain isolated fixtures and never enter this owner.
-  const state = (retainedState ??= await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "openclaw-ingress-queue-retained-",
-    applyEnv: false,
-  }));
-  const failures = new Set<unknown>();
-  const work = new AsyncWorkScope(failures);
-  const [outcome] = await Promise.allSettled([work.track(() => fn(state.stateDir))]);
-  await work.drain();
-  if ([...failures].some(hasUnjoinedWork)) {
-    try {
-      await state.restoreEnv();
-    } catch (error) {
-      failures.add(error);
-    }
-    const retained = [...failures];
-    const error =
-      retained.length === 1
-        ? retained[0]
-        : new AggregateError(retained, `Fixture cleanup unverified; retained ${state.root}`);
-    retainedFailure = { error };
-    throw error;
-  }
-  try {
-    if (outcome.status === "rejected") {
-      throw outcome.reason;
-    }
-    // Callback finally blocks have restored spies; native commands and their descendants settled.
-    runOpenClawStateWriteTransaction(
-      ({ db }) =>
-        executeSqliteQuerySync(
-          db,
-          getNodeSqliteKysely<ChannelIngressTestDatabase>(db).deleteFrom("channel_ingress_events"),
-        ),
-      { env: state.env },
-    );
-    return outcome.value;
-  } catch (error) {
-    try {
-      await state.cleanup();
-      retainedState = undefined;
-    } catch (cleanupError) {
-      const failure = new AggregateError(
-        [error, cleanupError],
-        `Fixture cleanup unverified; retained ${state.root}`,
-        { cause: error },
-      );
-      retainedFailure = { error: failure };
-      throw failure;
-    }
-    throw error;
-  }
-}
+const withTempState = useRetainedIngressState(afterAll);
 
 function openIngressStateDatabase(stateDir: string) {
   return openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
