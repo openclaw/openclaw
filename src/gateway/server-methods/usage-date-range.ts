@@ -66,7 +66,17 @@ const datePartsToStartMs = (
 ): number | undefined => {
   const { year, monthIndex, day } = parts;
   if (interpretation.mode === "gateway") {
-    return new Date(year, monthIndex, day).getTime();
+    // The host zone can skip a civil date. The constructor then lands on the
+    // next midnight, and the window ends before it starts.
+    const local = new Date(year, monthIndex, day);
+    if (
+      local.getFullYear() !== year ||
+      local.getMonth() !== monthIndex ||
+      local.getDate() !== day
+    ) {
+      return undefined;
+    }
+    return local.getTime();
   }
   if (interpretation.mode === "time-zone") {
     return resolveTimeZoneDayStartMs(
@@ -85,7 +95,9 @@ const datePartsToEndMs = (
   interpretation: DateInterpretation,
 ): number | undefined => {
   const lookaheadDays =
-    interpretation.mode === "time-zone" ? 1 + MAX_CONSECUTIVE_SKIPPED_TIME_ZONE_DAYS : 1;
+    interpretation.mode === "time-zone" || interpretation.mode === "gateway"
+      ? 1 + MAX_CONSECUTIVE_SKIPPED_TIME_ZONE_DAYS
+      : 1;
   // A 24-hour date-line transition can remove one civil date entirely. Range
   // resolution separately verifies the requested day; this only finds its end.
   for (let daysAhead = 1; daysAhead <= lookaheadDays; daysAhead += 1) {

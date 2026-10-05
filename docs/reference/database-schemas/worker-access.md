@@ -100,6 +100,17 @@ the existing read worker, with the original snapshot, reset, and read-fence rule
 Shipped synchronous SDK callbacks and process-held incognito storage retain
 their current owners; durable worker failures never fall back to host SQLite.
 
+Durable delivery-mirror corrections retain the history reader through display
+preparation, exact-row worker commit, and cleanup. The writer compares the captured
+generation and original stored bytes before changing the selected rows. Tail-selected
+rewrites also compare the sequence and mutation revision; indexed media corrections
+retain unrelated later appends. Source-mirror tail restrictions and turn/media matching remain
+with their existing selectors; unrelated transcript rows keep their bytes and
+sequences. Transaction and commit grants recheck current host authority. Native
+maintenance and process-held incognito keep their existing adapters. Locked mirror
+appends and feedback remain separate cutover work. Schemas, retention, durability,
+SDK signatures, and update behavior are unchanged.
+
 Explicit restart-tombstone recovery clones the transcript and changes both session
 identities atomically in the agent writer worker. Source preparation uses worker
 reads, while the Gateway retains current caller authority and invalidates prepared
@@ -108,6 +119,22 @@ guards; accepted writes retain settlement and committed identity publication.
 These cutovers change no schema, stored bytes, retention, or update behavior.
 
 ## Keep one store owner
+
+Sandbox reservation and removal-intent transactions run in the existing shared-state
+executor. Reservation selection and prune eligibility read authoritative rows inside
+the synchronous transaction. Removal retains its physical store through the provider
+wait and exact-generation deletion. Gateway close rejects new removals and joins
+accepted settlement before closing database transports; scheduler cancellation does
+not cancel accepted persistence. Direct database drainage uses the existing cleanup
+worker for provider-confirmed, exact-generation deletion after read admission closes.
+Cleanup retains physical-store identity and current host grants. Schemas, stored bytes,
+and update behavior are unchanged.
+
+Released synchronous sandbox callbacks are held across provider waits and deferred
+process launch, and need live generation authority that observes foreign removals;
+revisit when those callbacks get async companions (next SDK major). Their synchronous
+registry generation reader remains a retained compatibility path, without a cached
+or prepared-row replacement.
 
 Public meeting-library pages use the transcript read worker's existing page query
 and bounded collector. The worker projects public fields and summary previews

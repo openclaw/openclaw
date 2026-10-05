@@ -137,6 +137,25 @@ describe("gateway usage", () => {
     );
   });
 
+  it("rejects a host civil date the gateway timezone skipped", () => {
+    withEnv({ TZ: "Pacific/Apia" }, () => {
+      expect(
+        resolveDateRange({
+          mode: "gateway",
+          startDate: "2011-12-30",
+          endDate: "2011-12-30",
+        }),
+      ).toEqual({
+        ok: false,
+        error: "calendar day does not exist in requested time zone",
+      });
+      expect(range({ mode: "gateway", startDate: "2011-12-29", endDate: "2011-12-29" })).toEqual({
+        startMs: Date.parse("2011-12-29T10:00:00.000Z"),
+        endMs: Date.parse("2011-12-30T10:00:00.000Z") - 1,
+      });
+    });
+  });
+
   it.each([null, ""])("retains UTC for omitted or blank offset %j", (utcOffset) => {
     expect(range({ ...dates, mode: "specific", utcOffset })).toEqual({
       startMs: Date.parse("2026-02-01T00:00:00.000Z"),

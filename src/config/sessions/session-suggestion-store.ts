@@ -26,10 +26,6 @@ import { SessionWorkStartInvalidatedError } from "./work-start-error.js";
 export type { StoredSessionSuggestion } from "./session-sharing-store.types.js";
 export { SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS } from "./session-suggestion-store.kernel.js";
 
-function resolveDatabaseOptions(scope: SessionAccessScope): OpenClawAgentDatabaseOptions {
-  return toDatabaseOptions(resolveSqliteScope(scope));
-}
-
 function assertSuggestionExpectedEntry(
   database: OpenClawAgentDatabase,
   sessionKey: string,
@@ -54,8 +50,9 @@ export function addSessionSuggestion(
   if (!authorId || !text.trim()) {
     throw new Error("suggestion author and text are required");
   }
-  const options = resolveDatabaseOptions(scope);
-  const sessionKey = resolveSqliteScope(scope).sessionKey;
+  const resolved = resolveSqliteScope(scope);
+  const options = toDatabaseOptions(resolved);
+  const { sessionKey } = resolved;
   const suggestion: StoredSessionSuggestion & { state: "pending" } = {
     id: params.id ?? randomUUID(),
     authorId,
@@ -82,8 +79,9 @@ export function claimSessionSuggestionDispatch(
   scope: SessionAccessScope,
   params: SessionSuggestionClaimParams,
 ): ReturnType<typeof claimSessionSuggestionDispatchInDatabase> {
-  const options = resolveDatabaseOptions(scope);
-  const sessionKey = resolveSqliteScope(scope).sessionKey;
+  const resolved = resolveSqliteScope(scope);
+  const options = toDatabaseOptions(resolved);
+  const { sessionKey } = resolved;
   return runOpenClawAgentWriteTransaction(
     (database) => {
       assertSuggestionExpectedEntry(database, sessionKey, params.expectedEntry, options);
@@ -98,8 +96,9 @@ export function releaseSessionSuggestionDispatch(
   scope: SessionAccessScope,
   params: SessionSuggestionReleaseParams,
 ): boolean {
-  const options = resolveDatabaseOptions(scope);
-  const sessionKey = resolveSqliteScope(scope).sessionKey;
+  const resolved = resolveSqliteScope(scope);
+  const options = toDatabaseOptions(resolved);
+  const { sessionKey } = resolved;
   return runOpenClawAgentWriteTransaction(
     (database) => releaseSessionSuggestionDispatchInDatabase(database, sessionKey, params),
     options,
@@ -111,8 +110,9 @@ export function finalizeSessionSuggestionClaim(
   scope: SessionAccessScope,
   params: SessionSuggestionFinalizeParams,
 ): StoredSessionSuggestion | null {
-  const options = resolveDatabaseOptions(scope);
-  const sessionKey = resolveSqliteScope(scope).sessionKey;
+  const resolved = resolveSqliteScope(scope);
+  const options = toDatabaseOptions(resolved);
+  const { sessionKey } = resolved;
   return runOpenClawAgentWriteTransaction(
     (database) => {
       assertSuggestionExpectedEntry(database, sessionKey, params.expectedEntry, options);

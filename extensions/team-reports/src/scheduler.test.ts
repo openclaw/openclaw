@@ -137,26 +137,24 @@ async function setup(
       }),
   };
   const discord = {
-    collect: vi
-      .fn<DiscordSource["collect"]>()
-      .mockImplementation(async (_config, window, _roster, emit) => {
-        const atMs = window.sinceMs + 1;
-        await emit([
-          {
-            key: ((BigInt(atMs) - 1420070400000n) << 22n).toString(),
-            value: {
-              channelId: "200",
-              parentChannelId: "200",
-              channelName: "engineering",
-              authorId: "300",
-              authorIsBot: false,
-              atMs,
-              content: "Widget resizing is ready for review.",
-            },
+    collect: vi.fn<DiscordSource["collect"]>().mockImplementation(async (_config, window, emit) => {
+      const atMs = window.sinceMs + 1;
+      await emit([
+        {
+          key: ((BigInt(atMs) - 1420070400000n) << 22n).toString(),
+          value: {
+            channelId: "200",
+            parentChannelId: "200",
+            channelName: "engineering",
+            authorId: "300",
+            authorIsBot: false,
+            atMs,
+            content: "Widget resizing is ready for review.",
           },
-        ]);
-        return healthy;
-      }),
+        },
+      ]);
+      return healthy;
+    }),
   };
   const runtimes: SourceRuntime[] = [];
   const sources: ReportSourceFactory = (runtime) => {

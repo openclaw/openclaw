@@ -1833,7 +1833,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/cli/update-cli.candidate-activation.test.ts",
   "src/cli/update-cli.deferred-completion.test.ts",
   "src/cli/update-cli.fresh-doctor.test.ts",
-  "src/cli/update-cli.npm-runtime.test.ts",
   "src/cli/update-cli.option-collisions.test.ts",
   "src/cli/update-cli.package-lifecycle.test.ts",
   "src/cli/update-cli.plugin-convergence.test.ts",

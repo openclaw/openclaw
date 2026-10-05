@@ -45,6 +45,10 @@ import {
 import { createWorktreeGitMaintenance } from "./git-maintenance.js";
 import { commandError, worktreePathExists, runGit, requireGit } from "./git.js";
 import { worktreeOwnerMatches } from "./owner.js";
+import {
+  timeWorktreePreparationPhase,
+  withWorktreePreparationTiming,
+} from "./preparation-timing.js";
 import { provisionIncludedFiles } from "./provisioned-files.js";
 import {
   readRegistryWorktrees,
@@ -87,7 +91,7 @@ import {
   cleanupFailedCreate,
   createWithWorktreeAllocation,
   findWorktreeByName,
-  generateName,
+  resolveWorktreeName,
   resetFailedWorktreeAdd,
   resolveRepository,
   rebindLiveWorktreeRepository,
@@ -216,7 +220,9 @@ export class ManagedWorktreeService {
   async createWithOutcome(
     params: CreateManagedWorktreeParams,
   ): Promise<ManagedWorktreeCreationOutcome> {
-    return withWorktreeRunEnd(this.env, () => this.createWithOutcomeAccepted(params));
+    return withWorktreePreparationTiming("managed", () =>
+      withWorktreeRunEnd(this.env, () => this.createWithOutcomeAccepted(params)),
+    );
   }
 
   private async createWithOutcomeAccepted(
@@ -224,14 +230,15 @@ export class ManagedWorktreeService {
   ): Promise<ManagedWorktreeCreationOutcome> {
     params.signal?.throwIfAborted();
     const repository = await resolveRepository(params.repoRoot);
-    return await this.createWithAllocation(
-      params,
+    return await createWithWorktreeAllocation(
+      { ...params, env: this.env },
       async (guard, publication) =>
         await withWorktreeSources(
           { ...params, ...guard, env: this.env, repository },
           (retainSources) =>
             this.createForOwner({ ...params, ...guard, retainSources }, repository, publication),
         ),
+      (record) => this.rollbackPreparation(record, params.withRollback),
     );
   }
 
@@ -242,7 +249,9 @@ export class ManagedWorktreeService {
   async createEmptyWithOutcome(
     params: CreateEmptyManagedWorktreeParams,
   ): Promise<ManagedWorktreeCreationOutcome> {
-    return withWorktreeRunEnd(this.env, () => this.createEmptyWithOutcomeAccepted(params));
+    return withWorktreePreparationTiming("managed", () =>
+      withWorktreeRunEnd(this.env, () => this.createEmptyWithOutcomeAccepted(params)),
+    );
   }
 
   private async createEmptyWithOutcomeAccepted(
@@ -250,22 +259,32 @@ export class ManagedWorktreeService {
   ): Promise<ManagedWorktreeCreationOutcome> {
     let sourceRoot: string | undefined;
     try {
-      return await this.createWithAllocation(params, async (guard, publication) => {
-        const repoRoot = await ensureEmptyWorktreeSource({
-          env: this.env,
-          ownerId: params.ownerId,
-          signal: guard.signal,
-          commitGuard: () => guard.commitGuard?.(),
-        });
-        sourceRoot = repoRoot;
-        const repository = await resolveRepository(repoRoot);
-        const creation = { ...params, ...guard, repoRoot, baseRef: "main", runSetupScript: false };
-        return await withWorktreeSources(
-          { ...creation, env: this.env, repository },
-          (retainSources) =>
-            this.createForOwner({ ...creation, retainSources }, repository, publication),
-        );
-      });
+      return await createWithWorktreeAllocation(
+        { ...params, env: this.env },
+        async (guard, publication) => {
+          const repoRoot = await ensureEmptyWorktreeSource({
+            env: this.env,
+            ownerId: params.ownerId,
+            signal: guard.signal,
+            commitGuard: () => guard.commitGuard?.(),
+          });
+          sourceRoot = repoRoot;
+          const repository = await resolveRepository(repoRoot);
+          const creation = {
+            ...params,
+            ...guard,
+            repoRoot,
+            baseRef: "main",
+            runSetupScript: false,
+          };
+          return await withWorktreeSources(
+            { ...creation, env: this.env, repository },
+            (retainSources) =>
+              this.createForOwner({ ...creation, retainSources }, repository, publication),
+          );
+        },
+        (record) => this.rollbackPreparation(record, params.withRollback),
+      );
     } catch (error) {
       if (sourceRoot) {
         const repoRoot = sourceRoot;
@@ -330,19 +349,6 @@ export class ManagedWorktreeService {
       repository,
       params.name ?? params.suggestedName ?? createCrustaceanSlug(),
       publication,
-    );
-  }
-
-  private async createWithAllocation(
-    params: WorktreeMutationGuard &
-      Pick<CreateManagedWorktreeParams, "withSource" | "withRollback">,
-    run: (
-      guard: WorktreeAllocationGuard,
-      publication: WorktreeCreationPublication,
-    ) => Promise<ManagedWorktreeCreationOutcome>,
-  ): Promise<ManagedWorktreeCreationOutcome> {
-    return await createWithWorktreeAllocation({ ...params, env: this.env }, run, (record) =>
-      this.rollbackPreparation(record, params.withRollback),
     );
   }
 
@@ -549,30 +555,17 @@ export class ManagedWorktreeService {
     publication: WorktreeCreationPublication,
   ): Promise<MaterializedRepositoryWorktree> {
     const root = path.join(await this.worktreesRoot(), repository.fingerprint);
-    const name =
-      suppliedName ??
-      (await generateName(
-        this.env,
-        repository.repoRoot,
-        repository.fingerprint,
-        root,
-        params,
-        params.suggestedName ?? inferredName,
-      ));
+    const name = await resolveWorktreeName(
+      this.env,
+      repository.repoRoot,
+      repository.fingerprint,
+      root,
+      params,
+      params.suggestedName ?? inferredName,
+      suppliedName,
+    );
     const worktreePath = path.join(root, name);
     const branch = `openclaw/${name}`;
-    const branchExists = await runGit(repository.repoRoot, [
-      "show-ref",
-      "--quiet",
-      "--verify",
-      `refs/heads/${branch}`,
-    ]);
-    if (branchExists.code === 0) {
-      throw new Error(`branch already exists: ${branch}`);
-    }
-    if (branchExists.code !== 1) {
-      throw commandError("git show-ref --verify", branchExists);
-    }
     // Default-base resolution fetches remote refs; it is an effect, not just discovery.
     params.signal?.throwIfAborted();
     params.commitGuard?.();
@@ -684,7 +677,7 @@ export class ManagedWorktreeService {
         },
       });
     };
-    let added = await addCheckout();
+    let added = await timeWorktreePreparationPhase("checkout", addCheckout);
     if (added.code !== 0 && base.remote) {
       if (!(await canResetFailedWorktreeAdd(repository.repoRoot, worktreePath, branch, added))) {
         throw commandError("git worktree add", added);
@@ -694,7 +687,7 @@ export class ManagedWorktreeService {
       params.commitGuard?.();
       gitBase = "HEAD";
       recordBase = "HEAD";
-      added = await addCheckout();
+      added = await timeWorktreePreparationPhase("checkout", addCheckout);
     }
     if (added.code !== 0) {
       throw commandError("git worktree add", added);
@@ -736,7 +729,9 @@ export class ManagedWorktreeService {
           });
     if (runRepositorySetup) {
       await requireAllocationSpace(params, this.env, worktreePath, repository, setupBytes);
-      await runSetupScript(repository.sourceRoot, worktreePath, params);
+      await timeWorktreePreparationPhase("setup", () =>
+        runSetupScript(repository.sourceRoot, worktreePath, params),
+      );
     }
     return provisionedPaths;
   }

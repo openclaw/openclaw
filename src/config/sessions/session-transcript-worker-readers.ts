@@ -254,6 +254,7 @@ export function createSessionHistoryWorkerReaders(
       }),
     readTranscript: async (input, signal) => {
       const events: TranscriptEvent[] = [];
+      const eventJson: string[] | undefined = input.includeEventJson ? [] : undefined;
       let parts: string[] = [];
       let text: { encoding: string; decoder: TextDecoder } | undefined;
       const receiveChunk = (value: unknown) => {
@@ -283,7 +284,9 @@ export function createSessionHistoryWorkerReaders(
           }
           parts.push(text.decoder.decode(frame.data, { stream: !frame.endOfEvent }));
           if (frame.endOfEvent) {
-            events.push(JSON.parse(parts.join("")));
+            const json = parts.join("");
+            events.push(JSON.parse(json));
+            eventJson?.push(json);
             parts = [];
           }
         }
@@ -307,7 +310,10 @@ export function createSessionHistoryWorkerReaders(
           if (parts.length !== 0 || events.length !== value.eventCount) {
             throw new Error("Session history worker returned an incomplete transcript");
           }
-          return { kind: "full", snapshot: { events, version: value.version } };
+          return {
+            kind: "full",
+            snapshot: { events, version: value.version, ...(eventJson ? { eventJson } : {}) },
+          };
         },
         signal,
         input.limits ? undefined : receiveChunk,
@@ -336,6 +342,12 @@ export function createSessionHistoryWorkerReaders(
       "the latest active message",
       (input) => ({ kind: "latest-active-message", ...input }),
       (value) => value.message,
+    ),
+    readVoiceSessions: reader(
+      "voice-sessions",
+      "voice sessions",
+      (input) => ({ kind: "voice-sessions", ...input }),
+      (value) => value,
     ),
     readUsageCache: reader(
       "usage-refresh-lock",

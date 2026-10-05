@@ -213,6 +213,6 @@ export function createBlockReplyCoalescer(params: {
     enqueue,
     flush,
     hasBuffered: () => Boolean(bufferText),
-    stop: () => clearIdleTimer(),
+    stop: clearIdleTimer,
   };
 }

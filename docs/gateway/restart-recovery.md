@@ -657,6 +657,12 @@ interrupted by a restart and to continue from the existing transcript. If a
 final reply had already been produced but not delivered, its text is included
 so the agent can deliver it instead of redoing the work.
 
+Startup recovery prepares and admits one continuation at a time to bound database
+and worker pressure. Once execution starts, the normal main lane owns concurrency;
+a long recovered turn does not hold a separate startup slot. Deferred database
+admissions join the same startup scheduler. Shutdown stops new preparation and
+joins the current pass, leaving unstarted interruptions available for the next boot.
+
 The restart does not cancel the user's task. The agent checks the current state,
 reconciles tool results whose outcomes are unknown, and continues without asking
 the user to repeat the request. Preparing a new message cannot consume the
@@ -951,9 +957,11 @@ channels.start --params '{"channel":"<id>"}'`
   `openclaw_session_recovery_age_seconds`.
 - **Logs:** recovery decisions are logged under the
   `main-session-restart-recovery` and `agents/subagent-registry`
-  subsystems. A startup scan that finds interrupted candidates but starts none
-  still logs one summary, including bounded skip counts by reason such as
-  `live_owner`, `work_start_blocked`, or `dispatch_target_unavailable`.
+  subsystems. Every startup pass includes bounded skip counts by reason such as
+  `live_owner`, `work_start_blocked`, or `dispatch_target_unavailable`, even when
+  other sessions started. Each interrupted main candidate has a structured
+  decision line with boot/pass, session and source-run identity, outcome
+  (`started`, `settled`, `deferred`, or `blocked`), and the next responsible owner.
 - **Reply hooks:** resumed turns run currently loaded `before_agent_reply`
   hooks under the normal user-trigger rules. Automatically delivered replies
   also run the normal `reply_payload_sending` hook before channel delivery,

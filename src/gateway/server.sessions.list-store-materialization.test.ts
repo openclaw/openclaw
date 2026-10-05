@@ -89,16 +89,16 @@ test("sessions.list retains stored titles and transcript previews beyond the dat
     const sessionId = `session-${agentId}`;
     const sessionKey = `agent:${agentId}:main`;
     const storePath = storeTemplate.replace("{agentId}", agentId);
-    await writeSessionStore({
-      agentId,
-      entries: {
-        [sessionKey]: sessionStoreEntry(sessionId, {
-          updatedAt: 1_781_000_000_000 - index,
-          displayName: `Title ${agentId}`,
-        }),
-      },
-      storePath,
+    const entry = sessionStoreEntry(sessionId, {
+      updatedAt: 1_781_000_000_000 - index,
+      displayName: `Title ${agentId}`,
     });
+    if (index === 0) {
+      // Publish fixture config once; the remaining stores only need pristine row seeding.
+      await writeSessionStore({ agentId, entries: { [sessionKey]: entry }, storePath });
+    } else {
+      sessionAccessor.replaceSessionEntrySync({ agentId, sessionKey, storePath }, entry);
+    }
     await sessionAccessor.replaceTranscriptEvents({ agentId, sessionId, sessionKey, storePath }, [
       { type: "session", version: 3, id: sessionId, cwd: "/tmp" },
       {

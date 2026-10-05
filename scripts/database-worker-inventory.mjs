@@ -1040,11 +1040,12 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: [
           "removeRegistryRowInDatabase",
+          "insertSandboxRegistryRowInDatabase",
           "insertSandboxRegistryRowIfMissingInDatabase",
           "readRegistryRows",
         ],
         evidence:
-          "Removal is only registry-write.worker.ts:15 -> writeSandboxRegistryInDatabase (:88,101,112,127); import only registry-import.worker.ts:17. List helpers (:348,357,366) are called only at src/state/openclaw-state-read-registry.ts:75,86,90 through openclaw-state-read.worker.ts:679. Native shared insert/row readers stay T1.",
+          "Registry mutations, including reservation and removal-intent selection, run only through registry-write.worker.ts -> executeSandboxRegistryCommand; import only registry-import.worker.ts. List helpers run through openclaw-state-read-registry.ts in the read worker. The row reader remains T1 for released synchronous sandbox callbacks held across provider waits and deferred process launch; see worker-access.md.",
       },
     ],
   ],

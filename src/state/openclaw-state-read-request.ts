@@ -246,6 +246,12 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (isChannelIngressReadCommand(command)) {
     return bytes + Buffer.byteLength(JSON.stringify(command.input ?? null), "utf8");
   }
+  if (command.type === "acpSessions.resume") {
+    return (
+      bytes +
+      stringBytes([command.agentId, command.backendId, command.resumeSessionId, command.sessionKey])
+    );
+  }
   if (command.type === "acpSessions.metadata") {
     return command.entries.reduce(
       (total, input) =>

@@ -183,12 +183,11 @@ extension OpenClawChatViewModel {
         _ command: OpenClawChatCommandChoice,
         matchesInvocationName name: String) -> Bool
     {
-        let normalizedName = name.lowercased()
-        if command.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalizedName {
+        if command.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == name {
             return true
         }
         return command.textAliases.contains { alias in
-            self.slashCommandName(from: alias) == normalizedName
+            self.slashCommandName(from: alias) == name
         }
     }
 
@@ -207,7 +206,12 @@ extension OpenClawChatViewModel {
         let effectiveFilter: OpenClawChatCommandFilter = targetsSkills && filter == .all ? .skills : filter
         return commands.enumerated()
             .compactMap { index, command -> (Int, Int, OpenClawChatCommandChoice)? in
-                guard self.command(command, isIncludedIn: effectiveFilter) else { return nil }
+                switch effectiveFilter {
+                case .commands where command.source == .skill, .skills where command.source != .skill:
+                    return nil
+                default:
+                    break
+                }
                 guard let rank = self.commandSearchRank(command, query: query) else { return nil }
                 return (rank, index, command)
             }
@@ -218,20 +222,6 @@ extension OpenClawChatViewModel {
                 return $0.1 < $1.1
             }
             .map(\.2)
-    }
-
-    private static func command(
-        _ command: OpenClawChatCommandChoice,
-        isIncludedIn filter: OpenClawChatCommandFilter) -> Bool
-    {
-        switch filter {
-        case .all:
-            true
-        case .commands:
-            command.source != .skill
-        case .skills:
-            command.source == .skill
-        }
     }
 
     private static func commandSearchRank(
@@ -255,7 +245,7 @@ extension OpenClawChatViewModel {
         if command.description.lowercased().contains(query) {
             return 2
         }
-        if command.source.rawValue.lowercased().contains(query) {
+        if command.source.rawValue.contains(query) {
             return 3
         }
         return nil

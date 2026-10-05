@@ -1322,7 +1322,7 @@ extension GatewayProcessManager {
                 self.launchAgentFreshInstallGeneration = nil
             }
             self.refreshLog()
-            self.markChildHealthy(instance: instance)
+            if let pid = instance?.pid { self.childSupervisor.markHealthy(pid: pid) }
             return true
 
         case let .failed(terminalFailure):
@@ -1386,10 +1386,6 @@ extension GatewayProcessManager {
             startGeneration: context.generation)
         else { return false }
         return self.isCurrentGatewayReadiness(context)
-    }
-
-    private func markChildHealthy(instance: PortGuardian.Descriptor?) {
-        if let pid = instance?.pid { self.childSupervisor.markHealthy(pid: pid) }
     }
 
     private func probeGatewayHealth<C: Clock>(timeoutMs: Double, clock: C) async throws -> Data

@@ -3,7 +3,6 @@ import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createStatusReactionController,
   DEFAULT_EMOJIS,
-  DEFAULT_TIMING,
   logAckFailure,
   logTypingFailure,
   resolveAckReaction,
@@ -163,7 +162,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     accountId: deps.accountId,
     groups: resolveChannelGroups(deps.cfg, "signal", deps.accountId),
   });
-  const statusReactionTiming = deps.statusReactionTiming ?? DEFAULT_TIMING;
   const activeEnqueueEntries = new WeakSet<SignalInboundEntry>();
 
   async function handleSignalInboundMessage(entry: SignalInboundEntry) {
@@ -369,7 +367,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             initialEmoji: ackReaction,
             // Signal has one reaction slot. A stall warning otherwise reads as terminal failure.
             emojis: { stallHard: DEFAULT_EMOJIS.stallSoft },
-            timing: statusReactionTiming,
             onError: (err) => {
               logAckFailure({
                 log: logVerbose,
