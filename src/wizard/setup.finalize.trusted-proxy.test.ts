@@ -255,6 +255,7 @@ vi.mock("../../packages/terminal-core/src/restore.js", () => ({
   restoreTerminalState,
 }));
 
+// mock-isolation: Onboarding handoff fixtures isolate the interactive terminal graph and process-exit timers.
 vi.mock("../tui/tui.js", () => ({
   resolveTuiShutdownHardExitMs,
   runTui,

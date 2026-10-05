@@ -28,7 +28,8 @@ vi.mock("../config/config.js", () => ({
     hash: "config",
   }),
 }));
-vi.mock("./inference-route.js", () => ({
+vi.mock("./inference-route.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./inference-route.js")>()),
   projectInferenceRoute: vi.fn(async () => ({ route: null })),
 }));
 vi.mock("./audit.js", () => ({ appendSystemAgentAuditEntry: mocks.audit }));
