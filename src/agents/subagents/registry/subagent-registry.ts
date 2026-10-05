@@ -161,6 +161,7 @@ const subagentLifecycleController = new SubagentLifecycleController({
 const {
   clearScheduledResumeTimers,
   completeCleanupBookkeeping,
+  deleteSuspendedSubagentSession,
   completeSubagentRun,
   finalizeResumedAnnounceGiveUp,
   refreshFrozenResultFromSession,
@@ -551,6 +552,7 @@ const subagentSweeper = createSubagentRegistrySweeper({
   resumeRequesterSettleWake,
   startSubagentAnnounceCleanupFlow,
   completeCleanupBookkeeping,
+  deleteSuspendedSubagentSession,
   isCleanupOwnerCurrent: subagentLifecycleController.isCleanupOwnerCurrent,
   sessionEffectsHostCurrent: (entry) =>
     subagentLifecycleController.sessionEffectsHostCurrent(entry),

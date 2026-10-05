@@ -581,7 +581,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
   });
 
   it.each(["unchanged", "source-change", "callback-failure"] as const)(
-    "keeps quiet retirement custody (%s)",
+    "keeps quiet retained-completion custody (%s)",
     async (change) => {
       const runId = "quiet-delete-wake";
       const childSessionKey = "agent:main:subagent:quiet-delete-wake";
@@ -608,8 +608,14 @@ export function registerRequesterWakeReceiptBoundaryTests({
       }
       const { entry, wake } = member;
       expect(entry.runId).toBe(runId);
-      expect(wake?.retireAfterSettle).toBe(true);
-      expect(loadSubagentRegistryFromSqlite().has(runId)).toBe(false);
+      expect(wake).toBeDefined();
+      expect(wake?.retireAfterSettle).toBeUndefined();
+      expect(loadSubagentRegistryFromSqlite().get(runId)).toMatchObject({
+        cleanup: "delete",
+        cleanupCompletedAt: expect.any(Number),
+        execution: { status: "terminal" },
+      });
+      expect(loadSubagentRegistryFromSqlite().get(runId)?.requesterSettleWake).toBeUndefined();
       expect(isSameSubagentRunOwner(registry.getSubagentRunByRunId(runId), entry)).toBe(true);
       expect(registry.getSubagentRunByRunId(runId)?.requesterSettleWake).toEqual(wake);
       await registry.testing.sweepOnceForTests();
@@ -634,7 +640,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
           await vi.advanceTimersByTimeAsync(30_000);
           await flushOwnedWork();
           expect(isSameSubagentRunOwner(registry.getSubagentRunByRunId(runId), entry)).toBe(true);
-          expect(getGatewayContextResolver(entry)).toBeDefined();
+          expect(getGatewayContextResolver(registry.getSubagentRunByRunId(runId)!)).toBeDefined();
           expect(getRequesterWakeCalls()).toHaveLength(0);
           process.env.OPENCLAW_STATE_DIR = originalStateDir;
         } else if (change === "callback-failure") {
@@ -643,8 +649,9 @@ export function registerRequesterWakeReceiptBoundaryTests({
             publication: "published",
           });
           await flushOwnedWork();
-          expect(registry.getSubagentRunByRunId(runId)).toBeUndefined();
-          expect(getGatewayContextResolver(entry)).toBeDefined();
+          expect(isSameSubagentRunOwner(registry.getSubagentRunByRunId(runId), entry)).toBe(true);
+          expect(registry.getSubagentRunByRunId(runId)?.requesterSettleWake).toBeUndefined();
+          expect(getGatewayContextResolver(registry.getSubagentRunByRunId(runId)!)).toBeDefined();
         } else {
           await expect(held.completePublication.promise).resolves.toEqual({
             applied: true,
@@ -653,7 +660,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
         }
         if (change !== "unchanged") {
           database.db.exec(
-            "CREATE TRIGGER reject_quiet_retirement_replay BEFORE DELETE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'quiet retirement replayed'); END",
+            "CREATE TRIGGER reject_quiet_completion_replay BEFORE UPDATE OF payload_json ON subagent_runs WHEN OLD.run_id = 'quiet-delete-wake' AND json_type(OLD.payload_json, '$.requesterSettleWake') IS NULL AND json_type(NEW.payload_json, '$.requesterSettleWake') IS NULL BEGIN SELECT RAISE(ABORT, 'quiet completion replayed'); END",
           );
           replayTrigger = true;
           await registry.testing.sweepOnceForTests();
@@ -664,23 +671,29 @@ export function registerRequesterWakeReceiptBoundaryTests({
             applied: true,
             publication: "published",
           });
-          database.db.exec("DROP TRIGGER reject_quiet_retirement_replay");
+          database.db.exec("DROP TRIGGER reject_quiet_completion_replay");
           replayTrigger = false;
         }
         await flushOwnedWork();
-        expect(registry.getSubagentRunByRunId(runId)).toBeUndefined();
-        expect(loadSubagentRegistryFromSqlite().has(runId)).toBe(false);
-        expect(getGatewayContextResolver(entry)).toBeUndefined();
+        expect(isSameSubagentRunOwner(registry.getSubagentRunByRunId(runId), entry)).toBe(true);
+        expect(registry.getSubagentRunByRunId(runId)?.requesterSettleWake).toBeUndefined();
+        expect(loadSubagentRegistryFromSqlite().get(runId)).toMatchObject({
+          cleanup: "delete",
+          cleanupCompletedAt: expect.any(Number),
+          execution: { status: "terminal" },
+        });
+        expect(loadSubagentRegistryFromSqlite().get(runId)?.requesterSettleWake).toBeUndefined();
+        expect(getGatewayContextResolver(registry.getSubagentRunByRunId(runId)!)).toBeUndefined();
         expect(getRequesterWakeCalls()).toHaveLength(0);
         expect(held.executions.filter((phase) => phase === "complete")).toHaveLength(1);
-        // A source change first refreshes its committed deletion after a version conflict.
+        // A source change first refreshes its committed postimage after a version conflict.
         expect(held.executions.filter((phase) => phase === "reconcile")).toHaveLength(
           change === "unchanged" ? 0 : change === "source-change" ? 2 : 1,
         );
       } finally {
         process.env.OPENCLAW_STATE_DIR = originalStateDir;
         if (replayTrigger) {
-          database.db.exec("DROP TRIGGER reject_quiet_retirement_replay");
+          database.db.exec("DROP TRIGGER reject_quiet_completion_replay");
         }
         held.releaseAll();
       }

@@ -38,7 +38,6 @@ import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
   restoreSubagentRunsFromDisk,
-  SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
 import {
   getSubagentRegistryPublicationRevision,
@@ -51,9 +50,11 @@ import {
   prepareSubagentSessionCleanupRevocation,
 } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import { testing } from "./subagent-registry.test-helpers.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
+import { createSuspendedDeleteNativeFixture } from "./subagent-suspended-delete-native.test-support.js";
 
 vi.mock("../../../state/openclaw-state-worker-store.js", { spy: true });
 
@@ -62,6 +63,12 @@ vi.mock("./subagent-registry-lifecycle-announce-cleanup.js", { spy: true });
 vi.mock("../../../plugins/hook-runner-global.js", { spy: true });
 
 const fixture = useSubagentControlFixture();
+const {
+  originalPhysicalTarget,
+  readNativeChildNode,
+  installOwnedNativeDeleteGateway,
+  defineNativeCases,
+} = createSuspendedDeleteNativeFixture(fixture);
 
 const nativeWorker = await vi.importActual<typeof stateWorker>(
   "../../../state/openclaw-state-worker-store.js",
@@ -84,21 +91,31 @@ const nativeCleanup = await vi.importActual<typeof announceCleanup>(
 
 async function registerCompletion(
   runId: string,
-  options: { holdForRequester?: boolean; cleanup?: "keep" | "delete" } = {},
+  options: {
+    holdForRequester?: boolean;
+    cleanup?: "keep" | "delete";
+    originalSessionIdentity?: typeof originalPhysicalTarget;
+    gatewayContextResolver?: Parameters<typeof registerSubagentRun>[0]["gatewayContextResolver"];
+  } = {},
 ) {
   const childSessionKey = `agent:main:subagent:${runId}`;
   await writeSubagentSessionEntry({
     stateDir: fixture.stateDir,
     agentId: "main",
     sessionKey: childSessionKey,
-    defaultSessionId: "ordinary-child-session",
-    lifecycleRevision: "ordinary-child-revision",
+    defaultSessionId: options.originalSessionIdentity?.sessionId ?? "ordinary-child-session",
+    lifecycleRevision:
+      options.originalSessionIdentity?.lifecycleRevision ?? "ordinary-child-revision",
   });
   fixture.capture.mockResolvedValue("Synthetic completed result.");
   fixture.wake.mockResolvedValue(false);
   await registerSubagentRun({
     runId,
     childSessionKey,
+    ...(options.originalSessionIdentity ? { sessionEntry: options.originalSessionIdentity } : {}),
+    ...(options.gatewayContextResolver
+      ? { gatewayContextResolver: options.gatewayContextResolver }
+      : {}),
     requesterSessionKey: "agent:main:main",
     requesterAgentId: "main",
     requesterDisplayKey: "main",
@@ -652,13 +669,20 @@ it.each(["current", "revoked", "source switched", "yielded"] as const)(
   },
 );
 
+defineNativeCases({ testing, registerCompletion, completeRegistered, updateRun });
+
 it.each([false, true])(
-  "preserves registered suspended retirement across successor registration (successor: %s)",
+  "preserves registered suspended cleanup publication across successor registration (successor: %s)",
   async (replace) => {
-    const run = await registerCompletion("suspended-retirement", {
-      cleanup: "delete",
-      holdForRequester: true,
-    });
+    const nativeDelete = installOwnedNativeDeleteGateway();
+    const run = await nativeDelete.inScope(() =>
+      registerCompletion("suspended-retirement", {
+        cleanup: "delete",
+        holdForRequester: true,
+        originalSessionIdentity: originalPhysicalTarget,
+        gatewayContextResolver: nativeDelete.resolveGatewayContext,
+      }),
+    );
     completeRegistered(run);
     await fixture.settle();
     let entry = subagentRuns.get(run.runId)!;
@@ -697,6 +721,7 @@ it.each([false, true])(
     const release = createDeferredCore();
     const cleanupEntered = createDeferredCore();
     const releaseCleanup = createDeferredCore();
+    const releaseSuccessor = createDeferredCore();
     const removeAttachments = registryHelpers.safeRemoveAttachmentsDir;
     const cleanup = vi
       .spyOn(registryHelpers, "safeRemoveAttachmentsDir")
@@ -708,6 +733,7 @@ it.each([false, true])(
         return removeAttachments(retired, isCurrent);
       });
     let held = false;
+    let successorHeld = false;
     const worker = vi
       .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
       .mockImplementation((stateContext, operation, options) => {
@@ -720,12 +746,40 @@ it.each([false, true])(
                 if (
                   !held &&
                   isSubagentRegistryWriteCommand(command) &&
-                  command.input.deleteRunIds.includes(run.runId)
+                  command.input.values.some((row) => {
+                    if (row.run_id !== run.runId) {
+                      return false;
+                    }
+                    const postimage = rowToSubagentRunRecord(row);
+                    return (
+                      postimage?.execution.status === "terminal" &&
+                      postimage.delivery?.status === "discarded" &&
+                      postimage.delivery.discardReason === "expired" &&
+                      typeof postimage.cleanupCompletedAt === "number"
+                    );
+                  })
                 ) {
+                  expect(command.input.deleteRunIds).not.toContain(run.runId);
                   held = true;
+                  // Target/stamp publications precede this final UPDATE; freeze its actual host preimage.
+                  entry = subagentRuns.get(run.runId)!;
                   // The real transaction has settled; only its host acknowledgement waits.
                   ready.resolve();
                   await release.promise;
+                }
+                if (
+                  replace &&
+                  !successorHeld &&
+                  isSubagentRegistryWriteCommand(command) &&
+                  command.input.values.some((row) => {
+                    const next = row.run_id === run.runId && rowToSubagentRunRecord(row);
+                    return next && next.task === "live retirement successor";
+                  })
+                ) {
+                  successorHeld = true;
+                  // Hold the first successor's native ACK until the old cleanup
+                  // owns its attachment wait; publication then revokes that tail.
+                  await Promise.race([cleanupEntered.promise, releaseSuccessor.promise]);
                 }
                 return result;
               },
@@ -749,28 +803,54 @@ it.each([false, true])(
             requesterAgentId: "main",
             requesterDisplayKey: "main",
             task: "live retirement successor",
+            sessionEntry: {
+              sessionId: "successor-child-session",
+              lifecycleRevision: "successor-child-revision",
+            },
             cleanup: "keep",
             expectsCompletionMessage: true,
           }),
       );
     let successor = entry;
-    let rejectedRegistration: Promise<unknown> | undefined;
-    let registration: Promise<void> | undefined;
+    let registrations: Array<Promise<{ accepted: true } | { accepted: false; error: unknown }>> =
+      [];
     try {
       await Promise.race([
         ready.promise,
         outcome.then(() => {
-          throw new Error("Registered retirement omitted its acknowledgement boundary");
+          throw new Error("Registered cleanup omitted its UPDATE acknowledgement boundary");
         }),
       ]);
       expect(subagentRuns.get(run.runId)).toBe(entry);
       expect(entry.delivery?.status).toBe("suspended");
-      expect(loadSubagentRegistryFromSqlite().has(run.runId)).toBe(false);
+      expect(readNativeChildNode(run.childSessionKey)).toBeUndefined();
+      expect(nativeDelete.outcomes).toEqual([expect.objectContaining({ ok: true })]);
+      const committed = loadSubagentRegistryFromSqlite().get(run.runId)!;
+      expect(committed).toMatchObject({
+        generation: entry.generation,
+        createdAt: entry.createdAt,
+        archiveAtMs: entry.archiveAtMs,
+        delivery: { status: "discarded", discardReason: "expired" },
+        cleanupCompletedAt: expect.any(Number),
+      });
+      expect(committed.requesterSettleWake).toBeUndefined();
       expect(ended).not.toHaveBeenCalled();
       if (replace) {
-        rejectedRegistration = registerSuccessor().then(
-          () => undefined,
-          (error: unknown) => error,
+        // Both callers capture the pre-ACK physical owner. The first accepted
+        // successor supersedes the other registration, independently of order.
+        await writeSubagentSessionEntry({
+          stateDir: fixture.stateDir,
+          agentId: "main",
+          sessionKey: run.childSessionKey,
+          sessionId: "successor-child-session",
+          defaultSessionId: "successor-child-session",
+          lifecycleRevision: "successor-child-revision",
+        });
+        registrations = [registerSuccessor(), registerSuccessor()].map((registration) =>
+          registration.then(
+            () => ({ accepted: true as const }),
+            (error: unknown) => ({ accepted: false as const, error }),
+          ),
         );
       }
       const publicationRevision = getSubagentRegistryPublicationRevision();
@@ -779,22 +859,25 @@ it.each([false, true])(
         await Promise.race([
           cleanupEntered.promise,
           outcome.then(() => {
-            throw new Error("Suspended retirement settled before attachment cleanup entered");
+            throw new Error("Suspended cleanup settled before attachment cleanup entered");
           }),
         ]);
-        const rejection = await rejectedRegistration;
-        expect(rejection).toBeInstanceOf(SubagentRegistryMutationRejectedError);
-        expect(rejection).toHaveProperty(
+        const results = await Promise.all(registrations);
+        expect(results.filter((result) => result.accepted)).toHaveLength(1);
+        const refused = results.filter((result) => !result.accepted);
+        expect(refused).toHaveLength(1);
+        expect(refused[0]?.error).toBeInstanceOf(Error);
+        expect(refused[0]?.error).toHaveProperty(
           "message",
           "Subagent registration owner changed during preparation",
         );
-        expect(subagentRuns.has(run.runId)).toBe(false);
-        expect(loadSubagentRegistryFromSqlite().has(run.runId)).toBe(false);
-        registration = registerSuccessor();
-      }
-      await registration;
-      if (replace) {
         successor = subagentRuns.get(run.runId)!;
+        expect(successor.generation).toBe((entry.generation ?? 0) + 1);
+        expect(getSubagentRunRuntimeKey(successor)).not.toBe(getSubagentRunRuntimeKey(entry));
+        expect(loadSubagentRegistryFromSqlite().get(run.runId)?.task).toBe(
+          "live retirement successor",
+        );
+        expect(ended).not.toHaveBeenCalled();
       }
       releaseCleanup.resolve();
       const result = await outcome;
@@ -818,14 +901,23 @@ it.each([false, true])(
         });
       } else {
         expect(result).toEqual({ completed: true });
-        expect(subagentRuns.has(run.runId)).toBe(false);
-        expect(loadSubagentRegistryFromSqlite().has(run.runId)).toBe(false);
+        const retained = subagentRuns.get(run.runId)!;
+        expect(getSubagentRunRuntimeKey(retained)).toBe(getSubagentRunRuntimeKey(entry));
+        expect(retained).toMatchObject(committed);
+        expect(retained.requesterSettleWake).toBeUndefined();
+        expect(loadSubagentRegistryFromSqlite().get(run.runId)).toMatchObject({
+          generation: entry.generation,
+          archiveAtMs: entry.archiveAtMs,
+          delivery: { status: "discarded", discardReason: "expired" },
+          cleanupCompletedAt: retained.cleanupCompletedAt,
+        });
         expect(ended).toHaveBeenCalledOnce();
       }
     } finally {
       release.resolve();
       releaseCleanup.resolve();
-      await Promise.allSettled([outcome, rejectedRegistration, registration]);
+      releaseSuccessor.resolve();
+      await Promise.allSettled([outcome, ...registrations]);
       cleanup.mockRestore();
       worker.mockRestore();
       source.release();
