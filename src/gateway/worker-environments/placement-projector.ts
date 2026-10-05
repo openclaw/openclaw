@@ -226,10 +226,10 @@ export function projectWorkerSessionPlacement(
     ...(record.lastLiveEventAckCursor !== null
       ? { lastLiveEventAckCursor: record.lastLiveEventAckCursor }
       : {}),
-    ...(record.workspaceResultConflict
-      ? { workspaceResultConflict: record.workspaceResultConflict }
-      : {}),
   };
+  const conflict = record.workspaceResultConflict
+    ? { workspaceResultConflict: record.workspaceResultConflict }
+    : {};
   if (record.state === "reclaimed" || record.state === "failed") {
     const retained = {
       ...worker,
@@ -241,6 +241,9 @@ export function projectWorkerSessionPlacement(
       ...(record.remoteWorkspaceDir ? { remoteWorkspaceDir: record.remoteWorkspaceDir } : {}),
       ...(record.workerBundleHash ? { workerBundleHash: record.workerBundleHash } : {}),
       ...progress,
+      ...conflict,
+    };
+    const terminal = {
       ...(record.terminalReason ? { terminalReason: record.terminalReason } : {}),
       ...(record.terminalAtMs !== null ? { terminalAtMs: record.terminalAtMs } : {}),
     };
@@ -251,8 +254,9 @@ export function projectWorkerSessionPlacement(
           recoveryError: record.recoveryError,
           ...(failedRecoveryAction ? { recoveryAction: failedRecoveryAction } : {}),
           ...(retryOnSend ? { retryOnSend: true as const } : {}),
+          ...terminal,
         }
-      : { state: record.state, ...retained };
+      : { state: record.state, ...retained, ...terminal };
   }
   const bundle = {
     ...worker,
@@ -272,8 +276,12 @@ export function projectWorkerSessionPlacement(
   }
   return {
     state: record.state,
-    ...workspace,
+    ...worker,
+    environmentId: record.environmentId,
     activeOwnerEpoch: record.activeOwnerEpoch,
+    workerBundleHash: record.workerBundleHash,
+    workspaceBaseManifestRef: record.workspaceBaseManifestRef,
+    remoteWorkspaceDir: record.remoteWorkspaceDir,
     ...progress,
     ...(record.state === "active" && diskSpace ? { diskSpace } : {}),
     ...(record.state === "active" && runner ? { runner } : {}),
@@ -281,5 +289,6 @@ export function projectWorkerSessionPlacement(
     ...(workspaceResultReconciling && record.state !== "reconciling"
       ? { workspaceResultReconciling: true as const }
       : {}),
+    ...conflict,
   };
 }
