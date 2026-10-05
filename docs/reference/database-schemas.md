@@ -25,6 +25,13 @@ changes require a new ownership read. Transactions, pinned snapshots, and dynami
 authorizers keep querying the metadata. This changes no schema, stored bytes, or
 update behavior.
 
+Registry discovery reuses successful migration checks for the admitted schema
+generation. The minute retention sweep reads deletion history in a worker and
+shares one matcher across its agent stores; live deletion status and lifecycle
+commit guards still apply. Legacy watch-marker discovery uses an indexed prefix
+range. Retention continues as rows age, even without writes; schema, upgrade, and
+retention policies are unchanged.
+
 Session row-facts reads reuse a canonical continuation's existing transaction
 instead of nesting a savepoint. Reads without an active transaction still open
 one so entry metadata, board presence, and transcript watermarks share a snapshot.

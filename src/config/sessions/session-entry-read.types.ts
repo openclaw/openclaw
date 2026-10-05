@@ -1,11 +1,14 @@
+import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import type {
+  SessionEntryListScope,
   SessionEntryReadScope,
+  SessionEntrySummary,
   SessionTranscriptRuntimeScope,
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionEntryReadWorkerInput = {
   kind: "session-entry-read";
@@ -21,6 +24,20 @@ export type SessionEntryReadWorkerResult = {
   | { entry: SessionEntry | undefined; readError?: never }
   | { entry: undefined; readError: SessionTranscriptWorkerReadError }
 );
+
+export type SessionEntryListWorkerInput = {
+  kind: "session-entry-list";
+  database: { agentId: string; path: string };
+  scope: SessionEntryListScope & { cleanupSession?: string };
+  expectedIdentity?: DatabasePathIdentity;
+  continuation?: CanonicalSessionReaderContinuation;
+};
+
+export type SessionEntryListWorkerResult = {
+  kind: "session-entry-list";
+  entries: SessionEntrySummary[];
+  source?: CapturedSessionEntryReadSource & { databaseIdentity: string };
+};
 
 export type SessionRuntimeTargetWorkerInput = {
   kind: "session-runtime-target";

@@ -25,7 +25,6 @@ import { resolveRequiredHomeDir } from "./home-dir.js";
 import { resolveLegacyStateDirMigrationCandidates } from "./state-migrations.state-dir.js";
 import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
 import { UPDATE_CAPTURE_PRIVACY_MARKER } from "./update-capture-privacy-marker.js";
-import { updateRecoveryCaptureStateSchema } from "./update-recovery-receipt-schema.js";
 import { recordedUpdateRunDrivers } from "./update-run-activity.js";
 import { inspectUpdateRunDriver, sameUpdateRunDriver } from "./update-run-driver.js";
 import { getUpdateRunAsync } from "./update-run-reader.js";
@@ -45,8 +44,6 @@ const recordedOutcomeSchema = z.strictObject({
   manifestSha256: z.string().regex(/^[a-f0-9]{64}$/u),
 });
 
-const updateRecoveryForwardResolutionSchema =
-  updateRecoveryCaptureStateSchema.shape.forwardResolution.unwrap();
 type Outcome = {
   status: "pending" | "restored" | "committed" | "restore-failed";
   error?: string;
@@ -356,11 +353,10 @@ export async function hasUpdateRecoveryForwardResolution(
 ): Promise<boolean> {
   return withRecoveryMetadata(ref, async ({ manifest, outcome }) => {
     const run = await getUpdateRunAsync(manifest.runId);
-    const value = run?.origin.updateRecoveryCapture?.forwardResolution;
-    if (!value) {
+    const receipt = run?.origin.updateRecoveryCapture?.forwardResolution;
+    if (!receipt) {
       return false;
     }
-    const receipt = updateRecoveryForwardResolutionSchema.parse(value);
     if (outcome || !isDeepStrictEqual(receipt.binding, await readBinding(ref))) {
       throw new Error("Forward recovery receipt is stale or contradicts its failed capture.");
     }

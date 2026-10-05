@@ -1,18 +1,18 @@
 import { isDeepStrictEqual } from "node:util";
-import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createSqliteWorkerOperationAdmission,
-  type SqliteWorkerAdmissionFactory,
   type SqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionRequest,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
-import { SqliteWorkerError, type SqliteWorkerStore } from "../../infra/sqlite-worker-store.js";
-import type {
-  AgentDatabaseIncognitoIdentity,
-  AgentDatabaseIncognitoOperations,
-} from "../../state/openclaw-agent-execution-contract.js";
+import { SqliteWorkerError } from "../../infra/sqlite-worker-store.js";
+import type { AgentDatabaseIncognitoIdentity } from "../../state/openclaw-agent-execution-contract.js";
+import {
+  authorizeSessionFacts,
+  readIncognitoGrantFacts,
+  type IncognitoSessionRunner,
+} from "./session-incognito-admission.js";
 import {
   isIncognitoComputeWrite,
   type IncognitoComputeTarget,
@@ -35,6 +35,7 @@ import {
 } from "./session-incognito-lifecycle-contract.js";
 import type { IncognitoOutboxOperations } from "./session-incognito-outbox-contract.js";
 import {
+  createIncognitoPendingInputHistorySettlement,
   createIncognitoPendingInputSettlement,
   type IncognitoPendingInputOperations,
 } from "./session-incognito-pending-input-contract.js";
@@ -53,18 +54,11 @@ import type {
   PendingInputRead,
 } from "./session-pending-input-operations.types.js";
 
-type Scope = Pick<SqliteWorkerStore<AgentDatabaseIncognitoOperations>, "execute">;
 type LifecycleSettlement = {
   beforeCommit(): void;
   settle(outcome: "committed" | "rolled-back" | "unknown"): void;
 };
-export type IncognitoSessionRunner = <T>(
-  authority: IncognitoSessionAuthority,
-  operation: (scope: Scope) => Promise<T>,
-  signal?: AbortSignal,
-  admission?: SqliteWorkerAdmissionFactory,
-  cleanup?: boolean,
-) => Promise<T>;
+export type { IncognitoSessionRunner } from "./session-incognito-admission.js";
 
 export type IncognitoSessionClaim = {
   readonly identity: AgentDatabaseIncognitoIdentity;
@@ -81,18 +75,6 @@ export type IncognitoSessionActor = {
   readonly sessions: ReturnType<ReturnType<typeof createIncognitoSessionFacts>["bind"]>;
   assertCurrent(): void;
 };
-
-function authorizeSessionFacts(
-  authority: IncognitoSessionAuthority,
-  stage: "transaction" | "commit",
-  facts: IncognitoSessionFacts,
-) {
-  const authorization: unknown = authority.authorize?.(stage, structuredClone(facts));
-  if (isPromiseLike(authorization)) {
-    void Promise.resolve(authorization).catch(() => undefined);
-    throw new Error("Incognito session grants must remain synchronous");
-  }
-}
 
 /** Actor-local projection owned by its lifetime, never a roster or full-entry cache. */
 export function createIncognitoSessionFacts(
@@ -363,20 +345,7 @@ export function createIncognitoSessionFacts(
                     throw new Error("Incognito session authority requested out of order");
                   }
                   const received = request.facts.sessions;
-                  if (
-                    !Array.isArray(received) ||
-                    received.some(
-                      (facts: unknown) =>
-                        !isRecord(facts) ||
-                        !isDeepStrictEqual(facts.identity, identity) ||
-                        typeof facts.sessionKey !== "string" ||
-                        !Number.isSafeInteger(facts.revision),
-                    )
-                  ) {
-                    throw new Error("Incognito session grant differs from its captured target");
-                  }
-                  // SAFETY: the private, typed worker sends these bounded publication envelopes.
-                  const facts = received as IncognitoSessionFacts[];
+                  const facts = readIncognitoGrantFacts(received, identity);
                   const keys = facts.map((entry) => entry.sessionKey);
                   const lifecycleKeys = isIncognitoLifecycleCommand(captured)
                     ? incognitoLifecycleKeys(captured, identity)
@@ -591,7 +560,6 @@ export function createIncognitoSessionFacts(
           admitCustody: (stage: "transaction" | "commit", facts: PendingInputHistoryGrant) => void,
         ) {
           const captured = structuredClone(input);
-          const ids = new Set(captured.ids);
           return perform(
             authority,
             { type: "session.pendingInputs.interruptHistory", input: captured },
@@ -600,44 +568,7 @@ export function createIncognitoSessionFacts(
             undefined,
             undefined,
             false,
-            {
-              authorize(stage, facts) {
-                if (
-                  !isRecord(facts) ||
-                  facts.kind !== "pending-input-history-custody" ||
-                  !Array.isArray(facts.candidates) ||
-                  facts.candidates.some(
-                    (row: unknown) =>
-                      !isRecord(row) ||
-                      typeof row.input_id !== "string" ||
-                      !ids.has(row.input_id) ||
-                      row.session_key !== captured.sessionKey ||
-                      row.session_id !== captured.sessionId,
-                  )
-                ) {
-                  throw new Error("Incognito pending input history omitted its custody facts");
-                }
-                // SAFETY: The paired bounded kernel owns this validated custody envelope.
-                admitCustody(stage, facts as PendingInputHistoryGrant);
-              },
-              decodeReceipt(receipt) {
-                if (
-                  !isRecord(receipt) ||
-                  !Array.isArray(receipt.facts) ||
-                  !isRecord(receipt.value) ||
-                  receipt.value.kind !== "pending-input-history-interrupted" ||
-                  !Array.isArray(receipt.value.ids) ||
-                  receipt.value.ids.some((id: unknown) => typeof id !== "string" || !ids.has(id))
-                ) {
-                  throw new SqliteWorkerError(
-                    "Incognito pending input history omitted its committed receipt",
-                    "outcome-unknown",
-                  );
-                }
-                // SAFETY: Session facts are compared with the exact commit grant before publication.
-                return receipt as IncognitoSessionOperations["session.pendingInputs.interruptHistory"]["output"];
-              },
-            },
+            createIncognitoPendingInputHistorySettlement(captured, admitCustody),
           );
         },
         transcript: <Key extends keyof IncognitoTranscriptOperations>(

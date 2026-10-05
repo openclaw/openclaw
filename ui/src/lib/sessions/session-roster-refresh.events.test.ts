@@ -15,6 +15,42 @@ import {
 } from "./session-capability.test-support.ts";
 
 describe("session roster event traffic", () => {
+  it("keeps dock snapshots out of ordinary roster membership without repeated list reads", async () => {
+    vi.useFakeTimers();
+    const held = session("main", 1, { sessionId: "held" });
+    const dock = session("main", 2, {
+      key: "agent:main:board-agent",
+      sessionId: "board-agent",
+      isDock: true,
+    });
+    const request = vi.fn(async () => sessionsResult([held], 1));
+    const harness = createGatewayHarness(createTestGatewayClient(request));
+    const sessions = createTestSessionCapability(harness.gateway);
+    try {
+      await sessions.refresh({ agentId: "main", excludeDock: true, force: true });
+      harness.publishEvent("sessions.changed", {
+        reason: "patch",
+        sessionKey: dock.key,
+        session: dock,
+        ancestorSessions: [],
+      });
+      harness.publishEvent("sessions.changed", {
+        reason: "patch",
+        sessionKey: held.key,
+        session: { ...held, updatedAt: 3, label: "Updated title" },
+        ancestorSessions: [],
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(request).toHaveBeenCalledOnce();
+      expect(sessions.state.result?.sessions).toEqual([
+        { ...held, updatedAt: 3, label: "Updated title" },
+      ]);
+    } finally {
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it.each([false, true])(
     "recovers failed membership refreshes on the next keyed snapshot (managed: %s)",
     async (managed) => {
@@ -434,6 +470,7 @@ describe("session roster event traffic", () => {
       limit: 1,
       excludeCron: true,
       excludeSystem: true,
+      excludeDock: true,
     };
     let running = 0;
     const summaryRequest = vi.fn();

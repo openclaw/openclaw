@@ -38,6 +38,7 @@ type TuiRunLifecycleContext = {
   forgetLocalRunId?: (runId: string) => void;
   clearLocalRunIds?: () => void;
   clearLocalBtwRunIds?: () => void;
+  /** Reset `streaming` after this much delta silence. Set to 0 to disable. */
   streamingWatchdogMs?: number;
   localMode?: boolean;
 };

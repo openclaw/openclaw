@@ -576,7 +576,7 @@ export async function prepareGitHubPublicationIdentity(
 
 /** Options expose account facts only; publication obtains its own live credential. */
 export async function prepareGitHubPublicationOptionsIdentity(
-  params: GitHubIdentityPreparation,
+  params: GitHubIdentityPreparation & { assertCurrent?: () => void },
 ): Promise<Pick<PreparedGitHubPublicationIdentity, "source" | "account">> {
   const { prepared } = await prepareSharedGitHubIdentity(params, readCachedNativeGitHubToken);
   if (!prepared) {

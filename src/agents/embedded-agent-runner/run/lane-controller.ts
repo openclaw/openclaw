@@ -1,4 +1,5 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { createAbortError } from "../../../infra/abort-signal.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   getAgentEventLifecycleGeneration,
@@ -211,12 +212,10 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     if (reason instanceof Error) {
       throw reason;
     }
-    const abortError =
-      reason !== undefined
-        ? new Error("Operation aborted", { cause: reason })
-        : new Error("Operation aborted");
-    abortError.name = "AbortError";
-    throw abortError;
+    throw createAbortError(
+      "Operation aborted",
+      reason === undefined ? undefined : { cause: reason },
+    );
   };
   const withLaneTimeout = (
     opts?: CommandQueueEnqueueOptions,

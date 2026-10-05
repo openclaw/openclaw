@@ -20,6 +20,7 @@ import {
   resolveSessionConversationStub,
   resolveSessionTargetStub,
 } from "./sessions-channel-fixture.test-support.js";
+import { registerSessionsSendMaterializationTests } from "./sessions-send-materialization.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-exact-session-send-");
 
@@ -1585,8 +1586,13 @@ describe("sessions_send gating", () => {
   });
 });
 
-describe("sessions_send agent-main materialization provenance", () => {
-  it("uses the trusted in-process creation stamp in the production assembly (no injected caller)", async () => {
+registerSessionsSendMaterializationTests({
+  createTool: (options) => createSessionsSendTool(options),
+  agentChannel: MAIN_AGENT_CHANNEL,
+  callGatewayMock,
+  inProcessCreationMock,
+  requireDetails,
+  prepare: () => {
     inProcessGatewayContextAvailable = true;
     inProcessCreationMock.mockClear();
     loadConfigMock.mockReturnValue({
@@ -1596,47 +1602,10 @@ describe("sessions_send agent-main materialization provenance", () => {
         sessions: { visibility: "all" },
       },
     });
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string };
-      if (request.method === "sessions.resolve") {
-        return {};
-      }
-      if (request.method === "sessions.create") {
-        throw new Error("plain sessions.create must not be used for trusted materialization");
-      }
-      if (request.method === "agent") {
-        return { runId: "run-ensure-main", acceptedAt: 1 };
-      }
-      return {};
-    });
-    // Mirror production assembly (openclaw-tools.ts): no callGateway override, so
-    // ensureConfiguredAgentMainSession takes the trusted in-process branch.
-    const tool = createSessionsSendTool({
-      agentSessionKey: "agent:main:dashboard:req-provenance",
-      agentChannel: MAIN_AGENT_CHANNEL,
-    });
-
-    try {
-      const result = await tool.execute("call-ensure-main-provenance", {
-        sessionKey: "agent:main:main",
-        message: "wake up",
-        timeoutSeconds: 0,
-      });
-
-      expect(requireDetails(result).status).toBe("accepted");
-      expect(inProcessCreationMock).toHaveBeenCalledTimes(1);
-      expect(inProcessCreationMock).toHaveBeenCalledWith(
-        "sessions.create",
-        { key: "agent:main:main", agentId: "main" },
-        {
-          via: "internal",
-          actor: { type: "agent", id: "agent:main:dashboard:req-provenance" },
-        },
-      );
-    } finally {
-      inProcessGatewayContextAvailable = false;
-      inProcessCreationMock.mockClear();
-    }
-  });
+  },
+  cleanup: () => {
+    inProcessGatewayContextAvailable = false;
+    inProcessCreationMock.mockClear();
+  },
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,5 +1,7 @@
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok } from "@openclaw/normalization-core/result";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
 import {
@@ -457,15 +459,30 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "session-diagnostic-text", ...input }),
       (value) => value.text,
     ),
-    readEntries: async (scope, continuation) =>
-      runRequest(
-        () => ({ kind: "session-entry-list", scope, continuation }),
-        JSON.stringify({ scope, continuation }).length * 2,
+    readEntries: async (scope, continuation, expectedIdentity) => {
+      const captured = expectedIdentity && { ...expectedIdentity };
+      const assertIdentity = () => {
+        if (
+          captured &&
+          !isDeepStrictEqual(readDatabasePathIdentitySync(captured.canonicalPath), captured)
+        ) {
+          throw new Error("Session listing changed its captured physical owner");
+        }
+      };
+      assertIdentity();
+      return runRequest(
+        () => {
+          assertIdentity();
+          return { kind: "session-entry-list", scope, continuation, expectedIdentity: captured };
+        },
+        JSON.stringify({ scope, continuation, expectedIdentity: captured }).length * 2,
         (value) => {
           assertResultKind(value, "session-entry-list", "entries");
+          assertIdentity();
           return value.entries;
         },
-      ),
+      );
+    },
     readStoreProjection: reader(
       "session-store-projection",
       "store projection admission",

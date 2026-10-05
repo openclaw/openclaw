@@ -9,6 +9,12 @@ sidebarTitle: "Offline and reconnect"
 
 What survives a dropped connection, and how the Control UI recovers when it returns.
 
+Agent names and avatars keep their last loaded values when an identity refresh
+fails. Reads for the same agent share one request across the sidebar and chat,
+including failures: subsequent reads back off from 500 ms to 5 seconds and honor
+longer Gateway retry hints. Reconnecting clears the retry wait so identity reads
+can resume on the new connection.
+
 ## Busy initial connection
 
 If a WebSocket upgrade fails but the same-origin Gateway still answers its

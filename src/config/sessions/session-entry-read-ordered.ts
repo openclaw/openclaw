@@ -1,5 +1,7 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmissions } from "../../state/openclaw-agent-write-admission.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import { captureSessionEntryWorkerRequest } from "./session-entry-read-request.js";
@@ -49,6 +51,15 @@ export async function withOrderedSessionEntriesInWorker<T>(
     return runOpenClawAgentWriteAdmissions(
       selected.map(({ database }) => database),
       async () => {
+        // Synchronous SDK writers bypass the FIFO and may not publish row changes.
+        const nativeSources = selected.map(({ database }) => {
+          const native = getOpenClawAgentDatabaseIfOpen(database);
+          return {
+            database,
+            native,
+            revision: native && readSqliteNativeMutationRevision(native.db),
+          };
+        });
         let changed = false;
         const unsubscribe = sessionChanges.subscribeFacts((change) => {
           const scope = "all" in change ? change.scope : change;
@@ -95,6 +106,17 @@ export async function withOrderedSessionEntriesInWorker<T>(
           }
           for (const read of selected) {
             read.assertCurrent();
+          }
+          for (const { database, native, revision } of nativeSources) {
+            if (
+              getOpenClawAgentDatabaseIfOpen(database) !== native ||
+              (native &&
+                (native.db.isTransaction ||
+                  revision === undefined ||
+                  readSqliteNativeMutationRevision(native.db) !== revision))
+            ) {
+              throw new Error("Session entry changed during read");
+            }
           }
           if (changed) {
             throw new Error("Session entry changed during read");

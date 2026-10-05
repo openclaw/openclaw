@@ -3,7 +3,8 @@ import OpenClawKit
 import OpenClawProtocol
 
 extension OpenClawChatViewModel {
-    func handleProgressCardChanged(_ event: ProgressCardChangedEvent) {
+    @discardableResult
+    func handleProgressCardChanged(_ event: ProgressCardChangedEvent) -> Task<Void, Never>? {
         let session = self.currentSessionSnapshot()
         let target = self.progressCardTarget(for: session)
         let canonical = target?.sessionKey ?? session.key
@@ -16,11 +17,11 @@ extension OpenClawChatViewModel {
             current: canonical,
             mainSessionKey: self.resolvedMainSessionKey,
             activeAgentId: owner)
-        else { return }
+        else { return nil }
 
         // Global and ordinary rows can share a wire key. Events invalidate; only the
         // captured target's get response may publish or clear its durable card.
-        self.scheduleProgressCardFetch(for: session)
+        return self.scheduleProgressCardFetch(for: session)
     }
 
     @discardableResult

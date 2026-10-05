@@ -113,6 +113,7 @@ export function sidebarSessionListQuery(owner: SidebarSessionQueryOwner, agentId
   const { ownerId, involvingMe } = owner.sidebarSessionOwnerFilter();
   return {
     source: "sidebar",
+    excludeDock: true,
     ownerId: involvingMe ? undefined : ownerId || undefined,
     involvingMe: involvingMe || undefined,
     agentId,

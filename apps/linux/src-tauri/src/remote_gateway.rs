@@ -29,7 +29,6 @@ impl Drop for SshTunnel {
 #[derive(Clone)]
 pub(crate) struct TunnelRoute {
     pub id: u64,
-    pub selection: u64,
     pub request: RemoteGatewayRequest,
     pub url: Url,
 }
@@ -149,7 +148,6 @@ impl TunnelManager {
                 return Err("The SSH connection closed. Retry the connection.".to_string());
             }
             active.route.request = route.request;
-            active.route.selection = route.selection;
             active.recover = recover;
             return Ok(active.route.clone());
         }
@@ -2022,7 +2020,6 @@ mod tests {
         let url = Url::parse("ws://127.0.0.1:18789").unwrap();
         let route = TunnelRoute {
             id: 0,
-            selection: 7,
             request: request(),
             url: url.clone(),
         };

@@ -195,6 +195,7 @@ describe("event-driven session list refresh", () => {
     expect(researchRequests[0]?.[1]).toEqual({
       rowMode: "compact",
       source: "chat-pane",
+      excludeDock: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -388,6 +389,7 @@ describe("event-driven session list refresh", () => {
     expect(request.mock.calls[1]?.[1]).toEqual({
       rowMode: "compact",
       source: "sidebar",
+      excludeDock: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,

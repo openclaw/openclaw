@@ -85,10 +85,7 @@ export function createProviderHookRuntime(
   function resolveProviderRuntimeLookupModelId(
     params: ProviderRuntimePluginLookupParams & { context?: { modelId?: unknown } },
   ): string | undefined {
-    return normalizeOptionalString(
-      params.modelId ??
-        (typeof params.context?.modelId === "string" ? params.context.modelId : undefined),
-    );
+    return normalizeOptionalString(params.modelId ?? params.context?.modelId);
   }
 
   function resolveLoadedProviderPluginsForHooks(params: {

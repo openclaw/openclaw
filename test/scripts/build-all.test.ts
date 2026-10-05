@@ -146,43 +146,11 @@ describe("resolveBuildAllStep", () => {
     ).toThrow("full 40-character hexadecimal SHA");
   });
 
-  it.each([false, true])(
-    "routes pnpm steps through the npm_execpath pnpm runner on Windows (defer isolated: %s)",
-    (deferIsolatedAssets) => {
-      const step = getBuildAllStep("plugins:assets:build");
-      const tempDir = tempDirs.make("openclaw-pnpm-runner-");
-      const npmExecPath = path.join(tempDir, "pnpm.cjs");
-      fs.writeFileSync(npmExecPath, "console.log('pnpm');\n");
-      const result = resolveBuildAllStep(step, {
-        platform: "win32",
-        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-        npmExecPath,
-        env: {},
-        deferIsolatedAssets,
-      });
-
-      expect(result).toEqual({
-        command: "C:\\Program Files\\nodejs\\node.exe",
-        args: [
-          npmExecPath,
-          "plugins:assets:build",
-          ...(deferIsolatedAssets ? ["--defer-isolated"] : []),
-        ],
-        options: {
-          stdio: "inherit",
-          env: {},
-          shell: false,
-          windowsVerbatimArguments: undefined,
-        },
-      });
-    },
-  );
-
   it("passes encoded import URLs literally to managed Node on Windows", () => {
     const importUrl = "file:///C:/Users/RUNNER%7E1/Project/scripts/tsx.mjs";
     const result = resolveBuildAllStep(
       { label: "tsdown-unified", args: ["--import", importUrl, "scripts/tsdown-build.mts"] },
-      { platform: "win32", nodeExecPath: "C:\\Program Files\\nodejs\\node.exe", env: {} },
+      { nodeExecPath: "C:\\Program Files\\nodejs\\node.exe", env: {} },
     );
 
     expect(
@@ -201,18 +169,17 @@ describe("resolveBuildAllStep", () => {
   });
 
   it.each([false, true])(
-    "runs pnpm-free plugin builds through managed Node on Windows (defer isolated: %s)",
+    "runs plugin builds through managed Node on Windows (defer isolated: %s)",
     (deferIsolatedAssets) => {
       const args = [
         "--import",
-        "tsx",
+        "./scripts/tsx.mjs",
         "scripts/bundled-plugin-assets.mts",
         "--phase",
         "build",
         ...(deferIsolatedAssets ? ["--defer-isolated"] : []),
       ];
       const result = resolveBuildAllStep(getBuildAllStep("plugins:assets:build"), {
-        platform: "win32",
         nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
         env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
         deferIsolatedAssets,
@@ -275,7 +242,6 @@ describe("resolveBuildAllSteps", () => {
       steps.find(({ label }) => label === "ui:build"),
       "UI build",
     );
-    expect(ui.pnpmArgs).toEqual(["ui:build"]);
     expect(ui.cache).toBeUndefined();
     expect(labels.indexOf("ui:build")).toBeGreaterThan(labels.indexOf("runtime-postbuild-stamp"));
     expect(labels.indexOf("ui:build")).toBeLessThan(labels.indexOf("write-build-info"));
@@ -340,14 +306,11 @@ describe("resolveBuildAllSteps", () => {
       const cwd = tempDirs.make("openclaw-phase-stamp-");
       const steps = resolveBuildAllSteps(profile, {})
         .filter((step) => ["runtime-postbuild", "runtime-postbuild-stamp"].includes(step.label))
-        .map((step) => {
-          if (step.kind === "pnpm") {
-            throw new Error("Runtime metadata steps must use the native Node owner");
-          }
-          return step.label === "runtime-postbuild"
+        .map((step) =>
+          step.label === "runtime-postbuild"
             ? Object.assign({}, step, { args: ["-e", "process.exit(0)"] })
-            : step;
-        });
+            : step,
+        );
       const result = await runBuildAllSteps(profile, {
         cwd,
         env: {},

@@ -14,7 +14,6 @@ import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodDescriptorsFromHandlers,
   createGatewayMethodRegistry,
-  createPluginGatewayMethodDescriptors,
   isCoreGatewayMethodClassified,
   type GatewayMethodRegistry,
 } from "./methods/registry.js";
@@ -414,7 +413,7 @@ export async function startGatewayCoreRuntime(input: {
     return createGatewayMethodRegistry(
       [
         ...coreDescriptors,
-        ...createPluginGatewayMethodDescriptors(nextPluginRegistry),
+        ...nextPluginRegistry.gatewayMethodDescriptors,
         ...createGatewayMethodDescriptorsFromHandlers({
           handlers: auxHandlers,
           owner: { kind: "aux", area: "gateway-extra" },

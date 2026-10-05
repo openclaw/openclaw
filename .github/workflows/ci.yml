@@ -182,6 +182,7 @@ jobs:
       checks_node_core_nondist_matrix: ${{ steps.manifest.outputs.checks_node_core_nondist_matrix }}
       run_checks_node_core_dist: ${{ steps.manifest.outputs.run_checks_node_core_dist }}
       run_check: ${{ steps.manifest.outputs.run_check }}
+      run_pr_madge_import_cycles: ${{ steps.manifest.outputs.run_pr_madge_import_cycles }}
       startup_corpus_node_revision: ${{ steps.manifest.outputs.startup_corpus_node_revision }}
       startup_corpus_test_files_json: ${{ steps.manifest.outputs.startup_corpus_test_files_json }}
       changed_core_test_paths_json: ${{ steps.manifest.outputs.changed_core_test_paths_json }}
@@ -3670,6 +3671,7 @@ jobs:
           FROZEN_TARGET: *frozen_target
           HISTORICAL_TARGET: *historical_target
           FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check }}
+          RUN_PR_MADGE_IMPORT_CYCLES: ${{ needs.preflight.outputs.run_pr_madge_import_cycles }}
           RELEASE_GATE: &release_gate ${{ inputs.release_gate && (needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') && 'true' || 'false' }}
           RUN_CONTROL_UI_I18N: ${{ needs.preflight.outputs.run_control_ui_i18n }}
           RUN_UI_TESTS: ${{ needs.preflight.outputs.run_ui_tests }}
@@ -3762,6 +3764,9 @@ jobs:
               pnpm lint:auth:no-pairing-store-group
               pnpm lint:auth:pairing-account-scope
               pnpm check:import-cycles
+              if [[ "${RUN_PR_MADGE_IMPORT_CYCLES:-false}" == "true" ]]; then
+                GOGC="${GOGC:-30}" GOMEMLIMIT="${GOMEMLIMIT:-3GiB}" pnpm check:madge-import-cycles
+              fi
               ;;
             npm-lock)
               if [[ "$SKIP_NPM_LOCK" == "true" ]]; then
@@ -4294,6 +4299,7 @@ jobs:
         if: matrix.group == 'guards' || matrix.group == 'dependencies'
         env:
           TASK: ${{ matrix.group }}
+          RUN_PR_MADGE_IMPORT_CYCLES: ${{ needs.preflight.outputs.run_pr_madge_import_cycles }}
           OPENCLAW_LOCAL_CHECK: "0"
           FROZEN_TARGET: *frozen_target
           HISTORICAL_TARGET: *historical_target

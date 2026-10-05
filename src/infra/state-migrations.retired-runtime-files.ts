@@ -10,8 +10,9 @@ export function assertNoRetiredRuntimeStateFiles(
   homedir: () => string = os.homedir,
 ): void {
   const defaultStateDir = path.join(resolveRequiredHomeDir(env, homedir), ".openclaw");
+  // A leftover update-check.json is a disposable notification cache, so it never blocks
+  // Doctor or updates; losing it only repeats one update notice.
   assertNoRetiredStateFiles("Runtime JSON sidecars", [
-    path.join(stateDir, "update-check.json"),
     path.join(stateDir, "acp", "event-ledger.json"),
     path.join(stateDir, "acp", "event-ledger.json.doctor-import"),
     path.join(stateDir, "settings", "voicewake.json"),

@@ -97,23 +97,6 @@ const datePartsToEndMs = (
   return undefined;
 };
 
-// Invalid explicit dates must not fall through to the unrelated default range.
-const findInvalidExplicitDate = (params: {
-  startDate?: unknown;
-  endDate?: unknown;
-}): "startDate" | "endDate" | undefined => {
-  for (const field of ["startDate", "endDate"] as const) {
-    const raw = params[field];
-    if (raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === "")) {
-      continue;
-    }
-    if (parseDateParts(raw) === undefined) {
-      return field;
-    }
-  }
-  return undefined;
-};
-
 /**
  * Parse a UTC offset string in the format UTC+H, UTC-H, UTC+HH, UTC-HH, UTC+H:MM, UTC-HH:MM.
  * Returns the UTC offset in minutes (east-positive), or undefined if invalid.
@@ -266,12 +249,22 @@ export const resolveDateRange = (
   },
   resolvedInterpretation?: DateInterpretation,
 ): DateRangeResolution => {
-  const invalidDate = findInvalidExplicitDate(params);
-  if (invalidDate) {
-    return {
-      ok: false,
-      error: `invalid ${invalidDate}: expected a valid YYYY-MM-DD calendar date`,
-    };
+  const dates = {
+    startDate: parseDateParts(params.startDate),
+    endDate: parseDateParts(params.endDate),
+  };
+  for (const field of ["startDate", "endDate"] as const) {
+    const raw = params[field];
+    if (
+      raw != null &&
+      (typeof raw !== "string" || raw.trim() !== "") &&
+      dates[field] === undefined
+    ) {
+      return {
+        ok: false,
+        error: `invalid ${field}: expected a valid YYYY-MM-DD calendar date`,
+      };
+    }
   }
 
   const now = new Date();
@@ -288,8 +281,7 @@ export const resolveDateRange = (
     return { ok: false, error: "calendar day does not exist in requested time zone" };
   }
 
-  const startDateParts = parseDateParts(params.startDate);
-  const endDateParts = parseDateParts(params.endDate);
+  const { startDate: startDateParts, endDate: endDateParts } = dates;
   // Explicit date windows are atomic. A single boundary must not silently
   // fall through to the unrelated default 30-day range.
   if ((startDateParts === undefined) !== (endDateParts === undefined)) {

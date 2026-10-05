@@ -449,7 +449,11 @@ export function createManagedServiceUpdaterFixtureScript(params: {
             steps: updaterResult.steps ?? [],
             durationMs: updaterResult.durationMs ?? 0,
           },
-          meta: { root, handoffId: `${kind}-boundary` },
+          meta: {
+            root,
+            handoffId: `${kind}-boundary`,
+            note: "Preserve this updater notification across handoff.",
+          },
         })
       : null;
   // Use the canonical row shape without moving publication ahead of the child.

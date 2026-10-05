@@ -21,7 +21,7 @@ import {
 } from "./config-preflight-snapshot.js";
 import {
   assertNoRetiredOAuthSidecarsBeforeConfigRecovery,
-  listLegacyOAuthSidecarPaths,
+  listReferencedLegacyOAuthSidecarPaths,
 } from "./doctor-auth-legacy-paths.js";
 import { noteDoctorConfigPreflightIssues } from "./doctor-config-analysis.js";
 import {
@@ -72,10 +72,10 @@ async function runDoctorConfigPreflightOperation(
 ): Promise<DoctorConfigPreflightResult> {
   assertNoRetiredRuntimeStateFiles(resolveStateDir(process.env));
   assertNoRetiredOAuthSidecarsBeforeConfigRecovery({ env: process.env });
-  const { env: inspectionEnv } = readCurrentConfigForResolution();
+  const { config: inspectionConfig, env: inspectionEnv } = readCurrentConfigForResolution();
   assertNoRetiredStateFiles(
     "OAuth credential sidecars",
-    listLegacyOAuthSidecarPaths(inspectionEnv),
+    listReferencedLegacyOAuthSidecarPaths(inspectionEnv, inspectionConfig),
   );
   const stateMigrationsRequested = options.migrateState !== false;
   const skipLegacyParentConfigWrite = shouldSkipLegacyUpdateDoctorConfigWrite(process.env);
@@ -130,11 +130,11 @@ async function runDoctorConfigPreflightOperation(
   const readConfigSnapshotForPreflight = async (allowCurrentPluginMetadata = true) =>
     await measurePreflightStep("config-snapshot", async () =>
       readConfigPreflightSnapshot({
+        purpose: "doctor",
         allowCurrentPluginMetadata,
         includePluginMetadata: options.preparePluginMetadataSnapshot === true,
         measure: options.measure,
         observe: options.observe,
-        preparePluginMetadataSnapshot: options.preparePluginMetadataSnapshot === true,
         skipPluginValidation: shouldSkipPluginValidationForDoctorConfigPreflight(),
         prepareSnapshot: getSnapshotPreparation(options.doctorOnlyStateMigrations === true),
         ...(await pluginMigrations.snapshotOptions()),

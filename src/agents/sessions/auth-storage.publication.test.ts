@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -11,10 +10,23 @@ import {
 } from "../auth-profiles/oauth-refresh-marker.js";
 import { loadPersistedAuthProfileStore } from "../auth-profiles/persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../auth-profiles/runtime-snapshots.js";
+import * as authProfileSqlite from "../auth-profiles/sqlite.js";
 import { writePersistedAuthProfileStoreRaw } from "../auth-profiles/sqlite.js";
 import type { OAuthCredential } from "../auth-profiles/types.js";
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
-import { AuthStorage, FileAuthStorageBackend } from "./auth-storage.js";
+import { AuthStorage } from "./auth-storage.js";
+
+function observeAuthTransactions(after: () => void, before?: () => void) {
+  const runTransaction = authProfileSqlite.runAuthProfileWriteTransaction;
+  vi.spyOn(authProfileSqlite, "runAuthProfileWriteTransaction").mockImplementation(
+    (agentDir, operation, options) => {
+      before?.();
+      const result = runTransaction(agentDir, operation, options);
+      after();
+      return result;
+    },
+  );
+}
 
 function createCredential(overrides: Partial<OAuthCredential> = {}): OAuthCredential {
   return {
@@ -54,8 +66,7 @@ async function createSqliteAuthRefreshFixture(agentDir: string) {
     },
     agentDir,
   );
-  const backend = new FileAuthStorageBackend(path.join(agentDir, "auth.json"));
-  const storage = AuthStorage.fromStorage(backend);
+  const storage = AuthStorage.forAgent(agentDir, {});
   const peer = AuthStorage.forAgent(agentDir, {});
   const refreshToken = vi.fn(async () => refreshed);
   getAuthStorageOAuthProviderRegistry(storage).register({
@@ -67,7 +78,7 @@ async function createSqliteAuthRefreshFixture(agentDir: string) {
     refreshToken,
     getApiKey: (credential) => credential.access,
   });
-  return { backend, storage, peer, providerId, profileId, refreshed, replacement, refreshToken };
+  return { storage, peer, providerId, profileId, refreshed, replacement, refreshToken };
 }
 
 afterEach(() => {
@@ -92,32 +103,17 @@ describe("AuthStorage OAuth publication", () => {
         { layout: "state-only", prefix: "auth-refresh-publication-" },
         async (state) => {
           const agentDir = state.agentDir();
-          const {
-            backend,
-            storage,
-            peer,
-            providerId,
-            profileId,
-            refreshed,
-            replacement,
-            refreshToken,
-          } = await createSqliteAuthRefreshFixture(agentDir);
+          const { storage, peer, providerId, profileId, refreshed, replacement, refreshToken } =
+            await createSqliteAuthRefreshFixture(agentDir);
           let otherWhenRefreshStarted = storage.get("other");
           refreshToken.mockImplementation(async () => {
             otherWhenRefreshStarted = storage.get("other");
             return refreshed;
           });
           const mutate = actor === "same" ? storage : peer;
-          const withLock = backend.withLock.bind(backend);
           let queued = false;
-          backend.withLock = (fn) => {
-            let wrote = false;
-            const result = withLock((current) => {
-              const update = fn(current);
-              wrote = update.next !== undefined;
-              return update;
-            });
-            if (!queued && wrote) {
+          observeAuthTransactions(() => {
+            if (!queued) {
               const durable = loadPersistedAuthProfileStore(agentDir)?.profiles[profileId];
               if (
                 durable?.type === "oauth" &&
@@ -137,8 +133,7 @@ describe("AuthStorage OAuth publication", () => {
                 });
               }
             }
-            return result;
-          };
+          });
 
           const apiKey = await storage.getApiKey(providerId);
           expect(queued).toBe(true);
@@ -181,28 +176,29 @@ describe("AuthStorage OAuth publication", () => {
         { layout: "state-only", prefix: "auth-refresh-observer-publication-" },
         async (state) => {
           const agentDir = state.agentDir();
-          const {
-            backend,
-            storage,
-            peer,
-            providerId,
-            profileId,
-            refreshed,
-            replacement,
-            refreshToken,
-          } = await createSqliteAuthRefreshFixture(agentDir);
+          const { storage, peer, providerId, profileId, refreshed, replacement, refreshToken } =
+            await createSqliteAuthRefreshFixture(agentDir);
           peer.set(providerId, createOAuthRefreshFence({ profileId, credential: refreshed }));
           storage.reload();
-          const withLock = backend.withLock.bind(backend);
           let settlementQueued = false;
           let changeQueued = false;
-          backend.withLock = (fn) => {
-            const result = withLock(fn);
+          let settlingPeer = false;
+          observeAuthTransactions(() => {
+            if (settlingPeer) {
+              return;
+            }
             const durable = loadPersistedAuthProfileStore(agentDir)?.profiles[profileId];
             if (durable?.type === "oauth") {
               if (!settlementQueued && isPendingOAuthRefreshFence(durable)) {
                 settlementQueued = true;
-                queueMicrotask(() => peer.set(providerId, refreshed));
+                queueMicrotask(() => {
+                  settlingPeer = true;
+                  try {
+                    peer.set(providerId, refreshed);
+                  } finally {
+                    settlingPeer = false;
+                  }
+                });
               } else if (!changeQueued && durable.access === refreshed.access) {
                 changeQueued = true;
                 queueMicrotask(() => {
@@ -214,8 +210,7 @@ describe("AuthStorage OAuth publication", () => {
                 });
               }
             }
-            return result;
-          };
+          });
 
           const apiKey = await storage.getApiKey(providerId);
           expect(settlementQueued).toBe(true);
@@ -238,37 +233,33 @@ describe("AuthStorage OAuth publication", () => {
         { layout: "state-only", prefix: "auth-refresh-publication-read-failure-" },
         async (state) => {
           const agentDir = state.agentDir();
-          const { backend, storage, peer, providerId, profileId, replacement, refreshToken } =
+          const { storage, peer, providerId, profileId, replacement, refreshToken } =
             await createSqliteAuthRefreshFixture(agentDir);
-          const withLock = backend.withLock.bind(backend);
           const readError = new Error("synthetic publication read failure");
           let queued = false;
           let failNextRead = false;
-          backend.withLock = (fn) => {
-            if (failNextRead) {
-              failNextRead = false;
-              throw readError;
-            }
-            let wrote = false;
-            const result = withLock((current) => {
-              const update = fn(current);
-              wrote = update.next !== undefined;
-              return update;
-            });
-            if (!queued && wrote) {
-              const durable = loadPersistedAuthProfileStore(agentDir)?.profiles[profileId];
-              if (durable?.type === "oauth" && isPendingOAuthRefreshFence(durable)) {
-                queued = true;
-                queueMicrotask(() => {
-                  if (replace) {
-                    peer.set(providerId, replacement);
-                  }
-                  failNextRead = true;
-                });
+          observeAuthTransactions(
+            () => {
+              if (!queued) {
+                const durable = loadPersistedAuthProfileStore(agentDir)?.profiles[profileId];
+                if (durable?.type === "oauth" && isPendingOAuthRefreshFence(durable)) {
+                  queued = true;
+                  queueMicrotask(() => {
+                    if (replace) {
+                      peer.set(providerId, replacement);
+                    }
+                    failNextRead = true;
+                  });
+                }
               }
-            }
-            return result;
-          };
+            },
+            () => {
+              if (failNextRead) {
+                failNextRead = false;
+                throw readError;
+              }
+            },
+          );
 
           const apiKey = await storage.getApiKey(providerId);
           expect(queued).toBe(true);

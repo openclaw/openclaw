@@ -92,6 +92,93 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
   };
 }
 
+it.each([true, false])(
+  "keeps identical injected notes separate without adopting a run (persisted first=%s)",
+  (persistedFirst) => {
+    const user = textMessage("user", "Previous question", { id: "user", seq: 1 });
+    const reply = textMessage("assistant", "Previous reply", { id: "reply", seq: 2 });
+    const state = createState({ chatMessages: [user, reply] });
+    const ids = ["note-one", "note-two"];
+    const notes = ids.map((id, index) =>
+      textMessage("assistant", "Synthetic weekly report", { id, seq: index + 3 }),
+    );
+    for (const [index, saved] of notes.entries()) {
+      if (persistedFirst) {
+        applySessionMessagePayload(state, { message: saved }, false, { kind: "history-delta" });
+      }
+      const event = {
+        runId: `inject-${ids[index]}`,
+        seq: 0,
+        message: textMessage("assistant", "Synthetic weekly report"),
+      };
+      receive(state, "final", event);
+      receive(state, "final", event);
+      if (!persistedFirst) {
+        applySessionMessagePayload(state, { message: saved }, false, { kind: "history-delta" });
+      }
+      expect(state.chatMessages).toEqual([user, reply, ...notes.slice(0, index + 1)]);
+      expectSettled(state);
+      expect(Object.keys(getChatSessionProjection(state).runs)).toEqual([]);
+    }
+    const rendered = buildChatItems({
+      paneId: "injected-notes",
+      sessionKey: state.sessionKey,
+      runId: state.chatRunId,
+      messages: state.chatMessages,
+      toolMessages: [],
+      streamSegments: [],
+      stream: null,
+      streamStartedAt: null,
+      showToolCalls: true,
+    });
+    expect(
+      rendered.flatMap((item) =>
+        item.kind === "group" ? item.messages.map(({ message }) => extractText(message)) : [],
+      ),
+    ).toEqual([
+      "Previous question",
+      "Previous reply",
+      "Synthetic weekly report",
+      "Synthetic weekly report",
+    ]);
+  },
+);
+
+it("does not settle the foreground run when an injected note arrives", () => {
+  const state = createState({
+    chatRunId: "real-run",
+    chatStream: "Still working",
+    chatStreamStartedAt: 100,
+  });
+  receive(state, "final", {
+    runId: "inject-note",
+    seq: 0,
+    message: textMessage("assistant", "An independent note"),
+  });
+  expect(state.chatRunId).toBe("real-run");
+  expect(state.chatStream).toBe("Still working");
+  expect(state.chatStreamStartedAt).toBe(100);
+  expect(state.chatMessages.map(extractText)).toEqual(["An independent note"]);
+  expect(getChatSessionProjection(state).runs["inject-note"]).toBeUndefined();
+});
+
+it("settles a regular streamed run with an inject-prefixed client ID", () => {
+  const state = createState({ chatRunId: "inject-job" });
+  receive(state, "delta", {
+    runId: "inject-job",
+    seq: 1,
+    message: textMessage("assistant", "Regular reply"),
+  });
+  receive(state, "final", {
+    runId: "inject-job",
+    seq: 2,
+    message: textMessage("assistant", "Regular reply"),
+  });
+  expectSettled(state);
+  expect(state.chatMessages.map(extractText)).toEqual(["Regular reply"]);
+  expect(getChatSessionProjection(state).runs["inject-job"]?.status).toBe("completed");
+});
+
 it.each([
   { persistedFirst: false, transformed: false },
   { persistedFirst: true, transformed: true },

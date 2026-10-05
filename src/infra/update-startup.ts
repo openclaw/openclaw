@@ -146,11 +146,10 @@ function resolvePersistedUpdateAvailable(
   if (cmp == null || cmp >= 0) {
     return null;
   }
-  const persistedTag = state.lastAvailableTag?.trim() || channelToNpmTag(channel);
   return {
     currentVersion: VERSION,
     latestVersion,
-    channel: persistedTag,
+    channel: state.lastAvailableTag?.trim() || channelToNpmTag(channel),
   };
 }
 
@@ -421,11 +420,10 @@ async function runGatewayUpdateCheckOwned(
     !shouldBypassSharedThrottle &&
     rawNowIsValid &&
     lastCheckedAt &&
-    Number.isFinite(lastCheckedAt)
+    Number.isFinite(lastCheckedAt) &&
+    now - lastCheckedAt < checkIntervalMs
   ) {
-    if (now - lastCheckedAt < checkIntervalMs) {
-      return;
-    }
+    return;
   }
 
   const { root, status, installReceipt } = installStatus;

@@ -9,6 +9,7 @@ import { isToolCallContentType } from "../chat/tool-content.js";
 import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { sleep } from "../utils/sleep.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import {
   readTranscriptRecords,
@@ -158,9 +159,7 @@ async function loadSessionCostSummaryCaptured(
   ) {
     // Direct detail callers require the requested session, unlike background
     // summary refreshes. Wait for the agent-wide writer to release, then retry.
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, USAGE_COST_DIRECT_REFRESH_RETRY_MS);
-    });
+    await sleep(USAGE_COST_DIRECT_REFRESH_RETRY_MS);
   }
   const pricingFingerprint = await resolveUsageCostPricingFingerprint(
     prepared.config,

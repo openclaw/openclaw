@@ -19,6 +19,7 @@ import {
   normalizeOptionalString,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { resolveBrowserControlAuth } from "./control-auth.js";
@@ -418,15 +419,6 @@ export async function fetchBrowserJson<T>(
     const abort = createBrowserRequestAbort(timeoutMs, init?.signal);
     const { signal } = abort;
 
-    let abortListener: (() => void) | undefined;
-    const abortPromise: Promise<never> = signal.aborted
-      ? Promise.reject(toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"))
-      : new Promise((_, reject) => {
-          abortListener = () =>
-            reject(toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
-          signal.addEventListener("abort", abortListener, { once: true });
-        });
-
     const dispatchPromise = dispatchBrowserControlRequest({
       method:
         init?.method?.toUpperCase() === "DELETE"
@@ -441,12 +433,9 @@ export async function fetchBrowserJson<T>(
       ...(scope ? { assertCurrent: scope.assertCurrent } : {}),
     });
 
-    const result = await Promise.race([dispatchPromise, abortPromise]).finally(() => {
-      abort.dispose();
-      if (abortListener) {
-        signal.removeEventListener("abort", abortListener);
-      }
-    });
+    const result = await racePromiseWithAbortSignal(dispatchPromise, signal, ({ reason }) =>
+      toErrorObject(reason ?? new Error("aborted"), "Non-Error rejection"),
+    ).finally(abort.dispose);
 
     if (result.status >= 400) {
       if (result.status === 429) {

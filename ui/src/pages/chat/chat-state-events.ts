@@ -568,7 +568,10 @@ export function handlePageGatewayEvent(
         refreshPullRequestsForStreamedLinks(state, payload.runId, payload.deltaText);
       }
       const shouldRefreshPullRequests = finalAssistantReplyHasPullRequestLink(state, payload);
-      handleChatGatewayEvent(state, payload);
+      if (handleChatGatewayEvent(state, payload) === "injected") {
+        requestChatPageUpdate(state);
+        return;
+      }
       if (terminalPayload && sessionMatches) {
         clearPendingQueueItemsForRun(state, terminalPayload.runId);
       }

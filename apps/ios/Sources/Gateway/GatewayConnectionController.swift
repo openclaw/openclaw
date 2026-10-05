@@ -264,9 +264,7 @@ final class GatewayConnectionController {
             instanceId: instanceId,
             gatewayStableID: stableID)
         // Discovery is a LAN operation; refuse unauthenticated plaintext connects.
-        let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
-
-        if stored == nil {
+        guard let stored = GatewayTLSStore.loadFingerprint(stableID: stableID) else {
             guard let url = self.buildGatewayURL(host: target.host, port: target.port, useTLS: true)
             else { return .failed("Failed to build TLS URL for trust verification.") }
             return await self.resolveFirstUseTLS(
@@ -283,14 +281,13 @@ final class GatewayConnectionController {
                     gatewayGeneration: connectAttempt.gatewayGeneration)) ?? .superseded
         }
 
-        let tlsParams = stored.map { fp in
-            GatewayTLSParams(required: true, expectedFingerprint: fp, allowTOFU: false, storeKey: stableID)
-        }
+        let tlsParams = GatewayTLSParams(
+            required: true, expectedFingerprint: stored, allowTOFU: false, storeKey: stableID)
 
         guard let url = self.buildGatewayURL(
             host: target.host,
             port: target.port,
-            useTLS: tlsParams?.required == true)
+            useTLS: true)
         else { return .failed("Failed to build discovered gateway URL.") }
         let registryEntry = GatewaySettingsStore.GatewayRegistryEntry(
             stableID: stableID,
@@ -707,21 +704,17 @@ final class GatewayConnectionController {
     /// and re-apply the active gateway config so capability changes take effect immediately.
     func refreshActiveGatewayRegistrationFromSettings() {
         Task { [weak self] in
-            await self?.refreshActiveGatewayRegistrationFromSettingsAsync()
+            guard let self, let appModel = self.appModel,
+                  let cfg = appModel.activeGatewayConnectConfig,
+                  appModel.gatewayAutoReconnectEnabled
+            else { return }
+            let generation = appModel.gatewayConnectGeneration
+            var refreshedConfig = cfg
+            refreshedConfig.nodeOptions = await self.makeConnectOptions(
+                deviceAuthGatewayID: cfg.nodeOptions.deviceAuthGatewayID,
+                allowStoredDeviceAuth: cfg.nodeOptions.allowStoredDeviceAuth)
+            appModel.applyGatewayConnectConfig(refreshedConfig, expectedGeneration: generation)
         }
-    }
-
-    private func refreshActiveGatewayRegistrationFromSettingsAsync() async {
-        guard let appModel else { return }
-        guard let cfg = appModel.activeGatewayConnectConfig else { return }
-        guard appModel.gatewayAutoReconnectEnabled else { return }
-        let generation = appModel.gatewayConnectGeneration
-
-        var refreshedConfig = cfg
-        refreshedConfig.nodeOptions = await self.makeConnectOptions(
-            deviceAuthGatewayID: cfg.nodeOptions.deviceAuthGatewayID,
-            allowStoredDeviceAuth: cfg.nodeOptions.allowStoredDeviceAuth)
-        appModel.applyGatewayConnectConfig(refreshedConfig, expectedGeneration: generation)
     }
 
     func clearPendingTrustPrompt() {

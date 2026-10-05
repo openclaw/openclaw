@@ -12,6 +12,67 @@ Plugins continue to use `WorkerTaskPool` from
 workspace package does not change those public SDK entrypoints or add a plugin
 dependency on this private package.
 
+## Why an internal package
+
+[Piscina](https://github.com/piscinajs/piscina) and
+[Tinypool](https://github.com/tinylibs/tinypool) provide useful worker-pool
+mechanisms: bounded admission, ready handshakes, direct task channels, explicit
+transfers, and task-scoped async context. OpenClaw applies those ideas within its
+existing ownership model.
+
+OpenClaw also has tasks whose result becomes available before their owner can
+release the worker, input, or database resources. Those owners need execution
+and cleanup receipts that remain observable even when the caller cannot run
+Promise reactions. Cancellation must respect protected native operations, and
+independent compute pools must share the host's CPU budget. Replacing
+the scheduler with a general-purpose pool would still require this coordination
+around it.
+
+The private package keeps one scheduler for these contracts. The host adapter
+supplies application-specific authority and resources; the scheduler owns their
+admission and settlement order. Consider a replacement only if it can absorb
+that lifecycle without leaving a second scheduler or resource owner beside it.
+
+## Choose a contributor entrypoint
+
+For a new plugin worker, start with the public
+[worker task admission guide](https://docs.openclaw.ai/plugins/sdk-overview/infrastructure#worker-task-admission)
+and [cleanup contracts](https://docs.openclaw.ai/plugins/sdk-runtime/config-and-utilities).
+Use this README when changing the scheduler, task protocol, or host adapter. The
+[agent runtime architecture](https://docs.openclaw.ai/agent-runtime-architecture#compute-workers)
+describes how application callers share capacity and retain mutation authority.
+
+## Run the contributor example
+
+From a source checkout with its dependencies installed, run the synthetic
+round-trip example through the real pool, host adapter, and worker task server:
+
+```bash
+node --import ./scripts/tsx.mjs scripts/bench-worker-runtime.ts \
+  --transport both --scenario roundtrip --workers 1 \
+  --tasks 100 --warmup 16 --runs 2
+```
+
+The [benchmark runner](../../scripts/bench-worker-runtime.ts) exercises the shared
+scheduler with both the ordinary worker host and the internal retained-task host. It
+checks task outputs and joins pool closure before finishing. Start there when
+changing the protocol; plugin implementations should keep the public SDK imports
+described above.
+
+Use `--scenario all --workers 2 --concurrency 8` to include saturated admission
+and host exchanges. `--payload-bytes` controls the synthetic payload and
+`--exchanges` controls host round trips. `--json` emits machine-readable evidence;
+`--output <path>` saves a report. Run `--help` for limits and defaults. Each
+scenario separates a cold first wave from warm-up and steady-state measurements.
+Use `--diagnostics off` to measure without the stage subscriber, and
+`--transfer move` to compare owned-buffer transfer with the default cloning.
+
+For a retained-port polling experiment, use `--transport retained` with
+`--service-passes 10000`. This measures repeated native servicing while real
+workers wait for host responses; it does not represent normal Gateway service
+frequency. Compare against the same workload with the same arguments before
+adopting a polling optimization.
+
 ## Imports
 
 | Entrypoint                           | Purpose                                                                       |
@@ -89,15 +150,80 @@ queue pressure does not grant permission to cancel its underlying work. A
 checkpoint releases the task's execution slot through the ordinary settlement
 path, and continuation work rejoins admission.
 
+### Async context lifetime
+
+Each task captures its caller with an `OpenClaw.WorkerTask` `AsyncResource`.
+Preparation, host exchanges, cancellation observers, and settlement callbacks
+run in that task's scope. Worker creation, idle timers, and retirement use the
+pool scope so a warm worker does not retain its first caller.
+
+`captureWorkerTaskContext()` must keep the `AsyncResource` in an independent
+closure. Other task callbacks must not capture that resource through a shared
+closure: an owned task handle can remain readable after release. Release replaces
+its context runner with the pool runner so the caller can be collected while the
+handle survives. Keep automatic `AsyncResource` destruction enabled; result
+fulfillment is too early to destroy a context that retained cleanup or a late
+host-response callback can still need. Garbage collection supplies the destroy
+notification when that context is no longer reachable; it is not an execution or
+resource-release receipt.
+
 ## Diagnostics and benchmarks
 
 The `openclaw.worker.task` diagnostics channel reports queue, preparation, run,
 and transfer durations. `hostWaitMs` adds time spent waiting for host responses;
 it is a component of the existing `runMs`, not an additional duration to add to
-it. This is internal diagnostics data, not a public configuration option.
+it. `runMs` is elapsed wall time, including startup and completion work, rather
+than worker CPU time. This is internal diagnostics data, not a public
+configuration option.
+
+The benchmark's diagnostic subscriber in
+`scripts/lib/gateway-bench-diagnostics.ts` retains count, total, and maximum for
+validated numeric metrics. Duration metrics also expose approximate `p50`,
+`p95`, and `p99` values in milliseconds using bounded histograms. The collector
+allocates at most 256 histograms, with microsecond quantization and two
+significant digits. Values above one hour are clamped only in the histogram;
+raw totals and maxima remain intact. Check `histogramCount`, `clampedCount`, and
+`droppedHistogramSamples` before interpreting percentiles. Count and byte metrics
+keep simple aggregates. Histogram allocation and recording belong to the
+subscriber, so an unsubscribed pool pays none of that collection cost.
 
 Compare equivalent worker counts, admission limits, inputs, and warm-up state
 when benchmarking. Report cold and warm completion time, queue latency,
 preparation, host wait, transfer cost, and memory separately. Cancellation proof
 must also observe the execution receipt and resource cleanup so a faster rejected
 Promise is not mistaken for faster settlement.
+
+### Applying upstream patterns
+
+Borrow a mechanism where it improves a measured workload while preserving the
+settlement contracts above. Record the runtime version, source revision,
+benchmark arguments, and comparison results in the change's evidence. Synthetic
+round-trip improvements describe pool overhead, not whole-Gateway throughput.
+
+The retained transport already separates task traffic from native lifecycle
+receipts, and readiness acknowledgments prevent repeated failed bootstrap
+attempts. Explicit transfer hooks already exist for inputs, results, and host
+responses. Transfer only buffers the sender owns: copying an input can be
+necessary when its caller will reuse it.
+
+Blocking worker-side `Atomics.wait()` is not the default here. Idle workers must
+still run scheduled garbage collection, answer memory requests on another port,
+and close retained resources. An optimization that assumes only a new task can
+arrive while idle would suppress that work. Response counters that merely avoid
+empty host-side port polls have a different tradeoff. The initial Node 26 probe
+found empty polling was a small part of full native servicing, which still needs
+transport-loss checks. Keep event-driven delivery and unconditional terminal
+draining unless a full-path comparison demonstrates a useful saving. A worker
+can stop after posting its final reply but before publishing a counter increment;
+the hint must never hide that reply or stand in for an execution receipt.
+
+Use the producer's existing admission owner for backpressure. Image processing
+defers its input copy until pool admission, model-catalog requests propagate
+overload without a retry loop, and the SQLite writer broker already owns bounded
+capacity waiters. A generic `drain` notification would add no useful producer
+control to those paths. Add one only for a caller that can pause before buffering
+or allocating its next input, and observe actual admission release, including
+retained ownership, rather than task-result completion.
+
+Memory-driven recycling needs evidence of growth after garbage collection and
+must weigh recovered heap and external memory against worker startup cost.

@@ -37,7 +37,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     shutdownRuntime,
   } = runtime;
   const chatMetadataLifecycle = await startupTrace.measure("gateway.chat-metadata-lifecycle", () =>
-    createGatewayChatMetadataLifecycle({ getConfig: getRuntimeConfig, minimalTestGateway, log }),
+    createGatewayChatMetadataLifecycle({ getConfig: getRuntimeConfig, log }),
   );
   const configRevisionProjector = await startupTrace.measure(
     "gateway.config-revision-key",

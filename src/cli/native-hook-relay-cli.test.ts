@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { NativeHookRelayProcessResponse } from "../agents/harness/native-hook-relay-types.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
-import { runNativeHookRelayCli, runNativeHookRelayCliFromArgv } from "./native-hook-relay-cli.js";
+import {
+  runNativeHookRelayCliForTest,
+  runNativeHookRelayCliFromArgvForTest,
+} from "./native-hook-relay-cli.test-support.js";
 
 const relayOptions = {
   provider: "codex",
@@ -37,7 +40,7 @@ describe("native hook relay CLI", () => {
     const invokeBridge = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
 
     await expect(
-      runNativeHookRelayCliFromArgv(
+      runNativeHookRelayCliFromArgvForTest(
         [
           "node",
           "openclaw.mjs",
@@ -81,7 +84,7 @@ describe("native hook relay CLI", () => {
     const stdout = createWritableTextBuffer();
     const stderr = createWritableTextBuffer();
 
-    const exitCode = await runNativeHookRelayCli(
+    const exitCode = await runNativeHookRelayCliForTest(
       {
         ...relayOptions,
         event: "pre_tool_use",
@@ -133,7 +136,7 @@ describe("native hook relay CLI", () => {
     const stdout = createWritableTextBuffer();
     const stderr = createWritableTextBuffer();
 
-    const exitCode = await runNativeHookRelayCli(
+    const exitCode = await runNativeHookRelayCliForTest(
       {
         ...relayOptions,
         event: "permission_request",
@@ -158,7 +161,7 @@ describe("native hook relay CLI", () => {
     const stdout = createWritableTextBuffer();
     const stderr = createWritableTextBuffer();
 
-    const exitCode = await runNativeHookRelayCli(
+    const exitCode = await runNativeHookRelayCliForTest(
       {
         provider: "codex",
         relayId: "relay-1",
@@ -188,7 +191,7 @@ describe("native hook relay CLI", () => {
     const stdout = createWritableTextBuffer();
     const stderr = createWritableTextBuffer();
 
-    const exitCode = await runNativeHookRelayCli(
+    const exitCode = await runNativeHookRelayCliForTest(
       {
         ...relayOptions,
         event: "pre_tool_use",
@@ -221,7 +224,7 @@ describe("native hook relay CLI", () => {
     const stdout = createWritableTextBuffer();
     const stderr = createWritableTextBuffer();
 
-    const exitCode = await runNativeHookRelayCli(
+    const exitCode = await runNativeHookRelayCliForTest(
       { provider: "codex", relayId: "relay-1", event: "pre_tool_use" },
       {
         stdin: createReadableTextStream("{}"),
@@ -258,7 +261,7 @@ describe("native hook relay CLI", () => {
     const stdout = createWritableTextBuffer();
     const stderr = createWritableTextBuffer();
 
-    const exitCode = await runNativeHookRelayCli(
+    const exitCode = await runNativeHookRelayCliForTest(
       {
         ...relayOptions,
         event: "pre_tool_use",
@@ -289,7 +292,7 @@ describe("native hook relay CLI", () => {
     const callGateway = vi.fn();
     const stderr = createWritableTextBuffer();
 
-    const exitCode = await runNativeHookRelayCli(
+    const exitCode = await runNativeHookRelayCliForTest(
       { ...relayOptions, event: "pre_tool_use" },
       {
         stdin: createReadableTextStream("{nope"),
@@ -310,7 +313,7 @@ describe("native hook relay CLI", () => {
     const stdout = createWritableTextBuffer();
     const stderr = createWritableTextBuffer();
 
-    const exitCode = await runNativeHookRelayCli(
+    const exitCode = await runNativeHookRelayCliForTest(
       {
         ...relayOptions,
         event: "pre_tool_use",
@@ -348,7 +351,7 @@ describe("native hook relay CLI", () => {
     const stderr = createWritableTextBuffer();
 
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    const pending = runNativeHookRelayCli(
+    const pending = runNativeHookRelayCliForTest(
       {
         ...relayOptions,
         event: "post_tool_use",
@@ -403,7 +406,7 @@ describe("native hook relay CLI", () => {
     const stdout = createWritableTextBuffer();
     const callGateway = vi.fn();
     try {
-      const exitCode = await runNativeHookRelayCli(
+      const exitCode = await runNativeHookRelayCliForTest(
         { provider: "codex", relayId: "relay-1", event: "pre_tool_use", timeout: "25" },
         {
           stdin: createReadableTextStream("{}"),
@@ -448,7 +451,7 @@ describe("native hook relay CLI", () => {
       const stdout = createWritableTextBuffer();
       const stderr = createWritableTextBuffer();
       try {
-        await runNativeHookRelayCli(
+        await runNativeHookRelayCliForTest(
           { provider: "codex", relayId: "relay-1", event: "pre_tool_use", timeout: "25" },
           {
             stdin: createReadableTextStream("{}"),
@@ -481,7 +484,7 @@ describe("native hook relay CLI", () => {
     const stderr = createWritableTextBuffer();
 
     try {
-      const exitCode = await runNativeHookRelayCli(
+      const exitCode = await runNativeHookRelayCliForTest(
         {
           ...relayOptions,
           event: "pre_tool_use",
@@ -516,7 +519,7 @@ describe("native hook relay CLI", () => {
     const callGateway = vi.fn();
     const stderr = createWritableTextBuffer();
 
-    const exitCode = await runNativeHookRelayCli(
+    const exitCode = await runNativeHookRelayCliForTest(
       { ...relayOptions, event: "post_tool_use" },
       {
         stdin: createReadableTextStream("x".repeat(1024 * 1024 + 1)),
@@ -537,7 +540,7 @@ describe("native hook relay CLI", () => {
     const stdout = createWritableTextBuffer();
     const stderr = createWritableTextBuffer();
 
-    const exitCode = await runNativeHookRelayCli(
+    const exitCode = await runNativeHookRelayCliForTest(
       { provider: "codex", relayId: "relay-1", generation: "generation-1", event: "pre_tool_use" },
       {
         stdin: createReadableTextStream("{}"),
@@ -566,7 +569,7 @@ describe("native hook relay CLI", () => {
     const stdout = createWritableTextBuffer();
     const stderr = createWritableTextBuffer();
 
-    const exitCode = await runNativeHookRelayCli(
+    const exitCode = await runNativeHookRelayCliForTest(
       {
         ...relayOptions,
         event: "pre_tool_use",
@@ -593,7 +596,7 @@ describe("native hook relay CLI", () => {
     const stdout = createWritableTextBuffer();
     const stderr = createWritableTextBuffer();
 
-    const exitCode = await runNativeHookRelayCli(
+    const exitCode = await runNativeHookRelayCliForTest(
       {
         ...relayOptions,
         event: "permission_request",
@@ -626,7 +629,7 @@ describe("native hook relay CLI", () => {
     const stdout = createWritableTextBuffer();
     const stderr = createWritableTextBuffer();
 
-    const exitCode = await runNativeHookRelayCli(
+    const exitCode = await runNativeHookRelayCliForTest(
       { provider: "codex", relayId: "relay-1", generation: "generation-1", event: "post_tool_use" },
       {
         stdin: createReadableTextStream("{}"),
@@ -649,7 +652,7 @@ describe("native hook relay CLI", () => {
     const stdout = createWritableTextBuffer();
     const stderr = createWritableTextBuffer();
 
-    const exitCode = await runNativeHookRelayCli(
+    const exitCode = await runNativeHookRelayCliForTest(
       {
         provider: "codex",
         relayId: "relay-1",

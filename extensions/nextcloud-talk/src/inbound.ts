@@ -1,4 +1,4 @@
-import { resolveChannelInboundRouteEnvelope } from "openclaw/plugin-sdk/channel-inbound";
+import { createChannelInboundEnvelopeBuilderAsync } from "openclaw/plugin-sdk/channel-inbound";
 import {
   channelIngressRoutes,
   type ChannelIngressContextBinding,
@@ -7,6 +7,7 @@ import {
   bindIngressLifecycleToReplyOptions,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   isRecord,
   normalizeOptionalString,
@@ -299,7 +300,7 @@ export async function handleNextcloudTalkInbound(params: {
   const wasMentioned = mentionRegexes.length
     ? core.channel.mentions.matchesMentionPatterns(rawBody, mentionRegexes)
     : false;
-  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
+  const route = resolveAgentRoute({
     cfg: config as OpenClawConfig,
     channel: CHANNEL_ID,
     accountId: account.accountId,
@@ -325,6 +326,7 @@ export async function handleNextcloudTalkInbound(params: {
   }
 
   const fromLabel = isGroup ? `room:${roomName || roomToken}` : senderName || `user:${senderId}`;
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({ cfg: config, route });
   const body = buildEnvelope({
     channel: "Nextcloud Talk",
     from: fromLabel,

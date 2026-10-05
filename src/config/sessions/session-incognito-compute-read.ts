@@ -1,13 +1,13 @@
 import path from "node:path";
 import type { BuildSessionEntryOptions } from "../../../packages/memory-host-sdk/src/host/session-files.js";
-import { createCodexSessionContextReader } from "../../plugin-sdk/codex-session-transcript-runtime.js";
-import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.types.js";
+import type { IncognitoSessionActor } from "./session-incognito-actor.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import type {
   IncognitoContextReadResult,
   IncognitoHistoryTarget,
 } from "./session-incognito-history-contract.js";
+import { createSessionTranscriptContextReader } from "./session-transcript-context-reader.js";
 import { prepareIncognitoSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence.js";
 
@@ -23,7 +23,7 @@ async function readContextResult<Value>(
 
 /** Inactive adapters retain one actor; P7 supplies them to the production owners. */
 export function bindIncognitoSessionComputeReader(params: {
-  actor: IncognitoAgentDatabaseExecution;
+  actor: IncognitoSessionActor;
   authority: IncognitoSessionAuthority;
   target: IncognitoHistoryTarget;
   signal?: AbortSignal;
@@ -103,7 +103,7 @@ export function bindIncognitoSessionComputeReader(params: {
         disclose();
         return cutoff;
       }),
-    nativeContext: createCodexSessionContextReader({
+    nativeContext: createSessionTranscriptContextReader({
       assertCurrent: assertScope,
       read: () =>
         readContextResult(
