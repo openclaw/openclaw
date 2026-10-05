@@ -103,6 +103,12 @@ export type TurnAdoptionLifecycle = {
   admission?: TurnAdoptionAdmission;
   /** Transcript branch leaf from which this turn was admitted. */
   originatingLeafEntryId?: string | null;
+  /**
+   * Durable ingress order. The channel turn kernel awaits it before recording
+   * and dispatching, so a later same-lane claim cannot overtake one that is
+   * still buffered or preflighting. Explicit command turns skip it.
+   */
+  admissionTurn?: { wait: () => Promise<void> };
   onAdopted: () => void | Promise<void>;
   /** Return false to reject followup enqueue. */
   onDeferred?: () => boolean | void;

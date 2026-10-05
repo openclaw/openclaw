@@ -444,6 +444,26 @@ describe("createInboundDebouncer", () => {
     expect(onError.mock.calls[0]?.[0]).toBe(sessionError);
   });
 
+  it("forwards the source ingress admission turn to the turn it dispatches", async () => {
+    const admissionTurn = { wait: async () => {} };
+    const dispatched: unknown[] = [];
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      onFlush: (_items, createFlush) =>
+        createFlush({
+          lifecycle: { admissionTurn },
+          dispatch: async (lifecycle) => {
+            dispatched.push(lifecycle.admissionTurn);
+            await lifecycle.onAdopted();
+          },
+        }),
+    });
+
+    await debouncer.enqueue({ key: "sender", id: "reply" });
+    expect(dispatched).toEqual([admissionTurn]);
+  });
+
   it("drains same-key flushes queued before their completion is tracked", async () => {
     const started: string[] = [];
     const firstCompletion = createDeferred();

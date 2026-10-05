@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
-import type { ChannelIngressDispatchLifecycle } from "./ingress-drain-lifecycle.js";
+import {
+  combineIngressAdmissionTurns,
+  type ChannelIngressDispatchLifecycle,
+} from "./ingress-drain-lifecycle.js";
 import { createChannelIngressDrain } from "./ingress-drain.js";
 import {
   createTestIngressQueue,
@@ -310,6 +313,130 @@ describe("channel ingress drain lanes", () => {
 
       await drain.waitForIdle();
       drain.dispose();
+    });
+  });
+
+  it("keeps a buffered claim's reply admission ahead of a later sender on its released lane", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue(stateDir);
+      const lifecycles = new Map<string, ChannelIngressDispatchLifecycle>();
+      const order: string[] = [];
+      let laterSenderAdmitted: Promise<void> | undefined;
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        deferredLaneOccupancy: "release",
+        deriveLaneKey: () => "chat",
+        dispatchClaimedEvent: (event, lifecycle) => {
+          lifecycles.set(event.id, lifecycle);
+          if (event.id === "other-sender") {
+            // A different debounce key flushes on its own timer.
+            laterSenderAdmitted = lifecycle.admissionTurn?.wait().then(() => {
+              order.push("other-sender");
+              lifecycle.onDeferred();
+            });
+          }
+          // Every claim is still buffered when dispatch returns.
+          return { kind: "deferred" };
+        },
+      });
+      try {
+        for (const [index, id] of ["first", "other-sender", "same-sender"].entries()) {
+          await queue.enqueue(id, { text: id }, { receivedAt: index });
+          expect(await drain.drainOnce()).toEqual({ started: 1 });
+          await drain.waitForIdle();
+        }
+        const first = lifecycles.get("first");
+        const sameSender = lifecycles.get("same-sender");
+        if (!first || !sameSender || !laterSenderAdmitted) {
+          throw new Error("Expected every claim to reach its channel buffer");
+        }
+
+        // The coalesced batch never waits on the sender that arrived between its members.
+        await combineIngressAdmissionTurns([first.admissionTurn, sameSender.admissionTurn])?.wait();
+        order.push("batch");
+        // Queued reply admission, not adoption, releases the later sender.
+        first.onDeferred();
+        sameSender.onDeferred();
+        await laterSenderAdmitted;
+
+        expect(order).toEqual(["batch", "other-sender"]);
+        expect((await queue.listClaims()).map((claim) => claim.id).toSorted()).toEqual([
+          "first",
+          "other-sender",
+          "same-sender",
+        ]);
+      } finally {
+        drain.dispose();
+      }
+    });
+  });
+
+  it("replays a claim waiting on its admission turn in order after the drain shuts down", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue(stateDir);
+      let interruptedWait: Promise<boolean> | undefined;
+      const shutDown = createChannelIngressDrain<Payload>({
+        queue,
+        deferredLaneOccupancy: "release",
+        deriveLaneKey: () => "chat",
+        dispatchClaimedEvent: (event, lifecycle) => {
+          if (event.id === "later") {
+            interruptedWait = lifecycle.admissionTurn
+              ?.wait()
+              .then(() => lifecycle.abortSignal.aborted);
+          }
+          return { kind: "deferred" };
+        },
+      });
+      for (const [index, id] of ["earlier", "later"].entries()) {
+        await queue.enqueue(id, { text: id }, { receivedAt: index });
+        expect(await shutDown.drainOnce()).toEqual({ started: 1 });
+        await shutDown.waitForIdle();
+      }
+      shutDown.dispose();
+      // Shutdown, not admission, ended the wait; both claims stay held for recovery.
+      expect(await interruptedWait).toBe(true);
+      expect((await queue.listClaims()).map((claim) => claim.id).toSorted()).toEqual([
+        "earlier",
+        "later",
+      ]);
+
+      const order: string[] = [];
+      let earlier: ChannelIngressDispatchLifecycle | undefined;
+      let laterAdmitted: Promise<void> | undefined;
+      const replay = createChannelIngressDrain<Payload>({
+        queue,
+        deferredLaneOccupancy: "release",
+        deriveLaneKey: () => "chat",
+        dispatchClaimedEvent: (event, lifecycle) => {
+          if (event.id === "earlier") {
+            earlier = lifecycle;
+          } else {
+            laterAdmitted = lifecycle.admissionTurn?.wait().then(async () => {
+              order.push("later");
+              await lifecycle.onAdopted();
+            });
+          }
+          return { kind: "deferred" };
+        },
+      });
+      try {
+        expect(await replay.drainOnce()).toEqual({ started: 1 });
+        await replay.waitForIdle();
+        expect(await replay.drainOnce()).toEqual({ started: 1 });
+        await replay.waitForIdle();
+        if (!earlier || !laterAdmitted) {
+          throw new Error("Expected both recovered claims to reach their channel buffers");
+        }
+        order.push("earlier");
+        await earlier.onAdopted();
+        await laterAdmitted;
+
+        expect(order).toEqual(["earlier", "later"]);
+        expect(await queue.listClaims()).toEqual([]);
+      } finally {
+        replay.dispose();
+      }
     });
   });
 });

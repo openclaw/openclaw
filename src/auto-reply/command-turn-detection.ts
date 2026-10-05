@@ -24,7 +24,7 @@ function resolveStructuredNormalFallbackBody(input: CommandTurnContextInput): st
 /** Returns true when inbound metadata or command text identifies an explicit command turn. */
 export function isExplicitCommandTurnContext(
   input: CommandTurnContextInput,
-  cfg: OpenClawConfig,
+  cfg?: OpenClawConfig,
 ): boolean {
   if (isExplicitCommandTurn(resolveCommandTurnContext(input))) {
     return true;

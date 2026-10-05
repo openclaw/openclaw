@@ -45,6 +45,7 @@ type InboundDebounceFlush = {
 
 type InboundDebounceAdmissionLifecycleInput = {
   abortSignal?: AbortSignal;
+  admissionTurn?: { wait: () => Promise<void> };
   onAdopted?: () => void | Promise<void>;
   onDeferred?: () => boolean | void;
   onDeferredHeartbeat?: () => void;
@@ -57,6 +58,8 @@ type InboundDebounceAdmissionLifecycleInput = {
 /** Lifecycle shape passed to a channel dispatch so it can signal session-lane admission. */
 type InboundDebounceAdmissionLifecycle = {
   abortSignal: AbortSignal;
+  /** Durable ingress order, forwarded for the channel turn kernel to await. */
+  admissionTurn?: { wait: () => Promise<void> };
   onAdopted: () => Promise<void>;
   onDeferred: () => boolean | void;
   onDeferredHeartbeat?: () => void;
@@ -86,6 +89,7 @@ function createInboundDebounceFlush(params: {
   const source = params.lifecycle;
   const lifecycle: InboundDebounceAdmissionLifecycle = {
     abortSignal: source?.abortSignal ?? new AbortController().signal,
+    ...(source?.admissionTurn ? { admissionTurn: source.admissionTurn } : {}),
     onAdopted: async () => {
       await source?.onAdopted?.();
       markAdmitted();

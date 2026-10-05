@@ -19,6 +19,8 @@ type TelegramSpooledReplayLifecycle = Omit<
   onAdoptionFinalizing?: () => void;
 };
 
+type TelegramIngressAdmissionTurn = NonNullable<ChannelIngressMonitorLifecycle["admissionTurn"]>;
+
 type TelegramSpooledReplayFrame = {
   deferredWork?: TelegramSpooledReplayDeferredParticipant;
   lifecycle?: TelegramSpooledReplayLifecycle;
@@ -32,6 +34,10 @@ export type TelegramSpooledReplayDeferredParticipant = {
   isSettled: () => boolean;
   heartbeat: () => void;
   heartbeatIntervalMs?: number;
+  /** Await before reply dispatch so earlier same-chat spool rows are admitted first. */
+  admissionTurn?: TelegramIngressAdmissionTurn;
+  /** Records reply-lane admission (queued turn) for every claim this participant owns. */
+  markDeferred: () => void;
   wasOwnerAbortedWhilePending: () => boolean;
   /** Defers external timeout settlement while durable adoption decides ownership. */
   beginSettlementHold: () => TelegramSpooledReplaySettlementHold | undefined;
@@ -98,6 +104,24 @@ export function resolveTelegramSpooledReplayHeartbeatIntervalMs(
         typeof interval === "number" && Number.isFinite(interval) && interval > 0,
     );
   return intervals.length > 0 ? Math.min(...intervals) : undefined;
+}
+
+// One buffered turn is one admission batch: its claims never wait on each other.
+function joinTelegramAdmissionTurns(
+  participants: readonly TelegramSpooledReplayDeferredParticipant[],
+): TelegramIngressAdmissionTurn | undefined {
+  const turns = participants.flatMap((participant) =>
+    participant.admissionTurn ? [participant.admissionTurn] : [],
+  );
+  if (turns.length <= 1) {
+    return turns[0];
+  }
+  return {
+    wait: async (batch = []) => {
+      const joined = [...turns, ...batch];
+      await Promise.all(turns.map((turn) => turn.wait(joined)));
+    },
+  };
 }
 
 export function createTelegramSpooledReplayParticipant(
@@ -173,6 +197,21 @@ export function createTelegramSpooledReplayParticipant(
     heartbeatIntervalMs: resolveTelegramSpooledReplayHeartbeatIntervalMs(
       livenessSources ?? [{ heartbeatIntervalMs: ownerLifecycle?.deferredHeartbeatIntervalMs }],
     ),
+    admissionTurn: livenessSources
+      ? joinTelegramAdmissionTurns(livenessSources)
+      : ownerLifecycle?.admissionTurn,
+    markDeferred: () => {
+      if (settled) {
+        return;
+      }
+      if (livenessSources) {
+        for (const source of livenessSources) {
+          source.markDeferred();
+        }
+      } else {
+        ownerLifecycle?.onDeferred();
+      }
+    },
     wasOwnerAbortedWhilePending: () => ownerAbortedWhilePending,
     beginSettlementHold: () => {
       if (settled || settlementHeld) {

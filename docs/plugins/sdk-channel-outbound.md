@@ -110,6 +110,45 @@ deferred deliveries would hold every slot and stall the other lanes. How much
 handed-off deferred work may be pending at once stays the drain owner's
 semantics, unchanged by this budget.
 
+### Admission order on a released lane
+
+A released lane lets later claims reach a channel buffer while an earlier claim
+is still debouncing or preflighting there, so a burst from one sender can keep
+coalescing. Another sender on the same lane could then reach reply admission
+first. The drain separates the two kinds of deferral:
+
+- Returning `{ kind: "deferred" }` without calling `onDeferred` means the work
+  is still buffered in the channel. The lane is released, but the claim keeps
+  its place in the lane's admission order.
+- `onDeferred()` means the turn has been admitted downstream (for example,
+  queued behind an active run). `onAdopted()` and every terminal settlement
+  also end the claim's hold on that order.
+
+Each claim's lifecycle carries `admissionTurn`. Forward it to reply dispatch as
+`turnAdoptionLifecycle.admissionTurn`; `bindIngressLifecycleToReplyOptions`,
+`fanInChannelIngressLifecycles`, and the shared inbound debouncer's `createFlush`
+lifecycle all forward it. The channel turn kernel waits on it before recording
+and dispatching the turn. The wait resolves once every earlier same-lane claim
+has been admitted downstream or settled, or when this claim aborts. It does not
+wait for adoption, so a correction can still steer past an earlier turn that is
+only queued. Explicit command turns, such as an authorized `/stop`, skip the
+wait, just as control commands skip debouncing.
+
+A turn that consumes several claims is one batch: its wait starts from the
+earliest member, so members coalesced across another sender never wait on each
+other. `fanInChannelIngressLifecycles` combines its members' turns this way;
+code that builds its own batch passes every member to `turn.wait(batchTurns)`.
+
+A turn's wait depends only on earlier claims reaching admission, so a channel
+must report `onDeferred` before it makes a claim wait on a later turn (for
+example, behind a per-session turn queue). Otherwise the two claims would wait on
+each other until the adoption watchdog expires.
+
+Channels that report `onDeferred` when they buffer work, or that drop
+`admissionTurn` before reply dispatch, keep their previous ordering. To opt in,
+report `onDeferred` only at reply admission, return a deferred result while
+buffered, and forward the admission turn.
+
 Optional settings include custom append delays, a `drain` option block for
 advanced drain ordering/concurrency/retry policy, an external `abortSignal`, a
 clock, pump error reporting, a stopped-error factory, and admission policy.

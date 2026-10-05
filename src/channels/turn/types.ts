@@ -334,6 +334,8 @@ type PreparedChannelTurnDispatchLifecycle = {
 };
 
 export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = ChannelTurnContext & {
+  /** Command registry for the admission-order bypass; built-in commands when omitted. */
+  cfg?: OpenClawConfig;
   onPreDispatchFailure?: (err: unknown) => void | Promise<void>;
   runDispatch: () => Promise<TDispatchResult>;
   /** Optional for the legacy direct prepared runner; inbound adapters use the stricter type. */
