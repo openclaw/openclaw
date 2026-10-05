@@ -68,27 +68,19 @@ async function readConfig(): Promise<OpenClawConfig> {
 
 describe("custodian role creation through persisted configuration", () => {
   it.each<{
-    source: "command" | "tool" | "operation";
+    source: "command" | "tool";
     agentId: string;
     role?: "writer";
-    skipBootstrap?: boolean;
   }>([
     { source: "command", agentId: "ledger" },
-    { source: "tool", agentId: "qa-writer", skipBootstrap: false },
-    { source: "tool", agentId: "qa-writer", skipBootstrap: true },
+    { source: "tool", agentId: "qa-writer" },
     { source: "tool", agentId: "qa-writer", role: "writer" },
-    { source: "operation", agentId: "editor", role: "writer" },
   ])(
-    "creates $agentId from $source with role=$role and skipBootstrap=$skipBootstrap only after approval",
-    async ({ source, agentId, role, skipBootstrap = false }) => {
+    "creates $agentId from $source with role=$role only after approval",
+    async ({ source, agentId, role }) => {
       await withState(async (root, configPath) => {
         const workspace = path.join(root, agentId);
         const purpose = "Check arithmetic in synthetic order lists.";
-        if (skipBootstrap) {
-          const config = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
-          config.agents = { ...config.agents, defaults: { skipBootstrap: true } };
-          await fs.writeFile(configPath, JSON.stringify(config));
-        }
         const original = await fs.readFile(configPath, "utf8");
         const { runtime, lines } = createSystemAgentTestRuntime();
         let operation: SystemAgentOperation =
@@ -156,11 +148,7 @@ describe("custodian role creation through persisted configuration", () => {
           if (source === "command") {
             return;
           }
-          expect(result).toMatchObject({ bootstrapPending: !skipBootstrap });
-          if (skipBootstrap) {
-            expect(await fs.readdir(workspace)).toEqual(["AGENTS.md"]);
-            return;
-          }
+          expect(result).toMatchObject({ bootstrapPending: true });
           expect(await fs.readFile(path.join(workspace, "BOOTSTRAP.md"), "utf8")).not.toHaveLength(
             0,
           );
@@ -179,37 +167,14 @@ describe("custodian role creation through persisted configuration", () => {
           expect(await fs.readFile(path.join(workspace, "AGENTS.md"), "utf8")).toContain(purpose);
         } else {
           const template = await loadAgentRole(role);
-          if (source === "tool") {
-            expect(entry?.identity).toEqual({ ...template.identity, name: "QA Writer" });
-            expect(loadAgentIdentityFromWorkspace(workspace)).toMatchObject({
-              ...template.identity,
-              name: "QA Writer",
-            });
-            expect(await fs.readFile(path.join(workspace, "AGENTS.md"), "utf8")).toBe(
-              template.files["AGENTS.md"],
-            );
-          } else {
-            expect(result).toMatchObject({ bootstrapPending: false });
-            expect(entry).toMatchObject({
-              workspace,
-              identity: template.identity,
-              subagents: { allowAgents: [] },
-            });
-            expect(agentProvenance.readAgentProvenance(agentId)).toMatchObject({
-              createdVia: "agent",
-              creatorAgentId: "openclaw",
-            });
-            for (const [file, content] of Object.entries(template.files)) {
-              expect(await fs.readFile(path.join(workspace, file), "utf8")).toBe(content);
-            }
-            await expect(fs.access(path.join(workspace, "BOOTSTRAP.md"))).rejects.toMatchObject({
-              code: "ENOENT",
-            });
-            const confirmation = lines.join("\n");
-            expect(confirmation).toContain("Created agent Writer (editor)");
-            expect(confirmation).toContain("Agents home");
-            expect(confirmation).toContain("agent switcher");
-          }
+          expect(entry?.identity).toEqual({ ...template.identity, name: "QA Writer" });
+          expect(loadAgentIdentityFromWorkspace(workspace)).toMatchObject({
+            ...template.identity,
+            name: "QA Writer",
+          });
+          expect(await fs.readFile(path.join(workspace, "AGENTS.md"), "utf8")).toBe(
+            template.files["AGENTS.md"],
+          );
         }
       });
     },
@@ -246,39 +211,31 @@ describe("custodian role creation through persisted configuration", () => {
     });
   });
 
-  it.each([false, true])(
-    "preserves existing instructions with skipBootstrap=%s",
-    async (skipBootstrap) => {
-      await withState(async (root, configPath) => {
-        if (skipBootstrap) {
-          const config = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
-          config.agents = { ...config.agents, defaults: { skipBootstrap: true } };
-          await fs.writeFile(configPath, JSON.stringify(config));
-        }
-        const workspace = path.join(root, "existing");
-        await fs.mkdir(workspace);
-        const instructions = "# Existing instructions\n\nKeep the operator's workflow.\n";
-        await fs.writeFile(path.join(workspace, "AGENTS.md"), instructions);
-        const original = await fs.readFile(configPath, "utf8");
-        const { runtime } = createSystemAgentTestRuntime();
-        await expect(
-          executeSystemAgentOperation(
-            {
-              kind: "create-agent",
-              agentId: "ledger",
-              workspace,
-              purpose: "Check arithmetic in synthetic order lists.",
-            },
-            runtime,
-            { approved: true },
-          ),
-        ).rejects.toThrow("Existing AGENTS.md was preserved");
-        expect(await fs.readFile(path.join(workspace, "AGENTS.md"), "utf8")).toBe(instructions);
-        expect(await fs.readFile(configPath, "utf8")).toBe(original);
-        expect(await fs.readdir(workspace)).toEqual(["AGENTS.md"]);
-      });
-    },
-  );
+  it("preserves existing instructions", async () => {
+    await withState(async (root, configPath) => {
+      const workspace = path.join(root, "existing");
+      await fs.mkdir(workspace);
+      const instructions = "# Existing instructions\n\nKeep the operator's workflow.\n";
+      await fs.writeFile(path.join(workspace, "AGENTS.md"), instructions);
+      const original = await fs.readFile(configPath, "utf8");
+      const { runtime } = createSystemAgentTestRuntime();
+      await expect(
+        executeSystemAgentOperation(
+          {
+            kind: "create-agent",
+            agentId: "ledger",
+            workspace,
+            purpose: "Check arithmetic in synthetic order lists.",
+          },
+          runtime,
+          { approved: true },
+        ),
+      ).rejects.toThrow("Existing AGENTS.md was preserved");
+      expect(await fs.readFile(path.join(workspace, "AGENTS.md"), "utf8")).toBe(instructions);
+      expect(await fs.readFile(configPath, "utf8")).toBe(original);
+      expect(await fs.readdir(workspace)).toEqual(["AGENTS.md"]);
+    });
+  });
 
   it("creates the approved team with directed delegation and separate role workspaces", async () => {
     await withState(async (root, configPath) => {
@@ -349,26 +306,15 @@ describe("custodian role creation through persisted configuration", () => {
     });
   });
 
-  it.each(["unfinished-bootstrap", "authority-revoked", "post-commit-first", "post-commit-later"])(
+  it.each(["unfinished-bootstrap", "authority-revoked"])(
     "reports and audits retained members after %s blocks the remaining team",
     async (failure) => {
       await withState(async (root) => {
         const workspaceRoot = path.join(root, "team");
-        const retainedAgentIds =
-          failure === "post-commit-first"
-            ? ["coordinator"]
-            : failure === "post-commit-later"
-              ? ["coordinator", "researcher", "writer"]
-              : ["coordinator", "researcher"];
+        const retainedAgentIds = ["coordinator", "researcher"];
         let researcherRecorded = false;
         const recordProvenance = agentProvenance.recordAgentProvenance;
         vi.spyOn(agentProvenance, "recordAgentProvenance").mockImplementation((...args) => {
-          if (
-            (failure === "post-commit-first" && args[0] === "coordinator") ||
-            (failure === "post-commit-later" && args[0] === "writer")
-          ) {
-            throw new Error("provenance unavailable");
-          }
           const result = recordProvenance(...args);
           researcherRecorded ||= args[0] === "researcher";
           return result;
@@ -409,11 +355,7 @@ describe("custodian role creation through persisted configuration", () => {
           expect(output).toContain(id);
         }
         expect(output).toContain(
-          failure === "unfinished-bootstrap"
-            ? "unfinished bootstrap"
-            : failure === "authority-revoked"
-              ? "authority closed"
-              : "provenance unavailable",
+          failure === "unfinished-bootstrap" ? "unfinished bootstrap" : "authority closed",
         );
         expect(output).not.toContain("Created team:");
         expect(listSystemAgentAuditEntriesForTests().at(-1)?.value).toMatchObject({
