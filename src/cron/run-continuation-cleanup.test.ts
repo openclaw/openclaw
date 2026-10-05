@@ -6,6 +6,10 @@ import { subagentRuns } from "../agents/subagents/registry/subagent-registry-mem
 import { saveSubagentRegistryChangesToSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { readSubagentRun } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { createWorkerPlacementSessionEvidenceResolver } from "../gateway/server-worker-placement-session-evidence.js";
+import { createPlacementSessionRetirement } from "../gateway/worker-environments/placement-session-retirement.js";
+import { createWorkerSessionPlacementStore } from "../gateway/worker-environments/placement-store.js";
+import { executeLocalTurn } from "../gateway/worker-environments/worker-turn-admission.js";
 import * as queue from "../infra/session-delivery-queue-storage.js";
 import { SessionDeliveryDeadLetteredError } from "../infra/session-delivery-queue.records.js";
 import * as lifecycle from "../sessions/session-lifecycle-admission.js";
@@ -13,6 +17,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { prepareCronSession } from "./isolated-agent/session.js";
 import { removeCronRunContinuationSessionIfIdle } from "./run-continuation-cleanup.js";
 
 const base = { agentId: "main", sessionKey: "agent:main:cron:queue-race" };
@@ -64,6 +69,85 @@ function createCorrelatedRun() {
 }
 
 afterEach(() => vi.restoreAllMocks());
+
+it.each(["completed", "interrupted"] as const)(
+  "reconciles a retired exact-run local placement after a %s cron turn without replay",
+  async (outcome) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const context = await seedContinuation();
+      const placements = createWorkerSessionPlacementStore();
+      const identity = { ...exact, sessionId: "run-123", runId: "cron-turn" };
+      const runLocal = vi.fn(async () => {
+        if (outcome === "interrupted") {
+          throw new Error("fixture interruption");
+        }
+        return "completed";
+      });
+      const initial = executeLocalTurn({ placements, claim: identity, runLocal });
+      if (outcome === "interrupted") {
+        await expect(initial).rejects.toThrow("fixture interruption");
+      } else {
+        await expect(initial).resolves.toBe("completed");
+      }
+      const original = placements.get(identity.sessionId);
+      expect(original).toMatchObject({
+        state: "local",
+        sessionKey: exact.sessionKey,
+        turnClaim: null,
+      });
+      const continuation = vi.fn(async () => "continued");
+      const claim = { ...identity, sessionKey: base.sessionKey, runId: "new-continuation" };
+      await removeCronRunContinuationSessionIfIdle(exact.sessionKey, undefined, context);
+      expect(loadSessionEntry(exact)).toBeUndefined();
+      expect(loadSessionEntry(base)?.sessionId).toBe(identity.sessionId);
+
+      const forceDestroyEnvironment = vi.fn();
+      const retirement = createPlacementSessionRetirement({
+        placements,
+        environments: { get: () => undefined },
+        forceDestroyEnvironment,
+        createSessionEvidenceResolver: createWorkerPlacementSessionEvidenceResolver,
+        warn: vi.fn(),
+      });
+      await retirement.reconcile();
+      expect(placements.get(identity.sessionId)).toBeUndefined();
+      expect(runLocal).toHaveBeenCalledOnce();
+      expect(continuation).not.toHaveBeenCalled();
+      expect(forceDestroyEnvironment).not.toHaveBeenCalled();
+
+      await expect(executeLocalTurn({ placements, claim, runLocal: continuation })).resolves.toBe(
+        "continued",
+      );
+      expect(placements.get(identity.sessionId)).toMatchObject({
+        sessionId: identity.sessionId,
+        sessionKey: base.sessionKey,
+        turnClaim: null,
+      });
+      for (const mismatch of [{ sessionKey: exact.sessionKey }, { agentId: "other" }]) {
+        await expect(
+          executeLocalTurn({
+            placements,
+            claim: { ...claim, ...mismatch },
+            runLocal: continuation,
+          }),
+        ).rejects.toThrow("does not match its placement");
+      }
+      expect(continuation).toHaveBeenCalledOnce();
+
+      const next = await prepareCronSession({
+        cfg: {},
+        ...base,
+        forceNew: true,
+        nowMs: 2,
+      });
+      expect(next.sessionEntry.sessionId).not.toBe(identity.sessionId);
+      expect(loadSessionEntry(base)?.sessionId).toBe(identity.sessionId);
+      expect(placements.get(identity.sessionId)?.sessionKey).toBe(base.sessionKey);
+      await retirement.reconcile();
+      expect(placements.get(identity.sessionId)?.sessionKey).toBe(base.sessionKey);
+    });
+  },
+);
 
 it.each(writers)("retains the alias while a $name enqueue owns admission", async ({ enqueue }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
