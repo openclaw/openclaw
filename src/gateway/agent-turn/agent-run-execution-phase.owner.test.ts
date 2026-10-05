@@ -1,6 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../../agents/admitted-run-context.js";
 import { resolveAgentRunContext } from "../../agents/command/run-context.js";
 import {
   getForegroundUserRequest,
@@ -10,6 +15,7 @@ import {
   getPreparedModelRuntimeBorrowedSnapshot,
   getPreparedModelRuntimePluginGeneration,
 } from "../../agents/prepared-model-runtime-generation-scope.js";
+import { requireAdmittedRunForeground } from "../../agents/run-execution-policy.js";
 import { SessionFollowupCompletion } from "../../agents/subagents/completion/session-followup-completion.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -22,6 +28,7 @@ import {
 } from "../local-user-ingress.js";
 import type { GatewayClient } from "../server-methods/client-types.js";
 import * as sessionChange from "../server-methods/session-change-event.js";
+import * as sessionWorkspace from "../server-methods/session-create-project.js";
 import { replayAgentTurnIfCached } from "./agent-dedupe.js";
 import { resolveAgentDeliveryPhase } from "./agent-delivery-phase.js";
 import { startAgentRunExecution } from "./agent-run-execution-phase.js";
@@ -248,6 +255,131 @@ describe("startAgentRunExecution Gateway ownership", () => {
       await startAgentRunExecution(execution.params);
       expect(dispatchAgentRunFromGateway).toHaveBeenCalledOnce();
       expect(execution.params.io.emitFinal).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ...(["role", "session"] as const).flatMap((restriction) =>
+      (["valid", "missing", "revoked-before", "revoked-during-setup"] as const).map((source) => ({
+        restriction,
+        source,
+      })),
+    ),
+    { restriction: "none" as const, source: "missing" as const },
+  ])(
+    "fences $restriction workspace preparation with $source input",
+    async ({ restriction, source }) => {
+      const execution = createExecution();
+      const { params } = execution;
+      const connection = new AbortController();
+      const client: GatewayClient = {
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: { id: "webchat-ui", mode: "webchat", version: "test", platform: "test" },
+        },
+        connectionSignal: connection.signal,
+      };
+      if (source !== "missing") {
+        attachGatewayLocalUserIngress(
+          client,
+          prepareGatewayLocalUserIngress({
+            authMethod: "trusted-proxy",
+            authenticatedUserExpected: true,
+            isLocalClient: false,
+            profile: { profileId: "foreground-user" },
+          }),
+        );
+      }
+      if (source === "revoked-before") {
+        connection.abort();
+      }
+      params.client = captureAgentTurnPrincipal(client);
+      params.isOneShotModelRun = false;
+      params.lifecycleGeneration = getAgentEventLifecycleGeneration();
+      params.resolvedSessionKey = "agent:main:foreground-workspace";
+      params.resolvedSessionId = "foreground-workspace";
+      params.sessionEntry = {
+        sessionId: params.resolvedSessionId,
+        updatedAt: 1,
+        ...(restriction === "session" ? { execution: "foreground-only" as const } : {}),
+      };
+      params.prepared.operationalRunInstance = createOperationalRunInstanceRef(params.runId);
+      params.prepared.activeRunAbort.entry = {
+        controller: params.prepared.activeRunAbort.controller,
+        sessionId: params.resolvedSessionId,
+        sessionKey: params.resolvedSessionKey,
+        startedAtMs: 1,
+        expiresAtMs: Number.MAX_SAFE_INTEGER,
+      };
+      if (restriction === "role") {
+        params.prepared.operatorAuthority = createAdmittedRunOperatorAuthority({
+          profileId: "foreground-user",
+          scopes: ["operator.write"],
+          assertCurrent() {},
+          rolePolicy: {
+            execution: "foreground-only",
+            sessionAccessCap: "none",
+            sandboxRequired: true,
+            agents: "*",
+          },
+        });
+      }
+      const runtime = expectDefined(params.prepared.preparedModelRuntimeLease, "deferred runtime");
+      const acquireRuntime = vi.fn(async () => runtime);
+      Object.assign(params.prepared, {
+        preparedModelRuntimeLease: undefined,
+        acquireWorkspaceModelRuntime: acquireRuntime,
+      });
+      const setup = vi
+        .spyOn(sessionWorkspace, "prepareSessionWorkspaceForRun")
+        .mockImplementation(async (workspace) => {
+          if (source === "revoked-during-setup") {
+            connection.abort();
+          }
+          workspace.assertCurrent();
+        });
+      dispatchAgentRunFromGateway.mockImplementationOnce(async (dispatch) => {
+        const request = getForegroundUserRequest(resolveAgentRunContext(dispatch.ingressOpts));
+        if (restriction === "none") {
+          expect(request).toBeUndefined();
+          return;
+        }
+        const admission = prepareAgentRunAdmission({
+          cfg: {},
+          operationalRunInstance: params.prepared.operationalRunInstance,
+          operatorAuthority: params.prepared.operatorAuthority,
+          foregroundRequest: request,
+          facts: {
+            runId: params.runId,
+            agentId: "main",
+            ingress: { kind: "gateway-client", boundary: "test", state: "present" },
+          },
+        });
+        try {
+          requireAdmittedRunForeground(await admission.admit("embedded"));
+        } finally {
+          await admission.close();
+        }
+      });
+      try {
+        await startAgentRunExecution(params);
+        const allowed = source === "valid" || restriction === "none";
+        expect(setup).toHaveBeenCalledTimes(allowed || source === "revoked-during-setup" ? 1 : 0);
+        expect(acquireRuntime).toHaveBeenCalledTimes(allowed ? 1 : 0);
+        expect(dispatchAgentRunFromGateway).toHaveBeenCalledTimes(allowed ? 1 : 0);
+        expect(params.io.emitFinal).toHaveBeenCalledTimes(allowed ? 0 : 1);
+        if (!allowed) {
+          const final = vi.mocked(params.io.emitFinal).mock.calls[0]?.[0];
+          expect(final?.[2]?.message).toContain(
+            source === "revoked-during-setup"
+              ? "connection is no longer active"
+              : "fresh authenticated",
+          );
+        }
+      } finally {
+        setup.mockRestore();
+      }
     },
   );
 

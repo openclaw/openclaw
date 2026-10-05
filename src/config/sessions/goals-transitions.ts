@@ -72,6 +72,7 @@ export function buildCreatedSessionGoal(
   options: { objective: string; tokenBudget?: number },
   now: number,
 ): SessionGoal {
+  assertSessionGoalMayActivate(entry);
   const objective = options.objective;
   if (!objective.trim()) {
     throw new SessionGoalTransitionError("objective required");
@@ -104,6 +105,9 @@ export function buildUpdatedSessionGoalStatus(
   },
   now: number,
 ): SessionGoal {
+  if (options.status === "active") {
+    assertSessionGoalMayActivate(entry);
+  }
   const accounted = accountSessionGoalUsage(entry, now);
   if (!accounted) {
     throw new SessionGoalTransitionError("goal not found");
@@ -143,6 +147,14 @@ export function buildUpdatedSessionGoalStatus(
     next.budgetLimitedAt = now;
   }
   return next;
+}
+
+function assertSessionGoalMayActivate(entry: SessionEntry): void {
+  if (entry.execution === "foreground-only") {
+    throw new SessionGoalTransitionError(
+      "This conversation requires a fresh message for each foreground request. Continue the work in this thread without an automatically resumed goal.",
+    );
+  }
 }
 
 export function buildUpdatedSessionGoalObjective(

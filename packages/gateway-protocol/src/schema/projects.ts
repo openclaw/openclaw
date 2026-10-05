@@ -93,11 +93,15 @@ export const ProjectsListParamsSchema = closedObject({
 export const ProjectsListResultSchema = closedObject({
   projects: Type.Array(ProjectRecordSchema),
   creationPolicy: Type.Optional(
-    closedObject({
-      workspaceRequired: Type.Literal(true),
-      worktreeRequired: Type.Literal(true),
-      worktreeBaseRef: NonEmptyString,
-    }),
+    Type.Union([
+      closedObject({
+        workspaceRequired: Type.Literal(true),
+        worktreeRequired: Type.Literal(true),
+        worktreeBaseRef: NonEmptyString,
+        execution: Type.Optional(Type.Literal("foreground-only")),
+      }),
+      closedObject({ execution: Type.Literal("foreground-only") }),
+    ]),
   ),
   recents: Type.Optional(Type.Array(ProjectRecentSchema, { maxItems: 8 })),
   observedProjects: Type.Optional(

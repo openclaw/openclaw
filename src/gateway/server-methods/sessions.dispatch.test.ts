@@ -309,7 +309,7 @@ describe("sessions.dispatch", () => {
         },
       }),
       expect.any(Function),
-      undefined,
+      expect.any(Function),
       undefined,
     );
     expectDispatchError(respond, "remote dispatch reached", ErrorCodes.UNAVAILABLE);
@@ -348,7 +348,7 @@ describe("sessions.dispatch", () => {
         abandonSource: true,
       },
       expect.any(Function),
-      undefined,
+      expect.any(Function),
     );
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -384,7 +384,7 @@ describe("sessions.dispatch", () => {
         target: { kind: "profile", profileId: "test", machineClass: "beast", os: "os-b" },
       }),
       expect.any(Function),
-      undefined,
+      expect.any(Function),
     );
   });
 
@@ -461,7 +461,7 @@ describe("sessions.dispatch", () => {
           profileId: "test",
         }),
         expect.any(Function),
-        undefined,
+        expect.any(Function),
         undefined,
       );
       expect(respond).toHaveBeenCalledWith(
@@ -693,7 +693,7 @@ describe("sessions.dispatch", () => {
         devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
       }),
       expect.any(Function),
-      undefined,
+      expect.any(Function),
       undefined,
     );
     expect(changes.mock.calls).toEqual(Array.from({ length: 5 }, () => [{ sessionKey }]));

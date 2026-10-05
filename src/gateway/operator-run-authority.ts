@@ -100,7 +100,8 @@ function prepareRunRolePolicy(
   return role
     ? {
         sessionAccessCap: role.sessions.others,
-        sandboxRequired: role.sandbox === "required",
+        sandboxRequired: role.sandbox === "required" || role.execution === "foreground-only",
+        execution: role.execution,
         workspace: role.sessions.workspace,
         agents: role.agents,
       }

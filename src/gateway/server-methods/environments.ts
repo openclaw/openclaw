@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   type EnvironmentSummary,
@@ -41,6 +42,7 @@ import { formatForLog } from "../ws-log.js";
 import { respondDesktopLaunch, respondDesktopObserve } from "./environments.desktop.js";
 import { environmentsSessionExecHandlers } from "./environments.session-exec.js";
 import { environmentsSessionHandlers } from "./environments.session.js";
+import { bindForegroundContinuationGuard } from "./foreground-execution.js";
 import { respondUnavailableOnThrow } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -544,3 +546,36 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     },
   ),
 };
+
+// Observation and retirement remain available; only independently continuing work is fenced.
+for (const [method, handler] of Object.entries(environmentsHandlers)) {
+  if (
+    ![
+      "environments.create",
+      "environments.prepare",
+      "desktop.launch",
+      "worker.desktop.launch",
+      "desktop.observe",
+      "worker.desktop.observe",
+    ].includes(method)
+  ) {
+    continue;
+  }
+  environmentsHandlers[method] = async (options) => {
+    if (
+      method.endsWith(".observe") &&
+      !(isRecord(options.params) && options.params.control === true)
+    ) {
+      return await handler(options);
+    }
+    let guarded;
+    try {
+      guarded = bindForegroundContinuationGuard(options, "Starting independent environment work");
+      readGatewayRequestMutationAuthority(guarded).assertCurrent();
+    } catch (error) {
+      options.respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, formatForLog(error)));
+      return;
+    }
+    return await handler(guarded);
+  };
+}

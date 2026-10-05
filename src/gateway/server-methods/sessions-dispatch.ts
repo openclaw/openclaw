@@ -6,6 +6,7 @@ import {
   validateSessionsMoveParams,
   validateSessionsReclaimParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { assertExecutionMayContinue } from "../../agents/run-execution-policy.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
@@ -37,6 +38,7 @@ import {
 import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/placement-target.js";
 import type { WorkerSessionWorkspace } from "../worker-environments/session-workspace.js";
 import { listGatewayEnvironments } from "./environments.js";
+import { captureForegroundContinuationGuard } from "./foreground-execution.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import {
   isWorkerDispatchInputError,
@@ -261,6 +263,24 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       return;
     }
     const { cfg, target, entry, sessionId } = resolved;
+    const assertForegroundPlacement = captureForegroundContinuationGuard(
+      { client, context },
+      "Remote session placement",
+    );
+    const assertDispatchCurrent = () => {
+      sessionMutationAuthorization?.assertCurrent();
+      assertForegroundPlacement();
+      assertExecutionMayContinue(entry.execution === "foreground-only", "Remote session placement");
+    };
+    try {
+      assertDispatchCurrent();
+    } catch (error) {
+      respondInvalidWorkerSession(
+        respond,
+        `${formatErrorMessage(error)} Use this Gateway's embedded runtime and local sandbox.`,
+      );
+      return;
+    }
     let { dispatchTarget } = resolved;
     const autoDevice = params.autoDevice === true;
     const canUseProjectProfile =
@@ -471,7 +491,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
               sessionKey: target.canonicalKey,
             });
           },
-          sessionMutationAuthorization?.assertCurrent,
+          assertDispatchCurrent,
           signal,
         );
         respondWorkerPlacement({
@@ -516,7 +536,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       respond,
     );
   },
-  "sessions.move": async ({ params, respond, context, sessionMutationAuthorization }) => {
+  "sessions.move": async ({ params, respond, context, client, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsMoveParams, "sessions.move", respond)) {
       return;
     }
@@ -540,6 +560,30 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       return;
     }
     const { target, entry, sessionId } = resolved;
+    const assertForegroundPlacement = captureForegroundContinuationGuard(
+      { client, context },
+      "Remote session placement",
+    );
+    const assertMoveCurrent = () => {
+      sessionMutationAuthorization?.assertCurrent();
+      // Reclaiming the exact source onto the Gateway is cleanup, not new worker execution.
+      if (params.target.kind !== "gateway") {
+        assertForegroundPlacement();
+        assertExecutionMayContinue(
+          entry.execution === "foreground-only",
+          "Remote session placement",
+        );
+      }
+    };
+    try {
+      assertMoveCurrent();
+    } catch (error) {
+      respondInvalidWorkerSession(
+        respond,
+        `${formatErrorMessage(error)} Use this Gateway's embedded runtime and local sandbox.`,
+      );
+      return;
+    }
     if (entry.archivedAt !== undefined) {
       respondInvalidWorkerSession(respond, "cannot move an archived session");
       return;
@@ -584,7 +628,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
             reason: "move",
             sessionKey: target.canonicalKey,
           }),
-        sessionMutationAuthorization?.assertCurrent,
+        assertMoveCurrent,
       );
       respond(
         true,

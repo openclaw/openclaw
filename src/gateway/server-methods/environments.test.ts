@@ -1,13 +1,17 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ErrorCodes,
   type EnvironmentsListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import { NODE_RUNNER_UPDATE_REQUIRED_ISSUE } from "../../infra/node-runner-inventory.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
 import * as rfbProbe from "../desktop/rfb-probe.js";
 import { collectNodeCatalogRuntimeState } from "../node-registry-private.js";
+import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { summarizeWorkerEnvironment } from "../worker-environments/environment-summary.js";
 import { environmentsHandlers } from "./environments.js";
 import {
@@ -18,6 +22,8 @@ import {
   workerRecord,
   workerService,
 } from "./environments.test-support.js";
+import { bindGatewayRequestHandlerMutationAuthority } from "./session-mutation-guards.js";
+import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
 vi.mock("../../infra/device-pairing.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/device-pairing.js")>()),
@@ -68,6 +74,156 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("environment gateway methods", () => {
+  it.each([false, true])(
+    "fences independent environment work for admin foreground policy=%s",
+    async (restricted) => {
+      const service = workerService();
+      const baseContext = mockContext(service);
+      const client = createSyntheticPluginRuntimeClient({
+        operatorRoleActor: { kind: "operator", profileId: "environment-admin" },
+        scopes: ["operator.admin"],
+      });
+      client.preparedSessionProfile = {
+        profileId: "environment-admin",
+        aliases: new Set(["environment-admin"]),
+        role: "admin",
+      };
+      const context = {
+        ...baseContext,
+        getRuntimeConfig: (): OpenClawConfig => ({
+          ...baseContext.getRuntimeConfig(),
+          gateway: {
+            roles: {
+              definitions: {
+                admin: {
+                  sessions: { others: "none" },
+                  scopes: ["operator.admin"],
+                  agents: "*",
+                  ...(restricted ? { execution: "foreground-only" } : {}),
+                },
+              },
+            },
+          },
+        }),
+      } as unknown as GatewayRequestContext;
+      const source = { kind: "environment", environmentId: "worker-1" };
+      const mutations = [
+        ["environments.create", createParams],
+        ["environments.prepare", { profileId: "development", projectPath: "/project" }],
+        ["desktop.launch", { source, app: "terminal" }],
+        ["worker.desktop.launch", { ...workerId, app: "terminal" }],
+        ["desktop.observe", { source, control: true }],
+        ["worker.desktop.observe", { ...workerId, control: true }],
+      ] as const;
+      for (const [method, params] of mutations) {
+        const respond = vi.fn();
+        await expectDefined(
+          environmentsHandlers[method],
+          method,
+        )({
+          req: { type: "req", id: method, method, params },
+          params,
+          respond,
+          context,
+          client,
+          isWebchatConnect: () => false,
+        });
+        if (restricted) {
+          expect(respond).toHaveBeenCalledExactlyOnceWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              code: ErrorCodes.FORBIDDEN,
+              message: expect.stringContaining("cannot outlive this foreground request"),
+            }),
+          );
+        } else {
+          expect(respond.mock.calls[0]?.[0]).toBe(true);
+        }
+      }
+      expect(service.create).toHaveBeenCalledTimes(restricted ? 0 : 1);
+      expect(service.prepare).toHaveBeenCalledTimes(restricted ? 0 : 1);
+      expect(service.launchDesktopApp).toHaveBeenCalledTimes(restricted ? 0 : 2);
+      expect(service.observeDesktop).toHaveBeenCalledTimes(restricted ? 0 : 2);
+
+      // Read-only observation and retirement do not create an independent execution owner.
+      for (const [method, params] of [
+        ["environments.list", {}],
+        ["environments.status", { environmentId: "gateway" }],
+        ["environments.destroy", workerId],
+        ["desktop.observe", { source, control: false }],
+        ["worker.desktop.observe", workerId],
+        ["desktop.release", { wsPath: "/desktop/observe?token=unused" }],
+      ] as const) {
+        const respond = vi.fn();
+        await expectDefined(
+          environmentsHandlers[method],
+          method,
+        )({
+          req: { type: "req", id: method, method, params },
+          params,
+          respond,
+          context,
+          client,
+          isWebchatConnect: () => false,
+        });
+        expect(respond.mock.calls[0]?.[0]).toBe(true);
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "retains the bound request guard through deferred preparation (replaced=%s)",
+    async (replaced) => {
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      const committed = vi.fn();
+      const service = workerService({
+        prepare: vi.fn(async (_params, assertCurrent) => {
+          entered.resolve();
+          await release.promise;
+          assertCurrent?.();
+          committed();
+          return { environmentId: "worker-1", preparationKey: "project-key", reused: false };
+        }),
+      });
+      const respond = vi.fn();
+      const originalGuard = vi.fn();
+      const request: GatewayRequestHandlerOptions = {
+        req: { type: "req", id: "prepare", method: "environments.prepare" },
+        params: { profileId: "development", projectPath: "/project" },
+        respond,
+        context: mockContext(service) as unknown as GatewayRequestContext,
+        client: null,
+        isWebchatConnect: () => false,
+        sessionMutationCommitGuard: originalGuard,
+      };
+      const options = bindGatewayRequestHandlerMutationAuthority(
+        request,
+        { ...request },
+        undefined,
+        "operator.sessions.write",
+      );
+      const pending = expectDefined(
+        environmentsHandlers["environments.prepare"],
+        "prepare handler",
+      )(options);
+      try {
+        await entered.promise;
+        expect(originalGuard).toHaveBeenCalled();
+        if (replaced) {
+          // A copied callback alone would miss replacement of the exact admitted options.
+          options.sessionMutationCommitGuard = vi.fn();
+        }
+      } finally {
+        release.resolve();
+        await pending;
+      }
+      expect(committed).toHaveBeenCalledTimes(replaced ? 0 : 1);
+      expect(respond.mock.calls[0]?.[0]).toBe(!replaced);
+    },
+  );
+
   it("probes disabled host setup only when requested without advertising or granting desktop access", async () => {
     const probe = vi.spyOn(rfbProbe, "probeRfbServer").mockResolvedValue({
       kind: "rfb",

@@ -40,7 +40,10 @@ import {
 import { ToolInputError } from "../tool-input-error.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNonNegativeIntegerParam, readToolStringParam } from "./common.js";
-import { wrapGatewayPersonalToolExecution } from "./gateway-caller-context.js";
+import {
+  assertGatewayToolMayContinue,
+  wrapGatewayPersonalToolExecution,
+} from "./gateway-caller-context.js";
 import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
@@ -101,6 +104,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
     parameters: opts?.workerPlacement ? PlacedSessionsSendSchema : SessionsSendToolSchema,
     outputSchema: SessionsSendOutputSchema,
     execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args) => {
+      assertGatewayToolMayContinue("Starting or redirecting another session");
       const params = isRecord(args) ? args : {};
       const promptedAt = Date.now();
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;

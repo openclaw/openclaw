@@ -26,6 +26,7 @@ import {
   GATEWAY_UPLOADS_DISABLED_CODE,
   GATEWAY_UPLOADS_DISABLED_MESSAGE,
 } from "../upload-policy.js";
+import { captureForegroundContinuationGuard } from "./foreground-execution.js";
 import { buildNodeCommandRejectionHint } from "./node-command-rejection-hint.js";
 import { nodeInvokePolicy } from "./nodes-policy.js";
 import { handleNodeInvokeProgress } from "./nodes.handlers.invoke-progress.js";
@@ -38,7 +39,10 @@ import {
   isForwardedNodeInvokeApprovalAuthorityActive,
   resolveNodeInvokeRuntimeAuthorityError,
 } from "./nodes.invoke-authority.js";
-import { shouldQueueAsPendingForegroundAction } from "./nodes.invoke-foreground.js";
+import {
+  isNodeForegroundObservation,
+  shouldQueueAsPendingForegroundAction,
+} from "./nodes.invoke-foreground.js";
 import { emitTalkPttNodeEvent } from "./nodes.invoke-talk-events.js";
 import { toPendingParamsJSON } from "./nodes.pending.js";
 import {
@@ -61,6 +65,31 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
     const nodeId = normalizeOptionalString(p.nodeId) ?? "";
     const command = normalizeOptionalString(p.command) ?? "";
     const sessionKey = normalizeOptionalString(p.sessionKey);
+    const assertExecutionAllowed = captureForegroundContinuationGuard(
+      { client, context },
+      "Remote node execution",
+    );
+    const rejectUnownedExecution = () => {
+      if (isNodeForegroundObservation(command)) {
+        return false;
+      }
+      try {
+        assertExecutionAllowed();
+        return false;
+      } catch (error) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.FORBIDDEN, String(error), {
+            details: { nodeCommandDispatched: false },
+          }),
+        );
+        return true;
+      }
+    };
+    if (rejectUnownedExecution()) {
+      return;
+    }
     const assertUploadAllowed = captureGatewayClientUploadCommitGuard({
       method: "node.invoke",
       requestParams: p,
@@ -195,6 +224,9 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
       let releaseApprovalHandoff: (() => void) | undefined;
       try {
         const continuePairingWork = async (): Promise<boolean> => {
+          if (rejectUnownedExecution()) {
+            return false;
+          }
           const pairingCurrent = await awaitWithinDeadline(
             () => isNodePairingWorkCurrent({ nodeId, generation, lifecycle: wakeLifecycle }),
             invokeDeadlineAtMs,
@@ -556,7 +588,16 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             // Pending actions outlive this RPC. Closure-bound agent or approval
             // authority cannot be transferred to a later device pull.
             !client?.internal?.agentRuntimeIdentity &&
-            !forwardedParams.approvalAuthority
+            !forwardedParams.approvalAuthority &&
+            // Even observation queues would outlive a restricted user's request.
+            (() => {
+              try {
+                assertExecutionAllowed();
+                return true;
+              } catch {
+                return false;
+              }
+            })()
           ) {
             // Foreground-only iOS commands become pullable pending actions instead
             // of failing permanently while the device is locked/backgrounded.

@@ -7,17 +7,19 @@
 import { runEmbeddedAttempt } from "../embedded-agent-runner/run/attempt.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { runHostPreparedIsolatedCompletion } from "../host-prepared-isolated-completion.js";
-import { BUILTIN_AGENT_HARNESS_METADATA } from "./builtin-openclaw-metadata.js";
+import {
+  BUILTIN_AGENT_HARNESS_METADATA,
+  registerBuiltInOpenClawAgentHarness,
+} from "./builtin-openclaw-metadata.js";
 import { projectSettledTurnFinalizationAttemptResult } from "./settled-turn-finalization-result.js";
 import { harnessSupportsTurnScopedToolRestrictions } from "./types.js";
 import type {
-  AgentHarness,
   AgentHarnessAttemptParamsV2,
   AgentHarnessSettledTurnFinalizationAttemptParams,
   AgentHarnessV2,
 } from "./types.js";
 
-const builtInOpenClawHarnesses = new WeakSet<object>();
+export { isBuiltInOpenClawAgentHarness } from "./builtin-openclaw-metadata.js";
 
 function buildRestrictedFinalizationAttempt(
   attempt: AgentHarnessSettledTurnFinalizationAttemptParams<AgentHarnessAttemptParamsV2>,
@@ -105,11 +107,6 @@ export function createOpenClawAgentHarness(): AgentHarnessV2 {
       return projectSettledTurnFinalizationAttemptResult(result);
     },
   };
-  builtInOpenClawHarnesses.add(harness);
+  registerBuiltInOpenClawAgentHarness(harness);
   return harness;
-}
-
-/** Distinguishes the internal runtime from an untrusted harness that copies its public id. */
-export function isBuiltInOpenClawAgentHarness(harness: AgentHarness): boolean {
-  return builtInOpenClawHarnesses.has(harness);
 }

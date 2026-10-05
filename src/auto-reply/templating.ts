@@ -1,6 +1,7 @@
 /** Shared inbound message context types used by prompt templating and reply dispatch. */
 import type { SessionConversationLink } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
+import type { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import type { DmScope, ReplyToMode } from "../config/types.base.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
 import type { GatewayUiCommandTarget } from "../gateway/ui-command-target.types.js";
@@ -320,12 +321,10 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   SenderName?: string;
   SenderId?: string;
   /** Trusted in-process creation provenance; never populated from channel payloads. */
-  SessionCreation?: {
-    skillLibrarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
-    via: import("../config/sessions/session-entry-provenance.js").SessionCreatedVia;
-    actor?: import("../config/sessions/session-entry-provenance.js").SessionCreatedActor;
-    sandbox?: "required";
-  };
+  SessionCreation?: Pick<
+    Parameters<typeof buildSessionCreationStamp>[0],
+    "via" | "actor" | "sandbox" | "execution" | "skillLibrarySelections"
+  >;
   SenderUsername?: string;
   SenderTag?: string;
   SenderE164?: string;

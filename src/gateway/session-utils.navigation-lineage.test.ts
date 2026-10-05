@@ -117,6 +117,7 @@ describe("session list navigation lineage", () => {
       createdVia: "spawn",
       createdActor: { type: "agent", id: "agent:main:main" },
       createdAt: now - 10_000,
+      execution: "foreground-only",
       forkSource: {
         sessionKey: "agent:main:main",
         sessionId: "sess-source",
@@ -156,6 +157,7 @@ describe("session list navigation lineage", () => {
       identity: { type: "agent", id: "agent:main:main" },
     });
     expect(row.createdAt).toBe(now - 10_000);
+    expect(row.execution).toBe("foreground-only");
     expect(row.forkSource).toEqual({
       sessionKey: "agent:main:main",
       sessionId: "sess-source",

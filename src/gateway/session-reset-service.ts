@@ -93,7 +93,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import {
   authorizeGatewayUnpreparedSessionCreation,
-  resolveCreatorSandbox,
+  resolveCreatorSessionPolicy,
 } from "./operator-role-policy.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
@@ -1173,10 +1173,10 @@ export async function performGatewaySessionReset(params: {
               }
             : params.creation
               ? {
-                  ...buildSessionCreationStamp(params.creation),
-                  ...(resolveCreatorSandbox(cfg, params.creation) === "required"
-                    ? { sandbox: "required" as const }
-                    : {}),
+                  ...buildSessionCreationStamp({
+                    ...params.creation,
+                    ...resolveCreatorSessionPolicy(cfg, params.creation),
+                  }),
                 }
               : {};
           const nextEntry: InternalSessionEntry = {

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { withForegroundPromotedCaller } from "../../agents/run-execution-policy.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
@@ -27,6 +28,42 @@ const activePlacement = (): WorkerSessionPlacementRecord => ({
 });
 
 describe("placement session authorization", () => {
+  it.each(["role", "session", "stored"] as const)(
+    "refuses remote dispatch and move under %s foreground authority before allocation",
+    async (restriction) => {
+      if (restriction === "stored") {
+        mocks.resolveTarget.mockReturnValue(
+          makeSessionTarget({ sessionId, execution: "foreground-only" }),
+        );
+      }
+      const dispatch = vi.fn();
+      const move = vi.fn();
+      const context = makeDispatchTestContext({
+        workerPlacementDispatchService: { dispatch, move },
+        workerSessionPlacementService: { getMany: () => new Map([[sessionId, activePlacement()]]) },
+      });
+      const check = async () => {
+        const denied = expect.objectContaining({
+          message: expect.stringContaining("cannot outlive this foreground request"),
+        });
+        const dispatched = await invokeSessionDispatch(context);
+        expect(dispatched).toHaveBeenCalledWith(false, undefined, denied);
+        const moved = await invokeSessionMove(context, {
+          expected: { generation: 4, environmentId: "environment-previous", ownerEpoch: 1 },
+          target: { kind: "profile", profileId: "test" },
+        });
+        expect(moved).toHaveBeenCalledWith(false, undefined, denied);
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(move).not.toHaveBeenCalled();
+        expect(mocks.findLiveByOwner).not.toHaveBeenCalled();
+      };
+      if (restriction === "stored") {
+        await check();
+      } else {
+        await withForegroundPromotedCaller(restriction, check);
+      }
+    },
+  );
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.resolveTarget.mockReturnValue(

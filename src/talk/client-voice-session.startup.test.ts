@@ -89,6 +89,29 @@ describe("client voice session startup", () => {
     ).toBeUndefined();
   });
 
+  it("retains the creator's execution ceiling when a later maintainer adopts the Talk row", async () => {
+    const target = { agentId: "main", sessionKey: "agent:main:talk:foreground" };
+    const sessionId = await ensureClientVoiceAgentSessionEntry({
+      ...target,
+      creation: {
+        actor: { type: "human", source: "profile", id: "original" },
+        sandbox: "required",
+        execution: "foreground-only",
+      },
+    });
+    const original = loadSessionEntry(target);
+    expect(original).toMatchObject({
+      sessionId,
+      execution: "foreground-only",
+      sandbox: "required",
+    });
+    await ensureClientVoiceAgentSessionEntry({
+      ...target,
+      creation: { actor: { type: "human", source: "profile", id: "maintainer" } },
+    });
+    expect(loadSessionEntry(target)).toEqual(original);
+  });
+
   it.each([
     { origin: "client" as const, canonicalKey: "agent:main:work" },
     { origin: "relay" as const, canonicalKey: "global" },

@@ -1,9 +1,29 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildSessionCreationStamp,
+  inheritSessionCreationPolicy,
+  preserveCreationStamp,
   inheritSpawnSessionOwner,
   sessionPersonalProfileId,
   type SessionCreatedActor,
 } from "./session-entry-provenance.js";
+
+it("inherits and preserves the original foreground lifetime without role-name inference", () => {
+  const creator = { type: "human" as const, source: "profile" as const, id: "creator" };
+  const stamp = buildSessionCreationStamp({
+    via: "operator",
+    actor: creator,
+    execution: "foreground-only",
+    now: 1,
+  });
+  expect(stamp).toMatchObject({ execution: "foreground-only", sandbox: "required" });
+  expect(
+    inheritSessionCreationPolicy(stamp, { type: "human", source: "profile", id: "maintainer" }),
+  ).toMatchObject({ execution: "foreground-only", sandbox: "required", actor: creator });
+  expect(preserveCreationStamp({ ...stamp, execution: undefined }, stamp)).toMatchObject({
+    execution: "foreground-only",
+  });
+});
 
 describe("sessionPersonalProfileId", () => {
   const creator: SessionCreatedActor = { type: "human", source: "profile", id: "profile-creator" };

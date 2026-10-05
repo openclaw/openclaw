@@ -5,8 +5,9 @@ import {
   createDueIsolatedJob,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { withForegroundPromotedCaller } from "../../agents/run-execution-policy.test-support.js";
 import { CronService } from "../../cron/service.js";
-import { saveCronStore } from "../../cron/store.js";
+import { loadCronStore, saveCronStore } from "../../cron/store.js";
 import {
   finishCronRunReceiptAsync,
   prepareCronRunReceiptClaim,
@@ -23,6 +24,72 @@ import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-a
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { resolveCronMutationCommitGuard } from "./cron-caller-scope.js";
+import { cronHandlers } from "./cron.js";
+
+it.each(["role", "session"] as const)(
+  "denies cron enqueue under original %s policy after broader personal selection",
+  async (restriction) => {
+    await withOpenClawTestState({ label: "foreground-cron" }, async (fixture) => {
+      const now = Date.now();
+      const storePath = fixture.statePath("cron", "jobs.json");
+      const target = createDueIsolatedJob({ id: "target", nowMs: now, nextRunAtMs: now });
+      const runner = vi.fn(async () => ({ status: "ok" as const }));
+      const state = createCronRegressionState({
+        storePath,
+        defaultAgentId: "main",
+        isAgentAvailable: () => true,
+        nowMs: () => now,
+        runIsolatedAgentJob: runner,
+      });
+      await saveCronStore(storePath, { version: 1, jobs: [target] });
+      const cron = new CronService(state.deps);
+      const context = createDirectChatContext({
+        cron,
+        cronStorePath: storePath,
+        getRuntimeConfig: () => ({}),
+      });
+      const before = await loadCronStore(storePath);
+      const writes = vi.fn();
+      const stopObserving = observeCronJobWrites(target.id, writes);
+      try {
+        await withForegroundPromotedCaller(restriction, async (profileId) => {
+          const client = createSyntheticPluginRuntimeClient({
+            operatorRoleActor: { kind: "operator", profileId },
+            scopes: ["operator.admin"],
+          });
+          for (const [method, params] of [
+            ["cron.run", { id: target.id, mode: "force", waitTimeoutMs: 1000 }],
+            ["cron.update", { id: target.id, patch: { enabled: true } }],
+            ["wake", { mode: "now", text: "continue" }],
+          ] as const) {
+            const respond = vi.fn();
+            await cronHandlers[method]!({
+              req: {} as never,
+              params,
+              respond,
+              context,
+              client,
+              isWebchatConnect: () => false,
+            });
+            expect(respond).toHaveBeenCalledWith(
+              false,
+              undefined,
+              expect.objectContaining({
+                message: expect.stringContaining("cannot outlive this foreground request"),
+              }),
+            );
+          }
+        });
+        expect(await loadCronStore(storePath)).toEqual(before);
+        expect(writes).not.toHaveBeenCalled();
+        expect(runner).not.toHaveBeenCalled();
+      } finally {
+        stopObserving();
+        cron.stop();
+      }
+    });
+  },
+);
 
 it("revalidates a scheduled Gateway caller while its child reservation holds the SQLite writer", async () => {
   await withOpenClawTestState({ label: "cron-reservation-caller-authority" }, async (fixture) => {

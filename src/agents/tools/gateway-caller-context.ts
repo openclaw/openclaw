@@ -33,6 +33,10 @@ import {
   type EmbeddedRunToolAuthorityBinding,
 } from "../embedded-agent-runner/run-state.js";
 import {
+  assertExecutionMayContinue,
+  isAdmittedRunForegroundOnly,
+} from "../run-execution-policy.js";
+import {
   attachInternalToolExecutionPreparer,
   getInternalToolExecutionPreparer,
 } from "../runtime/internal-hooks.js";
@@ -51,6 +55,7 @@ type GatewayToolCallerIdentity = {
   operationalRunInstance?: OperationalRunInstanceRef;
   /** Original host-issued admission; personal tool selection cannot replace its execution policy. */
   admittedRunContext?: AdmittedRunContext;
+  execution?: "foreground-only";
   embeddedRunToolAuthorityBinding?: EmbeddedRunToolAuthorityBinding;
   /** Exact run authority used to fence delegated system-agent approvals. */
   approvalAuthority?: AgentRunDelegatedAuthority;
@@ -223,6 +228,18 @@ export function createAdmittedGatewayToolCallerIdentity(
 
 export function getGatewayToolCallerIdentity(): GatewayToolCallerIdentity | undefined {
   return gatewayToolCallerStorage.getStore();
+}
+
+export function isGatewayToolForegroundOnly(caller = getGatewayToolCallerIdentity()): boolean {
+  return (
+    caller?.execution === "foreground-only" ||
+    caller?.operatorAuthority?.rolePolicy?.execution === "foreground-only" ||
+    isAdmittedRunForegroundOnly(caller?.admittedRunContext)
+  );
+}
+
+export function assertGatewayToolMayContinue(activity: string): void {
+  assertExecutionMayContinue(isGatewayToolForegroundOnly(), activity);
 }
 
 /** Selection is model input; only the turn's host-owned participants grant a target. */
@@ -481,6 +498,10 @@ export async function withGatewayToolCallerIdentity<T>(
       ...(fullPermission !== undefined ? { fullPermission } : {}),
       ...(operationalRunInstance ? { operationalRunInstance } : {}),
       ...(admittedRunContext ? { admittedRunContext } : {}),
+      ...((inheritedOwner && isGatewayToolForegroundOnly(inheritedOwner)) ||
+      isGatewayToolForegroundOnly(identity)
+        ? { execution: "foreground-only" as const }
+        : {}),
       ...(embeddedRunToolAuthorityBinding ? { embeddedRunToolAuthorityBinding } : {}),
       ...(approvalAuthority ? { approvalAuthority } : {}),
       ...(operatorAuthority ? { operatorAuthority } : {}),

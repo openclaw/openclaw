@@ -4,6 +4,7 @@ import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import { withForegroundPromotedCaller } from "../../agents/run-execution-policy.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { withPersonalToolTurn } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
 import { ensureSessionEntrySync } from "../../config/sessions/session-accessor.js";
@@ -45,7 +46,7 @@ describe("conversation environment presentation participants", () => {
   });
   afterEach(() => closeOpenClawAgentDatabases());
 
-  function fixture() {
+  function fixture(session = identity) {
     const provision = vi.fn(async () => ({ leaseId: "lease-one", ssh: support.SSH_ENDPOINT }));
     const service = support.createService(support.createProvider({ provision }));
     const create = vi.spyOn(service, "createSessionAttachment");
@@ -73,17 +74,27 @@ describe("conversation environment presentation participants", () => {
         ),
     });
     const respond = vi.fn();
-    const call = (presentation?: "desktop" | "portal") =>
+    const call = (
+      presentation?: "desktop" | "portal",
+      action: "create" | "status" | "destroy" = "create",
+    ) =>
       withGatewayToolCallerIdentity(
-        { ...identity, assertToolAllowed: () => {}, gatewayContextResolver: () => context },
+        { ...session, assertToolAllowed: () => {}, gatewayContextResolver: () => context },
         () =>
-          environmentsSessionHandlers["environments.session.create"]!({
-            req: { type: "req", id: "create-preview", method: "environments.session.create" },
-            params: {
-              profileId: "development",
-              idempotencyKey: "open-preview",
-              ...(presentation ? { presentation } : {}),
+          environmentsSessionHandlers[`environments.session.${action}`]!({
+            req: {
+              type: "req",
+              id: "environment-preview",
+              method: `environments.session.${action}`,
             },
+            params:
+              action === "create"
+                ? {
+                    profileId: "development",
+                    idempotencyKey: "open-preview",
+                    ...(presentation ? { presentation } : {}),
+                  }
+                : {},
             client: createSyntheticPluginRuntimeClient({ pluginRuntimeOwnerId: "crabbox" }),
             context,
             isWebchatConnect: () => false,
@@ -92,6 +103,51 @@ describe("conversation environment presentation participants", () => {
       );
     return { call, respond, create, provision, service, context };
   }
+
+  it.each(["role", "session"] as const)(
+    "refuses foreground %s allocation while retaining status and destroy",
+    async (restriction) => {
+      const session = {
+        ...identity,
+        sessionKey:
+          restriction === "role"
+            ? "agent:main:main"
+            : `agent:main:foreground-environment-${restriction}`,
+        sessionId: `foreground-environment-${restriction}`,
+      };
+      ensureSessionEntrySync(
+        { ...session, storePath: support.testState.config.session?.store },
+        {
+          sessionId: session.sessionId,
+          updatedAt: 1,
+          ...(restriction === "session" ? { execution: "foreground-only" as const } : {}),
+        },
+      );
+      const test = fixture(session);
+      const check = async () => {
+        await test.call();
+        expect(test.respond).toHaveBeenLastCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            message: expect.stringContaining("cannot outlive this foreground request"),
+          }),
+        );
+        expect(test.create).not.toHaveBeenCalled();
+        expect(test.provision).not.toHaveBeenCalled();
+        await test.call(undefined, "status");
+        expect(test.respond).toHaveBeenLastCalledWith(true, { attachment: null });
+        await test.call(undefined, "destroy");
+        expect(test.respond).toHaveBeenLastCalledWith(true, { stopped: true });
+        expect(test.provision).not.toHaveBeenCalled();
+      };
+      if (restriction === "role") {
+        await withForegroundPromotedCaller("role", check);
+      } else {
+        await withPersonalToolTurn({ owner, ...session }, check);
+      }
+    },
+  );
 
   it.each(["desktop", "portal"] as const)(
     "rejects ambiguous %s presentation before creating an environment, but permits creation without presentation",

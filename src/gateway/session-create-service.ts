@@ -66,7 +66,7 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   authorizeGatewaySessionCreation,
-  resolveCreatorSandbox,
+  resolveCreatorSessionPolicy,
   resolveOperatorRolePolicyForProfile,
 } from "./operator-role-policy.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
@@ -624,8 +624,12 @@ export async function createGatewaySession(
     }
     const currentTargetEntry = targetRead.value;
     // Delegated isolation survives changes to the creator's current role.
-    const creationSandbox =
-      creation?.sandbox ?? (creation ? resolveCreatorSandbox(params.cfg, creation) : undefined);
+    const creationPolicy = resolveCreatorSessionPolicy(params.cfg, {
+      ...creation,
+      execution: creation?.execution ?? operatorAuthority?.rolePolicy?.execution,
+    });
+    const creationExecution = creationPolicy.execution;
+    const creationSandbox = creationPolicy.sandbox;
     const sandboxRequired =
       currentTargetEntry?.sandbox === "required" || creationSandbox === "required";
     const roleWorkspace =
@@ -966,6 +970,7 @@ export async function createGatewaySession(
             ? buildSessionCreationStamp({
                 ...creation,
                 sandbox: creationSandbox,
+                execution: creationExecution,
                 requiredWorkspace,
                 incognito,
               })

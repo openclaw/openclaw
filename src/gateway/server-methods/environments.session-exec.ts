@@ -18,7 +18,12 @@ export const environmentsSessionExecHandlers: GatewayRequestHandlers = {
     async (options) => {
       const { params, respond, context } = options;
       try {
-        const caller = resolveSessionEnvironmentCaller(options, params);
+        const action = params.action ?? "run";
+        const caller = resolveSessionEnvironmentCaller(
+          options,
+          params,
+          action === "run" || action === "start" ? "Attached environment execution" : undefined,
+        );
         const service = context.workerEnvironmentService;
         const binding = service?.getSessionAttachment(caller.identity.sessionId);
         if (
@@ -28,7 +33,6 @@ export const environmentsSessionExecHandlers: GatewayRequestHandlers = {
         ) {
           throw new Error("No matching environment is attached to this conversation");
         }
-        const action = params.action ?? "run";
         const command = {
           argv: params.argv ? [...params.argv] : ["openclaw-internal-workspace-process"],
           input: params.input,

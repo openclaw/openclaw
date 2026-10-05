@@ -11,6 +11,7 @@ export type TrustedSessionCreation = Partial<AgentRuntimeSessionSpawnContext> & 
   actor?: SessionCreatedActor;
   /** Creator-owned isolation requirement resolved only by the trusted Gateway boundary. */
   sandbox?: "required";
+  execution?: "foreground-only";
   /** Exact spawning session retained separately from the stable actor identity. */
   requesterSessionKey?: string;
 };

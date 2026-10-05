@@ -20,7 +20,11 @@ import {
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
 import { handleGatewayRequest } from "../../server-methods.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandler,
+  GatewayRequestHandlers,
+} from "../../server-methods/types.js";
 import { sharingPolicyClient } from "../../session-sharing.test-utils.js";
 import { closeTalkClientGatewayControlSession } from "../client-gateway-control.js";
 import {
@@ -641,6 +645,95 @@ describe("Talk target preparation through Gateway authorization", () => {
       );
       expect(createBrowserSession).not.toHaveBeenCalled();
       expect(mocks.bootstrap).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["role", "session"] as const)(
+    "refuses unsupported Talk work before provider effects for the %s execution ceiling",
+    async (restriction) => {
+      const sessionKey = "agent:voice:main";
+      if (restriction === "role") {
+        config.gateway = {
+          roles: {
+            default: "foreground",
+            definitions: {
+              foreground: {
+                agents: "*",
+                sessions: { others: "write" },
+                scopes: ["operator.admin"],
+                execution: "foreground-only",
+              },
+            },
+          },
+        };
+      } else {
+        await replaceSessionEntry(
+          { agentId: "voice", sessionKey },
+          { sessionId: "restricted-talk", updatedAt: 1, execution: "foreground-only" },
+        );
+      }
+      client.connect.scopes = ["operator.admin"];
+      const before = loadSessionEntry({ agentId: "voice", sessionKey });
+      for (const [method, params] of [
+        ["talk.client.create", createParams],
+        [
+          "talk.session.create",
+          { mode: "realtime", transport: "gateway-relay", brain: "agent-consult" },
+        ],
+        [
+          "talk.session.create",
+          { mode: "transcription", transport: "gateway-relay", brain: "none" },
+        ],
+        ["talk.client.toolCall", { name: "consult_agent", callId: "call", arguments: {} }],
+        ["talk.client.steer", { text: "continue", mode: "steer" }],
+      ] as const) {
+        expect(await dispatch(method, { ...params, sessionKey })).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "FORBIDDEN",
+            message: expect.stringContaining("cannot confirm foreground cleanup"),
+          }),
+        );
+      }
+      if (restriction === "role") {
+        for (const method of [
+          "talk.session.appendAudio",
+          "talk.session.submitToolResult",
+          "talk.session.steer",
+        ]) {
+          expect(
+            await dispatch(method, { sessionId: "retained", text: "continue" }),
+          ).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code: "FORBIDDEN" }));
+        }
+      }
+      const safeHandler = vi.fn<GatewayRequestHandler>(async ({ respond }) =>
+        respond(true, { ok: true }, undefined),
+      );
+      for (const method of [
+        "talk.client.close",
+        "talk.client.transcript",
+        "talk.session.cancelOutput",
+        "talk.session.close",
+      ]) {
+        expect(
+          await dispatch(method, { sessionKey, sessionId: "retained" }, { [method]: safeHandler }),
+        ).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      }
+      for (const mode of ["status", "cancel"]) {
+        expect(
+          await dispatch(
+            "talk.client.steer",
+            { sessionKey, mode },
+            { "talk.client.steer": safeHandler },
+          ),
+        ).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      }
+      expect(createBrowserSession).not.toHaveBeenCalled();
+      expect(mocks.createRelay).not.toHaveBeenCalled();
+      expect(mocks.createTranscription).not.toHaveBeenCalled();
+      expect(mocks.bootstrap).not.toHaveBeenCalled();
+      expect(loadSessionEntry({ agentId: "voice", sessionKey })).toEqual(before);
     },
   );
 

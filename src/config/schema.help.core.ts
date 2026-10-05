@@ -155,6 +155,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     'Access to other people\'s sessions: "none" hides them, "view" allows reading, "suggest" permits the suggestion flow, and "write" permits participation. Explicit session membership can grant additional access.',
   "gateway.roles.definitions.*.sandbox":
     'Execution isolation for newly created sessions: "inherit" (default) uses the agent policy; "required" permanently requires a sandbox, even when the agent sandbox mode is off, and fails closed if the backend is unavailable.',
+  "gateway.roles.definitions.*.execution":
+    'Set "foreground-only" to keep accepted work inside one authenticated foreground request. Requires the embedded OpenClaw runtime with an owned Docker or local Podman sandbox; unsupported runtimes fail before execution. Stop and normal completion join cleanup. Restart retains the conversation and worktree, stops interrupted work, and requires a fresh message. Newly created threads retain this ceiling after role changes. Omitted preserves existing execution behavior.',
   "gateway.roles.definitions.*.sessions.workspace":
     "Require selection of an authorized project and a fresh managed worktree before creating a thread. The selected project and checkout remain bound to that thread across role changes and resets. Omitted preserves existing workspace behavior.",
   "gateway.roles.definitions.*.sessions.workspace.projects":

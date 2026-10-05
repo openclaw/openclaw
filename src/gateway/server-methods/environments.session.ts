@@ -5,6 +5,7 @@ import {
   validateEnvironmentsSessionDestroyParams,
   validateEnvironmentsSessionStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { assertExecutionMayContinue } from "../../agents/run-execution-policy.js";
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
@@ -15,6 +16,7 @@ import { authorizeSessionSharingTarget } from "../session-sharing.js";
 import { summarizeWorkerEnvironment } from "../worker-environments/environment-summary.js";
 import type { WorkerEnvironmentSessionIdentity } from "../worker-environments/session-attachment.js";
 import { captureSessionEnvironmentToolPolicy } from "./environments.session-tool-policy.js";
+import { captureForegroundContinuationGuard } from "./foreground-execution.js";
 import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { dispatchUiCommandToRequester } from "./ui-command.js";
@@ -24,8 +26,12 @@ import { defineValidatedGatewayMethod } from "./validation.js";
 export function resolveSessionEnvironmentCaller(
   options: GatewayRequestHandlerOptions,
   requested: { sessionKey?: string; agentId?: string } = {},
+  continuationActivity?: string,
 ): { identity: WorkerEnvironmentSessionIdentity; assertCurrent: () => void; signal?: AbortSignal } {
   const { context, client } = options;
+  const assertMayContinue = continuationActivity
+    ? captureForegroundContinuationGuard(options, continuationActivity)
+    : undefined;
   const tool = client?.internal?.agentToolCaller;
   const runtime = client?.internal?.agentRuntimeIdentity;
   const ambient = client?.internal?.syntheticClient ? getGatewayToolCallerIdentity() : undefined;
@@ -102,6 +108,7 @@ export function resolveSessionEnvironmentCaller(
     if (runtime && context.validateAgentRuntimeApprovalAuthority?.(runtime) !== true) {
       throw new Error("Conversation environment agent run is no longer active");
     }
+    assertMayContinue?.();
     const current = readTarget();
     if (
       current.entry?.sessionId !== identity.sessionId ||
@@ -109,6 +116,12 @@ export function resolveSessionEnvironmentCaller(
       current.entry.lifecycleRevision !== identity.sessionLifecycleRevision
     ) {
       throw new Error("Conversation identity changed before the environment operation");
+    }
+    if (continuationActivity) {
+      assertExecutionMayContinue(
+        current.entry.execution === "foreground-only",
+        continuationActivity,
+      );
     }
     if (!owner) {
       const denied = authorizeSessionSharingTarget({
@@ -146,7 +159,11 @@ export const environmentsSessionHandlers: GatewayRequestHandlers = {
     async (options) => {
       const { params, respond, context } = options;
       try {
-        const caller = resolveSessionEnvironmentCaller(options, params);
+        const caller = resolveSessionEnvironmentCaller(
+          options,
+          params,
+          "Creating an independently owned environment",
+        );
         const { presentation, ...request } = params;
         if (presentation) {
           try {

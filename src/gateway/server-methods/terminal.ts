@@ -19,6 +19,7 @@ import {
   validateTerminalResizeParams,
   validateTerminalUploadResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { assertExecutionMayContinue } from "../../agents/run-execution-policy.js";
 import { allowsProcessHomeSessionScan } from "../../config/paths.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import { NODE_TERMINAL_UPLOAD_COMMAND } from "../../infra/node-commands.js";
@@ -37,6 +38,7 @@ import {
   waitForTerminalOpenDeadline,
 } from "../terminal/open-deadline.js";
 import type { AgentTerminalOwner } from "../terminal/session-manager.types.js";
+import { captureForegroundContinuationGuard } from "./foreground-execution.js";
 import { resolveSessionCatalogProvider } from "./session-catalog.js";
 import {
   authorizeTerminalNodeCommand,
@@ -48,6 +50,19 @@ import { assertValidParams } from "./validation.js";
 
 function invalid(respond: GatewayRequestHandlerOptions["respond"], detail: string): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, detail));
+}
+
+function terminalExecutionAllowed(opts: GatewayRequestHandlerOptions): boolean {
+  try {
+    captureForegroundContinuationGuard(opts, "An unconfined terminal")();
+    return true;
+  } catch (error) {
+    invalid(
+      opts.respond,
+      error instanceof Error ? error.message : "Terminal execution is unavailable",
+    );
+    return false;
+  }
 }
 
 function requireConnId(opts: GatewayRequestHandlerOptions): string | null {
@@ -153,6 +168,9 @@ export async function openTerminalSession(
   request: TerminalSessionOpenRequest,
 ): Promise<void> {
   const { respond, context } = opts;
+  if (!terminalExecutionAllowed(opts)) {
+    return;
+  }
   const connId = requireConnId(opts);
   if (!connId) {
     return;
@@ -334,6 +352,15 @@ export async function openTerminalSession(
       clone: false,
     });
     const agentSessionId = entry?.sessionId?.trim();
+    try {
+      assertExecutionMayContinue(entry?.execution === "foreground-only", "An unconfined terminal");
+    } catch (error) {
+      invalid(
+        respond,
+        error instanceof Error ? error.message : "Terminal execution is unavailable",
+      );
+      return;
+    }
     if (!agentSessionId) {
       respondTerminalUnavailable(
         respond,
@@ -526,6 +553,9 @@ export const terminalHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateTerminalInputParams, "terminal.input", respond)) {
       return;
     }
+    if (!terminalExecutionAllowed(opts)) {
+      return;
+    }
     const connId = requireConnId(opts);
     if (!connId) {
       return;
@@ -545,6 +575,9 @@ export const terminalHandlers: GatewayRequestHandlers = {
   "terminal.resize": async (opts) => {
     const { params, respond, context } = opts;
     if (!assertValidParams(params, validateTerminalResizeParams, "terminal.resize", respond)) {
+      return;
+    }
+    if (!terminalExecutionAllowed(opts)) {
       return;
     }
     const connId = requireConnId(opts);

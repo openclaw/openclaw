@@ -139,17 +139,23 @@ export function resolveOperatorRolePolicyForAssignment(
   return (roles.default ? roles.definitions[roles.default] : undefined) ?? deniedOperatorRole;
 }
 
-/** Preserve human-derived restrictions, including ambiguous historical actors; this is not identity proof. */
-export function resolveCreatorSandbox(
+/** One creator-policy fact for every creation owner; inherited ceilings cannot be weakened. */
+export function resolveCreatorSessionPolicy(
   cfg: OpenClawConfig,
-  creation: { actor?: SessionCreatedActor } | undefined,
-): "required" | undefined {
+  creation:
+    | { actor?: SessionCreatedActor; sandbox?: "required"; execution?: "foreground-only" }
+    | undefined,
+): Pick<TrustedSessionCreation, "sandbox" | "execution"> {
   const actor = creation?.actor;
-  return actor?.type === "human" &&
-    actor.id &&
-    resolveOperatorRolePolicyForProfile(actor.id, cfg)?.sandbox === "required"
-    ? "required"
-    : undefined;
+  const role =
+    actor?.type === "human" && actor.id
+      ? resolveOperatorRolePolicyForProfile(actor.id, cfg)
+      : undefined;
+  const execution = creation?.execution ?? role?.execution;
+  const sandbox =
+    creation?.sandbox ??
+    (role?.sandbox === "required" || execution === "foreground-only" ? "required" : undefined);
+  return { ...(sandbox ? { sandbox } : {}), ...(execution ? { execution } : {}) };
 }
 
 /** Resolves the current named policy from the connection's verified profile identity. */
@@ -300,7 +306,6 @@ export function resolveSandboxedSessionCreation(
   cfg: OpenClawConfig,
 ): TrustedSessionCreation | undefined {
   const creation = resolveOperatorSessionCreation(client);
-  return resolveCreatorSandbox(cfg, creation) === "required"
-    ? { ...creation, sandbox: "required" }
-    : undefined;
+  const policy = resolveCreatorSessionPolicy(cfg, creation);
+  return policy.sandbox === "required" ? { ...creation, ...policy } : undefined;
 }

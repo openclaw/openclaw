@@ -66,6 +66,44 @@ async function call(
 }
 
 describe("sessions.catalog.startTerminal", () => {
+  it("denies an execution-only role before the terminal provider or host launch", async () => {
+    const startTerminalSession = vi.fn();
+    const open = vi.fn();
+    activeProvider = provider({ startTerminalSession });
+    const respond = await call(
+      { catalogId: "codex", agentId: "main", cwd: process.cwd() },
+      {
+        gateway: {
+          roles: {
+            default: "bounded",
+            definitions: {
+              bounded: {
+                execution: "foreground-only",
+                sessions: { others: "write" },
+                agents: "*",
+                scopes: ["operator.admin"],
+              },
+            },
+          },
+        },
+      },
+      {
+        connId: "bounded-terminal",
+        authenticatedUserProfile: { profileId: "profile-bounded" },
+        connect: { scopes: ["operator.admin"] },
+      },
+      { isTerminalEnabled: () => true, terminalSessions: { open } },
+    );
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("cannot outlive this foreground request"),
+      }),
+    );
+    expect(startTerminalSession).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+  });
   beforeAll(async () => {
     await import("./terminal.js");
   });

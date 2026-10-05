@@ -442,6 +442,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     projectId: entry?.projectId,
     permissionMode: entry?.permissionMode,
     sandboxMode: entry?.sandboxMode,
+    execution: entry?.execution,
     nativeRuntimeConsent: entry?.nativeRuntimeConsent,
     permissionModePending: input.permissionModePending,
     ...(entry?.permissionMode !== undefined && entry.sessionRoot !== undefined

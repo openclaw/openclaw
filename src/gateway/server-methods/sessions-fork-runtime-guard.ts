@@ -6,7 +6,10 @@ import {
   readSessionUpstreamLink,
   type SessionUpstreamLink,
 } from "../../sessions/session-upstream-links.js";
-import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
+import {
+  authorizeGatewaySessionCreation,
+  resolveCreatorSessionPolicy,
+} from "../operator-role-policy.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { resolveSessionNativeRuntimeRestriction } from "./sessions-patch-model-selection.js";
@@ -113,8 +116,8 @@ export function createUpstreamForkCurrentGuard(params: {
     }
     const currentSandbox =
       sourceEntry.sandbox === "required" ||
-      resolveCreatorSandbox(currentConfig, resolveOperatorSessionCreation(params.client)) ===
-        "required"
+      resolveCreatorSessionPolicy(currentConfig, resolveOperatorSessionCreation(params.client))
+        .sandbox === "required"
         ? "required"
         : undefined;
     const sourceModel = resolveSessionModelRef(currentConfig, sourceEntry, source.target.agentId);

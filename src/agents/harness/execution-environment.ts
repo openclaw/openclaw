@@ -3,11 +3,17 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveSessionEntry } from "../../config/sessions/session-accessor.sqlite-exact-read.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  readRunOperatorAuthority,
+  type AdmittedRunContext,
+  type PreparedAgentRunAdmission,
+} from "../admitted-run-context.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveGroupToolPolicy } from "../agent-tools.policy.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { resolveExecConfigState } from "../exec-defaults.js";
+import { isAdmittedRunForegroundOnly } from "../run-execution-policy.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { resolveScheduledToolCallerContext } from "../scheduled-tool-policy.js";
 import { isKnownCoreToolId } from "../tool-catalog.js";
@@ -20,6 +26,7 @@ import {
   readToolAllowlistIntersection,
   toolPolicyRestrictsTools,
 } from "../tool-policy.js";
+import { isBuiltInOpenClawAgentHarness } from "./builtin-openclaw-metadata.js";
 import { AgentHarnessPreflightError } from "./errors.js";
 import type { AgentHarness } from "./types.js";
 
@@ -32,6 +39,7 @@ type ExecutionEnvironmentFacts = {
   nativeRuntimeConsent?: string;
   toolPolicyRestricted?: boolean;
   workspaceRequired?: boolean;
+  foregroundOnly?: boolean;
 };
 
 type ExecutionRestriction = {
@@ -41,9 +49,15 @@ type ExecutionRestriction = {
 
 /** Selection and invocation share this decision; a native working directory is not containment. */
 function resolveAgentHarnessExecutionRestriction(
-  harness: Pick<AgentHarness, "id" | "label" | "executionEnvironment">,
+  harness: AgentHarness,
   facts: ExecutionEnvironmentFacts,
 ): ExecutionRestriction | undefined {
+  if (facts.foregroundOnly && !isBuiltInOpenClawAgentHarness(harness)) {
+    return {
+      reason: "sandbox-required",
+      message: `${harness.label} cannot join this chat's foreground container cleanup. Choose the OpenClaw embedded runtime with a local Docker or Podman sandbox.`,
+    };
+  }
   if (harness.executionEnvironment !== "host-only") {
     return undefined;
   }
@@ -117,6 +131,7 @@ export function resolveAgentHarnessSessionExecutionRestriction(params: {
   entry: Pick<
     SessionEntry,
     | "sandbox"
+    | "execution"
     | "sandboxMode"
     | "createdActor"
     | "permissionMode"
@@ -127,7 +142,7 @@ export function resolveAgentHarnessSessionExecutionRestriction(params: {
   modelId: string;
 }): ExecutionRestriction | undefined {
   const { cfg, agentId, sessionKey, entry, harness } = params;
-  if (harness.executionEnvironment !== "host-only") {
+  if (harness.executionEnvironment !== "host-only" && entry.execution !== "foreground-only") {
     return undefined;
   }
   const sandbox = resolveSandboxRuntimeStatus({
@@ -142,6 +157,7 @@ export function resolveAgentHarnessSessionExecutionRestriction(params: {
       ? entry.nativeRuntimeConsent
       : undefined;
   return resolveAgentHarnessExecutionRestriction(harness, {
+    foregroundOnly: entry.execution === "foreground-only",
     sandboxed: sandbox.sandboxed || exec.host === "sandbox",
     sandboxRequired: sandbox.sandboxRequired || exec.host === "sandbox",
     workspaceOnly: resolveEffectiveToolFsWorkspaceOnly({ cfg, agentId }),
@@ -181,14 +197,17 @@ type ExecutionEnvironmentParams = Pick<
   | "toolsAllow"
   | "disableTools"
   | "swarmCollector"
->;
+> & {
+  admittedRunContext?: AdmittedRunContext;
+  preparedRunAdmission?: PreparedAgentRunAdmission;
+};
 
 /** Revalidates execution policy and returns whether this run has native permission consent. */
 export function assertAgentHarnessExecutionEnvironment(
   harness: AgentHarness,
   params: ExecutionEnvironmentParams,
 ): boolean {
-  if (harness.executionEnvironment !== "host-only") {
+  if (isBuiltInOpenClawAgentHarness(harness)) {
     return false;
   }
   const agentId = resolveSessionAgentId({
@@ -236,6 +255,10 @@ export function assertAgentHarnessExecutionEnvironment(
     execOverrides: params.execOverrides,
   });
   const restriction = resolveAgentHarnessExecutionRestriction(harness, {
+    foregroundOnly:
+      entry?.execution === "foreground-only" ||
+      isAdmittedRunForegroundOnly(params.admittedRunContext) ||
+      readRunOperatorAuthority(params)?.rolePolicy?.execution === "foreground-only",
     sandboxed: params.sandbox?.enabled === true || runtime.sandboxed || exec.host === "sandbox",
     nativeRuntimeConsent,
     workspaceRequired: params.requireWorkspaceOnly === true,

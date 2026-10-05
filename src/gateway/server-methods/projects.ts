@@ -345,18 +345,24 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
       const diagnostics = startProjectsListDiagnostics(context);
       try {
         const listingConfig = context.getRuntimeConfig();
-        const workspacePolicy = resolveOperatorRolePolicy(client, listingConfig)?.sessions
-          .workspace;
+        const rolePolicy = resolveOperatorRolePolicy(client, listingConfig);
+        const workspacePolicy = rolePolicy?.sessions.workspace;
         const registryProjects = (await listProjectRegistry(listingConfig)).filter(
           (project) => !workspacePolicy || workspacePolicy.projects.includes(project.id),
         );
-        const creationPolicy = workspacePolicy
-          ? {
-              workspaceRequired: true as const,
-              worktreeRequired: true as const,
-              worktreeBaseRef: workspacePolicy.worktreeBaseRef,
-            }
-          : undefined;
+        const creationPolicy =
+          workspacePolicy || rolePolicy?.execution
+            ? {
+                ...(workspacePolicy
+                  ? {
+                      workspaceRequired: true as const,
+                      worktreeRequired: true as const,
+                      worktreeBaseRef: workspacePolicy.worktreeBaseRef,
+                    }
+                  : {}),
+                ...(rolePolicy?.execution ? { execution: rolePolicy.execution } : {}),
+              }
+            : undefined;
         diagnostics?.mark("sessions");
         const projects = registryProjects.map(sanitizeProjectRecord);
         const cfg = context.getRuntimeConfig();
@@ -448,6 +454,7 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
             true,
             {
               projects,
+              ...(creationPolicy ? { creationPolicy } : {}),
               ...(recents ? { recents } : {}),
               ...(observedProjects ? { observedProjects } : {}),
             },

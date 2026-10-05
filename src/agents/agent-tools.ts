@@ -493,7 +493,29 @@ export function createOpenClawCodingToolsInternal(
       ? tools.find((tool) => tool.name === "structured_output")
       : undefined;
   const toolsForMemoryFlush = projectMemoryFlushTools(
-    tools,
+    foreground
+      ? tools
+          .filter(
+            (tool) =>
+              ![
+                "create_goal",
+                "sessions_spawn",
+                "sessions_send",
+                "image_generate",
+                "music_generate",
+                "video_generate",
+              ].includes(tool.name),
+          )
+          .map((tool) =>
+            tool.name === "cron"
+              ? copyAgentToolMetadata(tool, {
+                  ...tool,
+                  description:
+                    "Inspect or retire existing automations. This foreground request can list, get, inspect history, remove, or disable a job with only enabled:false. Starting, scheduling, or changing execution is unavailable; send a fresh message in this thread to continue work.",
+                })
+              : tool,
+          )
+      : tools,
     isMemoryFlushRun && memoryFlushWritePath
       ? {
           root: memoryFlushWriteRoot,
@@ -510,7 +532,9 @@ export function createOpenClawCodingToolsInternal(
   const unavailableCoreToolReason =
     isMemoryFlushRun && memoryFlushWritePath
       ? "memory-triggered compaction runs expose only read and append-only write"
-      : undefined;
+      : foreground
+        ? "foreground requests cannot schedule work or start unjoined child sessions"
+        : undefined;
   const toolsForMessageProvider = filterToolsByMessageProvider(
     toolsForMemoryFlush,
     options?.toolPolicyMessageProvider ?? options?.messageProvider,

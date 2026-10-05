@@ -52,6 +52,8 @@ const GatewayOperatorRoleDefinitionSchema = z.strictObject({
   }),
   /** Require sandbox isolation for newly created sessions, or inherit agent policy by default. */
   sandbox: z.enum(["inherit", "required"]).optional(),
+  /** Keep accepted work inside one foreground request and retire its execution environment. */
+  execution: z.literal("foreground-only").optional(),
   /** Agent IDs available for session creation and runs, or all agents when set to "*". */
   agents: z.union([
     z.literal("*"),

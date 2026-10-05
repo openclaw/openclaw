@@ -16,6 +16,7 @@ import {
   type SpawnBackendAdapter,
 } from "../../spawn-pipeline.js";
 import {
+  assertGatewayToolMayContinue,
   getGatewayToolCallerIdentity,
   resolveGatewayToolOperatorSelection,
   withGatewayToolOperatorContinuation,
@@ -62,6 +63,7 @@ export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
 ): Promise<SpawnSubagentResult> {
+  assertGatewayToolMayContinue("Starting an independently scheduled child");
   const assertActive = ctx.assertActive;
   const promptedAt = Date.now();
   const task = params.task;

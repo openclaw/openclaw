@@ -333,7 +333,49 @@ is not silently reallocated. Existing unstamped sessions cannot run under a role
 that requires this policy. Managed worker placement can execute an admitted local
 project remotely through its existing snapshot and recovery lifecycle.
 
-Required sandboxes are isolated per authenticated session creator, not merely
+### Foreground requests
+
+Set `execution: "foreground-only"` on a named role to keep accepted work inside
+foreground requests. For a team coding role, combine it with the required workspace
+policy above. The option also requires a sandbox, even if the agent disables one.
+Omitting `execution` keeps the existing lifetime policy.
+
+The supported execution path is the OpenClaw embedded runtime with local Podman
+or Docker through a Unix socket. Each admitted request receives a separate
+container with a private PID namespace. Native runtimes, CLI runtimes, browser
+sandboxes, Talk voice sessions, and remote placements refuse this policy before execution because
+they cannot join that container's cleanup. Select the embedded runtime and a
+supported sandbox and send a chat message to continue. Talk status, transcript delivery,
+and cancellation remain available.
+
+Request settlement waits for owned processes and the exact container to stop.
+Stop acknowledges cancellation promptly while that cleanup finishes; late cleanup
+failures remain visible in the thread. Detached shell children cannot keep the
+environment running after successful settlement. Automations, automatically resumed goals, detached media
+generation, and independently scheduled sessions are unavailable. Existing job
+inspection, disabling, removal, and process cleanup remain available. Child
+session flags such as `collect` do not establish joined ownership.
+
+The restriction belongs to the original request and, for new conversations, to
+the conversation's immutable creation policy. Selecting a maintainer's personal
+tools or sending a later maintainer message cannot loosen the same environment.
+Conversation history, drafts, and the managed worktree remain available after Stop.
+
+After a Gateway restart, accepted foreground inputs are never replayed automatically.
+OpenClaw records a stopped notice for interrupted active work. Startup reconciles
+retained container receipts before request dispatch becomes ready. A fresh authenticated
+message is required to continue; heartbeats, scheduled work, and internal continuations
+cannot authorize a restricted turn.
+
+Abrupt Gateway process death can leave a container running while the Gateway is down;
+this policy does not guarantee immediate extinction during that outage. Startup and
+workspace reuse require exact ownership and exit evidence. If either is uncertain,
+that workspace stays blocked with an explanation. Startup can retire eligible crashed
+allocations with exact receipts. Allocations marked cleanup-uncertain remain quarantined
+and can block startup readiness; an operator reconciliation command is not yet available.
+Conversation history, drafts, and worktrees are retained; cleanup does not delete them.
+
+Required sandboxes without `execution: "foreground-only"` are isolated per authenticated session creator, not merely
 per agent or per session. Different guests using the same agent receive separate
 sandbox environments and workspaces. Multiple sessions created by the same guest
 reuse that guest's environment and workspace. This per-guest boundary applies

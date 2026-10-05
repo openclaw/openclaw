@@ -60,7 +60,12 @@ import {
   slackSynologyConfig,
   slackConfig,
 } from "./cron.validation.test-support.js";
-import type { GatewayClient } from "./types.js";
+import { bindGatewayRequestHandlerMutationAuthority } from "./session-mutation-guards.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+} from "./types.js";
 
 const cronLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness({ prefix: "cron-gateway-validation-" });
@@ -582,7 +587,9 @@ describe("cron method validation", () => {
     );
 
     expect(context.cron.readJob).toHaveBeenCalledWith("cron-42");
-    expect(context.cron.enqueueRun).toHaveBeenCalledWith("cron-42", "force");
+    expect(context.cron.enqueueRun).toHaveBeenCalledWith("cron-42", "force", {
+      commitGuard: expect.any(Function),
+    });
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ ok: true, enqueued: true, runId: "run-1" }),
@@ -1615,6 +1622,65 @@ describe("cron method validation", () => {
       });
       expect(context.committedAdds).toHaveLength(0);
       expect(context.committedUpdates).toHaveLength(0);
+    },
+  );
+
+  it.each([false, true])(
+    "retains the bound caller through foreground and response wrappers (replaced=%s)",
+    async (replaced) => {
+      const context = createCronContext(createCronJob({ agentId: "ops" }));
+      const client = callerClient("ops");
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      const committed = vi.fn();
+      context.cron.enqueueRun.mockImplementationOnce(async (_id, _mode, options) => {
+        entered.resolve();
+        await release.promise;
+        expectDefined(options?.commitGuard, "cron commit guard")();
+        committed();
+        return { ok: true, enqueued: true, runId: "run-1" };
+      });
+      const respond = vi.fn();
+      const originalGuard = vi.fn();
+      const request: GatewayRequestHandlerOptions = {
+        req: { type: "req", id: "bound-cron", method: "cron.run" },
+        params: { id: "cron-1", mode: "force" },
+        respond,
+        context: context as unknown as GatewayRequestContext,
+        client,
+        isWebchatConnect: () => false,
+        sessionMutationCommitGuard: originalGuard,
+      };
+      const options = bindGatewayRequestHandlerMutationAuthority(
+        request,
+        { ...request },
+        undefined,
+        "operator.sessions.write",
+      );
+      const pending = Promise.resolve(
+        expectDefined(cronHandlers["cron.run"], "cron.run handler")(options),
+      ).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await entered.promise;
+        if (replaced) {
+          options.sessionMutationCommitGuard = vi.fn();
+        }
+      } finally {
+        release.resolve();
+      }
+      const error = await pending;
+      expect(committed).toHaveBeenCalledTimes(replaced ? 0 : 1);
+      if (replaced) {
+        expect(error).toMatchObject({ message: "Gateway requester authority changed" });
+        expect(respond).not.toHaveBeenCalled();
+      } else {
+        expect(error).toBeUndefined();
+        expect(originalGuard).toHaveBeenCalledOnce();
+        expectCronSuccess(respond);
+      }
     },
   );
 
@@ -2737,6 +2803,7 @@ describe("cron method validation", () => {
     );
 
     expect(context.cron.updateWithPrecondition.mock.calls[0]?.[3]).toEqual({
+      commitGuard: expect.any(Function),
       scheduledToolPolicy: {
         version: 1,
         mode: "account",

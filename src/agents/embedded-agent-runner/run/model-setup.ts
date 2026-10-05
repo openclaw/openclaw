@@ -171,6 +171,11 @@ export async function resolveEmbeddedRunModelSetup(params: {
   const pinnedHarness = pinnedHarnessId
     ? getRegisteredAgentHarness(pinnedHarnessId)?.harness
     : undefined;
+  if (pinnedHarness) {
+    // Native ownership probes may resume a backend. Reject unsupported lifetime
+    // policy before calling the plugin, not after selecting its model catalog.
+    assertAgentHarnessExecutionEnvironment(pinnedHarness, runParams);
+  }
   const nativeSessionRuntime = pinnedHarness
     ? prepareNativeSessionRuntime(runParams, pinnedHarness, params.sessionAdmission)
     : undefined;

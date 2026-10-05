@@ -94,7 +94,9 @@ import {
   cronJobIsVisible,
   cronJobVisibilityTarget,
 } from "./cron-visibility.js";
+import { bindForegroundContinuationGuard } from "./foreground-execution.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
+import { bindGatewayRequestHandlerMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -963,7 +965,23 @@ export const cronHandlers: GatewayRequestHandlers = {
 // The existing one-use grant is request-scoped; the original runtime identity
 // stays intact so deferred cron commits still fence the exact admitted run.
 for (const [method, handler] of Object.entries(cronHandlers)) {
-  cronHandlers[method] = async (args) => {
+  cronHandlers[method] = async (requestArgs) => {
+    let args = requestArgs;
+    const rawPatch =
+      isRecord(args.params) && isRecord(args.params.patch) ? args.params.patch : undefined;
+    const disableOnly =
+      rawPatch?.enabled === false && Object.keys(rawPatch).every((key) => key === "enabled");
+    if (
+      ["cron.add", "cron.run", "wake"].includes(method) ||
+      (method === "cron.update" && !disableOnly)
+    ) {
+      try {
+        args = bindForegroundContinuationGuard(args, "Scheduling work after this request");
+      } catch (error) {
+        respondInvalidCronParams(args.respond, method, formatErrorMessage(error));
+        return;
+      }
+    }
     const identity = args.client?.internal?.agentRuntimeIdentity;
     if (!identity) {
       return await handler(args);
@@ -972,24 +990,30 @@ for (const [method, handler] of Object.entries(cronHandlers)) {
     let succeeded = false;
     const run = async () => {
       assertActiveAgentRuntimeAuthority(args.client, args.context);
-      await handler({
-        ...args,
-        respond: (...response) => {
-          // Reads release data here; mutations already checked at commit. A late
-          // acknowledgement must not turn a committed effect into a retryable denial.
-          if (
-            method === "cron.list" ||
-            method === "cron.get" ||
-            method === "cron.runs" ||
-            method === "cron.history"
-          ) {
-            assertActiveAgentRuntimeAuthority(args.client, args.context);
-            getCronManagementAuthority(identity)?.();
-          }
-          succeeded = response[0];
-          args.respond(...response);
-        },
-      });
+      await handler(
+        bindGatewayRequestHandlerMutationAuthority(
+          args,
+          {
+            ...args,
+            respond: (...response) => {
+              // Reads release data here; mutations already checked at commit. A late
+              // acknowledgement must not turn a committed effect into a retryable denial.
+              if (
+                method === "cron.list" ||
+                method === "cron.get" ||
+                method === "cron.runs" ||
+                method === "cron.history"
+              ) {
+                assertActiveAgentRuntimeAuthority(args.client, args.context);
+                getCronManagementAuthority(identity)?.();
+              }
+              succeeded = response[0];
+              args.respond(...response);
+            },
+          },
+          undefined,
+        ),
+      );
     };
     try {
       await (grant ? withCronManagementGrant(grant, identity, method, run) : run());

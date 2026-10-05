@@ -18,6 +18,7 @@ import {
   resolveSessionSharingTarget,
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
+import { captureForegroundContinuationGuard } from "./foreground-execution.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { publishCommittedSessionGoalChange } from "./session-goal-change.js";
 import { fingerprintSessionGoalRequest } from "./session-goal-request.js";
@@ -31,6 +32,14 @@ async function handleSessionGoalMutation(
   const { client, context, respond } = options;
   const method = request.action === "clear" ? "sessions.goal.clear" : "sessions.goal.update";
   try {
+    if (request.action === "resume") {
+      try {
+        captureForegroundContinuationGuard(options, "Resuming an automatically continued goal")();
+      } catch (error) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(error)));
+        return;
+      }
+    }
     const authorization = options.sessionMutationAuthorization
       ? { authorization: options.sessionMutationAuthorization, error: null }
       : resolveSessionMutationAuthorization({

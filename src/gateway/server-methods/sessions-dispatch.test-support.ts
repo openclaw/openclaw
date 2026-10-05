@@ -97,6 +97,7 @@ export function makeFailedPlacement(): Extract<WorkerSessionPlacementRecord, { s
 type DispatchSessionEntry = Pick<
   SessionEntry,
   | "sessionId"
+  | "execution"
   | "worktree"
   | "agentHarnessId"
   | "agentRuntimeOverride"

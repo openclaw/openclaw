@@ -111,14 +111,21 @@ export function bindChannelParticipantInput(params: {
   const assertCurrent = captureCommandOwnerAssertion(params.context);
   const commandOwner = getCommandOwnerAuthority(params.context);
   if (authority.operatorProfile && assertCurrent && commandOwner) {
-    bindCommandOwnerAuthority(params.context, {
-      ...commandOwner,
-      operatorAuthority: captureChannelOperatorRunAuthority({
-        ...authority.operatorProfile,
-        getRuntimeConfig: () => gateway.getRuntimeConfig(),
-        assertCurrent,
-        signal: authority.signal,
-      }),
+    const operatorAuthority = captureChannelOperatorRunAuthority({
+      ...authority.operatorProfile,
+      getRuntimeConfig: () => gateway.getRuntimeConfig(),
+      assertCurrent,
+      signal: authority.signal,
     });
+    bindCommandOwnerAuthority(params.context, { ...commandOwner, operatorAuthority });
+    if (operatorAuthority.rolePolicy?.execution === "foreground-only") {
+      params.context.SessionCreation = {
+        via: "channel",
+        ...params.context.SessionCreation,
+        actor: { type: "human", source: "profile", id: operatorAuthority.profileId },
+        sandbox: "required",
+        execution: "foreground-only",
+      };
+    }
   }
 }

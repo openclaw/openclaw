@@ -803,6 +803,7 @@ function mergeSessionEntryWithPolicy(
   }
   next.inheritedGitContributorProfileIds = existing.inheritedGitContributorProfileIds;
   next.requiredWorkspace = existing.requiredWorkspace;
+  next.execution = existing.execution;
   if (existing.requiredWorkspace) {
     Object.assign(next, projectRequiredSessionWorkspaceBinding(existing));
   }

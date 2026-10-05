@@ -12,6 +12,10 @@ import {
   buildAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
+import {
+  getForegroundUserRequest,
+  prepareForegroundUserRequestClaim,
+} from "../../agents/foreground-request.js";
 import { repairMainSessionRecoveryMutation } from "../../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import {
@@ -119,7 +123,9 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
         throw new Error("Agent settlement no longer owns this Gateway run");
       }
     };
+    let assertForegroundCurrent: (() => void) | undefined;
     const assertDispatchCurrent = () => {
+      assertForegroundCurrent?.();
       params.assertContextCurrent?.();
       prepared.operatorAuthority?.assertCurrent();
       abortController.signal.throwIfAborted();
@@ -258,6 +264,43 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
           return;
         }
 
+        const foregroundInput = {};
+        // Accepted staff work can outlive transport, but only a live connection can mint custody.
+        if (
+          !isSyntheticGatewayCaller(params.client ?? null) &&
+          !params.client?.invalidated &&
+          !params.client?.connectionSignal?.aborted &&
+          (!params.inputProvenance || params.inputProvenance.kind === "external_user") &&
+          !params.restoredCronContinuation &&
+          !params.isOneShotModelRun &&
+          !params.isRestartRecoveryResumeRun &&
+          !params.request.internalEvents &&
+          !params.request.internalRuntimeHandoffId &&
+          !params.request.internalExecutionIdentityRetry &&
+          !params.request.execApprovalFollowupExpectedSessionId
+        ) {
+          bindGatewayForegroundUserRequest(params.client, foregroundInput, () => {
+            params.assertContextCurrent?.();
+            if (params.client?.invalidated || params.client?.connectionSignal?.aborted) {
+              throw new Error("Foreground user connection is no longer active.");
+            }
+          });
+        }
+        if (
+          prepared.operatorAuthority?.rolePolicy?.execution === "foreground-only" ||
+          params.sessionEntry?.execution === "foreground-only"
+        ) {
+          // Workspace setup can execute commands before model admission; it needs the same input owner.
+          assertForegroundCurrent = prepareForegroundUserRequestClaim(
+            getForegroundUserRequest(foregroundInput),
+            operationalRunInstance,
+          );
+          if (!assertForegroundCurrent) {
+            throw new Error("Foreground execution requires a fresh authenticated user request.");
+          }
+          assertForegroundCurrent();
+        }
+
         if (prepared.acquireWorkspaceModelRuntime) {
           const entry = params.sessionEntry;
           if (!entry || !params.resolvedSessionKey || entry.sessionId !== abortEntry?.sessionId) {
@@ -388,6 +431,7 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
         });
         const restartRecoveryChannelContext = restartRecoveryContext?.channel;
         const runContext = {
+          ...foregroundInput,
           messageChannel:
             restartRecoveryContext?.messageChannel ?? params.delivery.originMessageChannel,
           accountId:
@@ -420,27 +464,6 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
           attachAgentCommandRecoveryAdmissionFacts(runContext);
         } else if (localUserIngress) {
           attachAgentCommandAdmissionFacts(runContext, localUserIngress.facts);
-        }
-        // Accepted staff work can outlive transport, but only a live connection can mint custody.
-        if (
-          !isSyntheticGatewayCaller(params.client ?? null) &&
-          !params.client?.invalidated &&
-          !params.client?.connectionSignal?.aborted &&
-          (!params.inputProvenance || params.inputProvenance.kind === "external_user") &&
-          !params.restoredCronContinuation &&
-          !params.isOneShotModelRun &&
-          !params.isRestartRecoveryResumeRun &&
-          !params.request.internalEvents &&
-          !params.request.internalRuntimeHandoffId &&
-          !params.request.internalExecutionIdentityRetry &&
-          !params.request.execApprovalFollowupExpectedSessionId
-        ) {
-          bindGatewayForegroundUserRequest(params.client, runContext, () => {
-            params.assertContextCurrent?.();
-            if (params.client?.invalidated || params.client?.connectionSignal?.aborted) {
-              throw new Error("Foreground user connection is no longer active.");
-            }
-          });
         }
         // Awaited routing can retire this owner before final dispatch.
         params.assertContextCurrent?.();

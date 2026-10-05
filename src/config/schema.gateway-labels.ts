@@ -61,6 +61,7 @@ export const GATEWAY_FIELD_LABELS: Record<string, string> = {
     "Operator Role Allowed Workspace Projects",
   "gateway.roles.definitions.*.sessions.workspace.worktreeBaseRef": "Operator Role Worktree Base",
   "gateway.roles.definitions.*.sandbox": "Operator Role Sandbox Isolation",
+  "gateway.roles.definitions.*.execution": "Operator Role Execution Lifetime",
   "gateway.roles.definitions.*.agents": "Operator Role Allowed Agents",
   "gateway.roles.definitions.*.modelPolicy": "Operator Role Model Policy",
   "gateway.roles.definitions.*.modelPolicy.sourceAgent": "Operator Role Model Source Agent",

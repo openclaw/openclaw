@@ -33,7 +33,7 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import {
   authorizeGatewaySessionCreation,
-  resolveCreatorSandbox,
+  resolveCreatorSessionPolicy,
   resolveOperatorRolePolicy,
 } from "../operator-role-policy.js";
 import { buildDashboardSessionKey } from "../session-create-key.js";
@@ -420,10 +420,10 @@ async function mutateSessionAtMessage(
           ? inheritSessionCreationPolicy(current.entry, requestedCreation.actor)
           : {}),
       };
+      const creationPolicy =
+        action === "fork" ? resolveCreatorSessionPolicy(cfg, creation) : undefined;
       const sandbox =
-        action === "fork"
-          ? (current.entry.sandbox ?? resolveCreatorSandbox(cfg, creation))
-          : undefined;
+        action === "fork" ? (current.entry.sandbox ?? creationPolicy?.sandbox) : undefined;
       const workspaceRequirement = resolveRequiredSessionWorkspace({
         policy:
           action === "fork"
@@ -655,7 +655,12 @@ async function mutateSessionAtMessage(
                         preparedLifecycle: requiredPreparation,
                       })
                     : forkWorkspace?.value,
-                  creation: { ...creation, sandbox, requiredWorkspace },
+                  creation: {
+                    ...creation,
+                    ...creationPolicy,
+                    sandbox,
+                    requiredWorkspace,
+                  },
                 },
                 expectedState,
               )

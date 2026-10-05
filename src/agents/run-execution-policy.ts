@@ -26,3 +26,12 @@ export function isAdmittedRunForegroundOnly(context: AdmittedRunContext | undefi
       readAdmittedRunOperatorAuthority(context)?.rolePolicy?.execution === "foreground-only"),
   );
 }
+
+/** Consumers pass only host-captured admission or immutable session facts. */
+export function assertExecutionMayContinue(foregroundOnly: boolean, activity: string): void {
+  if (foregroundOnly) {
+    throw new Error(
+      `${activity} cannot outlive this foreground request. Keep the work in this thread and send a new message when needed.`,
+    );
+  }
+}
