@@ -27,9 +27,7 @@ import { recordSessionCreated } from "../../sessions/session-created.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
-import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { resolveChatAbortDiagnosticReason } from "../chat-abort-diagnostics.js";
-import type { ChatRunTiming } from "../server-chat-state.js";
 import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
@@ -58,10 +56,7 @@ import { applyChatSendReplyContextFields } from "./chat-send-reply-context.js";
 import { prepareAndAdmitChatSend } from "./chat-send-setup.js";
 import { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 import { createChatSendGoalCommitGuard } from "./chat-send-work-admission.js";
-import {
-  chatSendAckServerTimingAttributes,
-  roundedChatSendTimingMs,
-} from "./chat-server-timing.js";
+import { prepareChatSendAckTiming } from "./chat-server-timing.js";
 import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -110,18 +105,9 @@ async function handleChatSendWithOptions(
     return;
   }
   const { request, session, admission } = setup;
-  const { chatSendReceivedAtMs, clientInfo, p, systemInputProvenance, reconnectResumeRequested } =
-    request;
-  const {
-    clientRunId,
-    sessionLoadMs,
-    cfg,
-    storePath,
-    entry,
-    sessionKey,
-    sessionRoutingChanged,
-    selectedAgent,
-  } = session;
+  const { p, systemInputProvenance, reconnectResumeRequested } = request;
+  const { clientRunId, cfg, storePath, entry, sessionKey, sessionRoutingChanged, selectedAgent } =
+    session;
   const {
     activeRunAbort,
     admittedSessionId,
@@ -563,21 +549,13 @@ async function handleChatSendWithOptions(
     }
     messageInjectionAttempt = preAckInjection.attempt;
     phase?.mark("effects");
-    const serverTiming = isOperatorUiClient(clientInfo)
-      ? {
-          receivedToAckMs: roundedChatSendTimingMs(performance.now() - chatSendReceivedAtMs),
-          loadSessionMs: sessionLoadMs,
-          ...(prepareAttachmentsMs !== undefined ? { prepareAttachmentsMs } : {}),
-        }
-      : undefined;
-    const chatSendTiming: ChatRunTiming | undefined =
-      serverTiming && typeof client?.connId === "string" && client.connId.trim()
-        ? {
-            ackedAtMs: performance.now(),
-            connId: client.connId.trim(),
-            receivedAtMs: chatSendReceivedAtMs,
-          }
-        : undefined;
+    const { serverTiming, chatSendTiming, ackReadyEvent } = prepareChatSendAckTiming({
+      client,
+      request,
+      session,
+      prepareAttachmentsMs,
+      chatSendTraceAttributes,
+    });
     context.addChatRun(clientRunId, {
       sessionKey,
       agentId: selectedAgent.agentId,
@@ -594,19 +572,7 @@ async function handleChatSendWithOptions(
       ...(interruptedActiveRun ? { interruptedActiveRun: true } : {}),
       ...(serverTiming ? { serverTiming } : {}),
     };
-    emitDiagnosticsTimelineEvent(
-      {
-        type: "mark",
-        name: "gateway.chat_send.ack_ready",
-        phase: "agent-turn",
-        attributes: {
-          ...chatSendTraceAttributes,
-          ackStatus: ackPayload.status,
-          ...chatSendAckServerTimingAttributes(serverTiming),
-        },
-      },
-      { config: cfg },
-    );
+    emitDiagnosticsTimelineEvent(ackReadyEvent(ackPayload.status), { config: cfg });
     // After the ACK, dispatch owns the turn: its error lifecycle persists the
     // user transcript (which references the media) on every path, so a
     // post-ACK cleanupAdmittedRun must not race that persist with a discard.

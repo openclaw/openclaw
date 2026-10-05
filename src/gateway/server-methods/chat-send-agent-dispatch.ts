@@ -77,7 +77,6 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     request,
     session,
     terminalizeRestartSafeAdmission,
-    timing,
     turn,
     userTurn,
   } = params;
@@ -106,8 +105,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     selectedAgent,
     sessionKey,
   } = session;
-  const { chatSendReceivedAtMs, clientInfo, p, reconnectResumeRequested, supportsTaskSuggestions } =
-    request;
+  const { clientInfo, p, reconnectResumeRequested, supportsTaskSuggestions } = request;
   const {
     accountId,
     ctx,
@@ -126,7 +124,6 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
   const { beginCapturedMessageInjection, preAckReplyContextPromise, replyContextFieldsPromise } =
     injection;
   let { messageInjectionAttempt } = injection;
-  const { chatSendAckedAtMs, chatSendTiming } = timing;
 
   // The first release wins: true when reply progress frees naming while the turn still runs.
   const titleReady = createDeferredCore<boolean>();
@@ -219,22 +216,11 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     userTurnRecorder,
     isReplyDispatchRun: () => replyDispatchRun !== undefined,
   });
-  const dispatchStartedAtMs = performance.now();
-  if (chatSendTiming) {
-    chatSendTiming.dispatchStartedAtMs = dispatchStartedAtMs;
-  }
-  const { emit: emitServerTiming, emitFirstAssistant: emitFirstAssistantServerTiming } =
-    createOperatorChatSendServerTiming({
-      context,
-      client,
-      runId: clientRunId,
-      sessionKey,
-      agentId,
-      receivedAtMs: chatSendReceivedAtMs,
-      ackedAtMs: chatSendAckedAtMs,
-      dispatchStartedAtMs,
-      chatSendTiming,
-    });
+  const {
+    emit: emitServerTiming,
+    emitFirstAssistant: emitFirstAssistantServerTiming,
+    dispatchStartedAtMs,
+  } = createOperatorChatSendServerTiming(params);
   emitServerTiming("dispatch-started");
   const dispatchAdmission = {
     run: <T>(operation: () => Promise<T>) =>
