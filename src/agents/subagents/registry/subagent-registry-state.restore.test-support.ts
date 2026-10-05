@@ -4,7 +4,6 @@ import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
 import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
 import { persistRegistryFixture } from "./subagent-registry-state.fixture.test-support.js";
 import {
-  getSubagentMaintenanceRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForRead,
   getSubagentRunsSnapshotForRead,
 } from "./subagent-registry-state.js";
@@ -31,7 +30,6 @@ export function registerSubagentRestoreCacheCases(params: {
       for (const read of [
         getSubagentRunsSnapshotForRead,
         getSubagentSessionListRunsSnapshotForRead,
-        getSubagentMaintenanceRunsSnapshotForRead,
       ]) {
         expect([...read(new Map()).keys()]).toEqual([...restored.keys()]);
       }
@@ -49,13 +47,26 @@ export function registerSubagentRestoreCacheCases(params: {
       let reads = 0;
       vi.mocked(stateReads.executeExistingOpenClawStateRead).mockImplementation(
         async (_options, command) => {
-          expect(command).toEqual({ type: "subagents.runs", scope: { kind: "all" } });
+          expect(command).toEqual({
+            type: "subagents.runs",
+            scope: { kind: "page", after: undefined },
+          });
           const snapshot = structuredClone(canonical);
           if (++reads === 1) {
             entered.resolve();
             await release.promise;
           }
-          return { ok: true, type: "subagents.runs", sourceAdmitted: true, runs: snapshot };
+          return {
+            ok: true,
+            type: "subagents.runs",
+            sourceAdmitted: true,
+            runs: snapshot,
+            versions: new Map([...snapshot.keys()].map((runId) => [runId, "fixture-version"])),
+            page: {
+              order: [...snapshot].map(([runId, entry]) => [runId, entry.createdAt] as const),
+              nextRunId: null,
+            },
+          };
         },
       );
       const restored = new Map<string, SubagentRunRecord>();

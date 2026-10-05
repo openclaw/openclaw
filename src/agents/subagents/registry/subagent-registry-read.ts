@@ -18,7 +18,6 @@ import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import {
   getSubagentSessionListRunsSnapshotForChildSessions,
   getSubagentRunsSnapshotForChildSession,
-  getSubagentRunsSnapshotForController,
   getSubagentSessionListRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForSessions,
   withSubagentRunReadSnapshot,
@@ -76,17 +75,6 @@ export function buildLatestSubagentSessionListReadIndex(
   );
 }
 
-export function listSubagentRunsForController(
-  controllerSessionKey: string,
-  controllerAgentId?: string,
-): SubagentRunRecord[] {
-  return listRunsForControllerFromRuns(
-    getSubagentRunsSnapshotForController(subagentRuns, controllerSessionKey),
-    controllerSessionKey,
-    controllerAgentId,
-  );
-}
-
 export async function countPendingDescendantRuns(
   rootSessionKey: string,
   assertCurrent: () => void,
@@ -114,16 +102,16 @@ export async function countPendingDescendantRuns(
   return count;
 }
 
-export function resolveRequesterForChildSession(
+export async function resolveRequesterForChildSession(
   childSessionKey: string,
   childAgentId?: string,
-): {
+): Promise<{
   requesterSessionKey: string;
   requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
-} | null {
+} | null> {
   const resolved = resolveRequesterForChildSessionFromRuns(
-    getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey, childAgentId),
+    await getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey, childAgentId),
     childSessionKey,
     childAgentId,
   );
@@ -137,12 +125,12 @@ export function resolveRequesterForChildSession(
   };
 }
 
-export function shouldIgnorePostCompletionAnnounceForSession(
+export async function shouldIgnorePostCompletionAnnounceForSession(
   childSessionKey: string,
   childAgentId?: string,
-): boolean {
+): Promise<boolean> {
   return shouldIgnorePostCompletionAnnounceForSessionFromRuns(
-    getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey, childAgentId),
+    await getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey, childAgentId),
     childSessionKey,
     childAgentId,
   );
@@ -172,24 +160,24 @@ export function listSubagentRunsForRequester(
   return listRunsForRequesterFromRuns(subagentRuns, requesterSessionKey, options);
 }
 
-export function getSubagentRunByChildSessionKey(
+export async function getSubagentRunByChildSessionKey(
   childSessionKey: string,
   childAgentId?: string,
-): SubagentRunRecord | null {
+): Promise<SubagentRunRecord | null> {
   return getSubagentRunByChildSessionKeyFromRuns(
-    getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey, childAgentId),
+    await getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey, childAgentId),
     childSessionKey,
     childAgentId,
   );
 }
 
-export function getLatestSubagentRunByChildSessionKey(
+export async function getLatestSubagentRunByChildSessionKey(
   childSessionKey: string,
   childAgentId?: string,
-): SubagentRunRecord | null {
+): Promise<SubagentRunRecord | null> {
   return (
     getLatestSubagentRunByChildSessionKeyFromRuns(
-      getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey, childAgentId),
+      await getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey, childAgentId),
       childSessionKey,
       undefined,
       childAgentId,

@@ -1,5 +1,5 @@
 import { listActiveAcpSessionsForOwner } from "../../../acp/control-plane/active-turns.js";
-import { getSubagentRunByChildSessionKey } from "../registry/subagent-registry-read.js";
+import { buildLatestSubagentSessionListReadIndex } from "../registry/subagent-registry-read.js";
 
 export function countUntrackedActiveAcpRunsForOwner(
   ownerKey: string | undefined,
@@ -8,9 +8,11 @@ export function countUntrackedActiveAcpRunsForOwner(
   if (!ownerKey?.trim()) {
     return 0;
   }
+  const sessions = listActiveAcpSessionsForOwner(ownerKey.trim());
+  const registry = buildLatestSubagentSessionListReadIndex(sessions);
   return new Set(
-    listActiveAcpSessionsForOwner(ownerKey.trim()).filter((sessionKey) => {
-      const run = getSubagentRunByChildSessionKey(sessionKey);
+    sessions.filter((sessionKey) => {
+      const run = registry.getLatestSubagentRun(sessionKey);
       return (
         !pendingChildSessionKeys?.has(sessionKey) &&
         !(run && typeof run.execution.endedAt !== "number")

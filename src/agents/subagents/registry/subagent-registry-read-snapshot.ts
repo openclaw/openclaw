@@ -38,6 +38,7 @@ export type SubagentRunReadSelection = {
 
 export type SubagentRunReadScope =
   | { runIds: ReadonlySet<string> }
+  | { childSessionKeys: readonly string[] }
   | { sessionKeys: readonly string[]; descendants: boolean }
   | "all";
 
@@ -109,6 +110,10 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
           readScope.runIds,
           liveKeys,
         );
+      } else if ("childSessionKeys" in readScope) {
+        const keys = new Set(readScope.childSessionKeys.map((key) => key.trim()).filter(Boolean));
+        liveKeys = getSubagentSessionReadLookup(inMemoryRuns).selectChildren(keys);
+        persistedKeys = getSessionListLookup(compactCache, compact).selectChildren(keys);
       } else {
         const live = getSubagentSessionReadLookup(inMemoryRuns);
         const durable = getSessionListLookup(compactCache, compact)!;
@@ -391,6 +396,7 @@ export type PreparedSubagentMaintenanceRead = {
 export async function prepareSubagentMaintenanceReadSnapshot(
   inMemoryRuns: Map<string, SubagentRunRecord>,
   cache: SubagentRunsCache<SubagentRunMaintenanceRecord>,
+  options?: { live?: true },
 ): Promise<PreparedSubagentMaintenanceRead> {
   const context = shouldReadPersistedSubagentRuns()
     ? captureOpenClawStateWorkerContext()
@@ -439,7 +445,7 @@ export async function prepareSubagentMaintenanceReadSnapshot(
     const reply = await executeExistingOpenClawStateRead(
       { path: context.admission.databasePath, env: context.environment },
       { type: "subagents.runs", scope: { kind: "maintenance" } },
-      { context, current: true },
+      { context, current: true, live: options?.live },
     );
     assertCurrent();
     if (

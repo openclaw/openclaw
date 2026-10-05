@@ -50,6 +50,7 @@ import {
 } from "../../spawn-plan.js";
 import { resolveSpawnedWorkspaceInheritance } from "../../spawned-context.js";
 import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
+import { prepareSubagentSessionListReadCache } from "../registry/subagent-registry-state.js";
 import { countUntrackedActiveAcpRunsForOwner } from "./acp-spawn-admission.js";
 import {
   resolveAcpSpawnBootstrapDeliveryPlan,
@@ -299,6 +300,8 @@ export async function spawnAcpDirect(
     cfg,
     store: subagentStore,
   });
+  await prepareSubagentSessionListReadCache();
+  ctx.assertActive?.();
   const resolveAdmission = (pendingChildren = 0, pendingChildSessionKeys?: ReadonlySet<string>) =>
     resolveSpawnAdmission({
       cfg,

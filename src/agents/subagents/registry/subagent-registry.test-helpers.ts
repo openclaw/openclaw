@@ -9,7 +9,6 @@ export {
   getSubagentSessionStartedAt,
   isSubagentRunLive,
   isSubagentSessionRunActive,
-  listSubagentRunsForController,
   listSubagentRunsForRequester,
   resolveRequesterForChildSession,
   resolveSubagentSessionStatus,
@@ -17,7 +16,6 @@ export {
 } from "./subagent-registry-read.js";
 
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
-import { collectSessionMaintenancePreserveKeys } from "../../../config/sessions/store-maintenance-preserve.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import {
   createSubagentRunRecord,
@@ -101,7 +99,3 @@ export const testing = {
   sweepOnceForTests: () => getRegistryTestApi().testing.sweepOnceForTests(),
   runSweeperTickForTests: () => getRegistryTestApi().testing.runSweeperTickForTests(),
 };
-
-export function listSessionMaintenanceProtectedSubagentSessionKeys() {
-  return [...(collectSessionMaintenancePreserveKeys() ?? [])];
-}

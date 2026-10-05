@@ -14,7 +14,7 @@ import {
 } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded, isRetainedUnendedSubagentRun } from "./subagent-run-liveness.js";
 
-function resolveConcurrencyOwnerSessionKey(entry: SubagentRunRecord): string {
+function resolveConcurrencyOwnerSessionKey(entry: SubagentRunReadRecord): string {
   return entry.collect
     ? entry.swarmRequesterSessionKey?.trim() || resolveControllerSessionKey(entry)
     : resolveControllerSessionKey(entry);
@@ -529,12 +529,12 @@ export function shouldIgnorePostCompletionAnnounceForSessionFromRuns(
   );
 }
 
-export function listSwarmRunsForGroupFromRuns(
-  runs: Map<string, SubagentRunRecord>,
+export function listSwarmRunsForGroupFromRuns<T extends SubagentRunReadRecord>(
+  runs: Map<string, T>,
   groupId: string,
   requesterSessionKey?: string,
   requesterAgentId?: string,
-): SubagentRunRecord[] {
+): T[] {
   const key = groupId.trim();
   const requesterKey = requesterSessionKey?.trim();
   return [...runs.values()].filter(
@@ -548,8 +548,8 @@ export function listSwarmRunsForGroupFromRuns(
 }
 
 /** Counts active direct child runs plus completed children that still have pending descendants. */
-export function countActiveRunsForSessionFromRuns(
-  runs: Map<string, SubagentRunRecord>,
+export function countActiveRunsForSessionFromRuns<T extends SubagentRunReadRecord>(
+  runs: Map<string, T>,
   controllerSessionKey: string,
   options?: { collect?: boolean; requesterAgentId?: string },
 ): number {
@@ -559,9 +559,9 @@ export function countActiveRunsForSessionFromRuns(
   }
 
   const now = Date.now();
-  let readIndex: SubagentRunReadIndex | undefined;
+  let readIndex: SubagentRunReadIndex<T> | undefined;
 
-  const latestByChildSessionKey = new Map<string, SubagentRunRecord>();
+  const latestByChildSessionKey = new Map<string, T>();
   // Records already carry collect, and spawn admission is not request-hot, so a
   // filtered snapshot is simpler than maintaining a second registry index.
   for (const entry of runs.values()) {
