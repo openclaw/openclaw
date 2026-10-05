@@ -14,6 +14,7 @@ import {
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
 import * as placementContext from "../../gateway/session-worker-placement-context.js";
 import { createWorkerSessionPlacementStore } from "../../gateway/worker-environments/placement-store.js";
 import {
@@ -23,6 +24,7 @@ import {
 import { isAgentRunStaleLifecycleError } from "../../infra/agent-lifecycle-error.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
@@ -120,42 +122,106 @@ describe("createReplyRestartRecoveryClaimController", () => {
     },
   );
 
-  it("admits a source-less turn with a durable recovery claim and no persisted liveness", async () => {
-    const scope = {
-      agentId: "main",
-      storePath: path.join(tempDirs.make("openclaw-source-less-recovery-"), "sessions.json"),
-      sessionKey: "agent:main:main",
-    };
-    let entry: InternalSessionEntry = { sessionId: "source-less-session", updatedAt: 1 };
-    await replaceSessionEntry(scope, entry);
-    const recorder = createUserTurnTranscriptRecorder({
-      message: { role: "user", content: "continue the task", timestamp: 1 },
-      target: { ...scope, sessionId: entry.sessionId, sessionEntry: entry },
-      updateMode: "none",
-    });
-    const controller = createController({
-      ...scope,
-      admissionRunId: "source-less-run",
-      lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      getEntry: () => entry,
-      getSessionId: () => entry.sessionId,
-      isRestartAbort: () => false,
-      resolveDeliveryContext: () => undefined,
-      setEntry: (next) => {
-        entry = next;
-      },
-    });
+  it.each([
+    { completion: "runtime", owner: "main", metadata: {} },
+    { completion: "handled-silent", owner: "main", metadata: {} },
+    { completion: "restart", owner: "main", metadata: {} },
+    { completion: "restart", owner: "spawned child", metadata: { spawnDepth: 1 } },
+    { completion: "restart", owner: "role-owned child", metadata: { subagentRole: "leaf" } },
+  ] as const)(
+    "settles source-less execution custody through $completion for $owner without claiming delivery authority",
+    ({ completion, owner, metadata }) =>
+      withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const scope = {
+          agentId: "main",
+          storePath: path.join(state.sessionsDir(), "sessions.json"),
+          sessionKey: "agent:main:dashboard:recovery-admission",
+        };
+        const lifecycleGeneration = getAgentEventLifecycleGeneration();
+        const executionRunId = "source-less-execution";
+        let restartAborted = false;
+        let entry: InternalSessionEntry = {
+          sessionId: "source-less-session",
+          updatedAt: 1,
+          ...metadata,
+        };
+        const expectedRuns =
+          owner === "main" ? [{ runId: executionRunId, lifecycleGeneration }] : undefined;
+        await replaceSessionEntry(scope, entry);
+        const recorder = createUserTurnTranscriptRecorder({
+          message: { role: "user", content: "continue the task", timestamp: 1 },
+          target: { ...scope, sessionId: entry.sessionId, sessionEntry: entry },
+          updateMode: "none",
+        });
+        const controller = createController({
+          ...scope,
+          admissionRunId: "source-less-run",
+          executionRunId,
+          lifecycleGeneration,
+          getEntry: () => entry,
+          getSessionId: () => entry.sessionId,
+          isRestartAbort: () => restartAborted,
+          resolveDeliveryContext: () => undefined,
+          setEntry: (next) => {
+            entry = next;
+          },
+        });
 
-    await expect(controller.admitUserTurn(recorder)).resolves.toBe("admitted");
-    expect(recorder.hasPersisted()).toBe(true);
-    expect(loadSessionEntry(scope)).toMatchObject({
-      restartRecoveryDeliveryRunId: "source-less-run",
-      abortedLastRun: false,
-    });
-    expect(loadSessionEntry(scope)?.status).toBeUndefined();
-    await controller.clear();
-    expect(loadSessionEntry(scope)?.restartRecoveryDeliveryRunId).toBeUndefined();
-  });
+        await expect(controller.admitUserTurn(recorder)).resolves.toBe("admitted");
+        expect(recorder.hasPersisted()).toBe(true);
+        expect(loadSessionEntry(scope)).toMatchObject({
+          abortedLastRun: false,
+        });
+        expect(loadSessionEntry(scope)?.restartRecoveryRuns).toEqual(expectedRuns);
+        expect(loadSessionEntry(scope)?.status).toBeUndefined();
+        expect(loadSessionEntry(scope)?.restartRecoveryDeliveryRunId).toBeUndefined();
+        expect(loadSessionEntry(scope)?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+        if (completion === "handled-silent") {
+          await controller.beginBeforeAgentReply();
+          await controller.checkpointBeforeAgentReply({ state: "handled-silent" });
+        } else {
+          const startedAt = Date.now();
+          const event = {
+            runId: executionRunId,
+            lifecycleGeneration,
+            sessionKey: scope.sessionKey,
+            sessionId: entry.sessionId,
+            stream: "lifecycle" as const,
+            seq: 1,
+            ts: startedAt,
+          };
+          await persistGatewaySessionLifecycleEvent({
+            ...scope,
+            event: { ...event, data: { phase: "start", startedAt } },
+          });
+          expect(loadSessionEntry(scope)?.lifecycleRunId).toBe(executionRunId);
+          restartAborted = completion === "restart";
+          await persistGatewaySessionLifecycleEvent({
+            ...scope,
+            event: {
+              ...event,
+              seq: 2,
+              ts: startedAt + 10,
+              data: {
+                phase: "end",
+                endedAt: startedAt + 10,
+                ...(restartAborted ? { aborted: true, stopReason: "restart" } : {}),
+              },
+            },
+          });
+        }
+        await controller.clear();
+        const settled = loadSessionEntry(scope);
+        expect(settled?.status).toBe(restartAborted ? "interrupted" : "done");
+        if (restartAborted) {
+          expect(settled?.restartRecoveryRuns).toEqual(expectedRuns);
+          expect(await controller.isArmed()).toBe(owner === "main");
+        } else {
+          expect(settled?.restartRecoveryRuns).toBeUndefined();
+        }
+        expect(settled?.restartRecoveryDeliveryRunId).toBeUndefined();
+      }),
+  );
 
   describe("placement observations", () => {
     const placementDirs = useStateDatabaseTempDirs();

@@ -158,10 +158,24 @@ export function isMainSessionRecoveryPending(entry: SessionEntry, sessionKey: st
 /** Failed foreground admission can leave an unfinished recovery cycle behind. */
 export function isMainSessionRecoveryReconciliationCandidate(entry: SessionEntry): boolean {
   return (
+    (entry.status === undefined || entry.status === "failed") &&
     entry.abortedLastRun !== true &&
     hasMainSessionRecoveryClaim(entry) &&
     !isRetryableUnadoptedChatClaim(entry) &&
     !entry.mainRestartRecovery?.tombstone
+  );
+}
+
+/** A later foreground outcome cannot settle a different run's recovery fence. */
+export function hasCompletedMainSessionRecoveryOutcome(entry: SessionEntry): boolean {
+  return (
+    isTerminalSessionStatus(entry.status) &&
+    entry.status !== "interrupted" &&
+    !isRetryableUnadoptedChatClaim(entry) &&
+    !entry.pendingFinalDelivery &&
+    (entry.restartRecoveryRuns ?? []).every((run) =>
+      hasRestartRecoveryTerminalRun(entry, run.runId),
+    )
   );
 }
 
@@ -386,10 +400,7 @@ export function transitionMainSessionRecovery(
       }
       if (
         isMainRestartRecoveryTerminalOnly(entry) ||
-        (isTerminalSessionStatus(entry.status) &&
-          entry.status !== "interrupted" &&
-          !isRetryableUnadoptedChatClaim(entry) &&
-          !entry.pendingFinalDelivery &&
+        (hasCompletedMainSessionRecoveryOutcome(entry) &&
           !state?.tombstone &&
           !state?.reservation &&
           !(state && hasCurrentForegroundClaim(state, command.lifecycleGeneration)))

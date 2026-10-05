@@ -17,8 +17,12 @@ import { markSessionCompletedAfterRecoveryCheckpoint } from "./main-session-reco
 import { markStartupOrphanedMainSessionsForRecovery } from "./main-session-recovery/main-session-restart-recovery-marking.js";
 import { recoverStore } from "./main-session-recovery/main-session-restart-recovery-store.js";
 
-const { loadSessionEntry, replaceSessionEntry, rotateAgentEventLifecycleGeneration } =
-  compactionTestRuntime;
+const {
+  loadSessionEntry,
+  replaceSessionEntry,
+  rotateAgentEventLifecycleGeneration,
+  createAgentRunRestartAbortError,
+} = compactionTestRuntime;
 
 registerAgentCommandCompactionTestHooks();
 
@@ -138,11 +142,7 @@ it.each(["unknown", "delivered"] as const)(
     expect(completed?.mainRestartRecovery).toBeUndefined();
     expect(completed?.restartRecoveryRuns).toBeUndefined();
     expect(completed?.restartRecoveryDeliveryRunId).toBeUndefined();
-    expect(completed?.restartRecoveryTerminalRunIds).toEqual([
-      "previous-source",
-      sourceRunId,
-      "next-instruction",
-    ]);
+    expect(completed?.restartRecoveryTerminalRunIds).toEqual(["previous-source", sourceRunId]);
     expect(completed?.restartRecoveryTerminalDeliveryEvidence).toContainEqual(previousEvidence);
 
     await finishAgentCommandCleanup({
@@ -166,5 +166,52 @@ it.each(["unknown", "delivered"] as const)(
       releaseForeground: undefined,
     });
     expect(loadSessionEntry(target)).toEqual(completed);
+  },
+);
+
+it.each([
+  { owner: "main", metadata: {} },
+  { owner: "spawned child", metadata: { spawnDepth: 1 } },
+  { owner: "role-owned child", metadata: { subagentRole: "leaf" } },
+  {
+    owner: "child with retained fence",
+    metadata: {
+      spawnDepth: 1,
+      restartRecoveryRuns: [
+        { runId: "previous-owner", lifecycleGeneration: "previous-generation" },
+      ],
+    },
+  },
+] satisfies Array<{ owner: string; metadata: Partial<SessionEntry> }>)(
+  "arms command execution recovery only for its eligible owner: $owner",
+  async ({ owner, metadata }) => {
+    const sessionKey = "agent:main:dashboard:recovery-admission";
+    const sessionId = "recovery-admission-session";
+    const runId = "restart-aborted-admission";
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const target = { agentId: "main", sessionKey, storePath: requireCompactionStorePath() };
+    const entry: SessionEntry = { sessionId, updatedAt: Date.now(), ...metadata };
+    await replaceSessionEntry(target, entry);
+    state.runAgentAttemptMock.mockRejectedValue(createAgentRunRestartAbortError());
+
+    await expect(
+      agentCommandFromGatewayIngress(
+        {
+          sessionKey,
+          sessionId,
+          runId,
+          message: "Continue visible work",
+          allowModelOverride: false,
+        },
+        ...GATEWAY_INGRESS_ARGS,
+      ),
+    ).rejects.toMatchObject({ code: "OPENCLAW_RESTART_ABORT" });
+
+    expect(state.runAgentAttemptMock).toHaveBeenCalledOnce();
+    const admitted = loadSessionEntry(target);
+    expect(admitted?.restartRecoveryRuns).toEqual(
+      owner === "main" ? [{ runId, lifecycleGeneration }] : entry.restartRecoveryRuns,
+    );
+    expect(admitted?.restartRecoveryDeliveryRunId).toBeUndefined();
   },
 );

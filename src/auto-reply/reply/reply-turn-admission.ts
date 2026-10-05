@@ -423,6 +423,7 @@ export async function admitReplyTurn(
             ((hasMainSessionRecoveryClaim(admittedSessionEntry) &&
               admittedSessionEntry.abortedLastRun === true) ||
               (params.kind !== "heartbeat" &&
+                admittedSessionEntry.mainRestartRecovery !== undefined &&
                 admittedSessionEntry.restartRecoveryRuns !== undefined) ||
               admittedSessionEntry.mainRestartRecovery?.tombstone !== undefined) &&
             isMainRestartRecoveryCandidate(admittedSessionEntry, params.sessionKey);

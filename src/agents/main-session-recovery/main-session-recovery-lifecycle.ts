@@ -62,7 +62,7 @@ export function scheduleMainSessionRecoveryMutation<T>(params: {
 
 export function inspectMainSessionRecoveryLifecycleEvent(params: {
   currentLifecycleGeneration: string;
-  entry?: Partial<Pick<SessionEntry, "restartRecoveryRuns">> | null;
+  entry?: Partial<Pick<SessionEntry, "restartRecoveryRuns" | "abortedLastRun">> | null;
   event: MainRecoveryLifecycleEvent;
   abortSignal?: AbortSignal;
 }) {
@@ -95,7 +95,9 @@ export function inspectMainSessionRecoveryLifecycleEvent(params: {
     interrupted,
     suppress:
       matchesFence &&
-      (phase === "start" ||
+      ((phase === "start" &&
+        (params.entry?.abortedLastRun === true ||
+          lifecycleGeneration !== params.currentLifecycleGeneration)) ||
         (interrupted && lifecycleGeneration !== params.currentLifecycleGeneration)),
   };
 }

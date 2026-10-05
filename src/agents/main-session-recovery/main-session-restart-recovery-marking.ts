@@ -19,7 +19,6 @@ import {
   readSessionEntrySummariesInWorker,
 } from "../../config/sessions/session-entry-read-runtime.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
-import { isTerminalSessionStatus } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartRecoveryCandidate } from "../../gateway/chat-abort.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
@@ -32,6 +31,7 @@ import { hasLiveAgentRunContext, listAgentRunsForSession } from "../../infra/age
 import { captureGatewaySessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
 import { createCurrentProcessOwnerLookup } from "./main-session-recovery-live-owners.js";
 import {
+  hasCompletedMainSessionRecoveryOutcome,
   isMainRestartRecoveryTerminalOnly,
   normalizeMainSessionRecoveryRunFences,
   transitionMainSessionRecovery,
@@ -384,11 +384,15 @@ async function markOrphanedMainSessionStore(
         }
         return undefined;
       }
-      const completed =
-        isTerminalSessionStatus(entry.status) &&
-        entry.status !== "interrupted" &&
-        !entry.pendingFinalDelivery;
-      if (entry.abortedLastRun === true && !completed) {
+      const completed = hasCompletedMainSessionRecoveryOutcome(entry);
+      if (
+        !completed &&
+        (entry.abortedLastRun === true ||
+          (!entry.pendingFinalDelivery &&
+            entry.status !== undefined &&
+            entry.status !== "failed" &&
+            entry.status !== "interrupted"))
+      ) {
         return undefined;
       }
       orphanChecks.push(hasLiveOwner);

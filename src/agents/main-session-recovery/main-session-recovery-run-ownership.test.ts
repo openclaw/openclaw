@@ -33,6 +33,28 @@ function recoveryEntry(params?: {
 }
 
 describe("main-session recovery run ownership", () => {
+  it.each([
+    { lifecycleGeneration: "generation-current", abortedLastRun: false, action: "apply" },
+    { lifecycleGeneration: "generation-current", abortedLastRun: true, action: "suppress" },
+    { lifecycleGeneration: "generation-old", abortedLastRun: false, action: "suppress" },
+  ] as const)(
+    "fences a prearmed start ($lifecycleGeneration, interrupted=$abortedLastRun)",
+    ({ lifecycleGeneration, abortedLastRun, action }) => {
+      const patch = { status: undefined, abortedLastRun: false, startedAt: 200 };
+      expect(
+        projectMainSessionRecoveryLifecycle({
+          currentLifecycleGeneration: "generation-current",
+          entry: {
+            abortedLastRun,
+            restartRecoveryRuns: [{ runId: "admitted", lifecycleGeneration }],
+          },
+          event: { runId: "admitted", lifecycleGeneration, data: { phase: "start" } },
+          snapshotPatch: patch,
+        }),
+      ).toEqual(action === "apply" ? { action, patch } : { action });
+    },
+  );
+
   it("transfers process-owned recovery leases to a restart marker", () => {
     const entry: SessionEntry = {
       sessionId: "session-1",
