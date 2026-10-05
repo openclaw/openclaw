@@ -164,7 +164,7 @@ export type SlackQaCodexApprovalScenarioRun = {
   token: string;
 };
 
-export type SlackQaScenarioRun =
+type SlackQaScenarioRun =
   | SlackQaApprovalScenarioRun
   | SlackQaCodexApprovalScenarioRun
   | SlackQaDirectTransportScenarioRun

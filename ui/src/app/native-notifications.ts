@@ -3,7 +3,7 @@ import { webKitHostWindow } from "./native-webkit-bridge.ts";
 
 export type NativeNotificationsPermission = "granted" | "denied" | "notDetermined";
 
-export type NativeNotificationTestOutcome =
+type NativeNotificationTestOutcome =
   | { state: "pending" }
   | { state: "sent" }
   | { state: "error"; message: string };

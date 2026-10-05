@@ -745,5 +745,3 @@ export async function shouldRetainQaGatewayCredentialLease(env: NodeJS.ProcessEn
     return true;
   }
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
