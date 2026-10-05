@@ -199,6 +199,22 @@ describe("ollama embedding provider", () => {
     });
   });
 
+  it.each([
+    ["the provider-configured host", undefined, true],
+    ["a remote override of the provider host", "http://host.docker.internal:11434", true],
+    ["a separate remote embedding host", "http://embeddings.example:11434", false],
+  ] as const)(
+    "grants the 0.0.0.0/8 host-gateway exemption only to %s",
+    async (_name, remoteBaseUrl, expected) => {
+      await embedTestQuery({
+        config: createProviderConfig({ baseUrl: "http://host.docker.internal:11434" }),
+        ...(remoteBaseUrl ? { remote: { baseUrl: remoteBaseUrl } } : {}),
+      });
+
+      expect(firstGuardedFetchCall().allowUnspecifiedIpv4Range).toBe(expected);
+    },
+  );
+
   it("fails fast when memory-search remote apiKey is an unresolved SecretRef", async () => {
     await expect(
       createEmbeddingProvider({
