@@ -662,9 +662,7 @@ export async function preflightOpenClawDatabaseSchemas(
           });
         }
         recordPreparedSchemaHeader?.(agentVersion);
-        if (schemaInspection.integrityGateOutcome === "pending") {
-          return "defer";
-        }
+        return schemaInspection.preparationPending ? "defer" : undefined;
       } catch (error) {
         if (options.signal?.aborted) {
           throw error;
