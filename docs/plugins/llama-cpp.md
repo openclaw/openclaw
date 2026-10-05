@@ -128,6 +128,17 @@ managed server and the configured embedding model after explicit consent. It
 does not add a llama.cpp chat model or change the current chat model. Setup discovery remains
 read-only and never installs or downloads anything.
 
+If no recommended chat model fits your memory budget, enable local memory
+search and retry setup to get the embedding-only offer (about 0.3 GB for the
+default embedding model):
+
+```bash
+openclaw config set memory.search.provider local
+openclaw models auth login --provider llama-cpp --method local
+```
+
+If you use `--profile`, use the same profile for both commands.
+
 If the llama.cpp provider has any configured chat models, embedding-only setup
 leaves it unchanged. Move any chat routes to another provider and remove those
 model entries before retrying. An existing external llama.cpp server config
