@@ -167,10 +167,15 @@ column is removed, the board applies its rules again. Tile tooltips distinguish
 **by rule** and **pinned**.
 
 Facts update live from session changes, with automatic board rereads at most once
-every five seconds. Later events keep invalidating facts without delaying that
-reread. The board reuses unchanged facts across boards until a session change
-invalidates them, and concurrent reads share one facts refresh per board.
-Session visibility and people filters remain specific to each caller.
+every five seconds. Category-only session updates and card-only changes do not
+reload Sessions boards. Reads share a prepared placement snapshot when their
+board, authorized roster, people view, and session revision match. Each request
+still obtains its own caller-scoped roster; sharing never expands session visibility.
+`workboard.sessionsBoard.read` returns a `revision`; repeat the same query with
+`{ sinceRevision: revision }` for `{ unchanged: true, revision }` when current.
+Reconnects and view changes request a full snapshot. The Workboard change event's
+`sessionsRevision` advances for board edits, operator pins, and session fact
+invalidations independently of `cardsRevision`.
 Reads use prepared Gateway facts without waiting for Git or pull-request requests.
 Missing pull-request facts refresh in the background and announce a board change
 when ready. An inline warning names the
@@ -179,7 +184,8 @@ empty board. A failed facts read keeps the last known facts and placement;
 sessions with no known facts use the fallback column with reason
 `facts-unavailable`. A session whose available facts match no rule also uses that
 reason while its pull-request facts are unknown. Opening a board starts any needed
-background refresh; unchanged sessions do not refresh merely because time passed.
+background refresh. Shared snapshots reuse prepared facts until a publication or
+board age-window expiry; failure fallback retains the last known facts.
 
 When the Control UI host supports a session dock, **Board agent** opens a
 conversation beside the board. Its first use creates and saves a dedicated

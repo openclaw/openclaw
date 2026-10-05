@@ -538,7 +538,10 @@ export async function completePostCorePluginUpdate(
       }
       const freshDoctorRequired =
         pluginUpdate.changed ||
-        hasDeferredUpdateModelRetirement() ||
+        hasDeferredUpdateModelRetirement(
+          params.opts?.run?.env,
+          params.opts?.run?.runId ?? params.runId,
+        ) ||
         (await readDeferredPluginMigrationsAsync()).length > 0;
       assertCurrent();
       if (freshDoctorRequired) {

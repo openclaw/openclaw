@@ -5,7 +5,7 @@ import { listSubagentSessionListRunsForControllers } from "../agents/subagents/r
 import { resolveAgentMainSessionKey, type SessionEntry } from "../config/sessions.js";
 import { collectCanonicalSessionLookupKeys } from "../config/sessions/main-session-key.js";
 import { listSessionChildEntriesReadOnly } from "../config/sessions/session-accessor.js";
-import type { SessionEntryListScope } from "../config/sessions/session-accessor.types.js";
+import type { SessionEntryReadScope } from "../config/sessions/session-accessor.types.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionMember } from "../config/sessions/session-sharing-store.kernel.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
@@ -60,8 +60,8 @@ type GatewaySessionStoreLookupParams = {
   agentId?: string;
   preserveQualifiedAddress?: boolean;
   clone?: boolean;
-  projection?: SessionEntryListScope["projection"];
-  readConsistency?: SessionEntryListScope["readConsistency"];
+  projection?: SessionEntryReadScope["projection"];
+  readConsistency?: SessionEntryReadScope["readConsistency"];
   readOnly?: boolean;
   exactRead?: boolean;
   includeStoreChildEntries?: boolean;
@@ -401,6 +401,12 @@ export async function withGatewaySessionStoreTarget<T>(
               // Admission needs complete member rows; list-only readers need sharing identities.
               projection:
                 params.projection === "list" && !params.includeMembership ? "sharing" : "full",
+              snapshotFields:
+                typeof params.projection === "object"
+                  ? params.projection
+                  : params.projection === "list"
+                    ? []
+                    : undefined,
               includeMembers: params.includeMembership,
               includeAuthorization: true,
               env: inventory.env,
@@ -526,7 +532,7 @@ function resolveGatewaySessionStoreTargetsReadOnly(params: {
   env?: NodeJS.ProcessEnv;
   cfg: OpenClawConfig;
   targets: readonly { key: string; agentId?: string }[];
-  projection?: SessionEntryListScope["projection"];
+  projection?: SessionEntryReadScope["projection"];
 }): GatewaySessionStoreTargetWithStore[] {
   return readGatewaySessionStoreTargets(params, "eager").map((result) => {
     if (!result.ok) {
@@ -541,7 +547,7 @@ export function prepareGatewaySessionStoreTargetsReadOnly(params: {
   env?: NodeJS.ProcessEnv;
   cfg: OpenClawConfig;
   targets: readonly { key: string; agentId?: string }[];
-  projection: SessionEntryListScope["projection"];
+  projection: SessionEntryReadScope["projection"];
 }): Array<Result<GatewaySessionStoreTargetWithStore, unknown>> {
   return readGatewaySessionStoreTargets(params, "prepared");
 }

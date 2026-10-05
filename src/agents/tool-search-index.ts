@@ -9,12 +9,19 @@ const indexes = new LruCache<{
   index: ReturnType<typeof buildLexicalIndex<number>>;
   bytes: number;
 }>(32, { maxBytes: 8 * 1024 * 1024, sizeOf: (entry) => entry.bytes });
+// Eviction retires idle retention, never an index still held by an admitted view.
+const active = new Map<string, WeakRef<ReturnType<typeof buildLexicalIndex<number>>>>();
+const retired = new FinalizationRegistry<string>((revision) => {
+  if (!active.get(revision)?.deref()) {
+    active.delete(revision);
+  }
+});
 
 export function getTextLexicalIndex(documents: readonly string[]) {
   const revision = createHash("sha256").update(JSON.stringify(documents)).digest("hex");
-  const cached = indexes.get(revision);
+  const cached = indexes.get(revision)?.index ?? active.get(revision)?.deref();
   if (cached) {
-    return cached.index;
+    return cached;
   }
   let bytes = 0;
   const index = Object.freeze(
@@ -29,5 +36,7 @@ export function getTextLexicalIndex(documents: readonly string[]) {
     ),
   );
   indexes.set(revision, { index, bytes });
+  active.set(revision, new WeakRef(index));
+  retired.register(index, revision);
   return index;
 }

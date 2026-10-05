@@ -1,6 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import type { QualifiedSessionEntryAccessTarget } from "../config/sessions/session-accessor.types.js";
+import type {
+  QualifiedSessionEntryAccessTarget,
+  SessionEntryReadScope,
+} from "../config/sessions/session-accessor.types.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import { listSessionMembers } from "../config/sessions/session-sharing-store.js";
@@ -129,7 +132,7 @@ export function withIncognitoGatewaySessionStoreTarget<T>(params: {
   key: string;
   agentId?: string;
   env?: NodeJS.ProcessEnv;
-  projection?: "list" | "full";
+  projection?: SessionEntryReadScope["projection"];
   includeMembership?: boolean;
   identity: { agentId: string; canonicalKey: string };
   resolve: () => GatewaySessionStoreTargetWithStore;

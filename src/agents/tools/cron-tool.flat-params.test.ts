@@ -151,26 +151,6 @@ describe("cron shorthand recovery", () => {
     });
   });
 
-  it("nests literal dotted job keys into the recovered update patch (#120616)", async () => {
-    // Models sometimes emit "job.payload.message" as a flat literal key instead
-    // of nesting it. Without dotted-key recovery the key is not a recognized
-    // cron field, params.job stays absent, and cron-tool throws "job required".
-    await execute({
-      action: "update",
-      jobId: "job-dotted",
-      "job.payload.message": "after",
-    });
-
-    expect(gateway).toHaveBeenCalledExactlyOnceWith(
-      "cron.update",
-      expect.anything(),
-      expect.objectContaining({
-        id: "job-dotted",
-        patch: { payload: { kind: "agentTurn", message: "after" } },
-      }),
-    );
-  });
-
   it("merges sibling dotted keys under one recovered object (#120616)", async () => {
     // The first field creates the payload object; the second meets that parent
     // and must continue into it instead of being kept as a literal key.

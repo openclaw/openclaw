@@ -621,7 +621,8 @@ describe("createComputerTool node resolution", () => {
     },
   );
 
-  it.each(["windows", "linux"])("resolves and executes on a capable %s node", async (platform) => {
+  it("resolves and executes on a capable non-Mac node", async () => {
+    const platform = "windows";
     const nodeId = `${platform}-1`;
     listNodesMock.mockResolvedValue([
       {

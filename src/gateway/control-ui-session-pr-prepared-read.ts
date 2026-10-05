@@ -1,12 +1,48 @@
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import type { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
-import type { ControlUiSessionPullRequestSnapshot } from "./control-ui-contract.js";
+import type {
+  ControlUiSessionPullRequestSnapshot,
+  ControlUiSessionPullRequests,
+} from "./control-ui-contract.js";
 import {
   prepareControlUiSessionPrServiceTarget,
   type ControlUiSessionPrTarget,
+  type ControlUiSessionPrReadContext,
 } from "./control-ui-session-pr-read.js";
-import { createControlUiSessionPrSnapshotRead } from "./control-ui-session-pr-snapshot-read.js";
+import type { ControlUiSessionPullRequestsParams } from "./control-ui-session-prs.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
+
+export type LoadSessionPullRequests = (
+  params: ControlUiSessionPullRequestsParams,
+  cacheSignal: AbortSignal | undefined,
+  read: ControlUiSessionPrReadContext,
+) => Promise<ControlUiSessionPullRequests>;
+
+export async function loadSessionPullRequests(
+  params: ControlUiSessionPullRequestsParams,
+  cacheSignal: AbortSignal | undefined,
+  read: ControlUiSessionPrReadContext,
+): Promise<ControlUiSessionPullRequests> {
+  read.assertCurrent();
+  const { loadControlUiSessionPullRequests } = await import("./control-ui-session-prs.js");
+  return loadControlUiSessionPullRequests(params, { cacheSignal, read });
+}
+
+export function pushedSnapshot(
+  result: ControlUiSessionPullRequests,
+): ControlUiSessionPullRequestSnapshot {
+  return {
+    ...result,
+    status: result.status ?? (result.rateLimited ? "rate-limited" : "ready"),
+  };
+}
+
+export const UNAVAILABLE_SNAPSHOT: ControlUiSessionPullRequestSnapshot = {
+  pullRequests: [],
+  rateLimited: false,
+  status: "unavailable",
+};
 
 export type PreparedSessionPrState = {
   connIds: Set<string>;
@@ -17,13 +53,18 @@ export type PreparedSessionPrState = {
 };
 
 /** Background readers publish into the subscription owner's existing cells and concurrency. */
-export function createControlUiSessionPrPreparedRead<State extends PreparedSessionPrState>(
-  deps: Omit<Parameters<typeof createControlUiSessionPrSnapshotRead>[0], "publish"> & {
-    keyStates: Map<string, State>;
-    stateForTarget: (sessionKey: string, target: ControlUiSessionPrTarget) => State;
-    getSessionRowProjection?: () => SessionRowProjection | undefined;
-  },
-) {
+export function createControlUiSessionPrPreparedRead<State extends PreparedSessionPrState>(deps: {
+  scope: Pick<AsyncWorkScope, "isClosing" | "track">;
+  limit: <T>(run: () => Promise<T>) => Promise<T>;
+  withSource: <T>(
+    target: ControlUiSessionPrTarget,
+    operation: (assertCurrent: () => void, sourceIdentity: string) => Promise<T>,
+  ) => Promise<T>;
+  load: LoadSessionPullRequests;
+  keyStates: Map<string, State>;
+  stateForTarget: (sessionKey: string, target: ControlUiSessionPrTarget) => State;
+  getSessionRowProjection?: () => SessionRowProjection | undefined;
+}) {
   const { scope, limit, withSource, load, keyStates, stateForTarget } = deps;
   const preparing = new Map<State, Promise<void>>();
   const publishSnapshot = (state: State, snapshot: ControlUiSessionPullRequestSnapshot) => {
@@ -37,22 +78,59 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
     }
   };
 
-  const read = createControlUiSessionPrSnapshotRead({
-    scope,
-    limit,
-    withSource,
-    load,
-    publish: (target, snapshot) => {
+  const read = (
+    target: ControlUiSessionPrTarget,
+    assertCurrent: () => void,
+    projection?: ControlUiSessionPrReadContext["projection"],
+  ): Promise<ControlUiSessionPullRequestSnapshot> => {
+    const assertActive = () => {
+      if (scope.isClosing) {
+        throw new Error("Session pull-request owner is closed");
+      }
+      assertCurrent();
+      target.assertCurrent?.();
+    };
+    const publish = (snapshot: ControlUiSessionPullRequestSnapshot) => {
       const state = keyStates.get(target.params.sessionKey);
       if (
+        projection !== "publication" &&
         state?.prepared &&
         state.snapshot === undefined &&
         state.target.identity === target.identity
       ) {
         publishSnapshot(state, snapshot);
       }
-    },
-  });
+    };
+    assertActive();
+    return scope.track(() =>
+      limit(async () => {
+        assertActive();
+        return await withSource(target, async (assertSourceCurrent, sourceIdentity) => {
+          const assertReadCurrent = () => {
+            assertActive();
+            assertSourceCurrent();
+          };
+          assertReadCurrent();
+          try {
+            const result = await load(target.params, undefined, {
+              target,
+              sourceIdentity,
+              projection,
+              assertCurrent: assertReadCurrent,
+            });
+            assertReadCurrent();
+            const snapshot = pushedSnapshot(result);
+            publish(snapshot);
+            return snapshot;
+          } catch {
+            assertReadCurrent();
+            publish(UNAVAILABLE_SNAPSHOT);
+            return { ...UNAVAILABLE_SNAPSHOT };
+          }
+        });
+      }),
+    );
+  };
   const readPrepared = (target: ControlUiSessionPrTarget) => {
     if (scope.isClosing) {
       return undefined;

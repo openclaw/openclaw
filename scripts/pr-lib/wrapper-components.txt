@@ -139,7 +139,9 @@ packages/worker-runtime/src/lifecycle.ts
 packages/worker-runtime/src/retained-operation.ts
 packages/worker-runtime/src/worker-task-capacity.ts
 packages/worker-runtime/src/worker-task-context.ts
+packages/worker-runtime/src/worker-task-host.ts
 packages/worker-runtime/src/worker-task-native-sections.ts
+packages/worker-runtime/src/worker-task-pool-bootstrap.ts
 packages/worker-runtime/src/worker-task-pool-completion.ts
 packages/worker-runtime/src/worker-task-pool-core.ts
 packages/worker-runtime/src/worker-task-pool-owned.ts
@@ -1106,11 +1108,13 @@ src/infra/worker-native-handle.ts
 src/infra/worker-native-lifecycle.ts
 src/infra/worker-native-port.ts
 src/infra/worker-native-resource.ts
+src/infra/worker-native-task-port.ts
 src/infra/worker-task-capacity.ts
 src/infra/worker-task-host.ts
 src/infra/worker-task-pool-registry.ts
 src/infra/worker-task-pool.ts
 src/infra/worker-task-server.ts
+src/infra/worker-task-transport.ts
 src/infra/worker-transfer-bytes.ts
 src/infra/wsl.ts
 src/infra/zstd-codec.ts
@@ -1317,6 +1321,7 @@ src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
 src/plugins/plugin-instance-module-loader.ts
 src/plugins/plugin-instance-owned-values.ts
+src/plugins/plugin-instance-runtime-scope.ts
 src/plugins/plugin-instance-scope.ts
 src/plugins/plugin-instance-settlement.ts
 src/plugins/plugin-instance-bindings.ts
@@ -1533,6 +1538,7 @@ src/shared/path-array-index.ts
 src/shared/permit-pool.ts
 src/shared/pid-alive.ts
 src/shared/regexp.ts
+src/shared/rosetta-translation.ts
 src/shared/sandbox-workspace-paths.ts
 src/shared/settle-within.ts
 src/shared/store-writer-queue.ts

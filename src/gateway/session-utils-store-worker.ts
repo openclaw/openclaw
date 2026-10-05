@@ -1,4 +1,5 @@
 import { ok } from "@openclaw/normalization-core/result";
+import type { SessionEntryReadScope } from "../config/sessions/session-accessor.types.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
@@ -19,7 +20,7 @@ export async function resolveGatewaySessionStoreTargetInWorker(params: {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   assertActive?: () => void;
-  projection?: "full" | "list";
+  projection?: SessionEntryReadScope["projection"];
 }) {
   params.assertActive?.();
   const { agentId, canonicalKey } = resolveSessionStoreIdentity({
@@ -74,8 +75,9 @@ export async function resolveGatewaySessionStoreTargetInWorker(params: {
             agentId: read.agentId ?? agentId,
             storePath: read.storePath,
             sessionKeys: read.options.exactKeys!,
-            projection:
-              read.options.projection === "full" ? ("exact" as const) : read.options.projection,
+            projection: read.options.projection === "list" ? ("list" as const) : ("exact" as const),
+            snapshotFields:
+              typeof read.options.projection === "object" ? read.options.projection : undefined,
             env: inventory.env,
           })),
           (loaded) => {
@@ -104,13 +106,13 @@ export async function resolveGatewaySessionStoreTargetInWorker(params: {
   return target;
 }
 
-/** Full entry preparation shares the Gateway's alias, discovery, and reader owners. */
+/** Entry preparation shares the Gateway's alias, discovery, and reader owners. */
 export async function loadGatewaySessionEntryReadOnlyInWorker(
   params: Parameters<typeof resolveGatewaySessionStoreTargetInWorker>[0],
 ) {
   const target = await resolveGatewaySessionStoreTargetInWorker({
     ...params,
-    projection: "full",
+    projection: params.projection ?? "full",
   });
   params.assertActive?.();
   const match = findCanonicalStoreMatch(target.store, target.storeKeys);

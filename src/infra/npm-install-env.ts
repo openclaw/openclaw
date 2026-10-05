@@ -196,16 +196,11 @@ function buildNpmGlobalConfigPathCacheKey(env: NodeJS.ProcessEnv, scope: NpmConf
     env: Object.fromEntries(
       NPM_GLOBAL_CONFIG_PATH_CACHE_ENV_KEYS.map((key) => [key, env[key] ?? process.env[key] ?? ""]),
     ),
-    configFiles: configFiles.map((filePath) => ({
-      path: filePath,
-      signature: readFileSignature(filePath),
-    })),
+    configFiles: configFiles.map((filePath) => {
+      const stat = safeStatSync(filePath);
+      return { path: filePath, signature: stat ? `${stat.mtimeMs}:${stat.size}` : "missing" };
+    }),
   });
-}
-
-function readFileSignature(filePath: string): string {
-  const stat = safeStatSync(filePath);
-  return stat ? `${stat.mtimeMs}:${stat.size}` : "missing";
 }
 
 function resolveScopedProjectNpmrc(scope: NpmConfigScope): string | null {
@@ -218,12 +213,13 @@ function resolveScopedGlobalNpmrc(scope: NpmConfigScope): string | null {
   return prefix ? path.join(prefix, "etc", "npmrc") : null;
 }
 
-function resolveNpmConfigFiles(
+function hasRawNpmConfigKey(
   env: NodeJS.ProcessEnv,
+  key: string,
   scope: NpmConfigScope = {},
-  userNpmrc = resolveEnvPath(env, "NPM_CONFIG_USERCONFIG", "npm_config_userconfig") ??
-    resolveHomeNpmrc(env),
-): string[] {
+): boolean {
+  const userNpmrc =
+    resolveEnvPath(env, "NPM_CONFIG_USERCONFIG", "npm_config_userconfig") ?? resolveHomeNpmrc(env);
   const files = [
     resolveScopedProjectNpmrc(scope),
     userNpmrc,
@@ -231,7 +227,9 @@ function resolveNpmConfigFiles(
     resolveScopedGlobalNpmrc(scope),
     readNpmGlobalConfigPath(env, scope),
   ];
-  return uniqueStrings(files.filter((file): file is string => Boolean(file)));
+  return uniqueStrings(files.filter((file): file is string => Boolean(file))).some((file) =>
+    hasNpmrcConfigKey(file, key),
+  );
 }
 
 function hasNpmrcConfigKey(filePath: string, key: string): boolean {
@@ -243,14 +241,6 @@ function hasNpmrcConfigKey(filePath: string, key: string): boolean {
   } catch {
     return false;
   }
-}
-
-function hasRawNpmConfigKey(
-  env: NodeJS.ProcessEnv,
-  key: string,
-  scope: NpmConfigScope = {},
-): boolean {
-  return resolveNpmConfigFiles(env, scope).some((file) => hasNpmrcConfigKey(file, key));
 }
 
 function hasNpmEnvConfigKey(env: NodeJS.ProcessEnv, key: string): boolean {
@@ -339,7 +329,8 @@ export function applyNpmFreshnessBypassEnv(
   now = new Date(),
   scope: NpmConfigScope = {},
 ): void {
-  const [arg] = createNpmFreshnessBypassArgs(env, now, scope);
+  const before =
+    resolveNpmFreshnessBypassMode(env, scope) === "before" ? now.toISOString() : undefined;
   for (const key of NPM_FRESHNESS_BYPASS_KEYS) {
     if (process.platform === "win32" && key.includes("-")) {
       delete env[key];
@@ -347,9 +338,9 @@ export function applyNpmFreshnessBypassEnv(
     }
     env[key] = "";
   }
-  if (arg?.startsWith("--before=")) {
-    env.npm_config_before = arg.slice("--before=".length);
-  } else if (arg === "--min-release-age=0") {
+  if (before !== undefined) {
+    env.npm_config_before = before;
+  } else {
     env.npm_config_min_release_age = "0";
   }
 }
@@ -387,25 +378,20 @@ export function createNpmProjectInstallEnv(
   return installEnv;
 }
 
-/** Resolves an absolute POSIX shell for npm lifecycle scripts when one is available. */
-function resolvePosixNpmScriptShell(env: NodeJS.ProcessEnv): string | null {
-  if (process.platform === "win32") {
-    return null;
-  }
-  if (fsSync.existsSync("/bin/sh")) {
-    return "/bin/sh";
-  }
-  const shell = env.SHELL?.trim();
-  return shell && path.isAbsolute(shell) && fsSync.existsSync(shell) ? shell : null;
-}
-
 /** Sets npm's script-shell env only when the caller has not configured one. */
 export function applyPosixNpmScriptShellEnv(env: NodeJS.ProcessEnv): void {
-  if (NPM_CONFIG_SCRIPT_SHELL_KEYS.some((key) => Boolean(env[key]?.trim()))) {
+  if (
+    NPM_CONFIG_SCRIPT_SHELL_KEYS.some((key) => Boolean(env[key]?.trim())) ||
+    process.platform === "win32"
+  ) {
     return;
   }
-  const scriptShell = resolvePosixNpmScriptShell(env);
-  if (scriptShell) {
-    env.NPM_CONFIG_SCRIPT_SHELL = scriptShell;
+  if (fsSync.existsSync("/bin/sh")) {
+    env.NPM_CONFIG_SCRIPT_SHELL = "/bin/sh";
+  } else {
+    const shell = env.SHELL?.trim();
+    if (shell && path.isAbsolute(shell) && fsSync.existsSync(shell)) {
+      env.NPM_CONFIG_SCRIPT_SHELL = shell;
+    }
   }
 }

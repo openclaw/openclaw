@@ -164,26 +164,20 @@ function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOption
   };
 }
 
-async function readCacheDatabase(
+async function readRefreshLock(
   options: ReturnType<typeof captureCacheDatabaseOptions>,
-  request: SessionCostUsageCacheRead,
-) {
+): Promise<string | null> {
+  const request: SessionCostUsageCacheRead = { kind: "usage-refresh-lock" };
   if (isIncognitoOpenClawAgentSqlitePath(options.path, options)) {
     const { readSessionCostUsageCache } = await import("./session-cost-usage-cache-read.js");
-    return readSessionCostUsageCache(options, request);
+    return readSessionCostUsageCache(options, request).value;
   }
-  return withSessionHistoryWorkerDatabase(options, (owner) =>
+  const result = await withSessionHistoryWorkerDatabase(options, (owner) =>
     owner.readUsageCache({
       request,
       env: { ...options.env, OPENCLAW_STATE_DIR: options.env.OPENCLAW_STATE_DIR },
     }),
   );
-}
-
-async function readRefreshLock(
-  options: ReturnType<typeof captureCacheDatabaseOptions>,
-): Promise<string | null> {
-  const result = await readCacheDatabase(options, { kind: "usage-refresh-lock" });
   if (result.kind !== "usage-refresh-lock") {
     throw new Error("Invalid usage refresh-lock worker result");
   }

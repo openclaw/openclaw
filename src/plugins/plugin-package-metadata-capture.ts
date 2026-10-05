@@ -705,11 +705,11 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
   const beginDisposal = () => {
     disposed = true;
     // Revoke cached modules before removal yields, including compiled CJS helpers.
-    const filenames = directory + path.sep;
-    const urls = pathToFileURL(filenames).href;
+    // Jiti's Windows keys use forward slashes; containment follows filesystem identity.
+    const urls = pathToFileURL(directory + path.sep).href;
     const cache = createRequire(import.meta.url).cache;
     for (const id of Object.keys(cache)) {
-      if (id.startsWith(filenames) || id.startsWith(urls)) {
+      if (id.startsWith(urls) || (path.isAbsolute(id) && isPathInside(directory, id))) {
         delete cache[id];
       }
     }

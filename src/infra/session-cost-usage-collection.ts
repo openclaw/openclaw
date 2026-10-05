@@ -192,7 +192,11 @@ async function readUsageCostSqliteFiles(
     if (!stats) {
       return undefined;
     }
-    const filePath = formatCanonicalUsageCostSqliteMarker(marker, access.env);
+    const { path: storePath } = resolveSqliteTargetFromSessionStorePath(marker.storePath, {
+      agentId: marker.agentId,
+      env: access.env,
+    });
+    const filePath = formatSqliteSessionFileMarker({ ...marker, storePath });
     return {
       filePath,
       sourcePath: filePath,
@@ -204,17 +208,6 @@ async function readUsageCostSqliteFiles(
       maxSeq: stats.maxSeq,
     };
   });
-}
-
-function formatCanonicalUsageCostSqliteMarker(
-  marker: SqliteSessionFileMarker,
-  env?: NodeJS.ProcessEnv,
-): string {
-  const { path: storePath } = resolveSqliteTargetFromSessionStorePath(marker.storePath, {
-    agentId: marker.agentId,
-    env,
-  });
-  return formatSqliteSessionFileMarker({ ...marker, storePath });
 }
 
 export async function listUsageCountedTranscriptSources(

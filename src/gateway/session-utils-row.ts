@@ -417,6 +417,7 @@ export function projectSessionRowChildLinks(links: readonly SessionChildLink[] |
     entry: {
       sessionId: entry.sessionId,
       updatedAt: entry.updatedAt,
+      archivedAt: entry.archivedAt,
       status: entry.status,
       startedAt: entry.startedAt,
       endedAt: entry.endedAt,

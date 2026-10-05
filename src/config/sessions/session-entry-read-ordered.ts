@@ -2,16 +2,14 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { runOpenClawAgentWriteAdmissions } from "../../state/openclaw-agent-write-admission.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import { captureSessionEntryWorkerRequest } from "./session-entry-read-request.js";
 import type {
   PreparedSessionEntryWorkerRead,
   SessionEntryWorkerRead,
 } from "./session-entry-read-runtime.types.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
-import type {
-  SessionExactEntriesWorkerSelection,
-  SessionHistoryWorkerDatabase,
-} from "./session-transcript-worker.types.js";
+import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
 
 type ReadSessionStore = <T>(
   input: SessionEntryWorkerRead,
@@ -106,18 +104,8 @@ export async function withOrderedSessionEntriesInWorker<T>(
           const reads: PreparedSessionEntryWorkerRead[] = [];
           for (const { input: selectedInput, owner, database, continuation } of selected) {
             assertCurrent();
-            const selection: SessionExactEntriesWorkerSelection = selectedInput.selection
-              ? { selection: selectedInput.selection, projection: selectedInput.projection }
-              : {
-                  sessionKeys: [...new Set(selectedInput.sessionKeys)],
-                  projection: selectedInput.projection,
-                };
             const result = await owner.readExactEntries({
-              ...selection,
-              lifecycleSessionKey: selectedInput.lifecycleSessionKey,
-              includeMembers: selectedInput.includeMembers,
-              includeParticipantRecords: selectedInput.includeParticipantRecords,
-              includeAuthorization: selectedInput.includeAuthorization,
+              ...captureSessionEntryWorkerRequest(selectedInput),
               env: database.env,
               continuation,
             });

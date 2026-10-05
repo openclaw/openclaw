@@ -166,16 +166,21 @@ export async function handleChatMetadataRequest(
     if (!scope) {
       return;
     }
+    if (params.includeModels === false) {
+      scope.includeModels = false;
+    }
     scope.assertCurrent?.();
     const metadata = await context.readChatMetadata(scope);
     scope.draftAccountSelection?.assertCurrent();
     scope.assertCurrent?.();
     const cfg = context.getRuntimeConfig();
-    const policy = prepareOperatorModelPresentation({
-      cfg,
-      policyConfig: context.getCommittedRuntimeConfig?.() ?? cfg,
-      client,
-    })?.forAgent(scope.agentId, metadata.models);
+    const policy =
+      metadata.models &&
+      prepareOperatorModelPresentation({
+        cfg,
+        policyConfig: context.getCommittedRuntimeConfig?.() ?? cfg,
+        client,
+      })?.forAgent(scope.agentId, metadata.models);
     respond(
       true,
       projectModelFastModeCatalog(policy ? policy.metadata(metadata) : metadata, client),

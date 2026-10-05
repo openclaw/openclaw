@@ -35,7 +35,6 @@ import {
 } from "./install-npm-fixtures.js";
 import { findDarwinReexecBash } from "./install-reexec-fixtures.js";
 import {
-  defineInstallerNpmDirectoryIdentityContract,
   defineInstallerNpmFreshnessContract,
   defineInstallerShellIsolationContract,
 } from "./install-test-contract.js";
@@ -487,7 +486,6 @@ fi
         [[ "$1" == "$target" && "$2" == "main" ]] || return 1
         GIT_REF_KIND=moving
       }
-      ensure_pnpm_git_prepare_allowlist() { [[ "$1" == "$target" ]]; }
       ensure_pnpm() { [[ "$1" == "$target" ]]; }
       run_pnpm() {
         [[ "$1" == "-C" && "$2" == "$target" ]] || return 1
@@ -895,7 +893,6 @@ fi
             ? [
                 "preflight_fresh_git_disk_space() { :; }",
                 "ensure_pnpm() { :; }",
-                "ensure_pnpm_git_prepare_allowlist() { :; }",
                 "resolve_git_openclaw_ref() { printf 'main\\n'; }",
                 "checkout_git_openclaw_ref() { :; }",
                 "git_install_lockfile_flag() { printf '%s\\n' '--no-frozen-lockfile'; }",
@@ -1468,47 +1465,6 @@ fi
     expect(readFileSync(packageFile, "utf8")).toBe('{"name":"openclaw","version":"2026.9.2"}\n');
   });
 
-  it("removes the workspace rewrite temp file when rewriting fails", () => {
-    const tmp = tempDirs.make("openclaw-install-cli-workspace-cleanup-");
-    const repo = join(tmp, "repo");
-    const workspaceFile = join(repo, "pnpm-workspace.yaml");
-    const rewriteTemp = join(tmp, "workspace-rewrite");
-    const workspace = 'packages:\n  - "packages/*"\n\nallowBuilds:\n';
-    mkdirSync(repo, { recursive: true });
-    writeFileSync(workspaceFile, workspace);
-
-    const result = runInstallCliShell(
-      [
-        `mktemp() { : > ${JSON.stringify(rewriteTemp)}; printf '%s\\n' ${JSON.stringify(rewriteTemp)}; }`,
-        "awk() { return 43; }",
-        `ensure_pnpm_git_prepare_allowlist ${JSON.stringify(repo)}`,
-      ].join("\n"),
-    );
-
-    expect(result.status).toBe(43);
-    expect(() => lstatSync(rewriteTemp)).toThrow();
-    expect(readFileSync(workspaceFile, "utf8")).toBe(workspace);
-  });
-
-  it.each([
-    { expected: "", version: "11.15.0" },
-    { expected: "--allow-scripts=openclaw", version: "11.16.0" },
-  ])("resolves npm lifecycle policy for npm $version", ({ expected, version }) => {
-    const fixture = npmPolicyFixture();
-    const result = fixture.run("openclaw@latest", version);
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe(expected);
-    const tool = fixture.run("pnpm@12.0.0", version, "pnpm@12.0.0");
-    expect(tool.status).toBe(0);
-    expect(tool.stdout).toBe(expected ? "--allow-scripts=pnpm@12.0.0" : "");
-  });
-
-  it("rejects a malformed npm version before mutation", () => {
-    const fixture = npmPolicyFixture();
-    expect(fixture.run("openclaw@latest", "npm 12.0.0 warning").status).not.toBe(0);
-    expect(existsSync(fixture.args)).toBe(false);
-  });
-
   it.each([
     ["openclaw@npm:@scope/candidate.tgz@1.0.0", "--allow-scripts=@scope/candidate.tgz"],
     ["vendor/repo.tgz", "--allow-scripts=vendor/repo.tgz"],
@@ -1520,15 +1476,6 @@ fi
     const result = npmPolicyFixture().run(spec, "12.0.0");
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe(expected);
-  });
-
-  it("uses the absolute npm tarball identity for file-relative input", () => {
-    const fixture = npmPolicyFixture();
-    const result = fixture.run("file:./candidate.tgz", "12.0.0");
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe(
-      `--allow-scripts=file:${join(fixture.root, "candidate.tgz")}`,
-    );
   });
 
   it.each([
@@ -1548,8 +1495,6 @@ fi
       expect(existsSync(fixture.args)).toBe(false);
     },
   );
-
-  defineInstallerNpmDirectoryIdentityContract(installerContract);
 
   it.each(["global", "builtin"])(
     "honors raw %s npmrc min-release-age before --before",

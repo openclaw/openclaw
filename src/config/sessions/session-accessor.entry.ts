@@ -188,7 +188,16 @@ export async function readResolvedSessionEntryInWorker(
   const perAgent = scope.cfg.session?.store?.includes("{agentId}") === true;
   if (!perAgent) {
     return withSessionEntriesFromStoresInWorker(
-      [{ agentId, storePath, sessionKeys, projection: "exact", env: scope.env }],
+      [
+        {
+          agentId,
+          storePath,
+          sessionKeys,
+          projection: "exact",
+          snapshotFields: [],
+          env: scope.env,
+        },
+      ],
       ([loaded]) => selectCanonicalSessionEntryMatch(loaded!.result.entries, canonicalKey)?.entry,
     );
   }
@@ -216,6 +225,7 @@ export async function readResolvedSessionEntryInWorker(
         storePath: target.storePath,
         sessionKeys,
         projection: "exact" as const,
+        snapshotFields: [],
         env: inventory.env,
       })),
       (loaded) => {

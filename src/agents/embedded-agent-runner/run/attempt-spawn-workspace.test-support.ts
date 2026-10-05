@@ -85,7 +85,6 @@ type AttemptSpawnWorkspaceHoisted = {
   resolveSandboxContextMock: UnknownMock;
   ensureGlobalUndiciEnvProxyDispatcherMock: UnknownMock;
   ensureGlobalUndiciDispatcherStreamTimeoutsMock: UnknownMock;
-  ensureGlobalUndiciStreamTimeoutsMock: UnknownMock;
   createOpenClawCodingToolsMock: Mock<CreateCodingToolsFn>;
   subscribeEmbeddedAgentSessionMock: Mock<SubscribeEmbeddedAgentSessionFn>;
   installToolResultContextGuardMock: UnknownMock;
@@ -129,7 +128,6 @@ const hoisted = vi.hoisted((): AttemptBaseMocks => {
   const resolveSandboxContextMock = vi.fn();
   const ensureGlobalUndiciEnvProxyDispatcherMock = vi.fn();
   const ensureGlobalUndiciDispatcherStreamTimeoutsMock = vi.fn();
-  const ensureGlobalUndiciStreamTimeoutsMock = vi.fn();
   const createOpenClawCodingToolsMock = vi.fn<CreateCodingToolsFn>(() => []);
   const installToolResultContextGuardMock = vi.fn(() => () => {});
   const installContextEngineLoopHookMock = vi.fn(() => () => {});
@@ -213,7 +211,6 @@ const hoisted = vi.hoisted((): AttemptBaseMocks => {
     resolveSandboxContextMock,
     ensureGlobalUndiciEnvProxyDispatcherMock,
     ensureGlobalUndiciDispatcherStreamTimeoutsMock,
-    ensureGlobalUndiciStreamTimeoutsMock,
     createOpenClawCodingToolsMock,
     subscribeEmbeddedAgentSessionMock,
     installToolResultContextGuardMock,
@@ -403,14 +400,13 @@ vi.mock("../../../infra/machine-name.js", () => ({
   getMachineDisplayName: async () => "test-host",
 }));
 
+// mock-isolation: attempt orchestration observes setup without replacing the process dispatcher.
 vi.mock("../../../infra/net/undici-global-dispatcher.js", () => ({
   DEFAULT_UNDICI_STREAM_TIMEOUT_MS: 120_000,
   ensureGlobalUndiciEnvProxyDispatcher: (...args: unknown[]) =>
     hoisted.ensureGlobalUndiciEnvProxyDispatcherMock(...args),
   ensureGlobalUndiciDispatcherStreamTimeouts: (...args: unknown[]) =>
     hoisted.ensureGlobalUndiciDispatcherStreamTimeoutsMock(...args),
-  ensureGlobalUndiciStreamTimeouts: (...args: unknown[]) =>
-    hoisted.ensureGlobalUndiciStreamTimeoutsMock(...args),
 }));
 
 vi.mock("../../../tts/tts-settings.js", () => ({
@@ -885,7 +881,6 @@ export function resetEmbeddedAttemptHarness(
   hoisted.resolveSandboxContextMock.mockReset();
   hoisted.ensureGlobalUndiciEnvProxyDispatcherMock.mockReset();
   hoisted.ensureGlobalUndiciDispatcherStreamTimeoutsMock.mockReset();
-  hoisted.ensureGlobalUndiciStreamTimeoutsMock.mockReset();
   hoisted.createOpenClawCodingToolsMock.mockReset().mockImplementation((...args: unknown[]) => {
     const options = args[0] as
       | {

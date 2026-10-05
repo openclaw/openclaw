@@ -30,7 +30,7 @@ import {
 } from "../../../utils/message-channel.js";
 import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
 import {
-  createBoundDeliveryRouter,
+  resolveBoundDeliveryDestination,
   getGlobalHookRunner,
   resolveConversationIdFromTargets,
 } from "./subagent-announce-delivery.runtime.js";
@@ -182,13 +182,10 @@ export async function resolveSubagentCompletionOrigin(params: {
     stringifyRouteThreadId(threadId) || resolveConversationIdFromTargets({ targets: [to] }) || "";
   const requesterConversation: ConversationRef | undefined =
     channel && conversationId ? { channel, accountId, conversationId } : undefined;
-  const router = createBoundDeliveryRouter();
   for (const targetSessionKey of [params.requesterSessionKey, params.childSessionKey]) {
-    const route = await router.resolveDestination({
-      eventKind: "task_completion",
+    const route = await resolveBoundDeliveryDestination({
       targetSessionKey,
       requester: requesterConversation,
-      failClosed: true,
     });
     if (route.mode === "bound" && route.binding) {
       return mergeAnnounceDeliveryContext(

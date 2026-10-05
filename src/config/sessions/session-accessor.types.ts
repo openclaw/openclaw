@@ -14,6 +14,7 @@ import type { SessionLifecycleStoreTarget } from "./session-accessor.lifecycle-t
 import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
+import type { SessionEntryProjection } from "./session-entry-snapshots.js";
 import type {
   SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnExpectedState,
@@ -66,8 +67,8 @@ export type LogicalSessionAccessScope = {
 };
 
 export type SessionEntryReadScope = SessionAccessScope & {
-  /** Metadata views omit the large per-run prompt snapshots before decoding. */
-  projection?: "full" | "list";
+  /** Select only required saved snapshots; list omits all of them before decoding. */
+  projection?: SessionEntryProjection;
 };
 
 export type SessionEntryReadOnlyWorkerScope = SessionEntryReadScope & {
@@ -77,7 +78,10 @@ export type SessionEntryReadOnlyWorkerScope = SessionEntryReadScope & {
   env: NodeJS.ProcessEnv;
 };
 
-export type SessionEntryListScope = Partial<Omit<SessionEntryReadScope, "sessionKey">> & {
+export type SessionEntryListScope = Partial<
+  Omit<SessionEntryReadScope, "sessionKey" | "projection">
+> & {
+  projection?: "full" | "list";
   /** Select exact persisted keys after validating the complete listing snapshot. */
   sessionKeys?: readonly string[];
   /** Retain full cron-run entries for deletion guards, and only metadata for ordinary sessions. */

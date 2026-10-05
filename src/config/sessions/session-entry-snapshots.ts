@@ -13,6 +13,9 @@ export type SessionEntrySnapshot = {
   valueJson: string;
 };
 
+export type SessionEntrySnapshotField = SessionEntrySnapshot["field"];
+export type SessionEntryProjection = "full" | "list" | readonly SessionEntrySnapshotField[];
+
 export type SessionEntrySnapshotRow = {
   session_diff_baseline_json?: string | null;
   skills_snapshot_json?: string | null;
@@ -26,21 +29,28 @@ const snapshotColumns = [
 ] as const;
 
 /** One statement owns hot and cold facts; JSON remains opaque to SQLite's depth limit. */
-export function sessionEntrySnapshotColumnsForKeys(keys?: readonly string[]) {
+export function sessionEntrySnapshotColumnsForKeys(
+  keys?: readonly string[],
+  projection: SessionEntryProjection = "full",
+) {
   const selectedKeys = keys === undefined ? undefined : sqliteStringSet(keys);
   const eb = expressionBuilder<DB, "session_nodes">();
-  return snapshotColumns.map(([field, alias]) => {
-    const snapshot = eb
-      .selectFrom("session_entry_snapshots")
-      .select("value_json")
-      .whereRef("session_entry_snapshots.session_key", "=", "session_nodes.session_key")
-      .where("field", "=", field);
-    return (
-      selectedKeys === undefined
-        ? snapshot
-        : eb.case().when("session_nodes.session_key", "in", selectedKeys).then(snapshot).end()
-    ).as(alias);
-  });
+  return snapshotColumns
+    .filter(
+      ([field]) => projection === "full" || (projection !== "list" && projection.includes(field)),
+    )
+    .map(([field, alias]) => {
+      const snapshot = eb
+        .selectFrom("session_entry_snapshots")
+        .select("value_json")
+        .whereRef("session_entry_snapshots.session_key", "=", "session_nodes.session_key")
+        .where("field", "=", field);
+      return (
+        selectedKeys === undefined
+          ? snapshot
+          : eb.case().when("session_nodes.session_key", "in", selectedKeys).then(snapshot).end()
+      ).as(alias);
+    });
 }
 
 export const sessionEntrySnapshotColumns = sessionEntrySnapshotColumnsForKeys();
@@ -71,8 +81,14 @@ export function splitSessionEntrySnapshots(
 export function attachSessionEntrySnapshots<T extends object>(
   entry: T,
   row: SessionEntrySnapshotRow,
+  projection: SessionEntryProjection = "full",
 ): T {
   for (const [field, alias] of snapshotColumns) {
+    if (projection !== "full" && (projection === "list" || !projection.includes(field))) {
+      // Pending legacy rows may still carry snapshots inline.
+      Reflect.deleteProperty(entry, field);
+      continue;
+    }
     const valueJson = row[alias];
     if (valueJson != null) {
       const value: unknown = JSON.parse(valueJson);

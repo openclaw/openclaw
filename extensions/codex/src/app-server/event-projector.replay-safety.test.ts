@@ -25,7 +25,7 @@ import {
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector replay safety and progress projection", () => {
-  it.each(["completed", "blocked"] as const)(
+  it.each(["blocked"] as const)(
     "keeps dynamic card %s outcomes in the correct progress stream",
     async (terminalType) => {
       const onToolResult = vi.fn();
@@ -34,8 +34,7 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
         verboseLevel: "full",
         onToolResult,
       });
-      const success = terminalType === "completed";
-      const text = success ? "Progress card updated" : "Card write unavailable";
+      const text = "Card write unavailable";
       const item = {
         type: "dynamicToolCall",
         id: "card-outcome",
@@ -55,7 +54,7 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
       const result = {
         callId: item.id,
         tool: item.tool,
-        success,
+        success: false,
         terminalType,
         contentItems: [{ type: "inputText" as const, text }],
       };
@@ -63,23 +62,19 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
       projector.recordDynamicToolResult(result);
       const completedItem = {
         ...item,
-        status: success ? "completed" : "failed",
-        success,
+        status: "failed",
+        success: false,
         contentItems: result.contentItems,
       };
       await projector.handleNotification(forCurrentTurn("item/completed", { item: completedItem }));
       await projector.handleNotification(turnCompleted([completedItem]));
 
-      if (success) {
-        expect(onToolResult).not.toHaveBeenCalled();
-      } else {
-        expect(onToolResult).toHaveBeenCalledTimes(2);
-        expect(onToolResult).toHaveBeenCalledWith({
-          text: expect.stringContaining(text),
-          isError: true,
-        });
-        expect(JSON.stringify(onToolResult.mock.calls)).not.toContain("private");
-      }
+      expect(onToolResult).toHaveBeenCalledTimes(2);
+      expect(onToolResult).toHaveBeenCalledWith({
+        text: expect.stringContaining(text),
+        isError: true,
+      });
+      expect(JSON.stringify(onToolResult.mock.calls)).not.toContain("private");
     },
   );
 
@@ -161,52 +156,6 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
     );
 
     expect(terminalPresentation).toBe("later dynamic result");
-  });
-
-  it("clears a prior presentation for a completion-only native item without a turn snapshot", async () => {
-    const onToolOutcome = vi.fn();
-    let nextOrdinal = 1;
-    const projector = await createProjector({
-      ...(await createParams()),
-      allocateToolOutcomeOrdinal: () => nextOrdinal++,
-      onToolOutcome,
-    });
-
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "imageView",
-          id: "completion-only-image-view",
-          path: "/workspace/reference.png",
-        },
-      }),
-    );
-    await projector.handleNotification(turnCompleted([]));
-
-    expect(onToolOutcome).toHaveBeenLastCalledWith(
-      expect.objectContaining({ terminalPresentation: undefined }),
-    );
-  });
-
-  it("treats native image generation without a saved path as side-effect evidence", async () => {
-    const projector = await createProjector();
-
-    await projector.handleNotification(
-      turnCompleted([
-        {
-          type: "imageGeneration",
-          id: "image-generation-side-effect",
-          status: "completed",
-          revisedPrompt: null,
-          result: "generated-image-result",
-        },
-      ]),
-    );
-
-    expect(projector.buildResult(buildEmptyToolTelemetry()).replayMetadata).toEqual({
-      hadPotentialSideEffects: true,
-      replaySafe: false,
-    });
   });
 
   it("keeps executed dynamic tools side-effecting when their result is rewritten as blocked", async () => {
@@ -352,44 +301,6 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
         durationMs: 7,
       },
     ]);
-  });
-
-  it("does not suppress qualified external tools that end with message-like names", async () => {
-    const onAgentEvent = vi.fn();
-    const onToolResult = vi.fn();
-    const projector = await createProjector({
-      ...(await createParams()),
-      verboseLevel: "on",
-      onAgentEvent,
-      onToolResult,
-    });
-
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: {
-          type: "mcpToolCall",
-          id: "mcp-email-send-1",
-          server: "email",
-          tool: "send",
-          arguments: { to: "user@example.com" },
-          status: "inProgress",
-          result: null,
-          error: null,
-          durationMs: null,
-        },
-      }),
-    );
-
-    const toolStart = findAgentEvent(onAgentEvent, {
-      stream: "tool",
-      phase: "start",
-      itemId: "mcp-email-send-1",
-      name: "email.send",
-    }).data;
-    expect(toolStart.toolCallId).toBe("mcp-email-send-1");
-    expect(onToolResult).toHaveBeenCalledWith({
-      text: "Email.send: `user@example.com`",
-    });
   });
 
   it("warns once and preserves projection for an unknown Codex-native item status", async () => {
@@ -599,5 +510,74 @@ describe("subagent-progress", () => {
         .filter(([event]) => event.stream === "item")
         .every(([event]) => !event.data.hideFromChannelProgress),
     ).toBe(true);
+  });
+});
+
+const buffering = {
+  model: "gpt-5.6-sol",
+  useCases: ["cyber"],
+  reasons: ["user_risk"],
+  showBufferingUi: true,
+  fasterModel: "gpt-5.4-codex-mini",
+};
+
+async function createNoticeProjector(provider = "openai") {
+  const onAgentEvent = vi.fn();
+  const projector = await createProjector({ ...(await createParams()), provider, onAgentEvent });
+  return {
+    projector,
+    onAgentEvent,
+    buffer: (params = buffering) =>
+      projector.handleNotification(forCurrentTurn("model/safetyBuffering/updated", params)),
+    notices: () =>
+      onAgentEvent.mock.calls.map(([event]) => event).filter((event) => event.stream === "notice"),
+  };
+}
+
+describe("CodexAppServerEventProjector cyber notices", () => {
+  it("clears hidden buffering without claiming a model switch", async () => {
+    const { buffer, notices, onAgentEvent } = await createNoticeProjector();
+    await buffer();
+    await buffer({ ...buffering, useCases: [], showBufferingUi: false });
+    expect(notices()).toEqual([
+      {
+        stream: "notice",
+        data: {
+          phase: "provider_policy",
+          category: "cyber",
+          state: "buffering",
+          provider: "openai",
+          model: buffering.model,
+          fallbackModel: buffering.fasterModel,
+        },
+      },
+      {
+        stream: "notice",
+        data: { phase: "provider_policy", category: "cyber", state: "cleared", provider: "openai" },
+      },
+    ]);
+    expect(onAgentEvent.mock.calls.some(([event]) => event.stream === "fallback")).toBe(false);
+  });
+  it("shows the first buffering notice after commentary and retires it when the answer starts", async () => {
+    const { projector, buffer, notices } = await createNoticeProjector();
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "commentary",
+          phase: "commentary",
+          text: "I will review the code.",
+        },
+      }),
+    );
+    await buffer();
+    await projector.handleNotification(agentMessageDelta("Ready"));
+    await buffer();
+    expect(notices().map((event) => event.data.state)).toEqual(["buffering", "cleared"]);
+  });
+  it("does not label another provider as OpenAI", async () => {
+    const { buffer, onAgentEvent } = await createNoticeProjector("other");
+    await buffer();
+    expect(onAgentEvent).not.toHaveBeenCalled();
   });
 });

@@ -2490,6 +2490,28 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/x:
+    dependencies:
+      linkify-it:
+        specifier: 6.1.0
+        version: 6.1.0
+      lit:
+        specifier: 3.3.3
+        version: 3.3.3
+      tlds:
+        specifier: 1.261.0
+        version: 1.261.0
+      zod:
+        specifier: 4.6.5
+        version: 4.6.5
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/xai:
     dependencies:
       typebox:

@@ -321,7 +321,7 @@ export function registerWorktreesCli(program: Command): void {
     .command("gc")
     .description("Queue background managed worktree cleanup or inspect its progress")
     .option("--job <id>", "Show progress for a previously queued cleanup job")
-    .option("--retry-deferred", "Reinspect unchanged deferred checkouts", false)
+    .option("--retry-deferred", "Reinspect deferred checkouts and retry Git maintenance", false)
     .option("--json", "Output JSON", false)
     .action(async (opts: JsonOption & { job?: string; retryDeferred?: boolean }) => {
       const { formatWorktreeGcResult } = await import("../agents/worktrees/gc-result.js");

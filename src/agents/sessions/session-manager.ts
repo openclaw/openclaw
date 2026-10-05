@@ -22,11 +22,7 @@ import {
   assertCurrentSessionTranscriptHeader,
   findSessionTranscriptHeader,
 } from "../../config/sessions/session-entry-codec.js";
-import { readSessionTranscriptModelContextAsync } from "../../config/sessions/session-transcript-context-read.js";
-import {
-  resolveSessionTranscriptReadFence,
-  withSessionContextAdmission,
-} from "../../config/sessions/session-transcript-read-fence.js";
+import { withSessionContextAdmission } from "../../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import {
@@ -48,7 +44,11 @@ import {
   sessionManagerReadInitialContext,
   sessionManagerReadTranscriptStart,
 } from "./session-manager-current-turn.js";
-import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
+import {
+  prepareSessionManagerHydration,
+  readSessionManagerContextAsync,
+  readSessionManagerModelContextAsync,
+} from "./session-manager-incognito.js";
 import { receiveSessionManagerCommit } from "./session-manager-persistence-error.js";
 import type {
   SessionLeafControl,
@@ -139,10 +139,14 @@ export class SessionManager extends SessionManagerBranching {
     // A deliberate local branch owns its view; a concurrent selection must not
     // install the database's different active path into the same writer.
     const initial = this.captureTranscriptView();
-    const context = await SessionManager.openModelContextAsync(this.persistenceTarget, {
-      cwd: this.cwd,
-      limits: this.boundedContextLimits,
-    });
+    const target = this.persistenceTarget;
+    const cwd = this.cwd;
+    const context = await readSessionManagerModelContextAsync(
+      target,
+      { limits: this.boundedContextLimits },
+      (snapshot) => SessionManager.fromSelectedEntries(snapshot.events, cwd),
+      this,
+    );
     const current = this.captureTranscriptView();
     if (
       Object.keys(initial).some((key) => Reflect.get(initial, key) !== Reflect.get(current, key))
@@ -643,24 +647,9 @@ export class SessionManager extends SessionManagerBranching {
       limits?: SessionModelContextLimits;
     } = {},
   ): Promise<SessionManager> {
-    const readTarget = captureSessionTranscriptTargetBinding(target);
-    const receipt = options.admission ?? resolveSessionTranscriptReadFence(readTarget);
-    const admission = receipt ? { ...receipt } : undefined;
-    const through = options.through ? { ...options.through } : undefined;
-    const limits = options.limits ? { ...options.limits } : undefined;
-    options.signal?.throwIfAborted();
-    const manager = await withSessionContextAdmission(readTarget, admission, () =>
-      readSessionTranscriptModelContextAsync(
-        readTarget,
-        (context) => SessionManager.fromSelectedEntries(context.events, options.cwd),
-        admission,
-        options.signal,
-        through,
-        limits,
-      ),
+    return readSessionManagerModelContextAsync(target, options, (context) =>
+      SessionManager.fromSelectedEntries(context.events, options.cwd),
     );
-    options.signal?.throwIfAborted();
-    return manager;
   }
 
   private static fromSelectedEntries(contextEntries: unknown[], cwd?: string): SessionManager {
@@ -678,15 +667,28 @@ export class SessionManager extends SessionManagerBranching {
     return manager;
   }
 
-  /** Synchronously consumes full-fidelity context; its iterator closes with the read snapshot. */
+  /** @deprecated Await readSessionContextAsync. Removal: next Plugin SDK major. */
   static readSessionContext<T>(
     target: SessionTranscriptRuntimeTarget,
     read: (messages: Iterable<AgentMessage>, header: unknown) => T,
     options: { admission?: UserTurnTranscriptAdmissionReceipt } = {},
   ): T {
+    warnSessionPersistenceDeprecation(
+      "SessionManager.readSessionContext",
+      "readSessionContextAsync",
+    );
     return withSessionContextAdmission(target, options.admission, () =>
       readSessionTranscriptContextMessages(target, read),
     );
+  }
+
+  /** Consume full-fidelity context outside SQL; validate its source after the consumer settles. */
+  static async readSessionContextAsync<T>(
+    target: SessionTranscriptRuntimeTarget,
+    read: (messages: Iterable<AgentMessage>, header: unknown) => T | Promise<T>,
+    options: { admission?: UserTurnTranscriptAdmissionReceipt; signal?: AbortSignal } = {},
+  ): Promise<T> {
+    return readSessionManagerContextAsync(target, read, options);
   }
 
   /**

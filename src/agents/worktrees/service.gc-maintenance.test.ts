@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -7,6 +8,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { requireGit } from "./git.js";
 import * as registryReads from "./registry-read.js";
 import {
   deleteRegistryWorktree,
@@ -14,6 +16,10 @@ import {
   listRegistryWorktrees,
 } from "./registry.js";
 import { ManagedWorktreeService } from "./service.js";
+import {
+  materializeManagedWorktreeFixtures,
+  useManagedWorktreeTestRepository,
+} from "./service.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
@@ -23,6 +29,8 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("worktree-gc-maintenance-state-") };
+
+const initRepo = useManagedWorktreeTestRepository();
 
 beforeAll(async () => {
   await registryReads.readRegistryWorktrees(env);
@@ -36,17 +44,19 @@ afterEach(() => {
   }
 });
 
-it("maintains each live repository and warns without changing the cleanup outcome", async () => {
+it("maintains each shared repository and suspends failures until explicitly retried", async () => {
   const repo = tempDirs.make("worktree-gc-first-repo-");
   const otherRepo = tempDirs.make("worktree-gc-second-repo-");
-  for (const [index, repoRoot] of [repo, otherRepo].entries()) {
+  for (const [index, repoRoot] of [repo, repo, otherRepo].entries()) {
     const name = `manual-${index}`;
+    const worktreePath = path.join(repoRoot, name);
+    await fs.mkdir(worktreePath);
     insertRegistryWorktree(env, {
       id: name,
       name,
       repoFingerprint: name,
       repoRoot,
-      path: repoRoot,
+      path: worktreePath,
       branch: `openclaw/${name}`,
       baseRef: "HEAD",
       ownerKind: "manual",
@@ -64,7 +74,6 @@ it("maintains each live repository and warns without changing the cleanup outcom
       if (args[0] !== "maintenance") {
         return await execute(cwd, args, options);
       }
-      expect(args).toEqual(["maintenance", "run", "--auto"]);
       expect(options).toMatchObject({
         killProcessTree: true,
         signal: controller.signal,
@@ -93,8 +102,13 @@ it("maintains each live repository and warns without changing the cleanup outcom
       issueCount: 0,
     });
     expect(maintenanceRoots.toSorted()).toEqual([repo, otherRepo].toSorted());
-    const warning = await logs.findText("worktree Git maintenance failed");
+    const warning = await logs.findText("worktree Git maintenance");
     expect(warning).toContain("gc is already running");
+    await service.gc({ signal: controller.signal });
+    expect(maintenanceRoots).toHaveLength(3);
+    expect(maintenanceRoots.at(-1)).toBe(otherRepo);
+    await service.gc({ signal: controller.signal, retryDeferred: true });
+    expect(maintenanceRoots).toHaveLength(5);
     const calls = commands.mock.calls.length;
     controller.abort(new Error("cleanup cancelled"));
     await expect(service.gc({ signal: controller.signal })).rejects.toThrow("cleanup cancelled");
@@ -146,3 +160,72 @@ it.each([false, true])(
     expect(commands.mock.calls.filter(([, args]) => args[0] === "maintenance")).toEqual([]);
   },
 );
+
+it("preserves shared reflog history and maintains repositories with already-missing reflog objects", async () => {
+  const root = tempDirs.make("worktree-maintenance-reflogs-");
+  const repo = await initRepo(root);
+  const git = (cwd: string, ...args: string[]) => requireGit(cwd, args);
+  await git(repo, "config", "gc.auto", "0");
+  const [survivor, removed] = await materializeManagedWorktreeFixtures({
+    env,
+    stateDir: root,
+    repoRoot: repo,
+    names: ["survivor", "removed"],
+    now: 1,
+  });
+  const base = await git(repo, "rev-parse", "HEAD");
+  await git(survivor!.path, "checkout", "--detach");
+  await git(survivor!.path, "commit", "--allow-empty", "-m", "reflog-only commit");
+  const retained = await git(survivor!.path, "rev-parse", "HEAD");
+  await git(survivor!.path, "checkout", survivor!.branch);
+  const service = new ManagedWorktreeService({ env, now: () => 3 });
+  const removedLog = path.resolve(
+    removed!.path,
+    await git(removed!.path, "rev-parse", "--git-path", "logs/HEAD"),
+  );
+  await fs.access(removedLog);
+  await service.remove({ id: removed!.id, reason: "test" });
+  await expect(fs.access(removedLog)).rejects.toMatchObject({ code: "ENOENT" });
+  await git(repo, "repack", "-d");
+  const missing = "a".repeat(base.length);
+  const broken = await requireGit(repo, ["hash-object", "-w", "-t", "commit", "--stdin"], {
+    input: Buffer.from(
+      `tree ${missing}\nparent ${base}\nauthor Test <test@example.invalid> 1780000000 +0000\ncommitter Test <test@example.invalid> 1780000000 +0000\n\nmissing reflog tree\n`,
+    ),
+  });
+  const reflog = path.resolve(
+    survivor!.path,
+    await git(survivor!.path, "rev-parse", "--git-path", "logs/HEAD"),
+  );
+  const timestamp = Math.floor(Date.now() / 1000);
+  await fs.appendFile(
+    reflog,
+    `${base} ${broken} Test <test@example.invalid> ${timestamp} +0000\tmissing tree\n${broken} ${missing} Test <test@example.invalid> ${timestamp} +0000\tmissing commit\n`,
+  );
+  const history = await fs.readFile(reflog, "utf8");
+  for (let index = 0; index < 3; index++) {
+    const object = await requireGit(repo, ["hash-object", "-w", "--stdin"], {
+      input: Buffer.from(`pack-${index}`),
+    });
+    await requireGit(repo, ["pack-objects", path.join(repo, ".git", "objects", "pack", "pack")], {
+      input: Buffer.from(`${object}\n`),
+    });
+  }
+  await git(repo, "config", "gc.auto", "1");
+  await git(repo, "config", "gc.autoPackLimit", "1");
+  for (const task of ["commit-graph", "loose-objects", "incremental-repack"]) {
+    await git(repo, "config", `maintenance.${task}.auto`, "-1");
+  }
+  const logs = createWarnLogCapture("worktree-maintenance-reflogs");
+  try {
+    expect((await service.gc()).outcome).toBe("completed");
+    expect(await logs.findText("worktree Git maintenance")).toBeUndefined();
+    expect(await fs.readFile(reflog, "utf8")).toBe(history);
+    expect(await git(repo, "cat-file", "-t", retained)).toBe("commit");
+    await fs.access(
+      path.join(repo, ".git", "objects", "info", "commit-graphs", "commit-graph-chain"),
+    );
+  } finally {
+    logs.cleanup();
+  }
+});

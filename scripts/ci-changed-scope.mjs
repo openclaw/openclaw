@@ -834,6 +834,7 @@ export function listChangedPaths(
  * @param {NodeFastScope} [nodeFastScope]
  * @param {boolean} [runNativeI18n]
  * @param {string[] | null} [changedPaths]
+ * @param {string} [workflowEventName]
  * @returns {void}
  */
 export function writeGitHubOutput(
@@ -846,6 +847,7 @@ export function writeGitHubOutput(
   nodeFastScope = { runFastOnly: false, runPluginContracts: false, runCiRouting: false },
   runNativeI18n = true,
   changedPaths = null,
+  workflowEventName = "",
 ) {
   if (!outputPath) {
     throw new Error("GITHUB_OUTPUT is required");
@@ -864,7 +866,7 @@ export function writeGitHubOutput(
   );
   appendFileSync(
     outputPath,
-    `run_android_screenshots=${shouldRunAndroidScreenshots(changedPaths)}\n`,
+    `run_android_screenshots=${workflowEventName !== "pull_request" && shouldRunAndroidScreenshots(changedPaths)}\n`,
     "utf8",
   );
   appendFileSync(outputPath, `run_android=${scope.runAndroid}\n`, "utf8");
@@ -944,6 +946,7 @@ export function parseArgs(argv) {
 }
 
 if (isDirectRun()) {
+  const workflowEventName = process.env.GITHUB_EVENT_NAME ?? "";
   try {
     const args = parseArgs(process.argv.slice(2));
     const changedPaths = listChangedPaths(
@@ -953,7 +956,15 @@ if (isDirectRun()) {
       args.mergeHeadFirstParent,
     );
     if (changedPaths.length === 0) {
-      writeGitHubOutput(EMPTY_SCOPE, process.env.GITHUB_OUTPUT, undefined, undefined, false, []);
+      writeGitHubOutput(
+        EMPTY_SCOPE,
+        process.env.GITHUB_OUTPUT,
+        undefined,
+        undefined,
+        false,
+        [],
+        workflowEventName,
+      );
       process.exit(0);
     }
     const allowedGeneratedMixBranch = resolveAllowedGeneratedMixBranch();
@@ -966,6 +977,7 @@ if (isDirectRun()) {
       detectNodeFastScope(changedPaths),
       shouldRunNativeI18n(changedPaths),
       changedPaths,
+      workflowEventName,
     );
   } catch (error) {
     if (
@@ -975,7 +987,15 @@ if (isDirectRun()) {
       console.error(error.message);
       process.exitCode = 1;
     } else {
-      writeGitHubOutput(FULL_SCOPE, process.env.GITHUB_OUTPUT, undefined, undefined, true, null);
+      writeGitHubOutput(
+        FULL_SCOPE,
+        process.env.GITHUB_OUTPUT,
+        undefined,
+        undefined,
+        true,
+        null,
+        workflowEventName,
+      );
     }
   }
 }

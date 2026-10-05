@@ -465,7 +465,6 @@ export function resolveProviderConfigApiKeyWithPlugin(
 
 export {
   resolveProviderReasoningOutputModeWithPlugin,
-  sanitizeProviderReplayHistoryWithPlugin,
   sanitizeProviderReplayHistoryWithPluginAsync,
   validateProviderReplayTurnsWithPlugin,
 } from "./provider-replay-runtime.js";

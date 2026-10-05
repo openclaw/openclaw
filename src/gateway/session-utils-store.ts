@@ -33,8 +33,10 @@ import {
   type SessionScope,
 } from "../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
-import type { SessionEntryListScope } from "../config/sessions/session-accessor.js";
-import type { QualifiedSessionEntryAccessTarget } from "../config/sessions/session-accessor.types.js";
+import type {
+  QualifiedSessionEntryAccessTarget,
+  SessionEntryReadScope,
+} from "../config/sessions/session-accessor.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecPolicyForMode } from "../infra/exec-approvals-core.js";
 import { loadExecApprovalsReadOnlyAsync } from "../infra/exec-approvals-store.js";
@@ -138,7 +140,7 @@ function readAcpMetaForDeletedAgentCheck(params: {
 function loadSessionEntryWithMode(
   sessionKey: string,
   opts:
-    | (Pick<SessionEntryListScope, "agentId" | "clone" | "projection" | "env"> & {
+    | (Pick<SessionEntryReadScope, "agentId" | "clone" | "projection" | "env"> & {
         includeStoreChildEntries?: boolean;
         targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
       })
@@ -191,7 +193,7 @@ function loadSessionEntryWithMode(
 
 export function loadGatewaySessionEntry(
   sessionKey: string,
-  opts?: Pick<SessionEntryListScope, "agentId" | "clone" | "projection" | "env">,
+  opts?: Pick<SessionEntryReadScope, "agentId" | "clone" | "projection" | "env">,
   cfg?: OpenClawConfig,
 ) {
   return loadSessionEntryWithMode(sessionKey, opts, false, cfg);
@@ -202,7 +204,7 @@ export function loadGatewaySessionEntryReadOnly(
   opts?: {
     includeStoreChildEntries?: boolean;
     targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
-  } & Pick<SessionEntryListScope, "agentId" | "clone" | "projection" | "env">,
+  } & Pick<SessionEntryReadScope, "agentId" | "clone" | "projection" | "env">,
   cfg?: OpenClawConfig,
 ) {
   return loadSessionEntryWithMode(sessionKey, opts, true, cfg);
@@ -212,7 +214,7 @@ export function loadGatewaySessionEntryReadOnly(
 export async function withGatewaySessionEntry<T>(
   sessionKey: string,
   opts:
-    | (Pick<SessionEntryListScope, "agentId" | "projection" | "env"> & {
+    | (Pick<SessionEntryReadScope, "agentId" | "projection" | "env"> & {
         includeMembership?: boolean;
       })
     | undefined,

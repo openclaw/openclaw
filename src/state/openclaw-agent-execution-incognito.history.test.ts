@@ -8,11 +8,19 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import type { IncognitoLifecycleEntry } from "../config/sessions/session-incognito-lifecycle-contract.js";
+import {
+  readActiveTranscriptEntryAnchorAsync,
+  readSessionTranscriptAnchorsAsync,
+} from "../config/sessions/session-transcript-anchor-read.js";
 import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence.js";
 import {
   createIncognitoSessionComputeReader,
   createIncognitoSessionHistoryReader,
 } from "../gateway/session-history-snapshot.js";
+import {
+  readSessionTranscriptAccountingAsync,
+  readSessionTranscriptBoundedMessageTailPageAsync,
+} from "../gateway/session-transcript-readers.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
@@ -143,6 +151,140 @@ async function computeReader(target: IncognitoLifecycleEntry, owner = actor, gra
   });
   return { reader, scope };
 }
+
+it("composes anchor publication inside its actor FIFO and accounting/tail reads without host SQL", async () => {
+  const session = await create("anchor-accounting-tail");
+  const target = targetInput(session);
+  const scope = { ...target, agentId: actor.agentId, storePath: actor.path };
+  const binding = { actor, authority, target };
+  const first = await append(session, "original message");
+  assert(first.ok && first.value.append);
+  const entryId = first.value.append.messageId;
+  const barrier = await hold();
+  try {
+    const writing = actor.sessions.transcript(authority, {
+      type: "session.message.append",
+      input: {
+        sessionKey: target.sessionKey,
+        sessionId: target.sessionId,
+        fence: { expectedLifecycleRevision: target.lifecycleRevision },
+        message: {
+          role: "assistant",
+          content: "newest accounted answer",
+          usage: { input: 200, output: 7 },
+          __openclaw: { turnTainted: true },
+        },
+      },
+    });
+    let published = false;
+    const reading = readSessionTranscriptAnchorsAsync(
+      scope,
+      { entryIds: [entryId], afterSeq: 0 },
+      undefined,
+      (facts) => {
+        expect(facts.anchors[0]).toMatchObject({ entryId, activeMessagePosition: 0 });
+        expect(facts.tail?.entries).toHaveLength(2);
+        published = true;
+      },
+      binding,
+    );
+    const following = actor.run(authority, async () => {
+      expect(published).toBe(true);
+    });
+    const accounting = readSessionTranscriptAccountingAsync(
+      scope,
+      { includeByteSize: true, includeUsage: true, includeTurnTaint: true },
+      undefined,
+      binding,
+    );
+    const tail = readSessionTranscriptBoundedMessageTailPageAsync(
+      scope,
+      { maxBytes: 4096, maxMessages: 1, offset: 0 },
+      undefined,
+      binding,
+    );
+    barrier.release.resolve();
+    const [written, anchors, , usage, page] = await Promise.all([
+      writing,
+      reading,
+      following,
+      accounting,
+      tail,
+    ]);
+    expect(written.ok).toBe(true);
+    expect(usage).toMatchObject({
+      eventCount: 2,
+      turnTainted: true,
+      usage: { promptTokens: 200, outputTokens: 7, trailingMessages: [] },
+    });
+    expect(usage.byteSize).toBeGreaterThan(0);
+    expect(page).toMatchObject({
+      totalMessages: 2,
+      newestContiguousEventCount: 1,
+      events: [{ event: { message: { content: "newest accounted answer" } } }],
+    });
+    expect(
+      await readActiveTranscriptEntryAnchorAsync({ ...scope, entryId }, undefined, binding),
+    ).toEqual(anchors.anchors[0]);
+  } finally {
+    barrier.release.resolve();
+    await barrier.held;
+  }
+});
+
+it("refuses bound history facades for another store and revoked queued readers", async () => {
+  const session = await create("bound-history-revocation");
+  await append(session, "private answer");
+  const target = targetInput(session);
+  const scope = { ...target, agentId: actor.agentId, storePath: actor.path };
+  let revoked = false;
+  const binding = {
+    actor,
+    target,
+    authority: {
+      assertCurrent() {
+        if (revoked) {
+          throw new Error("bound history revoked");
+        }
+      },
+    },
+  };
+  const reads = [
+    (selected: typeof scope) =>
+      readSessionTranscriptAnchorsAsync(selected, { entryIds: [] }, undefined, undefined, binding),
+    (selected: typeof scope) =>
+      readSessionTranscriptAccountingAsync(
+        selected,
+        { includeByteSize: true, includeUsage: true },
+        undefined,
+        binding,
+      ),
+    (selected: typeof scope) =>
+      readSessionTranscriptBoundedMessageTailPageAsync(
+        selected,
+        { maxBytes: 4096, maxMessages: 1, offset: 0 },
+        undefined,
+        binding,
+      ),
+  ];
+  for (const read of reads) {
+    await expect(read({ ...scope, storePath: lossActor.path })).rejects.toThrow(
+      "another session or store",
+    );
+  }
+  const barrier = await hold();
+  try {
+    const refused = reads.map((read) =>
+      expect(read(scope)).rejects.toThrow("bound history revoked"),
+    );
+    revoked = true;
+    barrier.release.resolve();
+    await Promise.all(refused);
+  } finally {
+    barrier.release.resolve();
+    await barrier.held;
+  }
+});
 
 it("projects Memory and Codex snapshots after committed actor writes without host SQL", async () => {
   const target = await create("memory-codex-fifo");

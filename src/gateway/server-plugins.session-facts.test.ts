@@ -84,17 +84,28 @@ describe("trusted plugin session facts", () => {
         facts: { kind: "removed" },
         factsInvalidated: "category",
       });
+      sessionChanges.emit({
+        sessionKey,
+        facts: { kind: "category", sessionId: "session-category", category: "work" },
+      });
+      sessionChanges.emit({
+        sessionKey,
+        facts: { kind: "category", sessionId: "session-category", category: "work" },
+        factsInvalidated: true,
+      });
       sessionChanges.emit({ sessionKey, factsInvalidated: true });
       sessionChanges.emit({ agentId: "main", sessionKey });
       sessionChanges.emit({ all: true, scope: "stores", factsInvalidated: true });
       expect(listener.mock.calls).toEqual([
         [{ agentId: "main", sessionKey, factsInvalidated: "category" }],
+        [{ agentId: "main", sessionKey, factsInvalidated: "category" }],
+        [{ agentId: "main", sessionKey, factsInvalidated: "true" }],
         [{ agentId: "main", sessionKey, factsInvalidated: "true" }],
         [{ agentId: "main", sessionKey }],
       ]);
       unsubscribe();
       sessionChanges.emit({ agentId: "main", sessionKey });
-      expect(listener).toHaveBeenCalledTimes(3);
+      expect(listener).toHaveBeenCalledTimes(5);
     } finally {
       unsubscribe();
     }

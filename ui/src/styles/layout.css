@@ -2811,9 +2811,7 @@ wa-dropdown-item.sidebar-customize-menu__item {
   text-decoration: none;
 }
 
-/* The agent switcher marks its selection in the trailing details rail
-   (.session-menu__check), so the native leading checkmark is layout-only: it
-   reserved a column that pushed avatar rows out of the command rows' gutter. */
+/* Agent tiles use an avatar ring; command rows have no checked state. */
 .sidebar-agent-menu .sidebar-customize-menu__item::part(checkmark) {
   display: none;
 }
@@ -3463,9 +3461,16 @@ a:is(
 }
 
 .sidebar-workspace-header__mark {
+  display: grid;
+  place-items: center;
   width: var(--sidebar-agent-avatar-size);
   height: var(--sidebar-agent-avatar-size);
   flex: none;
+}
+
+.sidebar-workspace-header__mark > svg {
+  width: 24px;
+  height: 24px;
 }
 
 .sidebar-agent-card__avatar {
@@ -4065,7 +4070,6 @@ button.gateway-status:focus-visible {
   min-width: 0;
   width: auto;
   justify-content: center;
-  /* Web Awesome's checkbox-adjacent host padding survives the hidden checkmark. */
   padding: 0 !important;
   color: var(--muted) !important;
   text-align: center;
@@ -4107,7 +4111,10 @@ wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible {
   width: var(--agent-avatar-size);
   height: var(--agent-avatar-size);
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--text-strong) 9%, var(--card));
+  background: var(
+    --agent-avatar-background,
+    color-mix(in srgb, var(--text-strong) 9%, var(--card))
+  );
   color: var(--secondary-foreground);
   box-shadow:
     0 0 0 2px transparent,
@@ -4119,6 +4126,58 @@ wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible {
     box-shadow 120ms ease,
     opacity 120ms ease,
     filter 120ms ease;
+}
+
+.sidebar-agent-menu__avatar-group {
+  --agent-avatar-background: transparent;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+  padding: 3px;
+}
+
+.sidebar-agent-menu__group-item {
+  --agent-avatar-size: 100%;
+  --agent-avatar-glyph-size: 13px;
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text-strong) 9%, var(--card));
+}
+
+.sidebar-agent-menu__avatar-group--pair {
+  display: block;
+  position: relative;
+  padding: 0;
+}
+
+.sidebar-agent-menu__avatar-group--pair .sidebar-agent-menu__group-item {
+  --agent-avatar-glyph-size: 20px;
+  position: absolute;
+  width: 65%;
+  height: 65%;
+  box-shadow: 0 0 0 2px var(--bg-elevated);
+}
+
+.sidebar-agent-menu__avatar-group--pair .sidebar-agent-menu__group-item:first-child {
+  inset-block-start: 0;
+  inset-inline-start: 0;
+}
+
+.sidebar-agent-menu__avatar-group--pair .sidebar-agent-menu__group-item:last-child {
+  inset-block-end: 0;
+  inset-inline-end: 0;
+}
+
+.sidebar-agent-menu__group-count {
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1;
 }
 
 .sidebar-agent-menu__agent-tile .sidebar-agent-menu__agent-avatar .agent-select__avatar {
@@ -4138,7 +4197,10 @@ wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible {
 }
 
 .sidebar-agent-menu__agent-switch--active:hover .sidebar-agent-menu__agent-avatar {
-  background: color-mix(in srgb, var(--text-strong) 12%, var(--card));
+  background: var(
+    --agent-avatar-background,
+    color-mix(in srgb, var(--text-strong) 12%, var(--card))
+  );
   box-shadow:
     0 0 0 2px var(--bg-elevated),
     0 0 0 4px color-mix(in srgb, var(--accent) 65%, transparent);
@@ -4195,9 +4257,7 @@ wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible {
   gap: 3px;
 }
 
-/* The help flyout must escape the menu box, so the root stays
-   overflow-visible; the viewport bound moves to a flex column where only
-   the switcher list shrinks and scrolls (the action rows always fit). */
+/* Only the switcher list shrinks and scrolls; the action rows stay visible. */
 .sidebar-agent-menu {
   --agent-avatar-size: 48px;
   --agent-avatar-glyph-size: 25px;

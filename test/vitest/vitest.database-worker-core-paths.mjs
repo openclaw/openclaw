@@ -470,7 +470,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/system-agent/setup-lifetime.test.ts",
   "src/auto-reply/reply/agent-runner-memory.test.ts",
   "src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts",
-  "src/auto-reply/reply/agent-runner.visible-work.runreplyagent.test.ts",
   "src/agents/sessions/session-manager-target-capture.test.ts",
   "src/agents/sessions/sdk.metadata-cwd.test.ts",
   "src/agents/sessions/sdk.metadata-admission.test.ts",

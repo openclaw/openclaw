@@ -13,11 +13,10 @@ import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import type { NpmSpecResolution } from "./install-source-utils.js";
 import { JsonFileReadError, readJson, readJsonIfExists, writeJson } from "./json-files.js";
 import { resolveNpmCommand } from "./npm-command.js";
-import { createManagedNpmPeerPlanArgs } from "./npm-managed-peer-plan.js";
 import type { ParsedRegistryNpmSpec } from "./npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { isPackageDependencyName } from "./package-json.js";
-import { createSafeNpmInstallEnv } from "./safe-package-install.js";
+import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
 
 // Managed npm roots are private package roots used for installed plugins. This
@@ -132,13 +131,6 @@ async function readManagedNpmRootManifest(filePath: string): Promise<ManagedNpmR
   return isRecord(parsed) ? { ...parsed } : {};
 }
 
-async function readHostWorkspaceOverrides(packageRoot: string): Promise<Record<string, unknown>> {
-  const workspace = parseYaml(
-    await fs.readFile(path.join(packageRoot, "pnpm-workspace.yaml"), "utf8"),
-  ) as unknown;
-  return isRecord(workspace) ? readOverrideRecord(workspace.overrides) : {};
-}
-
 function resolveHostOverrideReferences(value: unknown, manifest: HostPackageManifest): unknown {
   if (typeof value === "string" && value.startsWith("$")) {
     const packageName = value.slice(1);
@@ -160,11 +152,6 @@ function resolveHostOverrideReferences(value: unknown, manifest: HostPackageMani
   return resolved;
 }
 
-function isPnpmParentChildOverrideSelector(key: string): boolean {
-  // Match pnpm's parse-overrides delimiter without confusing npm ranges such as pkg@>1.
-  return /[^ |@]>/u.test(key);
-}
-
 function filterUnsupportedManagedNpmRootOverrides(
   value: unknown,
   omitNpmAliases = false,
@@ -173,7 +160,8 @@ function filterUnsupportedManagedNpmRootOverrides(
   const filtered: Record<string, unknown> = {};
   for (const [key, raw] of Object.entries(overrides)) {
     if (
-      isPnpmParentChildOverrideSelector(key) ||
+      // Match pnpm's delimiter without confusing npm ranges such as pkg@>1.
+      /[^ |@]>/u.test(key) ||
       (omitNpmAliases && typeof raw === "string" && raw.trim().startsWith("npm:"))
     ) {
       continue;
@@ -297,8 +285,11 @@ export async function readOpenClawManagedNpmRootOverrides(params?: {
       return {};
     }
     const hostManifest = manifest as HostPackageManifest;
+    const workspace: unknown = parseYaml(
+      await fs.readFile(path.join(packageRoot, "pnpm-workspace.yaml"), "utf8"),
+    );
     const overrides = filterUnsupportedManagedNpmRootOverrides(
-      await readHostWorkspaceOverrides(packageRoot),
+      isRecord(workspace) ? workspace.overrides : undefined,
     );
     return Object.fromEntries(
       Object.entries(overrides).map(([key, value]) => [
@@ -415,10 +406,6 @@ function isUnsupportedOptionalLockPackage(value: unknown): boolean {
   );
 }
 
-function hasNpmPlatformConstraint(value: Record<string, unknown>): boolean {
-  return value.os !== undefined || value.cpu !== undefined || value.libc !== undefined;
-}
-
 function readLockPackageLocationName(location: string): string | undefined {
   const parts = location.split("/");
   for (let index = parts.length - 1; index >= 0; index -= 1) {
@@ -464,10 +451,6 @@ function resolveManagedNpmLockPackagePath(params: {
     return undefined;
   }
   return packagePath;
-}
-
-function isTopLevelLockPackageLocation(location: string): boolean {
-  return location.split("/").filter((part) => part === "node_modules").length === 1;
 }
 
 type MissingRequiredPlatformPackage = {
@@ -562,7 +545,7 @@ export async function listMissingRequiredPlatformPackages(params: {
     if (
       !isRecord(value) ||
       value.optional !== true ||
-      !hasNpmPlatformConstraint(value) ||
+      (value.os === undefined && value.cpu === undefined && value.libc === undefined) ||
       isUnsupportedOptionalLockPackage(value)
     ) {
       continue;
@@ -637,7 +620,7 @@ function collectNpmLockPeerDependencyPins(params: {
       if (!version && isOptionalPeerDependency(value, peerName)) {
         continue;
       }
-      if (!version && !isTopLevelLockPackageLocation(location)) {
+      if (!version && location.split("/").filter((part) => part === "node_modules").length !== 1) {
         continue;
       }
       pins.set(peerName, version ?? peerRange);
@@ -698,13 +681,6 @@ async function scrubHostPeerFromTempPackageLock(lockPath: string): Promise<void>
   }
 }
 
-function isHostPeerResolutionFailure(
-  result: Awaited<ReturnType<ManagedNpmRootRunCommand>>,
-): boolean {
-  const output = `${result.stdout}\n${result.stderr}`;
-  return /(^|[^@\w.-])openclaw(?=$|[@\s:,"'])/i.test(output);
-}
-
 async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
   npmRoot: string;
   manifest: ManagedNpmRootManifest;
@@ -755,23 +731,42 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
 
     const command = params.runCommand ?? runCommandWithTimeout;
     const runPeerPlan = (legacyPeerDeps: boolean) =>
-      command(createManagedNpmPeerPlanArgs({ force: true, legacyPeerDeps }), {
-        cwd: tempRoot,
-        timeoutMs: resolveInstallWorkTimeoutMs(
-          params.workTimeoutMs,
-          params.timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS,
-        ),
-        signal: params.signal,
-        killProcessTree: true,
-        env: createSafeNpmInstallEnv(process.env, {
-          legacyPeerDeps,
-          npmConfigCwd: tempRoot,
-          packageLock: true,
-          quiet: true,
-        }),
-      });
+      command(
+        resolveNpmCommand([
+          "install",
+          "--package-lock-only",
+          "--force",
+          ...createSafeNpmInstallArgs({
+            omitDev: true,
+            omitPeer: true,
+            legacyPeerDeps,
+            loglevel: "error",
+            ignoreWorkspaces: true,
+            noAudit: true,
+            noFund: true,
+          }).slice(1),
+        ]),
+        {
+          cwd: tempRoot,
+          timeoutMs: resolveInstallWorkTimeoutMs(
+            params.workTimeoutMs,
+            params.timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS,
+          ),
+          signal: params.signal,
+          killProcessTree: true,
+          env: createSafeNpmInstallEnv(process.env, {
+            legacyPeerDeps,
+            npmConfigCwd: tempRoot,
+            packageLock: true,
+            quiet: true,
+          }),
+        },
+      );
     let result = await runPeerPlan(false);
-    if (result.code !== 0 && isHostPeerResolutionFailure(result)) {
+    if (
+      result.code !== 0 &&
+      /(^|[^@\w.-])openclaw(?=$|[@\s:,"'])/i.test(`${result.stdout}\n${result.stderr}`)
+    ) {
       result = await runPeerPlan(true);
     }
     if (result.code !== 0) {

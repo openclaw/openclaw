@@ -52,8 +52,9 @@ afterEach(async () => {
   await state.cleanup();
 });
 
-it("hydrates only scoped candidates while protecting out-of-scope history references", () => {
+it("hydrates only old scoped candidates while protecting out-of-scope history references", () => {
   const database = openOpenClawAgentDatabase(options);
+  const nowMs = Date.now() + 600_000;
   const snapshots = {
     sessionDiffBaseline: { version: 1, sessionId, root: "/synthetic", files: [] },
     skillsSnapshot: { prompt: "saved prompt".repeat(1024), skills: [] },
@@ -91,6 +92,11 @@ it("hydrates only scoped candidates while protecting out-of-scope history refere
       sessionId: "survivor",
       updatedAt: 1,
     });
+    writeSessionEntry(transaction, "agent:main:artifact-plan-recent", {
+      ...snapshots,
+      sessionId: "recent",
+      updatedAt: nowMs,
+    });
     writeSessionEntry(transaction, "agent:other:artifact-plan-victim", {
       ...snapshots,
       sessionId: "other-agent",
@@ -111,8 +117,8 @@ it("hydrates only scoped candidates while protecting out-of-scope history refere
         agentId: "main",
         sessionKeySegmentPrefix: "artifact-plan-",
         transcriptContentMarker: "artifact-plan-marker",
-        orphanTranscriptMinAgeMs: 0,
-        nowMs: Date.now(),
+        orphanTranscriptMinAgeMs: 300_000,
+        nowMs,
         archiveRemovedEntryTranscripts: false,
         archiveDirectory: state.sessionsDir(),
       }),
@@ -256,4 +262,38 @@ it("leaves a missing lifecycle store absent", async () => {
     }),
   ).resolves.toEqual({ removedEntries: 0, archivedTranscriptArtifacts: 0 });
   expect(fs.existsSync(databasePath)).toBe(false);
+});
+
+it("keeps orphan plans across page boundaries and protects retained references", () => {
+  const database = openOpenClawAgentDatabase(options);
+  const ids = Array.from(
+    { length: 129 },
+    (_, index) => `history-${String(index).padStart(3, "0")}`,
+  );
+  runOpenClawAgentWriteTransaction((transaction) => {
+    writeSessionEntry(transaction, sessionKey, { ...entry, previousSessionId: ids.at(-2) });
+    const window = transaction.db.prepare(
+      "INSERT INTO session_windows (session_id, session_key, created_at, updated_at) VALUES (?, ?, 1, 1)",
+    );
+    const transcript = transaction.db.prepare(
+      "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, 0, ?, 1)",
+    );
+    for (const id of ids) {
+      window.run(id, sessionKey);
+      transcript.run(id, JSON.stringify(event));
+    }
+  }, options);
+  const plan = artifactPlanning.planSessionLifecycleArtifactCleanup(database, {
+    archiveRemovedEntryTranscripts: false,
+    archiveDirectory: state.sessionsDir(),
+    sessionKeySegmentPrefix: "unrelated-",
+    transcriptContentMarker: "artifact-plan-marker",
+    orphanTranscriptMinAgeMs: 0,
+    nowMs: Date.now(),
+  });
+  expect(database.db.isTransaction).toBe(false);
+  expect(plan.entries).toEqual([]);
+  expect(plan.deletePlans.map((item) => item.sessionId)).toEqual(
+    ids.filter((id) => id !== ids.at(-2)),
+  );
 });

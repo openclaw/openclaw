@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   WorkboardSessionFacts,
   WorkboardSessionsBoard,
@@ -14,6 +15,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi, OpenClawPluginService } from "../api.js";
 import { sessionMatchesColumn, sessionsBoardFallback } from "./sessions-board-rules.js";
 import type { WorkboardBoardStore } from "./store-boards.js";
+import { freezeCardList } from "./store-read.js";
 
 type Gateway = Pick<
   OpenClawPluginApi["runtime"]["gateway"],
@@ -46,7 +48,6 @@ type Operations = {
 export type WorkboardSessionsBoardService = OpenClawPluginService &
   Operations & { stop: () => Promise<void> };
 type Owner = Operations & { cancel: () => void; stop: () => Promise<void> };
-type CachedFacts = { sessionId: string; facts?: WorkboardSessionFacts; dirty: boolean };
 const FACTS_BATCH_SIZE = 40;
 
 function activeState() {
@@ -79,6 +80,7 @@ async function listSessions(
       "sessions.list",
       {
         limit: 1000,
+        rowMode: "compact",
         offset,
         configuredAgentsOnly: true,
         includeGlobal: false,
@@ -158,9 +160,13 @@ function createOwner(
   context: ParametersOfStart,
   isCurrent: () => boolean,
 ): Owner {
-  const cache = new Map<string, CachedFacts>();
-  const refreshes = new Map<string, Promise<void>>();
-  const reads = new Map<string, Promise<WorkboardSessionsBoardRead>>();
+  const lastKnown = new Map<string, WorkboardSessionFacts>();
+  const boards = new Map<string, Promise<WorkboardSessionsBoard>>();
+  const projections = new Map<
+    string,
+    { read: Promise<{ snapshot: WorkboardSessionsBoardRead; complete: boolean }>; expires: number }
+  >();
+  let revision = params.store.sessionsRevision;
   const now = params.now ?? Date.now;
   let stopped = false;
   let hasRead = false;
@@ -175,15 +181,11 @@ function createOwner(
     assertCurrent();
     caller?.assertCurrent();
   };
-  const unsubscribe = params.gateway.subscribeSessionChanges(({ sessionKey }) => {
-    const previous = cache.get(sessionKey);
-    if (stopped || !hasRead) {
+  const unsubscribe = params.gateway.subscribeSessionChanges(({ factsInvalidated }) => {
+    if (stopped || !hasRead || factsInvalidated === "category") {
       return;
     }
-    // Replacing the cell also rejects a result started before this publication.
-    if (previous) {
-      cache.set(sessionKey, { ...previous, dirty: true });
-    }
+    params.store.invalidateSessionBoards();
     if (timer) {
       return;
     }
@@ -195,77 +197,56 @@ function createOwner(
     }, 5_000);
     timer.unref?.();
   });
-  const read = async (
-    id: string,
-    view?: WorkboardSessionsBoardView,
+  const project = async (
+    board: WorkboardSessionsBoard,
+    roster: Map<string, WorkboardSessionFacts>,
+    people: WorkboardSessionsBoardRead["people"],
+    admittedRevision: typeof revision,
     caller?: CallerAuthority,
-  ): Promise<WorkboardSessionsBoardRead> => {
+  ) => {
+    const id = board.id;
     const assertReadCurrent = interactiveAuthority(caller);
-    assertReadCurrent();
-    const board = await params.store.getSessionsBoard(id);
-    hasRead = true;
-    const { sessions: roster, people } = await listSessions(params.gateway, board, view);
     assertReadCurrent();
     const unavailable = new Set<string>();
     const reasons = new Set<string>();
-    // Results belong to this caller's roster; omitted facts are not permission to reuse old data.
-    const omitted = new Set<string>();
-    while (refreshes.has(id)) {
-      // A departing caller must not retire another reader's live authority.
-      await refreshes.get(id)?.catch(() => {});
-      assertReadCurrent();
-    }
-    const missing = [...roster.values()].filter((row) => {
-      const cached = cache.get(row.key);
-      return (
-        row.key !== board.sessions.agentSessionKey &&
-        (!cached || cached.sessionId !== row.sessionId || cached.dirty)
-      );
-    });
-    const refresh = async () => {
-      for (let offset = 0; offset < missing.length; offset += FACTS_BATCH_SIZE) {
-        const batch = missing.slice(offset, offset + FACTS_BATCH_SIZE);
+    const resolved = new Map<string, WorkboardSessionFacts>();
+    const rows = [...roster.values()].filter((row) => row.key !== board.sessions.agentSessionKey);
+    let complete = true;
+    for (let offset = 0; offset < rows.length; offset += FACTS_BATCH_SIZE) {
+      const batch = rows.slice(offset, offset + FACTS_BATCH_SIZE);
+      try {
+        const result = await params.gateway.readSessionFacts({
+          sessionKeys: batch.map((row) => row.key),
+        });
+        assertReadCurrent();
+        const returned = new Map(result.sessions.map((facts) => [facts.key, facts]));
         for (const row of batch) {
-          if (cache.get(row.key)?.sessionId !== row.sessionId) {
-            cache.set(row.key, { sessionId: row.sessionId, dirty: true });
+          const facts = returned.get(row.key);
+          if (facts?.sessionId === row.sessionId) {
+            resolved.set(row.key, facts);
+          } else {
+            complete = false;
           }
-        }
-        const before = new Map(batch.map((row) => [row.key, cache.get(row.key)]));
-        try {
-          const result = await params.gateway.readSessionFacts({
-            sessionKeys: batch.map((row) => row.key),
-          });
-          assertReadCurrent();
-          const returned = new Map(result.sessions.map((facts) => [facts.key, facts]));
-          for (const row of batch) {
-            const facts = returned.get(row.key);
-            if (!facts || facts.sessionId !== row.sessionId) {
-              omitted.add(row.key);
-              if (cache.get(row.key) === before.get(row.key)) {
-                cache.delete(row.key);
-              }
-            } else if (cache.get(row.key) === before.get(row.key)) {
-              cache.set(row.key, { sessionId: facts.sessionId, facts, dirty: false });
+          // Late snapshots may finish, but cannot replace a newer generation's fallback facts.
+          if (params.store.sessionsRevision === admittedRevision) {
+            if (facts?.sessionId === row.sessionId) {
+              lastKnown.set(row.key, facts);
+            } else {
+              lastKnown.delete(row.key);
             }
           }
-        } catch (error) {
-          assertReadCurrent();
-          for (const row of batch) {
-            unavailable.add(row.key);
+        }
+      } catch (error) {
+        assertReadCurrent();
+        complete = false;
+        for (const row of batch) {
+          unavailable.add(row.key);
+          const previous = lastKnown.get(row.key);
+          if (previous?.sessionId === row.sessionId) {
+            resolved.set(row.key, previous);
           }
-          reasons.add(redactToolPayloadText(String(error)).replace(/\s+/g, " ").slice(0, 300));
         }
-      }
-    };
-    if (missing.length) {
-      const computation = refresh();
-      refreshes.set(id, computation);
-      try {
-        await computation;
-      } finally {
-        if (refreshes.get(id) === computation) {
-          refreshes.delete(id);
-        }
+        reasons.add(redactToolPayloadText(String(error)).replace(/\s+/g, " ").slice(0, 300));
       }
     }
     const placements = new Map(
@@ -275,11 +256,10 @@ function createOwner(
     const fallback = sessionsBoardFallback(board);
     const sessions: WorkboardSessionsBoardRead["sessions"] = [];
     for (const row of roster.values()) {
-      if (omitted.has(row.key)) {
+      if (!resolved.has(row.key) && !unavailable.has(row.key)) {
         continue;
       }
-      const cached = cache.get(row.key);
-      const known = cached?.sessionId === row.sessionId ? cached.facts : undefined;
+      const known = resolved.get(row.key);
       const facts = known ?? row;
       if (!inScope(facts, board, now())) {
         continue;
@@ -321,12 +301,106 @@ function createOwner(
       );
     }
     return {
-      board,
-      columns: board.sessions.columns,
-      sessions,
-      ...(people !== undefined ? { people } : {}),
-      ...(warnings.length ? { warning: warnings.join(" ") } : {}),
+      complete,
+      snapshot: {
+        board,
+        columns: board.sessions.columns,
+        sessions,
+        ...(people !== undefined ? { people } : {}),
+        ...(warnings.length ? { warning: warnings.join(" ") } : {}),
+      },
     };
+  };
+  const read = async (
+    id: string,
+    view?: WorkboardSessionsBoardView,
+    caller?: CallerAuthority,
+  ): Promise<WorkboardSessionsBoardRead> => {
+    const assertReadCurrent = interactiveAuthority(caller);
+    assertReadCurrent();
+    hasRead = true;
+    if (revision !== params.store.sessionsRevision) {
+      boards.clear();
+      projections.clear();
+      revision = params.store.sessionsRevision;
+    }
+    const admittedRevision = revision;
+    let boardRead = boards.get(id);
+    if (!boardRead) {
+      const pending = params.store.getSessionsBoard(id).catch((error: unknown) => {
+        if (boards.get(id) === pending) {
+          boards.delete(id);
+        }
+        throw error;
+      });
+      if (boards.size >= 64) {
+        boards.delete(boards.keys().next().value!);
+      }
+      boards.set(id, pending);
+      boardRead = pending;
+    }
+    const board = await boardRead;
+    const { sessions, people } = await listSessions(params.gateway, board, view);
+    assertReadCurrent();
+    // Roster membership and facets remain invocation-bound; only equal authorized inputs share work.
+    const key = JSON.stringify([id, view, [...sessions.values()], people]);
+    const cacheable = params.store.sessionsRevision === admittedRevision;
+    let projection = cacheable ? projections.get(key) : undefined;
+    if (projection && projection.expires < now()) {
+      projections.delete(key);
+      projection = undefined;
+    }
+    const joined = Boolean(projection);
+    if (!projection) {
+      const prepared = {
+        expires: Infinity,
+        read: project(board, sessions, people, admittedRevision, caller).then(
+          ({ snapshot: result, complete }) => {
+            const maxAge = (board.sessions.scope?.maxAgeHours ?? 72) * 3_600_000;
+            prepared.expires = result.sessions.reduce(
+              (expires, row) => Math.min(expires, row.lastActivityAt + maxAge),
+              Infinity,
+            );
+            const snapshot = {
+              ...result,
+              revision: { ...admittedRevision, boardId: id, scope: randomUUID() },
+            };
+            freezeCardList(snapshot);
+            return { snapshot, complete };
+          },
+        ),
+      };
+      // Bound arbitrary filters and aging roster windows; eviction only causes a cold read.
+      if (cacheable) {
+        if (projections.size >= 64) {
+          projections.delete(projections.keys().next().value!);
+        }
+        projections.set(key, prepared);
+      }
+      projection = prepared;
+    }
+    try {
+      const { snapshot, complete } = await projection.read;
+      assertReadCurrent();
+      // Complete an admitted read under its captured revision even during continuous churn.
+      // Retire incomplete and superseded work rather than retrying until writers become idle.
+      if (
+        (!complete || params.store.sessionsRevision !== admittedRevision) &&
+        projections.get(key) === projection
+      ) {
+        projections.delete(key);
+      }
+      return snapshot;
+    } catch (error) {
+      if (projections.get(key) === projection) {
+        projections.delete(key);
+      }
+      assertReadCurrent();
+      if (joined) {
+        return await read(id, view, caller);
+      }
+      throw error;
+    }
   };
   const cancel = () => {
     stopped = true;
@@ -335,27 +409,12 @@ function createOwner(
       clearTimeout(timer);
     }
     timer = undefined;
-    cache.clear();
+    lastKnown.clear();
+    boards.clear();
+    projections.clear();
   };
   return {
-    read(id, view, caller) {
-      // A caller's roster and people facets cannot be shared with a different viewer.
-      if (caller) {
-        return read(id, view, caller);
-      }
-      const key = JSON.stringify([id, view]);
-      const pending = reads.get(key);
-      if (pending) {
-        return pending;
-      }
-      const computation = read(id, view).finally(() => {
-        if (reads.get(key) === computation) {
-          reads.delete(key);
-        }
-      });
-      reads.set(key, computation);
-      return computation;
-    },
+    read,
     cancel,
     async stop() {
       cancel();
