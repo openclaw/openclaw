@@ -23,6 +23,7 @@ import {
 } from "./prepared-model-runtime.catalog-auth.js";
 import type { PreparedModelRuntimeCatalogAccessParams } from "./prepared-model-runtime.catalog-contract.js";
 import { createPreparedModelCatalogProjection } from "./prepared-model-runtime.catalog-projection.js";
+import { createPreparedModelCatalogGenerationRecoveryHandler } from "./prepared-model-runtime.catalog-recovery-handler.js";
 import {
   preparedProviderCatalogCredentials,
   preparedProviderCatalogSource,
@@ -137,6 +138,7 @@ export async function createFullModelCatalogAccess(
     },
     params.isPublished,
   );
+  const recoverCatalogGeneration = createPreparedModelCatalogGenerationRecoveryHandler(params);
   const providerSource = (provider: string) =>
     preparedProviderCatalogSource(
       params.agentFacts,
@@ -324,12 +326,16 @@ export async function createFullModelCatalogAccess(
         runtimeModels,
         providerExpiries,
         hookRows,
-      } = await worker.loadCatalog(
-        providerIds,
-        (providerIds ?? providers).some((provider) => published.inventory?.providers.has(provider))
-          ? (error) => attempt.failed(error, providerIds ?? providers, "provider")
-          : undefined,
-      );
+      } = await worker.loadCatalog(providerIds, (error) => {
+        if (
+          (providerIds ?? providers).some((provider) =>
+            published.inventory?.providers.has(provider),
+          )
+        ) {
+          attempt.failed(error, providerIds ?? providers, "provider");
+        }
+        recoverCatalogGeneration(error);
+      });
       assertCurrent();
       const scope = new Set(
         (
@@ -475,7 +481,7 @@ export async function createFullModelCatalogAccess(
       // Full inventory acquisition alone discovers additional paired provider credentials.
       const nativeAuth =
         !selection && completed && discoveredProviders.length
-          ? await worker.loadAuth({ providerIds: discoveredProviders })
+          ? await worker.loadAuth({ providerIds: discoveredProviders }, recoverCatalogGeneration)
           : undefined;
       assertCurrent();
       // Provider renewal may finish during native discovery. Commit native observations onto
@@ -658,10 +664,13 @@ export async function createFullModelCatalogAccess(
       await using _ = {
         [Symbol.asyncDispose]: retainPreparedPluginGeneration(params.pluginGeneration),
       };
-      const refreshed = await worker.loadAuth({
-        providerIds,
-        ...(profileIds?.length ? { profileIds } : {}),
-      });
+      const refreshed = await worker.loadAuth(
+        {
+          providerIds,
+          ...(profileIds?.length ? { profileIds } : {}),
+        },
+        recoverCatalogGeneration,
+      );
       assertCurrent();
       const previous =
         getPreparedModelFullCatalogAuth(published.catalog ?? staticCatalog) ?? currentAuth;

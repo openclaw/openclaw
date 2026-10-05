@@ -13,6 +13,8 @@
     "../../**/dist/**",
     "../../src/agents/bash-tools*.test.ts",
     "../../src/agents/bash-tools*.test.tsx",
+    "../../src/agents/prepared-model-runtime*.test.ts",
+    "../../src/agents/prepared-model-runtime*.test.tsx",
     "../../src/agents/bootstrap-files.remote.test.ts",
     "../../src/agents/code-mode*.test.ts",
     "../../src/agents/code-mode*.test.tsx",

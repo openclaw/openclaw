@@ -119,6 +119,11 @@ export const TSGO_CORE_TEST_SHARDS = [
     group: "ui",
     config: "test/tsconfig/tsconfig.core.test.ui-components.json",
   },
+  {
+    name: "agents-prepared-runtime",
+    group: "src",
+    config: "test/tsconfig/tsconfig.core.test.agents-prepared-runtime.json",
+  },
 ] as const;
 
 // Root tests remain one CI inventory graph; execution partitions its checker heap.
