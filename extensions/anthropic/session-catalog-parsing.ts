@@ -1,3 +1,4 @@
+import { sessionCatalogPaging } from "openclaw/plugin-sdk/session-catalog";
 import {
   isRecord,
   normalizeBoundedOptionalString as readBoundedString,
@@ -19,26 +20,12 @@ export const MAX_HOSTS = 100;
 const MAX_SEARCH_LENGTH = 500;
 
 export function encodeOffset(offset: number): string {
-  return Buffer.from(JSON.stringify({ offset }), "utf8").toString("base64url");
+  return sessionCatalogPaging.encodeCursor(offset);
 }
 
 export function decodeOffset(cursor: string | undefined, label: string): number {
-  if (cursor === undefined) {
-    return 0;
-  }
-  if (!isExactClaudeSessionCursor(cursor)) {
-    throw new ClaudeCatalogParamsError(`${label} cursor is invalid`);
-  }
   try {
-    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as unknown;
-    if (
-      !isRecord(parsed) ||
-      !Number.isSafeInteger(parsed.offset) ||
-      (parsed.offset as number) < 0
-    ) {
-      throw new Error("invalid offset");
-    }
-    return parsed.offset as number;
+    return sessionCatalogPaging.decodeCursor(cursor);
   } catch (error) {
     throw new ClaudeCatalogParamsError(`${label} cursor is invalid`, { cause: error });
   }
