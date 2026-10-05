@@ -31,9 +31,14 @@ function reportDoctorRepairResult(
 function withDoctorHealthCheckFacts<T extends object>(
   ctx: DoctorHealthFlowContext,
   input: T,
-): T & Pick<DoctorHealthCheckContext, "runWithPluginMetadataSnapshot" | "agentDatabaseRefusals"> {
+): T &
+  Pick<
+    DoctorHealthCheckContext,
+    "env" | "runWithPluginMetadataSnapshot" | "agentDatabaseRefusals"
+  > {
   return {
     ...input,
+    env: ctx.env,
     agentDatabaseRefusals: ctx.agentDatabaseRefusals,
     ...(ctx.runWithPluginMetadataSnapshot
       ? { runWithPluginMetadataSnapshot: ctx.runWithPluginMetadataSnapshot }
@@ -69,7 +74,6 @@ export async function runStructuredHealthRepairs(
       mode: "fix" as const,
       runtime: ctx.runtime,
       cfg: ctx.cfg,
-      env: ctx.env,
       cwd: workspaceDir,
       configPath: ctx.configPath,
     }),
