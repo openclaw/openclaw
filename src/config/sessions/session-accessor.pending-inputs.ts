@@ -418,6 +418,7 @@ async function stagePreparedPendingInput(
           if (finished) {
             throw new SessionPendingInputCustodyError("Pending input ownership ended");
           }
+          scope.incognito?.authority.assertCurrent();
           options.assertCurrent();
           return run();
         },

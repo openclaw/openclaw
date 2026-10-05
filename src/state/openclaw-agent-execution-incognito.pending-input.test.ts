@@ -219,29 +219,56 @@ it("refuses pending execution after its captured actor reference is released", a
   }
 });
 
-it("rechecks captured binding authority before pending execution", async () => {
-  const f = await fixture("revoked-binding");
-  let current = true;
-  f.scope.incognito = {
-    actor,
-    authority: {
-      assertCurrent() {
-        if (!current) {
-          throw new Error("Binding authority revoked");
-        }
+it.each(["staged", "transcript-recovered"] as const)(
+  "rechecks captured binding authority before %s pending execution",
+  async (source) => {
+    const f = await fixture(`revoked-binding-${source}`);
+    let current = true;
+    f.scope.incognito = {
+      actor,
+      authority: {
+        assertCurrent() {
+          if (!current) {
+            throw new Error("Binding authority revoked");
+          }
+        },
       },
-    },
-  };
-  const receipt = await f.stage("revoked-binding");
-  const execute = vi.fn();
-  current = false;
-  try {
-    expect(() => receipt.run(execute)).toThrow("Binding authority revoked");
-    expect(execute).not.toHaveBeenCalled();
-  } finally {
-    current = true;
-  }
-});
+    };
+    let committedId: string | undefined;
+    if (source === "transcript-recovered") {
+      const appended = await actor.sessions.transcript(authority, {
+        type: "session.message.append",
+        input: {
+          sessionKey: f.scope.sessionKey,
+          sessionId: f.scope.sessionId,
+          fence: { expectedLifecycleRevision: "initial" },
+          message: {
+            role: "user",
+            content: "Synthetic revoked-binding",
+            timestamp: 1,
+            idempotencyKey: "revoked-binding:user",
+          },
+        },
+      });
+      assert(appended.ok && appended.value.append);
+      committedId = appended.value.append.messageId;
+    }
+    const receipt = await f.stage("revoked-binding");
+    if (source === "transcript-recovered") {
+      expect(receipt.inputId).toBe(committedId);
+    }
+    const execute = vi.fn(() => "allowed");
+    expect(receipt.run(execute)).toBe("allowed");
+    execute.mockClear();
+    current = false;
+    try {
+      expect(() => receipt.run(execute)).toThrow("Binding authority revoked");
+      expect(execute).not.toHaveBeenCalled();
+    } finally {
+      current = true;
+    }
+  },
+);
 
 it("propagates a completion refusal without silently dispatching a terminal write", async () => {
   const f = await fixture("completion-refusal");

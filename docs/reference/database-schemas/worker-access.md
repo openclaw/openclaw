@@ -457,6 +457,8 @@ inside the synchronous transaction; transaction and commit grants recheck live
 host custody. Confirmed commit receipts publish accepted input ownership inside
 the actor FIFO, including when the ordinary reply is lost. Unknown outcomes never
 replay. Synchronous completion refuses an actor binding and names `completeAsync`.
+Freshly staged and transcript-recovered receipts both recheck the captured binding
+authority before invoking their execution callback.
 Admission may carry the enclosing close signal; accepted persistence does not
 inherit that cancellation, and the close prelude joins settlement before transport
 teardown.
