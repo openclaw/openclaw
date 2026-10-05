@@ -47,14 +47,7 @@ import {
 const DEFAULT_UPLOAD_MIME_TYPE = "application/octet-stream";
 const PLAYWRIGHT_FILE_PAYLOAD_SIZE_LIMIT_BYTES = 50 * 1024 * 1024;
 
-type PlaywrightFilePayload = {
-  name: string;
-  mimeType: string;
-  buffer: Buffer;
-  lastModifiedMs?: number;
-};
-
-async function toPlaywrightFilePayloads(paths: string[]): Promise<PlaywrightFilePayload[]> {
+async function toPlaywrightFilePayloads(paths: string[]) {
   const stats = await Promise.all(paths.map(async (filePath) => await fs.stat(filePath)));
   const totalSize = stats.reduce((size, stat) => size + stat.size, 0);
   if (totalSize >= PLAYWRIGHT_FILE_PAYLOAD_SIZE_LIMIT_BYTES) {

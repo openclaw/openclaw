@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
+import type { Download } from "playwright-core";
 import type { BrowserDownloadCandidate, BrowserDownloadResult } from "./download-types.js";
 import { writeExternalFileWithinOutputRoot } from "./output-files.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
@@ -25,12 +26,9 @@ export type BrowserDownloadCaptureOptions = {
   timeoutMessage?: string;
 };
 
-export type PlaywrightDownload = {
-  cancel?: () => Promise<void>;
-  url?: () => string;
-  suggestedFilename?: () => string;
-  saveAs?: (outPath: string) => Promise<void>;
-};
+export type PlaywrightDownload = Partial<
+  Pick<Download, "cancel" | "url" | "suggestedFilename" | "saveAs">
+>;
 
 function buildManagedDownloadPath(rootDir: string, fileName: string): string {
   const id = crypto.randomUUID();

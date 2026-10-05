@@ -68,18 +68,7 @@ type AgentCapabilityState = {
   agentsList: AgentsListResult | null;
 };
 
-export type AgentCapability = {
-  readonly state: AgentCapabilityState;
-  ensureList: () => Promise<AgentsListResult | null>;
-  refreshList: () => Promise<AgentsListResult | null>;
-  files: (agentId: string | null | undefined) => AgentFilesStatus;
-  invalidateFiles: (agentIds: readonly (string | null | undefined)[]) => void;
-  ensureFiles: (agentId: string) => Promise<AgentsFilesListResult | null>;
-  refreshFiles: (agentId: string) => Promise<AgentsFilesListResult | null>;
-  recordFile: (result: AgentsFilesGetResult) => void;
-  subscribe: (listener: (state: AgentCapabilityState) => void) => () => void;
-  dispose: () => void;
-};
+export type AgentCapability = ReturnType<typeof createAgentCapability>;
 
 function hasSelectedAgentMismatch(state: AgentToolsState, agentId: string): boolean {
   return Boolean(state.agentsSelectedId && state.agentsSelectedId !== agentId);
@@ -205,7 +194,7 @@ function emptyAgentFilesStatus(): AgentFilesStatus {
   return { list: null, loading: false, error: null };
 }
 
-export function createAgentCapability(gateway: AgentGateway): AgentCapability {
+export function createAgentCapability(gateway: AgentGateway) {
   const lifecycle = createGatewayConnectionLifecycle(gateway.snapshot);
   const state: AgentCapabilityState = {
     client: gateway.snapshot.client,
@@ -368,13 +357,13 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
     },
     ensureList: () => loadList(false),
     refreshList: () => loadList(true),
-    files(agentId) {
+    files(agentId: string | null | undefined) {
       const normalized = normalizeOptionalString(agentId);
       return normalized
         ? (files.get(normalized) ?? emptyAgentFilesStatus())
         : emptyAgentFilesStatus();
     },
-    invalidateFiles(agentIds) {
+    invalidateFiles(agentIds: readonly (string | null | undefined)[]) {
       let changed = false;
       for (const agentId of normalizeUniqueTrimmedStringList(agentIds)) {
         changed = files.delete(agentId) || changed;
@@ -384,9 +373,9 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
         publish();
       }
     },
-    ensureFiles: (agentId) => loadFiles(agentId, false),
-    refreshFiles: (agentId) => loadFiles(agentId, true),
-    recordFile({ agentId, file }) {
+    ensureFiles: (agentId: string) => loadFiles(agentId, false),
+    refreshFiles: (agentId: string) => loadFiles(agentId, true),
+    recordFile({ agentId, file }: AgentsFilesGetResult) {
       const status = fileStatus(agentId);
       if (!status.list) {
         // Reconnect/config invalidation can clear the list while an editor
@@ -410,7 +399,7 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
       status.error = null;
       publish();
     },
-    subscribe(listener) {
+    subscribe(listener: (state: AgentCapabilityState) => void) {
       return registerListener(listeners, listener);
     },
     dispose() {

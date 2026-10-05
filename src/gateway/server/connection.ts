@@ -5,22 +5,16 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import { GATEWAY_STARTUP_PENDING_CLOSE_CAUSE } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getRuntimeConfig } from "../../config/io.js";
-import type { CloudWorkerSetupMutationAdmission } from "../../infra/device-bootstrap.worker-types.js";
 import { recordPairedNodeDisconnection } from "../../infra/device-pairing-node.js";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import { commitPresence, upsertPresence } from "../../infra/system-presence.js";
 import { logRejectedLargePayload } from "../../logging/diagnostic-payload.js";
-import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { removeRemoteNodeInfo } from "../../skills/runtime/remote.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
-import type { AuthRateLimiter } from "../auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "../auth.js";
 import { resolvePreauthHandshakeTimeoutMs } from "../handshake-timeouts.js";
 import { getHeader } from "../http-header-value.js";
 import type { GatewayIngressAttribution } from "../ingress-attribution.js";
-import type { GatewayMethodRegistry } from "../methods/registry.js";
 import { isLoopbackAddress } from "../net.js";
-import type { NodeReapprovalCoordinator } from "../node-reapproval-coordinator.js";
 import { clearNodeWakeState } from "../node-wake-state.js";
 import {
   indexPluginNodeCapabilitySurfaces,
@@ -28,14 +22,12 @@ import {
   type PluginNodeCapabilitySurface,
 } from "../plugin-node-capability.js";
 import { serializeGatewayFrame } from "../serialized-json.js";
-import type { GatewayConnectionWork } from "../server-connection-work.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "../server-constants.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
+import type { GatewayRequestContext } from "../server-methods/types.js";
 import { cleanupTalkConnection } from "../talk/session-registry.js";
 import type { WebSocketHeartbeatDiagnostics } from "../websocket-keepalive.js";
 import { formatForLog, logWs } from "../ws-log.js";
 import { refreshClientPresence } from "./client-presence.js";
-import type { GatewayClientRegistry } from "./client-registry.js";
 import { closeGatewayTransportWithGrace } from "./connection-transport-close.js";
 import type {
   GatewayConnectionTransport,
@@ -59,40 +51,34 @@ import {
 import { resolveSharedGatewaySessionGeneration } from "./ws-shared-generation.js";
 import { WS_HANDSHAKE_PHASES, type GatewayWsClient, type WsHandshakePhase } from "./ws-types.js";
 
-type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 const unauthorizedCloseBeforeConnectLogLimiter = new HandshakeAuthLogLimiter();
-export type GatewayConnectionOptions = {
-  bootId: string;
-  clients: GatewayClientRegistry;
-  connectionWork: GatewayConnectionWork;
-  getPluginNodeCapabilities?: () => PluginNodeCapabilitySurface[];
+export type GatewayConnectionOptions = Pick<
+  GatewayWsMessageHandlerParams,
+  | "bootId"
+  | "clients"
+  | "connectionWork"
   // Read per connection so reloads cannot leave a stale auth snapshot.
-  getResolvedAuth: () => ResolvedGatewayAuth;
-  getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
-  rateLimiter?: AuthRateLimiter;
-  browserRateLimiter?: AuthRateLimiter;
-  nodeReapprovalCoordinator?: NodeReapprovalCoordinator;
+  | "getResolvedAuth"
+  | "getRequiredSharedGatewaySessionGeneration"
+  | "rateLimiter"
+  | "browserRateLimiter"
+  | "nodeReapprovalCoordinator"
+  | "isStartupPending"
+  | "isPendingWorkerNodeSetup"
+  | "admitsNodeSetupCompletion"
+  | "gatewayMethods"
+  | "events"
+  | "refreshHealthSnapshot"
+  | "logGateway"
+  | "logHealth"
+  | "logWsControl"
+  | "extraHandlers"
+  | "getMethodRegistry"
+  | "buildRequestContext"
+> & {
+  getPluginNodeCapabilities?: () => PluginNodeCapabilitySurface[];
   preauthHandshakeTimeoutMs?: number;
-  isStartupPending?: () => boolean;
-  isPendingWorkerNodeSetup?: (setupId: string, deviceId: string) => boolean;
-  admitsNodeSetupCompletion?: (setup: CloudWorkerSetupMutationAdmission) => boolean;
-  gatewayMethods: string[];
-  events: string[];
-  refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
-  logGateway: SubsystemLogger;
-  logHealth: SubsystemLogger;
-  logWsControl: SubsystemLogger;
-  extraHandlers: GatewayRequestHandlers;
-  getMethodRegistry?: () => GatewayMethodRegistry;
-  broadcast: (
-    event: string,
-    payload: unknown,
-    opts?: {
-      dropIfSlow?: boolean;
-      stateVersion?: { presence?: number; health?: number };
-    },
-  ) => void;
-  buildRequestContext: () => GatewayRequestContext;
+  broadcast: GatewayRequestContext["broadcast"];
 };
 
 type GatewayConnectionLifecycle = Pick<

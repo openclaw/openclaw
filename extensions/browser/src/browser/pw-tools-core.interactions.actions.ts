@@ -396,21 +396,19 @@ export async function evaluateViaPlaywright(
         }
       `;
     const args = { fnSource, timeoutMs: evaluateTimeout };
+    type EvaluateArgs = typeof args;
     let action: () => Promise<unknown>;
     if (opts.ref) {
       const locator = refLocator(page, opts.ref);
       // eslint-disable-next-line @typescript-eslint/no-implied-eval -- required for browser-context eval
       const evaluate = new Function("el", "args", evaluatorBody) as (
         el: Element,
-        args: { fnSource: string; timeoutMs: number },
+        args: EvaluateArgs,
       ) => unknown;
       action = async () => await locator.evaluate(evaluate, args);
     } else {
       // eslint-disable-next-line @typescript-eslint/no-implied-eval -- required for browser-context eval
-      const evaluate = new Function("args", evaluatorBody) as (args: {
-        fnSource: string;
-        timeoutMs: number;
-      }) => unknown;
+      const evaluate = new Function("args", evaluatorBody) as (args: EvaluateArgs) => unknown;
       action = async () => await page.evaluate(evaluate, args);
     }
     return await awaitNavigationGuardedInteraction(

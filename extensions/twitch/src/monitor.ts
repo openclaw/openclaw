@@ -27,22 +27,14 @@ type TwitchMonitorOptions = {
   statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 };
 
-type TwitchMonitorResult = {
-  stop: () => Promise<void>;
-};
-
 type TwitchIngressLifecycle = Parameters<Parameters<typeof createTwitchIngress>[0]["deliver"]>[1];
 
-async function processTwitchMessage(params: {
-  message: TwitchChatMessage;
-  account: TwitchAccountConfig;
-  accountId: string;
-  config: OpenClawConfig;
-  runtime: TwitchRuntimeEnv;
-  channelRuntime: TwitchMonitorOptions["channelRuntime"];
-  turnAdoptionLifecycle: TwitchIngressLifecycle;
-  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
-}): Promise<void> {
+async function processTwitchMessage(
+  params: Omit<TwitchMonitorOptions, "abortSignal"> & {
+    message: TwitchChatMessage;
+    turnAdoptionLifecycle: TwitchIngressLifecycle;
+  },
+): Promise<void> {
   const {
     message,
     account,
@@ -213,9 +205,7 @@ async function deliverTwitchReply(params: {
   }
 }
 
-export async function monitorTwitchProvider(
-  options: TwitchMonitorOptions,
-): Promise<TwitchMonitorResult> {
+export async function monitorTwitchProvider(options: TwitchMonitorOptions) {
   const { account, accountId, channelRuntime, config, runtime, abortSignal, statusSink } = options;
 
   const core = getTwitchRuntime();

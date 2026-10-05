@@ -23,9 +23,6 @@ import {
   resolveDurableExecApprovalRequirement,
   resolveExecApprovalsLocked,
   type ExecApprovalUsageAuthorization,
-  type ExecApprovalsResolved,
-  type ExecAsk,
-  type ExecSecurity,
 } from "../infra/exec-approvals.js";
 import { planExecAuthorization } from "../infra/exec-authorization-plan.js";
 import { resolveUnpinnedAutoApprovalEligibility } from "../infra/exec-auto-approval-eligibility.js";
@@ -114,12 +111,7 @@ type SystemRunDeniedReason =
   | "cwd-unavailable"
   | "permission:screenRecording";
 
-type SystemRunExecutionContext = {
-  sessionKey: string;
-  runId: string;
-  commandText: string;
-  suppressNotifyOnExit: boolean;
-};
+type SystemRunExecutionContext = SystemRunParsePhase["execution"];
 
 type SystemRunParsePhase = NonNullable<Awaited<ReturnType<typeof parseSystemRunPhase>>>;
 type SystemRunPolicyPhase = NonNullable<Awaited<ReturnType<typeof evaluateSystemRunPolicyPhase>>>;
@@ -132,16 +124,6 @@ const APPROVAL_SCRIPT_OPERAND_BINDING_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval missing script operand binding";
 const APPROVAL_STATE_WRITE_FAILED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval state could not be persisted";
-type ExecToolConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["exec"]>;
-
-type EffectiveSystemRunExecPolicy = {
-  agentExec: ExecToolConfig | undefined;
-  globalExec: ExecToolConfig | undefined;
-  approvals: ExecApprovalsResolved;
-  security: ExecSecurity;
-  ask: ExecAsk;
-  autoReview: boolean;
-};
 
 function warnWritableTrustedDirOnce(message: string): void {
   if (safeBinTrustedDirWarningCache.check(message)) {
@@ -169,7 +151,7 @@ export async function resolveEffectiveSystemRunExecPolicy(params: {
   cfg: OpenClawConfig;
   agentId: string | undefined;
   requireSocket: boolean;
-}): Promise<EffectiveSystemRunExecPolicy> {
+}) {
   const modePolicy = resolveNodeExecConfigPolicy(params);
   const { agentExec, globalExec } = modePolicy;
   const approvals = await resolveExecApprovalsLocked(params.agentId, {

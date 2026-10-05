@@ -25,14 +25,6 @@ import { resolveSlackTimestampMs } from "./timestamp.js";
 
 const loadSlackMediaModule = createLazyRuntimeModule(() => import("../media.js"));
 
-type SlackThreadContextData = {
-  threadStarterBody: string | undefined;
-  threadHistoryBody: string | undefined;
-  shouldSeedInitialThreadContext: boolean;
-  threadLabel: string | undefined;
-  threadStarterMedia: SlackMediaResult[] | null;
-};
-
 const SLACK_THREAD_CONTEXT_USER_LOOKUP_CONCURRENCY = 4;
 
 function formatSlackThreadLabelSnippet(text: string): string {
@@ -132,7 +124,7 @@ export async function resolveSlackThreadContextData(params: {
   excludedMessageIds?: ReadonlySet<string>;
   assertHistoryCurrent?: () => void;
   abortSignal?: AbortSignal;
-}): Promise<SlackThreadContextData> {
+}) {
   const botIdentity = {
     botUserId: params.ctx.botUserId,
     botId: params.ctx.botId,
