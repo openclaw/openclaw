@@ -123,7 +123,9 @@ enum OpenClawConfigFile {
             self.stampMeta(&output)
 
             do {
-                let data = try JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted, .sortedKeys])
+                let data = try ConfigJSONWriter.data(
+                    withJSONObject: output,
+                    preserving: previousData.map { String(bytes: $0, encoding: .utf8) ?? "" } ?? "{}")
                 let nextBytes = data.count
                 let gatewayModeAfter = self.gatewayMode(output)
                 var suspicious = self.configWriteSuspiciousReasons(

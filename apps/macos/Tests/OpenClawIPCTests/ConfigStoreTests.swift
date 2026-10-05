@@ -1,10 +1,80 @@
+import ConcurrencyExtras
 import Foundation
+import OpenClawKit
+import OpenClawProtocol
 import Testing
 @testable import OpenClaw
 
 @Suite(.serialized)
 @MainActor
 struct ConfigStoreTests {
+    @Test(arguments: [true, false])
+    func `gateway saves preserve source order and refuse missing source`(_ hasSource: Bool) async throws {
+        let initial = #"{"agents":{"ownership":"explicit","entries":{"zmain":{},"alpha":{}}},"browser":{"enabled":true}}"#
+        let raw = LockIsolated(initial)
+        let received = LockIsolated<[String]>([])
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
+                guard sendIndex > 0 else { return }
+                let data: Data = switch message {
+                case let .data(data): data
+                case let .string(text): Data(text.utf8)
+                @unknown default: throw URLError(.cannotParseResponse)
+                }
+                let frame = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+                let id = try #require(frame["id"] as? String)
+                let payload: [String: Any]
+                if frame["method"] as? String == "config.get" {
+                    let config = try JSONSerialization.jsonObject(with: Data(raw.value.utf8))
+                    var snapshot: [String: Any] = ["config": config, "hash": "synthetic-revision"]
+                    if hasSource { snapshot["raw"] = raw.value }
+                    payload = snapshot
+                } else {
+                    #expect(frame["method"] as? String == "config.set")
+                    let params = try #require(frame["params"] as? [String: Any])
+                    #expect(params["baseHash"] as? String == "synthetic-revision")
+                    let next = try #require(params["raw"] as? String)
+                    raw.withValue { $0 = next }
+                    received.withValue { $0.append(next) }
+                    payload = ["ok": true]
+                }
+                let response: [String: Any] = ["type": "res", "id": id, "ok": true, "payload": payload]
+                try socket.emitReceiveSuccess(.data(JSONSerialization.data(withJSONObject: response)))
+            })
+        })
+        let gateway = GatewayConnection(
+            configProvider: { (URL(string: "ws://127.0.0.1:49343/")!, nil, nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        do {
+            try await self.withOverrides(.init(isRemoteMode: { true }, notificationCenter: NotificationCenter())) {
+                for enabled in [false, true, false] {
+                    var document = await ConfigStore.load(gateway: gateway)
+                    document.root["browser"] = ["enabled": enabled]
+                    if hasSource {
+                        try await ConfigStore.save(document)
+                    } else {
+                        do {
+                            try await ConfigStore.save(document)
+                            Issue.record("A populated document without its source text must not be saved")
+                        } catch {
+                            #expect((error as NSError).code == 4)
+                        }
+                    }
+                }
+            }
+        } catch {
+            await gateway.shutdown()
+            throw error
+        }
+        await gateway.shutdown()
+        #expect(received.value.count == (hasSource ? 3 : 0))
+        for text in received.value {
+            let main = try #require(text.range(of: "\"zmain\""))
+            let other = try #require(text.range(of: "\"alpha\""))
+            #expect(main.lowerBound < other.lowerBound)
+        }
+    }
+
     @Test func `load uses remote in remote mode`() async {
         var localHit = false
         var remoteHit = false
