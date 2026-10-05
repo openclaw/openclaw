@@ -41,6 +41,7 @@ export function serveOwnedWorkerTasks<Output>(
   } = {},
 ): void {
   let memoryPort: MessagePort;
+  let taskPort: MessagePort | undefined;
   let memorySamplesStarted = false;
   serveRuntimeWorkerTasks<Output, [string, string][]>(
     handler,
@@ -67,12 +68,16 @@ export function serveOwnedWorkerTasks<Output>(
         if (!(message.port instanceof MessagePort)) {
           throw new Error("Retained worker task port is invalid");
         }
-        return message.port;
+        taskPort = message.port;
+        return taskPort;
       },
       initialize(port) {
         // Results use the host port; worker-local diagnostics must keep JSON stdout clean.
         loggingState.forceConsoleToStderr = true;
         memoryPort = port;
+      },
+      onReady() {
+        taskPort?.postMessage({ status: "ready" }, []);
       },
       onMessage(sampleMemory) {
         if (sampleMemory && !memorySamplesStarted) {

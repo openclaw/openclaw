@@ -159,7 +159,9 @@ it.each(["incognito", "internal-effects"] as const)(
     expect(prepared.initialSessionEntry).toBeUndefined();
     expect(prepared.store).toEqual({});
     if (kind === "incognito") {
-      expect(loadCronSessionEntryLatest(storePath, sessionKey)?.sessionId).toBe("process-held");
+      expect((await loadCronSessionEntryLatest(storePath, sessionKey))?.sessionId).toBe(
+        "process-held",
+      );
     }
   },
 );

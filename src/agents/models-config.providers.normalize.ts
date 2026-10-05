@@ -127,7 +127,6 @@ export function normalizeProviders(params: {
           ? (providerEnv) =>
               resolveProviderConfigApiKeyWithPlugin({
                 provider: runtimeProviderKey,
-                allowRuntimePluginLoad: false,
                 ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
                 context: { provider: normalizedKey, env: providerEnv },
               })
@@ -137,7 +136,6 @@ export function normalizeProviders(params: {
     normalizedProvider =
       normalizeProviderConfigWithPlugin({
         provider: resolveProviderPluginLookupKey(normalizedKey, normalizedProvider),
-        allowRuntimePluginLoad: false,
         ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
         context: { provider: normalizedKey, providerConfig: normalizedProvider },
       }) ?? normalizedProvider;

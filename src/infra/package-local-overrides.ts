@@ -138,7 +138,6 @@ async function runRequiredFsSafeMove(params: {
 class LocalOverrideRollbackError extends Error {
   constructor(
     readonly relativePath: string,
-    readonly action: string,
     readonly rollbackError: unknown,
   ) {
     super(
@@ -200,11 +199,7 @@ async function throwAfterRestoringMovedLocalOverrideTarget(params: {
     if (params.removeMovedAfterFailedRestore) {
       await params.packageFs.remove(params.movedPath).catch(() => undefined);
     }
-    throw new LocalOverrideRollbackError(
-      params.relativePath,
-      "restore current target",
-      rollbackError,
-    );
+    throw new LocalOverrideRollbackError(params.relativePath, rollbackError);
   }
   throw params.originalError;
 }
@@ -568,7 +563,11 @@ export async function applyLocalPackageOverrides(params: {
       rollbackFailures.set(relativePath, messages);
     };
     if (applyError instanceof LocalOverrideRollbackError) {
-      recordRollbackFailure(applyError.relativePath, applyError.action, applyError.rollbackError);
+      recordRollbackFailure(
+        applyError.relativePath,
+        "restore current target",
+        applyError.rollbackError,
+      );
     }
     for (const entry of rollbackEntries.toReversed()) {
       if (entry.cleanupPaths && packageFs) {

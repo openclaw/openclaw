@@ -182,10 +182,9 @@ describe("computer targeted action observations", () => {
       });
       const state: SessionState = { lastActivity: 0, state: "processing", queueDepth: 0 };
       const params = { action: "get_window_state", windowRef: "window-1" };
-      const config = { enabled: true };
       for (let index = 1; index <= 20; index++) {
         const id = `read-${index}`;
-        recordToolCall(state, "computer", params, id, config);
+        recordToolCall(state, "computer", params, id);
         const result = await fixture.tool.execute(id, params);
         expect(JSON.stringify(result.content)).toContain(`observation-${index}`);
         expect(JSON.stringify(result.content)).toContain(`element-${index}`);
@@ -196,7 +195,7 @@ describe("computer targeted action observations", () => {
           result,
         });
       }
-      expect(detectToolCallLoop(state, "computer", params, config)).toMatchObject({
+      expect(detectToolCallLoop(state, "computer", params)).toMatchObject({
         stuck: true,
         level: changing ? "warning" : "critical",
       });

@@ -12,7 +12,10 @@ import {
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   appendSqliteTrajectoryRuntimeEvents,
@@ -47,6 +50,12 @@ describe("SQLite trajectory runtime store", () => {
       createTrajectoryEvent({ seq: 1, type: `event-${index}` }),
     );
     const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath() });
+    Object.defineProperty(events[0], "toJSON", {
+      value: () => {
+        expect(database.db.isTransaction).toBe(false);
+        return { ...events[0] };
+      },
+    });
     const counter = trackSqliteStatementExecutions(database.db, ["append"], (sql) =>
       /^insert into "trajectory_runtime_events"/i.test(sql) ? "append" : null,
     );
@@ -298,6 +307,94 @@ describe("SQLite trajectory runtime store", () => {
     await expect(runtimeEventTypes("history")).resolves.toEqual(["recent"]);
   });
 
+  it("allows a competing writer during selection and rejects its now-stale eviction plan", async () => {
+    const now = Date.parse("2026-07-26T00:00:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
+      createTrajectoryEvent({ type: "current", ts: new Date(now).toISOString() }),
+    ]);
+    await addSession("history");
+    appendSqliteTrajectoryRuntimeEvents({ sessionId: "history", storePath }, [
+      createTrajectoryEvent({ sessionId: "history", type: "old" }),
+    ]);
+    vi.advanceTimersByTime(60 * 60 * 1_000);
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath() });
+    const competing = openNodeSqliteDatabase(sqlitePath());
+    competing.exec("PRAGMA busy_timeout = 0");
+    clearNodeSqliteKyselyCacheForDatabase(database.db);
+    const prepare = database.db.prepare.bind(database.db);
+    const exec = database.db.exec.bind(database.db);
+    let selectionPrepared = false;
+    let refreshed = false;
+    const spy = vi.spyOn(database.db, "prepare").mockImplementation((query) => {
+      selectionPrepared ||=
+        query.includes('"trajectory_runtime_events"') && /group by/i.test(query);
+      return prepare(query);
+    });
+    const commit = vi.spyOn(database.db, "exec").mockImplementation((statement) => {
+      // Inject after selection, before its read snapshot ends, regardless of all()/iterate().
+      if (statement === "COMMIT" && selectionPrepared && !refreshed) {
+        competing
+          .prepare("UPDATE trajectory_runtime_events SET created_at = ? WHERE session_id = ?")
+          .run(Date.now(), "history");
+        refreshed = true;
+      }
+      exec(statement);
+    });
+    try {
+      appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
+        createTrajectoryEvent({ type: "trigger", ts: new Date(Date.now()).toISOString() }),
+      ]);
+      expect(refreshed).toBe(true);
+    } finally {
+      clearNodeSqliteKyselyCacheForDatabase(database.db);
+      commit.mockRestore();
+      spy.mockRestore();
+      competing.close();
+    }
+    await expect(runtimeEventTypes("history")).resolves.toEqual(["old"]);
+  });
+
+  it("keeps the committed append when retention fails and retries retention on the next append", async () => {
+    const now = Date.parse("2026-07-26T00:00:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
+      createTrajectoryEvent({ type: "current", ts: new Date(now).toISOString() }),
+    ]);
+    await addSession("history");
+    appendSqliteTrajectoryRuntimeEvents({ sessionId: "history", storePath }, [
+      createTrajectoryEvent({ sessionId: "history", type: "old" }),
+    ]);
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath() });
+    database.db.exec(`CREATE TEMP TRIGGER reject_retention
+      BEFORE DELETE ON trajectory_runtime_events WHEN OLD.session_id = 'history'
+      BEGIN SELECT RAISE(ABORT, 'synthetic retention failure'); END`);
+    vi.advanceTimersByTime(60 * 60 * 1_000);
+    try {
+      appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
+        createTrajectoryEvent({ type: "retention-failed", ts: new Date(Date.now()).toISOString() }),
+      ]);
+      await expect(runtimeEventTypes("session-1")).resolves.toEqual([
+        "current",
+        "retention-failed",
+      ]);
+      await expect(runtimeEventTypes("history")).resolves.toEqual(["old"]);
+    } finally {
+      database.db.exec("DROP TRIGGER reject_retention");
+    }
+    appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
+      createTrajectoryEvent({ type: "retry-retention", ts: new Date(Date.now()).toISOString() }),
+    ]);
+    await expect(runtimeEventTypes("history")).resolves.toEqual([]);
+    await expect(runtimeEventTypes("session-1")).resolves.toEqual([
+      "current",
+      "retention-failed",
+      "retry-retention",
+    ]);
+  });
+
   it.each([0, -1])(
     "evicts complete runs at the global UTF-8 byte budget (%i-byte adjustment)",
     async (delta) => {
@@ -347,33 +444,34 @@ describe("SQLite trajectory runtime store", () => {
         if (sql.includes('group by "session_id", "run_id"')) {
           const all = statement.all.bind(statement);
           const iterate = statement.iterate.bind(statement);
-          const assertAggregate = (
+          const assertAggregatePlan = (
             rows: ReturnType<typeof statement.all>,
             args: Parameters<typeof statement.all>,
           ) => {
             aggregates += 1;
-            const previousRows = prepare(`
-              WITH event_sizes AS MATERIALIZED (
-                SELECT session_id, run_id, created_at,
-                       octet_length(event_json) + 1 AS runtime_bytes
-                FROM trajectory_runtime_events
-              )
-              SELECT session_id, run_id, max(created_at) AS newest_created_at,
-                     sum(runtime_bytes) AS runtime_bytes
-              FROM event_sizes GROUP BY session_id, run_id
-            `).all();
-            expect(rows).toEqual(previousRows);
             const plan = prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...args);
-            expect(plan.map((row) => row.detail)).toEqual([
-              expect.stringMatching(/SCAN trajectory_runtime_events USING COVERING INDEX/),
+            const details = plan.map((row) => row.detail);
+            expect(
+              details.filter(
+                (detail) =>
+                  typeof detail === "string" &&
+                  /(?:SCAN|SEARCH) trajectory_runtime_events\b/.test(detail),
+              ),
+            ).toEqual([
+              expect.stringMatching(
+                /SCAN trajectory_runtime_events USING COVERING INDEX idx_agent_trajectory_runtime_run/,
+              ),
             ]);
+            expect(details).not.toContainEqual(
+              expect.stringMatching(/USE TEMP B-TREE FOR GROUP BY/),
+            );
             return rows;
           };
           vi.spyOn(statement, "all").mockImplementation((...args) =>
-            assertAggregate(all(...args), args),
+            assertAggregatePlan(all(...args), args),
           );
           vi.spyOn(statement, "iterate").mockImplementation(function* (...args) {
-            yield* assertAggregate([...iterate(...args)], args);
+            yield* assertAggregatePlan([...iterate(...args)], args);
             return undefined;
           });
         }
@@ -403,6 +501,106 @@ describe("SQLite trajectory runtime store", () => {
     },
   );
 
+  it("drains complete runs through separate byte-bounded delete transactions", async () => {
+    const now = Date.parse("2026-07-26T00:00:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
+      createTrajectoryEvent({ type: "current", ts: new Date(now).toISOString() }),
+    ]);
+    for (let index = 0; index < 12; index++) {
+      const sessionId = `history-${String(index).padStart(2, "0")}`;
+      await addSession(sessionId);
+      appendSqliteTrajectoryRuntimeEvents(
+        { sessionId, storePath },
+        Array.from({ length: 4 }, (_, part) =>
+          createTrajectoryEvent({
+            sessionId,
+            type: `part-${part}`,
+            payloadSize: 256 * 1024 - 512,
+            ts: new Date(now - 15 * 86_400_000 + index * 1_000).toISOString(),
+          }),
+        ),
+      );
+    }
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath() });
+    const retainedRuns = () =>
+      database.db
+        .prepare(`SELECT session_id, count(*) AS rows
+      FROM trajectory_runtime_events WHERE session_id != 'session-1'
+      GROUP BY session_id ORDER BY session_id`)
+        .all();
+    const retainedAfterDeletes: ReturnType<typeof retainedRuns>[] = [];
+    let previousRows = 48;
+    const exec = database.db.exec.bind(database.db);
+    const commits = vi.spyOn(database.db, "exec").mockImplementation((statement) => {
+      exec(statement);
+      if (statement === "COMMIT") {
+        const remaining = retainedRuns();
+        const rows = remaining.reduce((count, run) => count + Number(run.rows), 0);
+        if (rows < previousRows) {
+          retainedAfterDeletes.push(remaining);
+        }
+        previousRows = rows;
+      }
+    });
+    vi.advanceTimersByTime(60 * 60 * 1_000);
+    try {
+      appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
+        createTrajectoryEvent({ type: "sweep", ts: new Date(Date.now()).toISOString() }),
+      ]);
+    } finally {
+      commits.mockRestore();
+    }
+    expect(retainedAfterDeletes).toEqual([
+      [
+        { session_id: "history-10", rows: 4 },
+        { session_id: "history-11", rows: 4 },
+      ],
+      [],
+    ]);
+    await expect(runtimeEventTypes("session-1")).resolves.toEqual(["current", "sweep"]);
+  });
+
+  it("preserves locale ordering and null-first ties when evicting equally old runs", async () => {
+    const now = Date.parse("2026-07-26T00:00:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    const current = createTrajectoryEvent({ type: "current", ts: new Date(now).toISOString() });
+    appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [current]);
+    const runs: TrajectoryEvent[] = [];
+    for (const sessionId of ["Z", "a"]) {
+      await addSession(sessionId);
+      const events = [undefined, ""].map((runId) => {
+        const event = createTrajectoryEvent({
+          sessionId,
+          type: runId === undefined ? "null-run" : "empty-run",
+          ts: new Date(now - 86_400_000).toISOString(),
+        });
+        event.runId = runId;
+        return event;
+      });
+      runs.push(...events);
+      appendSqliteTrajectoryRuntimeEvents({ sessionId, storePath }, events);
+    }
+    vi.advanceTimersByTime(60 * 60 * 1_000);
+    const trigger = createTrajectoryEvent({
+      type: "trigger",
+      ts: new Date(Date.now()).toISOString(),
+    });
+    const retained = runs.find((event) => event.sessionId === "Z" && event.runId === "")!;
+    const maxGlobalRuntimeBytes = [current, trigger, retained].reduce(
+      (bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event), "utf8") + 1,
+      0,
+    );
+    appendSqliteTrajectoryRuntimeEvents(
+      { sessionId: "session-1", storePath, maxGlobalRuntimeBytes },
+      [trigger],
+    );
+    await expect(runtimeEventTypes("a")).resolves.toEqual([]);
+    await expect(runtimeEventTypes("Z")).resolves.toEqual(["empty-run"]);
+  });
+
   it("rate-limits the global sweep instead of running it on every insert", async () => {
     const now = Date.parse("2026-07-26T00:00:00.000Z");
     vi.useFakeTimers();
@@ -424,6 +622,18 @@ describe("SQLite trajectory runtime store", () => {
     await expect(runtimeEventTypes("old-session")).resolves.toEqual(["old"]);
 
     vi.advanceTimersByTime(60 * 60 * 1_000);
+    expect(() =>
+      runOpenClawAgentWriteTransaction(
+        () => {
+          appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
+            createTrajectoryEvent({ type: "rolled-back", ts: new Date(Date.now()).toISOString() }),
+          ]);
+          throw new Error("synthetic enclosing rollback");
+        },
+        { agentId: "main", path: sqlitePath() },
+      ),
+    ).toThrow("synthetic enclosing rollback");
+    await expect(runtimeEventTypes("old-session")).resolves.toEqual(["old"]);
     appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
       createTrajectoryEvent({ type: "next-window", ts: new Date(Date.now()).toISOString() }),
     ]);

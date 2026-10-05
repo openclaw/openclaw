@@ -230,9 +230,8 @@ function looksLikeHtml(value: string): boolean {
 function formatWebFetchErrorDetail(params: {
   detail: string;
   contentType?: string | null;
-  maxChars: number;
 }): string {
-  const { detail, contentType, maxChars } = params;
+  const { detail, contentType } = params;
   if (!detail) {
     return "";
   }
@@ -243,7 +242,7 @@ function formatWebFetchErrorDetail(params: {
     const withTitle = rendered.title ? `${rendered.title}\n${rendered.text}` : rendered.text;
     text = markdownToText(withTitle);
   }
-  return truncateWebFetchText(text.trim(), maxChars).text;
+  return truncateWebFetchText(text.trim(), DEFAULT_ERROR_MAX_CHARS).text;
 }
 
 function redactUrlForDebugLog(rawUrl: string): string {
@@ -331,7 +330,7 @@ async function spillWebFetchContent(
   value: string,
   wrapped: WebFetchWrappedContent,
   maxChars: number,
-  sourceTruncated = false,
+  sourceTruncated: boolean,
 ): Promise<WebFetchWrappedContent> {
   if (!wrapped.truncated) {
     return sourceTruncated ? { ...wrapped, truncated: true } : wrapped;
@@ -670,7 +669,6 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
       const detail = formatWebFetchErrorDetail({
         detail: rawDetailResult.text,
         contentType: res.headers.get("content-type"),
-        maxChars: DEFAULT_ERROR_MAX_CHARS,
       });
       const wrappedDetail = wrapWebFetchContent(detail || res.statusText, DEFAULT_ERROR_MAX_CHARS);
       throw new Error(`Web fetch failed (${res.status}): ${wrappedDetail.text}`);

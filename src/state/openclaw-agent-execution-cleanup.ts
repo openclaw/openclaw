@@ -24,6 +24,7 @@ export async function cleanupRetiredAgentDatabaseLease(params: {
   const context = {
     environment: params.context.environment,
     existingSchemaPath: params.context.existingSchemaPath,
+    stateIntegrity: params.context.stateIntegrity,
   };
   const store = await openOpenClawStateWorkerCleanupStore(
     params.lease.sharedStatePath,

@@ -138,7 +138,10 @@ packages/worker-runtime/src/index.ts
 packages/worker-runtime/src/lifecycle.ts
 packages/worker-runtime/src/retained-operation.ts
 packages/worker-runtime/src/worker-task-capacity.ts
+packages/worker-runtime/src/worker-task-context.ts
+packages/worker-runtime/src/worker-task-host.ts
 packages/worker-runtime/src/worker-task-native-sections.ts
+packages/worker-runtime/src/worker-task-pool-bootstrap.ts
 packages/worker-runtime/src/worker-task-pool-completion.ts
 packages/worker-runtime/src/worker-task-pool-core.ts
 packages/worker-runtime/src/worker-task-pool-owned.ts
@@ -1657,6 +1660,7 @@ src/state/openclaw-state-db-failure.ts
 src/state/openclaw-state-db-fast-path.ts
 src/state/openclaw-state-db-handle.ts
 src/state/openclaw-state-db-initialization.ts
+src/state/openclaw-state-db-integrity-admission.ts
 src/state/openclaw-state-db-legacy-backfills.ts
 src/state/openclaw-state-db-maintenance.ts
 src/state/openclaw-state-db-open.ts
@@ -1728,6 +1732,9 @@ src/state/session-watch-cursor-provenance.ts
 src/state/worker-operation-registry.ts
 src/system-agent/agent-id.ts
 src/test-utils/bun-process.ts
+src/trajectory/paths.ts
+src/trajectory/runtime-retention.sqlite.ts
+src/trajectory/runtime-retention.worker.ts
 src/utils.ts
 src/utils/absolute-deadline.ts
 src/utils/boolean.ts

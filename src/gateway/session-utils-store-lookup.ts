@@ -333,8 +333,8 @@ export async function withGatewaySessionStoreTarget<T>(
   });
   if (isIncognitoSessionKey(identity.canonicalKey)) {
     return withIncognitoGatewaySessionStoreTarget({
-      ...params,
-      key: normalized.key,
+      env: params.env,
+      includeMembership: params.includeMembership,
       identity,
       resolve: () => resolveGatewaySessionStoreTargetWithStore(normalized),
       consume,

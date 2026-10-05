@@ -370,27 +370,26 @@ export async function fetchClawHubSkillDetail(
     typeof security.hasScanResult === "boolean";
   const isLatest = version !== undefined && version === detail.latestVersion?.version;
   const canUseLatest = isLatest && !releaseUnavailable && !releaseMismatch;
+  const displayRelease = selectedVersion ?? (canUseLatest ? detail.latestVersion : undefined);
   return {
     ...detail,
     registry,
     source: "clawhub",
     installRef: ownerHandle ? `@${ownerHandle}/${params.slug}` : params.slug,
-    selectedRelease: selectedVersion
+    selectedRelease: displayRelease
       ? {
-          version: selectedVersion.version,
-          createdAt: selectedVersion.createdAt,
-          changelog: selectedVersion.changelog,
-          tags: Object.entries(detail.skill?.tags ?? {})
-            .filter(([, taggedVersion]) => taggedVersion === selectedVersion.version)
-            .map(([tag]) => tag),
+          version: displayRelease.version,
+          createdAt: displayRelease.createdAt,
+          changelog: displayRelease.changelog,
+          ...(selectedVersion
+            ? {
+                tags: Object.entries(detail.skill?.tags ?? {})
+                  .filter(([, taggedVersion]) => taggedVersion === selectedVersion.version)
+                  .map(([tag]) => tag),
+              }
+            : {}),
         }
-      : canUseLatest && detail.latestVersion
-        ? {
-            version: detail.latestVersion.version,
-            createdAt: detail.latestVersion.createdAt,
-            changelog: detail.latestVersion.changelog,
-          }
-        : null,
+      : null,
     // Neither listing visibility, successful card reads, nor scan verdicts assert that
     // this exact release has a downloadable artifact. ClawHub's install resolver picks latest.
     downloadability: !version

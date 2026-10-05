@@ -7,13 +7,6 @@ import {
   type SessionBindingRecord,
 } from "./session-binding-service.js";
 
-/** Resolved session binding or the fallback reason used by delivery callers. */
-type BoundDeliveryRouterResult = {
-  binding: SessionBindingRecord | null;
-  mode: "bound" | "fallback";
-  reason: string;
-};
-
 function resolveBindingForRequester(
   requester: ConversationRef,
   bindings: SessionBindingRecord[],
@@ -38,38 +31,21 @@ function resolveBindingForRequester(
   return exactBinding ?? (matchingCount === 1 ? matchingBinding : null);
 }
 
-const fallbackDestination = (reason: string): BoundDeliveryRouterResult => ({
-  binding: null,
-  mode: "fallback",
-  reason,
-});
-
-/** Resolves task-completion delivery through active bindings and requester identity. */
+/** Resolves task-completion delivery only within the requester's conversation scope. */
 export async function resolveBoundDeliveryDestination(input: {
   targetSessionKey: string;
   requester?: ConversationRef;
-}): Promise<BoundDeliveryRouterResult> {
+}): Promise<SessionBindingRecord | null> {
   const targetSessionKey = input.targetSessionKey.trim();
   const requester = input.requester ? normalizeConversationRef(input.requester) : undefined;
   if (!targetSessionKey) {
-    return fallbackDestination("missing-target-session");
+    return null;
   }
-
   const activeBindings = (await listSessionBindingsBySessionAsync(targetSessionKey)).filter(
     (record) => record.status === "active",
   );
-  if (activeBindings.length === 0) {
-    return fallbackDestination("no-active-binding");
+  if (!requester?.channel || !requester.conversationId) {
+    return null;
   }
-  if (!requester) {
-    return fallbackDestination("missing-requester");
-  }
-  if (!requester.channel || !requester.conversationId) {
-    return fallbackDestination("invalid-requester");
-  }
-
-  const binding = resolveBindingForRequester(requester, activeBindings);
-  return binding
-    ? { binding, mode: "bound", reason: "requester-match" }
-    : fallbackDestination("no-requester-match");
+  return resolveBindingForRequester(requester, activeBindings);
 }

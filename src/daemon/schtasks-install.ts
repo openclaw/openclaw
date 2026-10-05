@@ -4,6 +4,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { hasErrnoCode } from "../infra/errno.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
+import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "../infra/windows-powershell-spawn.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import { formatLine, writeFormattedLines } from "./output.js";
@@ -11,12 +12,14 @@ import {
   readScheduledTaskDefinition,
   restartRegisteredScheduledTask,
   runScheduledTaskOrThrow,
+  stopRegisteredScheduledTask,
   type ScheduledTaskActivation,
 } from "./schtasks-control.js";
 import { execSchtasks } from "./schtasks-exec.js";
 import {
   backupScheduledTaskDefinition,
   publishScheduledTaskFiles,
+  type ScheduledTaskFileRecovery,
 } from "./schtasks-install-files.js";
 import {
   buildHiddenLauncherScript,
@@ -35,6 +38,8 @@ import {
 import {
   findInstalledProcessPid,
   readWindowsProcessSnapshot,
+} from "./schtasks-process-snapshot.js";
+import {
   resolveScheduledTaskCommandPort,
   shouldManageGatewayListenerPort,
   terminateGatewayProcessTree,
@@ -42,6 +47,7 @@ import {
 import {
   assertSchtasksAvailable,
   isRegisteredScheduledTask,
+  isScheduledTaskDefinitelyNotRunning,
   isStartupEntryInstalled,
   launchFallbackTaskScript,
   removeStartupEntries,
@@ -130,18 +136,20 @@ function resolveScheduledTaskActivationEnv(
   return activationEnv;
 }
 
-async function writeScheduledTaskScript({
-  env,
-  programArguments,
-  workingDirectory,
-  environment,
-  description,
-  definitionTransaction,
-}: Omit<GatewayServiceInstallArgs, "stdout">): Promise<{
+async function writeScheduledTaskScript(
+  {
+    env,
+    programArguments,
+    workingDirectory,
+    environment,
+    description,
+    definitionTransaction,
+  }: Omit<GatewayServiceInstallArgs, "stdout">,
+  beforePublish?: (recovery?: ScheduledTaskFileRecovery) => Promise<void>,
+): Promise<{
   scriptPath: string;
   taskLaunchPath: string;
   taskDescription: string;
-  recovery: Awaited<ReturnType<typeof publishScheduledTaskFiles>>;
 }> {
   const taskEnv = resolveScheduledTaskRenderEnv(env, environment);
   const scriptPath = resolveTaskScriptPath(taskEnv);
@@ -170,8 +178,8 @@ async function writeScheduledTaskScript({
       contents: encodeWindowsLauncherScript({ format: "vbs", content: launcher }),
     });
   }
-  const recovery = await publishScheduledTaskFiles(files, definitionTransaction);
-  return { scriptPath, taskLaunchPath, taskDescription, recovery };
+  await publishScheduledTaskFiles(files, definitionTransaction, beforePublish);
+  return { scriptPath, taskLaunchPath, taskDescription };
 }
 
 export async function stageScheduledTask({
@@ -324,6 +332,7 @@ export async function installScheduledTask(
 ): Promise<{ scriptPath: string }> {
   let restoreTask: Awaited<ReturnType<typeof backupScheduledTaskDefinition>> | undefined;
   let staged: Awaited<ReturnType<typeof writeScheduledTaskScript>> | undefined;
+  let recovery: ScheduledTaskFileRecovery | undefined;
   const warn = args.warn ?? ((message: string) => args.stdout.write(`${message}\n`));
   let activationAttempted = false;
   const install = async () => {
@@ -372,7 +381,61 @@ export async function installScheduledTask(
         resolveTaskScriptPath(resolveScheduledTaskRenderEnv(args.env, args.environment)),
       );
     }
-    staged = await writeScheduledTaskScript(args);
+    staged = await writeScheduledTaskScript(args, async (files) => {
+      recovery = files;
+      const assertOriginal = async () => {
+        await files?.assertPublished();
+        await restoreTask?.assertCurrent();
+        await args.definitionTransaction?.beforeWrite();
+        args.assertCurrent?.();
+      };
+      await assertOriginal();
+      const registered =
+        restoreTask?.registered ?? probeScheduledTaskExists(resolveTaskName(args.env));
+      if (registered === null) {
+        throw new Error("Scheduled Task registration could not be verified before replacement.");
+      }
+      if (!registered) {
+        return;
+      }
+      if (
+        isScheduledTaskDefinitelyNotRunning(resolveTaskName(fallbackEnv)) &&
+        (
+          await resolveFallbackRuntime(
+            fallbackEnv,
+            installedCommand,
+            "control",
+            performance.now() + WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
+          )
+        ).status === "stopped"
+      ) {
+        // An update may already own stopped-state custody. Observation must not reacquire it.
+        await assertOriginal();
+        return;
+      }
+      try {
+        // Stop against the original command; IgnoreNew cannot activate a rewritten running task.
+        const replaced = await stopRegisteredScheduledTask({
+          env: fallbackEnv,
+          stdout: args.stdout,
+          assertCurrent: args.assertCurrent,
+          beforeMutation: assertOriginal,
+          onProcessStopped: restoreTask?.recordStoppedProcess,
+          warn,
+          onEndMutation: () => {
+            activationAttempted = true;
+          },
+        });
+        if (replaced) {
+          throw new Error("Gateway ownership changed before Scheduled Task replacement.");
+        }
+      } catch (error) {
+        // A changed or unsettled task is not ours to end again during compensation.
+        restoreTask?.retainRecovery();
+        throw error;
+      }
+      await assertOriginal();
+    });
     const activation = await activateScheduledTask({
       env: activationEnv,
       stdout: args.stdout,
@@ -433,10 +496,10 @@ export async function installScheduledTask(
     return install();
   }
   return withGatewayServiceInstallationRecovery(install, async () => {
-    if (!staged?.recovery || !restoreTask) {
+    if (!recovery || !restoreTask) {
       return false;
     }
-    return restoreTask.restore(staged.recovery, activationAttempted);
+    return restoreTask.restore(recovery, activationAttempted);
   }).catch((error: unknown) => {
     if (
       (error instanceof GatewayServiceAuthorityError && error.outcome === "recovery-pending") ||

@@ -74,7 +74,7 @@ describe("readScheduledTaskCommand", () => {
           { USERPROFILE: "C:\\Users\\test", OPENCLAW_WINDOWS_TASK_NAME: taskName },
           { requireLoaded: true },
         ),
-      ).resolves.toMatchObject({ status: "running" });
+      ).resolves.toMatchObject({ status: "unknown", state: "Running" });
       expect(readFile).not.toHaveBeenCalled();
     },
   );

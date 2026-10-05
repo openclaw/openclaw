@@ -1991,10 +1991,6 @@ describe("provider-runtime", () => {
     resolvePluginProvidersMock.mockImplementation((_params: unknown) => {
       return [
         createDemoProvider({
-          normalizeConfig: ({ providerConfig }) => ({
-            ...providerConfig,
-            baseUrl: "https://normalized.example.com/v1",
-          }),
           normalizeTransport: ({ api, baseUrl }) => ({
             api,
             baseUrl: baseUrl ? `${baseUrl}/normalized` : undefined,
@@ -2040,7 +2036,6 @@ describe("provider-runtime", () => {
           formatApiKey: (cred) =>
             cred.type === "oauth" ? JSON.stringify({ token: cred.access }) : "",
           refreshOAuth,
-          resolveConfigApiKey: () => "DEMO_PROFILE",
           buildAuthDoctorHint: ({ provider, profileId }) =>
             provider === "demo" ? `Repair ${profileId}` : undefined,
           prepareRuntimeAuth,
@@ -2085,30 +2080,6 @@ describe("provider-runtime", () => {
       api: "openai-completions",
       baseUrl: "https://demo.example.com/normalized",
     });
-
-    expect(
-      normalizeProviderConfigWithPlugin({
-        provider: DEMO_PROVIDER_ID,
-        context: {
-          provider: DEMO_PROVIDER_ID,
-          providerConfig: {
-            baseUrl: "https://demo.example.com",
-            api: "openai-completions",
-            models: [],
-          },
-        },
-      })?.baseUrl,
-    ).toBe("https://normalized.example.com/v1");
-
-    expect(
-      resolveProviderConfigApiKeyWithPlugin({
-        provider: DEMO_PROVIDER_ID,
-        context: {
-          provider: DEMO_PROVIDER_ID,
-          env: { DEMO_PROFILE: "default" } as NodeJS.ProcessEnv,
-        },
-      }),
-    ).toBe("DEMO_PROFILE");
 
     expect(
       await prepareProviderDynamicModel({
@@ -2526,10 +2497,9 @@ describe("provider-runtime", () => {
   });
 
   it("does not reuse provider hook results during a nested provider load", () => {
-    const cachedNormalizedConfig: ModelProviderConfig = {
+    const cachedModel: ProviderRuntimeModel = {
+      ...MODEL,
       baseUrl: "https://cached.example.com",
-      api: "openai-completions",
-      models: [],
     };
     let providerLoadInFlight = false;
     isPluginProvidersLoadInFlightMock.mockImplementation(() => providerLoadInFlight);
@@ -2541,22 +2511,18 @@ describe("provider-runtime", () => {
             id: "cached-provider",
             label: "Cached Provider",
             auth: [],
-            normalizeConfig: () => cachedNormalizedConfig,
+            resolveDynamicModel: () => cachedModel,
           },
         ];
       }
       providerLoadInFlight = true;
       try {
-        const reentrantResult = normalizeProviderConfigWithPlugin({
+        const reentrantResult = runProviderDynamicModel({
           provider: "cached-provider",
-          context: {
+          context: createDemoRuntimeContext({
             provider: "cached-provider",
-            providerConfig: {
-              baseUrl: "https://example.com",
-              api: "openai-completions",
-              models: [],
-            },
-          },
+            modelRegistry: EMPTY_MODEL_REGISTRY,
+          }),
         });
         expect(reentrantResult).toBeUndefined();
         return [];
@@ -2566,26 +2532,22 @@ describe("provider-runtime", () => {
     });
 
     expect(
-      normalizeProviderConfigWithPlugin({
+      runProviderDynamicModel({
         provider: "cached-provider",
-        context: {
+        context: createDemoRuntimeContext({
           provider: "cached-provider",
-          providerConfig: { baseUrl: "https://example.com", api: "openai-completions", models: [] },
-        },
+          modelRegistry: EMPTY_MODEL_REGISTRY,
+        }),
       }),
-    ).toBe(cachedNormalizedConfig);
+    ).toBe(cachedModel);
 
     expect(
-      normalizeProviderConfigWithPlugin({
+      runProviderDynamicModel({
         provider: "outer-provider",
-        context: {
+        context: createDemoRuntimeContext({
           provider: "outer-provider",
-          providerConfig: {
-            baseUrl: "https://outer.example.com",
-            api: "openai-completions",
-            models: [],
-          },
-        },
+          modelRegistry: EMPTY_MODEL_REGISTRY,
+        }),
       }),
     ).toBeUndefined();
 

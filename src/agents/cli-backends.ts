@@ -57,7 +57,6 @@ type ResolvedCliBackendLiveTest = {
 type CliRuntimeModelBackendBinding = {
   provider: string;
   runtime: string;
-  pluginId?: string;
 };
 
 function resolveCliBackendModelProvider(
@@ -69,17 +68,16 @@ function resolveCliBackendModelProvider(
 
 function addCliRuntimeModelBinding(
   bindings: Map<string, CliRuntimeModelBackendBinding>,
-  params: { backend: Pick<CliBackendPlugin, "id" | "modelProvider">; pluginId?: string },
+  backend: Pick<CliBackendPlugin, "id" | "modelProvider">,
 ): void {
-  const provider = resolveCliBackendModelProvider(params.backend);
-  const runtime = normalizeProviderId(params.backend.id);
+  const provider = resolveCliBackendModelProvider(backend);
+  const runtime = normalizeProviderId(backend.id);
   if (!provider || !runtime) {
     return;
   }
   bindings.set(`${provider}:${runtime}`, {
     provider,
     runtime,
-    ...(params.pluginId ? { pluginId: params.pluginId } : {}),
   });
 }
 
@@ -93,20 +91,14 @@ export function listCliRuntimeModelBackendBindings(
 ): CliRuntimeModelBackendBinding[] {
   const bindings = new Map<string, CliRuntimeModelBackendBinding>();
   for (const backend of resolveRuntimeCliBackends("metadata")) {
-    addCliRuntimeModelBinding(bindings, {
-      backend,
-      ...(backend.pluginId ? { pluginId: backend.pluginId } : {}),
-    });
+    addCliRuntimeModelBinding(bindings, backend);
   }
   if (params.includeSetupRegistry === true) {
     for (const entry of resolvePluginSetupRegistry({
       config: params.config,
       env: params.env,
     }).cliBackends) {
-      addCliRuntimeModelBinding(bindings, {
-        backend: entry.backend,
-        pluginId: entry.pluginId,
-      });
+      addCliRuntimeModelBinding(bindings, entry.backend);
     }
   }
   return [...bindings.values()].toSorted((left, right) =>
@@ -167,7 +159,6 @@ export function resolveCliRuntimeModelBackendBinding(params: {
   provider: string | undefined;
   runtime: string | undefined;
   config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
 }): CliRuntimeModelBackendBinding | undefined {
   const provider = normalizeProviderId(params.provider ?? "");
   const runtime = normalizeProviderId(params.runtime ?? "");
@@ -181,14 +172,12 @@ export function resolveCliRuntimeModelBackendBinding(params: {
   if (runtimeBinding) {
     return runtimeBinding;
   }
-  const includeSetupRegistry = params.config !== undefined || params.env !== undefined;
-  if (!includeSetupRegistry) {
+  if (params.config === undefined) {
     return undefined;
   }
   const setupBackend = resolvePluginSetupCliBackend({
     backend: runtime,
     config: params.config,
-    env: params.env,
   });
   if (!setupBackend) {
     return undefined;
@@ -198,7 +187,6 @@ export function resolveCliRuntimeModelBackendBinding(params: {
     ? {
         provider: setupProvider,
         runtime,
-        ...(setupBackend.pluginId ? { pluginId: setupBackend.pluginId } : {}),
       }
     : undefined;
 }
@@ -208,7 +196,6 @@ export function isCliRuntimeModelBackendForProvider(params: {
   provider: string | undefined;
   runtime: string | undefined;
   config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
 }): boolean {
   return resolveCliRuntimeModelBackendBinding(params) !== undefined;
 }

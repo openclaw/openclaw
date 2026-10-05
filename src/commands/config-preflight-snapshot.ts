@@ -173,7 +173,11 @@ export async function persistRefreshedPluginIndex(params: {
   return await withPluginLifecycleLease(
     { env: params.env, assertCurrent: params.assertCurrent, processBound: true },
     async (pluginLease) => {
-      const fresh = await params.readPersistedSnapshot();
+      const fresh = await measureDoctorConfigPreflightStep(
+        "plugin-index.read-current",
+        params.readPersistedSnapshot,
+        params.measure,
+      );
       assertPreflightConfigUnchanged(params.snapshotRead.snapshot, fresh.snapshot);
       pluginLease.assertOwned();
       if (!needsRefreshedPluginIndexPersistence(fresh)) {
@@ -205,7 +209,11 @@ export async function persistRefreshedPluginIndex(params: {
           },
         ),
       );
-      const persistedSnapshotRead = await params.readPersistedSnapshot();
+      const persistedSnapshotRead = await measureDoctorConfigPreflightStep(
+        "plugin-index.read-persisted",
+        params.readPersistedSnapshot,
+        params.measure,
+      );
       const persistedPluginMetadataSnapshot = persistedSnapshotRead.pluginMetadataSnapshot;
       // The registry selector owns freshness and returns "persisted" only after accepting the
       // durable index. Persisted parsing intentionally canonicalizes non-runtime package metadata.
@@ -256,60 +264,68 @@ export async function readAdmittedConfigSnapshot(params: {
       ) {
         return { snapshot: selected };
       }
-      const recoveryOptions = { configPath: selected.path, observe: false, env: params.env };
-      const coreRecovery = await measureDoctorConfigPreflightStep("admission.core-recovery", () =>
-        createConfigIO({
-          ...recoveryOptions,
-          pluginValidation: "core-only",
-        }).prepareConfigRecovery(selected),
+      // Read-only preparation shares one state generation. Release its snapshot before
+      // the caller's live guard or any recovery application / writer lease acquisition.
+      const admitted = await measureDoctorConfigPreflightStep("admission.state-snapshot", () =>
+        withOpenClawStateDatabaseReadSnapshot(
+          async () => {
+            const recoveryOptions = { configPath: selected.path, observe: false, env: params.env };
+            const coreRecovery = await measureDoctorConfigPreflightStep(
+              "admission.core-recovery",
+              () =>
+                createConfigIO({
+                  ...recoveryOptions,
+                  pluginValidation: "core-only",
+                }).prepareConfigRecovery(selected),
+            );
+            const candidate = coreRecovery?.snapshot ?? selected;
+            await assertStartupStateReady({
+              cfg: candidate.sourceConfig ?? candidate.config,
+              env: params.env,
+            });
+            if (candidate.valid) {
+              await params.validateConfig?.(candidate);
+            }
+            // A discarded config cannot publish env values before its backup is restored.
+            let read = await measureDoctorConfigPreflightStep("admission.plugin-config", () =>
+              params.readSnapshot(coreRecovery ? { isolateEnv: true } : undefined),
+            );
+            assertPreflightConfigUnchanged(selected, read.snapshot);
+            const recovery = await measureDoctorConfigPreflightStep(
+              "admission.config-recovery",
+              () => createConfigIO(recoveryOptions).prepareConfigRecovery(read.snapshot),
+            );
+            if (Boolean(coreRecovery) !== Boolean(recovery)) {
+              throwStartupMigrationIdentityChanged();
+            }
+            if (recovery) {
+              assertPreflightConfigUnchanged(candidate, recovery.snapshot);
+              read = {
+                snapshot: recovery.snapshot,
+                pluginMetadataSnapshot: recovery.pluginMetadataSnapshot,
+              };
+            }
+            if (read.snapshot.valid) {
+              await params.validateConfig?.(read.snapshot);
+              await measureDoctorConfigPreflightStep("admission.device-identity", async () => {
+                const { loadDeviceIdentityIfPresent } = await import("../infra/device-identity.js");
+                loadDeviceIdentityIfPresent({ env: params.env });
+              });
+            }
+            return { ...read, ...(recovery ? { recovery } : {}) };
+          },
+          { env: params.env },
+        ),
       );
-      const candidate = coreRecovery?.snapshot ?? selected;
-      await assertStartupStateReady({
-        cfg: candidate.sourceConfig ?? candidate.config,
-        env: params.env,
-      });
-      if (candidate.valid) {
-        await params.validateConfig?.(candidate);
-        const { loadDeviceIdentityIfPresent } = await import("../infra/device-identity.js");
-        loadDeviceIdentityIfPresent({ env: params.env });
-      }
-      // Discovery policy and the index must see one admitted generation. Release
-      // its read scope before recovery, guards, or acquiring a writer lease.
-      // A discarded config cannot publish environment values before its backup is restored.
-      let read = await withOpenClawStateDatabaseReadSnapshot(
-        () => params.readSnapshot(coreRecovery ? { isolateEnv: true } : undefined),
-        { env: params.env },
-      );
-      assertPreflightConfigUnchanged(selected, read.snapshot);
-      const recovery = await measureDoctorConfigPreflightStep("admission.config-recovery", () =>
-        createConfigIO(recoveryOptions).prepareConfigRecovery(read.snapshot),
-      );
-      if (Boolean(coreRecovery) !== Boolean(recovery)) {
-        throwStartupMigrationIdentityChanged();
-      }
-      if (recovery) {
-        assertPreflightConfigUnchanged(candidate, recovery.snapshot);
-        read = {
-          snapshot: recovery.snapshot,
-          pluginMetadataSnapshot: recovery.pluginMetadataSnapshot,
-        };
-      }
-      if (read.snapshot.valid) {
-        await params.validateConfig?.(read.snapshot);
-      }
       if (
         params.beforeStatePreparation &&
         !(await measureDoctorConfigPreflightStep("admission.config-guard", () =>
-          params.beforeStatePreparation?.(read.snapshot),
+          params.beforeStatePreparation?.(admitted.snapshot),
         ))
       ) {
         throwStartupMigrationGuardRejected();
       }
-      if (read.snapshot.valid) {
-        const { loadDeviceIdentityIfPresent } = await import("../infra/device-identity.js");
-        loadDeviceIdentityIfPresent({ env: params.env });
-      }
-      return { ...read, ...(recovery ? { recovery } : {}) };
+      return admitted;
     } catch (error) {
       return rethrowStartupConfigFailure(error);
     }

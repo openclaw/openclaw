@@ -1,5 +1,6 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import type { SandboxBackendHandle } from "../../agents/sandbox/backend-handle.types.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import { createSandboxFsBridge } from "../../agents/sandbox/fs-bridge.js";
 import { createPreprovisionedSshSandboxBackend } from "../../agents/sandbox/ssh-backend.js";
@@ -27,6 +28,7 @@ type RemoteExecPlacementSandbox = SandboxContext & {
       }
     | {
         backendId: "ssh";
+        backend: SandboxBackendHandle;
         placementNodeId?: never;
         placementEnvironmentId?: never;
         placementSessionId?: never;

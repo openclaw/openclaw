@@ -8,7 +8,10 @@ import {
   type MatrixClient as MatrixJsClient,
 } from "matrix-js-sdk/lib/matrix.js";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
-import { captureChannelReadAuthority } from "openclaw/plugin-sdk/fetch-runtime";
+import {
+  captureChannelReadAuthority,
+  withEffectAuthority,
+} from "openclaw/plugin-sdk/fetch-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
@@ -142,7 +145,7 @@ export abstract class MatrixClientBase {
     return withoutMatrixSendCurrentness(() =>
       this.cryptoRequestOwner.run(
         { callerAuthority: captureChannelReadAuthority(), requestSignal },
-        run,
+        () => withEffectAuthority(undefined, run),
       ),
     );
   }

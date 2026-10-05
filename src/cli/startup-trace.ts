@@ -35,6 +35,7 @@ const STARTUP_PROGRESS_PHASES = new Set([
   "cli.main.gateway-run-imports",
   "cli.main.gateway-run-pre-bootstrap",
   "cli.main.gateway-run-bootstrap",
+  "cli.main.gateway-run-reload-environment",
 ]);
 const BOOTSTRAP_PROGRESS_PHASES = new Set([
   "cli.bootstrap.admission.database-readiness",
@@ -91,7 +92,12 @@ export async function measureGatewayBootstrapStep<T>(
   metrics?: () => Readonly<Record<string, number>>,
 ): Promise<T> {
   const traceEnabled = isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE);
-  const progressEnabled = BOOTSTRAP_PROGRESS_PHASES.has(name);
+  const progressEnabled =
+    BOOTSTRAP_PROGRESS_PHASES.has(name) ||
+    (isForegroundGatewayRunArgv(process.argv) &&
+      (name.startsWith("cli.bootstrap.") ||
+        name === "cli.command.config-ready" ||
+        name === "cli.command.config-guard-import"));
   if (!traceEnabled && !progressEnabled) {
     return await run();
   }

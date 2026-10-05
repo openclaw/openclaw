@@ -197,7 +197,6 @@ export async function createAgentAccountingPersistenceFixture({
         defaultModel: diagnostic.model,
         typing: createMockTypingController(),
         typingMode: "never",
-        opts: { isHeartbeat: context.isHeartbeat },
       },
       execution: {
         commentaryPayloadsEnabled: false,

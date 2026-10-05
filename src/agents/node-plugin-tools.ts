@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { getAgentToolAssistantTurnId } from "../../packages/agent-core/src/tool-execution-context.js";
 import { listConnectedNodePluginTools } from "../gateway/node-plugin-tool-snapshot.js";
 import {
   NODE_MCP_TOOL_CALL_GATEWAY_TIMEOUT_MS,
@@ -127,6 +128,7 @@ export function createNodePluginTools(params: {
         ? { executionMode: "sequential" as const, resultContentSource: "network" as const }
         : {}),
       execute: async (toolCallId, toolParams, signal) => {
+        const assistantTurnId = getAgentToolAssistantTurnId();
         const raw = await callGatewayTool(
           "node.invoke",
           {
@@ -145,7 +147,7 @@ export function createNodePluginTools(params: {
                 }
               : toolParams,
             timeoutMs: mcpTool ? NODE_MCP_TOOL_CALL_TIMEOUT_MS : NODE_PLUGIN_TOOL_CALL_TIMEOUT_MS,
-            idempotencyKey: toolCallId,
+            idempotencyKey: assistantTurnId ? `${assistantTurnId}:${toolCallId}` : toolCallId,
             ...(params.agentSessionKey ? { sessionKey: params.agentSessionKey } : {}),
           },
           { scopes: ["operator.write"], ...(signal ? { signal } : {}) },
