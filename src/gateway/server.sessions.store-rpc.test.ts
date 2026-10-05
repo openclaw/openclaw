@@ -17,6 +17,7 @@ import {
 } from "./server.sessions.store-rpc.test-helpers.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 import { agentDiscoveryMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
+import { seedLinearSessionTranscript } from "./test/server-sessions.test-helpers.js";
 import {
   directSessionReq as directSessionHandlerReq,
   setupGatewaySessionsTestHarness,
@@ -583,6 +584,59 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect((badThinking.error as { message?: unknown } | undefined)?.message ?? "").toMatch(
     /invalid thinkinglevel/i,
   );
+});
+
+test("sessions.search real WS run: configured ACP store owner with a non-ACP-shaped key", async () => {
+  const rootStateDir = expectDefined(process.env.OPENCLAW_STATE_DIR, "OPENCLAW_STATE_DIR");
+  const stateDir = path.join(rootStateDir, "acp-non-acp-key-real-run");
+  await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+    testState.agentsConfig = { ownership: "explicit", entries: { main: {} } };
+    const configPath = expectDefined(process.env.OPENCLAW_CONFIG_PATH, "OPENCLAW_CONFIG_PATH");
+    const configJson = '{"acp":{"defaultAgent":"codex","allowedAgents":["codex"]}}';
+    await fs.writeFile(configPath, configJson, "utf-8");
+    const agentsDir = path.join(stateDir, "agents");
+    const agentId = "codex";
+    const sessionKey = `agent:${agentId}:existing`;
+    const sessionId = "session-real-run-non-acp";
+    const storePath = path.join(agentsDir, agentId, "sessions", "sessions.json");
+    await writeSessionStore({
+      storePath,
+      agentId,
+      entries: { [sessionKey]: { sessionId, updatedAt: 42 } },
+    });
+    await seedLinearSessionTranscript({
+      agentId,
+      contents: ["real run proof needle for ordinary key"],
+      sessionId,
+      sessionKey,
+      storePath,
+    });
+
+    const { ws } = await openClient();
+    const owned = await rpcReq<{
+      ok: boolean;
+      results?: Array<{ sessionKey: string; excerpt?: string }>;
+    }>(ws, "sessions.search", {
+      agentId,
+      query: "real run proof needle",
+      sessionKeys: [sessionKey],
+    });
+    console.log("[real-run] owned non-ACP key:", JSON.stringify(owned));
+    expect(owned.ok).toBe(true);
+    expect(owned.payload?.results?.map((hit) => hit.sessionKey)).toContain(sessionKey);
+    expect(
+      owned.payload?.results?.[0]?.excerpt ?? owned.payload?.results?.[0]?.snippet ?? "",
+    ).toContain("real run proof needle");
+
+    const crossOwner = await rpcReq<{ ok: boolean; error?: { code: string } }>(
+      ws,
+      "sessions.search",
+      { agentId, query: "real run proof needle", sessionKeys: ["agent:claude:existing"] },
+    );
+    console.log("[real-run] cross-owner rejection:", JSON.stringify(crossOwner));
+    expect(crossOwner.ok).toBe(false);
+    expect((crossOwner.error as { code?: string } | undefined)?.code ?? "").toBe("INVALID_REQUEST");
+  });
 });
 
 test("sessions.list configuredAgentsOnly keeps configured-agent children and hides unrelated stores", async () => {
