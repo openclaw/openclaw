@@ -17,6 +17,7 @@ import {
   SYSTEM_AGENT_APPROVAL_EXPIRED_TEXT,
 } from "../plugin-sdk/approval-terminal.js";
 import { formatFencedCodeBlock } from "../shared/markdown-code.js";
+import { truncateUtf16WithEllipsis } from "../shared/text-truncate.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
 import { formatExecApprovalExpiresIn } from "./exec-approval-reply.js";
@@ -38,6 +39,9 @@ import {
   type SystemAgentApprovalRequest,
   type SystemAgentApprovalResolved,
 } from "./system-agent-approvals.js";
+
+// Resolved notices are one-shot confirmations; keep the echoed command short.
+const RESOLVED_COMMAND_MAX_LENGTH = 200;
 
 function formatApprovalCommand(command: string): { inline: boolean; text: string } {
   return !command.includes("\n") && !command.includes("`")
@@ -108,7 +112,19 @@ function buildForwardedExecApprovalRequest(request: ExecApprovalRequest, nowMs: 
 function buildForwardedExecApprovalResolved(resolved: ExecApprovalResolved) {
   const base = `✅ Exec approval ${approvalDecisionLabel(resolved.decision)}.`;
   const by = resolved.resolvedBy ? ` Resolved by ${resolved.resolvedBy}.` : "";
-  return `${base}${by} ID: ${resolved.id}`;
+  const summary = `${base}${by} ID: ${resolved.id}`;
+  const commandText = resolved.request
+    ? resolveExecApprovalCommandDisplay(resolved.request).commandText
+    : "";
+  if (!commandText) {
+    return summary;
+  }
+  const command = formatApprovalCommand(
+    truncateUtf16WithEllipsis(commandText, RESOLVED_COMMAND_MAX_LENGTH),
+  );
+  return command.inline
+    ? `${summary}\nCommand: ${command.text}`
+    : `${summary}\nCommand:\n${command.text}`;
 }
 
 export function buildForwardedExecApprovalExpired(request: ExecApprovalRequest) {
