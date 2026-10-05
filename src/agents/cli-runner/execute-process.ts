@@ -11,11 +11,16 @@ import { beginDiagnosticBackendActivity } from "../../logging/diagnostic-run-act
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import { appendCapturedOutput, createCapturedOutputBuffers } from "../../process/exec-output.js";
 import type { RunExit } from "../../process/supervisor/types.js";
-import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
+import type {
+  CliCommentarySegment,
+  CliOutput,
+  CliTerminalInterruption,
+} from "../cli-output-contracts.js";
 import { transformCliResultText } from "../cli-output-results.js";
 import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
 import { parseCliOutput } from "../cli-output.js";
 import type { FailoverError } from "../failover-error.js";
+import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import type { CliExecuteDeps } from "./execute-deps.js";
 import type { CliEventHandlers } from "./execute-events.js";
 import { createCliAbortError, executeNodeClaudeRun } from "./execute-node-claude.js";
@@ -76,6 +81,7 @@ export async function executeCliProcess(params: {
   cliTurnStartedAt: number;
   observeForkSuccessor: (sessionId: string) => void;
   options?: ExecuteCliProcessOptions;
+  onCommentarySegment?: (segment: CliCommentarySegment) => void;
 }): Promise<CliOutput> {
   const context = params.context;
   const runParams = context.params;
@@ -110,6 +116,17 @@ export async function executeCliProcess(params: {
           params.events.emitLiveEvents && runParams.emitCommentaryText
             ? params.events.emitCliCommentaryText
             : undefined,
+        // Durable history stores what live commentary shows, after the same output replacements.
+        onCommentarySegment: params.onCommentarySegment
+          ? (segment) =>
+              params.onCommentarySegment?.({
+                ...segment,
+                text: applyPluginTextReplacements(
+                  segment.text,
+                  context.backendResolved.textTransforms?.output,
+                ),
+              })
+          : undefined,
         onSessionId: params.observeForkSuccessor,
         onNativeTools: context.preparedBackend.mcpClientGrantCapture?.captureNativeTools,
         onAssistantMessage: params.diagnostics?.observeAssistantMessage,

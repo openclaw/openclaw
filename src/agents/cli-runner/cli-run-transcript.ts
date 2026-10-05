@@ -137,6 +137,10 @@ export async function persistCliAssistantTranscript(params: {
   usage?: CliUsage;
   stopReason: StopReason;
   yielded?: true;
+  segmentKey?: string;
+  timestamp?: number;
+  /** The CLI's own record of this text; history pairs it with its import by identity. */
+  nativeEntry?: { entryId: string; sessionId: string };
 }): Promise<{
   owned: boolean;
   idempotencyKey?: string;
@@ -154,7 +158,7 @@ export async function persistCliAssistantTranscript(params: {
     return { owned: false };
   }
   try {
-    const idempotencyKey = `cli-assistant:${runParams.runId}`;
+    const idempotencyKey = `cli-assistant:${runParams.runId}${params.segmentKey ? `:seg:${params.segmentKey}` : ""}`;
     const result = await appendExactAssistantMessageToSessionTranscript({
       sessionKey: runParams.sessionKey,
       agentId: runParams.agentId,
@@ -212,6 +216,18 @@ export async function persistCliAssistantTranscript(params: {
                 replacementText: params.text,
                 source: "segment",
                 itemId: runParams.runId,
+              },
+            }
+          : {}),
+        ...(params.timestamp !== undefined ? { timestamp: params.timestamp } : {}),
+        ...(params.nativeEntry
+          ? {
+              __openclaw: {
+                cliNativeRef: {
+                  externalId: params.nativeEntry.entryId,
+                  importedFrom: runParams.provider,
+                  cliSessionId: params.nativeEntry.sessionId,
+                },
               },
             }
           : {}),

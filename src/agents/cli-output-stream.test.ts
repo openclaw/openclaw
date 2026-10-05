@@ -384,6 +384,94 @@ describe("createCliJsonlStreamingParser", () => {
     expect(deltas.at(-1)?.text).toBe("Before.\n\nDONE");
   });
 
+  it.each([
+    { name: "plain", preTool: "The answer is here.", visible: "The answer is here." },
+    {
+      name: "tagged reasoning",
+      preTool: "<thinking>Private analysis.</thinking>The answer is here.",
+      visible: "The answer is here.",
+    },
+  ])("offers commentary for canonical history exactly as shown: $name", ({ preTool, visible }) => {
+    const segments: unknown[] = [];
+    const commentary: string[] = [];
+    const parser = createClaudeParser({
+      onCommentaryText: (text) => commentary.push(text),
+      onCommentarySegment: ({ key, text, native }) => segments.push({ key, text, native }),
+    });
+    finishFrames(
+      parser,
+      init("session-segments"),
+      claudeStreamEvent({ type: "message_start", message: { id: "message-1" } }),
+      claudeStreamEvent({ type: "content_block_start", content_block: { type: "text" } }),
+      claudeTextDelta(preTool),
+      // Claude Code's completed text-block snapshot, keyed like its native session record.
+      {
+        type: "assistant",
+        uuid: "entry-pre-tool",
+        message: { id: "message-1", role: "assistant", content: [{ type: "text", text: preTool }] },
+      },
+      toolStart(),
+      messageStop,
+      claudeStreamEvent({ type: "message_start", message: { id: "message-2" } }),
+      claudeTextDelta("Final answer."),
+      messageStop,
+      result("Final answer."),
+    );
+    expect(commentary).toEqual([visible]);
+    expect(segments).toEqual([
+      {
+        key: "message-1:0",
+        text: visible,
+        native: { entryId: "entry-pre-tool", sessionId: "session-segments" },
+      },
+    ]);
+    expect(parser.getOutput()?.text).toBe("Final answer.");
+  });
+
+  it("never names an earlier text block's native record for later commentary", () => {
+    const segments: unknown[] = [];
+    const parser = createClaudeParser({
+      onCommentaryText: () => {},
+      onCommentarySegment: ({ text, native }) => segments.push({ text, native }),
+    });
+    finishFrames(
+      parser,
+      init("session-segments"),
+      claudeStreamEvent({ type: "message_start", message: { id: "message-1" } }),
+      claudeStreamEvent({ type: "content_block_start", content_block: { type: "text" } }),
+      claudeTextDelta("First block."),
+      {
+        type: "assistant",
+        uuid: "entry-first",
+        message: { id: "message-1", role: "assistant", content: [{ type: "text", text: "x" }] },
+      },
+      claudeStreamEvent({ type: "content_block_start", content_block: { type: "text" } }),
+      claudeTextDelta("Second block."),
+      toolStart(),
+      messageStop,
+      result("Done."),
+    );
+    expect(segments).toEqual([{ text: "Second block.", native: undefined }]);
+  });
+
+  it("offers no history segment while pre-tool text stays in the reply", () => {
+    const segments: unknown[] = [];
+    const parser = createClaudeParser({ onCommentarySegment: (segment) => segments.push(segment) });
+    finishFrames(
+      parser,
+      init("session-no-commentary"),
+      messageStart,
+      claudeTextDelta("The answer is here."),
+      toolStart(),
+      messageStop,
+      messageStart,
+      claudeTextDelta("Final answer."),
+      result("Final answer."),
+    );
+    expect(segments).toEqual([]);
+    expect(parser.getOutput()?.text).toContain("The answer is here.");
+  });
+
   it("judges post-interim-result segments on their own stream state", () => {
     const deltas: Array<{ text: string; delta: string }> = [];
     const parser = createParser({ onAssistantDelta: (delta) => deltas.push(delta) });
