@@ -715,7 +715,7 @@ it.each([
   "script",
   "launcher",
   "metadata",
-  "planned-launcher",
+  "inactive-launcher",
   "missing-launcher",
   "path",
   "custom-script",
@@ -753,7 +753,7 @@ it.each([
     (releasedWaiting
       ? `' OpenClaw Gateway (v2026.9.3)\r\nWScript.Quit CreateObject("WScript.Shell").Run("""${scriptPath.replaceAll('"', '""')}""", 0, True)\r\n`
       : buildHiddenLauncherScript({ scriptPath, taskSupervisor: true })) +
-    (kind === "launcher" || kind === "planned-launcher" || kind === "released-waiting-custom"
+    (kind === "launcher" || kind === "inactive-launcher" || kind === "released-waiting-custom"
       ? 'WScript.Echo "operator-private"\r\n'
       : "");
   await fs.writeFile(scriptPath, script);
@@ -766,8 +766,9 @@ it.each([
     stdout: buildScheduledTaskXml({
       taskDescription: kind === "metadata" ? "operator-private" : "OpenClaw Gateway",
       taskUser: "fixture",
+      interactive: true,
       launchPath:
-        kind === "planned-launcher" || kind === "missing-launcher" ? scriptPath : hiddenPath,
+        kind === "inactive-launcher" || kind === "missing-launcher" ? scriptPath : hiddenPath,
     })
       .replace(
         "<RunLevel>LeastPrivilege</RunLevel>",
@@ -799,11 +800,17 @@ it.each([
     kind === "canonical" ||
     kind === "released-waiting" ||
     kind === "missing-launcher" ||
+    kind === "inactive-launcher" ||
     kind === "custom-script"
   ) {
-    expect(result.definitionDrift).toBeUndefined();
+    expect(result.definitionDrift).toContainEqual(
+      expect.objectContaining({ kind: "outdated", key: "Principals.Principal.LogonType" }),
+    );
+    expect(result.definitionDrift?.every((finding) => finding.kind === "outdated")).toBe(true);
   } else if (kind === "script") {
-    expect(result.definitionDrift).toBeUndefined();
+    expect(result.definitionDrift).toContainEqual(
+      expect.objectContaining({ kind: "outdated", key: "Principals.Principal.LogonType" }),
+    );
     expect(result.definitionDriftError).toBe(
       "Service definition inspection could not be completed.",
     );
@@ -830,13 +837,13 @@ it.each([
         }),
       ]),
     );
-    expect(result.definitionDrift).toHaveLength(3);
+    expect(result.definitionDrift?.every((finding) => finding.kind === "outdated")).toBe(true);
   } else {
     expect(result.definitionDrift).toContainEqual(
       expect.objectContaining({
         kind: "unknown-edit",
         key:
-          kind === "launcher" || kind === "planned-launcher" || kind === "released-waiting-custom"
+          kind === "launcher" || kind === "released-waiting-custom"
             ? "TaskLauncher"
             : kind === "path"
               ? "Environment.PATH"

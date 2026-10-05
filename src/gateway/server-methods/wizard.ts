@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -120,7 +119,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
             runHostedWizard((runtime) =>
               context.channelWizardRunner(
                 {
-                  channel: readStringValue(params.channel),
+                  channel: params.channel,
                   onConfigured: (accounts) => wizardSession.setConfiguredAccounts(accounts),
                   // Durable effects (plugin installs, config commit) must finish
                   // even if the client cancels mid-write.
@@ -138,7 +137,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
               context.wizardRunner(
                 {
                   mode: params.mode,
-                  workspace: readStringValue(params.workspace),
+                  workspace: params.workspace,
                   installDaemon: params.installDaemon,
                 },
                 runtime,
@@ -173,7 +172,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
           return;
         }
         try {
-          const validationError = await session.answer(answer.stepId ?? "", answer.value);
+          const validationError = await session.answer(answer.stepId, answer.value);
           if (validationError) {
             respond(
               true,

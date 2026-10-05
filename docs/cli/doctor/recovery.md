@@ -78,6 +78,10 @@ holder on the same host must stop before ordinary repair can proceed; Doctor
 names its PID. Update-driven foreground shutdown retains its existing drain budget.
 Do not delete a lock that an active Gateway might still own.
 
+Once Doctor owns maintenance, it checks the update requester's current authority
+within that same ownership scope. Its own maintenance window does not trigger a
+lock wait or an offline-maintenance refusal; requester revocation still stops repair.
+
 When maintenance cannot acquire state ownership, Doctor includes the underlying
 schema or filesystem error. A shared-state database from a newer OpenClaw build
 stays unchanged; rerun Doctor with a build that supports that database version.

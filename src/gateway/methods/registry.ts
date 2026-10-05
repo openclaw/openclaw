@@ -1,6 +1,6 @@
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { normalizePluginGatewayMethodScope } from "../../shared/gateway-method-policy.js";
-import { ADMIN_SCOPE, type OperatorScope } from "../operator-scopes.js";
+import type { OperatorScope } from "../operator-scopes.js";
 import {
   DYNAMIC_GATEWAY_METHOD_SCOPE,
   type GatewayMethodDescriptor,
@@ -129,23 +129,5 @@ export function createGatewayMethodDescriptorsFromHandlers(params: {
       owner: params.owner,
       scope,
     };
-  });
-}
-
-/** Resolves plugin method descriptors, including the legacy handler-only registry shape. */
-export function createPluginGatewayMethodDescriptors(
-  registry: Pick<PluginRegistry, "gatewayHandlers"> &
-    Partial<Pick<PluginRegistry, "gatewayMethodDescriptors">>,
-): GatewayMethodDescriptorInput[] {
-  const descriptors = registry.gatewayMethodDescriptors ?? [];
-  if (descriptors.length > 0) {
-    return [...descriptors];
-  }
-  // Older plugin registries only carried handlers, so keep them callable but assign admin scope
-  // until the plugin can provide explicit descriptor metadata.
-  return createGatewayMethodDescriptorsFromHandlers({
-    handlers: registry.gatewayHandlers,
-    owner: { kind: "plugin", pluginId: "unknown" },
-    defaultScope: ADMIN_SCOPE,
   });
 }

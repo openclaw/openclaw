@@ -1,9 +1,5 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import {
-  acpSessionRowMatchesEntry,
-  selectAcpSessionRows,
-  selectAcpSessionRowsByKeys,
-} from "../acp/runtime/session-meta-keys.js";
+import { readAcpSessionCommand } from "../acp/runtime/session-meta-read.worker.js";
 import {
   loadSubagentMaintenanceRunsInDatabase,
   loadVersionedSubagentRunsInDatabase,
@@ -87,7 +83,7 @@ import {
 } from "../skills/library/selection-read.kernel.js";
 import { isTuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import { readTuiLastSessionCommand } from "../tui/tui-last-session.kernel.js";
-import { readAgentDatabaseDeletionSnapshotInDatabase } from "./agent-deletion-journal.read.js";
+import { readAgentDatabaseDeletionWorkerSnapshot } from "./agent-deletion-journal.snapshot.worker.js";
 import { readBackupRunsInDatabase } from "./backup-run-records.kernel.js";
 import {
   isConfigMachineStateReadCommand,
@@ -240,7 +236,7 @@ serveOwnedWorkerTasks(
             if (command.type === "agentDatabaseDeletion.snapshot") {
               return {
                 type: command.type,
-                snapshot: readAgentDatabaseDeletionSnapshotInDatabase(
+                snapshot: readAgentDatabaseDeletionWorkerSnapshot(
                   db,
                   input.databasePath,
                   command.purpose,
@@ -259,30 +255,12 @@ serveOwnedWorkerTasks(
                 entries: readOutboundDeliveriesInDatabase({ db }, command),
               };
             }
-            if (command.type === "acpSessions.list") {
-              return {
-                type: command.type,
-                rows: selectAcpSessionRows(db),
-              };
-            }
-            if (command.type === "acpSessions.metadata") {
-              const cohortKeys = [...new Set(command.entries.flatMap((entry) => entry.keys))];
-              const rows = new Map(
-                [...selectAcpSessionRowsByKeys(db, cohortKeys)].map((row) => [
-                  row.session_key,
-                  row,
-                ]),
-              );
-              return {
-                type: command.type,
-                rows: command.entries.map(
-                  ({ keys, entry }) =>
-                    keys
-                      .map((key) => rows.get(key))
-                      .find((row) => row && (!entry || acpSessionRowMatchesEntry(row, entry))) ??
-                    null,
-                ),
-              };
+            if (
+              command.type === "acpSessions.resume" ||
+              command.type === "acpSessions.list" ||
+              command.type === "acpSessions.metadata"
+            ) {
+              return readAcpSessionCommand(db, command);
             }
             if (isChannelIngressReadCommand(command)) {
               return readChannelIngressInDatabase(db, command);

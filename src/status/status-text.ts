@@ -30,6 +30,7 @@ import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import { toAgentModelListLike } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { resolveSessionLifecycleTimestampsAsync } from "../config/sessions/lifecycle-read.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTimeout } from "../infra/fs-safe.js";
@@ -552,6 +553,12 @@ export async function buildStatusReplyParts(
               ? "active-or-bundled"
               : "active",
         });
+  const lifecycleTimestamps = await resolveSessionLifecycleTimestampsAsync({
+    entry: sessionEntry,
+    agentId: statusAgentId,
+    sessionKey,
+    storePath,
+  });
   return buildStatusMessageParts({
     config: cfg,
     agent: {
@@ -587,6 +594,7 @@ export async function buildStatusReplyParts(
     parentSessionKey,
     sessionScope,
     sessionStorePath: storePath,
+    sessionStartedAt: lifecycleTimestamps.sessionStartedAt,
     groupActivation,
     resolvedThink: effectiveThinkLevel,
     resolvedFast: effectiveFastMode,

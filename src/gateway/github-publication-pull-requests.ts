@@ -8,16 +8,6 @@ import {
   requirePublicationCommand,
 } from "./github-publication-git-transport.js";
 
-type GitHubPublicationPullRequest = {
-  userId: number;
-  url: string;
-  state: "open" | "closed";
-  body: string;
-  headSha: string;
-  headRef: string;
-  baseRef: string;
-};
-
 type GitHubPublicationPullRequestLookup = {
   repository: string;
   pushOwner: string;
@@ -29,17 +19,33 @@ type GitHubPublicationPullRequestLookup = {
   assertCurrent: () => void;
 };
 
-async function loadGitHubPublicationPullRequests(params: GitHubPublicationPullRequestLookup) {
+async function readGitHubPublicationApi(
+  params: GitHubPublicationPullRequestLookup,
+  endpoint: string,
+  args: string[] = [],
+) {
   const identity = await params.refreshIdentity();
   params.assertCurrent();
-  const marker = JSON.stringify(params.marker);
   const raw = await requirePublicationCommand(
     [
       ...githubPublicationApiArgs(
-        `repos/${params.repository}/pulls`,
+        endpoint,
         "GET",
         identity.host ?? params.host ?? resolveGitHubHost(),
       ),
+      ...args,
+    ],
+    { env: identity.env },
+  );
+  return { identity, raw };
+}
+
+async function loadGitHubPublicationPullRequests(params: GitHubPublicationPullRequestLookup) {
+  const marker = JSON.stringify(params.marker);
+  const { identity, raw } = await readGitHubPublicationApi(
+    params,
+    `repos/${params.repository}/pulls`,
+    [
       "-f",
       `head=${params.pushOwner}:${params.branch}`,
       "-f",
@@ -51,13 +57,12 @@ async function loadGitHubPublicationPullRequests(params: GitHubPublicationPullRe
       // Compact pages remain independently parseable; only the request marker is needed from prose.
       `map({url: .html_url, userId: .user.id, state: .state, body: (if ((.body // "") | contains(${marker})) then ${marker} else "" end), headSha: .head.sha, headRef: .head.ref, baseRef: .base.ref}) | tojson`,
     ],
-    { env: identity.env },
   );
   return { identity, candidates: parseGitHubPublicationPullRequests(raw) };
 }
 
 /** Parses the complete authenticated PR lookup; one malformed candidate invalidates the response. */
-function parseGitHubPublicationPullRequests(raw: string): GitHubPublicationPullRequest[] {
+function parseGitHubPublicationPullRequests(raw: string) {
   let pages: unknown[];
   try {
     pages = raw
@@ -166,15 +171,9 @@ export async function reconcileGitHubPublicationPullRequest(
     recordPushObserved?: (headCommit: string) => void;
   },
 ): Promise<string | undefined> {
-  const identity = await params.refreshIdentity();
-  params.assertCurrent();
-  const raw = await requirePublicationCommand(
-    githubPublicationApiArgs(
-      `repos/${params.pushRepository}/git/commits/${params.headCommit}`,
-      "GET",
-      identity.host ?? params.host ?? resolveGitHubHost(),
-    ),
-    { env: identity.env },
+  const { raw } = await readGitHubPublicationApi(
+    params,
+    `repos/${params.pushRepository}/git/commits/${params.headCommit}`,
   );
   params.assertCurrent();
   const commit: unknown = JSON.parse(raw);
@@ -211,22 +210,12 @@ export async function reconcileGitHubPublicationPullRequest(
     if (!objectId.test(head)) {
       throw new Error("GitHub publication head observation is invalid.");
     }
-    const currentIdentity = await params.refreshIdentity();
-    params.assertCurrent();
-    const comparison: unknown = JSON.parse(
-      await requirePublicationCommand(
-        [
-          ...githubPublicationApiArgs(
-            `repos/${params.pushRepository}/compare/${params.headCommit}...${head}?per_page=1`,
-            "GET",
-            currentIdentity.host ?? params.host ?? resolveGitHubHost(),
-          ),
-          "--jq",
-          "{sha: .merge_base_commit.sha}",
-        ],
-        { env: currentIdentity.env },
-      ),
+    const { raw: comparisonRaw } = await readGitHubPublicationApi(
+      params,
+      `repos/${params.pushRepository}/compare/${params.headCommit}...${head}?per_page=1`,
+      ["--jq", "{sha: .merge_base_commit.sha}"],
     );
+    const comparison: unknown = JSON.parse(comparisonRaw);
     if (
       !isRecord(comparison) ||
       typeof comparison.sha !== "string" ||
@@ -261,18 +250,11 @@ export async function reconcileGitHubPublicationPullRequest(
   if (params.pushOnly === "observed") {
     return undefined;
   }
-  const refIdentity = await params.refreshIdentity();
-  params.assertCurrent();
-  const refs: unknown = JSON.parse(
-    await requirePublicationCommand(
-      githubPublicationApiArgs(
-        `repos/${params.pushRepository}/git/matching-refs/heads/${encodeURIComponent(params.branch)}`,
-        "GET",
-        refIdentity.host ?? params.host ?? resolveGitHubHost(),
-      ),
-      { env: refIdentity.env },
-    ),
+  const { raw: refsRaw } = await readGitHubPublicationApi(
+    params,
+    `repos/${params.pushRepository}/git/matching-refs/heads/${encodeURIComponent(params.branch)}`,
   );
+  const refs: unknown = JSON.parse(refsRaw);
   if (!Array.isArray(refs)) {
     throw new Error("GitHub publication branch observation is invalid.");
   }

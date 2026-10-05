@@ -220,54 +220,6 @@ function normalizeMessagePollDeliveryResult(
   };
 }
 
-function assertPollOptionSupport(params: {
-  channel: string;
-  outbound: NonNullable<ChannelPlugin["outbound"]>;
-  durationSeconds?: number;
-  isAnonymous?: boolean;
-}): void {
-  if (
-    typeof params.durationSeconds === "number" &&
-    params.outbound.supportsPollDurationSeconds !== true
-  ) {
-    throw new Error(`durationSeconds is not supported for ${params.channel} polls`);
-  }
-  if (typeof params.isAnonymous === "boolean" && params.outbound.supportsAnonymousPolls !== true) {
-    throw new Error(`isAnonymous is not supported for ${params.channel} polls`);
-  }
-}
-
-async function assertRequiredMessageSendDurability(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  channel: Exclude<string, "none">;
-  payloads: ReplyPayload[];
-  replyToId?: string | null;
-  threadId?: string | number | null;
-  silent?: boolean;
-}): Promise<void> {
-  const support = await resolveOutboundDurableFinalDeliverySupport({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    channel: params.channel,
-    requirements: deriveDurableFinalDeliveryRequirementsForBatch({
-      ...params,
-      reconcileUnknownSend: true,
-    }),
-  });
-  if (support.ok) {
-    return;
-  }
-  const suffix =
-    support.reason === "capability_mismatch" && support.capability
-      ? `missing ${support.capability}`
-      : support.reason;
-  throw new Error(
-    `Required durable message send is unsupported for ${params.channel}: ${suffix}. ` +
-      'Use queuePolicy:"best_effort" for best-effort delivery, omit bestEffort:false in message-tool calls, or use a channel with required durable delivery support.',
-  );
-}
-
 async function callMessageGateway<T>(params: {
   gateway?: OutboundMessageGatewayOptionsInput;
   method: string;
@@ -390,15 +342,28 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     const requireUnknownSendReconciliation =
       params.requireUnknownSendReconciliation ?? params.queuePolicy === "required";
     if (requireUnknownSendReconciliation) {
-      await assertRequiredMessageSendDurability({
+      const support = await resolveOutboundDurableFinalDeliverySupport({
         cfg,
         agentId: params.agentId,
         channel: outboundChannel,
-        payloads: normalizedPayloads,
-        replyToId: reply?.replyToId,
-        threadId: params.threadId,
-        silent: params.silent,
+        requirements: deriveDurableFinalDeliveryRequirementsForBatch({
+          payloads: normalizedPayloads,
+          replyToId: reply?.replyToId,
+          threadId: params.threadId,
+          silent: params.silent,
+          reconcileUnknownSend: true,
+        }),
       });
+      if (!support.ok) {
+        const suffix =
+          support.reason === "capability_mismatch" && support.capability
+            ? `missing ${support.capability}`
+            : support.reason;
+        throw new Error(
+          `Required durable message send is unsupported for ${outboundChannel}: ${suffix}. ` +
+            'Use queuePolicy:"best_effort" for best-effort delivery, omit bestEffort:false in message-tool calls, or use a channel with required durable delivery support.',
+        );
+      }
     }
     const send = await sendDurableMessageBatchCore(
       {
@@ -560,12 +525,12 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     return buildResult({ dryRun: true });
   }
 
-  assertPollOptionSupport({
-    channel,
-    outbound,
-    durationSeconds: params.durationSeconds,
-    isAnonymous: params.isAnonymous,
-  });
+  if (typeof params.durationSeconds === "number" && outbound.supportsPollDurationSeconds !== true) {
+    throw new Error(`durationSeconds is not supported for ${channel} polls`);
+  }
+  if (typeof params.isAnonymous === "boolean" && outbound.supportsAnonymousPolls !== true) {
+    throw new Error(`isAnonymous is not supported for ${channel} polls`);
+  }
 
   if (deliveryMode !== "gateway" || params.gatewayOwnedDelivery === true) {
     const resolvedTarget = resolveOutboundTarget({

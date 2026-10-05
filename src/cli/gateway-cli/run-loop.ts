@@ -16,7 +16,6 @@ import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-li
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { consumeGatewaySuspendHandoff } from "../../infra/gateway-suspend-coordinator.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
-import { cleanupSnapshotOperations } from "../../infra/sqlite-readonly-location-cleanup.js";
 import { findStartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithProcessCleanupBudget } from "../../process/supervisor/cleanup-budget.js";
@@ -26,7 +25,7 @@ import { measureGatewayBootstrapStep } from "../startup-trace.js";
 import { createGatewayHostLifecycle } from "./host-lifecycle.js";
 import { installGatewayHostLifeline } from "./host-lifeline.js";
 import { drainGatewayActiveWork } from "./run-loop-drain.js";
-import * as loopLogs from "./run-loop-log-flush.js";
+import * as loopExit from "./run-loop-exit.js";
 import {
   isUpdateProcessRestartReason,
   registerGatewayRunInstallationReplacement,
@@ -54,7 +53,6 @@ import {
 } from "./shutdown-hard-exit.js";
 import { GatewayUpdateSuccessor } from "./update-successor.js";
 const gatewayLog = createSubsystemLogger("gateway");
-const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
 const HARD_EXIT_WATCHDOG_GRACE_MS = 2_000;
 
 type ShutdownFailure = { step: string; error: unknown };
@@ -122,7 +120,7 @@ export async function runGatewayLoop(params: {
     );
     restartDrainWarning = undefined;
   };
-  const observeSignal = loopLogs.createGatewaySignalObserver(gatewayLog);
+  const observeSignal = loopExit.createGatewaySignalObserver(gatewayLog);
   let startupFailedWithoutServerHandle = false;
   const restartRecovery = createGatewayRestartRecovery(params, gatewayLog, supervisor);
   const processInstanceId = randomUUID();
@@ -159,16 +157,7 @@ export async function runGatewayLoop(params: {
     }
     let ownerToCommit = initialOwner;
     let commitOutcome = initialOutcome;
-    // Graceful signal/restart paths call process.exit(), which skips beforeExit.
-    if (!foregroundUpdateClosed) {
-      await eagerLifecycleRuntime
-        .stopActiveManagedProviderLocalServices()
-        .catch((error: unknown) => {
-          gatewayLog.warn(`managed local service shutdown failed: ${formatErrorMessage(error)}`);
-        });
-    }
-    await cleanupSnapshotOperations();
-    await loopLogs.flushGatewayLogsBeforeExit(gatewayLog);
+    await loopExit.prepareGatewayExit(eagerLifecycleRuntime, gatewayLog, foregroundUpdateClosed);
     for (;;) {
       if (hostStopOwner && hostLifecycle !== hostStopOwner) {
         return;
@@ -229,7 +218,7 @@ export async function runGatewayLoop(params: {
       return;
     }
   };
-  const writeStabilityBundle = loopLogs.createGatewayStabilityReporter(
+  const writeStabilityBundle = loopExit.createGatewayStabilityReporter(
     eagerLifecycleRuntime,
     gatewayLog,
   );
@@ -271,7 +260,7 @@ export async function runGatewayLoop(params: {
     }
     // Exit rescue cannot replay an issued file append; join it before final authority checks.
     // Reserve half the hard-exit grace for final shutdown bookkeeping.
-    await loopLogs.flushGatewayLogsBeforeExit(gatewayLog, HARD_EXIT_WATCHDOG_GRACE_MS / 2);
+    await loopExit.flushGatewayLogsBeforeExit(gatewayLog, HARD_EXIT_WATCHDOG_GRACE_MS / 2);
     if (foregroundUpdateClosed) {
       return;
     }
@@ -526,14 +515,7 @@ export async function runGatewayLoop(params: {
       }
       gatewayLog.info("restart mode: full process restart (supervisor restart)");
       if (supervisorMode === "launchd") {
-        const delay = new Promise<void>((resolve) => {
-          setTimeout(resolve, LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS);
-        });
-        const spawned = respawn.handoffSpawned
-          ? await Promise.race([respawn.handoffSpawned, delay.then(() => true)])
-          : false;
-        // Preserve the crash-loop throttle window even when spawn settles early.
-        await delay;
+        const spawned = await loopExit.waitForLaunchdRestartHandoff(respawn.handoffSpawned);
         if (!spawned) {
           writeStabilityBundle("gateway.restart_handoff_spawn_failed");
           gatewayLog.warn(
@@ -774,7 +756,7 @@ export async function runGatewayLoop(params: {
         // before process exit can strand an external fixing agent.
         await restartRecovery.waitForCleanup();
         shutdownStep = "active-work-drain";
-        await drainGatewayActiveWork({
+        const drainCutShort = await drainGatewayActiveWork({
           request: acceptedRequest,
           runtime: eagerLifecycleRuntime,
           drainTimeoutMs: drainBudget.drainTimeoutMs,
@@ -836,6 +818,16 @@ export async function runGatewayLoop(params: {
               reason: isRestart ? "gateway restarting" : "gateway stopping",
               restartExpectedMs: isRestart ? 1500 : null,
               ...(isRestart ? { drainTimeoutMs: drainBudget.closeDrainTimeoutMs() } : {}),
+              ...loopExit.interruptedRestartExitOptions({
+                request: acceptedRequest,
+                drainCutShort,
+                ownsProcessLifecycle: params.ownsProcessLifecycle,
+                runtime: eagerLifecycleRuntime,
+                logger: gatewayLog,
+                releaseLock: releaseLockIfHeld,
+                completeBoot,
+                exit: exitProcess,
+              }),
             }),
         );
       } catch (err) {

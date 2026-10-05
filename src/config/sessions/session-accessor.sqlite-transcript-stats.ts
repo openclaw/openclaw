@@ -17,8 +17,8 @@ function sqliteTranscriptJsonlByteSize() {
     + CASE WHEN COUNT(*) > 0 THEN COUNT(*) - 1 ELSE 0 END`.as("size_bytes");
 }
 
-function createTranscriptStatsQuery(database: Pick<OpenClawAgentDatabase, "db">) {
-  const db = getSessionKysely(database.db);
+const transcriptStatsQuery = createSqliteQueryCache((database) => {
+  const db = getSessionKysely(database);
   return prepareSqliteQuerySync<
     string,
     {
@@ -31,7 +31,7 @@ function createTranscriptStatsQuery(database: Pick<OpenClawAgentDatabase, "db">)
       transcript_observed_at: number | null;
       transcript_updated_at: number | null;
     }
-  >(database.db, (parameter) =>
+  >(database, (parameter) =>
     db
       .selectFrom(
         db
@@ -73,9 +73,7 @@ function createTranscriptStatsQuery(database: Pick<OpenClawAgentDatabase, "db">)
         "session.transcript_updated_at",
       ]),
   );
-}
-
-const transcriptStatsQuery = createSqliteQueryCache((db) => createTranscriptStatsQuery({ db }));
+});
 
 /** Reads transcript freshness and byte size without materializing event rows. */
 export function readTranscriptStatsFromDatabase(

@@ -1,5 +1,11 @@
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { selectSessionTranscriptProjection } from "../../gateway/session-transcript-read-kernel.js";
 import type { SessionTranscriptProjectionSelection } from "../../gateway/session-transcript-read.types.js";
+import {
+  SOURCE_PAGE_MAX_BYTES,
+  SOURCE_PAGE_MAX_MESSAGES,
+} from "../../gateway/session-transcript-source-pages.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
@@ -13,8 +19,14 @@ import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.j
 import { readCurrentProjectionSnapshot } from "./session-accessor.sqlite-projection-read.js";
 import {
   loadTranscriptReadSnapshotSync,
+  hasSessionTranscriptMessageInDatabase,
   readTranscriptExportSnapshotReadOnlySync,
 } from "./session-accessor.sqlite-read.js";
+import {
+  iterateVisibleMessageMetadata,
+  readVisibleMessageRange,
+  resolveVisibleMessagePositions,
+} from "./session-accessor.sqlite-reset-window.js";
 import { readTranscriptStatsFromDatabase } from "./session-accessor.sqlite-transcript-stats.js";
 import {
   prepareSessionHistoryReadOperation,
@@ -265,19 +277,93 @@ export function createIncognitoHistoryWorker(
           readTranscriptStatsFromDatabase(database, sessionId),
         );
         return;
+      case "session.history.message-presence":
+        prepared = prepareHistoryRead(command.type, () =>
+          hasSessionTranscriptMessageInDatabase(database, sessionId),
+        );
+        return;
+      case "session.history.visitor-source":
+        prepared = prepareHistoryRead(command.type, () =>
+          runWithSessionTranscriptReadFence(admission, () => {
+            const snapshot = readCurrentProjectionSnapshot(
+              database,
+              resolvedScope,
+              (projection) => {
+                const { total } = resolveVisibleMessagePositions(projection);
+                const start = resolveIntegerOption(command.input.offset, 0, { min: 0, max: total });
+                let end = start;
+                let bytes = 0;
+                for (const row of iterateVisibleMessageMetadata(
+                  projection,
+                  start,
+                  Math.min(total, start + SOURCE_PAGE_MAX_MESSAGES),
+                )) {
+                  if (row.serialized_bytes > SOURCE_PAGE_MAX_BYTES) {
+                    throw new Error(
+                      `Transcript source message exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte page limit`,
+                    );
+                  }
+                  if (bytes + row.serialized_bytes > SOURCE_PAGE_MAX_BYTES) {
+                    break;
+                  }
+                  bytes += row.serialized_bytes;
+                  end++;
+                }
+                if (end === start && start < total) {
+                  throw new Error("Transcript visitor page is incomplete");
+                }
+                const events = readVisibleMessageRange(projection, start, end);
+                return {
+                  ...(end < total ? { nextOffset: end } : {}),
+                  messages: events.flatMap(({ event, seq }) => {
+                    const message = asOptionalRecord(event)?.message;
+                    return message === undefined ? [] : [{ message, seq }];
+                  }),
+                };
+              },
+            );
+            if (snapshot.kind === "unavailable") {
+              throw new SessionTranscriptProjectionUnavailableError(sessionId);
+            }
+            return snapshot.value;
+          }),
+        );
+        return;
       case "session.history.memory-entry": {
         const { projectSessionEntryRecord } =
           await import("../../../packages/memory-host-sdk/src/host/session-entry-projection.js");
         prepared = prepareHistoryRead(command.type, () =>
           runWithSessionTranscriptReadFence(admission, () => {
             const snapshot = readTranscriptExportSnapshotReadOnlySync(target, {
-              projectEvent: projectSessionEntryRecord,
+              projectEvent: command.input.includeMessages ? undefined : projectSessionEntryRecord,
             });
             if (!snapshot) {
               throw new Error("Incognito actor transcript snapshot is unavailable");
             }
             return snapshot;
           }),
+        );
+        return;
+      }
+      case "session.history.memory-corpus": {
+        const { readSessionTranscriptCorpusInventory } =
+          await import("../../../packages/memory-host-sdk/src/host/session-transcript-corpus.js");
+        const scope = {
+          ...command.input.scope,
+          env,
+          normalizedAgentId: database.agentId,
+          storePath: database.path,
+          isSharedFixedStore: false,
+          artifactDirs: [],
+        };
+        const selected = new Set(command.input.sessionKeys);
+        prepared = prepareHistoryRead(command.type, () =>
+          readSessionTranscriptCorpusInventory(
+            scope,
+            command.input.options,
+            [],
+            database.path,
+          ).filter((entry) => entry.sessionKey !== undefined && selected.has(entry.sessionKey)),
         );
         return;
       }

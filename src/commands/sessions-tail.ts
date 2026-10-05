@@ -49,13 +49,6 @@ const SESSION_KEY_PAD = 30;
 const EVENT_TYPE_PAD = 16;
 const FOLLOW_INTERVAL_MS = 1_000;
 
-function parseTailCount(value: string | number | undefined): number | null {
-  if (value === undefined) {
-    return DEFAULT_TAIL_COUNT;
-  }
-  return parseStrictNonNegativeInteger(value) ?? null;
-}
-
 function formatTimestamp(ts: string): string {
   const date = new Date(ts);
   if (Number.isNaN(date.getTime())) {
@@ -167,16 +160,6 @@ function compareSelectionsByUpdatedAt(a: TailSelection, b: TailSelection): numbe
   return (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0);
 }
 
-function buildTailSelection(params: {
-  agentId: string;
-  entry: SessionEntry;
-  key: string;
-  storePath: string;
-}): TailSelection | null {
-  const sessionId = params.entry.sessionId?.trim();
-  return sessionId ? { ...params, sessionId } : null;
-}
-
 function selectSessionsToTail(selections: TailSelection[], sessionKey?: string): TailSelection[] {
   if (sessionKey) {
     return selections.filter((selection) => selection.key === sessionKey);
@@ -260,8 +243,9 @@ export async function sessionsTailCommand(
   opts: SessionsTailOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const tailCount = parseTailCount(opts.tail);
-  if (tailCount === null) {
+  const tailCount =
+    opts.tail === undefined ? DEFAULT_TAIL_COUNT : parseStrictNonNegativeInteger(opts.tail);
+  if (tailCount == null) {
     runtime.error("--tail must be a non-negative integer, for example --tail 25.");
     runtime.exit(1);
     return;
@@ -290,14 +274,9 @@ export async function sessionsTailCommand(
       storePath: target.storePath,
       projection: "list",
     })) {
-      const selection = buildTailSelection({
-        agentId: target.agentId,
-        entry,
-        key: sessionKey,
-        storePath: target.storePath,
-      });
-      if (selection) {
-        selections.push(selection);
+      const sessionId = entry.sessionId?.trim();
+      if (sessionId) {
+        selections.push({ ...target, entry, key: sessionKey, sessionId });
       }
     }
   }

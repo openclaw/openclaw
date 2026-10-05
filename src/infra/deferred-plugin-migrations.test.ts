@@ -24,6 +24,7 @@ import {
   assertDeferredPluginMigrationsCurrent,
   readDeferredPluginMigrationCompletions,
   readDeferredPluginMigrations,
+  readDeferredPluginMigrationsAsync,
   recordDeferredPluginMigrations,
   formatDeferredPluginMigration,
   withDeferredPluginMigrationsCurrent,
@@ -91,6 +92,31 @@ describe("deferred configured-plugin migrations", () => {
       { env },
     );
   }
+
+  it.each([undefined, false])(
+    "keeps async inspection on its captured snapshot (preserve artifacts: %s)",
+    async (artifactPreservingReadOnly) => {
+      const { env } = fixture();
+      writePending(env, pending);
+      await closeOpenClawStateDatabaseAsync();
+      using writer = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
+      const changed = { ...pending, reason: "Committed after the inspection snapshot" };
+      await withOpenClawStateDatabaseReadSnapshot(
+        async () => {
+          writer
+            .prepare("UPDATE migration_runs SET report_json = ? WHERE id = ?")
+            .run(JSON.stringify(changed), `deferred-plugin-migration:${pending.pluginId}`);
+          expect(
+            await readDeferredPluginMigrationsAsync({ env, artifactPreservingReadOnly }),
+          ).toEqual([pending]);
+        },
+        { env },
+      );
+      expect(await readDeferredPluginMigrationsAsync({ env, artifactPreservingReadOnly })).toEqual([
+        changed,
+      ]);
+    },
+  );
 
   it.each(["transaction", "commit"] as const)(
     "rolls back deferred obligations when the requester is revoked at worker %s admission",

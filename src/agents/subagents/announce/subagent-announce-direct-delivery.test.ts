@@ -1,4 +1,5 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { createSessionWorkStartChangedError } from "../../../config/sessions/lifecycle.js";
 import * as sessionEntryWorker from "../../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -40,7 +41,7 @@ describe("late exact requester recovery", () => {
       lifecycleRevision: "requester-revision",
       updatedAt: 1,
     };
-    const state = { entry: initialEntry, allowed: true };
+    const state = { entry: initialEntry, allowed: true, active: false };
     const storePath = "/synthetic/requester-recovery/sessions.json";
     const cfg: OpenClawConfig = { session: { store: storePath } };
     let executionStarted: (() => unknown) | undefined;
@@ -101,9 +102,12 @@ describe("late exact requester recovery", () => {
         canonicalKey: key,
         agentId: "main",
         storePath,
-        entry: initialEntry,
+        entry: state.entry,
       }),
-      getRequesterSessionActivity: () => ({ sessionId: initialEntry.sessionId, isActive: false }),
+      getRequesterSessionActivity: () => ({
+        sessionId: initialEntry.sessionId,
+        isActive: state.active,
+      }),
       dispatchGatewayMethodInProcess: dispatch,
       sendMessage: send,
       queueEmbeddedAgentMessageWithOutcome: steer,
@@ -146,6 +150,46 @@ describe("late exact requester recovery", () => {
       steer,
     };
   }
+
+  it.each(["subagent_settle", "subagent_announce"])(
+    "joins an interrupted %s continuation and consumes its final receipt without replay",
+    async (sourceTool) => {
+      const fixture = setup();
+      fixture.params.sourceTool = sourceTool;
+      fixture.params.expectsCompletionMessage = sourceTool === "subagent_announce";
+      fixture.state.entry = {
+        ...fixture.state.entry,
+        restartRecoveryDeliverySourceRunId: sourceRunId,
+        restartRecoveryDeliveryRunId: "recovery-successor",
+      };
+      fixture.dispatchDone.resolve({
+        status: "ok",
+        result: {
+          payloads: [{ text: "Unexpected duplicate" }],
+          deliveryStatus: sentDeliveryStatus,
+        },
+      });
+      await expect(fixture.startDelivery()).resolves.toMatchObject({
+        delivered: false,
+        reason: "requester_turn_pending",
+      });
+      expect(fixture.dispatch).not.toHaveBeenCalled();
+      fixture.state.active = true;
+      fixture.state.entry = {
+        ...fixture.state.entry,
+        ...finalReceipt,
+        restartRecoveryDeliveryRunId: undefined,
+        restartRecoveryDeliverySourceRunId: undefined,
+      };
+      await expect(deliverSubagentAnnouncement(fixture.params)).resolves.toMatchObject({
+        delivered: true,
+        requesterVisibleFinalDelivered: true,
+      });
+      expect(fixture.dispatch).not.toHaveBeenCalled();
+      expect(fixture.send).not.toHaveBeenCalled();
+      expect(fixture.steer).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     "completed",
@@ -243,12 +287,20 @@ describe("late exact requester recovery", () => {
 
   it.each<{
     name: string;
+    sourceTool?: string;
     response?: unknown;
     error?: Error;
     patch: Partial<SessionEntry>;
     expected: { delivered: boolean; requesterVisibleFinalDelivered?: boolean; reason?: string };
     disposition?: string;
   }>([
+    {
+      name: "announcement completed while waiting for recovery",
+      sourceTool: "subagent_announce",
+      error: createSessionWorkStartChangedError(sessionKey),
+      patch: finalReceipt,
+      expected: { delivered: true, requesterVisibleFinalDelivered: true },
+    },
     ...[
       { name: "empty final", response: { status: "ok", result: { payloads: [] } } },
       { name: "accepted turn", response: { status: "accepted" } },
@@ -313,6 +365,10 @@ describe("late exact requester recovery", () => {
     ),
   ])("reconciles the exact late receipt for $name without replay", async (outcome) => {
     const fixture = setup();
+    if (outcome.sourceTool) {
+      fixture.params.sourceTool = outcome.sourceTool;
+      fixture.params.expectsCompletionMessage = true;
+    }
     const delivery = fixture.startDelivery();
     await fixture.dispatchEntered.promise;
     fixture.state.entry = { ...fixture.state.entry, ...outcome.patch };
@@ -409,7 +465,7 @@ describe("late exact requester recovery", () => {
     expect(fixture.send).not.toHaveBeenCalled();
   });
 
-  it.each(["private", "incognito", "ordinary announcement"] as const)(
+  it.each(["private", "incognito"] as const)(
     "does not add recovery reads to %s delivery",
     async (scope) => {
       const fixture = setup();
@@ -417,11 +473,9 @@ describe("late exact requester recovery", () => {
         fixture.params.completionTarget = "parent";
         fixture.params.completionRequesterSessionId = "requester-session";
         fixture.params.completionRequesterLifecycleRevision = "requester-revision";
-      } else if (scope === "incognito") {
+      } else {
         fixture.params.requesterSessionKey = "agent:main:dashboard:incognito-recovery";
         fixture.params.targetRequesterSessionKey = fixture.params.requesterSessionKey;
-      } else {
-        fixture.params.sourceTool = "subagent_announce";
       }
       const delivery = fixture.startDelivery();
       await fixture.dispatchEntered.promise;

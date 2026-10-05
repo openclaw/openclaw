@@ -68,6 +68,7 @@ describe("dashboards route", () => {
         limit: SIDEBAR_SESSION_ROSTER_LIMIT,
         rowMode: "compact",
         source: "dashboard",
+        excludeDock: true,
         hasBoard: true,
         archivedFilter: "all",
       });
@@ -75,6 +76,7 @@ describe("dashboards route", () => {
         limit: SIDEBAR_SESSION_ROSTER_LIMIT,
         rowMode: "compact",
         source: "dashboard",
+        excludeDock: true,
         hasBoard: true,
         archivedFilter: "all",
       });

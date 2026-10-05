@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { pathExists, writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -384,9 +385,7 @@ export async function runMantisVisualDriver(
     );
     const settleMs = opts.settleMs ?? DEFAULT_SETTLE_MS;
     if (settleMs > 0) {
-      await new Promise((resolve) => {
-        setTimeout(resolve, settleMs);
-      });
+      await sleep(settleMs);
     }
     await runCommandWithExternalOutput({
       command: crabboxBin,

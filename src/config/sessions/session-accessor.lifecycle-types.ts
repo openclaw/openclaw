@@ -159,8 +159,6 @@ export type SessionEntryLifecycleRemoval = SessionEntryLifecycleRemovalBase &
       }
   );
 
-export { SessionEntryLifecycleUpsertConflictError } from "./session-mutation-conflict-error.js";
-
 export type SessionEntryLifecycleUpsert = {
   sessionKey: string;
   /** Apply this upsert only when the named removal was projected in the same mutation. */

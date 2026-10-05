@@ -59,6 +59,8 @@ function createRuntimeGateway(): PluginRuntime["gateway"] {
       const runtime = await loadGatewayPluginRuntime();
       return runtime.withTrustedPluginUserProfileIdentity(captured, run);
     },
+    resolveGitHubAccount: async ({ login, signal }) =>
+      (await loadGatewayPluginRuntime()).resolveTrustedPluginGitHubAccount({ login, signal }),
   };
 }
 
@@ -212,6 +214,7 @@ export const createPluginRuntime: PluginRuntimeFactory = (
   let modelConfig = _options.modelConfig;
   const runtime: PluginRuntime = {
     version: VERSION,
+    capabilities: base.capabilities,
     decisions: {
       evaluate: async (...args) =>
         (await import("../../decisions/runtime.js")).evaluateDecision(...args),

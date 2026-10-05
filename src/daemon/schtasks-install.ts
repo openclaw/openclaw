@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { DOMParser } from "linkedom";
 import { hasErrnoCode } from "../infra/errno.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "../infra/windows-powershell-spawn.js";
@@ -153,7 +154,10 @@ async function writeScheduledTaskScript(
 }> {
   const taskEnv = resolveScheduledTaskRenderEnv(env, environment);
   const scriptPath = resolveTaskScriptPath(taskEnv);
-  const taskLaunchPath = resolveTaskLauncherScriptPath(taskEnv, scriptPath);
+  const taskLaunchPath =
+    taskEnv.OPENCLAW_SERVICE_KIND !== "node" && resolveTaskUser(taskEnv)
+      ? scriptPath
+      : resolveTaskLauncherScriptPath(taskEnv, scriptPath);
   const taskDescription = resolveGatewayServiceDescription({
     env: taskEnv,
     description,
@@ -209,11 +213,38 @@ async function activateScheduledTask(
 ): Promise<ScheduledTaskActivation | "startup-fallback"> {
   const taskDescription = params.description ?? "OpenClaw Gateway";
   const taskName = resolveTaskName(params.env);
+  const original = params.registration?.xml;
+  // Password credentials are absent from exported XML. Re-registering would discard
+  // an operator's working unattended account; refresh its launcher files in place.
+  if (
+    original &&
+    new DOMParser()
+      .parseFromString(original, "text/xml")
+      .querySelector("Principals > Principal > LogonType")?.textContent === "Password"
+  ) {
+    assertGatewayServiceUpdateCurrent();
+    params.onActivation?.();
+    const activation = await runScheduledTaskOrThrow({
+      taskName,
+      env: params.env,
+      scriptPath: params.scriptPath,
+      allowFallback: false,
+    });
+    writeFormattedLines(params.stdout, [
+      { label: "Updated task script", value: params.scriptPath },
+      {
+        label: "Startup mode",
+        value: "Preserved Password task (operator-managed account and triggers)",
+      },
+    ]);
+    return activation;
+  }
   const quotedLaunchPath = quoteSchtasksArg(params.taskLaunchPath);
   let expectedXml = buildScheduledTaskXml({
     taskDescription,
     taskUser: resolveTaskUser(params.env),
     launchPath: params.taskLaunchPath,
+    interactive: params.env.OPENCLAW_SERVICE_KIND === "node",
   });
   if (params.definitionTransaction?.preservePolicy?.length) {
     expectedXml = preserveServicePolicyXml(
@@ -241,8 +272,7 @@ async function activateScheduledTask(
   let create: Awaited<ReturnType<typeof execSchtasks>>;
   try {
     const xmlArgs = ["/Create", "/F", "/TN", taskName, "/XML", xmlPath];
-    // The XML owns UserId and InteractiveToken. `/NP` overrides that principal
-    // with a non-interactive S4U logon, so a successful task never starts here.
+    // The XML owns the account and logon type; CLI credential flags must not override it.
     await params.definitionTransaction?.taskPrepared(expectedXml);
     params.definitionTransaction?.assertCurrent();
     assertGatewayServiceUpdateCurrent();
@@ -301,6 +331,7 @@ async function activateScheduledTask(
       await launchFallbackTaskScript(params.env);
       writeFormattedLines(params.stdout, [
         { label: "Installed Windows login item", value: startupEntryPath },
+        { label: "Startup mode", value: "Per-user desktop (requires interactive logon)" },
         { label: "Task script", value: params.scriptPath },
       ]);
       return "startup-fallback";
@@ -322,6 +353,15 @@ async function activateScheduledTask(
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
   writeFormattedLines(params.stdout, [
     { label: updating ? "Updated Scheduled Task" : "Installed Scheduled Task", value: taskName },
+    {
+      label: "Startup mode",
+      value:
+        create.code !== 0
+          ? "Existing task policy retained (inspect Task Scheduler)"
+          : params.env.OPENCLAW_SERVICE_KIND !== "node" && resolveTaskUser(params.env)
+            ? "Unattended (S4U; boot and logon; no stored password)"
+            : "Per-user desktop (requires interactive logon)",
+    },
     { label: "Task script", value: params.scriptPath },
   ]);
   return activation;

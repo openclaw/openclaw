@@ -626,16 +626,6 @@ export async function settleStartupSession(
   );
 }
 
-/** Process-held incognito databases retain their native transaction owner. */
-async function appendSessionTranscriptReportNative(
-  scope: SessionTranscriptWriteScope,
-  report: TranscriptReport,
-): Promise<Result<void, TranscriptAppendRefusal>> {
-  return withNativeCurrentTranscript(scope, (database, resolved) =>
-    appendSessionTranscriptReportInTransaction(database, resolved, report),
-  );
-}
-
 /** Selects and appends one report against the same authoritative branch revision. */
 export async function appendSessionTranscriptReport(
   scope: SessionTranscriptWriteScope,
@@ -649,7 +639,9 @@ export async function appendSessionTranscriptReport(
     if (options?.sessionEntryCurrent) {
       throw new Error("A file session source cannot authorize a process-held transcript report");
     }
-    return appendSessionTranscriptReportNative(scope, report);
+    return withNativeCurrentTranscript(scope, (database, resolved) =>
+      appendSessionTranscriptReportInTransaction(database, resolved, report),
+    );
   }
   if (report.kind === "assistant") {
     const preparedMessage = prepareTranscriptMessageAppend({

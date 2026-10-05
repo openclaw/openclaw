@@ -40,6 +40,7 @@ import { authorizeOperatorScopesForRequiredScope } from "./method-scopes.js";
 import { normalizeOperatorScopeList } from "./operator-scopes.js";
 import type { GatewayNodeInvokeStream } from "./server-methods/shared-types.js";
 import type { GatewayContextResolver, GatewayRequestHandler } from "./server-methods/types.js";
+import { resolveTrustedPluginGitHubAccount } from "./server-plugin-github-account.js";
 import {
   dispatchGatewayMethodInProcess,
   dispatchGatewayMethodInProcessRaw,
@@ -67,7 +68,11 @@ export {
 export type { GatewayMethodDispatchResponse } from "./server-plugin-in-process-dispatch.js";
 export { runWithOperatorToolGatewayCleanupContext } from "./server-plugin-in-process-dispatch.js";
 export { hasInProcessGatewayContext } from "./server-plugins-node-runtime.js";
-export { readTrustedPluginSessionFacts, withTrustedPluginUserProfileIdentity };
+export {
+  readTrustedPluginSessionFacts,
+  withTrustedPluginUserProfileIdentity,
+  resolveTrustedPluginGitHubAccount,
+};
 export { createGatewaySubagentRuntime } from "./server-plugin-subagent-runtime.js";
 
 export async function dispatchTrustedPluginGatewayMethod<T>(
@@ -268,6 +273,14 @@ function createGatewayPluginRuntimeBindings(
         subscribeSessionChanges: subscribeRuntimeSessionChanges,
         withUserProfileIdentity: (params, run) =>
           withTrustedPluginUserProfileIdentity(params, run, resolveBoundGatewayContext),
+        resolveGitHubAccount: (params) =>
+          resolveTrustedPluginGitHubAccount(
+            {
+              ...params,
+              signal: params.signal ? AbortSignal.any([params.signal, signal]) : signal,
+            },
+            resolveBoundGatewayContext,
+          ),
       },
       hooks: {
         dispatchHookAgentTurn: async (params) => {

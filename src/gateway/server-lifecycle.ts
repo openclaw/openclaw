@@ -520,6 +520,7 @@ export async function prepareGatewayLifecycle(params: {
       {
         resolveGatewayContext: runtime.resolvePluginGatewayContext,
         preparePluginRegistryClose: () => pluginRuntime.prepareClose(),
+        agentUnsub: runtimeState.agentUnsub,
         chatRunState,
         chatAbortControllers,
         chatQueuedTurns,

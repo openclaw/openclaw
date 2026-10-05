@@ -4,10 +4,7 @@ import { persistSubagentRunChangesInWorker } from "../agents/subagents/registry/
 import { replaceWorkspaceAttestationInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { executeWorkspaceStateCommand } from "../agents/workspace-state-store.worker.js";
 import { readClawInstallSchemaVersionRows } from "../claws/provenance-runtime-read.kernel.js";
-import {
-  patchConfigHealthEntryInDatabase,
-  readConfigHealthSnapshotInDatabase,
-} from "../config/io.health-state.kernel.js";
+import { patchConfigHealthEntryInDatabase } from "../config/io.health-state.kernel.js";
 import {
   executeCronStateCommand,
   isCronStateWorkerCommand,
@@ -126,17 +123,6 @@ export function executeSharedStateCommand(
       database: open(),
       ...stateOptions(),
     });
-  }
-  if (command.type === "config.health.read") {
-    const read = command.input.artifactPreserving
-      ? withExistingOpenClawStateDatabaseArtifactPreservingReadOnly
-      : withExistingOpenClawStateDatabaseReadOnly;
-    return (
-      read(({ db }) => readConfigHealthSnapshotInDatabase(db), stateOptions()) ?? {
-        state: {},
-        basis: {},
-      }
-    );
   }
   if (command.type === "deviceAuth.read" || command.type === "deviceAuth.readOrigin") {
     const read = (db: OpenClawStateDatabase["db"]) =>

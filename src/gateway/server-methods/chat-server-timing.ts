@@ -66,10 +66,7 @@ export function emitOperatorChatSendServerTiming(params: {
   dispatchStartedAtMs?: number;
   extra?: Record<string, string | number>;
 }) {
-  const connId =
-    typeof params.client?.connId === "string" && params.client.connId.trim()
-      ? params.client.connId.trim()
-      : undefined;
+  const connId = params.client?.connId?.trim();
   if (!connId || !isOperatorUiClient(params.client?.connect?.client)) {
     return;
   }

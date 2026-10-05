@@ -197,29 +197,14 @@ function mergeCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>
   right: PluginRegistry[K],
 ): PluginRegistry[K] {
   const merged = new Map<string, PluginRegistry[K][number]>();
-  const unnamed: Array<PluginRegistry[K][number]> = [];
   for (const entries of [left, right]) {
     for (const entry of entries) {
-      const provider = entry.provider as { id?: string };
-      if (!provider.id) {
-        unnamed.push(entry);
-        continue;
-      }
-      if (!merged.has(provider.id)) {
-        merged.set(provider.id, entry);
+      if (!merged.has(entry.provider.id)) {
+        merged.set(entry.provider.id, entry);
       }
     }
   }
-  return [...merged.values(), ...unnamed] as PluginRegistry[K];
-}
-
-function addObjectKeys(target: Set<string>, value: unknown): void {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return;
-  }
-  for (const key of Object.keys(value)) {
-    addStringValue(target, key);
-  }
+  return [...merged.values()] as PluginRegistry[K];
 }
 
 function addStringValue(target: Set<string>, value: unknown): void {
@@ -229,57 +214,42 @@ function addStringValue(target: Set<string>, value: unknown): void {
   }
 }
 
-function addModelConfigProviderIds(target: Set<string>, value: unknown): void {
-  for (const ref of resolveVoiceModelRefs(value)) {
-    addStringValue(target, ref.provider);
-  }
-}
-
-function collectRequestedSpeechProviderIds(
-  cfg: OpenClawConfig | undefined,
-  options: { includeVoiceModel: boolean },
-): Set<string> {
-  const requested = new Set<string>();
-  addStringValue(requested, cfg?.tts?.provider);
-  addObjectKeys(requested, cfg?.tts?.providers);
-  addStringValue(requested, cfg && talk.resolveConfiguredTalkSpeechProviderId(cfg));
-  if (options.includeVoiceModel) {
-    addModelConfigProviderIds(requested, cfg?.agents?.defaults?.voiceModel);
-  }
-  addObjectKeys(requested, cfg?.models?.providers);
-  return requested;
-}
-
-function collectRequestedVoiceModelProviderIds(cfg: OpenClawConfig | undefined): Set<string> {
-  const requested = new Set<string>();
-  addModelConfigProviderIds(requested, cfg?.agents?.defaults?.voiceModel);
-  return requested;
-}
-
 function collectRequestedCapabilityProviderIds(params: {
   key: CapabilityProviderRegistryKey;
   cfg?: OpenClawConfig;
   includeVoiceModel?: boolean;
 }): Set<string> | undefined {
-  switch (params.key) {
-    case "speechProviders":
-      return collectRequestedSpeechProviderIds(params.cfg, {
-        includeVoiceModel: params.includeVoiceModel ?? false,
-      });
-    case "realtimeTranscriptionProviders":
-      return params.includeVoiceModel
-        ? collectRequestedVoiceModelProviderIds(params.cfg)
-        : undefined;
-    case "realtimeVoiceProviders": {
-      const requested = params.includeVoiceModel
-        ? collectRequestedVoiceModelProviderIds(params.cfg)
-        : new Set<string>();
-      addStringValue(requested, talk.resolveConfiguredTalkRealtimeProviderId(params.cfg ?? {}));
-      return requested.size > 0 ? requested : undefined;
-    }
-    default:
-      return undefined;
+  if (
+    !shouldScopeCapabilityLoadToRequestedProviders(params.key) ||
+    (params.key === "realtimeTranscriptionProviders" && !params.includeVoiceModel)
+  ) {
+    return undefined;
   }
+  const requested = new Set<string>();
+  const cfg = params.cfg;
+  if (params.key === "speechProviders") {
+    for (const provider of [
+      cfg?.tts?.provider,
+      ...Object.keys(cfg?.tts?.providers ?? {}),
+      cfg && talk.resolveConfiguredTalkSpeechProviderId(cfg),
+    ]) {
+      addStringValue(requested, provider);
+    }
+  }
+  if (params.includeVoiceModel) {
+    for (const ref of resolveVoiceModelRefs(cfg?.agents?.defaults?.voiceModel)) {
+      addStringValue(requested, ref.provider);
+    }
+  }
+  if (params.key === "speechProviders") {
+    for (const provider of Object.keys(cfg?.models?.providers ?? {})) {
+      addStringValue(requested, provider);
+    }
+  } else if (params.key === "realtimeVoiceProviders") {
+    addStringValue(requested, talk.resolveConfiguredTalkRealtimeProviderId(cfg ?? {}));
+    return requested.size > 0 ? requested : undefined;
+  }
+  return requested;
 }
 
 function shouldScopeCapabilityLoadToRequestedProviders(
@@ -292,10 +262,8 @@ function shouldScopeCapabilityLoadToRequestedProviders(
   );
 }
 
-function* capabilityProviderIds(provider: { id?: unknown; aliases?: unknown }) {
-  if (typeof provider.id === "string") {
-    yield provider.id.toLowerCase();
-  }
+function* capabilityProviderIds(provider: { id: string; aliases?: unknown }) {
+  yield provider.id.toLowerCase();
   if (Array.isArray(provider.aliases)) {
     for (const alias of provider.aliases) {
       if (typeof alias === "string") {

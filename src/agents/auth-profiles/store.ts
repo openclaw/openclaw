@@ -198,33 +198,17 @@ function resolveRuntimeAuthProfileLoadOptions(
   return { ...options, inheritedAuthDir: mode.agentDir };
 }
 
-let runtimeSnapshotPublisherForTest: ((publish: () => void) => void) | undefined;
-
 type RuntimeSnapshotPublication = {
   agentDir?: string;
   databasePath: string;
   publish: () => boolean;
 };
 
-function publishRuntimeSnapshotsAfterCommit(
-  publication: RuntimeSnapshotPublication | undefined,
-): boolean {
-  if (!publication) {
-    return true;
-  }
+function publishRuntimeSnapshotsAfterCommit(publication: RuntimeSnapshotPublication): boolean {
   // A committed write can no longer roll back, so publication failure must
   // evict only the exact derived owner that could now be stale.
   try {
-    let converged = false;
-    const publish = () => {
-      converged = publication.publish();
-    };
-    if (runtimeSnapshotPublisherForTest) {
-      runtimeSnapshotPublisherForTest(publish);
-    } else {
-      publish();
-    }
-    return converged;
+    return publication.publish();
   } catch (err) {
     clearRuntimeAuthProfileStoreSnapshotAtDatabasePath(
       publication.databasePath,
@@ -235,19 +219,6 @@ function publishRuntimeSnapshotsAfterCommit(
     });
     return false;
   }
-}
-
-const testing = {
-  resetRuntimeSnapshotPublisherForTest(): void {
-    runtimeSnapshotPublisherForTest = undefined;
-  },
-  setRuntimeSnapshotPublisherForTest(publisher: (publish: () => void) => void): void {
-    runtimeSnapshotPublisherForTest = publisher;
-  },
-};
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.authProfileStoreTestApi")] =
-    testing;
 }
 
 function resolvePersistedLoadOptions(
@@ -1560,8 +1531,7 @@ export function createAuthProfileStoreRuntime(
   }): CommittedAuthProfileStoreSave {
     const agentDir = resolveRuntimeAuthProfileAgentDir(params.agentDir);
     assertAuthProfilePersistenceOwner(params.snapshot.owner, agentDir, params.stateDir);
-    let publishRuntimeSnapshots: RuntimeSnapshotPublication | undefined;
-    const owned = runAuthProfileWriteTransaction(
+    const { owned, publication } = runAuthProfileWriteTransaction(
       agentDir,
       (database, owner) => {
         if (params.snapshot.owner.databasePath !== database.path) {
@@ -1583,14 +1553,14 @@ export function createAuthProfileStoreRuntime(
             runtimeRevision,
           }),
         );
-        publishRuntimeSnapshots = saveAuthProfileStoreInTransaction(
+        const committedPublication = saveAuthProfileStoreInTransaction(
           params.store,
           agentDir,
           params.options,
           database,
           owner,
         );
-        return {
+        const ownedSnapshot = {
           owner,
           credentialsRaw: readPersistedAuthProfileStoreRaw(agentDir, database),
           stateRaw: readPersistedAuthProfileStateRaw(agentDir, database),
@@ -1598,16 +1568,13 @@ export function createAuthProfileStoreRuntime(
           runtimeRevisionAtSaveEdge: runtimeAtSaveEdge.runtimeRevision,
           derivedRuntimeRevisionsAtSaveEdge,
         } satisfies AuthProfileStorePersistenceSnapshot;
+        return { owned: ownedSnapshot, publication: committedPublication };
       },
       { env: params.snapshot.owner.env },
     );
     return {
       owned,
       publishRuntimeSnapshots: () => {
-        if (!publishRuntimeSnapshots) {
-          return true;
-        }
-        const publication = publishRuntimeSnapshots;
         return publishRuntimeSnapshotsAfterCommit({
           ...publication,
           publish: () => {

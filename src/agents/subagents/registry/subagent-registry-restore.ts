@@ -22,6 +22,7 @@ import { bindSwarmRunReservation, enqueueSwarmRun } from "../swarm/swarm-schedul
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { callSubagentRegistryGateway } from "./subagent-registry-deps.js";
 import { updateSubagentArchiveAtMs } from "./subagent-registry-helpers.js";
+import type { SubagentLifecycleOptions } from "./subagent-registry-lifecycle-context.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import {
   getCurrentSubagentRunOwner,
@@ -59,6 +60,7 @@ export function createSubagentRegistryRestorer(config: {
   getGatewayContextResolver: () => GatewayContextResolver | undefined;
   bindGatewayOwners: () => boolean | Promise<boolean>;
   settleRequesterTurn: SubagentLifecycleController["settleRequesterTurnAfterSessionSpawns"];
+  retireSupersededRun: SubagentLifecycleOptions["retireSupersededRun"];
   ensureListener: () => void;
   startSweeper: () => void;
   scheduleSweep: () => void;
@@ -207,7 +209,7 @@ export function createSubagentRegistryRestorer(config: {
       stateContext,
       assertCurrent,
       settleRequesterTurn,
-      warn,
+      retireSupersededRun: config.retireSupersededRun,
     });
     assertCurrent();
     if (!runsResumed) {

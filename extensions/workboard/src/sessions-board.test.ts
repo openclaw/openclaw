@@ -131,12 +131,13 @@ async function createFixture(options: {
 }
 
 describe("Sessions board rules and live facts", () => {
-  it("filters automation at the roster source unless the scope opts in", async () => {
+  it("always excludes dock conversations and filters automation unless the scope opts in", async () => {
     await withService({ facts: [] }, async ({ service, request, store }) => {
       await service.read(BOARD_ID);
       expect(request.mock.calls[0]?.[1]).toMatchObject({
         excludeCron: true,
         excludeSystem: true,
+        excludeDock: true,
       });
       expect(request.mock.calls[0]?.[1]).not.toHaveProperty("excludeSubagents");
       await expect(service.move(BOARD_ID, "agent:main:cron:job:trigger", "other")).rejects.toThrow(
@@ -146,6 +147,7 @@ describe("Sessions board rules and live facts", () => {
       expect(await store.listSessionPlacements(BOARD_ID)).toEqual([]);
       await service.update(BOARD_ID, { scope: { includeAutomation: true } });
       await service.read(BOARD_ID);
+      expect(request.mock.lastCall?.[1]).toHaveProperty("excludeDock", true);
       expect(request.mock.lastCall?.[1]).not.toHaveProperty("excludeCron");
       expect(request.mock.lastCall?.[1]).not.toHaveProperty("excludeSystem");
       expect(request.mock.lastCall?.[1]).not.toHaveProperty("excludeSubagents");

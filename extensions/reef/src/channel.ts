@@ -330,7 +330,6 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
       const ownerNotice = createReefOwnerNoticeHandler({
         runtime,
         cfg: ctx.cfg,
-        accountId: "default",
         handle: ctx.account.config.handle!,
       });
       const flow: ReefMessageFlow = new ReefMessageFlow({

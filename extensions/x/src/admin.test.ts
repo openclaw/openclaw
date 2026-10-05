@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerXAllowlistMethods } from "./admin.js";
+import { openXSpend, XBudgetExceededError } from "./spend.js";
 import { createKeyedState } from "./test-support/monitor.js";
 
 const getUserByUsername = vi.hoisted(() => vi.fn());
@@ -15,6 +16,7 @@ vi.mock("./client.js", async (importOriginal) => ({
 
 type Handler = Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
 type Request = Parameters<Handler>[0];
+let gatewaySequence = 0;
 
 function gateway(beforeWrite?: () => Promise<void>, configOverride?: OpenClawConfig) {
   const handlers = new Map<string, Handler>();
@@ -42,14 +44,17 @@ function gateway(beforeWrite?: () => Promise<void>, configOverride?: OpenClawCon
       return { nextConfig: config };
     },
   );
-  registerXAllowlistMethods({
-    runtime: {
-      state: {
-        openKeyedStore: createKeyedState(undefined, beforeWrite),
-        resolveStateDir: () => "synthetic-x-admin",
-      },
+  const stateDir = `synthetic-x-admin-${gatewaySequence++}`;
+  const runtime = {
+    state: {
+      openKeyedStore: createKeyedState(undefined, beforeWrite),
+      resolveStateDir: () => stateDir,
     },
-    logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
+  };
+  const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() };
+  registerXAllowlistMethods({
+    runtime,
+    logger,
     registerGatewayMethod(method, handler, options) {
       handlers.set(method, handler);
       scopes.set(method, options?.scope);
@@ -80,7 +85,7 @@ function gateway(beforeWrite?: () => Promise<void>, configOverride?: OpenClawCon
     } as Request);
     return respond;
   }
-  return { invoke, scopes, getConfig: () => config };
+  return { invoke, scopes, runtime, logger, getConfig: () => config };
 }
 
 beforeEach(() => {
@@ -90,6 +95,61 @@ beforeEach(() => {
 });
 
 describe("X allowlist Gateway methods", () => {
+  it("includes the selected account's recorded spend and limits without an X API lookup", async () => {
+    const { invoke, runtime } = gateway(undefined, {
+      channels: {
+        x: {
+          accounts: {
+            small: {
+              userId: "101",
+              username: "small_bot",
+              costLimits: { dailyUsd: 5, monthlyUsd: 25, cycleStartDay: 20 },
+            },
+            other: { userId: "102", username: "other_bot" },
+          },
+        },
+      },
+    });
+    await openXSpend(runtime, "small", () => ({
+      dailyUsd: 5,
+      monthlyUsd: 25,
+      cycleStartDay: 20,
+    })).charge(250_000);
+    expect(await invoke("x.allowlist.list", { accountId: "small" })).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        accountId: "small",
+        spend: {
+          dayUsd: 0.25,
+          cycleUsd: 0.25,
+          dailyLimitUsd: 5,
+          monthlyLimitUsd: 25,
+          cycleStart: expect.stringMatching(/^\d{4}-\d{2}-20$/),
+        },
+      }),
+    );
+    expect(await invoke("x.allowlist.list", { accountId: "other" })).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ spend: expect.objectContaining({ dayUsd: 0, cycleUsd: 0 }) }),
+    );
+    expect(getUserByUsername).not.toHaveBeenCalled();
+  });
+
+  it("reports budget refusals without duplicating the ledger's warning", async () => {
+    const { invoke, logger } = gateway();
+    const refusal = new XBudgetExceededError("X API daily budget reached; resumes tomorrow", 1);
+    getUserByUsername.mockRejectedValue(refusal);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect(await invoke("x.allowlist.add", { username: "maintainer" })).toHaveBeenCalledWith(
+        false,
+        undefined,
+        { code: "UNAVAILABLE", message: refusal.message },
+      );
+    }
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
   it.each(["implicit default", "explicit default", "named account"])(
     "persists guest mode for the %s while preserving other account settings",
     async (selection) => {
@@ -100,12 +160,14 @@ describe("X allowlist Gateway methods", () => {
             userId: "100",
             username: "example_bot",
             guests: { enabled: false, maxMentionsPerAuthorPerDay: 7 },
+            costLimits: { dailyUsd: 100, monthlyUsd: 1000, cycleStartDay: 20 },
             accounts: {
               ...(selection === "explicit default" ? { default: {} } : {}),
               second: {
                 userId: "101",
                 username: "second_bot",
                 guests: { threadContextMaxPosts: 4 },
+                costLimits: { dailyUsd: 5 },
               },
             },
           },
@@ -116,6 +178,11 @@ describe("X allowlist Gateway methods", () => {
         true,
         expect.objectContaining({
           accountId,
+          spend: expect.objectContaining({
+            dailyLimitUsd: selection === "named account" ? 5 : 100,
+            monthlyLimitUsd: 1000,
+            cycleStart: expect.stringMatching(/^\d{4}-\d{2}-20$/),
+          }),
           guests: expect.objectContaining({
             enabled: true,
             maxMentionsPerAuthorPerDay: 7,
@@ -129,6 +196,8 @@ describe("X allowlist Gateway methods", () => {
       expect(selected.guests.enabled).toBe(true);
       expect(channel.guests.maxMentionsPerAuthorPerDay).toBe(7);
       expect(channel.accounts.second.guests.threadContextMaxPosts).toBe(4);
+      expect(channel.costLimits).toEqual({ dailyUsd: 100, monthlyUsd: 1000, cycleStartDay: 20 });
+      expect(channel.accounts.second.costLimits).toEqual({ dailyUsd: 5 });
       expect(channel.guests.enabled).toBe(selection === "implicit default");
       expect(mutateConfigFile).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -297,6 +366,13 @@ describe("X allowlist Gateway methods", () => {
     expect(listed).toHaveBeenCalledWith(true, {
       accountId: "maintainers",
       guests: expect.objectContaining({ enabled: false }),
+      spend: {
+        dayUsd: 0,
+        cycleUsd: 0,
+        dailyLimitUsd: 100,
+        monthlyLimitUsd: 1000,
+        cycleStart: expect.any(String),
+      },
       accounts: [{ accountId: "maintainers", username: "maintainers_bot" }],
       entries: [{ userId: "40", configured: true, editable: false }],
     });
@@ -312,6 +388,13 @@ describe("X allowlist Gateway methods", () => {
     expect(added).toHaveBeenCalledWith(true, {
       accountId: "default",
       guests: expect.objectContaining({ enabled: false }),
+      spend: {
+        dayUsd: 0,
+        cycleUsd: 0,
+        dailyLimitUsd: 100,
+        monthlyLimitUsd: 1000,
+        cycleStart: expect.any(String),
+      },
       accounts: [
         { accountId: "default", username: "roboclawbot" },
         { accountId: "second", username: "anotherbot" },

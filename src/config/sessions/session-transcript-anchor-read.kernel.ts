@@ -9,13 +9,18 @@ import { loadTranscriptEventRowsAfterSeqInDatabase } from "./session-accessor.sq
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readTranscriptHeaderFromDatabase } from "./session-accessor.sqlite-transcript-metadata-read.js";
+import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
+import type { SessionTranscriptWatermark } from "./session-history-read.types.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
+import type { InternalSessionEntry } from "./types.js";
 
 export type SessionTranscriptAnchorSelection = {
   entryIds: readonly string[];
   afterSeq?: number;
+  includeHeader?: boolean;
   contextValidation?: Parameters<typeof validateSessionTranscriptContextInDatabase>[2];
+  contextAuthority?: true | { permissionMode: InternalSessionEntry["permissionMode"] };
   replayValidation?: Pick<
     SessionTranscriptWriteScope,
     "expectedLifecycleRevision" | "expectedWriterRunId"
@@ -24,7 +29,19 @@ export type SessionTranscriptAnchorSelection = {
 
 export type SessionTranscriptAnchorFacts = {
   anchors: TranscriptEntryAnchor[];
+  header?: unknown;
   contextValidated?: true;
+  contextAuthority?: {
+    entry?: Pick<
+      InternalSessionEntry,
+      | "sessionId"
+      | "lifecycleRevision"
+      | "activeWriterRunId"
+      | "cliHistoryBoundary"
+      | "permissionMode"
+    >;
+    watermark: SessionTranscriptWatermark;
+  };
   replayValidated?: "current" | "initial";
   tail?: {
     lastSeq?: number;
@@ -46,6 +63,31 @@ export function readSessionTranscriptAnchorFactsInDatabase(
   return runSqliteDeferredTransactionSync(
     database.db,
     () => {
+      const contextEntry = selection.contextAuthority
+        ? readSessionEntryRow(database, resolved.sessionKey)?.entry
+        : undefined;
+      const contextAuthority = selection.contextAuthority
+        ? {
+            entry: contextEntry && {
+              sessionId: contextEntry.sessionId,
+              lifecycleRevision: contextEntry.lifecycleRevision,
+              activeWriterRunId: contextEntry.activeWriterRunId,
+              cliHistoryBoundary: contextEntry.cliHistoryBoundary,
+              permissionMode: contextEntry.permissionMode,
+            },
+            watermark: readSessionTranscriptWatermarkInDatabase(database, resolved.sessionId),
+          }
+        : undefined;
+      // Session replacement and permission refusal precede transcript-anchor refusal.
+      if (
+        selection.contextAuthority &&
+        (!contextEntry ||
+          contextEntry.sessionId !== resolved.sessionId ||
+          (selection.contextAuthority !== true &&
+            contextEntry.permissionMode !== selection.contextAuthority.permissionMode))
+      ) {
+        return { anchors: [], contextAuthority };
+      }
       let replayValidated: SessionTranscriptAnchorFacts["replayValidated"];
       const replay = selection.replayValidation;
       if (replay) {
@@ -74,9 +116,18 @@ export function readSessionTranscriptAnchorFactsInDatabase(
         validateSessionTranscriptContextInDatabase(database, resolved, context);
       }
       const validated = {
+        ...(contextAuthority ? { contextAuthority } : {}),
         ...(context ? { contextValidated: true as const } : {}),
         ...(replayValidated ? { replayValidated } : {}),
       };
+      const header: Pick<SessionTranscriptAnchorFacts, "header"> = {};
+      if (selection.includeHeader) {
+        try {
+          header.header = readTranscriptHeaderFromDatabase(database, resolved.sessionId);
+        } catch {
+          // Lifecycle header metadata is best effort; reader admission and owner checks still fail closed.
+        }
+      }
       const anchors = new Map<string, TranscriptEntryAnchor | undefined>();
       const readAnchor = (entryId: string) => {
         if (!anchors.has(entryId)) {
@@ -89,7 +140,7 @@ export function readSessionTranscriptAnchorFactsInDatabase(
       };
       const selected = selection.entryIds.flatMap((entryId) => readAnchor(entryId) ?? []);
       if (selection.afterSeq === undefined) {
-        return { anchors: selected, ...validated };
+        return { anchors: selected, ...validated, ...header };
       }
       const rows = loadTranscriptEventRowsAfterSeqInDatabase(
         database,
@@ -115,7 +166,12 @@ export function readSessionTranscriptAnchorFactsInDatabase(
           ...(anchor ? { anchor } : {}),
         });
       }
-      return { anchors: selected, ...validated, tail: { lastSeq: rows.at(-1)?.seq, entries } };
+      return {
+        anchors: selected,
+        ...validated,
+        ...header,
+        tail: { lastSeq: rows.at(-1)?.seq, entries },
+      };
     },
     { databaseLabel: database.path, operationLabel: "session transcript anchors read" },
   );

@@ -328,10 +328,15 @@ export function toTrajectoryToolDefinitions(
     .toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
-export function createTrajectoryRuntimeRecorder(
-  params: TrajectoryRuntimeInit,
-): TrajectoryRuntimeRecorder | null {
-  const env = params.env ?? process.env;
+export async function createTrajectoryRuntimeRecorder(
+  input: TrajectoryRuntimeInit,
+): Promise<TrajectoryRuntimeRecorder | null> {
+  const params = {
+    ...input,
+    env: { ...(input.env ?? process.env) },
+    sessionTarget: input.sessionTarget && { ...input.sessionTarget },
+  };
+  const env = params.env;
   // Trajectory capture is now default-on. The env var remains as an explicit
   // override so operators can still disable recording with OPENCLAW_TRAJECTORY=0.
   const enabled = parseBooleanValue(env.OPENCLAW_TRAJECTORY) ?? true;
@@ -343,7 +348,7 @@ export function createTrajectoryRuntimeRecorder(
     1,
     Math.floor(params.maxRuntimeFileBytes ?? TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES),
   );
-  const sink = createSqliteTrajectoryRuntimeSink({
+  const sink = await createSqliteTrajectoryRuntimeSink({
     env,
     maxRuntimeFileBytes,
     sessionFile: params.sessionFile,
@@ -352,6 +357,7 @@ export function createTrajectoryRuntimeRecorder(
     sessionTarget: params.sessionTarget,
     assertCommitAllowed: params.assertCommitAllowed,
   });
+  params.assertCommitAllowed?.();
   if (!sink) {
     return null;
   }

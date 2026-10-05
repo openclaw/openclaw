@@ -46,6 +46,7 @@ export function commitSessionEntryPatch(
         options: {
           consumePendingReset: input.consumePendingReset,
           providerReviewMutation: input.providerReviewMutation,
+          workerGuard: { cliHistory: input.cliHistory },
           assertCommitAllowed: () => {
             const refusedSource = readRefusedSessionSource(database, input.sources);
             if (refusedSource) {

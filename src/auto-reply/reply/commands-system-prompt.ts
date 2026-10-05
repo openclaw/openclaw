@@ -223,30 +223,29 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
     ),
     skillsSnapshot: targetSessionEntry?.skillsSnapshot,
   });
-  const tools = await (async () => {
-    try {
-      return await createOpenClawCodingToolsAsync({
-        config: params.cfg,
-        agentId: sessionAgentId,
-        workspaceDir,
-        sessionKey: toolPolicySessionKey,
-        allowGatewaySubagentBinding: true,
-        messageProvider: params.command.channel,
-        groupId: targetSessionEntry?.groupId ?? undefined,
-        groupChannel: targetSessionEntry?.groupChannel ?? undefined,
-        groupSpace: targetSessionEntry?.space ?? undefined,
-        spawnedBy: targetSessionEntry?.spawnedBy ?? undefined,
-        senderId: params.command.senderId,
-        senderName: params.ctx.SenderName,
-        senderUsername: params.ctx.SenderUsername,
-        senderE164: params.ctx.SenderE164,
-        modelProvider: params.provider,
-        modelId: params.model,
-      });
-    } catch {
-      return [];
-    }
-  })();
+  let tools: Awaited<ReturnType<typeof createOpenClawCodingToolsAsync>>;
+  try {
+    tools = await createOpenClawCodingToolsAsync({
+      config: params.cfg,
+      agentId: sessionAgentId,
+      workspaceDir,
+      sessionKey: toolPolicySessionKey,
+      allowGatewaySubagentBinding: true,
+      messageProvider: params.command.channel,
+      groupId: targetSessionEntry?.groupId ?? undefined,
+      groupChannel: targetSessionEntry?.groupChannel ?? undefined,
+      groupSpace: targetSessionEntry?.space ?? undefined,
+      spawnedBy: targetSessionEntry?.spawnedBy ?? undefined,
+      senderId: params.command.senderId,
+      senderName: params.ctx.SenderName,
+      senderUsername: params.ctx.SenderUsername,
+      senderE164: params.ctx.SenderE164,
+      modelProvider: params.provider,
+      modelId: params.model,
+    });
+  } catch {
+    tools = [];
+  }
   const toolNames = tools.map((t) => t.name);
   const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
   const accountId = params.command.accountId ?? params.ctx.AccountId;

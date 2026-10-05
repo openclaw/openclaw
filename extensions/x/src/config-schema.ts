@@ -1,6 +1,7 @@
 import { buildMultiAccountChannelSchema } from "openclaw/plugin-sdk/channel-config-schema";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
+import { X_GUEST_TOOLS } from "./guest-tools.js";
 import { MAX_X_GUEST_MENTIONS_PER_AUTHOR_PER_DAY } from "./guest-usage.js";
 
 const XAccountSchema = z.object({
@@ -16,6 +17,14 @@ const XAccountSchema = z.object({
   clientSecret: buildSecretInputSchema().optional(),
   refreshToken: buildSecretInputSchema().optional(),
   bearerToken: buildSecretInputSchema().optional(),
+  costLimits: z
+    .object({
+      dailyUsd: z.number().finite().nonnegative().optional(),
+      monthlyUsd: z.number().finite().nonnegative().optional(),
+      cycleStartDay: z.number().int().min(1).max(28).optional(),
+    })
+    .strict()
+    .optional(),
   events: z
     .object({
       mode: z.enum(["auto", "stream", "poll"]).optional(),
@@ -42,7 +51,7 @@ const XAccountSchema = z.object({
       threadContextMaxPosts: z.number().int().min(2).max(100).optional(),
       tools: z
         .object({
-          allow: z.array(z.enum(["read", "ls"])).optional(),
+          allow: z.array(z.enum(X_GUEST_TOOLS)).optional(),
           deny: z.array(z.string()).optional(),
         })
         .strict()

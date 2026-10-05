@@ -569,8 +569,9 @@ vi.mock("../terminal/ansi.js", () => ({
   sanitizeForLog: (s: string) => s,
 }));
 
+// mock-isolation: Record only attempt metadata without opening a trajectory database.
 vi.mock("../trajectory/runtime.js", () => ({
-  createTrajectoryRuntimeRecorder: (params: unknown) => {
+  createTrajectoryRuntimeRecorder: async (params: unknown) => {
     state.createTrajectoryRuntimeRecorderMock(params);
     state.trajectoryRecorderParamsMock(params);
     return {

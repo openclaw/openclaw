@@ -95,8 +95,11 @@ describe("plugin runtime command execution", () => {
     heartbeatRunnerMocks.runHeartbeatOnce.mockReset();
   });
 
-  it("exposes runtime.version from the shared VERSION constant", () => {
-    expect(createPluginRuntime().version).toBe(VERSION);
+  it("exposes the host version and immutable supported behavior capabilities", () => {
+    const runtime = createPluginRuntime();
+    expect(runtime.version).toBe(VERSION);
+    expect(runtime.capabilities).toContain("sender-restricted-hidden-helpers-v1");
+    expect(Object.isFrozen(runtime.capabilities)).toBe(true);
   });
 
   it("exposes reset freshness resolver on the host channel runtime", () => {

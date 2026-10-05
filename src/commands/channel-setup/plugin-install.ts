@@ -64,26 +64,44 @@ export async function ensureChannelSetupPluginInstalled(params: {
   };
 }
 
-function loadChannelSetupPluginRegistry(params: {
+/** Load an inactive setup-plugin registry snapshot for resolving a channel without side effects. */
+export function loadChannelSetupPluginRegistrySnapshotForChannel(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
+  channel: string;
+  pluginId?: string;
   workspaceDir?: string;
-  onlyPluginIds?: string[];
   forceSetupOnlyChannelPlugins?: boolean;
 }): PluginRegistry {
+  let scopedPluginId = params.pluginId?.trim();
+  if (!scopedPluginId) {
+    scopedPluginId = getTrustedChannelPluginCatalogEntry(params.channel, {
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+    })?.pluginId;
+    if (scopedPluginId == null) {
+      const matches = resolveDiscoverableScopedChannelPluginIds({
+        config: params.cfg,
+        channelIds: [params.channel],
+        workspaceDir: params.workspaceDir,
+        env: process.env,
+      });
+      scopedPluginId = matches.length === 1 ? matches[0] : undefined;
+    }
+  }
   const autoEnabled = applyPluginAutoEnable({ config: params.cfg, env: process.env });
   const resolvedConfig = autoEnabled.config;
   const workspaceDir =
     params.workspaceDir ??
     resolveAgentWorkspaceDir(resolvedConfig, resolveDefaultAgentId(resolvedConfig));
-  const onlyPluginIds =
-    params.onlyPluginIds ??
-    resolveConfiguredChannelPluginIds({
-      config: resolvedConfig,
-      activationSourceConfig: params.cfg,
-      workspaceDir,
-      env: process.env,
-    });
+  const onlyPluginIds = scopedPluginId
+    ? [scopedPluginId]
+    : resolveConfiguredChannelPluginIds({
+        config: resolvedConfig,
+        activationSourceConfig: params.cfg,
+        workspaceDir,
+        env: process.env,
+      });
   const log = createSubsystemLogger("plugins");
   return loadPluginRegistryHandle({
     config: resolvedConfig,
@@ -96,58 +114,5 @@ function loadChannelSetupPluginRegistry(params: {
     includeSetupOnlyChannelPlugins: true,
     forceSetupOnlyChannelPlugins: params.forceSetupOnlyChannelPlugins,
     channelPluginLoadIntent: "setup",
-  });
-}
-
-function resolveScopedChannelPluginId(params: {
-  cfg: OpenClawConfig;
-  channel: string;
-  pluginId?: string;
-  workspaceDir?: string;
-}): string | undefined {
-  const explicitPluginId = params.pluginId?.trim();
-  if (explicitPluginId) {
-    return explicitPluginId;
-  }
-  return (
-    getTrustedChannelPluginCatalogEntry(params.channel, {
-      cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
-    })?.pluginId ?? resolveUniqueManifestScopedChannelPluginId(params)
-  );
-}
-
-function resolveUniqueManifestScopedChannelPluginId(params: {
-  cfg: OpenClawConfig;
-  channel: string;
-  workspaceDir?: string;
-}): string | undefined {
-  const matches = resolveDiscoverableScopedChannelPluginIds({
-    config: params.cfg,
-    channelIds: [params.channel],
-    workspaceDir: params.workspaceDir,
-    env: process.env,
-  });
-  return matches.length === 1 ? matches[0] : undefined;
-}
-
-/** Load an inactive setup-plugin registry snapshot for resolving a channel without side effects. */
-export function loadChannelSetupPluginRegistrySnapshotForChannel(params: {
-  cfg: OpenClawConfig;
-  runtime: RuntimeEnv;
-  channel: string;
-  pluginId?: string;
-  workspaceDir?: string;
-  forceSetupOnlyChannelPlugins?: boolean;
-}): PluginRegistry {
-  const scopedPluginId = resolveScopedChannelPluginId({
-    cfg: params.cfg,
-    channel: params.channel,
-    pluginId: params.pluginId,
-    workspaceDir: params.workspaceDir,
-  });
-  return loadChannelSetupPluginRegistry({
-    ...params,
-    ...(scopedPluginId ? { onlyPluginIds: [scopedPluginId] } : {}),
   });
 }

@@ -122,6 +122,7 @@ export type SessionCreatedVia = NonNullable<SessionRow["createdVia"]>;
 // types.ts imports from here, never the reverse (madge cycle guard).
 export function buildSessionCreationStamp(params: {
   via: SessionCreatedVia;
+  surface?: "plugin-dock";
   actor?: SessionCreatedActor;
   now?: number;
   sandbox?: "required";
@@ -131,6 +132,7 @@ export function buildSessionCreationStamp(params: {
   conversationLink?: SessionConversationLink;
 }): {
   createdVia: SessionCreatedVia;
+  createdSurface?: "plugin-dock";
   createdActor?: SessionCreatedActor;
   createdAt: number;
   sandbox?: "required";
@@ -140,6 +142,7 @@ export function buildSessionCreationStamp(params: {
 } {
   return {
     createdVia: params.via,
+    ...(params.surface ? { createdSurface: params.surface } : {}),
     ...(params.actor ? { createdActor: params.actor } : {}),
     createdAt: params.now ?? Date.now(),
     ...(params.conversationLink ? { conversationLink: params.conversationLink } : {}),
@@ -165,6 +168,7 @@ export function preserveCreationStamp<
     ? {
         ...entry,
         createdVia: authoritative.createdVia,
+        createdSurface: authoritative.createdSurface,
         createdActor: authoritative.createdActor,
         createdAt: authoritative.createdAt,
         // A logical session keeps its launch conversation even when delivery moves or resets.

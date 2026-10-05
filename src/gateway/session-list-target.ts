@@ -16,6 +16,7 @@ export function readSessionListSelectionFacts(
     spawnedBy?: string;
     category?: string;
     heartbeatIsolatedBaseSessionKey?: string;
+    createdSurface?: "plugin-dock";
   } & Omit<Parameters<typeof isSystemCreatedSessionRow>[0], "key" | "classification">,
 ) {
   const parsed = parseAgentSessionKey(key);
@@ -23,6 +24,7 @@ export function readSessionListSelectionFacts(
     agentId: parsed ? normalizeAgentId(parsed.agentId) : undefined,
     isCronRun: isCronRunSessionKey(key),
     isCron: isCronSessionDisplayKey(key),
+    isDock: entry?.createdSurface === "plugin-dock",
     isSystem: isSystemCreatedSessionRow({
       key,
       createdActor: entry?.createdActor,

@@ -52,6 +52,7 @@ import type {
   SessionStoreWorkerReadScope,
   SessionEntryReadSourcePreparation,
 } from "./session-entry-read-runtime.types.js";
+import type { SessionEntryListWorkerInput } from "./session-entry-read.types.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import {
   assertSessionStoreReadCandidate,
@@ -66,11 +67,8 @@ import {
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
-import type {
-  SessionHistoryWorkerDatabase,
-  SessionEntryListWorkerInput,
-} from "./session-transcript-worker.types.js";
-import type { SessionEntry } from "./types.js";
+import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export function captureSessionEntryReadScope(input: SessionEntryReadScope) {
   const env = cloneEnvWithPlatformSemantics(input.env ?? process.env);
@@ -178,6 +176,12 @@ export function readSessionEntryReadOnlyInWorker(
     }
     return read.value;
   });
+}
+
+/** Envelope timestamps are descriptive reads; missing stores remain absent. */
+export async function readSessionUpdatedAtInWorker(input: SessionAccessScope) {
+  const entry = await readSessionEntryReadOnlyInWorker({ ...input, projection: "list" });
+  return entry?.updatedAt;
 }
 
 /** Diagnostic identities name the default agent store, not a logical store locator. */

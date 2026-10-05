@@ -241,12 +241,6 @@ export function getCompactionContent(
 const MAX_OMISSION_MESSAGES = 8;
 const OMISSION_OVERFLOW = "[More image/non-text data omitted from summary input]";
 
-type PersistedSender = {
-  id?: string;
-  name?: string;
-  username?: string;
-};
-
 // Compaction sees both model messages and harness-only AgentMessages. Sender
 // metadata is only meaningful on user turns, so this deliberately accepts the
 // minimal shared shape rather than forcing token accounting through an unsafe
@@ -255,7 +249,7 @@ type PersistedSenderCarrier = {
   role: string;
 };
 
-function readPersistedSender(message: PersistedSenderCarrier): PersistedSender | undefined {
+function readPersistedSender(message: PersistedSenderCarrier) {
   if (message.role !== "user") {
     return undefined;
   }

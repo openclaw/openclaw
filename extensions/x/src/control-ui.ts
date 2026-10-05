@@ -16,6 +16,10 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
   let disposed = false;
   let available = false;
   const canManage = () => host.connection.connected && host.connection.canAdmin;
+  const usd = new Intl.NumberFormat(host.locale, {
+    style: "currency",
+    currency: "USD",
+  });
   const isCurrent = (id: number) =>
     !disposed && !context.signal.aborted && generation === id && canManage();
 
@@ -110,7 +114,10 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                           ${
                             snapshot
                               ? snapshot.accounts.map(
-                                  (account) => html`<option value=${account.accountId}>
+                                  (account) => html`<option
+                                    value=${account.accountId}
+                                    ?selected=${account.accountId === accountId}
+                                  >
                                     ${account.username ? `@${account.username}` : account.accountId}
                                     (${account.accountId})
                                   </option>`,
@@ -194,9 +201,17 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                                 </div>
                               </dl>
                               <p class="x-replies__hint">
-                                Applies to the selected bot account. Guests get answers only: no
-                                writes, commands, work sessions, or subagents. Maintainers keep
-                                their normal access.
+                                ${
+                                  snapshot.guests.helpersAvailable
+                                    ? html`Applies to the selected bot account. Guests get
+                                      repository answers with hidden helpers of the same agent. No
+                                      writes, commands, visible work sessions, or other agents.
+                                      Maintainers keep their normal access.`
+                                    : html`Applies to the selected bot account. Guests can read the
+                                      repository without starting helpers. Upgrade OpenClaw to
+                                      enable hidden helpers safely. Maintainers keep their normal
+                                      access.`
+                                }
                                 <a
                                   href="https://docs.openclaw.ai/channels/x#guest-mode"
                                   target="_blank"
@@ -212,6 +227,32 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                                   : nothing
                               }
                             </section>
+                            <dl class="x-replies__spend" aria-label="X API spend">
+                              <div>
+                                <dt>Today (UTC)</dt>
+                                <dd>
+                                  <strong>${usd.format(snapshot.spend.dayUsd)}</strong>
+                                  <span> / ${usd.format(snapshot.spend.dailyLimitUsd)}</span>
+                                </dd>
+                              </div>
+                              <div>
+                                <dt>Billing cycle since ${snapshot.spend.cycleStart}</dt>
+                                <dd>
+                                  <strong>${usd.format(snapshot.spend.cycleUsd)}</strong>
+                                  <span> / ${usd.format(snapshot.spend.monthlyLimitUsd)}</span>
+                                </dd>
+                              </div>
+                            </dl>
+                            ${
+                              snapshot.spend.exhaustedUntil
+                                ? html`<p class="x-replies__budget" role="status">
+                                    X API budget reached. Paid requests resume at
+                                    <time datetime=${snapshot.spend.exhaustedUntil}
+                                      >${snapshot.spend.exhaustedUntil}</time
+                                    >.
+                                  </p>`
+                                : nothing
+                            }
                             <div class="x-replies__list" aria-busy=${busy}>
                               ${
                                 snapshot.entries.length

@@ -205,6 +205,24 @@ describe("authenticated GitHub identity sync", () => {
     },
   );
 
+  it("preserves the sign-in resolver's existing optional-auth recovery", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({
+        gateway: { controlUi: { github: { token: "synthetic-stale-service-token" } } },
+      });
+      const fetchMock = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValueOnce(githubResponse({}, 401))
+        .mockResolvedValueOnce(githubResponse({ id: 42, login: "Visitor" }));
+      await expect(tailscaleSync("visitor")?.()).resolves.toHaveProperty("profileId");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
+        "Bearer synthetic-stale-service-token",
+      );
+      expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).has("authorization")).toBe(false);
+    });
+  });
+
   it("rejects a malformed public GitHub account id", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       vi.spyOn(globalThis, "fetch").mockResolvedValue(githubResponse({ id: "583231" }));

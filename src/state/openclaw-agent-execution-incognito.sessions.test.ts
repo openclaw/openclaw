@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createSubagentControllerRead } from "../agents/subagents/registry/subagent-controller-read.js";
+import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import { createBoardWidgetApprovalResolver } from "../gateway/board-widget-approval.js";
 import * as execApprovalsStore from "../infra/exec-approvals-store.js";
@@ -95,9 +96,9 @@ it("reads existing actor sessions without creating missing stores or crossing na
       expected: { sessionId: "identity", lifecycleRevision: "replaced" },
     }),
   ).rejects.toThrow("generation is no longer current");
-  await expect(
-    actor.sessions.read(authority, { sessionKey: key("identity", "sibling") }),
-  ).rejects.toThrow("refusing non-canonical session key");
+  const foreignRead = actor.sessions.read(authority, { sessionKey: key("identity", "sibling") });
+  await expect(foreignRead).rejects.toBeInstanceOf(SessionCanonicalKeyMigrationRequiredError);
+  await expect(foreignRead).rejects.toThrow("refusing non-canonical session key");
   await expect(
     actor.sessions.create(authority, {
       sessionKey: "agent:main:dashboard:ordinary",

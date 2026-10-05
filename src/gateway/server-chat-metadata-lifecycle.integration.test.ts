@@ -106,7 +106,6 @@ afterEach(async ({ task }) => {
 async function createLifecycle(getConfig: () => OpenClawConfig = () => config) {
   return await createGatewayChatMetadataLifecycle({
     getConfig,
-    minimalTestGateway: false,
     log: { warn: vi.fn() } as never,
   });
 }

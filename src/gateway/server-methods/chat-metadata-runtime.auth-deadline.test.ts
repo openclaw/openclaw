@@ -73,7 +73,6 @@ describe("gateway chat metadata auth deadlines", () => {
     const onChanged = vi.fn();
     const harness = createChatMetadataHarness(config, {
       useDefaultProjection: true,
-      refreshOnRead: false,
       onChanged,
     });
     harness.setOwner(owner);

@@ -76,6 +76,10 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         Number.isSafeInteger(input.command.input.limit) &&
         (input.command.input.beforeSequence === undefined ||
           Number.isSafeInteger(input.command.input.beforeSequence))) ||
+      (input.command.type === "diagnostic.configAuditFacts" &&
+        isRecord(input.command.input) &&
+        typeof input.command.input.scope === "string" &&
+        Number.isSafeInteger(input.command.input.lastSeenAuditSequence)) ||
       (input.command.type === "secrets.execEnvironment" &&
         isRecord(input.command.input) &&
         isStringArray(input.command.input.excludeNames)) ||
@@ -90,11 +94,18 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
           typeof input.command.input.includeDeleted === "boolean") &&
         (input.command.input.redactedOnly === undefined ||
           typeof input.command.input.redactedOnly === "boolean")) ||
+      (input.command.type === "acpSessions.resume" &&
+        (input.command.sessionKey === undefined || typeof input.command.sessionKey === "string") &&
+        typeof input.command.agentId === "string" &&
+        typeof input.command.resumeSessionId === "string" &&
+        (input.command.backendId === undefined || typeof input.command.backendId === "string")) ||
       input.command.type === "acpSessions.list" ||
       input.command.type === "backup.runs" ||
       ((input.command.type === "restartSentinel.current" ||
         input.command.type === "restartSentinel.snapshot" ||
-        input.command.type === "restartSentinel.installReceipt") &&
+        input.command.type === "restartSentinel.installReceipt" ||
+        input.command.type === "plugins.deferredMigrations.read" ||
+        input.command.type === "config.health.read") &&
         "input" in input.command &&
         input.command.input === undefined) ||
       (input.command.type === "claws.packageOwnership" &&
