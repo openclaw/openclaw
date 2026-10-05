@@ -786,6 +786,7 @@ src/infra/container-environment.ts
 src/infra/crypto-digest.ts
 src/infra/dedupe.ts
 src/infra/deep-merge.ts
+src/infra/deferred-plugin-migrations.contract.ts
 src/infra/deferred-plugin-migrations.ts
 src/infra/delivery-queue-sqlite-bound.ts
 src/infra/delivery-queue-sqlite.types.ts
