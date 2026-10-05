@@ -38,6 +38,46 @@ export type RawSessionConversationRef = {
   prefix: string;
 };
 
+export type ParsedCacheStableSessionScope = {
+  baseSessionKey: string | undefined;
+  isVolatile: boolean;
+};
+
+/**
+ * Strips volatile per-run / per-chat scopes so one logical session renders one stable key.
+ * The Runtime line sits inside the prompt prefix a provider-side cache reuses, so a rotating id
+ * there defeats reuse for everything after it (tool definitions included).
+ *
+ * Handled: cron `:run:<id>`, dashboard chat ids, subagent spawn ids.
+ */
+export function parseCacheStableSessionScope(
+  sessionKey: string | undefined | null,
+): ParsedCacheStableSessionScope {
+  const raw = normalizeOptionalString(sessionKey);
+  if (!raw) {
+    return { baseSessionKey: undefined, isVolatile: false };
+  }
+  const cron = parseCronRunScopeSuffix(raw);
+  if (cron.runId !== undefined) {
+    return { baseSessionKey: cron.baseSessionKey, isVolatile: true };
+  }
+  const parsed = parseAgentSessionKey(raw);
+  const rest = parsed?.rest ?? raw;
+  const lowerRest = rest.toLowerCase();
+  if (lowerRest.startsWith("dashboard:")) {
+    const isIncognito =
+      lowerRest.startsWith("dashboard:incognito-") || lowerRest.startsWith("dashboard:incognito:");
+    const baseTail = isIncognito ? "dashboard:incognito" : "dashboard";
+    const base = parsed ? `agent:${parsed.agentId}:${baseTail}` : baseTail;
+    return { baseSessionKey: base, isVolatile: true };
+  }
+  if (lowerRest.startsWith("subagent:")) {
+    const base = parsed ? `agent:${parsed.agentId}:subagent` : "subagent";
+    return { baseSessionKey: base, isVolatile: true };
+  }
+  return { baseSessionKey: raw, isVolatile: false };
+}
+
 export function isCronRunSessionKey(sessionKey: string | undefined | null): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed) {

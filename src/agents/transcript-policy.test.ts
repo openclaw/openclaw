@@ -4,6 +4,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { buildOpenAICompatibleReplayPolicy } from "../plugins/provider-replay-helpers.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import {
   shouldAllowProviderOwnedThinkingReplay,
@@ -507,6 +508,90 @@ describe("resolveTranscriptPolicy", () => {
 
     expect(defaultPolicy.dropReasoningFromHistory).toBe(true);
     expect(reasoningPolicy.dropReasoningFromHistory).toBe(false);
+  });
+
+  it("does not reuse cached policies across prompt-prefix capability changes", () => {
+    // The policy now depends on the model's prompt-cache/continuation capability, so the memoized
+    // key has to separate the two. Resolve in both orders: the first resolution must not decide
+    // the second one.
+    const config = {} as OpenClawConfig;
+    const base = {
+      config,
+      provider: "local-deepseek",
+      modelId: "local-model",
+      modelApi: "openai-responses",
+    };
+    const optedIn = { compat: { supportsResponsesContinuation: true } };
+
+    const plainFirst = resolveTranscriptPolicy({ ...base, model: { compat: {} } as never });
+    const cachedFirst = resolveTranscriptPolicy({ ...base, model: optedIn as never });
+    expect(plainFirst.appendOnlyRuntimeContext).toBe(false);
+    expect(cachedFirst.appendOnlyRuntimeContext).toBe(true);
+
+    const cachedSecond = resolveTranscriptPolicy({ ...base, model: optedIn as never });
+    const plainSecond = resolveTranscriptPolicy({ ...base, model: { compat: {} } as never });
+    expect(cachedSecond.appendOnlyRuntimeContext).toBe(true);
+    expect(plainSecond.appendOnlyRuntimeContext).toBe(false);
+  });
+
+  it("keeps unowned Chat Completions replay transient even with a cache capability", () => {
+    // The shared Responses helper keeps this gate on the Responses family; the unowned fallback
+    // has to agree, or a custom `openai-completions` setup would silently retain old carriers
+    // while the equivalent plugin-owned route stays transient.
+    const policy = resolveTranscriptPolicy({
+      config: {} as OpenClawConfig,
+      provider: "custom-openai-proxy",
+      modelId: "qwen3.6-27b",
+      modelApi: "openai-completions",
+      model: { compat: { supportsPromptCacheKey: true } } as never,
+    });
+    expect(policy.appendOnlyRuntimeContext).toBe(false);
+
+    const responses = resolveTranscriptPolicy({
+      config: {} as OpenClawConfig,
+      provider: "custom-openai-proxy",
+      modelId: "qwen3.6-27b",
+      modelApi: "openai-responses",
+      model: { compat: { supportsPromptCacheKey: true } } as never,
+    });
+    expect(responses.appendOnlyRuntimeContext).toBe(true);
+  });
+
+  it("keeps the unowned fallback and the plugin-owned gate in agreement", () => {
+    // Two code paths decide the same question: the shared helper (plugin-owned routes) and the
+    // unowned fallback (config-defined providers). They agreed on "Responses family only" until
+    // this gate was added, so pin the whole matrix rather than one case — a mismatch here is
+    // silent, because both paths still look plausible on their own.
+    const capabilities = [
+      {},
+      { supportsPromptCacheKey: true },
+      { supportsResponsesContinuation: true },
+    ];
+    for (const modelApi of [
+      "openai-responses",
+      "openai-chatgpt-responses",
+      "azure-openai-responses",
+      "openai-completions",
+    ]) {
+      for (const compat of capabilities) {
+        const viaPlugin =
+          buildOpenAICompatibleReplayPolicy(modelApi, { model: { compat } as never })
+            ?.appendOnlyRuntimeContext === true;
+        const viaFallback =
+          resolveTranscriptPolicy({
+            config: {} as OpenClawConfig,
+            provider: "custom-openai-proxy",
+            modelId: "local-model",
+            modelApi,
+            model: { compat } as never,
+          }).appendOnlyRuntimeContext === true;
+        expect({ modelApi, compat, viaFallback }).toEqual({
+          modelApi,
+          compat,
+          viaFallback: viaPlugin,
+        });
+      }
+    }
   });
 
   it("enables Anthropic-compatible policies for Bedrock provider", () => {

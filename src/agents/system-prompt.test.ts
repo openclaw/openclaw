@@ -225,7 +225,7 @@ describe("buildAgentSystemPrompt", () => {
       [
         "Runtime: name=Runt | agent=work",
         "sessionUrl=https://gateway.example/control/chat/main",
-        "session=agent:main:subagent:runtime-check",
+        "session=agent:main:subagent",
         "host=host",
         "repo=/repo",
         "os=macOS (arm64)",
@@ -236,6 +236,10 @@ describe("buildAgentSystemPrompt", () => {
         "channel=telegram",
         "capabilities=inlinebuttons",
       ],
+      // A subagent spawn id is unique per spawn, so rendering it here would make every child's
+      // system prompt differ and defeat prompt-prefix reuse. The child still receives its own key
+      // in the task message ("## Session Context").
+      ["session=agent:main:subagent:runtime-check"],
     ],
   ])("%s", expectPromptCase);
   it("does not inspect owner identities when minimal prompts omit owner guidance", () => {

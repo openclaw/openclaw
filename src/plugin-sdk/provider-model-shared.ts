@@ -362,6 +362,7 @@ export function buildProviderReplayFamilyHooks(
           buildOpenAICompatibleReplayPolicy(ctx.modelApi, {
             ...policyOptions,
             modelId: ctx.modelId,
+            model: ctx.model,
           }),
       };
     }

@@ -128,4 +128,20 @@ describe("subagent spawn envelope", () => {
       "completion event",
     );
   });
+
+  it("keeps per-spawn identity out of the system prompt so prompts stay cacheable", () => {
+    // The child session key is unique per spawn and the label is per task. Rendering either into
+    // the system prompt makes every child's prompt unique, which costs a full re-prefill of the
+    // tail (tool definitions included) on every spawn.
+    const { systemPrompt, message } = buildEnvelope({
+      childSessionKey: "agent:main:subagent:e17aa2a0",
+      label: "spawn-42",
+    });
+    expect(systemPrompt).not.toContain("agent:main:subagent:e17aa2a0");
+    expect(systemPrompt).not.toContain("spawn-42");
+    // The child still receives both, in the task message instead.
+    expect(message).toContain("## Session Context");
+    expect(message).toContain("- Your session: agent:main:subagent:e17aa2a0.");
+    expect(message).toContain("- Label: spawn-42");
+  });
 });
