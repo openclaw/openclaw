@@ -285,27 +285,60 @@ describe("ensureSandboxBrowser create args", () => {
     expect(findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create")).toBeUndefined();
   });
 
-  it("passes the SSRF policy when recreating a stale browser", async () => {
-    const existingBridge = { server: { listening: true } };
-    harness.BROWSER_BRIDGES.set("session:test", {
-      bridge: existingBridge,
-      containerName: "openclaw-sbx-browser-session-test-0661d10a",
-      authToken: "test-bridge-token",
-    });
-    dockerMocks.dockerContainerState.mockResolvedValue({ exists: true, running: true });
-
-    await ensureTestSandboxBrowser({
+  it.each([
+    { policy: "SSRF", change: { ssrfPolicy: { allowedHostnames: ["example.com"] } } },
+    { policy: "evaluate", change: { evaluateEnabled: false } },
+  ])("recreates a reusable bridge when its $policy policy changes", async ({ change }) => {
+    bridgeMocks.startBrowserBridgeServer.mockImplementation(async (params) => ({
+      server: { listening: true },
+      port: 19000,
+      baseUrl: "http://127.0.0.1:19000",
+      state: {
+        server: null,
+        port: 19000,
+        resolved: params.resolved,
+        profiles: new Map(),
+      },
+    }));
+    const common = {
       scopeKey: "session:test",
       workspaceDir: harness.testWorkspaceDir,
       agentWorkspaceDir: harness.testWorkspaceDir,
       cfg: buildConfig(false),
-      ssrfPolicy: { allowedHostnames: ["example.com"] },
-    });
+      evaluateEnabled: true,
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+    };
 
-    expect(bridgeMocks.stopBrowserBridgeServer).toHaveBeenCalledWith(existingBridge.server);
-    expect(latestBridgeResolved().ssrfPolicy).toEqual({
-      allowedHostnames: ["example.com"],
-    });
+    await ensureTestSandboxBrowser(common);
+    const initialBridge = await requireValue(
+      bridgeMocks.startBrowserBridgeServer.mock.results[0],
+      "initial bridge startup",
+    ).value;
+    const authEntry = requireDockerCreateEnvEntries().find((entry) =>
+      entry.startsWith("OPENCLAW_BROWSER_CDP_AUTH_TOKEN="),
+    );
+    const hashEntry = requireDockerCreateArgs().find((arg) =>
+      arg.startsWith("openclaw.configHash="),
+    );
+    dockerMocks.dockerContainerState.mockResolvedValue({ exists: true, running: true });
+    dockerMocks.readDockerContainerEnvVar.mockResolvedValue(
+      requireValue(authEntry, "CDP auth env").slice("OPENCLAW_BROWSER_CDP_AUTH_TOKEN=".length),
+    );
+    dockerMocks.readDockerContainerLabel.mockResolvedValue(
+      requireValue(hashEntry, "browser config hash").slice("openclaw.configHash=".length),
+    );
+
+    await ensureTestSandboxBrowser(common);
+    expect(bridgeMocks.startBrowserBridgeServer).toHaveBeenCalledTimes(1);
+    expect(bridgeMocks.stopBrowserBridgeServer).not.toHaveBeenCalled();
+
+    await ensureTestSandboxBrowser({ ...common, ...change });
+    expect(bridgeMocks.stopBrowserBridgeServer).toHaveBeenCalledExactlyOnceWith(
+      initialBridge.server,
+    );
+    expect(bridgeMocks.startBrowserBridgeServer).toHaveBeenCalledTimes(2);
+    expect(latestBridgeResolved()).toMatchObject(change);
+    expect(findDockerArgsCall(dockerMocks.execDocker.mock.calls, "rm")).toBeUndefined();
   });
 
   it.each([200, 503])(

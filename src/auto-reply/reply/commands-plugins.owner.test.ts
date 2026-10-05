@@ -46,22 +46,25 @@ afterEach(() => {
 });
 
 describe("/plugins live owner authority", () => {
-  it("rejects a stale owner snapshot before install", async () => {
-    await withTempHome("openclaw-plugins-stale-owner-", async (home) => {
-      const params = buildPluginsCommandParams({
-        commandBodyNormalized: "/plugins install ./candidate",
-        workspaceDir: home,
+  it.each(["install ./candidate", "enable authority-plugin", "disable authority-plugin"])(
+    "rejects a stale owner snapshot before %s",
+    async (action) => {
+      await withTempHome("openclaw-plugins-stale-owner-", async (home) => {
+        const params = buildPluginsCommandParams({
+          commandBodyNormalized: `/plugins ${action}`,
+          workspaceDir: home,
+        });
+        delete params.ctx.GatewayClientScopes;
+        params.command.assertOwnerCurrent = () => {
+          throw new Error("owner authority revoked");
+        };
+
+        const result = await handlePluginsCommand(params, true);
+
+        expect(result?.reply?.text).toBe("Your owner authority changed; send a new request.");
       });
-      delete params.ctx.GatewayClientScopes;
-      params.command.assertOwnerCurrent = () => {
-        throw new Error("owner authority revoked");
-      };
-
-      const result = await handlePluginsCommand(params, true);
-
-      expect(result?.reply?.text).toBe("Your owner authority changed; send a new request.");
-    });
-  });
+    },
+  );
 
   it.each([
     { action: "install", gatewayAdmin: false },

@@ -536,18 +536,22 @@ describe("routeReply", () => {
   );
 
   it.each([
-    [undefined, "released"],
-    ["visible-1", "held"],
+    ["throw", false, undefined, "held"],
+    ["throw", true, undefined, "released"],
+    ["throw", true, "visible-1", "held"],
+    ["best-effort return", false, undefined, "released"],
+    ["best-effort return", true, undefined, "held"],
+    ["best-effort return", true, "visible-1", "released"],
   ] as const)(
-    "projects partial send failure with messageId=%s and custody=%s through durable send",
-    async (messageId, queueCustody) => {
+    "projects %s with sentBeforeError=%s, messageId=%s, and custody=%s through durable send",
+    async (failureMode, sentBeforeError, messageId, queueCustody) => {
       const cause = new Error("transport failed");
       const results = messageId ? [{ channel: "slack" as const, messageId }] : [];
       const outcome = {
         index: 0,
         status: "failed",
         error: cause,
-        sentBeforeError: true,
+        sentBeforeError,
         stage: "platform_send",
         results,
       } satisfies OutboundPayloadDeliveryOutcome;
@@ -558,7 +562,15 @@ describe("routeReply", () => {
         stage: "platform_send",
       });
       error.queueCustody = queueCustody;
-      mocks.deliverOutboundPayloads.mockRejectedValueOnce(error);
+      mocks.deliverOutboundPayloads.mockImplementationOnce(
+        async ({ onPayloadDeliveryOutcome }: DeliverOutboundPayloadsParams) => {
+          if (failureMode === "throw") {
+            throw error;
+          }
+          onPayloadDeliveryOutcome?.({ ...outcome, error });
+          return results;
+        },
+      );
 
       const result = await routeTestReply({
         payload: { text: "hello" },
@@ -570,10 +582,10 @@ describe("routeReply", () => {
         ok: false,
         delivered: Boolean(messageId),
         error: "Failed to route reply to slack: transport failed",
-        cause: expect.objectContaining({ cause, queueCustody, sentBeforeError: true }),
+        cause: expect.objectContaining({ cause, queueCustody, sentBeforeError }),
         messageId,
         queueCustody,
-        ...(!messageId ? { ambiguous: true } : {}),
+        ...(!messageId && sentBeforeError ? { ambiguous: true } : {}),
       });
       expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     },

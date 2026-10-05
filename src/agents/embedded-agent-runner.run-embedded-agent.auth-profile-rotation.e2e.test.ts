@@ -16,7 +16,6 @@ import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
 } from "./auth-profiles/credential-fixtures.test-support.js";
-import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
 import type { AgentHarness } from "./harness/types.js";
 import {
@@ -107,6 +106,9 @@ type TestRunEmbeddedAgent = (
   params: Omit<Parameters<ProductionRunEmbeddedAgent>[0], "admittedRunContext">,
 ) => ReturnType<ProductionRunEmbeddedAgent>;
 let runEmbeddedAgent: TestRunEmbeddedAgent;
+let ensureAuthProfileStore: typeof import("./auth-profiles/store-runtime.js").ensureAuthProfileStore;
+let saveAuthProfileStore: typeof import("./auth-profiles/store-runtime.js").saveAuthProfileStore;
+let createOpenClawDatabaseMaintenanceScope: typeof import("../state/openclaw-state-db-async-lifecycle.js").createOpenClawDatabaseMaintenanceScope;
 let createDiagnosticLogRecordCaptureFn: typeof import("../logging/test-helpers/diagnostic-log-capture.js").createDiagnosticLogRecordCapture;
 let cleanupLogCapture: (() => void) | undefined;
 let resetLoggerFn: typeof import("../logging/logger.js").resetLogger;
@@ -120,6 +122,11 @@ beforeAll(async () => {
   runEmbeddedAgent = wrapRunWithTestPreparedAdmission(
     (await import("./embedded-agent-runner/run.js")).runEmbeddedAgent,
   );
+  // Fixture reads and runner writes must share the post-reset auth snapshot owner.
+  ({ ensureAuthProfileStore, saveAuthProfileStore } =
+    await import("./auth-profiles/store-runtime.js"));
+  ({ createOpenClawDatabaseMaintenanceScope } =
+    await import("../state/openclaw-state-db-async-lifecycle.js"));
   ({ createDiagnosticLogRecordCapture: createDiagnosticLogRecordCaptureFn } =
     await import("../logging/test-helpers/diagnostic-log-capture.js"));
   ({ resetLogger: resetLoggerFn, setLoggerOverride: setLoggerOverrideFn } =
@@ -134,10 +141,15 @@ type RunEmbeddedAgentTestParams = Parameters<typeof runEmbeddedAgent>[0] & {
 async function runEmbeddedAgentInline(
   params: RunEmbeddedAgentTestParams,
 ): Promise<Awaited<ReturnType<typeof runEmbeddedAgent>>> {
-  return await runEmbeddedAgent({
-    ...params,
-    enqueue: async (task) => await task(),
-  });
+  const maintenance = createOpenClawDatabaseMaintenanceScope();
+  try {
+    return await maintenance.run(() =>
+      runEmbeddedAgent({ ...params, enqueue: async (task) => await task() }),
+    );
+  } finally {
+    // Success bookkeeping outlives the runner result; join it before reads or cleanup.
+    await maintenance.close();
+  }
 }
 
 beforeEach(() => {

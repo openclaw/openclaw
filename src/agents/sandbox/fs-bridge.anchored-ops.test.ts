@@ -149,29 +149,70 @@ describe("sandbox fs bridge anchored ops", () => {
     });
   });
 
-  it("exclusive create pins canonical parent + basename", async () => {
+  const pinnedCases = [
+    {
+      name: "exclusive create pins canonical parent + basename",
+      invoke: (bridge: ReturnType<typeof createSandboxFsBridge>) => {
+        const createFileExclusive = bridge.createFileExclusive?.bind(bridge);
+        if (!createFileExclusive) {
+          throw new Error("expected exclusive-create capability");
+        }
+        return createFileExclusive({ filePath: "nested/new.txt", data: "created" });
+      },
+      expectedArgs: ["create", "/workspace", "nested", "new.txt", "1"],
+      forbiddenArgs: ["/workspace/nested/new.txt"],
+    },
+    {
+      name: "write pins canonical parent + basename",
+      invoke: (bridge: ReturnType<typeof createSandboxFsBridge>) =>
+        bridge.writeFile({ filePath: "nested/file.txt", data: "updated" }),
+      expectedArgs: ["write", "/workspace", "nested", "file.txt", "1"],
+      forbiddenArgs: ["/workspace/nested/file.txt"],
+    },
+    {
+      name: "mkdirp pins mount root + relative path",
+      invoke: (bridge: ReturnType<typeof createSandboxFsBridge>) =>
+        bridge.mkdirp({ filePath: "nested/leaf" }),
+      expectedArgs: ["mkdirp", "/workspace", "nested/leaf"],
+      forbiddenArgs: ["/workspace/nested/leaf"],
+    },
+    {
+      name: "remove pins mount root + parent/basename",
+      invoke: (bridge: ReturnType<typeof createSandboxFsBridge>) =>
+        bridge.remove({ filePath: "nested/file.txt" }),
+      expectedArgs: ["remove", "/workspace", "nested", "file.txt", "0", "1"],
+      forbiddenArgs: ["/workspace/nested/file.txt"],
+    },
+    {
+      name: "rename pins both parents + basenames",
+      invoke: (bridge: ReturnType<typeof createSandboxFsBridge>) =>
+        bridge.rename({ from: "from.txt", to: "nested/to.txt" }),
+      expectedArgs: ["rename", "/workspace", "", "from.txt", "/workspace", "nested", "to.txt", "1"],
+      forbiddenArgs: ["/workspace/from.txt", "/workspace/nested/to.txt"],
+    },
+  ] as const;
+
+  it.each(pinnedCases)("$name", async (testCase) => {
     // Mutations pass mount roots and basenames separately; full target paths
     // would allow symlink swaps between validation and execution.
     await withTempDir("openclaw-fs-bridge-contract-write-", async (stateDir) => {
       const { bridge } = await createSeededSandboxFsBridge(stateDir);
 
-      const createFileExclusive = bridge.createFileExclusive?.bind(bridge);
-      if (!createFileExclusive) {
-        throw new Error("expected exclusive-create capability");
-      }
-      await createFileExclusive({ filePath: "nested/new.txt", data: "created" });
+      await testCase.invoke(bridge);
 
       const opCall = mockedExecDockerRaw.mock.calls.find(
         ([args]) =>
           typeof args[5] === "string" &&
           args[5].includes('exec "$python_cmd" -c "$python_script" "$@"') &&
-          getDockerArg(args, 1) === "create",
+          getDockerArg(args, 1) === testCase.expectedArgs[0],
       );
-      const args = requireDockerCall(opCall, "create")[0];
-      ["create", "/workspace", "nested", "new.txt", "1"].forEach((value, index) => {
+      const args = requireDockerCall(opCall, testCase.name)[0];
+      testCase.expectedArgs.forEach((value, index) => {
         expect(getDockerArg(args, index + 1)).toBe(value);
       });
-      expect(args).not.toContain("/workspace/nested/new.txt");
+      testCase.forbiddenArgs.forEach((value) => {
+        expect(args).not.toContain(value);
+      });
     });
   });
 
