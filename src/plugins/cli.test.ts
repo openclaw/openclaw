@@ -1,6 +1,6 @@
 /** CLI integration coverage for plugin commands, setup, status, and registry flows. */
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createPluginCliLoadSession } from "./cli-registry-loader.js";
 
@@ -359,8 +359,11 @@ describe("registerPluginCliCommandsFromValidatedConfig", () => {
         hasSubcommands: true,
       },
     ]);
-    const { renderRootHelpText } = await import("../cli/program/root-help.js");
-    const help = await renderRootHelpText({ config: rawConfig });
+    const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    onTestFinished(() => write.mockRestore());
+    const { outputRootHelp } = await import("../cli/program/root-help.js");
+    await outputRootHelp({ config: rawConfig });
+    const help = write.mock.calls.map(([chunk]) => String(chunk)).join("");
     expect(help).toContain("matrix *");
     expect(help).toContain("Matrix channel utilities");
     expect(help).not.toContain("External utilities");
@@ -430,8 +433,11 @@ describe("registerPluginCliCommandsFromValidatedConfig", () => {
         hasSubcommands: true,
       },
     ]);
-    const { renderRootHelpText } = await import("../cli/program/root-help.js");
-    await expect(renderRootHelpText({ config })).resolves.toContain("matrix *");
+    const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    onTestFinished(() => write.mockRestore());
+    const { outputRootHelp } = await import("../cli/program/root-help.js");
+    await outputRootHelp({ config });
+    expect(write.mock.calls.map(([chunk]) => String(chunk)).join("")).toContain("matrix *");
     expect(stderrWrite).not.toHaveBeenCalled();
     expect(getMockCallObject(mocks.loadOpenClawPluginCliRegistry).onlyPluginIds).toEqual([
       "legacy-cli",

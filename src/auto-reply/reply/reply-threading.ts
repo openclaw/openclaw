@@ -35,22 +35,20 @@ function normalizeReplyToModeChatType(
 /** Resolve configured reply-to mode from channel and chat-type config. */
 function resolveConfiguredReplyToMode(
   cfg: OpenClawConfig,
-  channel?: OriginatingChannelType,
+  provider?: string,
   chatType?: string | null,
-  accountId?: string | null,
+  accountId?: string,
 ): ReplyToMode {
-  const provider = normalizeAnyChannelId(channel) ?? normalizeOptionalLowercaseString(channel);
   if (!provider) {
     return "all";
   }
   const channelConfig = (cfg.channels as Record<string, ReplyToModeChannelConfig> | undefined)?.[
     provider
   ];
-  const normalizedAccountId = accountId?.trim();
-  const accountConfig = normalizedAccountId
+  const accountConfig = accountId
     ? resolveChannelAccountEntry(
         channelConfig?.accounts,
-        normalizeAccountId(normalizedAccountId),
+        normalizeAccountId(accountId),
         provider,
         normalizeAccountId,
       )
@@ -77,14 +75,12 @@ export function resolveReplyToMode(
   chatType?: string | null,
 ): ReplyToMode {
   const normalizedAccountId = normalizeOptionalLowercaseString(accountId);
-  if (!normalizedAccountId) {
-    return resolveConfiguredReplyToMode(cfg, channel, chatType);
-  }
   const provider = normalizeAnyChannelId(channel) ?? normalizeOptionalLowercaseString(channel);
-  const threading = provider ? getChannelPlugin(provider)?.threading : undefined;
+  const threading =
+    normalizedAccountId && provider ? getChannelPlugin(provider)?.threading : undefined;
   return (
     threading?.resolveReplyToMode?.({ cfg, accountId: normalizedAccountId, chatType }) ??
-    resolveConfiguredReplyToMode(cfg, channel, chatType, normalizedAccountId)
+    resolveConfiguredReplyToMode(cfg, provider, chatType, normalizedAccountId)
   );
 }
 

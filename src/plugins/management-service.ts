@@ -58,7 +58,6 @@ import {
   prepareCatalogEntries,
   loadOfficialCatalog,
   normalizeKinds,
-  normalizeCatalogMetadata,
   normalizeFeaturedAt,
   firstPluginError,
   compareCatalogEntries,
@@ -68,6 +67,7 @@ import {
   resolveOfficialEntryById,
 } from "./management-catalog.js";
 import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
+import { normalizeManifestCatalog } from "./manifest-capability-normalizers.js";
 import { readPluginMcpAuthStatus } from "./mcp-auth-status.js";
 import {
   getOfficialExternalPluginCatalogManifest,
@@ -249,7 +249,7 @@ export const listManagedPlugins = withManagedPluginCache(
     const plugins = metadata.index.plugins.map((record): ManagedPluginCatalogEntry => {
       const enabled = isEnabled(record.pluginId);
       const manifest = metadata.byPluginId.get(record.pluginId);
-      const localCatalog = normalizeCatalogMetadata(manifest?.catalog);
+      const localCatalog = normalizeManifestCatalog(manifest?.catalog);
       const ownership = ownershipResolver.resolvePackage(record.pluginId);
       const installOwner = ownership.ok ? ownership.value.installOwner : undefined;
       const installRecord = installOwner ? metadata.index.installRecords[installOwner] : undefined;
@@ -265,7 +265,7 @@ export const listManagedPlugins = withManagedPluginCache(
         installedClawHubPackages.add(clawhubPackage);
       }
       const officialCatalogMetadata = officialEntry
-        ? normalizeCatalogMetadata(getOfficialExternalPluginCatalogManifest(officialEntry)?.catalog)
+        ? normalizeManifestCatalog(getOfficialExternalPluginCatalogManifest(officialEntry)?.catalog)
         : undefined;
       // Published plugin curation follows the live feed even after install, including
       // omission. Private bundled plugins without an exact package/source match stay local.
@@ -448,7 +448,7 @@ export const listManagedPlugins = withManagedPluginCache(
       const { entry, clawhub, npmPackage } = facts;
       const pluginId = resolveOfficialExternalPluginId(entry);
       const manifest = getOfficialExternalPluginCatalogManifest(entry);
-      const manifestCatalog = normalizeCatalogMetadata(manifest?.catalog);
+      const manifestCatalog = normalizeManifestCatalog(manifest?.catalog);
       const catalog =
         manifestCatalog || typeof entry.featured === "boolean"
           ? {

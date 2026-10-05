@@ -739,7 +739,10 @@ describe("session transcript reconcile worker lifecycle", () => {
           });
           await waitForSessionTranscriptIndexReconcile(options);
           const database = openOpenClawAgentDatabase(options);
-          if (mode !== "clean") {
+          if (mode === "clean") {
+            // Admit the initial status once; the measured clean read needs no write grants.
+            await reconcileSessionTranscriptIndexes(options);
+          } else {
             database.db
               .prepare(
                 "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",

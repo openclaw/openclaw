@@ -208,6 +208,10 @@ it("composes empty and multi-session store compute without holding its actor FIF
   await expect(reconcileSessionTranscriptIndexes({ ...location(), env }, binding)).resolves.toEqual(
     { reconciledSessions: 0 },
   );
+  // Clean headers sort before the dirty targets and exceed one maintenance batch.
+  for (let index = 0; index < 129; index++) {
+    await create(`admission-${String(index).padStart(3, "0")}`);
+  }
   const first = await create("store-first");
   const second = await create("store-second");
   for (const target of [first, second]) {

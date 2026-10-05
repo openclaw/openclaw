@@ -1,9 +1,13 @@
 import { chmodSync, existsSync, statSync } from "node:fs";
 import path from "node:path";
+import { StatementSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import type { BoardWidgetMaterializedPutParams } from "../../packages/gateway-protocol/src/index.js";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  observeSqliteReadSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as configEnv from "../config/config-env-vars.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.entry.js";
@@ -70,6 +74,62 @@ async function holdWriter(options: Parameters<typeof runOpenClawAgentWorkerWrite
   await entered.promise;
   return { release, held };
 }
+
+it("admits Board writes without reading session existence on the caller thread", async () => {
+  const { store, target } = fixture();
+  const reads = observeSqliteReadSql(StatementSync.prototype);
+  try {
+    await store.applyOps(target, [{ kind: "tab_create", tabId: "main", title: "Main" }]);
+    const put = await store.putWidget({
+      ...target,
+      name: "status",
+      content: { kind: "html", html: "<p>status</p>" },
+      declared: { tools: ["health"] },
+    });
+    await store.grant(target, "status", "granted", 1, put.widgets[0]?.instanceId);
+    expect(
+      reads.queries.filter((sql) => /select "entry_json" from "session_nodes"/iu.test(sql)),
+    ).toEqual([]);
+  } finally {
+    reads.restore();
+  }
+});
+
+it("rejects a Board write whose session is replaced during preparation", async () => {
+  const { database, options, store, target } = fixture();
+  const replaceSession = () =>
+    replaceSessionEntrySync(
+      { ...target, agentId: options.agentId, storePath: database.path },
+      { sessionId: "replacement-session", updatedAt: 2 },
+    );
+  const pending = store.putWidget(
+    {
+      ...target,
+      name: "app",
+      content: {
+        kind: "mcp-app",
+        descriptor: {
+          serverName: "server",
+          toolName: "tool",
+          uiResourceUri: "ui://app",
+          toolCallId: "call",
+        },
+        interactive: true,
+      },
+    },
+    {
+      resolveMcpAppInteraction: async () => {
+        replaceSession();
+        return true;
+      },
+    },
+  );
+  await expect(pending).rejects.toMatchObject({
+    code: "invalid_operation",
+    message: "board session changed; retry",
+  });
+  expect(await store.getSnapshot(target)).toMatchObject({ revision: 0, widgets: [] });
+});
 
 it("keeps incognito Board mutations on the process-held database without creating its disk path", async () => {
   const { database, options, store, target } = fixture(true);
@@ -365,9 +425,14 @@ it.each(["snapshot", "metadata", "mcp"] as const)(
   },
 );
 
-it.each(["transaction", "commit"] as const)(
-  "refuses a Board read whose target changes at the %s grant",
-  async (stage) => {
+it.each([
+  { stage: "transaction", operation: "read" },
+  { stage: "commit", operation: "read" },
+  { stage: "transaction", operation: "write" },
+  { stage: "commit", operation: "write" },
+] as const)(
+  "refuses a Board $operation whose target changes at the $stage grant",
+  async ({ stage, operation }) => {
     const { options, store, target } = fixture();
     await store.putWidget({
       ...target,
@@ -392,9 +457,15 @@ it.each(["transaction", "commit"] as const)(
       );
     const consume = vi.fn();
     try {
-      await expect(reader.useSnapshot(target, consume)).rejects.toBeInstanceOf(
-        BoardValidationError,
-      );
+      const pending =
+        operation === "read"
+          ? reader.useSnapshot(target, consume)
+          : reader.putWidget({
+              ...target,
+              name: "denied",
+              content: { kind: "html", html: "denied" },
+            });
+      await expect(pending).rejects.toBeInstanceOf(BoardValidationError);
       expect(consume).not.toHaveBeenCalled();
     } finally {
       interception.mockRestore();

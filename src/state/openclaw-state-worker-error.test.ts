@@ -258,6 +258,7 @@ describe("shared-state worker error transport", () => {
     const payload = encodeOpenClawStateWorkerError(original);
     assert(payload);
     const job: Job = {
+      observation: { started() {}, completed() {} },
       request: {
         type: "execute",
         id: 1,

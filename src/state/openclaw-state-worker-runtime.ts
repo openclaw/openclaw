@@ -267,11 +267,17 @@ export function executeSharedStateCommand(
       ? readAgentProvenanceBatchInDatabase(database.db, command.input.agentIds)
       : listAgentProvenanceInDatabase(database.db);
   }
-  if (command.type === "sessionUpstream.current" || command.type === "sessionUpstream.settle") {
+  if (
+    command.type === "sessionUpstream.current" ||
+    command.type === "sessionUpstream.settle" ||
+    command.type === "sessionUpstream.upsert" ||
+    command.type === "sessionUpstream.delete"
+  ) {
     return executeSessionUpstreamCommand(command, writeOptions);
   }
   if (
     command.type === "sessionState.sweep" ||
+    command.type === "sessionState.cleanup" ||
     command.type === "sessionState.record" ||
     command.type === "sessionState.prune" ||
     command.type === "sessionState.registerWatch" ||

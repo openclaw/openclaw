@@ -806,6 +806,28 @@ describe("Bedrock thinking request composition", () => {
   });
 });
 
+describe("Bedrock tool order", () => {
+  it("sends the same request bytes for any tool discovery order", async () => {
+    const lookup = {
+      name: "lookup",
+      description: "Lookup",
+      parameters: { type: "object", properties: {} },
+    };
+    const calculate = { ...lookup, name: "calculate", description: "Calculate" };
+    const capture = async (tools: unknown[]) =>
+      captureCommandInput(
+        bedrockModel({ id: "anthropic.claude-sonnet-4-20250514-v1:0" }),
+        { messages: [{ role: "user", content: "Hi", timestamp: 0 }], tools } as never,
+        { cacheRetention: "short", toolChoice: "auto" },
+      );
+    const forward = [lookup, calculate];
+    const first = await capture(forward);
+    const second = await capture([calculate, lookup]);
+    expect(JSON.stringify(first)).toBe(JSON.stringify(second));
+    expect(forward.map((tool) => tool.name)).toEqual(["lookup", "calculate"]);
+  });
+});
+
 describe("Bedrock Fable contract", () => {
   function fableModel() {
     return bedrockModel({

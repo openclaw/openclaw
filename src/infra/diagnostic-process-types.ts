@@ -1,5 +1,38 @@
 import type { HeapSpaceInfo } from "node:v8";
 
+export type WorkerRequestKind =
+  | "identity"
+  | "avatar"
+  | "catalog"
+  | "transcript"
+  | "sqlite_read"
+  | "sqlite_writer"
+  | "state_read"
+  | "cron"
+  | "compute"
+  | "other";
+
+export type DiagnosticWorkerRequestFields = {
+  type: "worker.request";
+  kind: WorkerRequestKind;
+  requestClass: string;
+  phase: "queued" | "started" | "completed";
+  queueDepth: number;
+  queueWaitMs?: number;
+  durationMs?: number;
+};
+
+export type DiagnosticAsyncQueueDroppedFields = {
+  type: "diagnostic.async_queue.dropped";
+  droppedEvents: number;
+  droppedTrustedEvents?: number;
+  droppedUntrustedEvents?: number;
+  droppedPriorityEvents?: number;
+  queueLength: number;
+  maxQueueLength: number;
+  drainBatchSize: number;
+};
+
 export type DiagnosticMemoryUsage = {
   rssBytes: number;
   heapTotalBytes: number;

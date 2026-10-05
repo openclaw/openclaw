@@ -66,8 +66,8 @@ Placement claim/result mutations and notifying event cursor operations have
 reviewed worker-only entries. The event recorder's `registeredWatcherKeys`
 initializer is classified separately from its native event/head SQL.
 Creation, compaction, adoption, and child-spawn producers are non-notifying.
-Creation, compaction, child-spawn cursor seeding, and periodic retention use the
-existing signal worker; adoption/native-binding recording remains T1. Placement restart clearing remains T2.
+Creation, compaction, adoption, child-spawn cursor seeding, reset/deletion cleanup,
+and periodic retention use the existing signal worker. Placement restart clearing remains T2.
 The activation-only `activated` initializer and workspace-journal cleanup have
 exact worker-only entries: native prepared binding selects `provisioning`, and
 native move drains omit the manifest that triggers journal cleanup. The shared
@@ -199,7 +199,9 @@ source against the same snapshot. Foreign-store transcript rewrites retain the
 original source owner's live host assertion; the destination cannot supply its facts.
 Accepted persistence keeps its existing settlement
 and close owner. Released synchronous custody callbacks retain their compatibility
-contract; no schema, permission, retention, or update migration is required.
+contract. Process-held Incognito input keeps its native source identity and live
+permission checks through staging, dispatch, and transcript writes. No schema,
+permission, retention, or update migration is required.
 
 ### Incognito worker ownership (P1, inactive)
 
@@ -898,6 +900,17 @@ entry facts before releasing FIFO custody, and close joins accepted persistence.
 Incognito, maintenance, and opaque or cross-store SDK guards retain native atomicity.
 Receipt validity, retry behavior, schemas, retention, and update behavior are unchanged.
 
+Durable Board writes prepare exact session existence in the session reader and carry
+its session and lifecycle identity into transaction and commit checks. Session
+presentation consumes worker-prepared Board membership through its existing row
+projection; unavailable facts stay dirty until preparation finishes. Process-held
+incognito retains its native reader. Board request authority prepares session and
+membership predicates before worker grants; the worker rereads those facts at
+transaction and commit while the host rechecks live caller authority. Released
+opaque SDK guards and cross-store assertions retain their synchronous transaction
+contract. Board publication, schemas, permissions,
+retention, and update behavior are unchanged.
+
 Durable entry deletion can carry prepared Agents API and Codex binding participants
 through the same executing worker. Binding deletion still commits in shared state
 before the agent transaction commits, and can veto that transaction. Confirmed agent
@@ -1336,6 +1349,24 @@ durability, or update migration changes.
 
 ## Carry facts, publish after commit
 
+Session observer admission, publication, terminal synthesis, and companion snapshots
+read through the existing Gateway session worker lookup. Each observation captures
+its configured and physical sources before queueing and fetches fresh rows at later
+authority boundaries. Events retain FIFO order; reset notifications immediately
+fence pending reads, and publication rechecks the current lifecycle and audience
+after preparation. Digest persistence uses the existing agent worker patch guard
+to recheck retained host authority during transaction validation and before commit.
+Observer acceptance retains the original database generation and writer FIFO through
+its synchronous consumer. A native mutation witness rejects intervening synchronous
+SDK rewrites, and database closure revokes pending reads before disclosure.
+Gateway close rejects new observation work and joins accepted
+reads and digest persistence before closing database workers. Accepted persistence
+does not inherit scheduler cancellation, and failed write replies never authorize
+replay. The released synchronous observer methods remain deprecated SDK adapters;
+bundled callers use their awaited companions. Live reply-hook and channel verbosity
+callbacks likewise use fresh worker reads while retaining the released synchronous
+contracts. Schemas, retention, durability, and update behavior are unchanged.
+
 Local sandbox projection rows and archive receipts use the existing shared-state
 reader and writer. Reconciliation retains its physical database and renewable
 lease through Git preparation, filesystem effects, publication, and cleanup,
@@ -1395,14 +1426,17 @@ accepted persistence before database teardown, independently of scheduler
 cancellation. Incognito and atomic reset retain their existing row kernel. No
 schema, SDK, retention, durability, or update migration is required.
 
-Native creation, compaction, and child-spawn signals use the existing shared-state
+Native creation, adoption, compaction, and child-spawn signals use the existing shared-state
 writer. Their callers join recording before releasing their lifecycle; embedded
 compaction joins through its subscription event chain. Acknowledged notices precede
 bounded pruning, and unknown signal outcomes never replay the originating action.
 Pruning retains ambient-watch invalidation through worker settlement and preserves
-the 30-day and 50,000-row bounds. Adopted-event/native-binding producers retain their
-existing synchronous recorder, with periodic pruning delegated to the same worker.
-Schemas, stored bytes, retention, and update behavior are unchanged.
+the 30-day and 50,000-row bounds. Reset and deletion clear signal rows and cursors
+through the same writer, retaining their lifecycle fence and original physical store
+until settlement. Ambient-watch readers are invalidated through cleanup settlement.
+Deletion still removes its upstream link synchronously before signal cleanup; the
+released upstream-link SDK migration remains separate. Schemas, stored bytes,
+retention, and update behavior are unchanged.
 
 Post-ready notice recovery reads pending watches through the shared-state reader
 and captures each watcher's physical source through the session reader.
@@ -1823,6 +1857,20 @@ rechecked after admission. Page limits do not bound checkpoint copying or storag
 latency. Slow transaction diagnostics include commit and rollback time on both
 the main thread and workers, naming the database and operation when supplied.
 
+Session upstream-link adoption and native initialization writes use the existing
+shared-state writer. Callers capture the physical store and input before yielding;
+the worker preserves FIFO order, compares current rows, and requests live host
+authority at transaction and commit. Native fork guards consume transaction-local
+source-link facts for these grants. Exact rollback cleanup joins accepted writes
+before deleting its own link; uncertain outcomes are never replayed. Session deletion
+removes its upstream link and signal state in the existing cleanup transaction,
+capturing one physical store and revoking ambient reads before yielding. The released
+synchronous upsert/delete SDK methods and native initializer's `link` method remain
+deprecated compatibility paths until the next Plugin SDK major. Synchronous link
+reads used by immediate native-fork authority checks remain separate migration
+work. Schemas, stored data, retention, and update behavior are unchanged. See
+[await session upstream links](/plugins/sdk-migration/how-to-migrate#await-session-upstream-links).
+
 Watched human-turn signals and upstream observations use the shared-state writer,
 including their watcher probe and pruning. Producers await settlement and recheck
 current session authority; upstream observations compare the captured source in
@@ -1844,8 +1892,9 @@ advances only the frozen notification watermark. Version enrichment and bounded 
 pages use the shared-state reader, preserving composite session identity and per-session
 pruned watermarks. Accepted operations retain the existing worker's FIFO and settlement
 owner. Schemas, retention, and update behavior are unchanged.
-Synchronous creation, compaction, reset, deletion, and the public SDK's ambient prompt
-probe remain separate migration work; the restart notice sweep stays in boot admission.
+The public SDK's synchronous ambient prompt probe remains compatibility debt.
+Creation, compaction, adoption, reset, deletion, and the restart notice sweep use
+the signal worker.
 
 Durable session entry replacement reads its detached snapshot in the history
 worker and commits through the existing agent database executor. The transaction
