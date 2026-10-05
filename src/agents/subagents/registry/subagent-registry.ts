@@ -457,6 +457,7 @@ const subagentRestorer = createSubagentRegistryRestorer({
     return true;
   },
   settleRequesterTurn: settleRequesterTurnAfterSessionSpawns,
+  retireSupersededRun: retireSupersededSubagentRun,
   ensureListener: () => subagentListener.ensure(),
   startSweeper: () => subagentSweeper.start(),
   scheduleSweep: scheduleSubagentRegistrySweep,
@@ -487,9 +488,18 @@ const subagentRestorer = createSubagentRegistryRestorer({
   warn,
 });
 
-function retireSupersededSubagentRun(runId: string, expected: SubagentRunRecord): Promise<void> {
+function retireSupersededSubagentRun(
+  runId: string,
+  expected: SubagentRunRecord,
+  assertCurrent?: () => void,
+): Promise<void> {
+  assertCurrent?.();
   const entry = subagentRuns.get(runId);
-  if (!entry || !isSameSubagentRunOwner(entry, expected)) {
+  if (
+    !entry ||
+    !isSameSubagentRunOwner(entry, expected) ||
+    !isRequesterRetirementCustodyCurrent(entry, expected)
+  ) {
     return Promise.resolve();
   }
   const wake = entry.requesterSettleWake;
@@ -533,7 +543,11 @@ function retireSupersededSubagentRun(runId: string, expected: SubagentRunRecord)
     entry,
     runs: subagentRuns,
     clearPendingLifecycleError,
-    isCurrent: (current) => isRequesterRetirementCustodyCurrent(current, entry),
+    assertCurrent,
+    isCurrent: (current) => {
+      assertCurrent?.();
+      return isRequesterRetirementCustodyCurrent(current, entry);
+    },
   });
 }
 
