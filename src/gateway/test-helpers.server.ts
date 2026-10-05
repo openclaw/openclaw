@@ -1246,12 +1246,7 @@ export async function rpcReq<T extends Record<string, unknown>>(
   if (hasUnsyncedGatewayTestSessionConfig()) {
     await persistTestSessionConfig();
   }
-  if (
-    method === "agent" ||
-    method === "chat.send" ||
-    method === "chat.metadata" ||
-    method === "models.list"
-  ) {
+  if (method === "agent" || method === "chat.send" || method === "chat.metadata") {
     await prepareGatewayReplyRuntimeForTest();
   }
   const { randomUUID } = await import("node:crypto");
