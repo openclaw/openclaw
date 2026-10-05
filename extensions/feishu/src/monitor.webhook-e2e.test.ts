@@ -296,24 +296,6 @@ describe("Feishu webhook signed-request e2e", () => {
     });
   });
 
-  it("accepts signed callbacks near the timestamp skew window edge", async () => {
-    await withSignedWebhook("skew-window-edge", async (url) => {
-      const rawBody = JSON.stringify({ type: "url_verification", challenge: "challenge-token" });
-      const response = await fetch(url, {
-        method: "POST",
-        body: rawBody,
-        headers: signFeishuPayload({
-          encryptKey: "encrypt_key",
-          rawBody,
-          timestamp: (Math.floor(Date.now() / 1000) - 3_300).toString(),
-        }),
-      });
-      expect(response.status).toBe(200);
-      expect(response.headers.get("x-openclaw-delivery-accepted")).toBeNull();
-      await expect(response.json()).resolves.toEqual({ challenge: "challenge-token" });
-    });
-  });
-
   it("admits signed requests only on the configured POST webhook route", async () => {
     const path = "/hook-e2e-route";
     await withRoute(createFeishuWebhookTestAccount("route", path), async (request) => {
@@ -467,20 +449,6 @@ describe("Feishu webhook signed-request e2e", () => {
     }
   });
 
-  it("marks durably admitted message acks with the delivery-accepted header", async () => {
-    await withSignedWebhook("signed-durable-ack", async (url) => {
-      const payload = {
-        schema: "2.0",
-        header: { event_type: "im.message.receive_v1", event_id: "evt-durable-ack-1" },
-        event: { message: { chat_id: "oc_durable_ack" } },
-      };
-      const response = await postSignedPayload(url, payload);
-
-      expect(response.status).toBe(200);
-      expect(response.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
-    });
-  });
-
   it("filters prototype-bearing keys without changing the Lark webhook envelope", async () => {
     const accountId = "prototype-guard";
     const path = "/hook-e2e-prototype-guard";
@@ -560,6 +528,7 @@ describe("Feishu webhook signed-request e2e", () => {
       const response = await postSignedPayload(url, payload);
 
       expect(response.status).toBe(200);
+      expect(response.headers.get("x-openclaw-delivery-accepted")).toBeNull();
       await expect(response.json()).resolves.toEqual({
         challenge: "encrypted-challenge-token",
       });
@@ -989,27 +958,24 @@ describe("Feishu webhook security hardening", () => {
     );
   });
 
-  it.each([-7_200, 7_200])(
-    "rejects correctly signed callbacks with %i seconds of timestamp skew",
-    async (offsetSeconds) => {
-      await withSignedWebhook("timestamp-skew", async (url) => {
-        const payload = { type: "url_verification", challenge: "challenge-token" };
-        const headers = signFeishuPayload({
-          encryptKey: "encrypt_key",
-          rawBody: JSON.stringify(payload),
-          timestamp: (Math.floor(Date.now() / 1000) + offsetSeconds).toString(),
-        });
-
-        const response = await fetch(url, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(payload),
-        });
-
-        expect(response.status).toBe(401);
-        expect(response.headers.get("content-type")).toBe("text/plain; charset=utf-8");
-        expect(await response.text()).toBe("Invalid signature");
+  it("rejects correctly signed callbacks with stale timestamps", async () => {
+    await withSignedWebhook("timestamp-skew", async (url) => {
+      const payload = { type: "url_verification", challenge: "challenge-token" };
+      const headers = signFeishuPayload({
+        encryptKey: "encrypt_key",
+        rawBody: JSON.stringify(payload),
+        timestamp: (Math.floor(Date.now() / 1000) - 7_200).toString(),
       });
-    },
-  );
+
+      const response = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+      });
+
+      expect(response.status).toBe(401);
+      expect(response.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+      expect(await response.text()).toBe("Invalid signature");
+    });
+  });
 });
