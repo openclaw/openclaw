@@ -253,29 +253,6 @@ export async function configureWithEnvToken(
   return { cfg: cfgWithAccount };
 }
 
-function setTwitchAccessControl(
-  cfg: OpenClawConfig,
-  allowedRoles: TwitchRole[],
-  requireMention: boolean,
-  accountId?: string,
-): OpenClawConfig {
-  const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
-  const account = getAccountConfig(cfg, resolvedAccountId);
-  if (!account) {
-    return cfg;
-  }
-
-  return setTwitchAccount(
-    cfg,
-    {
-      ...account,
-      allowedRoles,
-      requireMention,
-    },
-    resolvedAccountId,
-  );
-}
-
 function resolveTwitchGroupPolicy(
   cfg: OpenClawConfig,
   accountId?: string,
@@ -376,8 +353,17 @@ const twitchDmPolicy = createChannelDmPolicy({
       policy === "open" ? ["all"] : policy === "allowlist" ? [] : ["moderator"];
     return { allowedRoles };
   },
-  applyPatch: ({ cfg, account, patch }) =>
-    setTwitchAccessControl(cfg, patch.allowedRoles as TwitchRole[], true, account.accountId),
+  applyPatch: ({ cfg, account, patch }) => {
+    const accountId = resolveSetupAccountId(cfg, account.accountId);
+    const existing = getAccountConfig(cfg, accountId);
+    return existing
+      ? setTwitchAccount(
+          cfg,
+          { ...existing, allowedRoles: patch.allowedRoles as TwitchRole[], requireMention: true },
+          accountId,
+        )
+      : cfg;
+  },
   promptAllowFrom: async ({ cfg, prompter, accountId }) => {
     const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
     const account = getAccountConfig(cfg, resolvedAccountId);

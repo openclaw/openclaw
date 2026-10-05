@@ -140,12 +140,12 @@ export async function pollContinueGateway(
     typeof payload.pollTimeoutMs === "number"
       ? (clampTimerTimeoutMs(payload.pollTimeoutMs) ?? fallbackTimeoutMs)
       : fallbackTimeoutMs;
-  const deadlineMs = Date.now() + (clampTimerTimeoutMs(timeoutMs) ?? MAX_TIMER_TIMEOUT_MS);
+  const deadlineMs = performance.now() + (clampTimerTimeoutMs(timeoutMs) ?? MAX_TIMER_TIMEOUT_MS);
 
   for (;;) {
     // Sleep already clamps to remaining budget; the gateway RPC must too.
     // Otherwise the final poll can overrun the continue deadline by a full RPC timeout.
-    const remainingMs = deadlineMs - Date.now();
+    const remainingMs = deadlineMs - performance.now();
     if (remainingMs <= 0) {
       break;
     }
@@ -174,7 +174,7 @@ export async function pollContinueGateway(
     if (result.status !== "pending") {
       throw new Error("voicecall gateway response has unknown operation status");
     }
-    const sleepMs = Math.min(VOICE_CALL_GATEWAY_POLL_INTERVAL_MS, deadlineMs - Date.now());
+    const sleepMs = Math.min(VOICE_CALL_GATEWAY_POLL_INTERVAL_MS, deadlineMs - performance.now());
     if (sleepMs <= 0) {
       break;
     }

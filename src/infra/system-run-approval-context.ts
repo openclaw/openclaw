@@ -6,7 +6,7 @@ import type {
   SystemRunApprovalPlan,
 } from "./exec-approvals.js";
 import { normalizeSystemRunApprovalPlan } from "./system-run-approval-plan.js";
-import { formatExecCommand, resolveSystemRunCommandRequest } from "./system-run-command.js";
+import { resolveSystemRunCommandRequest } from "./system-run-command.js";
 import { normalizeNonEmptyString, normalizeStringArray } from "./system-run-normalize.js";
 
 // System-run approval context normalizes prepared node-run payloads before exec policy.
@@ -116,11 +116,9 @@ export function resolveSystemRunApprovalRequestContext(params: {
     host === "node" ? normalizeSystemRunApprovalPlan(params.systemRunPlan) : null;
   const fallbackArgv = normalizeStringArray(params.commandArgv);
   const fallbackCommand = typeof params.command === "string" ? params.command : "";
-  const commandText = normalizedPlan
-    ? normalizedPlan.commandText || formatExecCommand(normalizedPlan.argv)
-    : fallbackCommand;
+  const commandText = normalizedPlan?.commandText ?? fallbackCommand;
   const preview = normalizedPlan
-    ? normalizeNonEmptyString(normalizedPlan.commandPreview ?? fallbackCommand)
+    ? (normalizedPlan.commandPreview ?? normalizeNonEmptyString(fallbackCommand))
     : null;
   const commandPreview = preview && preview !== commandText ? preview : null;
   const plan = normalizedPlan ? { ...normalizedPlan, commandPreview } : null;

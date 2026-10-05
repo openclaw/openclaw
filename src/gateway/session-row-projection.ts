@@ -381,12 +381,13 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     row: records.Row,
     configuredAgentIds = new Set(listAgentIds(cfg)),
     readRow = rowReads.readResidentSessionRow,
-    databaseFacts?: records.PreparedSessionRowDatabaseFacts,
+    preparedDatabaseFacts?: records.PreparedSessionRowDatabaseFacts,
     repositoryWorkspace?: Parameters<
       typeof rowReads.readResidentSessionRow
     >[0]["repositoryWorkspace"],
   ) {
-    if (!row.entry) {
+    const databaseFacts = preparedDatabaseFacts ?? row.retainedDatabaseFacts;
+    if (!row.entry || (!databaseFacts && !isIncognitoSessionKey(row.key))) {
       return false;
     }
     const links = readChildLinks(row, databaseFacts !== undefined);
@@ -455,7 +456,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     revision: () => epoch,
     databaseRevision: () => databaseRevision,
     acquireEntry,
-    readEntry: readSessionRowEntry,
     materialize,
     forgetBackfill: backfill.remove,
     retainArchived(row) {

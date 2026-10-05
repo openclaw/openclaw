@@ -54,7 +54,7 @@ function resolveTranscriptTurnAgentId(params: {
     throw new Error("Malformed agent session key; refusing transcript turn persistence.");
   }
   const scopedAgentId = params.scopeAgentId?.trim()
-    ? normalizeAgentId(params.scopeAgentId.trim())
+    ? normalizeAgentId(params.scopeAgentId)
     : undefined;
   const parsedAgentId = parseAgentSessionKey(params.sessionKey)?.agentId;
   const keyAgentId = parsedAgentId ? normalizeAgentId(parsedAgentId) : undefined;

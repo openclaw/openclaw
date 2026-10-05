@@ -22,7 +22,6 @@ type BundleLspConfig = {
 
 /** Runtime support summary for bundle-declared LSP servers. */
 type BundleLspRuntimeSupport = {
-  hasStdioServer: boolean;
   supportedServerNames: string[];
   unsupportedServerNames: string[];
   diagnostics: string[];
@@ -101,7 +100,6 @@ export function inspectBundleLspRuntimeSupport(params: {
     (supported ? supportedServerNames : unsupportedServerNames).push(name);
   }
   return {
-    hasStdioServer: supportedServerNames.length > 0,
     supportedServerNames,
     unsupportedServerNames,
     diagnostics,

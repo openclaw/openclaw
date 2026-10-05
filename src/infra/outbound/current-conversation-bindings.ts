@@ -186,20 +186,6 @@ function resolveChannelConversationBindingSupport(params: SessionBindingScope) {
   return plugin?.conversationBindings;
 }
 
-function resolveChannelSupportsCurrentConversationBinding(params: SessionBindingScope): boolean {
-  const bindingSupport = resolveChannelConversationBindingSupport(params);
-  if (
-    bindingSupport?.supportsCurrentConversationBinding !== true ||
-    bindingSupport.bindingStore === "adapter" ||
-    typeof bindingSupport.createManager === "function"
-  ) {
-    return false;
-  }
-  return (
-    bindingSupport.isCurrentConversationBindingSupported?.({ accountId: params.accountId }) ?? true
-  );
-}
-
 /** True when an active channel lifecycle owns bindings through a registered adapter. */
 export function requiresRegisteredSessionBindingAdapter(params: SessionBindingScope): boolean {
   const support = resolveChannelConversationBindingSupport(params);
@@ -214,10 +200,18 @@ function supportsGenericCurrentConversationBinding(ref: SessionBindingScope): bo
   if (normalized.channel === INTERNAL_MESSAGE_CHANNEL) {
     return true;
   }
-  return resolveChannelSupportsCurrentConversationBinding({
-    channel: normalized.channel,
-    accountId: normalized.accountId,
-  });
+  const bindingSupport = resolveChannelConversationBindingSupport(normalized);
+  if (
+    bindingSupport?.supportsCurrentConversationBinding !== true ||
+    bindingSupport.bindingStore === "adapter" ||
+    typeof bindingSupport.createManager === "function"
+  ) {
+    return false;
+  }
+  return (
+    bindingSupport.isCurrentConversationBindingSupported?.({ accountId: normalized.accountId }) ??
+    true
+  );
 }
 
 function bindingRefFromId(bindingId: string, scope?: SessionBindingScope): ConversationRef | null {

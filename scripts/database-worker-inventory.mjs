@@ -508,6 +508,17 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/sessions/session-upstream-links.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: ["listWatchedSessionUpstreamLinksInDatabase"],
+        evidence:
+          "Only sessionUpstream.listWatched dispatches this read; mutation kernels retain v2026.9.8 synchronous SDK callers until the next Plugin SDK major.",
+      },
+    ],
+  ],
+  [
     "src/sessions/session-state-events.kernel.ts",
     [
       {
@@ -516,8 +527,7 @@ const reviewedOperations = new Map([
           "hasSessionStateWatchersInDatabase",
           "isSessionStateUpstreamCurrentInDatabase",
         ],
-        evidence:
-          "session-state-events.worker.ts and session-upstream-links.worker.ts; event/head SQL retains native adopted-event callers",
+        evidence: "session-state-events.worker.ts and session-upstream-links.worker.ts",
       },
       {
         tier: "W",
@@ -527,20 +537,19 @@ const reviewedOperations = new Map([
           "pruneSessionStateEventsInDatabase.stampPrunedWatermarks",
         ],
         evidence:
-          "Seed cursors run through sessionState.record/registerWatch; periodic and restart pruning dispatch sessionState.prune; adopted-event/native-binding producers remain native",
+          "Seed cursors run through sessionState.record/registerWatch; periodic and restart pruning dispatch sessionState.prune",
       },
       {
         tier: "W",
         operations: ["readCursor", "readMaterialCursors", "updateMaterialCursor"],
         evidence:
-          "Watch calls only in session-state-events.worker.ts:40,58,95; event cursor paths gated by NOTIFY_BY_KIND at kernel:367,386; native producers are non-notifying",
+          "Watch commands and event recording execute only in session-state-events.worker.ts and subagent-registry.store.worker.ts",
       },
       {
         tier: "W",
         operations: ["recordSessionStateEventInDatabase"],
-        binding: "registeredWatcherKeys",
         evidence:
-          "Only the registeredWatcherKeys initializer at kernel:354 is notifying-only; worker record at session-state-events.worker.ts:158 / subagent-registry.store.worker.ts:65; other event sites remain T1",
+          "All producers await sessionState.record; the only direct production kernel callers are session-state-events.worker.ts and subagent-registry.store.worker.ts",
       },
     ],
   ],
@@ -2008,8 +2017,6 @@ const workerModules = new Set([
   "src/secrets/store/secret-store-config-ref.kernel.ts", // Config-ref writes are called only by the shared-state worker runtime.
   "src/secrets/store/secret-store-expiry.kernel.ts", // Expiry SQL uses shared-state worker dispatch; host captures cutoffs only.
   "src/secrets/store/secret-store-metadata.kernel.ts", // Metadata, exec environment, and exact values only run through stateReadRegistry in the shared-state reader.
-
-  "src/sessions/session-upstream-links.kernel.ts", // openclaw-state.worker.ts dispatches sessionUpstream.listWatched; host imports only the codec.
 
   "src/skills/lifecycle/upload-store-commit.ts", // Skill-upload worker commit command only.
   "src/skills/lifecycle/upload-store.kernel.ts", // Skill-upload worker dispatcher only.

@@ -128,10 +128,9 @@ export async function resolveChatMetadataReadParams(
     }
   }
   const resolved = resolveAgentIdOrRespondError({
-    rawAgentId: params.agentId,
+    rawAgentId: params.agentId?.trim() ? normalizeAgentId(params.agentId) : undefined,
     respond,
     cfg,
-    normalize: (id) => (typeof id === "string" && id.trim() ? normalizeAgentId(id) : undefined),
   });
   if (!resolved) {
     return undefined;

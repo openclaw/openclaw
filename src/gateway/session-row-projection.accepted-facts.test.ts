@@ -702,7 +702,13 @@ it.each([false, true])(
           expect(suffix.pendingDatabaseFacts).toBeUndefined();
           expect(ready(suffix)).toBe(false);
         }
-        const current = projection.describe(query)!;
+        const pending = withReadySessionRows(
+          projection,
+          () => [query],
+          (read) => read.describe(query)!,
+        );
+        await resume();
+        const current = await pending;
         expect(current.generation).toBe(suffix.generation);
         expect(current.pendingDatabaseFacts).toBeUndefined();
         expect(current.entry).toMatchObject({ updatedAt: entry.updatedAt, label });
@@ -711,9 +717,8 @@ it.each([false, true])(
           expect(isColdArchivedSessionRow(current)).toBe(false);
           expect(current.materialized.row.label).toBe(label);
         }
-        await resume();
         if (!archived) {
-          expect(reads).toHaveLength(1);
+          expect(reads).toHaveLength(2);
           expect(projection.snapshot(query).row?.label).toBe(label);
         }
         expect(projection.dirtyRowCount).toBe(0);

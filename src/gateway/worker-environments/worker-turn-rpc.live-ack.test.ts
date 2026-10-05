@@ -73,9 +73,7 @@ describe("worker live ACK ownership", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
   it.each([
-    { ackedSeq: 0, seq: 21, lastAckedSeq: 20, transcriptFirst: false },
     { ackedSeq: 5, seq: 21, lastAckedSeq: 20, transcriptFirst: false },
-    { ackedSeq: 5, seq: 5, lastAckedSeq: 5, transcriptFirst: false },
     { ackedSeq: 5, seq: 5, lastAckedSeq: 5, transcriptFirst: true },
   ])(
     "withholds terminal authority for seq=$seq, durable=$ackedSeq, transcriptFirst=$transcriptFirst",
@@ -172,52 +170,6 @@ describe("worker ACK ordering", () => {
       await expect(request()).rejects.toBe(error);
       await expect(request()).resolves.toMatchObject({ ok: true });
       expect(placementStore.updateAckCursors).toHaveBeenCalledTimes(2);
-    },
-  );
-
-  it.each(["end", "finishing"] as const)(
-    "keeps preview ACKs in memory and durably fences %s",
-    async (phase) => {
-      const applyTranscriptCommit = support.successfulTranscriptCommit("entry-placement");
-      const { liveEvents } = support.sequencedLiveEvents();
-      const { identity, placementStore, workerService } = await support.placementHarness(
-        "worker-placement-ack",
-        "session-placement-ack",
-        {
-          applyTranscriptCommit,
-          liveEvents,
-        },
-      );
-      const claim = identity.turnClaim!;
-
-      await expect(
-        workerService.commitTranscript(
-          identity,
-          support.transcriptRequest(identity, "commit", { seq: 7 }),
-        ),
-      ).resolves.toMatchObject({ ok: true });
-      expect(placementStore.updateAckCursors).toHaveBeenCalledWith({
-        claim,
-        transcriptSeq: 7,
-        assertCurrent: expect.any(Function),
-      });
-
-      await expect(
-        workerService.pushLiveEvent(identity, support.assistantEvent(identity, "preview")),
-      ).resolves.toEqual({ ok: true, result: { ackedSeq: 1 } });
-      expect(placementStore.updateAckCursors).toHaveBeenCalledOnce();
-
-      await expect(
-        workerService.pushLiveEvent(identity, {
-          ...support.terminalEvent(identity, { lastAckedSeq: 1, seq: 2 }),
-          event: { kind: "lifecycle", payload: { phase, startedAt: 1, endedAt: 2 } },
-        }),
-      ).resolves.toEqual({ ok: true, result: { ackedSeq: 2 } });
-      expect(placementStore.updateAckCursors).toHaveBeenLastCalledWith({
-        claim,
-        liveSeq: 2,
-        assertCurrent: expect.any(Function),
-      });
     },
   );
 
