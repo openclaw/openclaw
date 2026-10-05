@@ -94,6 +94,7 @@ import {
   type LifecycleFixtureWrite,
   type RunEntryOverrides,
 } from "./subagent-registry-lifecycle-controller.test-support.js";
+import { registerDeleteCleanupRetentionTests } from "./subagent-registry-lifecycle-delete-cleanup.test-support.js";
 import { registerLifecycleDeliveryReceiptCases } from "./subagent-registry-lifecycle-delivery.test-support.js";
 import type {
   SubagentLifecycleController,
@@ -531,6 +532,8 @@ describe("subagent registry lifecycle hardening", () => {
       .mockImplementation(nativeSessionEntryRuntime.loadSessionEntryByKey);
   });
 
+  registerDeleteCleanupRetentionTests({ createLifecycleController });
+
   it.each([
     { change: "identical", current: true },
     { change: "older equivalent", current: true },
@@ -923,7 +926,9 @@ describe("subagent registry lifecycle hardening", () => {
         triggerCleanup: true,
       }),
     );
-    await waitForLifecycleState(() => expect(runs.has(entry.runId)).toBe(false));
+    await waitForLifecycleState(() =>
+      expect(runs.get(entry.runId)?.cleanupCompletedAt).toBeTypeOf("number"),
+    );
 
     expect(
       browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
@@ -935,7 +940,7 @@ describe("subagent registry lifecycle hardening", () => {
     expect(notifyContextEngineSubagentEnded).not.toHaveBeenCalled();
     expect(recovered?.execution.suppressSessionEffects).toBe(true);
     if (!recovered) {
-      throw new Error("expected committed recovery before retirement");
+      throw new Error("expected committed recovery before retained cleanup");
     }
     await completeRun(controller, entry, { endedAt: 4_001, triggerCleanup: true });
     expect(
@@ -944,7 +949,7 @@ describe("subagent registry lifecycle hardening", () => {
         endedAt: 4_002,
       }),
     ).toBe(false);
-    expect(runs.has(entry.runId)).toBe(false);
+    expect(runs.get(entry.runId)?.cleanupCompletedAt).toBeTypeOf("number");
     expect(
       browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
     ).not.toHaveBeenCalled();
@@ -1405,57 +1410,6 @@ describe("subagent registry lifecycle hardening", () => {
       subagentRuns.delete(successor.runId);
     }
   });
-
-  it.each([false, true])(
-    "resumes only current ancestors after retirement (cycle=%s)",
-    async (cycle) => {
-      const ancestor = createRunEntry({
-        runId: "ancestor-current",
-        childSessionKey: "agent:main:subagent:ancestor",
-        requesterSessionKey: cycle ? "agent:main:subagent:parent" : "agent:main:main",
-        generation: 2,
-        endedAt: Date.now(),
-        expectsCompletionMessage: true,
-        pauseReason: "sessions_yield",
-        wakeOnDescendantSettle: true,
-      });
-      const previous = createRunEntry({ ...ancestor, runId: "ancestor-previous", generation: 1 });
-      const parent = createRunEntry({
-        runId: "parent",
-        childSessionKey: "agent:main:subagent:parent",
-        requesterSessionKey: ancestor.childSessionKey,
-        endedAt: Date.now(),
-        cleanupCompletedAt: Date.now(),
-      });
-      const settled = createRunEntry({
-        runId: "settled",
-        requesterSessionKey: parent.childSessionKey,
-        endedAt: Date.now(),
-      });
-      const unrelated = createRunEntry({
-        runId: "unrelated",
-        childSessionKey: "agent:main:subagent:unrelated",
-        endedAt: Date.now(),
-      });
-      const runs = new Map(
-        [ancestor, previous, parent, settled, unrelated].map((entry) => [entry.runId, entry]),
-      );
-      const resumeSubagentRun = vi.fn();
-      const controller = createLifecycleController({ entry: settled, runs, resumeSubagentRun });
-
-      await controller.completeCleanupBookkeeping({
-        runId: settled.runId,
-        entry: settled,
-        cleanup: "delete",
-        completedAt: Date.now(),
-        preserveTranscript: true,
-        skipRequesterSettleWake: true,
-      });
-
-      expect(runs.has(settled.runId)).toBe(false);
-      expect(resumeSubagentRun).toHaveBeenCalledExactlyOnceWith(ancestor.runId);
-    },
-  );
 
   it("drops a failed-cleanup retry after a newer cleanup generation starts", async () => {
     vi.useFakeTimers();
@@ -2235,7 +2189,9 @@ describe("subagent registry lifecycle hardening", () => {
     expect(readLifecycleRun(entry).endedReason).toBe(SUBAGENT_ENDED_REASON_COMPLETE);
 
     releaseDelete?.();
-    await waitForLifecycleState(() => expect(runs.has(entry.runId)).toBe(false));
+    await waitForLifecycleState(() =>
+      expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number"),
+    );
   });
 
   it("rejects a yield after announce cleanup hands off delete dispatch", async () => {
@@ -2277,7 +2233,7 @@ describe("subagent registry lifecycle hardening", () => {
       announceRelease.resolve("delivered");
       await join();
     }
-    expect(runs.has(entry.runId)).toBe(false);
+    expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
   });
 
   it.each([
@@ -2365,7 +2321,7 @@ describe("subagent registry lifecycle hardening", () => {
         announceRelease.resolve("delivered");
         await join();
       }
-      expect(runs.has(entry.runId)).toBe(false);
+      expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
     },
   );
 
@@ -2416,7 +2372,9 @@ describe("subagent registry lifecycle hardening", () => {
     expect(readLifecycleRun(entry).delivery?.payload).toBeUndefined();
 
     releaseAnnounce?.("delivered");
-    await waitForLifecycleState(() => expect(runs.has(entry.runId)).toBe(false));
+    await waitForLifecycleState(() =>
+      expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number"),
+    );
   });
 
   it("discards completion capture when an authoritative yield arrives during the await", async () => {
@@ -3325,7 +3283,9 @@ describe("subagent registry lifecycle hardening", () => {
     );
     expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
     expect(finalPostimage?.delivery?.status === "delivered").toBe(false);
-    await waitForLifecycleState(() => expect(runs.has(entry.runId)).toBe(false));
+    await waitForLifecycleState(() =>
+      expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number"),
+    );
     expect(finalPostimage?.delivery?.announcedAt).toBeUndefined();
   });
 
@@ -4816,7 +4776,7 @@ describe("requester settle wake trigger", () => {
     });
   });
 
-  it("retains delete-cleanup rows until the settle wake resolves", async () => {
+  it("retains delete-cleanup rows after the settle wake resolves until archive expiry", async () => {
     const entry = createRunEntry({ endedAt: 4_000, cleanup: "delete" });
     const runs = new Map([[entry.runId, entry]]);
     const settleWake = vi.fn<
@@ -4839,7 +4799,6 @@ describe("requester settle wake trigger", () => {
     expect(readLifecycleRun(entry).requesterSettleWake).toEqual({
       status: "pending",
       attemptCount: 0,
-      retireAfterSettle: true,
     });
     expect(settleWake).toHaveBeenCalledTimes(1);
     expect(settleWake).toHaveBeenCalledWith(
@@ -4856,11 +4815,13 @@ describe("requester settle wake trigger", () => {
       [settleParams.settledEntry],
       settleParams.settledEntry.requesterSettleWake?.rearmGeneration,
     );
-    expect(runs.has(entry.runId)).toBe(false);
+    expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
   });
 
   it("emits cleanup effects when settle retirement wins before detached tails start", async () => {
-    const entry = makeRunModeCleanupEntry("internal-settle-retirement");
+    const entry = makeRunModeCleanupEntry("internal-settle-retirement", {
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+    });
     const transcriptTarget = entry.execution.transcriptTarget;
     const runs = new Map([[entry.runId, entry]]);
     const notifyContextEngineSubagentEnded = vi.fn(async () => {});
@@ -4878,7 +4839,7 @@ describe("requester settle wake trigger", () => {
     await controller.completeCleanupBookkeeping({
       runId: entry.runId,
       entry,
-      cleanup: "delete",
+      cleanup: "keep",
       completedAt: 5_000,
     });
 
@@ -4900,6 +4861,7 @@ describe("requester settle wake trigger", () => {
   it("drops settle-retirement effects when a newer child generation takes ownership", async () => {
     const entry = makeRunModeCleanupEntry("internal-settle-retired-generation", {
       generation: 1,
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
     });
     const runs = new Map([[entry.runId, entry]]);
     const notifyContextEngineSubagentEnded = vi.fn(async () => {});
@@ -4916,7 +4878,7 @@ describe("requester settle wake trigger", () => {
     await controller.completeCleanupBookkeeping({
       runId: entry.runId,
       entry,
-      cleanup: "delete",
+      cleanup: "keep",
       completedAt: 5_000,
     });
     runs.delete(entry.runId);
@@ -5212,74 +5174,6 @@ describe("requester settle wake trigger", () => {
     expect(maybeWakeRequesterAfterAllChildrenSettled).not.toHaveBeenCalled();
   });
 
-  it("does not transfer a partial batch after a suppressed delete-mode child retires", async () => {
-    const entry = createRunEntry({
-      runId: "suppressed-child",
-      requesterTurnRunId: "requester-turn",
-      cleanup: "delete",
-      expectsCompletionMessage: true,
-    });
-    const sibling = createRunEntry({
-      runId: "remaining-child",
-      childSessionKey: "agent:main:subagent:remaining",
-      requesterTurnRunId: "requester-turn",
-      requesterTurnYielded: true,
-      expectsCompletionMessage: true,
-      endedAt: 4_000,
-      delivery: { status: "delivered" },
-    });
-    const runs = new Map([entry, sibling].map((child) => [child.runId, child]));
-    const acceptedSessionSpawns = [entry, sibling].map((child) => ({
-      runId: child.runId,
-      childSessionKey: child.childSessionKey,
-      expectsCompletionMessage: true,
-    }));
-    let finalPostimage: SubagentRunRecord | undefined;
-    const beforeWrite = vi.fn(({ postimages }: LifecycleFixtureWrite) => {
-      const row = postimages.get(entry.runId);
-      if (row) {
-        finalPostimage = row;
-      }
-    });
-    const settleWake = vi.fn(async () => false);
-    const controller = createLifecycleController({
-      entry,
-      runs,
-      beforeWrite,
-      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
-      runSubagentAnnounceFlow: async (params) => {
-        await params.onDeliveryResult?.({
-          delivered: false,
-          path: "direct",
-          reason: "delivery_suppressed",
-          error: "cancelled_by_message_sending_hook",
-          terminal: true,
-          disposition: "intentional_non_delivery",
-        });
-        return "intentional_non_delivery";
-      },
-    });
-    await completeRun(controller, entry, {
-      triggerCleanup: true,
-      terminalReply: { disposition: "visible", text: "Suppressed child result" },
-    });
-    await waitForLifecycleState(() => expect(runs.has(entry.runId)).toBe(false));
-    expect(finalPostimage?.delivery?.status).toBe("failed");
-    const before = structuredClone(runs);
-    beforeWrite.mockClear();
-    expect(
-      await controller.settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: entry.requesterSessionKey,
-        requesterTurnRunId: "requester-turn",
-        requesterYielded: true,
-        acceptedSessionSpawns,
-      }),
-    ).toBe(false);
-    expect(runs).toEqual(before);
-    expect(beforeWrite).not.toHaveBeenCalled();
-    expect(settleWake).not.toHaveBeenCalled();
-  });
-
   it("marks yielded intentional non-delivery blocked after requester-settle exhaustion", async () => {
     const entry = createRunEntry({
       endedAt: 4_000,
@@ -5556,7 +5450,7 @@ describe("requester settle wake trigger", () => {
     expect(readLifecycleRun(entry)).toEqual(before);
   });
 
-  it("retains a delete-mode child after no-wake until its requester turn settles", async () => {
+  it("retains a delete-mode child after no-wake and requester turn settlement", async () => {
     const entry = createRunEntry({
       requesterTurnRunId: "run-requester",
       cleanup: "delete",
@@ -5593,7 +5487,6 @@ describe("requester settle wake trigger", () => {
     expect(runs.has(entry.runId)).toBe(true);
     expect(readLifecycleRun(entry).requesterSettleWake).toMatchObject({
       status: "pending",
-      retireAfterSettle: true,
     });
     expect(readLifecycleRun(entry).retireAfterRequesterTurn).toBeUndefined();
     expect(settleWake).not.toHaveBeenCalled();
@@ -5615,10 +5508,10 @@ describe("requester settle wake trigger", () => {
         }),
       }),
     );
-    expect(runs.has(entry.runId)).toBe(false);
+    expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
   });
 
-  it("retires delete cleanup immediately without a completion message", async () => {
+  it("retains completed delete cleanup without a completion message", async () => {
     const entry = createRunEntry({
       requesterTurnRunId: "run-requester",
       cleanup: "delete",
@@ -5643,9 +5536,9 @@ describe("requester settle wake trigger", () => {
     await completeRun(controller, entry, { triggerCleanup: true });
     await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledTimes(1));
     await settleWake.mock.results[0]?.value;
-    expect(runs.has(entry.runId)).toBe(false);
+    expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
 
-    expect(runs.get(entry.runId)).toBeUndefined();
+    expect(runs.has(entry.runId)).toBe(true);
   });
 
   it("retains a reconciled killed row until the settle wake resolves", async () => {
@@ -5750,7 +5643,7 @@ describe("requester settle wake trigger", () => {
     expect(notifyContextEngineSubagentEnded).not.toHaveBeenCalled();
   });
 
-  it("emits cleanup effects once after immediate retirement commits", async () => {
+  it("emits cleanup effects once after retained delete cleanup commits", async () => {
     const entry = makeRunModeCleanupEntry("internal-successful-retirement");
     const transcriptTarget = entry.execution.transcriptTarget;
     const runs = new Map([[entry.runId, entry]]);
@@ -5772,7 +5665,7 @@ describe("requester settle wake trigger", () => {
     });
 
     expect(beforeWrite).toHaveBeenCalledOnce();
-    expect(runs.has(entry.runId)).toBe(false);
+    expect(runs.get(entry.runId)?.cleanupCompletedAt).toBe(5_000);
     await waitForLifecycleState(() => {
       expect(
         internalSessionEffectsMocks.removeInternalSessionEffectsSession,

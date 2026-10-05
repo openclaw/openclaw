@@ -113,13 +113,31 @@ export function isRetainedUnendedSubagentRun(
 
 /** Return whether a child-session link should still appear in subagent listings. */
 export function shouldKeepSubagentRunChildLink(
-  entry: SubagentRunLivenessRecord & { runId: string },
+  entry: SubagentRunLivenessRecord &
+    Pick<
+      SubagentRunRecord,
+      "runId" | "cleanupCompletedAt" | "deleteCleanupDispatchedAt" | "deleteCleanupTarget"
+    > & { cleanup?: "delete" | "keep" },
   options?: {
     activeDescendants?: number;
+    childSessionExists?: boolean;
     now?: number;
   },
 ): boolean {
   const now = options?.now ?? Date.now();
+  if (entry.cleanup === "delete" && typeof entry.cleanupCompletedAt === "number") {
+    if (options?.childSessionExists === true) {
+      return true;
+    }
+    if (
+      options?.childSessionExists === false ||
+      (options?.childSessionExists !== true &&
+        typeof entry.deleteCleanupDispatchedAt === "number" &&
+        entry.deleteCleanupTarget)
+    ) {
+      return false;
+    }
+  }
   return (
     isRetainedUnendedSubagentRun(entry, now) ||
     (options?.activeDescendants ?? 0) > 0 ||

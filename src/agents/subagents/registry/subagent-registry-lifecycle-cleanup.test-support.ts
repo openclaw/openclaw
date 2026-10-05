@@ -267,7 +267,7 @@ export function registerDirectSessionCleanupAuthorityTests({
 
     releaseDelete?.();
     await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-    expect(runs.has(entry.runId)).toBe(false);
+    expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
   });
 
   it("settles direct cleanup when the child changes during its deletion identity read", async () => {
@@ -311,7 +311,10 @@ export function registerDirectSessionCleanupAuthorityTests({
     expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
     expect(finalPostimage?.execution.status).toBe("terminal");
     expect(finalPostimage?.execution.suppressSessionEffects).toBe(true);
-    expect(runs.has(entry.runId)).toBe(false);
+    expect(runs.get(entry.runId)).toMatchObject({
+      cleanupCompletedAt: expect.any(Number),
+      execution: { suppressSessionEffects: true },
+    });
   });
 }
 

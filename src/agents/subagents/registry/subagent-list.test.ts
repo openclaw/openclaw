@@ -40,6 +40,51 @@ beforeEach(async () => {
 });
 
 describe("buildSubagentList", () => {
+  it.each([true, false])(
+    "uses authoritative child existence for retained delete navigation: live successor=%s",
+    async (exists) => {
+      await withOpenClawTestState({ label: "retained-delete-list-existence" }, async (state) => {
+        const cfg: OpenClawConfig = {
+          session: { store: state.statePath("agents/{agentId}/sessions/sessions.json") },
+        };
+        const now = Date.now();
+        const parent: SubagentRunRecord = {
+          runId: "visible-delete-parent",
+          childSessionKey: "agent:main:subagent:visible-delete-parent",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: "parent task",
+          cleanup: "keep",
+          createdAt: now - 2_000,
+          execution: { status: "running", startedAt: now - 2_000 },
+        };
+        const child: SubagentRunRecord = {
+          ...parent,
+          runId: "retained-delete-child",
+          childSessionKey: "agent:main:subagent:retained-delete-child",
+          requesterSessionKey: parent.childSessionKey,
+          controllerSessionKey: parent.childSessionKey,
+          cleanup: "delete",
+          execution: { status: "terminal", endedAt: now - 1_000, outcome: { status: "ok" } },
+          cleanupCompletedAt: now - 500,
+          archiveAtMs: now + 60_000,
+        };
+        await addSubagentRunForTests(parent);
+        await addSubagentRunForTests(child);
+        if (exists) {
+          await replaceSessionEntry(
+            { sessionKey: child.childSessionKey },
+            { sessionId: "actual-successor", lifecycleRevision: "new-revision", updatedAt: now },
+          );
+        }
+        const list = await buildSubagentList({ cfg, runs: [parent], recentMinutes: 30 });
+        expect(list.active.find((entry) => entry.runId === parent.runId)?.childSessions).toEqual(
+          exists ? [child.childSessionKey] : undefined,
+        );
+      });
+    },
+  );
+
   it("reads fresh active and recent metadata from each visible child's store", async () => {
     await withOpenClawTestState({ label: "subagent-list-selection" }, async (state) => {
       const cfg: OpenClawConfig = {

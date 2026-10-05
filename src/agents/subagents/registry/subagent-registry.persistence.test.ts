@@ -483,14 +483,22 @@ describe("subagent registry persistence", () => {
       if (cleanup === "delete") {
         expect(
           delivered?.requesterSettleWake?.retireAfterSettle,
-          "delete waits for real settlement",
-        ).toBe(true);
+          "delete receipt remains retained across requester settlement",
+        ).toBeUndefined();
       }
       await settlement.release();
       expect(settlement.run).toHaveBeenCalledOnce();
       const afterSecond = readPersistedRun(runId);
       if (cleanup === "delete") {
-        expect(afterSecond, "settled delete retires its durable row").toBeUndefined();
+        expect(afterSecond, "settled delete retains its durable receipt").toMatchObject({
+          delivery: { status: "delivered" },
+          cleanupCompletedAt: expect.any(Number),
+        });
+        expect(afterSecond?.requesterSettleWake).toBeUndefined();
+        await restartRegistry();
+        await fixture.settle();
+        expect(announceSpy, "retained delivered receipt is not replayed").toHaveBeenCalledTimes(2);
+        expect(readPersistedRun(runId)?.cleanupCompletedAt).toBe(afterSecond?.cleanupCompletedAt);
       } else {
         expect(afterSecond?.cleanupCompletedAt).toBeGreaterThanOrEqual(beforeRetry);
       }

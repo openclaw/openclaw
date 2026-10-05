@@ -117,6 +117,10 @@ export type SubagentRunReadRecord = {
   endedReason?: SubagentLifecycleEndedReason;
   pauseReason?: "sessions_yield";
   cleanupCompletedAt?: number;
+  cleanup?: "delete" | "keep";
+  deleteCleanupDispatchedAt?: number;
+  /** Original physical session, never a same-key successor. */
+  deleteCleanupTarget?: { sessionId: string; lifecycleRevision: string };
   /** Durable outbox marker for parent/external completion delivery. */
   delivery?: SubagentCompletionDeliveryState;
   execution: {

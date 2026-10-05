@@ -40,6 +40,7 @@ import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import {
   clearSubagentRunsReadCacheForTest,
+  prepareSubagentSessionListReadCache,
   getSubagentRunsSnapshotForRead,
   getSubagentMaintenanceRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForRead,
@@ -781,4 +782,34 @@ it("retains the execution's Gateway binding through immutable metadata publicati
     "runtime owner is no longer active",
   );
   expect(subagentRuns.runWithCompletionAuthority(recovered, () => "recovered")).toBe("recovered");
+});
+
+it("round-trips a retained delete target through the native writer and cold compact read worker", async () => {
+  vi.stubEnv("OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE", "1");
+  const row = {
+    ...entry("retained-delete"),
+    cleanup: "delete" as const,
+    cleanupCompletedAt: 3,
+    archiveAtMs: Date.now() + 60_000,
+    deleteCleanupDispatchedAt: 2,
+    deleteCleanupTarget: { sessionId: "original-session", lifecycleRevision: "original-revision" },
+    execution: { status: "terminal" as const, endedAt: 1 },
+  };
+  await register(row);
+  expect(loadSubagentRegistryFromSqlite().get(row.runId)).toMatchObject({
+    archiveAtMs: row.archiveAtMs,
+    cleanupCompletedAt: 3,
+    deleteCleanupDispatchedAt: 2,
+    deleteCleanupTarget: row.deleteCleanupTarget,
+  });
+  subagentRuns.clear();
+  clearSubagentRunsReadCacheForTest();
+  await prepareSubagentSessionListReadCache();
+  const compact = getSubagentSessionListRunsSnapshotForRead(new Map()).get(row.runId);
+  expect(compact).toMatchObject({
+    cleanup: "delete",
+    cleanupCompletedAt: 3,
+    deleteCleanupDispatchedAt: 2,
+    deleteCleanupTarget: row.deleteCleanupTarget,
+  });
 });

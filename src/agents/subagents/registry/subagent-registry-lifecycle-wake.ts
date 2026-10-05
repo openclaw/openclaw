@@ -99,12 +99,10 @@ function releaseRequesterSettleWakeBatch(
   const entries = observedEntries.map((entry) => currentSubagentRunOrObserved(params.runs, entry));
   const requesterSessionKeys = new Set(entries.map((entry) => entry.requesterSessionKey));
   revokeRequesterCronAuthorityBatch(entries, rearmGeneration);
-  const retiredEntries: SubagentRunRecord[] = [];
   for (const entry of entries) {
     const { runId } = entry;
     if (!params.runs.has(runId)) {
       subagentRuns.confirmRetirement(entry);
-      retiredEntries.push(entry);
     }
   }
   for (const entry of entries) {
@@ -134,8 +132,14 @@ function releaseRequesterSettleWakeBatch(
       scheduleRequesterSettleWake(context, runId, entry, stateContext);
     }
   }
-  for (const entry of retiredEntries) {
-    if (!params.runs.has(entry.runId)) {
+  for (const entry of entries) {
+    const current = params.runs.get(entry.runId);
+    if (
+      !current ||
+      (entry.cleanup === "delete" &&
+        isSameSubagentRunOwner(current, entry) &&
+        current.requesterSettleWake === undefined)
+    ) {
       context.resumeAncestorCleanup(entry);
     }
   }

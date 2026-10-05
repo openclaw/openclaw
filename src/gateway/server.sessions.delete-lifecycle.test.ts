@@ -2,6 +2,7 @@
 // active-run cleanup, hooks, thread bindings, and browser/MCP cleanup.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
@@ -18,6 +19,7 @@ import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
+import type { CallGatewayOptions } from "./call.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -736,4 +738,118 @@ test("sessions.delete returns unavailable when active run does not stop", async 
   ).toEqual([]);
 
   ws.close();
+});
+
+test("delete-mode cleanup retains its native receipt while real Gateway deletion removes the original child", async () => {
+  const { createLifecycleControllerFixture } =
+    await import("../agents/subagents/registry/subagent-registry-lifecycle-controller.test-support.js");
+  const { getCurrentSubagentRunOwner, subagentRuns } =
+    await import("../agents/subagents/registry/subagent-registry-memory.js");
+  const { mutateSubagentRuns, restoreSubagentRunsFromDisk } =
+    await import("../agents/subagents/registry/subagent-registry-persistence.js");
+  const { observeRootWork } =
+    await import("../agents/subagents/registry/subagent-registry.browser-cleanup.test-support.js");
+  const { loadSubagentRegistryFromSqlite } =
+    await import("../agents/subagents/registry/subagent-registry.store.sqlite.js");
+  const { addSubagentRunForTests } =
+    await import("../agents/subagents/registry/subagent-registry.test-helpers.js");
+  const { shouldKeepSubagentRunChildLink } =
+    await import("../agents/subagents/registry/subagent-run-liveness.js");
+  const { storePath } = await createSessionStoreDir();
+  const childSessionKey = "agent:main:subagent:retained-delete-owner";
+  const target = {
+    sessionId: "retained-delete-original",
+    lifecycleRevision: "retained-delete-revision",
+  };
+  await writeSessionStore({
+    entries: {
+      [childSessionKey]: sessionStoreEntry(target.sessionId, {
+        lifecycleRevision: target.lifecycleRevision,
+      }),
+    },
+  });
+  const runId = "real-gateway-retained-delete-owner";
+  await addSubagentRunForTests({
+    runId,
+    childSessionKey,
+    cleanup: "delete",
+    requesterSessionKey: "agent:main:main",
+    requesterDisplayKey: "main",
+    task: "retain completion receipt",
+    createdAt: Date.now() - 10,
+    endedAt: Date.now() - 1,
+    archiveAtMs: Date.now() + 60_000,
+    expectsCompletionMessage: false,
+  });
+  const entry = subagentRuns.get(runId);
+  if (!entry) {
+    throw new Error("Native worker did not publish the proof run");
+  }
+  const notifyContextEngineSubagentEnded = vi.fn(async () => {});
+  const callGateway = async <T = Record<string, unknown>>(
+    request: CallGatewayOptions,
+  ): Promise<T> => {
+    if (request.method !== "sessions.delete" || !isRecord(request.params)) {
+      throw new Error("Proof expected a sessions.delete request with record parameters");
+    }
+    await request.prepareDispatchCurrent?.();
+    request.assertDispatchCurrent?.();
+    const result = await directSessionReq<T>("sessions.delete", request.params);
+    if (!result.ok || result.payload === undefined) {
+      throw new Error(result.error?.message ?? "Proof Gateway deletion failed");
+    }
+    return result.payload;
+  };
+  const controller = createLifecycleControllerFixture(
+    { entry, runs: subagentRuns, realWorker: true, notifyContextEngineSubagentEnded },
+    {
+      callGateway,
+      cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
+      ownersByEntry: new Map(),
+    },
+  );
+  const join = observeRootWork();
+  try {
+    expect(controller.startSubagentAnnounceCleanupFlow(runId, entry)).toBe(true);
+    await join();
+    const completed = getCurrentSubagentRunOwner(subagentRuns, entry);
+    if (!completed) {
+      throw new Error("Cleanup removed the retained native receipt");
+    }
+    expect(completed).toMatchObject({
+      cleanupCompletedAt: expect.any(Number),
+      deleteCleanupTarget: target,
+      deleteCleanupDispatchedAt: expect.any(Number),
+    });
+    expect(loadSessionEntry({ sessionKey: childSessionKey, storePath })).toBeUndefined();
+    expect(loadSubagentRegistryFromSqlite().get(runId)).toMatchObject({
+      cleanupCompletedAt: completed.cleanupCompletedAt,
+      deleteCleanupTarget: target,
+    });
+    expect(shouldKeepSubagentRunChildLink(completed, { childSessionExists: false })).toBe(false);
+    expect(notifyContextEngineSubagentEnded).toHaveBeenCalledWith(
+      expect.objectContaining({ childSessionKey, reason: "deleted" }),
+      expect.any(Object),
+    );
+    console.log(
+      "OPENCLAW_DELETE_RETENTION_PROOF " +
+        JSON.stringify({
+          runId,
+          nativeReceiptRetained: true,
+          originalSessionDeleted: true,
+          contextEndReason: "deleted",
+          noDeletedChildNavigation: true,
+        }),
+    );
+  } finally {
+    await join();
+    controller.clearScheduledResumeTimers();
+    await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+    if (subagentRuns.has(runId)) {
+      await mutateSubagentRuns([runId], () => ({
+        value: undefined,
+        postimages: new Map([[runId, null]]),
+      }));
+    }
+  }
 });

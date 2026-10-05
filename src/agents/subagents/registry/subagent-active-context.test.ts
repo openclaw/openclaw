@@ -1,12 +1,16 @@
 // Active subagent prompt tests cover the compact current-turn facts that tells
 // a parent session which child runs are still in flight.
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
+import * as sessionEntryReads from "../../../config/sessions/session-entry-read-runtime.js";
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import type { SubagentRunRecordOverrides } from "../../subagent-test-fixtures.test-helpers.js";
 import { buildActiveSubagentRuntimeContext } from "./subagent-active-context.js";
+import * as subagentList from "./subagent-list.js";
 import {
   seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
@@ -26,6 +30,80 @@ afterEach(async () => {
 });
 
 describe("buildActiveSubagentRuntimeContext", () => {
+  it("keeps retained-delete topology unknown when the active context skips existence enrichment", async () => {
+    await withOpenClawTestState(
+      { label: "active-context-unknown-delete-topology" },
+      async (state) => {
+        const cfg: OpenClawConfig = {
+          session: { store: state.statePath("agents/{agentId}/sessions/sessions.json") },
+        };
+        const controllerSessionKey = "agent:main:main";
+        const parentSessionKey = "agent:main:subagent:unknown-parent";
+        const childSessionKey = "agent:main:subagent:live-successor";
+        const storePath = resolvePhysicalSessionStorePath(
+          { sessionKey: controllerSessionKey },
+          cfg,
+        );
+        const now = Date.now();
+        seedSubagentRunForReadTest({
+          runId: "unknown-parent",
+          childSessionKey: parentSessionKey,
+          controllerSessionKey,
+          requesterSessionKey: controllerSessionKey,
+          controllerStorePath: storePath,
+          requesterStorePath: storePath,
+          task: "parent task",
+          createdAt: now - 2_000,
+          execution: { status: "running", startedAt: now - 2_000 },
+        });
+        seedSubagentRunForReadTest({
+          runId: "retained-delete-predecessor",
+          childSessionKey,
+          controllerSessionKey: parentSessionKey,
+          requesterSessionKey: parentSessionKey,
+          controllerStorePath: storePath,
+          requesterStorePath: storePath,
+          cleanup: "delete",
+          createdAt: now - 2_000,
+          execution: {
+            status: "terminal",
+            endedAt: now - 1_000,
+            outcome: { status: "ok" },
+            suppressSessionEffects: true,
+          },
+          cleanupCompletedAt: now - 500,
+          archiveAtMs: now + 60_000,
+        });
+        await replaceSessionEntry(
+          { sessionKey: childSessionKey },
+          {
+            sessionId: "actual-live-successor",
+            lifecycleRevision: "successor-revision",
+            updatedAt: now,
+          },
+        );
+        const build = vi.spyOn(subagentList, "buildSubagentList");
+        const readEntries = vi.spyOn(sessionEntryReads, "readSessionEntriesFromStoreInWorker");
+        try {
+          const prompt = await buildActiveSubagentRuntimeContext({ cfg, controllerSessionKey });
+          expect(prompt).toContain("unknown-parent");
+          const built = build.mock.results.at(-1);
+          if (!built || built.type !== "return") {
+            throw new Error("Active context did not return from the real list owner");
+          }
+          expect(
+            built.value.active.find((entry) => entry.runId === "unknown-parent")?.childSessions,
+          ).toEqual([childSessionKey]);
+          expect(build.mock.calls.at(-1)?.[0].sessionEntries).toBeUndefined();
+          expect(readEntries).not.toHaveBeenCalled();
+        } finally {
+          readEntries.mockRestore();
+          build.mockRestore();
+        }
+      },
+    );
+  });
+
   it.each(["same", "replaced", "unknown"] as const)(
     "keeps pending child context bound to the parent store: %s",
     async (store) => {

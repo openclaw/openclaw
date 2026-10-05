@@ -26,6 +26,7 @@ import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpe
 import { prepareSubagentKillSession } from "./subagent-control-session.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { reconcileDurableSubagentKillIntent } from "./subagent-registry-sweep-kill.js";
+import { registerSweeperDeleteCleanupTests } from "./subagent-registry-sweeper-delete-cleanup.test-support.js";
 import { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
 import {
   createArchivedSubagentSweeperRun as archivedRun,
@@ -142,6 +143,8 @@ describe("subagent registry recovery scheduling", () => {
       }
     },
   );
+
+  registerSweeperDeleteCleanupTests({ killSessionEntry });
 
   it("observes a sibling completion committed while another completion is awaiting", async () => {
     const actual = await vi.importActual<typeof import("./subagent-session-reconciliation.js")>(

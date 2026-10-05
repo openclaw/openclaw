@@ -14,6 +14,20 @@ import type {
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
 
+/** A cleanup target is usable only when both physical lifecycle identities are present. */
+export function normalizeDeleteCleanupTarget(
+  value: unknown,
+): SubagentRunReadRecord["deleteCleanupTarget"] {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const sessionId = normalizeOptionalString("sessionId" in value ? value.sessionId : undefined);
+  const lifecycleRevision = normalizeOptionalString(
+    "lifecycleRevision" in value ? value.lifecycleRevision : undefined,
+  );
+  return sessionId && lifecycleRevision ? { sessionId, lifecycleRevision } : undefined;
+}
+
 export function resetRequesterSettleWakeRetry(
   wake?: RequesterSettleWakeState,
 ): RequesterSettleWakeState {
@@ -82,6 +96,11 @@ export function projectSubagentRunForSessionList(entry: SubagentRunRecord): Suba
       ? { runTimeoutSeconds: entry.runTimeoutSeconds }
       : {}),
     ...(entry.endedReason ? { endedReason: entry.endedReason } : {}),
+    cleanup: entry.cleanup,
+    ...(entry.deleteCleanupDispatchedAt !== undefined
+      ? { deleteCleanupDispatchedAt: entry.deleteCleanupDispatchedAt }
+      : {}),
+    ...(entry.deleteCleanupTarget ? { deleteCleanupTarget: { ...entry.deleteCleanupTarget } } : {}),
     ...(entry.cleanupCompletedAt !== undefined
       ? { cleanupCompletedAt: entry.cleanupCompletedAt }
       : {}),
@@ -136,6 +155,7 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
   entry.deleteCleanupDispatchedAt = Number.isFinite(entry.deleteCleanupDispatchedAt)
     ? entry.deleteCleanupDispatchedAt
     : undefined;
+  entry.deleteCleanupTarget = normalizeDeleteCleanupTarget(entry.deleteCleanupTarget);
   entry.suppressCompletionDelivery = entry.suppressCompletionDelivery === true ? true : undefined;
   entry.terminalOwner =
     entry.terminalOwner === "interrupted-recovery" &&
@@ -221,6 +241,17 @@ export function clearDeliveryState(entry: SubagentRunRecord): void {
 
 export function isDeliverySuspended(entry: Pick<SubagentRunRecord, "delivery">): boolean {
   return entry.delivery?.status === "suspended" && typeof entry.delivery.suspendedAt === "number";
+}
+
+/** The failed completion remains readable after its original delete cleanup is terminal. */
+export function isRetainedFailedDeleteCompletion(entry: SubagentRunRecord): boolean {
+  return (
+    entry.cleanup === "delete" &&
+    typeof entry.cleanupCompletedAt === "number" &&
+    entry.execution.status === "terminal" &&
+    typeof entry.execution.endedAt === "number" &&
+    entry.delivery?.status === "failed"
+  );
 }
 
 /** A finished requester without its required message receipt must not execute again implicitly. */
@@ -371,6 +402,11 @@ export function transitionRequesterSettleWakeState(
 
 export function completeRequesterSettleWakeState(entry: SubagentRunRecord): boolean {
   let retire = false;
+  if (entry.cleanup === "delete") {
+    entry.retireAfterRequesterTurn = undefined;
+    entry.requesterSettleWake = undefined;
+    return false;
+  }
   if (entry.pauseReason !== "sessions_yield") {
     if (entry.requesterTurnRunId && entry.expectsCompletionMessage === true) {
       entry.retireAfterRequesterTurn =

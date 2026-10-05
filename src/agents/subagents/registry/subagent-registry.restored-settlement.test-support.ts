@@ -359,10 +359,12 @@ export function registerRestoredRequesterWakeSettlementTests({
         throw new Error("transient sqlite read failure");
       }) as never);
     }
-    const retirementWrites: string[][] = [];
+    const settlementWrites: string[][] = [];
     mocks.persistRegistryRows.mockImplementation((runs, ids) => {
-      if (runIds.every((id) => ids.includes(id) && !runs.has(id))) {
-        retirementWrites.push(ids.toSorted());
+      if (
+        runIds.every((id) => ids.includes(id) && runs.has(id) && !runs.get(id)?.requesterSettleWake)
+      ) {
+        settlementWrites.push(ids.toSorted());
       }
     });
     const wakeGateway = createDeferred<unknown>();
@@ -428,10 +430,15 @@ export function registerRestoredRequesterWakeSettlementTests({
       await settleRootWork();
     }
     expect(getActiveGatewayRootWorkCount()).toBe(0);
-    expect(retirementWrites).toEqual([runIds.toSorted()]);
+    expect(settlementWrites).toEqual([runIds.toSorted()]);
     for (const entry of restored) {
       expect(getGatewayContextResolver(entry)).toBe(getGatewayContextResolver(restored[0]!));
-      expect(mod.getSubagentRunByRunId(entry.runId)).toBeUndefined();
+      expect(mod.getSubagentRunByRunId(entry.runId)).toMatchObject({
+        cleanupCompletedAt: endedAt,
+        delivery: { status: "delivered" },
+      });
+      expect(mod.getSubagentRunByRunId(entry.runId)?.requesterSettleWake).toBeUndefined();
+      expect(mod.getSubagentRunByRunId(entry.runId)?.retireAfterRequesterTurn).toBeUndefined();
     }
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
     expect(wakeRequester).toHaveBeenCalledWith(
