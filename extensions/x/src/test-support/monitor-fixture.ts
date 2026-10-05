@@ -67,6 +67,7 @@ export function fixture(options: {
   queue?: ChannelIngressQueue<Payload>;
   onCursor?: () => void;
   cfg?: OpenClawConfig;
+  replyText?: string;
 }) {
   const cfg = options.cfg ?? config;
   const replies: Array<{ text: string; parent: string }> = [];
@@ -105,7 +106,7 @@ export function fixture(options: {
     if (!plan.delivery.deliver) {
       throw new Error("Missing X text delivery adapter");
     }
-    await plan.delivery.deliver({ text: "I am on it." }, { kind: "final" });
+    await plan.delivery.deliver({ text: options.replyText ?? "I am on it." }, { kind: "final" });
     await plan.turnAdoptionLifecycle?.onAdopted();
     return {
       admission: { kind: "dispatch" as const },
