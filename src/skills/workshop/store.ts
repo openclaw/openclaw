@@ -460,7 +460,7 @@ export async function readSkillProposalBundle(
   record: SkillProposalRecord,
   options: SkillWorkshopStoreOptions,
 ): Promise<SkillProposalReadResult> {
-  const content = await readSkillProposalDraft(record, options);
+  const draftContent = await readSkillProposalDraft(record, options);
   const stateRoot = await root(resolveSkillWorkshopStateDir(options));
   const supportFiles: PreparedSkillProposalSupportFile[] = [];
   for (const file of record.supportFiles ?? []) {
@@ -482,7 +482,7 @@ export async function readSkillProposalBundle(
   return {
     record,
     revisionHash: hashSkillProposalRevision(record),
-    content,
+    content: draftContent,
     ...(supportFiles.length > 0 ? { supportFiles } : {}),
   };
 }

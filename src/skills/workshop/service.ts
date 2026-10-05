@@ -116,9 +116,9 @@ export async function reviseSkillProposal(
         assertInsideSkillsRoot(skillsRoot, record.target.skillFile, "skill file");
         assertInsideSkillsRoot(skillsRoot, record.target.skillDir, "skill directory");
 
-        const currentContent = await readWorkspaceSkillFile(record.target.skillFile);
+        const currentSkillContent = await readWorkspaceSkillFile(record.target.skillFile);
         if (record.kind === "create") {
-          if (currentContent !== null) {
+          if (currentSkillContent !== null) {
             await markSkillProposalStale({
               store,
               record,
@@ -128,12 +128,12 @@ export async function reviseSkillProposal(
             });
           }
         } else {
-          if (currentContent === null) {
+          if (currentSkillContent === null) {
             throw new Error(`Target skill is missing: ${record.target.skillFile}`);
           }
           if (
             record.target.currentContentHash &&
-            hashSkillProposalContent(currentContent) !== record.target.currentContentHash
+            hashSkillProposalContent(currentSkillContent) !== record.target.currentContentHash
           ) {
             await markSkillProposalStale({
               store,

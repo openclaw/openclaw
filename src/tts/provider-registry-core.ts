@@ -44,10 +44,10 @@ export function createSpeechProviderRegistry(resolver: SpeechProviderRegistryRes
   };
 
   return {
-    canonicalizeSpeechProviderId(
+    canonicalizeSpeechProviderId: (
       providerId: string | undefined,
       cfg?: OpenClawConfig,
-    ): SpeechProviderId | undefined {
+    ): SpeechProviderId | undefined => {
       const normalized = normalizeSpeechProviderId(providerId);
       return normalized ? (getProvider(normalized, cfg)?.id ?? normalized) : undefined;
     },
