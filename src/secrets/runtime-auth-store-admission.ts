@@ -33,6 +33,10 @@ export function loadAdmittedAuthStores(params: {
       refusal?.paths.some((pathname) => isSameOpenClawAgentDatabasePath(pathname, databasePath))
     ) {
       // The admission owner keeps this store unavailable, including cached credentials.
+      // Pending preparation resolves its secrets before publishing successful admission.
+      if (refusal.code === "agent-database-inspection-pending") {
+        continue;
+      }
       degradedOwners.push({
         ownerKind: "route",
         ownerId: shortenHomePath(databasePath),

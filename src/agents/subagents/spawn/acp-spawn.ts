@@ -13,7 +13,6 @@ import {
 } from "../../../config/sessions/session-entry-provenance.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../../../gateway/session-utils-store-worker.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveEventSessionRoutingPolicy } from "../../../infra/event-session-routing.js";
@@ -37,7 +36,6 @@ import {
   inheritedToolAllowPatch,
   inheritedToolDenyPatch,
 } from "../../inherited-tool-deny.js";
-import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import {
   runSpawnPipeline,
   summarizeSpawnError,
@@ -48,10 +46,10 @@ import {
   prepareSpawnThreadBinding,
   resolveSpawnAdmission,
   resolveSpawnMode,
-  resolveSpawnSandboxError,
   type PreparedSpawnThreadBinding,
 } from "../../spawn-plan.js";
 import { resolveSpawnedWorkspaceInheritance } from "../../spawned-context.js";
+import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
 import { countUntrackedActiveAcpRunsForOwner } from "./acp-spawn-admission.js";
 import {
   resolveAcpSpawnBootstrapDeliveryPlan,
@@ -63,6 +61,10 @@ import {
   startAcpSpawnParentStreamRelay,
   type AcpSpawnParentRelayHandle,
 } from "./acp-spawn-parent-stream.js";
+import {
+  resolveAcpSenderSpawnError,
+  resolveAcpSpawnRuntimePolicyError,
+} from "./acp-spawn-policy.js";
 import {
   resolveAcpSpawnRequesterState,
   readAcpSpawnParentDeliveryContext,
@@ -139,33 +141,15 @@ type SpawnAcpContext = {
   sandboxed?: boolean;
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
+  inheritedToolPolicySource?: "sender";
+  workspaceDir?: string;
+  sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
 };
 
 const ACP_SPAWN_ACCEPTED_NOTE =
   "initial ACP task queued in isolated session; follow-ups continue in the bound thread.";
 const ACP_SPAWN_SESSION_ACCEPTED_NOTE =
   "thread-bound ACP session stays active after this task; continue in-thread for follow-ups.";
-
-export function resolveAcpSpawnRuntimePolicyError(params: {
-  cfg: OpenClawConfig;
-  requesterAgentId: string;
-  requesterSessionKey?: string;
-  requesterSandboxed?: boolean;
-  sandbox?: SpawnAcpSandboxMode;
-}): string | undefined {
-  const requesterRuntime = resolveSandboxRuntimeStatus({
-    cfg: params.cfg,
-    sessionKey: params.requesterSessionKey,
-    agentId: params.requesterAgentId,
-  });
-  return resolveSpawnSandboxError({
-    backend: "acp",
-    requesterSandboxed: params.requesterSandboxed === true || requesterRuntime.sandboxed,
-    sandbox: params.sandbox === "require" ? "require" : "inherit",
-  });
-}
-
-export { resolveRuntimeCwdForAcpSpawn } from "./acp-spawn-runtime.js";
 
 export async function spawnAcpDirect(
   params: SpawnAcpParams,
@@ -267,6 +251,17 @@ export async function spawnAcpDirect(
     };
   }
   const { agentId: targetAgentId, backendId } = targetAgentResult;
+  const senderRestricted = ctx.inheritedToolPolicySource === "sender";
+  const requesterRoot = ctx.sessionPermissionPolicy?.root ?? ctx.workspaceDir;
+  const requesterPolicyError = resolveAcpSenderSpawnError({
+    ...ctx,
+    requesterAgentId,
+    targetAgentId,
+    cwd: params.cwd,
+  });
+  if (requesterPolicyError) {
+    return { status: "forbidden", errorCode: "runtime_policy", error: requesterPolicyError };
+  }
   const agentPolicyError = resolveAcpAgentPolicyError(cfg, targetAgentId);
   if (agentPolicyError) {
     return {
@@ -307,7 +302,8 @@ export async function spawnAcpDirect(
   const resolveAdmission = (pendingChildren = 0, pendingChildSessionKeys?: ReadonlySet<string>) =>
     resolveSpawnAdmission({
       cfg,
-      enabled: hasSubagentEnvelope,
+      inheritedToolPolicySource: ctx.inheritedToolPolicySource,
+      enabled: hasSubagentEnvelope || senderRestricted,
       requesterSessionKey: requesterInternalKey,
       requesterAgentId,
       targetAgentId,
@@ -327,13 +323,15 @@ export async function spawnAcpDirect(
   if (!admission.ok) {
     return rejectSubagentPolicy(admission.error);
   }
-  const resumeAuthorization = validateAcpResumeSessionOwnership({
+  const resumeAuthorization = await validateAcpResumeSessionOwnership({
     cfg,
     targetAgentId,
     backendId,
     requesterSessionKey: requesterInternalKey,
     resumeSessionId: params.resumeSessionId,
+    assertCurrent: ctx.assertActive,
   });
+  ctx.assertActive?.();
   if (!resumeAuthorization.ok) {
     return {
       status: "forbidden",
@@ -368,13 +366,13 @@ export async function spawnAcpDirect(
     config: cfg,
     targetAgentId,
     requesterSessionKey: ctx.agentSessionKey,
-    explicitWorkspaceDir: params.cwd,
+    explicitWorkspaceDir: senderRestricted ? requesterRoot : params.cwd,
   });
   let runtimeCwd: string | undefined;
   try {
     runtimeCwd = await resolveRuntimeCwdForAcpSpawn({
       resolvedCwd,
-      explicitCwd: params.cwd,
+      explicitCwd: senderRestricted ? requesterRoot : params.cwd,
     });
   } catch (error) {
     return {
@@ -512,8 +510,19 @@ export async function spawnAcpDirect(
             parentSessionKey: requesterInternalKey,
             ...childSessionPatch,
             inheritedToolPolicyVersion: 1,
+            ...(ctx.inheritedToolPolicySource
+              ? { inheritedToolPolicySource: ctx.inheritedToolPolicySource }
+              : {}),
             ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
             ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
+            ...(senderRestricted
+              ? {
+                  spawnedWorkspaceDir: ctx.workspaceDir ?? requesterRoot,
+                  spawnedCwd: runtimeCwd,
+                  sessionRoot: requesterRoot,
+                  permissionMode: ctx.sessionPermissionPolicy?.mode,
+                }
+              : {}),
             ...(params.label ? { label: params.label } : {}),
             // Same trust rules as native spawn: stamped last, from trusted host facts only.
             ...parentLineage.receipt,

@@ -49,7 +49,7 @@ import { defaultRuntime } from "../runtime.js";
 import { loadSnapshotLocal, saveSnapshotLocal } from "./exec-approvals-local.js";
 import { rethrowExpectedCliError } from "./failure-output.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
-import { formatDocsHelp } from "./help-format.js";
+import { formatDocsHelp, formatHelpExamples } from "./help-format.js";
 import { nodesCallOpts, resolveCliNodeId } from "./nodes-cli/rpc.js";
 import type { NodesRpcOpts } from "./nodes-cli/types.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
@@ -330,7 +330,12 @@ async function saveSnapshotTargeted(params: SaveSnapshotTargetedParams): Promise
     }
     next = await saveSnapshotLocal(params.file, params.baseHash);
   } else {
-    next = await saveSnapshot(params.opts, params.nodeId, params.file, params.baseHash);
+    const { opts, nodeId, file, baseHash } = params;
+    next = (await callGatewayFromCli(
+      nodeId ? "exec.approvals.node.set" : "exec.approvals.set",
+      opts,
+      nodeId ? { nodeId, file, baseHash } : { file, baseHash },
+    )) as ExecApprovalsSnapshot;
   }
   if (params.opts.json) {
     defaultRuntime.writeJson(isFileApprovalsSnapshot(next) ? redactExecApprovals(next) : next, 0);
@@ -1053,35 +1058,8 @@ function renderNativeApprovalsSnapshot(snapshot: NativeExecApprovalsSnapshot, ta
   );
 }
 
-async function saveSnapshot(
-  opts: ExecApprovalsCliOpts,
-  nodeId: string | null,
-  file: ExecApprovalsFile,
-  baseHash: string,
-): Promise<ExecApprovalsSnapshot> {
-  const method = nodeId ? "exec.approvals.node.set" : "exec.approvals.set";
-  const params = nodeId ? { nodeId, file, baseHash } : { file, baseHash };
-  return (await callGatewayFromCli(method, opts, params)) as ExecApprovalsSnapshot;
-}
-
 function resolveAgentKey(value?: string | null): string {
   return value == null ? "*" : requireTrimmedNonEmpty(value, "--agent must not be blank");
-}
-
-function normalizeAllowlistEntry(entry: { pattern?: string } | null): string | null {
-  return normalizeOptionalString(entry?.pattern) ?? null;
-}
-
-function isEmptyAgent(agent: ExecApprovalsAgent): boolean {
-  const allowlist = Array.isArray(agent.allowlist) ? agent.allowlist : [];
-  return (
-    !agent.security &&
-    !agent.ask &&
-    !agent.askFallback &&
-    agent.autoAllowSkills === undefined &&
-    !agent.mcpTools?.length &&
-    allowlist.length === 0
-  );
 }
 
 async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts) {
@@ -1145,9 +1123,6 @@ function registerAllowlistMutationCommand(params: {
 }
 
 export function registerExecApprovalsCli(program: Command) {
-  const formatExample = (cmd: string, desc: string) =>
-    `  ${theme.command(cmd)}\n    ${theme.muted(desc)}`;
-
   const approvals = program
     .command("approvals")
     .alias("exec-approvals")
@@ -1324,19 +1299,24 @@ export function registerExecApprovalsCli(program: Command) {
     .addHelpText(
       "after",
       () =>
-        `\n${theme.heading("Examples:")}\n${formatExample(
-          'openclaw approvals allowlist add "~/Projects/**/bin/rg"',
-          "Allowlist a local binary pattern for the main agent.",
-        )}\n${formatExample(
-          'openclaw approvals allowlist add --agent main --node <id|name|ip> "/usr/bin/uptime"',
-          "Allowlist on a specific node/agent.",
-        )}\n${formatExample(
-          'openclaw approvals allowlist add --agent "*" "/usr/bin/uname"',
-          "Allowlist for all agents (wildcard).",
-        )}\n${formatExample(
-          'openclaw approvals allowlist remove "~/Projects/**/bin/rg"',
-          "Remove an allowlist pattern.",
-        )}\n${formatDocsHelp("/cli/approvals")}`,
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          [
+            'openclaw approvals allowlist add "~/Projects/**/bin/rg"',
+            "Allowlist a local binary pattern for the main agent.",
+          ],
+          [
+            'openclaw approvals allowlist add --agent main --node <id|name|ip> "/usr/bin/uptime"',
+            "Allowlist on a specific node/agent.",
+          ],
+          [
+            'openclaw approvals allowlist add --agent "*" "/usr/bin/uname"',
+            "Allowlist for all agents (wildcard).",
+          ],
+          [
+            'openclaw approvals allowlist remove "~/Projects/**/bin/rg"',
+            "Remove an allowlist pattern.",
+          ],
+        ])}\n${formatDocsHelp("/cli/approvals")}`,
     );
 
   registerAllowlistMutationCommand({
@@ -1344,7 +1324,9 @@ export function registerExecApprovalsCli(program: Command) {
     name: "add",
     description: "Add a glob pattern to an allowlist",
     mutate: ({ trimmedPattern, file, agent, agentKey, allowlistEntries }) => {
-      if (allowlistEntries.some((entry) => normalizeAllowlistEntry(entry) === trimmedPattern)) {
+      if (
+        allowlistEntries.some((entry) => normalizeOptionalString(entry?.pattern) === trimmedPattern)
+      ) {
         defaultRuntime.log("Already allowlisted.");
         return false;
       }
@@ -1361,7 +1343,7 @@ export function registerExecApprovalsCli(program: Command) {
     description: "Remove a glob pattern from an allowlist",
     mutate: ({ trimmedPattern, file, agent, agentKey, allowlistEntries }) => {
       const nextEntries = allowlistEntries.filter(
-        (entry) => normalizeAllowlistEntry(entry) !== trimmedPattern,
+        (entry) => normalizeOptionalString(entry?.pattern) !== trimmedPattern,
       );
       if (nextEntries.length === allowlistEntries.length) {
         defaultRuntime.log("Pattern not found.");
@@ -1372,7 +1354,14 @@ export function registerExecApprovalsCli(program: Command) {
       } else {
         agent.allowlist = nextEntries;
       }
-      if (isEmptyAgent(agent)) {
+      if (
+        nextEntries.length === 0 &&
+        !agent.security &&
+        !agent.ask &&
+        !agent.askFallback &&
+        agent.autoAllowSkills === undefined &&
+        !agent.mcpTools?.length
+      ) {
         const agents = { ...file.agents };
         delete agents[agentKey];
         file.agents = Object.keys(agents).length > 0 ? agents : undefined;

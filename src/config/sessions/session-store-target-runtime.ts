@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import {
   AgentDatabaseRegistryChangedError,
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
@@ -28,22 +29,65 @@ type StoreTargetReadOwner = {
 
 function prepareSessionStoreRegistryRead(
   request: Pick<SessionStoreTargetInventoryRequest, "env" | "candidates" | "registryDiscovery">,
+  selectedTarget?: () => PreparedStoreTarget | undefined,
 ) {
+  const captured = request.candidates.map((candidate) => {
+    try {
+      const identity = readDatabasePathIdentitySync(candidate.path);
+      return { candidate, identity: identity.key, birthtime: identity.birthtime };
+    } catch {
+      // Retain path fencing; the worker owns an unreadable candidate's diagnostic.
+      return { candidate, identity: "unavailable" };
+    }
+  });
+  const preparedSources: Array<
+    Parameters<typeof createSessionStoreRegistryMutationFilter>[0]["preparedSources"][number]
+  > = [];
+  const unchangedBy = createSessionStoreRegistryMutationFilter({
+    captured,
+    preparedSources,
+    registryDiscovery: request.registryDiscovery,
+  });
   return prepareOpenClawAgentDatabaseRegistrySnapshotRead(
     { env: request.env },
-    createSessionStoreRegistryMutationFilter({
-      captured: request.candidates.map((candidate) => {
-        try {
-          const identity = readDatabasePathIdentitySync(candidate.path);
-          return { candidate, identity: identity.key, birthtime: identity.birthtime };
-        } catch {
-          // Retain path fencing; the worker owns an unreadable candidate's diagnostic.
-          return { candidate, identity: "unavailable" };
+    (mutation, entries) => {
+      const target = selectedTarget?.();
+      if (target && mutation.kind === "upsert" && preparedSources.length === 0) {
+        for (const source of mutation.sources) {
+          const absent = captured.find(
+            ({ candidate, identity }) =>
+              !candidate.scope &&
+              identity.startsWith("path:") &&
+              candidate.physicalPath === target.database.path,
+          );
+          if (
+            !absent ||
+            source.agentId !== target.database.agentId ||
+            source.physicalPath !== target.database.path ||
+            source.schemaVersion !== OPENCLAW_AGENT_SCHEMA_VERSION
+          ) {
+            continue;
+          }
+          try {
+            const current = readDatabasePathIdentitySync(absent.candidate.path);
+            if (current.key === source.identity && current.birthtime !== undefined) {
+              // First registration preserves the selected absent owner; later changes keep its generation.
+              absent.identity = current.key;
+              absent.birthtime = current.birthtime;
+              preparedSources.push({
+                ...target.database,
+                identity: current.key,
+                birthtime: current.birthtime,
+              });
+              break;
+            }
+          } catch {
+            // An unreadable or replaced source remains a registry invalidation.
+          }
         }
-      }),
-      preparedSources: [],
-      registryDiscovery: request.registryDiscovery,
-    }),
+      }
+      return unchangedBy(mutation, entries);
+    },
   );
 }
 
@@ -125,7 +169,8 @@ export async function withSessionStoreTarget<T>(
 ): Promise<T> {
   assertCallerCurrent?.();
   const { candidates, ...targetRequest } = request;
-  let registryRead = prepareSessionStoreRegistryRead(request);
+  let selectedTarget: PreparedStoreTarget | undefined;
+  let registryRead = prepareSessionStoreRegistryRead(request, () => selectedTarget);
   return withSessionHistoryWorkerReadCandidates(
     candidates,
     async (discovery) => {
@@ -170,6 +215,7 @@ export async function withSessionStoreTarget<T>(
         }
       }
       const target = resolved;
+      selectedTarget = target;
       const assertSourceCurrent = () => {
         assertCallerCurrent?.();
         discovery.assertCurrent();

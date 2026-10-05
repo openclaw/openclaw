@@ -151,10 +151,8 @@ export async function removeMemoryDatabaseFiles(dbPath: string): Promise<void> {
 }
 
 /** Remove crash-left shadows while the caller owns the reindex lease. */
-export async function cleanupAgedMemoryReindexTempFiles(
-  dbPath: string,
-  nowMs = Date.now(),
-): Promise<void> {
+export async function cleanupAgedMemoryReindexTempFiles(dbPath: string): Promise<void> {
+  const nowMs = Date.now();
   if (!(await isRegularFile(dbPath))) {
     return;
   }

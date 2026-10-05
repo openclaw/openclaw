@@ -1,4 +1,5 @@
 import { SESSION_ROW_DETAIL_FIELDS } from "../../packages/gateway-protocol/src/session-row-fields.js";
+import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
@@ -54,20 +55,11 @@ type PublicationRows = WeakMap<
   records.MaterializedRow,
   {
     facts: readonly unknown[];
-    views: Map<string, GatewaySessionRow>;
+    views: Map<string, Readonly<GatewaySessionRow>>;
     target: SessionSharingTarget;
   }
 >;
-type PublicationView = (context: SessionRowReadView["state"]["rowContext"]) => PublicationRows;
-
-const publications = new WeakMap<
-  SessionRowProjection,
-  {
-    context: SessionRowReadView["state"]["rowContext"];
-    revision: object | undefined;
-    rows: PublicationRows;
-  }
->();
+const publications = new WeakMap<SessionRowProjection, PublicationRows>();
 const encodings = new WeakMap<GatewaySessionRow, string>();
 
 /** Only the immutable presentation is encoded; recipient-specific list wrappers stay private. */
@@ -86,24 +78,15 @@ export function prepareSessionRowPublication(
   now: number,
   read: SessionRowReadView = projection,
 ) {
-  const view: PublicationView = (context) => {
-    const revision = projection.sharingRevision;
-    let publication = publications.get(projection);
-    if (
-      !publication ||
-      publication.context !== context ||
-      publication.revision !== revision ||
-      !revision
-    ) {
-      publication = { context, revision, rows: new WeakMap() };
-      publications.set(projection, publication);
-    }
-    return publication.rows;
-  };
+  let rows = publications.get(projection);
+  if (!rows) {
+    rows = new WeakMap();
+    publications.set(projection, rows);
+  }
   return (
     client?: GatewayClient | null,
     projectRun?: ReturnType<typeof createVisibleActiveSessionRunProjector>,
-  ) => prepareProjectedSessionPresentation(read, client, now, projectRun, view);
+  ) => prepareProjectedSessionPresentation(read, client, now, projectRun, rows);
 }
 
 /** Recreate after yields: the caller identity and clock belong to one synchronous presentation. */
@@ -112,7 +95,7 @@ export function prepareProjectedSessionPresentation(
   client?: GatewayClient | null,
   now = Date.now(),
   projectRun?: ReturnType<typeof createVisibleActiveSessionRunProjector>,
-  publication?: PublicationView,
+  publicationRows?: PublicationRows,
 ) {
   const { cfg, policyConfig, rowContext } = projection.state;
   const presentFastMode = prepareSessionFastModePresentation(client);
@@ -120,7 +103,6 @@ export function prepareProjectedSessionPresentation(
     client === undefined
       ? undefined
       : prepareOperatorModelPresentation({ cfg, policyConfig, client });
-  const publicationRows = publication?.(rowContext);
   const subagentRuns = rowContext.subagentRuns.atTime(now);
   const active = (key: string, entry: records.MaterializedRow["entry"], agentId: string) =>
     projectRun?.({
@@ -218,6 +200,11 @@ export function prepareProjectedSessionPresentation(
     // owns these views; in-place preview/profile/lineage updates retire the whole row's views.
     let published = publicationRows?.get(record);
     if (publicationRows) {
+      const liveModel = resolveProjectedAgentRunModel({
+        agentId: record.agentId,
+        sessionId: record.entry.sessionId,
+        index: rowContext.projectedAgentRuns,
+      });
       const runState = (key: string, entry: records.MaterializedRow["entry"]) =>
         projectGatewaySessionRunState({
           key,
@@ -233,6 +220,9 @@ export function prepareProjectedSessionPresentation(
         record.subagentRevision,
         record.lastMessagePreview,
         record.fallbackModel,
+        liveModel?.provider,
+        liveModel?.model,
+        liveModel === null,
         sourceSwarm,
         subagentRuns.revision,
         childOwnerSessionKeys,
@@ -310,7 +300,7 @@ export function prepareProjectedSessionPresentation(
       if (existing) {
         return existing;
       }
-      const snapshot = freezeJsonSnapshot(structuredClone(projected));
+      const snapshot = Object.freeze(projected);
       views.set(modelSignature, snapshot);
       return snapshot;
     };

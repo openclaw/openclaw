@@ -257,6 +257,9 @@ an idle chat does not require unrelated chats, model discovery, or tool-catalog
 reads to finish. OpenClaw coordinates its own lifecycle operations for each
 native thread and preserves that thread's identity across ordinary resumes.
 A closed, replaced, or retired client still cannot complete a stale handoff.
+When native interruption and subscription cleanup are confirmed, stopping one
+chat leaves other chats running on the shared client. A follow-up can resume the
+stopped thread without waiting for those chats to finish.
 
 Managed local connections share a bounded inference relay. Up to 16 request
 preparations and uploads run at once, with another 16 waiting in arrival order.

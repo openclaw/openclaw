@@ -115,14 +115,7 @@ type RestartIteration = {
   startupTrace: Record<string, number>;
 };
 
-type ResourceSlope = {
-  activeHandlesCountPerRestart: number | null;
-  activeRequestsCountPerRestart: number | null;
-  activeTimersCountPerRestart: number | null;
-  fdCountPerRestart: number | null;
-  heapUsedMbPerRestart: number | null;
-  rssMbPerRestart: number | null;
-};
+type ResourceSlope = ReturnType<typeof computeResourceSlope>;
 
 type GatewayRestartSample = {
   childExitCode: number | null;
@@ -144,22 +137,7 @@ type GatewayRestartSample = {
   resourceSlope: ResourceSlope;
 };
 
-type CaseResult = {
-  id: string;
-  name: string;
-  samples: GatewayRestartSample[];
-  summary: {
-    downtimeMs: SummaryStats | null;
-    failureRate: number;
-    firstFailureCode: GatewayRestartFailureCode | null;
-    healthzRecoveryMs: SummaryStats | null;
-    readyzRecoveryMs: SummaryStats | null;
-    resourceSlope: Record<keyof ResourceSlope, SummaryStats | null>;
-    restartReadyMs: SummaryStats | null;
-    restartReadyTotalMs: SummaryStats | null;
-    restartTrace: Record<string, SummaryStats>;
-  };
-};
+type CaseResult = ReturnType<typeof summarizeCase>;
 
 type BenchmarkEvidenceFailure = {
   id: string;
@@ -375,7 +353,7 @@ function summarizeResourceSlope(
   ) as Record<keyof ResourceSlope, SummaryStats | null>;
 }
 
-function summarizeCase(benchCase: GatewayBenchCase, samples: GatewayRestartSample[]): CaseResult {
+function summarizeCase(benchCase: GatewayBenchCase, samples: GatewayRestartSample[]) {
   const iterations = samples.flatMap((sample) => sample.iterations);
   const summarize = (read: (iteration: RestartIteration) => number | null) =>
     summarizeNumbers(
@@ -676,7 +654,7 @@ function resolveSampleExitFailure(exit: StopChildResult): GatewayRestartFailureC
     : "restart_child_exited";
 }
 
-function computeResourceSlope(iterations: RestartIteration[]): ResourceSlope {
+function computeResourceSlope(iterations: RestartIteration[]) {
   const traceSlope = (field: string) =>
     slope(
       iterations.map((iteration) =>

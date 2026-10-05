@@ -238,7 +238,6 @@ describe("diagnostic session activity aliases", () => {
       sessionId: "s1",
       sessionKey: "main",
       workKey: "reply:main",
-      clearRunActivity: false,
     });
 
     expect(getDiagnosticSessionActivitySnapshot({ sessionId: "s1", sessionKey: "main" })).toEqual(
@@ -1465,10 +1464,11 @@ describe("stuck session recovery activity reconciliation", () => {
     const state = startSession();
     markStaleActivity();
     const reply = { ...ref, sessionId: "reply-run-1" };
+    const replyOwner = createDiagnosticEmbeddedRunOwner(reply);
     const replyTool = { ...reply, toolName: "ReplyTool", toolCallId: "fresh-tool" };
 
     await recoverStalledSession(state.generation, () => {
-      markDiagnosticEmbeddedRunStarted(reply);
+      markDiagnosticEmbeddedRunStarted({ ...reply, owner: replyOwner });
       emitDiagnosticEvent({
         type: "tool.execution.started",
         ...replyTool,
@@ -1492,7 +1492,7 @@ describe("stuck session recovery activity reconciliation", () => {
       activeToolName: undefined,
     });
 
-    markDiagnosticEmbeddedRunEnded({ ...reply, clearRunActivity: false });
+    closeDiagnosticEmbeddedRunOwner(replyOwner);
     const activity = getDiagnosticSessionActivitySnapshot(ref);
     expect(activity.activeWorkKind).toBeUndefined();
     expect(activity.activeToolName).toBeUndefined();

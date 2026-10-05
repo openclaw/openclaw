@@ -4,7 +4,11 @@ import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
 import type { SessionsCompanionStateResult } from "../../packages/gateway-protocol/src/index.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { AgentHarnessSessionCleanupError } from "../agents/harness/errors.js";
 import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
@@ -664,16 +668,26 @@ test("a delayed deletion event cannot erase Side chat for a newer generation", a
   expect(await readState(service, sessionKey)).toEqual(newState);
 });
 
-test("sessions.delete cancels a prepared Side chat ask before its late answer", async () => {
+test("sessions.delete cancels a prepared Side chat ask before its late answer", async ({
+  signal,
+}) => {
   await createSessionStoreDir();
   const sessionKey = "agent:main:companion-active-delete";
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry("active-generation") } });
   const pending = createDeferred<string>();
-  const { service, run } = await createCompanion(() => pending.promise);
+  const started = createDeferred();
+  const { service, run } = await createCompanion(() => {
+    started.resolve();
+    return pending.promise;
+  });
   const active = ask(service, sessionKey, "Can this survive deletion?");
   const failure = active.catch((error: unknown) => error);
   try {
-    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+    await withinTest(
+      awaitGateBeforeSettlement(started.promise, active, "Side chat settled before model start"),
+      signal,
+    );
+    expect(run).toHaveBeenCalledOnce();
     const deleted = await directSessionReq("sessions.delete", { key: sessionKey });
     expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
     expect(run.mock.calls[0]?.[0].signal.aborted).toBe(true);

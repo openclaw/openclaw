@@ -461,11 +461,11 @@ function findTopLevelDelimiter(text: string, delimiter: string): number {
   return -1;
 }
 
-function splitTopLevelClauses(text: string, delimiter: string): string[] {
+function splitTopLevelClauses(text: string): string[] {
   const parts: string[] = [];
   let rest = text;
   while (rest.length > 0) {
-    const splitAt = findTopLevelDelimiter(rest, delimiter);
+    const splitAt = findTopLevelDelimiter(rest, ";");
     if (splitAt < 0) {
       parts.push(rest);
       break;
@@ -508,9 +508,7 @@ function atomizeClaimText(text: string): string[] {
   if (!normalized) {
     return [];
   }
-  const atomic = splitTopLevelClauses(normalized, ";").flatMap((part) =>
-    splitSubjectLeadClaim(part),
-  );
+  const atomic = splitTopLevelClauses(normalized).flatMap(splitSubjectLeadClaim);
   return uniqueStrings(atomic).slice(0, 3);
 }
 

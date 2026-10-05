@@ -16,7 +16,11 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import type { AgentDatabaseAdmissionRestriction } from "../../state/openclaw-agent-execution-domain.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
-import type { SessionTranscriptWriteScope } from "./session-accessor.sqlite-contract.js";
+import type {
+  SessionTranscriptWriteScope,
+  SessionTranscriptContextVersion,
+  TranscriptEvent,
+} from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import {
   findTranscriptEventInDatabase,
@@ -28,10 +32,15 @@ import {
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
-import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import {
+  readTranscriptGenerationInTransaction,
+  readTranscriptContextVersionInTransaction,
+} from "./session-accessor.sqlite-transcript-state.js";
 import { rewriteSqliteTranscriptEventRowsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { assertLockedTranscriptWriteAllowed } from "./session-accessor.sqlite-transcript-write-guard.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
+import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import { transcriptEventJsonSql } from "./transcript-payload.js";
@@ -58,6 +67,16 @@ export type SessionMessageRewriteCommitted = {
 };
 
 export type SessionMessageRewriteOperations = {
+  "session.transcript.correct": {
+    input: {
+      scope: ResolvedTranscriptScope;
+      fence: SessionTranscriptWriteScope;
+      version: SessionTranscriptContextVersion;
+      allowLaterAppends: boolean;
+      rows: Array<{ entryId: string; expectedEventJson: string; event: TranscriptEvent }>;
+    };
+    output: ReturnType<typeof commitSessionTranscriptCorrection>;
+  };
   "session.messageRewrite.prepare": {
     input: SessionMessageRewriteSelection;
     output: SessionMessageRewriteSnapshot | null;
@@ -114,6 +133,8 @@ export function bindSqliteWorkerBackend(
   return {
     execute(command) {
       switch (command.type) {
+        case "session.transcript.correct":
+          return commitSessionTranscriptCorrection(command.input, context);
         case "session.messageRewrite.prepare":
           return prepareSessionMessageRewrite(command.input, context);
         case "session.messageRewrite.commit":
@@ -129,6 +150,56 @@ export function bindSqliteWorkerBackend(
     },
     close() {},
   };
+}
+
+export type SessionTranscriptCorrectionCommitted = {
+  kind: "session-transcript-correction";
+  generation: string | null;
+};
+
+function commitSessionTranscriptCorrection(
+  input: SessionMessageRewriteOperations["session.transcript.correct"]["input"],
+  { writeTransaction, admit }: AgentWorkerOperationContext,
+) {
+  return writeTransaction(
+    "session.transcript.rewrite-exact",
+    "Transcript correction",
+    (database) => {
+      assertLockedTranscriptWriteAllowed(database, input.scope, input.fence);
+      const current = readTranscriptContextVersionInTransaction(database, input.scope.sessionId);
+      const candidate: SessionTranscriptCorrectionCommitted = {
+        kind: "session-transcript-correction",
+        generation: null,
+      };
+      if (
+        current.generation !== input.version.generation ||
+        (!input.allowLaterAppends &&
+          (current.rawSeq !== input.version.rawSeq ||
+            current.updatedAt !== input.version.updatedAt))
+      ) {
+        if (input.allowLaterAppends) {
+          return transferSessionEntryWorkerCandidate(database, admit, candidate);
+        }
+        throw new SqliteTranscriptMutationConflictError(input.scope.sessionId);
+      }
+      const rows = input.rows.map((row) => {
+        const identity = readTranscriptIdentityByEventId(
+          database,
+          input.scope.sessionId,
+          row.entryId,
+        );
+        if (!identity) {
+          throw new SqliteTranscriptMutationConflictError(input.scope.sessionId);
+        }
+        return { ...row, seq: identity.seq };
+      });
+      rewriteSqliteTranscriptEventRowsInTransaction(database, input.scope, rows);
+      assertLockedTranscriptWriteAllowed(database, input.scope, input.fence);
+      candidate.generation =
+        readTranscriptGenerationInTransaction(database, input.scope.sessionId) ?? null;
+      return transferSessionEntryWorkerCandidate(database, admit, candidate);
+    },
+  );
 }
 
 export function prepareSessionMessageRewrite(

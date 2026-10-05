@@ -771,23 +771,23 @@ describe("openclaw.chat", () => {
     });
 
     expect(call.payload).toMatchObject({ reply: "Everything is healthy." });
-    expect(transcriptStoreMocks.appendTranscriptTurn).toHaveBeenCalledTimes(2);
-    expect(transcriptStoreMocks.appendTranscriptTurn).toHaveBeenNthCalledWith(
+    expect(transcriptStoreMocks.appendTurn).toHaveBeenCalledTimes(2);
+    expect(transcriptStoreMocks.appendTurn).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ role: "user", text: "How is this machine doing?" }),
     );
-    expect(transcriptStoreMocks.appendTranscriptTurn).toHaveBeenNthCalledWith(
+    expect(transcriptStoreMocks.appendTurn).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ role: "assistant", text: "Everything is healthy." }),
     );
-    expect(JSON.stringify(transcriptStoreMocks.appendTranscriptTurn.mock.calls)).not.toMatch(
+    expect(JSON.stringify(transcriptStoreMocks.appendTurn.mock.calls)).not.toMatch(
       /ui-context|plugin-reference|Example/,
     );
   });
 
   it("seeds a new engine with the persisted tail without recording an idle welcome", async () => {
     stubEngineOverview();
-    transcriptStoreMocks.readTranscriptTail.mockReturnValue([
+    transcriptStoreMocks.readTranscriptTailAsync.mockResolvedValue([
       { role: "user", text: "Earlier question", at: 1 },
       { role: "assistant", text: "Earlier answer", at: 2 },
     ]);
@@ -796,14 +796,14 @@ describe("openclaw.chat", () => {
     const call = await callChat(makeContext(new Map()), { sessionId: "fresh" });
 
     expect(call.ok).toBe(true);
-    expect(transcriptStoreMocks.readTranscriptTail).toHaveBeenCalledWith(30, {
+    expect(transcriptStoreMocks.readTranscriptTailAsync).toHaveBeenCalledWith(30, {
       afterLastReset: true,
     });
     expect(seedHistory).toHaveBeenCalledWith([
       { role: "user", text: "Earlier question" },
       { role: "assistant", text: "Earlier answer" },
     ]);
-    expect(transcriptStoreMocks.appendTranscriptTurn).not.toHaveBeenCalled();
+    expect(transcriptStoreMocks.appendTurn).not.toHaveBeenCalled();
   });
 
   it("persists only the mask marker for a sensitive hosted-wizard answer", async () => {
@@ -821,11 +821,11 @@ describe("openclaw.chat", () => {
 
     const prompt = await callChat(context, { sessionId: "s1", message: "connect telegram" });
     expect(prompt.payload).toMatchObject({ sensitive: true, wizardInputPending: true });
-    transcriptStoreMocks.appendTranscriptTurn.mockClear();
+    transcriptStoreMocks.appendTurn.mockClear();
 
     await callChat(context, { sessionId: "s1", message: "raw-secret-value" });
 
-    const persisted = transcriptStoreMocks.appendTranscriptTurn.mock.calls.map(([turn]) => turn);
+    const persisted = transcriptStoreMocks.appendTurn.mock.calls.map(([turn]) => turn);
     expect(persisted).toContainEqual(
       expect.objectContaining({ role: "user", text: "<redacted secret>" }),
     );

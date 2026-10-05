@@ -211,9 +211,9 @@ async function recoverRemovalWithAllocation(params: {
       throw preserved("Provisioned-file recovery requires its original archive owner");
     }
     // A projection can retain ignored guest data outside the ordinary Git capture.
-    const { localWorkspaceStore } =
+    const { hasLocalWorkspaceProjection } =
       await import("../../gateway/worker-environments/local-workspace-store.js");
-    if (localWorkspaceStore(params.env).revision(record.id) !== undefined) {
+    if (await hasLocalWorkspaceProjection(record.id, params.env)) {
       throw preserved("Projected worktree recovery requires its original archive owner");
     }
     const head = await requireGit(record.repoRoot, ["rev-parse", `${params.snapshot}^`], options);

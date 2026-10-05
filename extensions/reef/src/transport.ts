@@ -1,5 +1,6 @@
 import { toStringifiedError as asError } from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
@@ -317,6 +318,7 @@ export class ReefTransportClient {
     signal?: AbortSignal,
     secrets: readonly string[] = [],
   ): Promise<T> {
+    const effect = captureEffectAuthority();
     const url = new URL(path, this.relayUrl).toString();
     const timeout = buildTimeoutAbortSignal({
       timeoutMs: this.requestTimeoutMs,
@@ -326,14 +328,25 @@ export class ReefTransportClient {
     });
     try {
       let response: Response;
+      let initiated = false;
       try {
-        response = await this.fetcher(url, {
-          method,
-          headers: { ...headers, ...(bytes.length ? { "content-type": "application/json" } : {}) },
-          ...(bytes.length ? { body: bytes as BodyInit } : {}),
-          signal: timeout.signal,
+        response = await effect.initiate(() => {
+          timeout.signal?.throwIfAborted();
+          initiated = true;
+          return this.fetcher(url, {
+            method,
+            headers: {
+              ...headers,
+              ...(bytes.length ? { "content-type": "application/json" } : {}),
+            },
+            ...(bytes.length ? { body: bytes as BodyInit } : {}),
+            signal: timeout.signal,
+          });
         });
       } catch (error) {
+        if (!initiated) {
+          throw error;
+        }
         if (timeout.signal?.aborted) {
           throw timeout.signal.reason;
         }

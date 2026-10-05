@@ -248,6 +248,20 @@ export async function settleChatSendPreAckMessageInjection(params: {
   return { status: "continue", attempt: undefined };
 }
 
+/** Pre-ACK steering is already owned; join it before fallible source preparation. */
+export async function settleChatSendMessageInjection(
+  attempt: ReplyMessageInjectionAttempt | undefined,
+): Promise<boolean> {
+  if (!attempt) {
+    return false;
+  }
+  const outcome = await attempt.outcome;
+  if (outcome.status === "failed") {
+    throw outcome.error;
+  }
+  return outcome.status !== "rejected";
+}
+
 /** Finish an accepted steer without entering reply dispatch, or return false for fallback. */
 export async function finalizeAcceptedChatSendMessageInjection(params: {
   attempt: ReplyMessageInjectionAttempt;

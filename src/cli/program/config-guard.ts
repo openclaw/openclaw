@@ -24,7 +24,6 @@ import {
   isExistingOpenClawStateSchema,
 } from "../../state/openclaw-state-db-schema-policy.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import type { InvalidConfigRecoveryDeps } from "../invalid-config-recovery.js";
 
 const ALLOWED_INVALID_COMMANDS = new Set(["audit", "doctor", "logs", "health", "help", "status"]);
 const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
@@ -91,18 +90,15 @@ async function getConfigSnapshot(
   return configSnapshotPromise;
 }
 
-export async function ensureConfigReady(
-  params: {
-    runtime: RuntimeEnv;
-    commandPath?: string[];
-    suppressDoctorStdout?: boolean;
-    allowInvalid?: boolean;
-    beforeStatePreparation?: StartupConfigPreflightOptions["beforeStatePreparation"];
-    measure?: ConfigSnapshotReadMeasure;
-    validateConfigOnly?: boolean;
-  },
-  recoveryDeps?: InvalidConfigRecoveryDeps,
-): Promise<void> {
+export async function ensureConfigReady(params: {
+  runtime: RuntimeEnv;
+  commandPath?: string[];
+  suppressDoctorStdout?: boolean;
+  allowInvalid?: boolean;
+  beforeStatePreparation?: StartupConfigPreflightOptions["beforeStatePreparation"];
+  measure?: ConfigSnapshotReadMeasure;
+  validateConfigOnly?: boolean;
+}): Promise<void> {
   const commandPath = params.commandPath ?? [];
   const commandName = commandPath[0];
   const subcommandName = commandPath[1];
@@ -306,7 +302,6 @@ export async function ensureConfigReady(
     const { offerInvalidConfigRecovery } = await import("../invalid-config-recovery.js");
     const recovery = await offerInvalidConfigRecovery({
       runtime: params.runtime,
-      deps: recoveryDeps,
       retry: async () => {
         // Explicit Doctor owns the repair; retry only current snapshot validation.
         configSnapshotPromise = null;
@@ -323,13 +318,10 @@ export async function ensureConfigReady(
           : await getConfigSnapshot(configSnapshotOptions, params.measure);
         if (retrySnapshot.exists && !retrySnapshot.valid) {
           const retryIssues = renderConfigValidationIssueLines(retrySnapshot);
-          const createError = isConfigReadFailure(retrySnapshot)
-            ? createConfigReadError
-            : createInvalidConfigError;
-          throw createError(
-            retrySnapshot.path,
-            retryIssues.join("\n") || "Unknown validation issue.",
-          );
+          const details = retryIssues.join("\n") || "Unknown validation issue.";
+          throw isConfigReadFailure(retrySnapshot)
+            ? createConfigReadError(retrySnapshot, details)
+            : createInvalidConfigError(retrySnapshot.path, details);
         }
         setRuntimeConfigSnapshot(
           retrySnapshot.runtimeConfig ?? retrySnapshot.config,

@@ -21,6 +21,7 @@ import {
   remainingHovercardOpenDelay,
 } from "./lazy-hovercard-registration.ts";
 import { renderPersonActivityCard } from "./person-activity-card.ts";
+import { observePersonActivityData } from "./person-activity-data.ts";
 import { personActivityRouting } from "./person-activity-link.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
 
@@ -38,6 +39,7 @@ export class SidebarPeopleRuntime {
   private readonly portal = new PortaledHovercardController(() => this.close(), 100);
   private readonly observer = new MutationObserver(() => this.sync());
   private lastOpenAt = -Infinity;
+  private activity: ReturnType<typeof observePersonActivityData> | undefined;
   private readonly stopLocale: () => void;
 
   constructor(private readonly host: AppSidebarSessionNavigationElement) {
@@ -221,6 +223,7 @@ export class SidebarPeopleRuntime {
       this.close();
       return;
     }
+    const activity = (this.activity ??= observePersonActivityData(context, () => this.sync()));
     const defaults = {
       agentsList: context.agents.state.agentsList,
       hello: context.gateway.snapshot.hello,
@@ -238,7 +241,7 @@ export class SidebarPeopleRuntime {
       render(
         renderPersonActivityCard({
           user,
-          sessionData: data,
+          sessionData: activity.data,
           watchAgentId: resolveUiDefaultAgentId(defaults),
           mainKey: resolveUiConfiguredMainKey(defaults),
           globalScope: isUiGlobalScopeConfigured(defaults),
@@ -333,6 +336,8 @@ export class SidebarPeopleRuntime {
     if (this.portal.card) {
       this.lastOpenAt = performance.now();
     }
+    this.activity?.dispose();
+    this.activity = undefined;
     this.observer.disconnect();
     document.removeEventListener("pointerdown", this.outsideInteraction, true);
     document.removeEventListener("focusin", this.outsideInteraction, true);

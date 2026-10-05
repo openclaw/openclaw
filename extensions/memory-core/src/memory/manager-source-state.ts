@@ -62,7 +62,7 @@ export async function resolveMemorySourceFileEntries(params: {
 }
 
 export async function inspectMemorySourceState(params: {
-  db: DatabaseSync;
+  readIndexedRows: () => Promise<MemorySourceFileStateRow[]>;
   workspaceDir: string;
   settings: Pick<ResolvedMemorySearchConfig, "extraPaths" | "multimodal">;
   concurrency: number;
@@ -74,10 +74,7 @@ export async function inspectMemorySourceState(params: {
     onSkippedSymlinkRoot: (root) => skippedRoots.add(root),
   });
   const indexedByPath = new Map(
-    loadMemorySourceFileState({ db: params.db, source: "memory" }).map((row) => [
-      row.path,
-      row.hash,
-    ]),
+    (await params.readIndexedRows()).map((row) => [row.path, row.hash]),
   );
   return {
     source: "memory",
@@ -109,4 +106,23 @@ export function loadMemorySourceFileState(params: {
     query = query.where("path", "in", sqliteStringSet(params.paths));
   }
   return executeSqliteQuerySync(params.db, query).rows;
+}
+
+export function refreshMemorySessionSourceState(
+  db: DatabaseSync,
+  input: { path: string; hash: string; mtime: number; size: number; expectedHash: string },
+): boolean {
+  return (
+    Number(
+      executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<MemorySourceDatabase>(db)
+          .updateTable("memory_index_sources")
+          .set({ hash: input.hash, mtime: input.mtime, size: input.size })
+          .where("path", "=", input.path)
+          .where("source", "=", "sessions")
+          .where("hash", "=", input.expectedHash),
+      ).numAffectedRows,
+    ) === 1
+  );
 }

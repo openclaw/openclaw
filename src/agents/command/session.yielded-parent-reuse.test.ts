@@ -73,7 +73,7 @@ describe("resolveSession with a yielded running parent", () => {
       },
     );
 
-    const first = resolveSession({ cfg, sessionKey, agentId });
+    const first = await resolveSession({ cfg, sessionKey, agentId });
     expect(first.sessionId).toBe(parentSessionId);
 
     // The first completion's prompt admission lands after the registry row.
@@ -86,7 +86,7 @@ describe("resolveSession with a yielded running parent", () => {
       endedAt: yieldedAt,
     });
 
-    const second = resolveSession({ cfg, sessionKey, agentId });
+    const second = await resolveSession({ cfg, sessionKey, agentId });
     expect(second.sessionId).toBe(parentSessionId);
     expect(second.isNewSession).toBe(false);
     expect(second.previousSessionId).toBeUndefined();

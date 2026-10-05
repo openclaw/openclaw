@@ -20,6 +20,7 @@ import {
 import { createDeferredCore, type Deferred } from "../../../shared/deferred.js";
 import { acquireTestPortBlock } from "../../../test-utils/port-claims.js";
 import type { AgentRuntimeIdentity } from "../../agent-runtime-identity-token.js";
+import { createPluginGatewayMethodDescriptor } from "../../methods/descriptor.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -488,6 +489,13 @@ describe("authenticated WebSocket request trace dispatch", () => {
       observation.after = getActiveDiagnosticTraceContext();
       respond(true, { traced: true });
     };
+    registry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: "request-dispatch-proof",
+        name: "test.trace",
+        handler: registry.gatewayHandlers["test.trace"],
+      }),
+    );
     setTestPluginRegistry(registry);
 
     const token = "gateway-request-trace-test-token";
@@ -576,6 +584,13 @@ describe("authenticated WebSocket request trace dispatch", () => {
         },
       });
     };
+    registry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: "request-dispatch-proof",
+        name: "test.serialize",
+        handler: registry.gatewayHandlers["test.serialize"],
+      }),
+    );
     setTestPluginRegistry(registry);
 
     const token = "gateway-response-serialization-test-token";

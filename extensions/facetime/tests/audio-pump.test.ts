@@ -1,3 +1,4 @@
+import type { SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { Writable } from "node:stream";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
@@ -33,13 +34,16 @@ class FakeProcess extends EventEmitter {
   }
 }
 
-type TestSpawn = NonNullable<Parameters<typeof startFaceTimeAudioPump>[0]["spawn"]>;
+const spawnMock = vi.hoisted(() =>
+  vi.fn<(command: string, args: string[], options: SpawnOptions) => unknown>(),
+);
+vi.mock("node:child_process", () => ({ spawn: spawnMock }));
 
 describe("FaceTime native audio bridge", () => {
   let activePump: ReturnType<typeof startFaceTimeAudioPump>;
   function createPump(overrides: Partial<Parameters<typeof startFaceTimeAudioPump>[0]> = {}) {
     const processes: FakeProcess[] = [];
-    const spawn = vi.fn<TestSpawn>(() => {
+    const spawn = spawnMock.mockImplementation(() => {
       const process = new FakeProcess();
       processes.push(process);
       return process;
@@ -48,12 +52,12 @@ describe("FaceTime native audio bridge", () => {
       captureBinary: "/capture",
       logger: console,
       onInputAudio() {},
-      spawn,
       ...overrides,
     });
     return { pump: activePump, processes, spawn };
   }
   beforeEach(() => {
+    spawnMock.mockReset();
     vi.useFakeTimers();
   });
   afterEach(async () => {

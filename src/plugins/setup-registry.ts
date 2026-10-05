@@ -56,6 +56,13 @@ const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
 const RUNNING_FROM_BUILT_ARTIFACT =
   CURRENT_MODULE_PATH.includes(`${path.sep}dist${path.sep}`) ||
   CURRENT_MODULE_PATH.includes(`${path.sep}dist-runtime${path.sep}`);
+const ORDERED_SETUP_API_EXTENSIONS = RUNNING_FROM_BUILT_ARTIFACT
+  ? SETUP_API_EXTENSIONS
+  : [...SETUP_API_EXTENSIONS.slice(3), ...SETUP_API_EXTENSIONS.slice(0, 3)];
+// Shipped implicit setup entries in the root outrank every package-local dist format.
+const SETUP_API_PATHS = ["", "dist"].flatMap((directory) =>
+  ORDERED_SETUP_API_EXTENSIONS.map((extension) => path.join(directory, `setup-api${extension}`)),
+);
 
 type SetupProviderEntry = {
   pluginId: string;
@@ -138,37 +145,21 @@ function resolveSetupApiPath(
   if (cached !== undefined) {
     return cached?.modulePath ?? null;
   }
-  const modulePath = resolveSetupApiPathUncached(rootDir, options);
+  let modulePath = resolvePluginRootArtifactPath(rootDir, SETUP_API_PATHS);
+  if (!modulePath && options?.includeBundledSourceFallback !== false) {
+    const sourceExtensionRoot = path.resolve(
+      path.dirname(CURRENT_MODULE_PATH),
+      "..",
+      "..",
+      "extensions",
+      path.basename(rootDir),
+    );
+    if (sourceExtensionRoot !== rootDir) {
+      modulePath = resolvePluginRootArtifactPath(sourceExtensionRoot, SETUP_API_PATHS);
+    }
+  }
   artifacts.set(key, modulePath ? { modulePath, boundaryRoot: path.dirname(modulePath) } : null);
   return modulePath;
-}
-
-function resolveSetupApiPathUncached(
-  rootDir: string,
-  options?: { includeBundledSourceFallback?: boolean },
-): string | null {
-  const orderedExtensions = RUNNING_FROM_BUILT_ARTIFACT
-    ? SETUP_API_EXTENSIONS
-    : ([...SETUP_API_EXTENSIONS.slice(3), ...SETUP_API_EXTENSIONS.slice(0, 3)] as const);
-
-  // Shipped implicit setup entries in the root outrank every package-local dist format.
-  const artifactPaths = ["", "dist"].flatMap((directory) =>
-    orderedExtensions.map((extension) => path.join(directory, `setup-api${extension}`)),
-  );
-  const direct = resolvePluginRootArtifactPath(rootDir, artifactPaths);
-  if (direct || options?.includeBundledSourceFallback === false) {
-    return direct;
-  }
-  const sourceExtensionRoot = path.resolve(
-    path.dirname(CURRENT_MODULE_PATH),
-    "..",
-    "..",
-    "extensions",
-    path.basename(rootDir),
-  );
-  return sourceExtensionRoot === rootDir
-    ? null
-    : resolvePluginRootArtifactPath(sourceExtensionRoot, artifactPaths);
 }
 
 function resolveRelevantSetupMigrationPluginIds(params: {
@@ -214,15 +205,6 @@ function resolveLoadableSetupRuntimeSource(
       rootDir: record.rootDir,
       packageManifest: record.packageManifest,
     }),
-  );
-}
-
-function resolveDeclaredSetupRuntimeSource(record: PluginManifestRecord): string | null {
-  return (
-    record.setupSource ??
-    resolveSetupApiPath(record.rootDir, {
-      includeBundledSourceFallback: false,
-    })
   );
 }
 
@@ -444,7 +426,12 @@ function pushDescriptorRuntimeDisabledDiagnostic(params: {
   record: PluginManifestRecord;
   diagnostics: PluginSetupRegistryDiagnostic[];
 }): void {
-  if (!resolveDeclaredSetupRuntimeSource(params.record)) {
+  if (
+    !(
+      params.record.setupSource ??
+      resolveSetupApiPath(params.record.rootDir, { includeBundledSourceFallback: false })
+    )
+  ) {
     return;
   }
   params.diagnostics.push({

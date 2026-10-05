@@ -5,7 +5,10 @@ import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import { normalizeBotFrameworkServiceUrl } from "./bot-framework-service-url.js";
 import { resolveMSTeamsPrivateQaRuntime } from "./qa/private-runtime.js";
 import { MSTEAMS_REQUEST_TIMEOUT_MS } from "./request-timeout.js";
-import { msteamsConnectorHandoffInterceptor } from "./send-handoff.js";
+import {
+  msteamsConnectorEffectMiddleware,
+  msteamsConnectorHandoffInterceptor,
+} from "./send-handoff.js";
 import type { MSTeamsCredentials, MSTeamsFederatedCredentials } from "./token.js";
 import { buildOpenClawUserAgentFragment } from "./user-agent.js";
 
@@ -129,6 +132,7 @@ async function createMSTeamsApp(
         headers: { "User-Agent": buildOpenClawUserAgentFragment() },
         timeout: MSTEAMS_REQUEST_TIMEOUT_MS,
         interceptors: [msteamsConnectorHandoffInterceptor],
+        middlewares: [msteamsConnectorEffectMiddleware],
       },
     ...(privateQaRuntime
       ? {

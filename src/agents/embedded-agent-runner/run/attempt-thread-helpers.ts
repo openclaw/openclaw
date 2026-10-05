@@ -1,4 +1,3 @@
-import { normalizeStructuredPromptSection } from "@openclaw/ai/internal/shared";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import type { isCacheTtlEligibleProvider } from "../cache-ttl.js";
@@ -11,30 +10,19 @@ import {
 /** Custom transcript marker used to preserve cache-TTL pruning state across attempts. */
 const ATTEMPT_CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
 
-/**
- * Combines hook-provided system context with the base prompt while preserving
- * stable structured-section bytes. Returning undefined when hooks add nothing
- * lets callers avoid rewriting the original prompt.
- */
+/** Combines already-normalized hook sections without rewriting an unchanged prompt. */
 export function composeSystemPromptWithHookContext(params: {
   baseSystemPrompt?: string;
   prependSystemContext?: string;
   appendSystemContext?: string;
 }): string | undefined {
-  const prependSystem =
-    typeof params.prependSystemContext === "string"
-      ? normalizeStructuredPromptSection(params.prependSystemContext)
-      : "";
-  const appendSystem =
-    typeof params.appendSystemContext === "string"
-      ? normalizeStructuredPromptSection(params.appendSystemContext)
-      : "";
-  if (!prependSystem && !appendSystem) {
+  if (!params.prependSystemContext && !params.appendSystemContext) {
     return undefined;
   }
-  return joinPresentTextSegments([prependSystem, params.baseSystemPrompt, appendSystem], {
-    trim: true,
-  });
+  return joinPresentTextSegments(
+    [params.prependSystemContext, params.baseSystemPrompt, params.appendSystemContext],
+    { trim: true },
+  );
 }
 
 /**

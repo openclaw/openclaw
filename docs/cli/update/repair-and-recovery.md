@@ -179,8 +179,20 @@ Retention copies plugin manifests and files inspected by plugin safety checks,
 so retaining the updater does not make the checkout's plugins fail hardlink
 validation. Other runtime files remain hardlinked when supported.
 
+Updaters using `@openclaw/fs-safe` 0.23.1 or later rely on its guarded byte-copy
+fallback when a container or filesystem refuses file cloning. Native filesystem
+safeguards, source identity checks, file modes, snapshot verification, and SQLite
+byte-copy space admission remain active. Genuine I/O errors still fail the copy.
+This includes Proxmox LXC containers whose seccomp policy denies the `FICLONE`
+ioctl; changing that policy is unnecessary for an updater using this dependency.
+Do not globally disable native filesystem support to bypass cloning: Doctor's
+state migrations require native safeguards.
+
 These lifecycle and copying changes apply when the installed updater supports
 them; installing a newer candidate cannot change the updater already running.
+For the first hop from 2026.9.7 in an affected container, manually install a
+release containing this fix with npm. Subsequent `openclaw update` runs inherit
+the fallback from the installed updater's fs-safe dependency.
 
 On Windows, interruption before activation still lets the admitted recovery
 owner restore task autostart after pending task operations settle. Cancellation
@@ -241,6 +253,25 @@ existing recovery checks. A candidate cannot patch the older updater already
 running; use the manual installation hop below if the installed CLI lacks this
 repair.
 
+For a publication stranded at `publishing` after an external write, repair can
+close it as `publication-settled-external-change` when the installed build-info
+reports the exact candidate version, every file in the package's own dist content
+inventory still matches, the original helper's seal verifies, and no updater owns
+the installation. The root `package.json` must parse with name `openclaw`, the
+candidate version, and type `module`; every `main`, `exports`, and `bin` target must
+resolve to a file in the package. Targets within `dist/` must be inventoried;
+top-level targets such as `openclaw.mjs` are checked for resolution without content
+verification. Extra `package.json` files under `dist/` refuse settlement because
+they can change how inventoried code loads. Dependency manifests under
+`node_modules/` are expected and ignored. Other extra dist files remain warnings.
+Restore any changed inventoried file to its packaged bytes before retrying; a
+working Gateway alone does not waive an inventory failure. Repair preserves the
+previous package and sealed helper, leaves the installed package and launchers in
+place, and records the warning and extra paths in update history. The warning and
+receipt identify the root manifest as field-verified, not content-verified. The
+sealed tree digest cannot identify old per-file metadata differences. Use a CLI
+containing this fix; the original sealed helper keeps its original recovery checks.
+
 For a package update stranded by an older updater's launcher ownership checks,
 use the manual installation hop, then repair from the new CLI at the same root:
 
@@ -256,8 +287,8 @@ When the installed package directory matches neither recorded generation, repair
 closes the previous package operation as `superseded-by-manual-install`, warns with
 its operation ID, and preserves its staged files and helper beside the installation.
 The original failed history entry remains intact. The pending package-recovery
-gate then clears, so another update can proceed. Same-identity recovery keeps its
-original sealed-helper checks; missing packages, active update owners, and pending
+gate then clears, so another update can proceed. Other same-identity recovery keeps
+its original sealed-helper checks; missing packages, active update owners, and pending
 database or configuration restoration still require their existing recovery path.
 
 If recovery instead reports `managed handoff lease database identity changed`,

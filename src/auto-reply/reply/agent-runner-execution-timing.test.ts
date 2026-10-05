@@ -18,6 +18,43 @@ vi.mock("../../gateway/session-utils.js", () => ({ loadSessionEntry: vi.fn() }))
 
 const state = await setupAgentRunnerExecutionTestState();
 
+it("announces a remote native run before its worker starts writing replies", async () => {
+  const { executeAgentTurn } = await import("./agent-runner-execution.js");
+  const onAgentRunStart = vi.fn();
+  const turn = createMinimalRunAgentTurnParams({ opts: { onAgentRunStart } });
+  turn.followupRun.run.config = {
+    agents: {
+      defaults: { models: { "anthropic/claude": { agentRuntime: { id: "openclaw" } } } },
+    },
+  };
+  const transcriptStart = {
+    agentId: "main",
+    sessionId: "session",
+    sessionKey: "main",
+    storePath: "/synthetic/sessions.json",
+    generation: "worker-start",
+    maxSeq: 7,
+  };
+  const prepare = vi
+    .spyOn(transcriptWatermarks, "readSessionTranscriptStartAsync")
+    .mockResolvedValue(transcriptStart);
+  let startsBeforeReply = -1;
+  state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+    await params.onExecutionStarted?.({ backend: "cloud-worker" });
+    params.onExecutionPhase?.({ phase: "process_spawned", backend: "cloud-worker" });
+    startsBeforeReply = onAgentRunStart.mock.calls.length;
+    return { payloads: [{ text: "worker answer" }], meta: {} };
+  });
+  try {
+    const result = await executeAgentTurn(turn);
+    expect(result.outcome.kind).toBe("settled");
+    expect(startsBeforeReply).toBe(1);
+    expect(onAgentRunStart.mock.lastCall?.[3]).toEqual(transcriptStart);
+  } finally {
+    prepare.mockRestore();
+  }
+});
+
 it.each(["settled", "pending"] as const)(
   "uses the starting fallback candidate's facts after a prior %s preparation",
   async (preparationState) => {

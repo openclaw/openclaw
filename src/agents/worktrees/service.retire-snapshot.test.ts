@@ -1,15 +1,19 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { StatementSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { registerWorktreesCli } from "../../cli/worktrees-cli.js";
-import { localWorkspaceStore } from "../../gateway/worker-environments/local-workspace-store.js";
+import { withLocalWorkspaceStore } from "../../gateway/worker-environments/local-workspace-store.js";
+import {
+  observeLocalWorkspaceStoreSql,
+  readLocalWorkspaceProjection,
+} from "../../gateway/worker-environments/local-workspace-store.test-support.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { defaultRuntime } from "../../runtime.js";
+import * as stateRead from "../../state/openclaw-state-db-readonly.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -17,7 +21,6 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import * as worktreeGit from "./git.js";
 import { insertRegistryWorktreeProvisionedChunk } from "./provisioned-snapshot.test-support.js";
 import { getRegistryWorktreeProvisionedChunk } from "./registry-read.js";
@@ -378,9 +381,8 @@ describe("Exact removed worktree snapshot retirement", () => {
     await fs.mkdir(projection, { recursive: true });
     const payload = path.join(projection, "ignored-owned.txt");
     await fs.writeFile(payload, "projection-only content");
-    const store = localWorkspaceStore(env);
-    const row = store.create(
-      {
+    const row = await withLocalWorkspaceStore({ worktreeId: record.id, env }, (store) =>
+      store.create({
         worktree_id: record.id,
         agent_id: "main",
         session_key: record.ownerId!,
@@ -397,28 +399,35 @@ describe("Exact removed worktree snapshot retirement", () => {
         journal_pack: Buffer.from("synthetic recovery pack"),
         paused_runtimes_json: null,
         created_at_ms: removedAt - 1,
-      },
-      () => undefined,
+      }),
     );
     expect(row.revision).toBe(0);
-    const reads = observeMainThreadReads();
+    const reads = observeLocalWorkspaceStoreSql();
     try {
       reads.calibrate();
+      const executeRead = stateRead.executeExistingOpenClawStateRead;
+      const projectionReplyBytes: number[] = [];
+      const readReply = vi
+        .spyOn(stateRead, "executeExistingOpenClawStateRead")
+        .mockImplementation(async (options, command, readOptions) => {
+          const reply = await executeRead(options, command, readOptions);
+          if (command.type.startsWith("localWorkspace.")) {
+            projectionReplyBytes.push(Buffer.byteLength(JSON.stringify(reply)));
+          }
+          return reply;
+        });
       await expect(retireManagedWorktreeSnapshotById(request)).rejects.toThrow(
         /projection custody/,
       );
-      const projections = reads.calls
-        .flatMap((call) => call.mock.contexts)
-        .filter((statement): statement is StatementSync => statement instanceof StatementSync)
-        .filter((statement) => statement.sourceSQL.includes('"local_workspace_projections"'));
-      expect(
-        projections.map((statement) => statement.columns().map((column) => column.name)),
-      ).toEqual([["revision"]]);
+      readReply.mockRestore();
+      expect(projectionReplyBytes.length).toBeGreaterThan(0);
+      expect(Math.max(...projectionReplyBytes)).toBeLessThan(1024);
+      reads.expectIdle();
     } finally {
       reads.restore();
     }
     await expectPreserved(record);
-    expect(store.get(record.id)).toEqual(row);
+    expect(await readLocalWorkspaceProjection(record.id, env)).toEqual(row);
     expect(await fs.readFile(payload, "utf8")).toBe("projection-only content");
   });
 

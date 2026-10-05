@@ -151,6 +151,9 @@ export function captureOpenClawAgentDatabaseValidationTransfer(
       (capturedValidation &&
         wasValid === 1 &&
         Atomics.load(new Int32Array(capturedValidation.valid), 0) !== 1) ||
+      (captured.validation !== capturedValidation &&
+        captured.validation &&
+        Atomics.load(new Int32Array(captured.validation.valid), 0) !== 1) ||
       !isRecord(received) ||
       received.agentId !== database.agentId ||
       received.identity !== identity ||
@@ -225,7 +228,12 @@ export function hasOpenClawAgentCanonicalValidation(
     return false;
   }
   const canonical = createValidationReceipt({ ...database, path: pathname }, true);
-  validatedPaths.set(path.resolve(pathname), { validation: canonical, integrityVerified: false });
+  const entry: ValidationEntry = validatedPaths.get(path.resolve(pathname)) ?? {
+    integrityVerified: false,
+  };
+  // A canonical read enriches this owner; only revocation replaces its handoff identity.
+  entry.validation = canonical;
+  validatedPaths.set(path.resolve(pathname), entry);
   bindValidationLifetime({ ...database, path: pathname }, canonical);
   return true;
 }

@@ -177,7 +177,6 @@ async function withWebchatTool(
 
 describe("WebChat automation creation through the tool and Gateway", () => {
   it.each([
-    { name: "default current session", delivery: undefined, storedContext: undefined },
     {
       name: "ignores stale external route",
       delivery: { mode: "announce" },

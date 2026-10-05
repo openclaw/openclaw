@@ -87,6 +87,10 @@ const pluginAppPolicyContextSchema = z
     pluginAppIds: z.record(z.string(), z.array(z.string())).default({}),
   })
   .strict();
+export type PluginAppPolicyContext = z.infer<typeof pluginAppPolicyContextSchema>;
+export type CodexAppPolicyContextEntry = PluginAppPolicyContext["apps"][string];
+export type PluginAppPolicyContextEntry = z.infer<typeof pluginAppPolicyEntrySchema>;
+
 export const legacyAppPolicyEntrySchema = z.union([
   accountAppPolicyEntrySchema
     .extend({ destructiveApprovalMode: destructiveApprovalModeSchema })

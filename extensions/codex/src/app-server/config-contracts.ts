@@ -24,7 +24,6 @@ export type CodexAppServerTransportMode = "stdio" | "websocket" | "unix";
 export type CodexAppServerHomeScope = "agent" | "user";
 export type CodexAppServerPolicyMode = "yolo" | "guardian";
 export type CodexAppServerConnectionClass = "local-loopback" | "remote";
-export type CodexAppServerRemoteAppsSubstrate = "preconfigured";
 export type ProviderAuthAliasConfig = NonNullable<ProviderAuthAliasLookupParams>["config"];
 export type CodexAppServerDefaultPolicy = {
   mode: CodexAppServerPolicyMode;
@@ -35,7 +34,6 @@ export type CodexAppServerDefaultPolicy = {
 };
 export type CodexAppServerApprovalPolicy = "never" | "on-request";
 export type CodexAppServerManagedApprovalPolicy = Extract<CodexApprovalPolicy, string>;
-export type CodexAppServerApprovalPolicySource = "config" | "env" | "requirements" | "implicit";
 export type CodexAppServerEffectiveApprovalPolicy = CodexApprovalPolicy;
 export type CodexManagedCommandOrder = "package-first" | "desktop-first" | "package-only";
 export type CodexDynamicToolsLoading = "searchable" | "direct";
@@ -87,13 +85,11 @@ export type CodexAppServerStartOptions = {
 export type CodexAppServerRuntimeOptions = {
   start: CodexAppServerStartOptions;
   connectionClass: CodexAppServerConnectionClass;
-  remoteAppsSubstrate: CodexAppServerRemoteAppsSubstrate;
   remoteWorkspaceRoot?: string;
   codeModeOnly: boolean;
   loopDetectionPreToolUseRelay: boolean;
   requestTimeoutMs: number;
   approvalPolicy: CodexAppServerEffectiveApprovalPolicy;
-  approvalPolicySource?: CodexAppServerApprovalPolicySource;
   sandbox: CodexSandboxMode;
   approvalsReviewer: CodexApprovalsReviewer;
   /** Prepared boundary for an explicit session permission mode. */

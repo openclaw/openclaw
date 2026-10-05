@@ -294,9 +294,17 @@ async function prepareUserProfileAuthority(
     if (!reply.profile) {
       return undefined;
     }
-    const isCurrent = read.bind([profileId, reply.profile.profileId]);
+    const sourceProfiles = [profileId, reply.profile.profileId];
+    const isCurrent = read.bind(sourceProfiles);
     if (isCurrent) {
-      return { ...reply.profile, isCurrent };
+      return {
+        ...reply.profile,
+        isCurrent,
+        readSource: () => {
+          read.assertSettled(sourceProfiles);
+          return { path: context.admission.databasePath, env: context.environment };
+        },
+      };
     }
   }
   throw new Error("Profile authority changed while preparing the administrative request");

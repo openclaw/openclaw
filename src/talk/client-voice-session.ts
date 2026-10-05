@@ -29,16 +29,16 @@ import {
   ClientVoiceMutationDigestOwner,
   deliverClientVoiceMutationDigest,
 } from "./client-voice-mutation-digest-owner.js";
+import { lookupClientVoiceSessions } from "./client-voice-session-read.js";
 import {
   assertVoiceSessionOwnership as assertOwnership,
   type ClientVoiceRunBinding,
   type ClientVoiceSessionRecord,
   type ClientVoiceToolEffect,
   operationKey,
-  parseStoredVoiceSessionRecord as parseStoredRecord,
   readVoiceSessionRecord as readRecord,
   readVoiceSessionRecordInTransaction as readRecordInTransaction,
-  readVoiceSessionRecordRows,
+  readVoiceSessionFacts,
   VOICE_SESSION_RECORD_VERSION as RECORD_VERSION,
   VOICE_SESSION_STALE_AFTER_MS as STALE_AFTER_MS,
   writeVoiceSessionRecordInTransaction as writeRecordInTransaction,
@@ -69,11 +69,19 @@ function hasLiveConsultRun(record: ClientVoiceSessionRecord): boolean {
 
 async function closeVoiceSessionOperationOwner(
   params: Parameters<typeof closeClientVoiceSessionInternal>[0],
-): Promise<void> {
+): Promise<boolean> {
+  let closed: boolean | undefined;
   await voiceSessionOperations.close(
     operationKey(params.agentId, params.voiceSessionId),
-    async () => closeClientVoiceSessionInternal(params),
+    async () => {
+      closed = await closeClientVoiceSessionInternal(params);
+    },
   );
+  // A joined recovery close may skip a resumed call; explicit closes need their own barrier.
+  if (closed === undefined && params.staleBefore === undefined) {
+    return closeVoiceSessionOperationOwner(params);
+  }
+  return closed ?? false;
 }
 
 function effectStatus(
@@ -345,7 +353,7 @@ export function resolveClientVoiceRunBinding(runId?: string): ClientVoiceRunBind
  * Legacy clients without transcript reporting keep pre-gate behavior.
  */
 export function isClientVoiceSessionConfirmable(binding: ClientVoiceRunBinding): boolean {
-  const record = readRecord(binding.agentId, binding.voiceSessionId);
+  const record = readVoiceSessionFacts(binding.agentId, binding.voiceSessionId);
   return (
     record?.origin === "relay" ||
     record?.transcriptCapable === true ||
@@ -353,17 +361,18 @@ export function isClientVoiceSessionConfirmable(binding: ClientVoiceRunBinding):
   );
 }
 
-/** Validate ownership and open state before starting a voice-bound consult. */
-export function assertClientVoiceSessionOpen(params: {
-  agentId: string;
-  sessionKey: string;
-  voiceSessionId: string;
-}): "client" | "relay" {
-  const record = readRecord(params.agentId, params.voiceSessionId);
+function requireOwnedVoiceSession(params: ClientVoiceRunBinding) {
+  const record = readVoiceSessionFacts(params.agentId, params.voiceSessionId);
   if (!record) {
     throw new Error("voice session not found");
   }
   assertOwnership(record, params);
+  return record;
+}
+
+/** Validate ownership and open state before starting a voice-bound consult. */
+export function assertClientVoiceSessionOpen(params: ClientVoiceRunBinding): "client" | "relay" {
+  const record = requireOwnedVoiceSession(params);
   if (record.status !== "open") {
     throw new Error("voice session is closed");
   }
@@ -371,41 +380,17 @@ export function assertClientVoiceSessionOpen(params: {
 }
 
 /** Validate durable ownership without rejecting an idempotent close retry. */
-export function resolveClientVoiceSessionOrigin(params: {
-  agentId: string;
-  sessionKey: string;
-  voiceSessionId: string;
-}): "client" | "relay" {
-  const record = readRecord(params.agentId, params.voiceSessionId);
-  if (!record) {
-    throw new Error("voice session not found");
-  }
-  assertOwnership(record, params);
-  return record.origin;
+export function resolveClientVoiceSessionOrigin(params: ClientVoiceRunBinding): "client" | "relay" {
+  return requireOwnedVoiceSession(params).origin;
 }
 
 /** Resolve the unique open client-owned call for legacy tool-call clients. */
-export function resolveOpenClientVoiceSessionId(params: {
+export async function resolveOpenClientVoiceSessionId(params: {
   agentId: string;
   sessionKey: string;
-}): string | undefined {
-  const rows = readVoiceSessionRecordRows(params.agentId);
-  let match: string | undefined;
-  for (const row of rows) {
-    const record = parseStoredRecord(row.value_json);
-    if (
-      record?.origin === "client" &&
-      record.status === "open" &&
-      record.agentId === params.agentId &&
-      record.sessionKey === params.sessionKey
-    ) {
-      if (match) {
-        return undefined;
-      }
-      match = record.voiceSessionId;
-    }
-  }
-  return match;
+}): Promise<string | undefined> {
+  const matches = await lookupClientVoiceSessions({ kind: "legacy", ...params });
+  return matches.length === 1 ? matches[0]?.voiceSessionId : undefined;
 }
 
 function appendVoiceTranscript(params: {
@@ -590,20 +575,23 @@ async function closeClientVoiceSessionInternal(params: {
   config: OpenClawConfig;
   transcriptFailurePolicy: "require-success" | "retain-and-close";
   now?: number;
-}): Promise<void> {
-  const existing = readRecord(params.agentId, params.voiceSessionId);
-  if (!existing) {
-    throw new Error("voice session not found");
-  }
-  assertOwnership(existing, params);
+  staleBefore?: number;
+}): Promise<boolean> {
   const now = params.now ?? Date.now();
-  runOpenClawAgentWriteTransaction(
+  const closed = runOpenClawAgentWriteTransaction(
     (database) => {
       const current = readRecordInTransaction(database, params.voiceSessionId);
       if (!current) {
         throw new Error("voice session disappeared during close");
       }
       assertOwnership(current, params);
+      // Recovery candidates can be resumed while the reader or close queue is awaiting work.
+      if (
+        params.staleBefore !== undefined &&
+        (current.status !== "open" || current.updatedAt > params.staleBefore)
+      ) {
+        return undefined;
+      }
       if (
         current.transcriptFailureKeys.length > 0 &&
         params.transcriptFailurePolicy === "require-success"
@@ -619,13 +607,13 @@ async function closeClientVoiceSessionInternal(params: {
         current.updatedAt = now;
         writeRecordInTransaction(database, current);
       }
+      return current;
     },
     { agentId: params.agentId },
     { operationLabel: "voice.session.close" },
   );
-  const closed = readRecord(params.agentId, params.voiceSessionId);
   if (!closed) {
-    throw new Error("voice session disappeared after close");
+    return false;
   }
   // Transport close does not end consult runs: live bindings keep effect capture active,
   // approved grants stay valid for those runs, and the digest waits for the last run.completed.
@@ -641,6 +629,7 @@ async function closeClientVoiceSessionInternal(params: {
     voiceSessionId: params.voiceSessionId,
     context: params.config,
   });
+  return true;
 }
 
 /** Close a logical voice call after its accepted transcript prefix is durable. */
@@ -686,26 +675,27 @@ export async function closeStaleClientVoiceSessions(params: {
   // A new voice session remains a retry point, but channel I/O is detached so a
   // stalled adapter cannot block stale-session recovery.
   mutationDigestDeliveryOwner.retryAgent(params.agentId, params.config);
-  const rows = readVoiceSessionRecordRows(params.agentId, now - STALE_AFTER_MS);
-  const stale = rows.flatMap((row) => {
-    const record = parseStoredRecord(row.value_json);
-    return record &&
-      record.status === "open" &&
-      record.voiceSessionId !== params.excludeVoiceSessionId
-      ? [record]
-      : [];
+  const stale = await lookupClientVoiceSessions({
+    kind: "stale",
+    agentId: params.agentId,
+    updatedBefore: now - STALE_AFTER_MS,
+    excludeVoiceSessionId: params.excludeVoiceSessionId,
   });
   let closed = 0;
   for (const record of stale) {
     try {
-      await closeClientVoiceSession({
+      const didClose = await closeVoiceSessionOperationOwner({
         agentId: params.agentId,
         sessionKey: record.sessionKey,
         voiceSessionId: record.voiceSessionId,
         config: params.config,
         now,
+        staleBefore: now - STALE_AFTER_MS,
+        transcriptFailurePolicy: "require-success",
       });
-      closed += 1;
+      if (didClose) {
+        closed += 1;
+      }
     } catch (error) {
       params.warn?.(
         `failed to close stale voice session ${record.voiceSessionId}: ${error instanceof Error ? error.message : String(error)}`,

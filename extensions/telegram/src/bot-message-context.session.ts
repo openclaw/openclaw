@@ -88,7 +88,7 @@ type TelegramMessageContextSessionRuntime =
 const sessionRuntimeMethods = [
   "buildChannelInboundEventContext",
   "readAmbientTranscriptWatermark",
-  "readSessionUpdatedAt",
+  "readSessionUpdatedAtAsync",
   "recordInboundSession",
   "resolveAmbientTranscriptWatermarkKey",
   "resolveInboundLastRouteSessionKey",
@@ -518,7 +518,7 @@ export async function buildTelegramInboundContextPayload(params: {
     agentId: route.agentId,
   });
   const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
-  const previousTimestamp = sessionRuntime.readSessionUpdatedAt({
+  const previousTimestamp = await sessionRuntime.readSessionUpdatedAtAsync({
     storePath,
     sessionKey: route.sessionKey,
   });

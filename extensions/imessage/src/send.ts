@@ -40,7 +40,6 @@ import {
 } from "./approval-reactions.js";
 import { chatContextFromIMessageTarget, resolveIMessageDirectChatService } from "./chat-context.js";
 import { withIMessageReceiptGuidReader } from "./chat-db.js";
-import { runIMessageCliJsonCommand } from "./cli-output.js";
 import { resolveIMessageChatDbLookupPath } from "./cli-path.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { DEFAULT_IMESSAGE_SEND_TIMEOUT_MS } from "./constants.js";
@@ -57,7 +56,11 @@ import {
 } from "./monitor/sanitize-outbound.js";
 import { withIMessageRemoteFile } from "./remote-file.js";
 import { resolveIMessageRemoteHost } from "./remote-host.js";
-import { requestIMessageRpcSend, type IMessageSendHandoff } from "./send-transport.js";
+import {
+  bindIMessageCliSend,
+  requestIMessageRpcSend,
+  type IMessageSendHandoff,
+} from "./send-transport.js";
 import {
   formatIMessageChatTarget,
   type IMessageService,
@@ -510,14 +513,7 @@ export async function sendMessageIMessage(
       : undefined;
   // Unthreaded fallback must also clear reply metadata from receipts and bindings.
   let effectiveReplyToId = resolvedReplyToId;
-  const runCli =
-    opts.runCliJson ??
-    ((args: readonly string[]) => runIMessageCliJsonCommand({ args, cliPath, dbPath, timeoutMs }));
-  const runCliJson = async (args: readonly string[]) => {
-    // Lookup commands need current authority without recording visible dispatch.
-    opts.assertDirectAdapterHandoff?.();
-    return await runCli(args);
-  };
+  const runCliJson = bindIMessageCliSend(opts, { cliPath, dbPath, timeoutMs });
   const requestOwnedRpc = async (method: string, rpcParams: Record<string, unknown>) => {
     opts.assertDirectAdapterHandoff?.();
     const rpcClient = await (opts.createClient ?? createIMessageRpcClient)({

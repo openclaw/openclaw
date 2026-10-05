@@ -57,7 +57,7 @@ import {
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import {
   getSessionEntry,
-  readSessionUpdatedAt,
+  readSessionUpdatedAtAsync,
   resolveSendPolicy,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -838,7 +838,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
             }),
           }
         : decision;
-    const previousTimestamp = readSessionUpdatedAt({
+    const previousTimestamp = await readSessionUpdatedAtAsync({
       storePath,
       sessionKey: decision.route.sessionKey,
     });

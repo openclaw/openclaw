@@ -214,6 +214,8 @@ it.each(["cold start", "hot enable"] as const)(
         });
         await runGatewayStartupObservers({
           registry: initial.pluginRegistry,
+          resolveGatewayContext: () => undefined,
+          loadSubagentRegistryActivation: async () => () => {},
           signal: runtime.requestEntryLifetime.signal,
           port: 0,
           config,

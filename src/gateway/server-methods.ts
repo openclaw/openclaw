@@ -1,4 +1,8 @@
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import {
+  captureExternalSessionCommitGuard,
+  composeSessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -26,7 +30,6 @@ import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodDescriptorsFromHandlers,
   createGatewayMethodRegistry,
-  createPluginGatewayMethodDescriptors,
   isCoreGatewayMethodClassified,
   type GatewayMethodRegistry,
 } from "./methods/registry.js";
@@ -62,6 +65,7 @@ import { sessionLog } from "./session-log.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 import { resolveRuntimeSessionParticipantRequest } from "./session-tool-participant.js";
+import { dispatchSharedRead } from "./shared-read-responses.js";
 import {
   startSlowRequestDiagnostics,
   type SessionSubscribePhase,
@@ -95,7 +99,7 @@ export function createRequestGatewayMethodRegistry(
   return createGatewayMethodRegistry(
     [
       ...createCoreGatewayMethodDescriptors(coreDescriptorHandlers),
-      ...(gatewayPluginRegistry ? createPluginGatewayMethodDescriptors(gatewayPluginRegistry) : []),
+      ...(gatewayPluginRegistry?.gatewayMethodDescriptors ?? []),
       ...createGatewayMethodDescriptorsFromHandlers({
         handlers: Object.fromEntries(auxHandlers),
         owner: { kind: "aux", area: "gateway-extra" },
@@ -315,11 +319,11 @@ export async function handleGatewayRequest(
       : respondUnobserved;
     const sessionMutationCommitGuard =
       profileBinding || runtimeParticipant
-        ? () => {
-            profileBinding?.assertCurrent();
-            runtimeParticipant?.assertCurrent();
-            opts.sessionMutationCommitGuard?.();
-          }
+        ? composeSessionSourceAssertion([
+            profileBinding?.assertCurrent,
+            runtimeParticipant?.assertCurrent,
+            captureExternalSessionCommitGuard(opts.sessionMutationCommitGuard),
+          ])
         : opts.sessionMutationCommitGuard;
     const entry = opts.requestEntry ?? context.requestEntryLifetime?.enter(opts);
     const releaseForegroundWork = retainSessionListForegroundWork();
@@ -410,11 +414,11 @@ export async function handleGatewayRequest(
       }
       const sessionMutationAuthorization = withSessionMutationCommitGuard(
         authorization.sessionMutationAuthorization,
-        () => {
-          runtimeParticipant?.assertCurrent();
-          assertOperatorCurrent();
-          requestMutationAuthority.assertCurrent();
-        },
+        composeSessionSourceAssertion([
+          runtimeParticipant?.assertCurrent,
+          assertOperatorCurrent,
+          requestMutationAuthority.assertCurrent,
+        ]),
         profileBinding?.assertCurrent,
         requestMutationAuthority.assertAdmittedInputCurrent
           ? () => {
@@ -484,7 +488,24 @@ export async function handleGatewayRequest(
         // Long polls and shutdown initiators must never remain preparation leases.
         entry?.release();
         profileBinding?.markInvoked();
-        return GatewayRpcDiagnostics.runHandler(() => preparedHandler(handlerOptions), diagnostics);
+        const sharing = opts.acceptsSerializedJson
+          ? methodRegistry.getReadSharing?.(req.method)
+          : undefined;
+        return GatewayRpcDiagnostics.runHandler(
+          () =>
+            sharing
+              ? dispatchSharedRead(preparedHandler, handlerOptions, sharing, () => {
+                  runtimeParticipant?.assertCurrent();
+                  profileBinding?.assertCurrent();
+                  assertOperatorCurrent();
+                  requestMutationAuthority.assertCurrent();
+                  authorization.sessionAccessAuthority?.assertCurrent();
+                  sessionMutationAuthorization?.assertCurrent();
+                  signal?.throwIfAborted();
+                })
+              : preparedHandler(handlerOptions),
+          diagnostics,
+        );
       };
       if (req.method === "question.get" || req.method === "question.resolve") {
         // Draining admission consults the pending owner before handler entry.

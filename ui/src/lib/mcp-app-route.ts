@@ -19,10 +19,8 @@ function validMcpAppDeepLink(value: string): boolean {
 }
 
 export function parseMcpAppLink(value: string): McpAppRoute | null {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
+  const url = URL.parse(value);
+  if (!url) {
     return null;
   }
   const native =

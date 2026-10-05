@@ -64,6 +64,7 @@ import { resolveActiveExplicitSteerSessionKey } from "./explicit-steer-routing.j
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   enqueueFollowupRun,
+  kickFollowupDrainIfIdle,
   refreshQueuedFollowupSession,
   scheduleFollowupDrain,
   type FollowupRun,
@@ -315,6 +316,7 @@ vi.mock("../../gateway/mcp-app-channel-action.js", () => ({
 vi.mock("./queue.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./queue.js")>()),
   enqueueFollowupRun: vi.fn(),
+  kickFollowupDrainIfIdle: vi.fn(),
   parkSteerCandidate: parkedSteer.park,
   refreshQueuedFollowupSession: vi.fn(),
   scheduleFollowupDrain: vi.fn(),
@@ -361,6 +363,7 @@ beforeEach(() => {
   });
   vi.mocked(enqueueFollowupRun).mockReset().mockReturnValue(true);
   vi.mocked(refreshQueuedFollowupSession).mockReset();
+  vi.mocked(kickFollowupDrainIfIdle).mockReset();
   vi.mocked(scheduleFollowupDrain).mockReset();
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
@@ -1584,6 +1587,17 @@ describe("runReplyAgent heartbeat followup guard", () => {
 
     expect(runState.admission).toEqual({ status: "owned" });
     expect(resolveReplyOperationAgentTurn(runState)).toBe("ok");
+  });
+
+  it("kicks queued followups without handing them a heartbeat runner", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const { run } = createMinimalRun({ opts: { isHeartbeat: true } });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(vi.mocked(kickFollowupDrainIfIdle)).toHaveBeenCalledExactlyOnceWith("main");
+    expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
   });
 
   it("records a failed heartbeat turn when a visible reply replaces its synthetic failure", async () => {
@@ -3862,7 +3876,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
   registerRequiredReplyCompletionCases({
     createMinimalRun,
     state,
-    requireScheduledFollowupRunner,
   });
 
   it("does not start typing on assistant message start without prior text in message mode", async () => {

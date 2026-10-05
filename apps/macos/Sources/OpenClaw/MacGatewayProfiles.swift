@@ -103,7 +103,6 @@ actor MacGatewayProfileStore {
         AppProfile.current.keychainService(base: self.baseService)
     }
 
-    private static let registryAccount = "registry-v1"
     private static let currentLegacyPrimaryMigrationVersion = 1
 
     /// Registry reads are prompt-bearing: when this binary is missing from the
@@ -536,10 +535,19 @@ actor MacGatewayProfileStore {
 
     private func loadRegistry() throws -> Registry {
         if let cachedRegistry { return cachedRegistry }
-        let registry: Registry = if let data = try self.load(account: Self.registryAccount) {
-            try Self.decodeRegistry(data)
+        var query = Self.registryQuery
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        let status = self.keychainAccess.perform { SecItemCopyMatching(query as CFDictionary, &result) }
+        let registry: Registry
+        if status == errSecItemNotFound {
+            registry = Registry()
         } else {
-            Registry()
+            guard status == errSecSuccess, let data = result as? Data else {
+                throw MacGatewayProfileError.keychain(status)
+            }
+            registry = try Self.decodeRegistry(data)
         }
         self.cachedRegistry = registry
         return registry
@@ -556,13 +564,24 @@ actor MacGatewayProfileStore {
         let migrated = Self.migratingLegacyPrimaryConnection(
             root: OpenClawConfigFile.loadDict(),
             registry: registry)
-        guard migrated != registry else { return registry }
         try self.saveRegistry(migrated)
         return migrated
     }
 
     private func saveRegistry(_ registry: Registry) throws {
-        try self.save(JSONEncoder().encode(registry), account: Self.registryAccount)
+        let data = try JSONEncoder().encode(registry)
+        let query = Self.registryQuery
+        let update = self.keychainAccess.perform {
+            SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        }
+        if update != errSecSuccess {
+            guard update == errSecItemNotFound else { throw MacGatewayProfileError.keychain(update) }
+            var add = query
+            add[kSecValueData as String] = data
+            add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            let status = self.keychainAccess.perform { SecItemAdd(add as CFDictionary, nil) }
+            guard status == errSecSuccess else { throw MacGatewayProfileError.keychain(status) }
+        }
         self.cachedRegistry = registry
     }
 
@@ -649,40 +668,11 @@ actor MacGatewayProfileStore {
         return submitted
     }
 
-    private func load(account: String) throws -> Data? {
-        var query = Self.baseQuery(account: account)
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: CFTypeRef?
-        let status = self.keychainAccess.perform { SecItemCopyMatching(query as CFDictionary, &result) }
-        if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let data = result as? Data else {
-            throw MacGatewayProfileError.keychain(status)
-        }
-        return data
-    }
-
-    private func save(_ data: Data, account: String) throws {
-        let query = Self.baseQuery(account: account)
-        let update = self.keychainAccess.perform {
-            SecItemUpdate(
-                query as CFDictionary,
-                [kSecValueData as String: data] as CFDictionary)
-        }
-        if update == errSecSuccess { return }
-        guard update == errSecItemNotFound else { throw MacGatewayProfileError.keychain(update) }
-        var add = query
-        add[kSecValueData as String] = data
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        let status = self.keychainAccess.perform { SecItemAdd(add as CFDictionary, nil) }
-        guard status == errSecSuccess else { throw MacGatewayProfileError.keychain(status) }
-    }
-
-    private static func baseQuery(account: String) -> [String: Any] {
+    private static var registryQuery: [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: self.service,
-            kSecAttrAccount as String: account,
+            kSecAttrAccount as String: "registry-v1",
             kSecAttrSynchronizable as String: false,
         ]
     }

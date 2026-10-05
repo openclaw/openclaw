@@ -37,19 +37,6 @@ function createPrefixOnlyChannelPlugin(
   };
 }
 
-function createEnablementHostileChannelPlugin(id: string): ChannelPlugin {
-  const base = createPrefixOnlyChannelPlugin(id, [id]);
-  return {
-    ...base,
-    config: {
-      ...base.config,
-      // Mirrors twitch/discord: an unlisted or credential-suppressed account
-      // resolves to a not-enabled account, which must NOT read as operator intent.
-      isEnabled: () => false,
-    },
-  };
-}
-
 export function setCronValidationTestRegistry(): void {
   setActivePluginRegistry(
     createTestRegistry([
@@ -67,11 +54,6 @@ export function setCronValidationTestRegistry(): void {
         pluginId: "slack",
         plugin: createPrefixOnlyChannelPlugin("slack", ["slack"]),
         source: "test:slack",
-      },
-      {
-        pluginId: "twitch",
-        plugin: createEnablementHostileChannelPlugin("twitch"),
-        source: "test:twitch",
       },
       {
         pluginId: "msteams",

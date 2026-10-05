@@ -206,7 +206,9 @@ export async function withClawAgentConfigRemoval<T>(
         } else {
           const current = openOpenClawStateDatabase(stateOptions);
           // Worker admission can hold the writer lock while waiting for this read-only authority check.
-          runSqliteDeferredTransactionSync(current.db, () => check(current));
+          runSqliteDeferredTransactionSync(current.db, () => check(current), {
+            operationLabel: "claws.removal.authority",
+          });
         }
       };
       try {

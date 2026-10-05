@@ -18,6 +18,7 @@ import type {
   SessionTranscriptTurnWriteContext,
 } from "./session-accessor.types.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
+import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import { completeSessionTranscriptCommit } from "./session-transcript-commit-completion.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { prepareSessionTurnGoalMessage } from "./session-turn.kernel.js";
@@ -137,13 +138,14 @@ export async function appendSessionTurnInWorker(
         if (!custody) {
           throw new Error("Session turn has no pending-input owner");
         }
-        custody.assertCurrent();
+        // SAFETY: The paired worker captures the row and members in its current transaction.
+        custody.assertCurrent(facts.authority as SessionPendingInputAuthorityFacts, assertCurrent);
         custodyRequired = true;
         return true;
       },
-      assertCandidate() {
+      assertCandidate(candidate) {
         if (custodyRequired) {
-          custody?.assertCurrent();
+          custody?.assertCurrent(candidate.authority, assertCurrent);
         }
       },
       async run(worker, commit) {

@@ -366,8 +366,8 @@ export function listThinkingLevelLabels(
   catalog?: ThinkingCatalogEntry[],
   agentRuntime?: string | null,
 ): string[] {
-  return listThinkingLevelOptions(provider, model, catalog, agentRuntime).map(
-    (level) => level.label,
+  return resolveThinkingProfile({ provider, model, catalog, agentRuntime }).levels.map(
+    ({ label }) => label,
   );
 }
 
@@ -390,18 +390,12 @@ export function resolveThinkingDefaultForModel(
     model: string;
   },
 ): ThinkLevel {
-  return resolveThinkingSelectionForModel({
-    ...params,
-    agentRuntime: params.agentRuntime,
-  }).requestedLevel;
+  return resolveThinkingSelectionForModel(params).requestedLevel;
 }
 
 /** Resolve intent, support, and execution level from one selected model profile. */
 export function resolveThinkingSelectionForModel(
-  params: ThinkingProfileParams & {
-    level?: ThinkLevel;
-    agentRuntime: string | null | undefined;
-  },
+  params: ThinkingProfileParams & { level?: ThinkLevel },
 ): { requestedLevel: ThinkLevel; level: ThinkLevel; supported: boolean } {
   const candidate = resolveThinkingCatalogEntry(params);
   const profile = resolveThinkingProfile({
@@ -426,10 +420,7 @@ export function isThinkingLevelSupported(
     level: ThinkLevel;
   },
 ): boolean {
-  return resolveThinkingSelectionForModel({
-    ...params,
-    agentRuntime: params.agentRuntime,
-  }).supported;
+  return resolveThinkingSelectionForModel(params).supported;
 }
 
 export function resolveSupportedThinkingLevelFromProfile(
@@ -458,5 +449,5 @@ export function resolveSupportedThinkingLevelFromProfile(
 export function resolveSupportedThinkingLevel(
   params: ThinkingProfileParams & { level: ThinkLevel },
 ): ThinkLevel {
-  return resolveThinkingSelectionForModel({ ...params, agentRuntime: params.agentRuntime }).level;
+  return resolveThinkingSelectionForModel(params).level;
 }

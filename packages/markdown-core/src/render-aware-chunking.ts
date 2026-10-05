@@ -65,12 +65,7 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
   const pending = splitMarkdownIRPreserveWhitespace(options.ir, normalizedLimit).toReversed();
   const finalized: RenderedCandidate<TRendered>[] = [];
 
-  while (pending.length > 0) {
-    const chunk = pending.pop();
-    if (!chunk) {
-      continue;
-    }
-
+  for (let chunk = pending.pop(); chunk; chunk = pending.pop()) {
     const candidate = renderCandidate(options, chunk);
     if (
       options.measureRendered(candidate.output.rendered) <= normalizedLimit ||
@@ -109,9 +104,6 @@ function splitMarkdownIRByRenderedLimit<TRendered>(
     const candidate = sliceMarkdownIR(chunk, 0, safeCandidateLength);
     const rendered = renderCandidate(options, candidate).output.rendered;
     if (options.measureRendered(rendered) <= renderedLimit) {
-      if (safeCandidateLength <= 0) {
-        return [chunk];
-      }
       const split = splitMarkdownIRPreserveWhitespace(chunk, safeCandidateLength);
       const firstChunk = split[0];
       if (
@@ -186,9 +178,6 @@ function findMarkdownIRPreservedSplitIndex(text: string, start: number, limit: n
   }
 
   const resolveWhitespaceBreak = (breakIndex: number, runStart: number): number => {
-    if (breakIndex <= start) {
-      return breakIndex;
-    }
     if (runStart <= start) {
       return breakIndex;
     }

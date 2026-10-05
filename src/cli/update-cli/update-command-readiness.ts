@@ -1,3 +1,4 @@
+import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewayService } from "../../daemon/service.js";
@@ -37,20 +38,6 @@ import {
 } from "./update-command-service-plan.js";
 import { hasLoadedLaunchdKeepAliveSupervisor } from "./update-command-supervisor.js";
 
-// The startup watchdog supplies the floor; ×10 leaves slow-disk headroom.
-// One hour bounds implicit observation of an already-serving Gateway; --timeout wins.
-const PREVIOUS_GATEWAY_READINESS_CAP_MS = 60 * 60_000;
-
-function readinessTimeoutMs(
-  params: { timeoutMs?: number; observedStartupMs?: number },
-  capMs = Infinity,
-) {
-  return (
-    params.timeoutMs ??
-    Math.min(capMs, Math.max(STARTUP_MIGRATION_LEASE_TTL_MS, (params.observedStartupMs ?? 0) * 10))
-  );
-}
-
 export async function verifyPreviousGatewayForUpdate(params: {
   root: string;
   config: OpenClawConfig;
@@ -67,11 +54,12 @@ export async function verifyPreviousGatewayForUpdate(params: {
   const { config, env } = params;
   const { assertCurrent, proofOptions } = captureUpdateGatewayReadinessOwner(params);
   const run = proofOptions.run;
-  const timeoutMs = readinessTimeoutMs(params, PREVIOUS_GATEWAY_READINESS_CAP_MS);
-  const derivation =
-    params.timeoutMs === undefined
-      ? `min(${PREVIOUS_GATEWAY_READINESS_CAP_MS}ms, max(${STARTUP_MIGRATION_LEASE_TTL_MS}ms, canary startup ${params.observedStartupMs ?? 0}ms × 10))`
-      : "explicit --timeout";
+  const { deadlineMs: timeoutMs, derivation } = resolveGatewayStartupTiming(process.platform, {
+    timeoutMs: params.timeoutMs,
+    observedStartupMs: params.observedStartupMs,
+    migrationLeaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
+    previousGateway: true,
+  });
   const startedAtMs = Date.now();
   const deadline = createGatewayRestartDeadline({ timeoutMs, signal: params.signal });
   let lastProgress = { stage: "", at: -Infinity };
@@ -246,7 +234,11 @@ export function gatewayReadinessPending(health: GatewayRestartSnapshot): boolean
 /** Observe one ready generation before activation or after restart, without recording a verdict. */
 export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadinessParams) {
   const waitForStartup = params.waitForStartup !== false;
-  const timeoutMs = readinessTimeoutMs(params);
+  const { deadlineMs: timeoutMs } = resolveGatewayStartupTiming(process.platform, {
+    timeoutMs: params.timeoutMs,
+    observedStartupMs: params.observedStartupMs,
+    migrationLeaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
+  });
   const settle = params.settle ?? { probes: 12 };
   const settleDurationMs = waitForStartup
     ? (Math.max(1, settle.probes) - 1) * DEFAULT_RESTART_HEALTH_DELAY_MS

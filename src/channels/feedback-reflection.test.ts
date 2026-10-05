@@ -9,19 +9,22 @@ import {
 const appendTranscriptEvent = vi.hoisted(() => vi.fn(async () => undefined));
 const dispatchRoutedChannelTurn = vi.hoisted(() => vi.fn());
 const loadSessionEntry = vi.hoisted(() => vi.fn());
-const readSessionUpdatedAtCore = vi.hoisted(() => vi.fn());
 const resolveSessionTranscriptRuntimeTarget = vi.hoisted(() => vi.fn());
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/state/main/sessions.json"));
 
 vi.mock("../config/sessions/paths.js", () => ({
   resolveSessionStorePathCore: resolveStorePath,
 }));
-vi.mock("../config/sessions/session-accessor.js", () => ({
+vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-accessor.js")>()),
   appendTranscriptEvent,
   loadSessionEntry,
   loadSessionEntryReadOnly: loadSessionEntry,
-  readSessionUpdatedAtCore,
   resolveSessionTranscriptRuntimeTarget,
+}));
+vi.mock("../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-entry-read-runtime.js")>()),
+  readSessionUpdatedAtInWorker: vi.fn(async () => undefined),
 }));
 vi.mock("./turn/lifecycle.js", () => ({ dispatchRoutedChannelTurn }));
 

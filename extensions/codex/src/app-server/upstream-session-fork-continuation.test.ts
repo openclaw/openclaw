@@ -21,7 +21,7 @@ import {
 } from "./session-binding.js";
 import { createCodexTestBindingStateStore } from "./session-binding.test-helpers.js";
 import { createCodexTestModel } from "./test-support.js";
-import { startOrResumeThread } from "./thread-lifecycle.js";
+import { startOrResumeThread } from "./thread-lifecycle-run.js";
 import { importCodexThreadHistoryToTranscript } from "./transcript-mirror.js";
 import {
   createForkTestRuntime,

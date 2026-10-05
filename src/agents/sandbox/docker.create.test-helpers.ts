@@ -300,7 +300,7 @@ export function createSandboxContainerTestHarness() {
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
       cfg: params.cfg,
-      ...(params.engine ? { engine: params.engine } : {}),
+      engine: params.engine ?? DOCKER_SANDBOX_ENGINE,
     });
 
     const createCall = spawnState.calls.find(
@@ -345,8 +345,12 @@ export function createSandboxContainerTestHarness() {
     createSandboxConfig,
     computeTestSandboxHash,
     ensureSandboxCreateCallForTest,
-    get ensureSandboxContainer() {
-      return ensureSandboxContainer;
+    ensureSandboxContainer(
+      params: Omit<Parameters<typeof ensureSandboxContainer>[0], "engine"> & {
+        engine?: import("./docker.js").SandboxContainerEngine;
+      },
+    ) {
+      return ensureSandboxContainer({ engine: DOCKER_SANDBOX_ENGINE, ...params });
     },
     get resolveDockerEnvPolicyEpoch() {
       return resolveDockerEnvPolicyEpoch;

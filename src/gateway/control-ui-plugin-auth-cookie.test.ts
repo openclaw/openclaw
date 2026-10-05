@@ -26,6 +26,7 @@ import {
   resolveSharedSecretHttpOperatorScopes,
   setControlUiPluginAuthCookieForRequest,
 } from "./http-auth-utils.js";
+import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
@@ -175,11 +176,9 @@ describe("Control UI plugin auth cookie profile binding", () => {
             setControlUiPluginAuthCookieForRequest(
               { headers: {} } as IncomingMessage,
               issued.res,
-              "tailscale",
-              true,
               generation,
               getRuntimeConfig(),
-              undefined,
+              CLI_DEFAULT_OPERATOR_SCOPES,
               profile.id,
             ),
           ).toEqual([

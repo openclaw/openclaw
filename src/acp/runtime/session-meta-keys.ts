@@ -100,7 +100,7 @@ export function parseAcpDatabaseSessionKey(sessionKey: string):
 }
 
 export function acpSessionRowMatchesEntry(
-  row: AcpSessionRow,
+  row: Pick<AcpSessionRow, "session_id" | "updated_at">,
   entry: AcpSessionEntryBinding | undefined,
 ): boolean {
   return (

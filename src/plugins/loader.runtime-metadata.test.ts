@@ -10,7 +10,7 @@ import * as sdkAlias from "./sdk-alias.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it("keeps version and injected instance surfaces independent of the broad runtime module", () => {
+it("keeps host metadata and injected instance surfaces independent of the broad runtime module", () => {
   const gateway = {} as PluginRuntime["gateway"];
   const hooks = {
     dispatchHookAgentTurn: vi.fn<PluginRuntime["hooks"]["dispatchHookAgentTurn"]>(),
@@ -30,6 +30,11 @@ it("keeps version and injected instance surfaces independent of the broad runtim
   expect(getGatewayContextResolver(runtime)).toBe(resolveGatewayContext);
 
   expect(runtime.version).toBe(VERSION);
+  expect(runtime.capabilities).toContain("sender-restricted-hidden-helpers-v1");
+  expect(Object.isFrozen(runtime.capabilities)).toBe(true);
+  expect(Object.getOwnPropertyDescriptor(runtime, "capabilities")?.get?.()).toBe(
+    runtime.capabilities,
+  );
   expect(Object.getOwnPropertyDescriptor(runtime, "version")?.get?.()).toBe(VERSION);
   const descriptors = Object.getOwnPropertyDescriptors(runtime);
   expect(Reflect.ownKeys(runtime)).toEqual(Reflect.ownKeys(descriptors));

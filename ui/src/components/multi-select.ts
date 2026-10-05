@@ -9,17 +9,12 @@ import { t } from "../i18n/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { configureAnchoredPopup } from "./anchored-overlay.ts";
 import { icons } from "./icons.ts";
+import type { ModelPickerOption } from "./model-picker.ts";
 import { renderProviderBrandIcon } from "./provider-icon.ts";
 import { revealInScrollRegion } from "./scroll-state.ts";
 import "../styles/multi-select.css";
 
-export type MultiSelectOption = {
-  value: string;
-  label: string;
-  provider?: string;
-  detail?: string;
-  disabled?: boolean;
-};
+export type MultiSelectOption = ModelPickerOption;
 
 type MultiSelectRow = MultiSelectOption & { custom?: boolean };
 

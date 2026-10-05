@@ -521,8 +521,8 @@ const initializations = () => globalThis[Symbol.for("worker-highlight-initializa
 assert.equal(initializations(), 0, "headless worker bootstrap must not initialize syntax highlighting");
 assert.equal(supportsLanguage("abnf"), true);
 assert.equal(supportsLanguage("javascript"), true);
-assert.match(highlight("const answer = 42;", {
-  language: "javascript", theme: { keyword: text => "[" + text + "]" },
+assert.match(highlight("const answer = 42;", "javascript", {
+  keyword: text => "[" + text + "]",
 }), /\\[const\\]/);
 assert.equal(initializations(), 1, "rendering must initialize the bundled highlighter only once");
 const explanation = await explainShellCommand('printf "%s" "$(whoami)" | cat');

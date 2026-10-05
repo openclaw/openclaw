@@ -253,7 +253,9 @@ export async function readInstalledSkill(
   signal?.throwIfAborted();
   const skill = skills.find((entry) => entry.name === name);
   if (!skill) {
-    throw new ToolInputError(`Unknown installed skill ${JSON.stringify(name)}.`);
+    throw new ToolInputError(
+      `Skill ${JSON.stringify(name)} is not available to this agent. Search the available skills instead.`,
+    );
   }
   skill.assertCurrent?.();
   const content =

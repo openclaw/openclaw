@@ -542,17 +542,7 @@ enum GatewayLaunchAgentManager {
 
     static func launchdGatewayLogPath() -> String {
         let snapshot = self.launchdConfigSnapshot()
-        if let stdout = snapshot?.stdoutPath?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !stdout.isEmpty
-        {
-            return stdout
-        }
-        if let stderr = snapshot?.stderrPath?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !stderr.isEmpty
-        {
-            return stderr
-        }
-        return LogLocator.launchdGatewayLogPath
+        return snapshot?.stdoutPath?.nonEmpty ?? snapshot?.stderrPath?.nonEmpty ?? LogLocator.launchdGatewayLogPath
     }
 }
 
@@ -760,7 +750,7 @@ extension GatewayLaunchAgentManager {
         beforeSpawn: (@Sendable () -> String?)? = nil,
         checkCurrent: (@MainActor @Sendable () async throws -> Void)? = nil) async -> CommandResult
     {
-        let command = invocation.prefix + self.withJsonFlag(args)
+        let command = invocation.prefix + (args.contains("--json") ? args : args + ["--json"])
         #if DEBUG
         if self.testingState.withLock({ $0.resolveCLI != nil }) {
             do { try await checkCurrent?() } catch {
@@ -879,11 +869,6 @@ extension GatewayLaunchAgentManager {
             result["OPENCLAW_CONFIG_PATH"] = directory.appendingPathComponent("openclaw.json").path
         }
         return GatewayChildSupervisor.environmentWithoutSupervisorMarkers(result)
-    }
-
-    private static func withJsonFlag(_ args: [String]) -> [String] {
-        if args.contains("--json") { return args }
-        return args + ["--json"]
     }
 
     #if DEBUG

@@ -402,17 +402,9 @@ export class DraftPlaceBrowser {
 
   selectGatewayBrowser(path?: string) {
     this.browserOpenValue = true;
-    this.loadBrowser(path && isAbsolutePath(path) ? path : undefined);
-    this.focusProjectView(".new-session-page__browser-path");
-  }
-
-  loadBrowser(path: string | undefined) {
-    const snapshot = this.read().context?.gateway.snapshot;
-    if (snapshot?.phase !== "connected" || !snapshot.client || !this.browserOpenValue) {
-      return;
-    }
     this.browserProjectPathValue = null;
-    void this.browser.navigate(path);
+    void this.browser.navigate(path && isAbsolutePath(path) ? path : undefined, "initial");
+    this.focusProjectView(".new-session-page__browser-path");
   }
 
   async registerBrowserProject(path: string) {

@@ -6,6 +6,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
@@ -39,6 +40,16 @@ export type SystemEvent = {
 };
 
 const MAX_EVENTS = 20;
+const log = createSubsystemLogger("system-events");
+
+export class SystemEventQueueFullError extends Error {
+  constructor() {
+    super(
+      `System event queue is full (${MAX_EVENTS} pending). Let the session process pending events before retrying the notification.`,
+    );
+    this.name = "SystemEventQueueFullError";
+  }
+}
 
 type SessionQueue = {
   queue: SystemEvent[];
@@ -131,7 +142,7 @@ export function enqueueSystemEventEntry(
 function enqueueOwnedSystemEventEntry(
   text: string,
   options: SystemEventOptions,
-  receiptOptions?: ReceiptOptions,
+  receiptOptions?: ReceiptOptions & { throwOnFull?: boolean },
 ): SystemEvent | null {
   const key = requireSessionKey(options.sessionKey);
   const sessionStorePath =
@@ -160,8 +171,6 @@ function enqueueOwnedSystemEventEntry(
     if (matching.length === 1 && matching[0]?.text === cleaned) {
       return null;
     }
-    // Replacements move to the end without evicting unrelated sources.
-    entry.queue = entry.queue.filter((event) => !matches(event));
   } else if (receiptOptions?.allowDuplicate !== true) {
     const duplicate = (event: SystemEvent | undefined) =>
       event !== undefined && event.text === cleaned && matches(event);
@@ -170,6 +179,17 @@ function enqueueOwnedSystemEventEntry(
     ) {
       return null;
     }
+  }
+  if (entry.queue.length >= MAX_EVENTS && !(options.replace && entry.queue.some(matches))) {
+    const error = new SystemEventQueueFullError();
+    log.warn(error.message, { sessionKey: key });
+    if (receiptOptions?.throwOnFull) {
+      throw error;
+    }
+    return null;
+  }
+  if (options.replace) {
+    entry.queue = entry.queue.filter((event) => !matches(event));
   }
   if (normalizedContextKey !== null) {
     entry.lastContextKey = normalizedContextKey;
@@ -184,9 +204,6 @@ function enqueueOwnedSystemEventEntry(
     ...(options.fromConversationTurn ? { fromConversationTurn: true as const } : {}),
   };
   entry.queue.push(event);
-  if (entry.queue.length > MAX_EVENTS) {
-    entry.queue.shift();
-  }
   return event;
 }
 
@@ -200,7 +217,10 @@ export function enqueueSystemEventWithReceipt(
   options: SystemEventOptions,
   receiptOptions?: ReceiptOptions,
 ): (() => boolean) | null {
-  const event = enqueueOwnedSystemEventEntry(text, options, receiptOptions);
+  const event = enqueueOwnedSystemEventEntry(text, options, {
+    ...receiptOptions,
+    throwOnFull: true,
+  });
   if (!event) {
     return null;
   }

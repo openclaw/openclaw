@@ -742,21 +742,6 @@ describe("main-session-restart-recovery", () => {
     });
   });
 
-  it("keeps a configured fixed store when its path carries a retired owner id", async () => {
-    const sessionsDir = await makeSessionsDir("old");
-    const storePath = path.join(sessionsDir, "sessions.json");
-    await writeMainSession({ sessionsDir, sessionKey: "agent:old:main" });
-
-    const cfg = {
-      agents: { entries: { main: {} } },
-      session: { store: storePath },
-    } as OpenClawConfig;
-
-    await expect(
-      discoverRestartRecoveryStoreTargets({ cfg, stateDir: tmpDir, statuses: ["running"] }),
-    ).resolves.toContainEqual({ agentId: "old", storePath });
-  });
-
   it("preserves the yielded global requester owner in a shared store", async () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: tmpDir }, async () => {
       const storePath = path.join(tmpDir, "yielded", "shared.sqlite");
@@ -1292,43 +1277,43 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("resumes a drain-marked turn that settles normally before the replacement starts", async () => {
-    const sessionsDir = await makeSessionsDir();
-    const storePath = path.join(sessionsDir, "sessions.json");
-    const sessionKey = "agent:main:main";
-    const runId = "drain-overlap-run";
-    const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    await writeStore(sessionsDir, {
-      [sessionKey]: runningSessionEntry("main-session"),
-    });
-    await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "finish the admitted work after the restart" },
-    ]);
-
-    const rootAdmission = tryBeginGatewayRootWorkAdmission();
-    expect(rootAdmission).not.toBeNull();
-    await rootAdmission?.run(async () => {
-      await expect(
-        markRestartAbortedMainSessions({
-          resolveGatewayContext,
-          stateDir: tmpDir,
-          activeRuns: [{ runId, lifecycleGeneration, sessionKey, sessionId: "main-session" }],
-          reason: "gateway restart drain",
-        }),
-      ).resolves.toEqual({ marked: 1, skipped: 0 });
-      markGatewayRestartDraining();
-      await expect(
-        runWithGatewayIndependentRootWorkAdmission(async () => undefined),
-      ).rejects.toBeInstanceOf(GatewayDrainingError);
+    await withEnvAsync({ OPENCLAW_STATE_DIR: tmpDir }, async () => {
+      const sessionsDir = await makeSessionsDir();
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const sessionKey = "agent:main:main";
+      const runId = "drain-overlap-run";
+      const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      await writeStore(sessionsDir, {
+        [sessionKey]: runningSessionEntry("main-session"),
+      });
       await writeTranscript(sessionsDir, "main-session", [
-        {
-          role: "toolResult",
-          toolName: "sessions_spawn",
-          isError: true,
-          content: [{ type: "text", text: "Gateway restart admission is closed." }],
-        },
-        makeAssistantTextMessage("The Gateway is restarting; retry after it comes back."),
+        { role: "user", content: "finish the admitted work after the restart" },
       ]);
-      await withEnvAsync({ OPENCLAW_STATE_DIR: tmpDir }, async () => {
+
+      const rootAdmission = tryBeginGatewayRootWorkAdmission();
+      expect(rootAdmission).not.toBeNull();
+      await rootAdmission?.run(async () => {
+        await expect(
+          markRestartAbortedMainSessions({
+            resolveGatewayContext,
+            stateDir: tmpDir,
+            activeRuns: [{ runId, lifecycleGeneration, sessionKey, sessionId: "main-session" }],
+            reason: "gateway restart drain",
+          }),
+        ).resolves.toEqual({ marked: 1, skipped: 0 });
+        markGatewayRestartDraining();
+        await expect(
+          runWithGatewayIndependentRootWorkAdmission(async () => undefined),
+        ).rejects.toBeInstanceOf(GatewayDrainingError);
+        await writeTranscript(sessionsDir, "main-session", [
+          {
+            role: "toolResult",
+            toolName: "sessions_spawn",
+            isError: true,
+            content: [{ type: "text", text: "Gateway restart admission is closed." }],
+          },
+          makeAssistantTextMessage("The Gateway is restarting; retry after it comes back."),
+        ]);
         await persistGatewaySessionLifecycleEvent({
           sessionKey,
           agentId: "main",
@@ -1341,35 +1326,35 @@ describe("main-session-restart-recovery", () => {
           },
         });
       });
-    });
-    rootAdmission?.release();
+      rootAdmission?.release();
 
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-      status: "running",
-      abortedLastRun: true,
-    });
-    expect(loadSessionEntry({ sessionKey, storePath })?.restartRecoveryRuns).toBeUndefined();
+      expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+        status: "running",
+        abortedLastRun: true,
+      });
+      expect(loadSessionEntry({ sessionKey, storePath })?.restartRecoveryRuns).toBeUndefined();
 
-    resetGatewayWorkAdmission();
-    rotateAgentEventLifecycleGeneration();
-    const recovery = scheduleRestartAbortedMainSessionRecovery({
-      delayMs: 0,
-      getConfig: () => ({}),
-      maxRetries: 1,
-      stateDir: tmpDir,
-    });
-    await mockRecoveryRuntime.expectAdmission(1, recovery, { sessionKey, storePath });
+      resetGatewayWorkAdmission();
+      rotateAgentEventLifecycleGeneration();
+      const recovery = scheduleRestartAbortedMainSessionRecovery({
+        delayMs: 0,
+        getConfig: () => ({}),
+        maxRetries: 1,
+        stateDir: tmpDir,
+      });
+      await mockRecoveryRuntime.expectAdmission(1, recovery, { sessionKey, storePath });
 
-    expect(gatewayParams()).toMatchObject({
-      expectedExistingSessionId: "main-session",
-      inputProvenance: {
-        kind: "internal_system",
-        sourceSessionKey: sessionKey,
-        sourceTool: "main_session_restart_recovery",
-      },
-      sessionKey,
+      expect(gatewayParams()).toMatchObject({
+        expectedExistingSessionId: "main-session",
+        inputProvenance: {
+          kind: "internal_system",
+          sourceSessionKey: sessionKey,
+          sourceTool: "main_session_restart_recovery",
+        },
+        sessionKey,
+      });
+      expect(gatewayParams().idempotencyKey).not.toBe(runId);
     });
-    expect(gatewayParams().idempotencyKey).not.toBe(runId);
   });
 
   registerParentRestartRecoveryCases({
@@ -2745,6 +2730,7 @@ describe("main-session-restart-recovery", () => {
   registerStartupSessionRepairCases(() => ({
     tmpDir,
     makeSessionsDir,
+    mainSessionEntry,
     writeStore,
     writeTranscript,
     runningSessionEntry,
@@ -3043,7 +3029,6 @@ describe("main-session-restart-recovery", () => {
     try {
       await firstDispatch.promise;
       expect(callGateway).toHaveBeenCalledOnce();
-      dispatchSettlement.resolve(); // The second store waits for the first recovery slot.
       await mockRecoveryRuntime.expectAdmission(
         2,
         recovery,

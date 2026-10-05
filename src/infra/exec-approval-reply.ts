@@ -16,6 +16,7 @@ import { formatFencedCodeBlock } from "../shared/markdown-code.js";
 import { formatApprovalDisplayPath } from "./approval-display-paths.js";
 import { summarizeApprovalScope, type ApprovalScope } from "./approval-scope.js";
 import type { ChannelApprovalKind } from "./approval-types.js";
+import type { ExecApprovalActionDescriptor } from "./exec-approval-action.types.js";
 import {
   describeNativeExecApprovalClientSetup,
   listNativeExecApprovalClientLabels,
@@ -26,6 +27,8 @@ import {
   type ExecApprovalDecision,
   type ExecHost,
 } from "./exec-approvals.js";
+
+export type { ExecApprovalActionDescriptor } from "./exec-approval-action.types.js";
 
 export type ExecApprovalReplyDecision = ExecApprovalDecision;
 export type ExecApprovalUnavailableReason =
@@ -40,16 +43,6 @@ export type ExecApprovalReplyMetadata = {
   agentId?: string;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
   sessionKey?: string;
-};
-
-export type ExecApprovalActionDescriptor = {
-  decision: ExecApprovalReplyDecision;
-  label: string;
-  style: NonNullable<MessagePresentationButton["style"]>;
-  /** Optional semantic action; omitted by the shipped command-backed builders. */
-  action?: MessagePresentationAction;
-  /** Copyable text fallback retained for non-interactive approval surfaces. */
-  command: string;
 };
 
 /** Approval descriptor guaranteed to carry a canonical typed approval action. */
@@ -218,16 +211,10 @@ export function buildTypedApprovalPresentation(
 }
 
 /** Build the shipped command-backed exec-approval presentation. */
-export function buildExecApprovalPresentation(params: {
-  approvalCommandId: string;
-  ask?: string | null;
-  allowedDecisions?: readonly ExecApprovalReplyDecision[];
-}): MessagePresentation | undefined {
-  return buildApprovalButtonPresentation({
-    approvalId: params.approvalCommandId,
-    ask: params.ask,
-    allowedDecisions: params.allowedDecisions,
-  });
+export function buildExecApprovalPresentation(
+  params: BuildExecApprovalActionDescriptorsParams,
+): MessagePresentation | undefined {
+  return buildApprovalPresentationFromActionDescriptors(buildExecApprovalActionDescriptors(params));
 }
 
 export function getExecApprovalApproverDmNoticeText(): string {

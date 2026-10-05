@@ -17,9 +17,19 @@ describe("AppSidebar person activity card", () => {
       "agent:research:robot",
       ...[1, 2, 3, 4].map((n) => `agent:research:recent-${n}`),
     ]);
+    const observeList = sessions.sessions.observeList;
+    let activityQuery: ReturnType<typeof observeList> | undefined;
+    vi.spyOn(sessions.sessions, "observeList").mockImplementation((query, listener) => {
+      const observation = observeList(query, listener);
+      if (query.source === "activity") {
+        activityQuery = observation;
+      }
+      return observation;
+    });
     const result = sessions.sessions.state.result!;
     const now = Date.now();
     result.sessions.forEach((row, index) => {
+      row.agentId = "research";
       row.label = row.key === "global" ? "Research global" : `Visible ${index}`;
       row.updatedAt = now - index * 60_000;
       if (index === 2) {
@@ -77,6 +87,7 @@ describe("AppSidebar person activity card", () => {
     const card = document.querySelector<HTMLElement>(".person-activity-hovercard")!;
     expect(card.querySelector(".person-activity-card__session")).toBeNull();
     sessions.publishList({ result });
+    await activityQuery?.refresh();
     await settleLitElement(sidebar);
     expect(card.querySelectorAll("dt")).toHaveLength(2);
     expect(card.querySelector(".person-activity-card__status")?.textContent?.trim()).toBe("Online");
@@ -124,6 +135,9 @@ describe("AppSidebar person activity card", () => {
       );
     const publish = async (rows: typeof result.sessions) => {
       sessions.publishList({ result: { ...result, sessions: rows } });
+      if (document.querySelector(".person-activity-hovercard")) {
+        await activityQuery?.refresh();
+      }
       await settleLitElement(sidebar);
     };
     const initial = links();
@@ -163,6 +177,7 @@ describe("AppSidebar person activity card", () => {
     await publish([]);
     trigger.blur();
     trigger.focus();
+    await activityQuery?.refresh();
     await settleLitElement(sidebar);
     expect(links()).toHaveLength(0);
     await publish(updated);
@@ -170,6 +185,7 @@ describe("AppSidebar person activity card", () => {
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     trigger.blur();
     trigger.focus();
+    await activityQuery?.refresh();
     await settleLitElement(sidebar);
     expect(links().map((link) => link.getAttribute("href"))).toEqual(
       [4, 3, 2].map((n) => `/chat/research/recent-${n}`),

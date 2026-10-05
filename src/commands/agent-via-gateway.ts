@@ -178,26 +178,6 @@ const MESSAGE_FILE_DECODER = new TextDecoder("utf-8", { fatal: true });
 let gatewayAbortRetryDelaysMsForTests: readonly number[] | undefined;
 
 type EmbeddedAgentCommandOpts = Parameters<typeof import("./agent.js").agentCommand>[0];
-type EmbeddedRunDiagnosticsOptions = {
-  suppressStdoutDiagnosticLogs: boolean;
-};
-
-async function startEmbeddedRunDiagnosticsExporters(
-  runtime: RuntimeEnv,
-  options: EmbeddedRunDiagnosticsOptions,
-  config: OpenClawConfig,
-): Promise<OneShotDiagnosticsHandle | null> {
-  try {
-    return await startOneShotDiagnosticsExporters({
-      config,
-      suppressStdoutDiagnosticLogs: options.suppressStdoutDiagnosticLogs,
-    });
-  } catch (err) {
-    // Exporter startup must never break the agent run itself.
-    runtime.error?.(`diagnostics exporter startup failed for embedded run: ${String(err)}`);
-    return null;
-  }
-}
 
 /**
  * Run the embedded agent command with OTel diagnostics export for this
@@ -209,15 +189,19 @@ async function runEmbeddedAgentCommand(
   opts: EmbeddedAgentCommandOpts,
   runtime: RuntimeEnv,
   deps: AgentCliDeps | undefined,
-  diagnosticsOptions: EmbeddedRunDiagnosticsOptions,
 ) {
   const { agentCommand } = await measureAgentStartup("command-import", () => import("./agent.js"));
   const config = await loadRuntimeConfig();
-  const diagnostics = await startEmbeddedRunDiagnosticsExporters(
-    runtime,
-    diagnosticsOptions,
-    config,
-  );
+  let diagnostics: OneShotDiagnosticsHandle | null = null;
+  try {
+    diagnostics = await startOneShotDiagnosticsExporters({
+      config,
+      suppressStdoutDiagnosticLogs: opts.json === true,
+    });
+  } catch (err) {
+    // Exporter startup must never break the agent run itself.
+    runtime.error?.(`diagnostics exporter startup failed for embedded run: ${String(err)}`);
+  }
   let stopLocalAuditWriter: (() => Promise<void>) | undefined;
   if (isExecutionIdentityCollectionEnabled(config)) {
     try {
@@ -452,22 +436,13 @@ function shouldRetryGatewayDispatchWithShellEnvFallback(err: unknown): boolean {
   );
 }
 
-function resolveGatewayAgentFailureHint(
-  err: unknown,
-): "timed out" | "connection closed" | undefined {
+function formatGatewayAgentTransportLossHint(err: unknown): string | undefined {
   if (!isGatewayTransportError(err)) {
     return undefined;
   }
   // callGateway's wrapper timer gives this CLI path typed transport errors.
   // Legacy request-timeout strings belong to lower-level and in-process callers.
-  return err.kind === "timeout" ? "timed out" : "connection closed";
-}
-
-function formatGatewayAgentTransportLossHint(err: unknown): string | undefined {
-  const failureHint = resolveGatewayAgentFailureHint(err);
-  if (!failureHint) {
-    return undefined;
-  }
+  const failureHint = err.kind === "timeout" ? "timed out" : "connection closed";
   // Transport loss is ambiguous: the Gateway may have accepted and may still
   // finish this turn. Recommending a blind retry or --local here could
   // double-execute the message, so point at verification first.
@@ -1194,7 +1169,6 @@ export async function agentCliCommand(
           },
           runtime,
           deps,
-          { suppressStdoutDiagnosticLogs: dispatchOpts.json === true },
         );
       } finally {
         await stateLock?.release();

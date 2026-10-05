@@ -261,8 +261,7 @@ struct MacNodeRuntimeTests {
             screenIndex _: Int?,
             durationMs _: Int?,
             fps _: Double?,
-            includeAudio _: Bool?,
-            outPath _: String?) async throws -> (path: String, hasAudio: Bool)
+            includeAudio _: Bool?) async throws -> (path: String, hasAudio: Bool)
         {
             let url = FileManager().temporaryDirectory
                 .appendingPathComponent("openclaw-test-screen-record-\(UUID().uuidString).mp4")

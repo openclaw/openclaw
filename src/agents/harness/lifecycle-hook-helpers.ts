@@ -45,16 +45,12 @@ function countFinalizeRetryBudgetEntries(budget: FinalizeRetryBudget): number {
 
 function pruneFinalizeRetryBudget(budget: FinalizeRetryBudget): void {
   while (countFinalizeRetryBudgetEntries(budget) > FINALIZE_RETRY_BUDGET_MAX_ENTRIES) {
-    const oldestRunId = budget.keys().next().value;
-    if (oldestRunId === undefined) {
-      return;
-    }
-    const oldestRunBudget = budget.get(oldestRunId);
-    const oldestRetryKey = oldestRunBudget?.keys().next().value;
-    if (oldestRunBudget && oldestRetryKey !== undefined) {
+    const [oldestRunId, oldestRunBudget] = budget.entries().next().value!;
+    const oldestRetryKey = oldestRunBudget.keys().next().value;
+    if (oldestRetryKey !== undefined) {
       oldestRunBudget.delete(oldestRetryKey);
     }
-    if (!oldestRunBudget || oldestRunBudget.size === 0) {
+    if (oldestRunBudget.size === 0) {
       budget.delete(oldestRunId);
     }
   }
@@ -69,7 +65,7 @@ export function runAgentHarnessLlmInputHook(
   params: AgentHarnessHookParams<PluginHookLlmInputEvent>,
 ): void {
   const hookRunner = params.hookRunner ?? getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("llm_input") || typeof hookRunner.runLlmInput !== "function") {
+  if (!hookRunner?.hasHooks("llm_input")) {
     return;
   }
   void hookRunner
@@ -84,7 +80,7 @@ export function runAgentHarnessLlmOutputHook(
   params: AgentHarnessHookParams<PluginHookLlmOutputEvent>,
 ): void {
   const hookRunner = params.hookRunner ?? getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("llm_output") || typeof hookRunner.runLlmOutput !== "function") {
+  if (!hookRunner?.hasHooks("llm_output")) {
     return;
   }
   void hookRunner
@@ -99,7 +95,7 @@ async function executeAgentHarnessAgentEndHook(
 ): Promise<void> {
   const loadMessages = takeHookMessageLoader(params.event);
   const hookRunner = params.hookRunner ?? getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("agent_end") || typeof hookRunner.runAgentEnd !== "function") {
+  if (!hookRunner?.hasHooks("agent_end")) {
     return;
   }
   try {
@@ -138,10 +134,7 @@ export async function runAgentHarnessBeforeAgentFinalizeHook(
 ): Promise<AgentHarnessBeforeAgentFinalizeOutcome> {
   const loadMessages = takeHookMessageLoader(params.event);
   const hookRunner = params.hookRunner ?? getGlobalHookRunner();
-  if (
-    !hookRunner?.hasHooks("before_agent_finalize") ||
-    typeof hookRunner.runBeforeAgentFinalize !== "function"
-  ) {
+  if (!hookRunner?.hasHooks("before_agent_finalize")) {
     return { action: "continue" };
   }
   try {

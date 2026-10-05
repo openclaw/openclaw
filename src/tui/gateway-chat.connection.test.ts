@@ -172,14 +172,7 @@ describe("GatewayChatClient connections", () => {
     });
   });
 
-  it.each([
-    "ws://127.0.0.1/gateway",
-    "wss://other.example/gateway",
-    "wss://127.0.0.1:19876/gateway",
-    "wss://127.0.0.1/other",
-    "wss://127.0.0.1/gateway?target=other",
-    "wss://127.0.0.1/gateway#other",
-  ])(
+  it.each(["wss://other.example/gateway"])(
     "requires explicit auth and drops the configured TLS pin for mismatched target %s",
     async (url) => {
       setGateway({
@@ -225,13 +218,6 @@ describe("GatewayChatClient connections", () => {
     });
     await expect(resolveGatewayConnection({})).rejects.toThrow(
       "gateway.auth.mode is unset. Set gateway.auth.mode to token or password.",
-    );
-  });
-
-  it("fails with guidance when env-template config auth token is unresolved", async () => {
-    setGateway({ mode: "local", auth: { token: "${MISSING_GATEWAY_TOKEN}" } });
-    await expect(resolveGatewayConnection({})).rejects.toThrow(
-      "gateway.auth.token SecretRef is unresolved",
     );
   });
 

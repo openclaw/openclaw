@@ -194,9 +194,9 @@ function sameSpanStyle(left: FlexSpan, right: FlexSpan): boolean {
   );
 }
 
-function renderTableCell(cell: MarkdownTableCell | undefined, fallback: string): RenderedCell {
-  if (!cell?.text.trim()) {
-    return { text: fallback, hasMarkup: false };
+function renderTableCell(cell: MarkdownTableCell): RenderedCell {
+  if (!cell.text.trim()) {
+    return { text: "-", hasMarkup: false };
   }
 
   const codeSpans = cell.styles.filter((span) => span.style === "code");
@@ -276,7 +276,7 @@ function renderTableCell(cell: MarkdownTableCell | undefined, fallback: string):
     spans
       .map((span) => span.text ?? "")
       .join("")
-      .trim() || fallback;
+      .trim() || "-";
   return {
     text: renderedText,
     ...(hasMarkup ? { contents: spans } : {}),
@@ -295,7 +295,7 @@ function convertTableToFlexBubble(table: MarkdownTableMeta): FlexBubble | undefi
   const renderCells = (cells: MarkdownTableCell[]): RenderedCell[] | undefined => {
     const rendered: RenderedCell[] = [];
     for (const cell of cells) {
-      const prepared = renderTableCell(cell, "-");
+      const prepared = renderTableCell(cell);
       if (requiresPlainCells && prepared.hasMarkup) {
         return undefined;
       }
