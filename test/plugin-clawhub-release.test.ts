@@ -1349,11 +1349,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
       },
     });
 
-    const binDir = join(repoDir, "bin");
-    mkdirSync(binDir);
-    writeFileSync(join(binDir, "npm"), "#!/bin/sh\nprintf '\"1.2.4\"\\n'\n", { mode: 0o755 });
-    const previousPath = process.env.PATH;
-    process.env.PATH = `${binDir}${delimiter}${previousPath ?? ""}`;
+    const resolveLatestVersion = vi.fn(() => "1.2.4");
     const plan = await buildOpenClawReleaseClawHubPlan(
       {
         bootstrapWorkflowRef: `release-publish/${"d".repeat(12)}-12345`,
@@ -1371,15 +1367,11 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
         rootDir: repoDir,
         fetchImpl,
         registryBaseUrl: "https://clawhub.ai",
+        resolveLatestVersion,
       },
-    ).finally(() => {
-      if (previousPath === undefined) {
-        delete process.env.PATH;
-      } else {
-        process.env.PATH = previousPath;
-      }
-    });
+    );
 
+    expect(resolveLatestVersion).toHaveBeenCalledWith("demo-runtime");
     expect(plan.warnings).toEqual(
       ["demo-plugin", "demo-three", "demo-two"].map(
         (id) =>
@@ -2105,7 +2097,7 @@ set -euo pipefail
 printf '%s\\n' "$*" >> "$TEST_INVOCATIONS"
 if [[ "\${1:-}" == "--workdir" ]]; then shift 2; fi
 if [[ "\${2:-}" == "pack" ]]; then
-  printf '{"path":"%s"}\\n' "$TEST_TGZ"
+  node -e 'console.log(JSON.stringify({ path: process.env.TEST_TGZ }))'
   exit 0
 fi
 if [[ " $* " == *" --dry-run "* ]]; then
