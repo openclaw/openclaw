@@ -4,7 +4,6 @@ export {
   countPendingDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
   getLatestSubagentRunByChildSessionKey,
-  getSubagentRunByChildSessionKey,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
   isSubagentRunLive,
@@ -22,7 +21,21 @@ import {
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
 import { immutableSubagentRun, subagentRuns } from "./subagent-registry-memory.js";
+import { getSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
+import { getSubagentRunsSnapshotForChildSession } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+export async function getSubagentRunByChildSessionKey(
+  childSessionKey: string,
+  childAgentId?: string,
+): Promise<SubagentRunRecord | null> {
+  const runs = await getSubagentRunsSnapshotForChildSession(
+    subagentRuns,
+    childSessionKey,
+    childAgentId,
+  );
+  return getSubagentRunByChildSessionKeyFromRuns(runs, childSessionKey, childAgentId);
+}
 
 type RegistryTestApi = {
   addSubagentRunForTests(entry: SubagentRunRecord): Promise<void>;

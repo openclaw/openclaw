@@ -429,12 +429,12 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
  * newest row of that class rather than the newest row overall. Without it a
  * sibling registered at a higher generation hides the row the caller owns.
  */
-export function getLatestSubagentRunByChildSessionKeyFromRuns(
-  runs: Map<string, SubagentRunRecord> | Iterable<SubagentRunRecord>,
+export function getLatestSubagentRunByChildSessionKeyFromRuns<T extends SubagentRunReadRecord>(
+  runs: Map<string, T> | Iterable<T>,
   childSessionKey: string,
-  matches?: (entry: SubagentRunRecord) => boolean,
+  matches?: (entry: T) => boolean,
   childAgentId?: string,
-): SubagentRunRecord | undefined {
+): T | undefined {
   const key = childSessionKey.trim();
   if (!key) {
     return undefined;
@@ -443,6 +443,28 @@ export function getLatestSubagentRunByChildSessionKeyFromRuns(
     runs instanceof Map ? runs.values() : runs,
     (entry) =>
       matchesSubagentChildSessionOwner(entry, key, childAgentId) && (!matches || matches(entry)),
+  );
+}
+
+/** Admission prefers a retained active run, then the latest generation. */
+export function getSubagentRunByChildSessionKeyFromRuns<T extends SubagentRunReadRecord>(
+  runs: Map<string, T>,
+  childSessionKey: string,
+  childAgentId?: string,
+  liveRuns?: ReadonlyMap<string, SubagentRunRecord>,
+): T | null {
+  return (
+    getLatestSubagentRunByChildSessionKeyFromRuns(
+      runs,
+      childSessionKey,
+      (entry) => {
+        const live = liveRuns?.get(entry.runId);
+        return isRetainedUnendedSubagentRun(live && isSameSubagentRun(live, entry) ? live : entry);
+      },
+      childAgentId,
+    ) ??
+    getLatestSubagentRunByChildSessionKeyFromRuns(runs, childSessionKey, undefined, childAgentId) ??
+    null
   );
 }
 
@@ -456,31 +478,6 @@ export function getLatestSubagentRunForChild(
     child.childSessionKey,
     undefined,
     child.childAgentId,
-  );
-}
-
-/** Returns the preferred run for a child session, active first then latest ended. */
-export function getSubagentRunByChildSessionKeyFromRuns(
-  runs: Map<string, SubagentRunRecord>,
-  childSessionKey: string,
-  childAgentId?: string,
-): SubagentRunRecord | null {
-  const key = childSessionKey.trim();
-  if (!key) {
-    return null;
-  }
-
-  return (
-    latestSubagentRun(
-      runs.values(),
-      (entry) =>
-        matchesSubagentChildSessionOwner(entry, key, childAgentId) &&
-        isRetainedUnendedSubagentRun(entry),
-    ) ??
-    latestSubagentRun(runs.values(), (entry) =>
-      matchesSubagentChildSessionOwner(entry, key, childAgentId),
-    ) ??
-    null
   );
 }
 

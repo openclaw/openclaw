@@ -139,7 +139,9 @@ const embeddedRunMock = {
 const { subagentRegistryMock } = vi.hoisted(() => ({
   subagentRegistryMock: {
     isSubagentSessionRunActive: vi.fn(() => true),
-    shouldIgnorePostCompletionAnnounceForSession: vi.fn((_sessionKey: string) => false),
+    shouldIgnorePostCompletionAnnounceForSession: vi.fn(
+      (_sessionKey: string, _childAgentId?: string) => false,
+    ),
     countPendingDescendantRuns: vi.fn((_sessionKey: string) => 0),
     latestRunForChild: vi.fn((_childSessionKey: string): MockSubagentRun | undefined => undefined),
     listSubagentRunsForRequester: vi.fn(
@@ -148,7 +150,9 @@ const { subagentRegistryMock } = vi.hoisted(() => ({
     replaceSubagentRunAfterSteerCore: vi.fn(
       (_params: { previousRunId: string; nextRunId: string; lifecycleGeneration?: string }) => true,
     ),
-    resolveRequesterForChildSession: vi.fn((_sessionKey: string): RequesterResolution => null),
+    resolveRequesterForChildSession: vi.fn(
+      (_sessionKey: string, _childAgentId?: string): RequesterResolution => null,
+    ),
   },
 }));
 const subagentDeliveryTargetHookMock = vi.fn(
@@ -351,11 +355,17 @@ function createRegistryDiscoveryFixture() {
         },
       };
     },
-    async shouldIgnorePostCompletionAnnounceForSession(childSessionKey: string) {
-      return subagentRegistryMock.shouldIgnorePostCompletionAnnounceForSession(childSessionKey);
+    async shouldIgnorePostCompletionAnnounceForSession(
+      childSessionKey: string,
+      childAgentId?: string,
+    ) {
+      return subagentRegistryMock.shouldIgnorePostCompletionAnnounceForSession(
+        childSessionKey,
+        childAgentId,
+      );
     },
-    async resolveRequesterForChildSession(childSessionKey: string) {
-      return subagentRegistryMock.resolveRequesterForChildSession(childSessionKey);
+    async resolveRequesterForChildSession(childSessionKey: string, childAgentId?: string) {
+      return subagentRegistryMock.resolveRequesterForChildSession(childSessionKey, childAgentId);
     },
     listSubagentRunsForRequester(sessionKey: string, scope?: { requesterRunId?: string }) {
       return subagentRegistryMock

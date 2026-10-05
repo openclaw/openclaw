@@ -75,6 +75,18 @@ export function buildLatestSubagentSessionListReadIndex(
   );
 }
 
+/** Capacity reads retain active-first selection without hydrating child payloads. */
+export function getSubagentSessionListRunByChildSessionKey(
+  childSessionKey: string,
+): SubagentRunReadRecord | null {
+  return getSubagentRunByChildSessionKeyFromRuns(
+    getSubagentSessionListRunsSnapshotForChildSessions([childSessionKey]),
+    childSessionKey,
+    undefined,
+    subagentRuns,
+  );
+}
+
 export async function countPendingDescendantRuns(
   rootSessionKey: string,
   assertCurrent: () => void,
@@ -158,17 +170,6 @@ export function listSubagentRunsForRequester(
 ): SubagentRunRecord[] {
   // Request-run lifetime scoping must observe the raw live map, including rows not persisted yet.
   return listRunsForRequesterFromRuns(subagentRuns, requesterSessionKey, options);
-}
-
-export async function getSubagentRunByChildSessionKey(
-  childSessionKey: string,
-  childAgentId?: string,
-): Promise<SubagentRunRecord | null> {
-  return getSubagentRunByChildSessionKeyFromRuns(
-    await getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey, childAgentId),
-    childSessionKey,
-    childAgentId,
-  );
 }
 
 export async function getLatestSubagentRunByChildSessionKey(

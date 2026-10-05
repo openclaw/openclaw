@@ -25,7 +25,7 @@ import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
 export function registerSessionMaintenanceProtectionTests() {
   it.each(["worker", "native lifecycle"] as const)(
-    "prepares cold durable subagent protection without querying the calling thread (%s)",
+    "prepares cold durable subagent protection without bulk caller-thread reads (%s)",
     async (owner) => {
       await withOpenClawTestState(
         { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
@@ -95,7 +95,15 @@ export function registerSessionMaintenanceProtectionTests() {
               });
               expect(nativeCommit).toBe(true);
             }
-            expect(sql.queries.filter((query) => query.includes("subagent_runs"))).toEqual([]);
+            const registryQueries = sql.queries.filter((query) => query.includes("subagent_runs"));
+            if (owner === "worker") {
+              expect(registryQueries).toEqual([]);
+            } else {
+              // Any foreign state commit requires native pruning to recheck its candidates.
+              for (const query of registryQueries) {
+                expect(query).toContain('"child_session_key" in');
+              }
+            }
             expect(loadSessionEntry(protectedSession)?.sessionId).toBe("protected");
             expect(loadSessionEntry(stale)).toBeUndefined();
           } finally {

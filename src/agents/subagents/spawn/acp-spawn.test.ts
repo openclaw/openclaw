@@ -77,7 +77,7 @@ const hoisted = vi.hoisted(() => ({
   closeRuntimeOnFailureMock: vi.fn(),
   registerSubagentRunMock: vi.fn(),
   countActiveRunsForSessionMock: vi.fn(),
-  getLatestSubagentRunMock: vi.fn(),
+  getSubagentRunMock: vi.fn(),
   upsertSessionEntryMock: vi.fn(),
   normalizeChannelIdMock: vi.fn((channelId: string) => channelId.trim().toLowerCase() || null),
   state: { cfg: createDefaultSpawnConfig() },
@@ -151,9 +151,7 @@ vi.mock("../registry/subagent-registry.js", () => ({
 
 // mock-isolation: This ACP admission fixture owns its synthetic registry inventory.
 vi.mock("../registry/subagent-registry-read.js", () => ({
-  buildLatestSubagentSessionListReadIndex: () => ({
-    getLatestSubagentRun: hoisted.getLatestSubagentRunMock,
-  }),
+  getSubagentSessionListRunByChildSessionKey: hoisted.getSubagentRunMock,
 }));
 
 const { spawnAcpDirect } = await import("./acp-spawn.js");
@@ -498,7 +496,7 @@ describe("spawnAcpDirect", () => {
     hoisted.closeRuntimeOnFailureMock.mockReset().mockResolvedValue(undefined);
     hoisted.registerSubagentRunMock.mockReset().mockResolvedValue(undefined);
     hoisted.countActiveRunsForSessionMock.mockReset().mockReturnValue(0);
-    hoisted.getLatestSubagentRunMock.mockReset().mockReturnValue(null);
+    hoisted.getSubagentRunMock.mockReset().mockReturnValue(null);
     hoisted.upsertSessionEntryMock
       .mockReset()
       .mockImplementation(async (_scope: unknown, patch: Partial<SessionEntry>) => ({
@@ -934,7 +932,7 @@ describe("spawnAcpDirect", () => {
       () => hoisted.registerSubagentRunMock.mock.calls.length,
     );
     if (cap === 2) {
-      hoisted.getLatestSubagentRunMock.mockImplementation((childSessionKey: string) =>
+      hoisted.getSubagentRunMock.mockImplementation((childSessionKey: string) =>
         hoisted.registerSubagentRunMock.mock.calls.some(
           ([run]) => run.childSessionKey === childSessionKey,
         )

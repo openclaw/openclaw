@@ -35,7 +35,7 @@ import {
   mutateRequesterSettleWakeBatch,
   settleRequesterCompletionBatch,
 } from "../completion/subagent-completion-admission.store.js";
-import { recoverSubagentRunGatewayOwner } from "./subagent-registry-gateway-owner.js";
+import { bindSubagentRunGatewayOwners } from "./subagent-registry-gateway-owner.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
@@ -860,7 +860,12 @@ it("retains the execution's Gateway binding through immutable metadata publicati
   const replacementGateway = createGatewayContext();
   const replacementResolver = () => replacementGateway;
   await expect(
-    recoverSubagentRunGatewayOwner(published, replacementResolver, () => {}),
+    bindSubagentRunGatewayOwners({
+      runs: subagentRuns,
+      resumedRuns: new Set(),
+      getGatewayContextResolver: () => replacementResolver,
+      onRecovered: () => {},
+    }),
   ).resolves.toBe(true);
   const recovered = subagentRuns.get(child.runId)!;
   expect(isSameSubagentRunOwner(recovered, alias)).toBe(false);

@@ -1,9 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { markAcpTurnActive } from "../../../acp/control-plane/active-turns.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../../../infra/agent-run-registry.js";
+import { countUntrackedActiveAcpRunsForOwner } from "../spawn/acp-spawn-admission.js";
+import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import {
   countActiveDescendantRunsFromRuns,
   hasDescendantRunAwaitingSettleFromRuns,
   listRunsForControllerFromRuns,
 } from "./subagent-registry-queries.js";
+import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { withSubagentRunReadSnapshot } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -17,6 +22,9 @@ const mocks = vi.hoisted(() => {
     ),
     getSubagentSessionListRunsSnapshotForRead: vi.fn<
       (runs: Map<string, SubagentRunRecord>) => Map<string, SubagentRunRecord>
+    >(() => new Map()),
+    getSubagentSessionListRunsSnapshotForChildSessions: vi.fn<
+      (keys: readonly string[]) => Map<string, SubagentRunReadRecord>
     >(() => new Map()),
     getSubagentRunsSnapshotForChildSession: vi.fn<
       typeof import("./subagent-registry-state.js").getSubagentRunsSnapshotForChildSession
@@ -37,6 +45,8 @@ vi.mock("./subagent-registry-memory.js", () => ({
 // mock-isolation: Scoped reads consume fixture snapshots without opening the shared-state worker.
 vi.mock("./subagent-registry-state.js", () => ({
   getSubagentSessionListRunsSnapshotForRead: mocks.getSubagentSessionListRunsSnapshotForRead,
+  getSubagentSessionListRunsSnapshotForChildSessions:
+    mocks.getSubagentSessionListRunsSnapshotForChildSessions,
   getSubagentRunsSnapshotForChildSession: mocks.getSubagentRunsSnapshotForChildSession,
   getSubagentRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
   withSubagentRunReadSnapshot: (async (_runs, select, consume) => {
@@ -72,6 +82,7 @@ describe("subagent registry scoped reads", () => {
     mocks.readSnapshot.clear();
     mocks.getSubagentRunsForChildSession.mockReset().mockReturnValue([]);
     mocks.getSubagentSessionListRunsSnapshotForRead.mockReset().mockReturnValue(new Map());
+    mocks.getSubagentSessionListRunsSnapshotForChildSessions.mockReset().mockReturnValue(new Map());
     mocks.getSubagentRunsSnapshotForChildSession.mockReset().mockResolvedValue(new Map());
     mocks.getSubagentRunsSnapshotForRead.mockReset().mockImplementation(() => {
       throw new Error("unexpected full registry hydration");
@@ -181,6 +192,52 @@ describe("subagent registry scoped reads", () => {
       latest,
     );
     expect(mocks.getSubagentRunsSnapshotForChildSession).not.toHaveBeenCalled();
+  });
+
+  it("keeps an older live ACP child tracked despite newer terminal history", () => {
+    const childSessionKey = "agent:main:acp:capacity-child";
+    const ownerKey = "agent:main:subagent:capacity-owner";
+    const older = createRun({
+      runId: "capacity-active",
+      childSessionKey,
+      requesterSessionKey: ownerKey,
+      generation: 1,
+      createdAt: Date.now() - 3 * 60 * 60_000,
+    });
+    const latest = createRun({
+      runId: "capacity-terminal",
+      childSessionKey,
+      requesterSessionKey: ownerKey,
+      generation: 2,
+      createdAt: Date.now(),
+      execution: { status: "terminal", endedAt: Date.now() },
+    });
+    mocks.liveRuns.set(older.runId, older);
+    mocks.liveRuns.set(latest.runId, latest);
+    mocks.getSubagentSessionListRunsSnapshotForChildSessions.mockReturnValue(
+      new Map([older, latest].map((row) => [row.runId, projectSubagentRunForSessionList(row)])),
+    );
+    const claim = claimAgentRunContext(
+      older.runId,
+      { sessionKey: childSessionKey },
+      { trackOwner: true, ownsContext: true },
+    );
+    const releaseTurn = markAcpTurnActive({
+      agentId: "main",
+      sessionKey: childSessionKey,
+      ownerSessionKey: ownerKey,
+    });
+    try {
+      expect(countUntrackedActiveAcpRunsForOwner(ownerKey)).toBe(0);
+      releaseAgentRunContext(older.runId, claim);
+      expect(countUntrackedActiveAcpRunsForOwner(ownerKey)).toBe(1);
+      expect(countUntrackedActiveAcpRunsForOwner(ownerKey, new Set([childSessionKey]))).toBe(0);
+      expect(mocks.getSubagentRunsSnapshotForChildSession).not.toHaveBeenCalled();
+      expect(mocks.getSubagentRunsSnapshotForRead).not.toHaveBeenCalled();
+    } finally {
+      releaseTurn?.();
+      releaseAgentRunContext(older.runId, claim);
+    }
   });
 
   it.each(["requester", "completion"] as const)(
@@ -368,7 +425,6 @@ describe("subagent registry scoped reads", () => {
     mocks.readSnapshot = snapshot;
     expect(await mod.countPendingDescendantRuns(root, () => {})).toBe(4);
     expect(hasDescendantRunAwaitingSettleFromRuns(snapshot, root, pendingRun.runId)).toBe(true);
-    expect(await mod.getSubagentRunByChildSessionKey(reusedChild)).toBe(oldActive);
     expect(await mod.getLatestSubagentRunByChildSessionKey(reusedChild)).toBe(freshTerminal);
     expect(mod.buildSubagentSessionListReadIndex(now).getDisplaySubagentRun(reusedChild)).toBe(
       freshTerminal,

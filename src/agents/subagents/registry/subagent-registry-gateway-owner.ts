@@ -13,7 +13,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
 /** A closed Gateway's durable terminal wake acquires fresh host custody, never its old aliases. */
-export async function recoverSubagentRunGatewayOwner(
+async function recoverSubagentRunGatewayOwner(
   expected: SubagentRunRecord,
   resolver: GatewayContextResolver,
   onRecovered: (entry: SubagentRunRecord) => void,
