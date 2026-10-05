@@ -2,6 +2,7 @@ import fs from "node:fs";
 import nodePath from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { resolveStateDir } from "../config/paths.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -113,6 +114,34 @@ it("keeps one connection while nested reads retain independent committed snapsho
       scope.close();
     }
     expect(retained?.isOpen).toBe(false);
+  });
+});
+
+it("borrows a retained canonical shared reader across agents", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const sharedPath = nodePath.join(
+      resolveStateDir(state.env),
+      "state",
+      "memory",
+      "shared-0123456789abcdef.sqlite",
+    );
+    const orionOptions = { agentId: "orion", env: state.env, path: sharedPath };
+    const { path } = openOpenClawAgentDatabase(orionOptions);
+    await closeOpenClawAgentDatabaseByPathAsync(path);
+    const retained = retainOpenClawAgentDatabaseReadOnly(orionOptions);
+    expect(retained.found).toBe(true);
+    try {
+      const borrowed = withOpenClawAgentDatabaseReadOnly(({ db }) => db, {
+        agentId: "main",
+        env: state.env,
+        path: sharedPath,
+      });
+      expect(borrowed.found && borrowed.value.isOpen).toBe(true);
+    } finally {
+      if (retained.found) {
+        retained.claim.release();
+      }
+    }
   });
 });
 

@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  isOpenClawSharedMemoryDatabasePath,
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
@@ -66,5 +67,31 @@ describe("agent SQLite path memoization", () => {
         resolveOpenClawAgentSqlitePath({ agentId: "worker", env, path: "custom.sqlite" }),
       ).toBe(path.join(workingDir, "custom.sqlite"));
     }
+  });
+
+  it("recognizes only canonical shared memory database paths", () => {
+    const root = tempDirs.make("openclaw-agent-shared-paths-");
+    const env = { OPENCLAW_STATE_DIR: root };
+    const canonical = path.join(root, "state", "memory", "shared-0123456789abcdef.sqlite");
+    expect(isOpenClawSharedMemoryDatabasePath(canonical, { env })).toBe(true);
+    expect(
+      isOpenClawSharedMemoryDatabasePath(
+        path.join(root, "state", "memory", "shared-0123456789ABCDEF.sqlite"),
+        { env },
+      ),
+    ).toBe(false);
+    expect(
+      isOpenClawSharedMemoryDatabasePath(
+        path.join(root, "memory", "shared-0123456789abcdef.sqlite"),
+        {
+          env,
+        },
+      ),
+    ).toBe(false);
+    expect(
+      isOpenClawSharedMemoryDatabasePath(resolveOpenClawAgentSqlitePath({ agentId: "main", env }), {
+        env,
+      }),
+    ).toBe(false);
   });
 });

@@ -87,3 +87,17 @@ export function isIncognitoOpenClawAgentSqlitePath(
     resolved === resolveIncognitoOpenClawAgentSqlitePath(options)
   );
 }
+
+/** Identify the canonical cross-agent memory database created for one workspace hash. */
+export function isOpenClawSharedMemoryDatabasePath(
+  pathname: string,
+  options: Pick<OpenClawAgentSqlitePathOptions, "env"> = {},
+): boolean {
+  const stateDir = resolveStateDir(options.env ?? process.env);
+  const sharedDir = path.resolve(stateDir, "state", "memory");
+  const resolved = path.resolve(pathname);
+  return (
+    path.dirname(resolved) === sharedDir &&
+    /^shared-[0-9a-f]{16}\.sqlite$/.test(path.basename(resolved))
+  );
+}

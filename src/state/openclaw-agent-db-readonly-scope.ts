@@ -23,6 +23,7 @@ import {
   type OpenClawAgentReadOnlyDatabaseHandle,
 } from "./openclaw-agent-db-readonly-open.js";
 import { registerOpenClawAgentDatabaseSyncResource } from "./openclaw-agent-db-resources.js";
+import { isOpenClawSharedMemoryDatabasePath } from "./openclaw-agent-db.paths.js";
 import { observeOpenClawDatabaseMaintenanceResource } from "./openclaw-state-db-async-lifecycle.js";
 
 export type OpenClawAgentDatabaseReadOnlyBehavior = {
@@ -176,7 +177,10 @@ export class OpenClawAgentDatabaseReadOnlyScope {
       return { found: false, reason: "schema-missing" } as const;
     }
     const requestedAgentId = normalizeAgentId(options.agentId);
-    if (this.database.agentId !== requestedAgentId) {
+    if (
+      this.database.agentId !== requestedAgentId &&
+      !isOpenClawSharedMemoryDatabasePath(this.database.path, options)
+    ) {
       throw new Error(
         `OpenClaw agent database ${this.database.path} belongs to agent ${this.database.agentId}; requested agent ${requestedAgentId}.`,
       );
