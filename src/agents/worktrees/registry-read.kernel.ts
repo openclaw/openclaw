@@ -134,6 +134,23 @@ export function findLiveRegistryWorktreeByOwnerInDatabase(
   return row ? rowToRecord(row) : undefined;
 }
 
+export function findLiveRegistryWorktreeByPathInDatabase(
+  db: DatabaseSync,
+  worktreePath: string,
+): ManagedWorktreeRecord | undefined {
+  const row = executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "worktrees">>(db)
+      .selectFrom("worktrees")
+      .select(WORKTREE_RECORD_COLUMNS)
+      .where("path", "=", worktreePath)
+      .where("removed_at", "is", null)
+      .orderBy("created_at", "desc")
+      .limit(1),
+  ).rows[0];
+  return row ? rowToRecord(row) : undefined;
+}
+
 export function listRegistryWorktreesInDatabase(
   db: DatabaseSync,
   options: WorktreeRegistryListOptions = {},

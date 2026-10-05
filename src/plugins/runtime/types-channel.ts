@@ -114,7 +114,11 @@ export type PluginRuntimeChannel = {
   session: {
     /** @deprecated Prefer channel turn helpers that record inbound sessions as part of dispatch. */
     resolveStorePath: typeof import("../../config/sessions/paths.js").resolveSessionStorePathCore;
+    /** @deprecated Use readSessionUpdatedAtAsync. Retained until the next Plugin SDK major. */
     readSessionUpdatedAt: ReadSessionUpdatedAt;
+    readSessionUpdatedAtAsync: (
+      ...params: Parameters<ReadSessionUpdatedAt>
+    ) => Promise<ReturnType<ReadSessionUpdatedAt>>;
     recordSessionMetaFromInbound: RecordSessionMetaFromInbound;
     /** @deprecated Prefer channel turn helpers that record inbound sessions as part of dispatch. */
     recordInboundSession: RecordInboundSession;

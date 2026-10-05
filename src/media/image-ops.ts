@@ -22,8 +22,8 @@ class ImageProcessorUnavailableError extends Error {
   readonly operation: string;
   readonly causes: unknown[];
 
-  constructor(operation: string, message?: string, causes: unknown[] = []) {
-    super(message ?? `Image processor unavailable for ${operation}`, {
+  constructor(operation: string, message: string, causes: unknown[]) {
+    super(message, {
       cause: causes.find((cause): cause is Error => cause instanceof Error),
     });
     this.name = "ImageProcessorUnavailableError";

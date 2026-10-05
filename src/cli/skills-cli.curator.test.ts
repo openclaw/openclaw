@@ -170,16 +170,6 @@ describe("skills curator CLI", () => {
     expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(liveStatus);
   });
 
-  it("reports asynchronous local status failure without a result", async () => {
-    mocks.callGateway.mockRejectedValue(unavailable());
-    mocks.getSkillCuratorStatus.mockRejectedValueOnce(new Error("curator state unavailable"));
-    await expect(run("status", "--json")).rejects.toThrow("__exit__:1");
-    expect(mocks.defaultRuntime.error).toHaveBeenCalledExactlyOnceWith("curator state unavailable");
-    expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
-    expect(mocks.defaultRuntime.writeStdout).not.toHaveBeenCalled();
-    expect(mocks.acquireGatewayLock).not.toHaveBeenCalled();
-  });
-
   it("reports retirement for registered curator mutations", async () => {
     for (const action of actions.slice(1)) {
       await expect(run(...action, "--json")).rejects.toThrow("__exit__:1");

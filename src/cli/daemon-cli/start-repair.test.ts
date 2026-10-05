@@ -359,48 +359,60 @@ describe("repairLoadedGatewayServiceForStart", () => {
     },
   );
 
-  it.each([
-    ["command", { launcher: "command" as const }, undefined],
-    ["working directory", { launcher: "working-directory" as const }, undefined],
-    [
-      "gateway target environment",
-      { environment: { keys: ["OPENCLAW_STATE_DIR"] } },
-      { HOME: "/home/openclaw", OPENCLAW_STATE_DIR: "/srv/operator-state" },
-    ],
-  ])(
-    "refuses an ineffective stopped-service repair for a %s drop-in",
-    async (_, overrides, effectiveEnvironment) => {
-      const installMock = vi.fn(async () => {});
-      const service = { install: installMock, isLoaded: vi.fn(async () => true) };
-      const managedDefinition = {
-        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
-        workingDirectory: "/srv/openclaw",
-        environment: { HOME: "/home/openclaw" },
-      };
-      const state = stoppedServiceState({
-        ...managedDefinition,
-        ...(effectiveEnvironment ? { environment: effectiveEnvironment } : {}),
-        sourcePath: "/home/openclaw/.config/systemd/user/openclaw-work.service",
-        managedDefinition,
-        managedOverrides: overrides,
-      });
+  describe.each(["linux", "win32"] as const)("operator overrides on %s", (platform) => {
+    it.each([
+      ["command", { launcher: "command" as const }, undefined],
+      ["working directory", { launcher: "working-directory" as const }, undefined],
+      [
+        "gateway target environment",
+        { environment: { keys: ["OPENCLAW_STATE_DIR"] } },
+        { HOME: "/home/openclaw", OPENCLAW_STATE_DIR: "/srv/operator-state" },
+      ],
+    ])(
+      "refuses an ineffective stopped-service repair for a %s override",
+      async (_, overrides, effectiveEnvironment) => {
+        const originalPlatform = process.platform;
+        Object.defineProperty(process, "platform", { value: platform });
+        try {
+          const installMock = vi.fn(async () => {});
+          const service = { install: installMock, isLoaded: vi.fn(async () => true) };
+          const managedDefinition = {
+            programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+            workingDirectory: "/srv/openclaw",
+            environment: { HOME: "/home/openclaw" },
+          };
+          const state = stoppedServiceState({
+            ...managedDefinition,
+            ...(effectiveEnvironment ? { environment: effectiveEnvironment } : {}),
+            sourcePath: "/home/openclaw/.config/systemd/user/openclaw-work.service",
+            managedDefinition,
+            managedOverrides: overrides,
+          });
 
-      await expect(
-        repairLoadedGatewayServiceForStart({
-          service,
-          state,
-          issues: [{ code: "missing-program", message: "missing program" }],
-          json: true,
-          stdout: process.stdout,
-        }),
-      ).rejects.toThrow(/systemd drop-in.*systemctl --user cat openclaw-work\.service/);
+          await expect(
+            repairLoadedGatewayServiceForStart({
+              service,
+              state,
+              issues: [{ code: "missing-program", message: "missing program" }],
+              json: true,
+              stdout: process.stdout,
+            }),
+          ).rejects.toThrow(
+            platform === "win32"
+              ? /Scheduled Task.*registered action and working directory/
+              : /systemd drop-in.*systemctl --user cat openclaw-work\.service/,
+          );
 
-      expect(readConfigFileSnapshotForWriteMock).not.toHaveBeenCalled();
-      expect(resolveGatewayInstallTokenMock).not.toHaveBeenCalled();
-      expect(buildGatewayInstallPlanMock).not.toHaveBeenCalled();
-      expect(installMock).not.toHaveBeenCalled();
-    },
-  );
+          expect(readConfigFileSnapshotForWriteMock).not.toHaveBeenCalled();
+          expect(resolveGatewayInstallTokenMock).not.toHaveBeenCalled();
+          expect(buildGatewayInstallPlanMock).not.toHaveBeenCalled();
+          expect(installMock).not.toHaveBeenCalled();
+        } finally {
+          Object.defineProperty(process, "platform", { value: originalPlatform });
+        }
+      },
+    );
+  });
 
   it.each(["start", "restart"] as const)(
     "refuses %s repair when ambient state, config, and port target a different service",

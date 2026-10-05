@@ -61,7 +61,7 @@ import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shar
 import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
-import { agentWaitHandler } from "./agent-wait.js";
+import { agentHandlers } from "./agent.js";
 import { createScopedCliClient } from "./chat-client.test-support.js";
 import {
   createFileAttachment,
@@ -1474,7 +1474,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(context.addChatRun).toHaveBeenCalledOnce();
       expect(operation.result).toEqual({ kind: "completed" });
       expect(mockState.lastDispatchCtx?.BodyForAgent).toBe("hello");
-      expect(mockState.lastMessageInjectionDisposition).toBe("rejected");
+      expect(mockState.lastMessageInjectionDisposition).toBeUndefined();
     },
   );
 
@@ -2222,7 +2222,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     expect(context.addChatRun).toHaveBeenCalledOnce();
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore + 1);
-    expect(mockState.lastMessageInjectionDisposition).toBe("rejected");
+    expect(mockState.lastMessageInjectionDisposition).toBeUndefined();
     expect(staleQueue).not.toHaveBeenCalled();
     expect(staleCancel).not.toHaveBeenCalled();
     expect(readPersistedUserMessages()).toHaveLength(1);
@@ -3483,7 +3483,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         ...(failed ? { summary: errorMessage } : {}),
       });
       const waitRespond = vi.fn<RespondFn>();
-      await agentWaitHandler({
+      await agentHandlers["agent.wait"]!({
         params: { runId, timeoutMs: 0 },
         respond: waitRespond,
         context,

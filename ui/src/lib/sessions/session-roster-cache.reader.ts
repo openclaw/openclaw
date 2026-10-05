@@ -43,6 +43,7 @@ function isRosterQuery(value: unknown): value is SessionListOptions {
           "includeDerivedTitles",
           "includeLastMessage",
           "ownerFirst",
+          "excludeDock",
         ].includes(key) && typeof entry === "boolean"
       );
     })

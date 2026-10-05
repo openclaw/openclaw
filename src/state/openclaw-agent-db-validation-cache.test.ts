@@ -146,6 +146,29 @@ describe("canonical proof on physical database validation", () => {
   );
 
   describe("native integrity proof handoff", () => {
+    it.each(["current", "revoked"] as const)(
+      "preserves a %s native handoff while a reader publishes durable canonical proof",
+      async (state) => {
+        await withReceiptFixture(true, (database, options) => {
+          runOpenClawAgentWriteTransaction(recordOpenClawAgentCanonicalValidation, options);
+          const received = independentWorkerReceipt(database);
+          clearOpenClawAgentDatabaseValidationCache(database.path);
+          const adopt = captureOpenClawAgentDatabaseValidationTransfer(database);
+
+          expect(hasOpenClawAgentCanonicalValidation(database)).toBe(true);
+          expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
+          if (state === "revoked") {
+            invalidateOpenClawAgentDatabaseValidation(database.path);
+          }
+
+          expect(adopt(received.identity, received)).toBe(state === "current");
+          expect(getOpenClawAgentDatabaseValidationForTransfer(database)?.valid).toBe(
+            state === "current" ? received.valid : undefined,
+          );
+        });
+      },
+    );
+
     it("does not restore delayed proof after path, repeated, cache, or agent revocation", async () => {
       await withReceiptFixture(false, (database) => {
         const received = independentWorkerReceipt(database);
@@ -406,11 +429,20 @@ describe("canonical proof on physical database validation", () => {
     },
   );
 
-  it.runIf(typeof DatabaseSync.prototype.deserialize === "function")(
-    "revokes proof on a failed native replacement attempt",
-    async () => {
-      await withReceiptFixture(true, (database) => {
+  it
+    .runIf(typeof DatabaseSync.prototype.deserialize === "function")
+    .each(["integrity proof", "canonical enrichment"] as const)(
+    "revokes delayed %s on a failed native replacement attempt",
+    async (proof) => {
+      await withReceiptFixture(true, (database, options) => {
         expect(markOpenClawAgentCanonicalValidation(database)).toBe(true);
+        const received = independentWorkerReceipt(database);
+        if (proof === "canonical enrichment") {
+          runOpenClawAgentWriteTransaction(recordOpenClawAgentCanonicalValidation, options);
+          clearOpenClawAgentDatabaseValidationCache(database.path);
+        }
+        const adopt = captureOpenClawAgentDatabaseValidationTransfer(database);
+        expect(hasOpenClawAgentCanonicalValidation(database)).toBe(true);
         const serialized = database.db.serialize();
         database.db.exec("BEGIN IMMEDIATE");
         try {
@@ -418,9 +450,12 @@ describe("canonical proof on physical database validation", () => {
           expect(() => database.db.deserialize(serialized)).toThrow();
           expect(getOpenClawAgentDatabaseValidation(database)).toBeUndefined();
           expect(hasOpenClawAgentCanonicalValidation(database)).toBe(false);
+          expect(adopt(received.identity, received)).toBe(false);
         } finally {
           database.db.exec("ROLLBACK");
         }
+        const fresh = captureOpenClawAgentDatabaseValidationTransfer(database);
+        expect(fresh(received.identity, received)).toBe(true);
       });
     },
   );

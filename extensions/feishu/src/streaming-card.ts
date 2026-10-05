@@ -8,7 +8,7 @@ import {
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
-import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { FEISHU_HTTP_TIMEOUT_MS } from "./client-timeout.js";
 import { getFeishuUserAgent } from "./client.js";
@@ -31,15 +31,6 @@ type CardState = {
   currentText: string;
   sentText: string;
   hasNote: boolean;
-};
-
-type FeishuStreamingFetch = typeof fetch;
-
-type FeishuStreamingDeps = {
-  /** Override fetch for tests while preserving the real SSRF guard path. */
-  fetchImpl?: FeishuStreamingFetch;
-  /** Override hostname lookup for hermetic SSRF-guard tests. */
-  lookupFn?: LookupFn;
 };
 
 type CardKitResponse = { code?: number; msg?: string };
@@ -138,7 +129,7 @@ async function assertSuccessfulCardKitResponse(
   }
 }
 
-async function getToken(creds: Credentials, deps?: FeishuStreamingDeps): Promise<string> {
+async function getToken(creds: Credentials): Promise<string> {
   const key = `${creds.domain ?? "feishu"}|${creds.appId}`;
   const cached = tokenCache.get(key);
   const rawNow = Date.now();
@@ -156,8 +147,6 @@ async function getToken(creds: Credentials, deps?: FeishuStreamingDeps): Promise
       headers: { "Content-Type": "application/json", "User-Agent": getFeishuUserAgent() },
       body: JSON.stringify({ app_id: creds.appId, app_secret: creds.appSecret }),
     },
-    fetchImpl: deps?.fetchImpl,
-    lookupFn: deps?.lookupFn,
     policy: { allowedHostnames: resolveAllowedHostnames(creds.domain) },
     auditContext: "feishu.streaming-card.token",
     timeoutMs: creds.httpTimeoutMs ?? FEISHU_HTTP_TIMEOUT_MS,
@@ -240,20 +229,11 @@ export class FeishuStreamingSession {
   private pendingText: string | null = null;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private updateThrottleMs = STREAMING_UPDATE_THROTTLE_MS;
-  private fetchImpl?: FeishuStreamingFetch;
-  private lookupFn?: LookupFn;
 
-  constructor(
-    client: Client,
-    creds: Credentials,
-    log?: (msg: string) => void,
-    deps?: FeishuStreamingDeps,
-  ) {
+  constructor(client: Client, creds: Credentials, log?: (msg: string) => void) {
     this.client = client;
     this.creds = creds;
     this.log = log;
-    this.fetchImpl = deps?.fetchImpl;
-    this.lookupFn = deps?.lookupFn;
   }
 
   private async requestCardKit<T>(
@@ -270,13 +250,7 @@ export class FeishuStreamingSession {
       init: {
         method,
         headers: {
-          Authorization: `Bearer ${
-            token ??
-            (await getToken(this.creds, {
-              fetchImpl: this.fetchImpl,
-              lookupFn: this.lookupFn,
-            }))
-          }`,
+          Authorization: `Bearer ${token ?? (await getToken(this.creds))}`,
           "Content-Type":
             method === "PATCH" ? "application/json; charset=utf-8" : "application/json",
           "User-Agent": getFeishuUserAgent(),
@@ -284,8 +258,6 @@ export class FeishuStreamingSession {
         // Token renewal can await; read the current sequence only at dispatch.
         body: JSON.stringify(body()),
       },
-      fetchImpl: this.fetchImpl,
-      lookupFn: this.lookupFn,
       policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext,
       timeoutMs: this.creds.httpTimeoutMs ?? FEISHU_HTTP_TIMEOUT_MS,
@@ -509,10 +481,7 @@ export class FeishuStreamingSession {
     this.state.sequence += 1;
     const path = `/${this.state.cardId}/elements/note/content`;
     // Token failures propagate; only the note request itself is best effort.
-    const token = await getToken(this.creds, {
-      fetchImpl: this.fetchImpl,
-      lookupFn: this.lookupFn,
-    });
+    const token = await getToken(this.creds);
     await this.requestCardKit(
       path,
       "note-update",

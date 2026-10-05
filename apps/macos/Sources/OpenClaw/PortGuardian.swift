@@ -384,14 +384,12 @@ actor PortGuardian {
         let pid: Int32
         let command: String
         let fullCommand: String
-        let user: String?
     }
 
     struct ReportListener: Identifiable {
         let pid: Int32
         let command: String
         let fullCommand: String
-        let user: String?
         let expected: Bool
 
         var id: Int32 {
@@ -479,16 +477,14 @@ actor PortGuardian {
         var listeners: [Listener] = []
         var currentPid: Int32?
         var currentCmd: String?
-        var currentUser: String?
 
         func flush() {
             if let pid = currentPid, let cmd = currentCmd {
                 let full = Self.readFullCommand(pid: pid) ?? cmd
-                listeners.append(Listener(pid: pid, command: cmd, fullCommand: full, user: currentUser))
+                listeners.append(Listener(pid: pid, command: cmd, fullCommand: full))
             }
             currentPid = nil
             currentCmd = nil
-            currentUser = nil
         }
 
         for line in text.split(separator: "\n") {
@@ -500,8 +496,6 @@ actor PortGuardian {
                 currentPid = Int32(value) ?? 0
             case "c":
                 currentCmd = value
-            case "u":
-                currentUser = value
             default:
                 continue
             }
@@ -516,24 +510,12 @@ actor PortGuardian {
         mode: AppState.ConnectionMode,
         tunnelHealthy: Bool?) -> PortReport
     {
-        let expectedDesc: String
-        let okPredicate: (Listener) -> Bool
-        let expectedCommands = ["node", "openclaw", "tsx", "pnpm", "bun"]
-
-        switch mode {
-        case .remote:
-            expectedDesc = "Remote gateway (SSH tunnel, Docker, or direct)"
-            okPredicate = { _ in true }
-        case .local:
-            expectedDesc = "Gateway websocket (node/tsx)"
-            okPredicate = { listener in
-                let c = listener.command.lowercased()
-                return expectedCommands.contains { c.contains($0) }
-            }
-        case .unconfigured:
-            expectedDesc = "Gateway not configured"
-            okPredicate = { _ in false }
+        let expectedDesc = switch mode {
+        case .remote: "Remote gateway (SSH tunnel, Docker, or direct)"
+        case .local: "Gateway websocket (node/tsx)"
+        case .unconfigured: "Gateway not configured"
         }
+        let expectedCommands = ["node", "openclaw", "tsx", "pnpm", "bun"]
 
         if listeners.isEmpty {
             let text = "Nothing is listening on \(port) (\(expectedDesc))."
@@ -542,12 +524,14 @@ actor PortGuardian {
 
         let tunnelUnhealthy = mode == .remote && tunnelHealthy == false
         let reportListeners = listeners.map { listener in
-            ReportListener(
+            let expected = mode == .remote || mode == .local && expectedCommands.contains {
+                listener.command.lowercased().contains($0)
+            }
+            return ReportListener(
                 pid: listener.pid,
                 command: listener.command,
                 fullCommand: listener.fullCommand,
-                user: listener.user,
-                expected: okPredicate(listener) && !tunnelUnhealthy)
+                expected: expected && !tunnelUnhealthy)
         }
 
         let offenders = reportListeners.filter { !$0.expected }
@@ -748,22 +732,20 @@ extension PortGuardian {
     static func _testParseListeners(_ text: String) -> [(
         pid: Int32,
         command: String,
-        fullCommand: String,
-        user: String?)]
+        fullCommand: String)]
     {
-        self.parseListeners(from: text).map { ($0.pid, $0.command, $0.fullCommand, $0.user) }
+        self.parseListeners(from: text).map { ($0.pid, $0.command, $0.fullCommand) }
     }
 
     static func _testBuildReport(
         port: Int,
         mode: AppState.ConnectionMode,
-        listeners: [(pid: Int32, command: String, fullCommand: String, user: String?)]) -> PortReport
+        listeners: [(pid: Int32, command: String, fullCommand: String)]) -> PortReport
     {
         let mapped = listeners.map { Listener(
             pid: $0.pid,
             command: $0.command,
-            fullCommand: $0.fullCommand,
-            user: $0.user) }
+            fullCommand: $0.fullCommand) }
         return Self.buildReport(port: port, listeners: mapped, mode: mode, tunnelHealthy: nil)
     }
 }

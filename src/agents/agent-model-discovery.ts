@@ -50,7 +50,6 @@ function createOpenClawModelRegistry(
       : {}),
     ...(options?.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
     allowWorkspaceScopedCurrent: options?.workspaceDir === undefined,
-    useRuntimeConfig: options?.config === undefined,
   });
   const registryOptions = {
     config: options?.config,

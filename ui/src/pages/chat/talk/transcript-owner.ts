@@ -1,5 +1,5 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
-import { sleepWithAbort } from "@openclaw/retry";
+import { createAbortError, sleepWithAbort } from "@openclaw/retry";
 import type { BoundedSerialQueue } from "../../../../../src/shared/bounded-serial-queue.js";
 import { createDeferredCore } from "../../../../../src/shared/deferred.js";
 import {
@@ -303,12 +303,6 @@ export function reserveClientVoiceSessionOwner(
   };
 }
 
-function transcriptPersistenceAbortError(): Error {
-  const error = new Error("voice transcript persistence aborted");
-  error.name = "AbortError";
-  return error;
-}
-
 export async function retryVoiceTranscriptPersistence(
   signal: AbortSignal,
   operation: () => Promise<unknown>,
@@ -319,7 +313,7 @@ export async function retryVoiceTranscriptPersistence(
   // separate owner deadlines so accepted writes drain before close is attempted.
   for (const delayMs of [0, 500, 2_000]) {
     if (signal.aborted) {
-      throw transcriptPersistenceAbortError();
+      throw createAbortError("voice transcript persistence aborted");
     }
     try {
       if (delayMs > 0) {
@@ -329,7 +323,7 @@ export async function retryVoiceTranscriptPersistence(
       return;
     } catch (error) {
       if (signal.aborted) {
-        throw transcriptPersistenceAbortError();
+        throw createAbortError("voice transcript persistence aborted");
       }
       lastError = error;
     }

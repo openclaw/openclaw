@@ -2,6 +2,8 @@
 export const agentChip = {
   menuLabel: "Agent menu",
   agents: "Agents",
+  search: "Find an agent…",
+  noMatches: "No matching agents",
   showAll: "Show all",
   seeAllAgents: "See all agents",
   namedSettings: "{name} settings",

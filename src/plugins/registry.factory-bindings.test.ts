@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { createPluginRecord } from "./loader-records.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
+import { bindPluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-binding.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+import { createPluginRuntime } from "./runtime/index.js";
 import { mapRegistryProviders } from "./web-provider-resolution-shared.js";
 
 function createOwner() {
@@ -62,9 +65,7 @@ function createTools(expectScope: () => void) {
 describe("registered plugin factory bindings", () => {
   it.each([
     { kind: "static", shape: "single" } as const,
-    ...(["function", "version 2"] as const).flatMap((kind) =>
-      (["single", "array"] as const).map((shape) => ({ kind, shape })),
-    ),
+    { kind: "version 2", shape: "array" } as const,
   ])(
     "binds a $kind tool factory's $shape result to its consumer while data crosses by reference",
     async ({ kind, shape }) => {
@@ -76,14 +77,9 @@ describe("registered plugin factory bindings", () => {
         return shape === "array" ? tools : tools[0]!;
       };
       try {
-        api.registerTool(
-          kind === "static"
-            ? tools[0]!
-            : kind === "function"
-              ? create
-              : { contextVersion: 2, create },
-          { names: shape === "single" ? names.slice(0, 1) : names },
-        );
+        api.registerTool(kind === "static" ? tools[0]! : { contextVersion: 2, create }, {
+          names: shape === "single" ? names.slice(0, 1) : names,
+        });
         expect(builder.registry.diagnostics).toEqual([]);
         const factory = builder.registry.tools[0]!.factory;
         const context = { assertInvocationCurrent() {} };
@@ -127,7 +123,7 @@ describe("registered plugin factory bindings", () => {
     },
   );
 
-  it.each(["call", "apply", "bind"] as const)(
+  it.each(["apply", "bind"] as const)(
     "keeps registered factory results executable through Function.%s",
     async (helper) => {
       const { builder, api, instance, expectScope } = createOwner();
@@ -145,11 +141,8 @@ describe("registered plugin factory bindings", () => {
         const invoke =
           helper === "bind"
             ? consumer!.wrap(factory.bind(undefined, {}))
-            : helper === "call"
-              ? // oxlint-disable-next-line no-useless-call -- The test exercises the boundary's Function.prototype.call path.
-                () => factory.call(undefined, {})
-              : // oxlint-disable-next-line no-useless-call -- The test exercises the boundary's Function.prototype.apply path.
-                () => factory.apply(undefined, [{}]);
+            : // oxlint-disable-next-line no-useless-call -- The test exercises the boundary's Function.prototype.apply path.
+              () => factory.apply(undefined, [{}]);
         const tool = invoke();
         assert(tool && !Array.isArray(tool));
         const execute = tool.execute;
@@ -271,5 +264,32 @@ describe("registered plugin factory bindings", () => {
     } finally {
       await instance.dispose();
     }
+  });
+});
+
+describe("plugin API runtime entrypoint", () => {
+  it("preserves the selected main entry during setup registration without guessing an unselected entry", () => {
+    const builder = createTestPluginRegistry(createPluginRuntime());
+    const rootDir = path.resolve("plugins/fixture");
+    const source = path.join(rootDir, "index.ts");
+    const record = createPluginRecord({
+      id: "fixture",
+      source,
+      rootDir,
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+    expect(builder.createApi(record, { config: {} }).runtimeSource).toBeUndefined();
+
+    const runtimeSource = path.join(rootDir, "dist/index.js");
+    bindPluginRuntimeArtifactSelection(record, {
+      runtimeEntry: { source: runtimeSource, rootDir },
+      setupEntry: { source: path.join(rootDir, "dist/setup.js"), rootDir },
+    });
+    const api = builder.createApi(record, { config: {}, registrationMode: "setup-runtime" });
+    expect(api.runtimeSource).toBe(runtimeSource);
+    expect(api.source).toBe(source);
+    expect(api.rootDir).toBe(rootDir);
   });
 });

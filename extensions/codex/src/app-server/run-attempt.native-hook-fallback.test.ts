@@ -41,7 +41,7 @@ import {
 } from "./session-binding.test-helpers.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 import * as threadLifecyclePreflight from "./thread-lifecycle-preflight.js";
-import { startOrResumeThread } from "./thread-lifecycle.js";
+import { startOrResumeThread } from "./thread-lifecycle-run.js";
 import { createLeasedCodexLifecycleHarness } from "./thread-lifecycle.test-fixtures.js";
 
 function participantHostCapabilities(assertNativeSubagentSpawnAllowed: () => void) {

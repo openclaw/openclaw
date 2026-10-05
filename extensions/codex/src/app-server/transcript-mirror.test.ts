@@ -1356,6 +1356,83 @@ describe("mirrorCodexAppServerTranscript", () => {
   describe("projected transcript persistence", () => {
     registerCodexEventProjectorTestLifecycle();
 
+    it("retains each committed steering cutoff when a later mirror assertion fails", async () => {
+      const target = await createSqliteMirrorTarget("openclaw-codex-steering-partial-mirror-");
+      const params: EmbeddedRunAttemptParams = {
+        ...(await createProjectorParams()),
+        ...target,
+        suppressNextUserMessagePersistence: true,
+      };
+      const projector = new CodexAppServerEventProjector(params, "thread-1", "turn-1");
+      const item = { type: "agentMessage", id: "answer", phase: "final_answer", text: "" };
+      await projector.handleNotification(forCurrentTurn("item/started", { item }));
+      await projector.handleNotification(
+        forCurrentTurn("item/agentMessage/delta", {
+          itemId: item.id,
+          delta: "Before failed mirror.",
+        }),
+      );
+      const firstPrefix = projector.buildSteeringTranscriptPrefix();
+      const owned: string[] = [];
+      let failed = false;
+      const mirrorOptions = {
+        ...target,
+        idempotencyScope: "codex-app-server:thread-1",
+        onAssistantMessageOwned: (identity: string) => {
+          projector.markSteeringTranscriptMessagePersisted(identity);
+          owned.push(identity);
+        },
+        assertCurrent: () => {
+          if (owned.length > 0 && !failed) {
+            failed = true;
+            throw new Error("owner changed after first commit");
+          }
+        },
+      };
+      await expect(
+        mirrorCodexAppServerTranscript({
+          ...mirrorOptions,
+          messages: [...firstPrefix, mirroredAssistant("Uncommitted later row", "turn-1:later", 2)],
+        }),
+      ).rejects.toThrow("owner changed after first commit");
+      expect(await readMirrorMessages(target)).toEqual([
+        { role: "assistant", text: "Before failed mirror." },
+      ]);
+
+      await projector.handleNotification(
+        forCurrentTurn("item/agentMessage/delta", {
+          itemId: item.id,
+          delta: " After failed mirror.",
+        }),
+      );
+      const secondPrefix = projector.buildSteeringTranscriptPrefix();
+      await mirrorCodexAppServerTranscript({
+        ...mirrorOptions,
+        messages: [...firstPrefix, ...secondPrefix, mirroredUser("Steer", "steer:user", 3)],
+      });
+      expect(owned).toEqual([
+        "turn-1:assistant:answer:segment:0",
+        "turn-1:assistant:answer:segment:0",
+        "turn-1:assistant:answer:segment:1",
+      ]);
+      const completed = {
+        ...item,
+        text: "Before failed mirror. After failed mirror. After steer.",
+      };
+      await projector.handleNotification(forCurrentTurn("item/completed", { item: completed }));
+      await projector.handleNotification(turnCompleted([completed]));
+      await mirrorCodexAppServerTranscript({
+        ...mirrorOptions,
+        messages: projector.buildResult(buildEmptyToolTelemetry()).messagesSnapshot,
+      });
+      expect(await readMirrorMessages(target)).toEqual([
+        { role: "assistant", text: "Before failed mirror." },
+        { role: "assistant", text: " After failed mirror." },
+        { role: "user", text: "Steer" },
+        { role: "assistant", text: "After steer." },
+      ]);
+    });
+
     it.each([true, false])(
       "keeps failed attempt diagnostics without taking deferred run ownership (deferred: %s)",
       async (deferTerminalLifecycle) => {

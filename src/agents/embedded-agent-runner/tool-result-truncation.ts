@@ -302,7 +302,7 @@ export const toolResultWarningDedupe = {
 };
 
 type ToolResultTruncationOptions = {
-  suffix?: string | ((truncatedChars: number) => string);
+  suffix?: (truncatedChars: number) => string;
   minKeepChars?: number;
   minimumRawWeight?: number;
 };
@@ -340,16 +340,6 @@ function logToolResultSessionTruncation(params: {
   log.warn(
     `${message}; aggregate tool-result pressure detected; consider /compact or /new if pressure persists`,
   );
-}
-
-function resolveSuffixFactory(
-  suffix: ToolResultTruncationOptions["suffix"],
-): (truncatedChars: number) => string {
-  return typeof suffix === "function"
-    ? suffix
-    : typeof suffix === "string"
-      ? () => suffix
-      : DEFAULT_SUFFIX;
 }
 
 function resolveEffectiveMinKeepChars(params: {
@@ -417,7 +407,7 @@ export function truncateToolResultText(
   maxChars: number,
   options: ToolResultTruncationOptions = {},
 ): string {
-  const suffixFactory = resolveSuffixFactory(options.suffix);
+  const suffixFactory = options.suffix ?? DEFAULT_SUFFIX;
   const budgetOptions = { minimumRawWeight: options.minimumRawWeight };
   const minKeepChars = resolveEffectiveMinKeepChars({
     maxChars,
@@ -524,7 +514,7 @@ export function truncateToolResultMessage(
   maxChars: number,
   options: ToolResultTruncationOptions = {},
 ): AgentMessage {
-  const suffixFactory = resolveSuffixFactory(options.suffix);
+  const suffixFactory = options.suffix ?? DEFAULT_SUFFIX;
   const budgetOptions = { minimumRawWeight: options.minimumRawWeight };
   const minKeepChars = resolveEffectiveMinKeepChars({
     maxChars,

@@ -7,11 +7,11 @@ describe("FaceTime initial greeting", () => {
   it("does not talk over a caller who speaks during the settle window", async () => {
     vi.useFakeTimers();
     const speak = vi.fn();
-    const greeting = createFaceTimeInitialGreeting({ delayMs: 750, speak });
+    const greeting = createFaceTimeInitialGreeting({ speak });
 
     greeting.schedule();
     greeting.cancel();
-    await vi.advanceTimersByTimeAsync(750);
+    await vi.advanceTimersByTimeAsync(100);
 
     expect(speak).not.toHaveBeenCalled();
   });

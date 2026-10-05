@@ -2,7 +2,7 @@ import {
   formatInboundEnvelope,
   formatInboundFromLabel,
   implicitMentionKindWhen,
-  resolveInboundSessionEnvelopeContext,
+  resolveInboundSessionEnvelopeContextAsync,
   toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveBotThreadMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
@@ -123,7 +123,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
     // detection and CommandBody, or the leading-slash check fails and the model gets prose.
     const commandBody = normalizeMention(rawText, botUsername).trim();
     const { effectiveReplyToId, sessionKey } = thread;
-    const { envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
+    const { envelopeOptions, previousTimestamp } = await resolveInboundSessionEnvelopeContextAsync({
       cfg,
       agentId: route.agentId,
       sessionKey,

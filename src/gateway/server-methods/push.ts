@@ -1,7 +1,4 @@
-import {
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -230,7 +227,7 @@ export const pushHandlers = {
       return;
     }
 
-    const nodeId = normalizeStringifiedOptionalString(params.nodeId) ?? "";
+    const nodeId = normalizeOptionalString(params.nodeId) ?? "";
     if (!nodeId) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
       return;

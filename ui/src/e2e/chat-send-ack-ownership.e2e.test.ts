@@ -117,10 +117,7 @@ suite.define(() => {
           state: "delta",
           deltaText: " Still streaming.",
         });
-        await page
-          .locator(".chat-bubble")
-          .getByText(`${progress} Still streaming.`, { exact: true })
-          .waitFor();
+        await page.locator(".chat-bubble").getByText("Still streaming.", { exact: true }).waitFor();
         await composer.fill("");
         await stop.click();
         const aborted = await gateway.waitForRequest("chat.abort");

@@ -61,6 +61,75 @@ function mixedMatrixCandidate(workflow = matrixWorkflow) {
 }
 
 describePosix("explicit prior-CI admin landing", () => {
+  it.each([false, true])(
+    "revalidates delegated CI bypass before dispatch (revoked=%s)",
+    (revoked) => {
+      const f = preExistingCandidate();
+      const state = f.state();
+      state.repoAuthority.permissions = { admin: false, maintain: true, push: true };
+      state.priorCi.membership = "member";
+      state.graphqlMergeProjection = { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" };
+      state.priorCi.rulesetBypass = "always";
+      state.priorCi.revokeRulesetAfterRead = revoked;
+      f.save(state);
+      const result = f.adminPriorCi(f.path);
+      if (revoked) {
+        expect(result.status, result.output).not.toBe(0);
+        expect(result.output).toContain("CI-only ruleset bypass");
+        expect(f.state().priorCi.rulesetReads).toBe(2);
+        expect(f.state().mutations).toBe(0);
+        expect(
+          f.git(["for-each-ref", "--format=%(refname)", "refs/openclaw/pr-merge-outcomes/123"]),
+        ).toBe("");
+      } else {
+        expect(result.status, result.output).toBe(0);
+        expect(f.state().mutations).toBe(1);
+        expect(f.record().transport).toBe("rest");
+        expect(f.record().priorCiAdmin.delegation).toEqual({
+          kind: "ci-ruleset-bypass",
+          repositoryId: 1103012935,
+          actor: state.operator,
+          rulesets: [{ id: 41, mode: "always" }],
+        });
+        expect(f.state().comments[0]?.body).toContain("No current-head CI success is claimed");
+      }
+    },
+  );
+
+  it("refuses a generic protection 404 without treating hidden GraphQL rules as absent", () => {
+    const f = preExistingCandidate();
+    f.save({ ...f.state(), restPolicy: "not-found" });
+    const result = f.verifyPriorCi(f.path);
+    expect(result.status, result.output).not.toBe(0);
+    expect(result.output).toContain("classic branch-protection policy is unavailable");
+    expect(f.state().calls.some((call) => call.includes("graphql"))).toBe(false);
+    expect(f.state().mutations).toBe(0);
+    expect(() => f.record()).toThrow();
+  });
+
+  it.each(["review", "security", "new attempt"])("delegation cannot waive %s", (fault) => {
+    const f = preExistingCandidate();
+    const state = f.state();
+    state.repoAuthority.permissions = { admin: false, maintain: true, push: true };
+    state.priorCi.membership = "member";
+    state.priorCi.rulesetBypass = "always";
+    if (fault === "review") {
+      state.priorCi.reviewDecision = "REVIEW_REQUIRED";
+    }
+    if (fault === "security") {
+      state.priorCi.security.fault = "failed-guard";
+    }
+    if (fault === "new attempt") {
+      state.priorCi.latestAttempt++;
+    }
+    f.save(state);
+    const result = f.verifyPriorCi(f.path);
+    expect(result.status, result.output).not.toBe(0);
+    expect(result.output).toMatch(/current enforced reviews|security-sensitive|newer or running/);
+    expect(f.state().mutations).toBe(0);
+    expect(() => f.record()).toThrow();
+  });
+
   it("lands fork matrix cancellation while retaining independent UI failure attribution", () => {
     const f = mixedMatrixCandidate();
     const state = f.state();

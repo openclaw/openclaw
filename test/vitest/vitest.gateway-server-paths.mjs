@@ -11,6 +11,7 @@ export const gatewayPluginTestFiles = [
 
 // Native database consumers retain lifecycle cleanup within each forked process.
 export const gatewayDatabaseWorkerTestFiles = [
+  "src/gateway/agent-turn/agent-run-commentary-media.test.ts",
   "src/gateway/approval-fixture.test.ts",
   "src/gateway/auth-token-store-ref.test.ts",
   "src/gateway/board-http.test.ts",
@@ -61,6 +62,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/github-publication-requester-aliases.test.ts",
   "src/gateway/github-publication-requester.test.ts",
   "src/gateway/github-publication-session-access.test.ts",
+  "src/gateway/github-publication-sqlite.test.ts",
   "src/gateway/github-publication-transcript.test.ts",
   "src/gateway/github-publication-workflows.test.ts",
   "src/gateway/github-publication.test.ts",
@@ -71,7 +73,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/github-shared-publication-read.test.ts",
   "src/gateway/github-shared-publication-relevance.test.ts",
   "src/gateway/github-user-identity.authority.test.ts",
-  "src/gateway/github-user-identity.cache.test.ts",
   "src/gateway/github-user-identity.oidc.test.ts",
   "src/gateway/github-user-identity.test.ts",
   "src/gateway/health/collector.channel-discovery.test.ts",
@@ -124,12 +125,10 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server-methods/approval.legacy-authority.test.ts",
   "src/gateway/server-methods/approval.request-authority.test.ts",
   "src/gateway/server-methods/approval.settlement.test.ts",
-  "src/gateway/server-methods/chat-send-commentary-media.test.ts",
   "src/gateway/server-methods/chat-send-synthetic-repair.integration.test.ts",
   "src/gateway/server-methods/chat.abort-live-proof.test.ts",
   "src/gateway/server-methods/chat.oauth-refresh-cancel.integration.test.ts",
   "src/gateway/server-methods/cron-creator-transports.integration.test.ts",
-  "src/gateway/server-methods/cron.delivery-aliases.test.ts",
   "src/gateway/server-methods/cron.list-scoped.test.ts",
   "src/gateway/server-methods/cron.runs.test.ts",
   "src/gateway/server-methods/cron.scheduled-policy-adoption.integration.test.ts",
@@ -194,9 +193,13 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server/ws-connection/message-handler.worker.test.ts",
   "src/gateway/session-activity-summaries.retry.test.ts",
   "src/gateway/session-activity-summaries.test.ts",
+  "src/gateway/session-companion-rpc.test.ts",
   "src/gateway/session-companion-runtime.test.ts",
   "src/gateway/session-create-atomic-initialization.test.ts",
+  "src/gateway/session-create-collision.test.ts",
+  "src/gateway/session-create-display-name.test.ts",
   "src/gateway/session-create-preparation.test.ts",
+  "src/gateway/session-create-target.test.ts",
   "src/gateway/session-delivery-clock-jump.integration.test.ts",
   "src/gateway/session-groups.registration.test.ts",
   "src/gateway/session-groups.test.ts",
@@ -206,6 +209,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-history-worker.integration.test.ts",
   "src/gateway/session-involvement.test.ts",
   "src/gateway/session-lifecycle-run-failure.test.ts",
+  "src/gateway/session-lifecycle-source-authority.test.ts",
   "src/gateway/session-lifecycle-state.persistence.test.ts",
   "src/gateway/session-list-viewers.perf.test.ts",
   "src/gateway/session-message-events.exec-completion.test.ts",
@@ -236,6 +240,8 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-sharing-preparation.test.ts",
   "src/gateway/session-sharing.worker.test.ts",
   "src/gateway/session-startup-migration.test.ts",
+  "src/gateway/session-startup-orphan-admission.test.ts",
+  "src/gateway/session-startup-orphan-races.test.ts",
   "src/gateway/session-subagent-resume.test.ts",
   "src/gateway/session-swarm-summary.test.ts",
   "src/gateway/session-transcript-preview.hydration.test.ts",
@@ -285,6 +291,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/live-events-settlement.test.ts",
   "src/gateway/worker-environments/live-events.test.ts",
   "src/gateway/worker-environments/local-workspace-projection.test.ts",
+  "src/gateway/worker-environments/local-workspace-store.test.ts",
   "src/gateway/worker-environments/local-workspace-template.test.ts",
   "src/gateway/worker-environments/node-desktop-carrier.test.ts",
   "src/gateway/worker-environments/node-enrollment.test.ts",
@@ -541,14 +548,10 @@ export const gatewayCoreTestExclude = [
   "src/gateway/openai-http.test.ts",
   "src/gateway/openresponses-http.test.ts",
   "src/gateway/probe.auth.integration.test.ts",
-  "src/gateway/server.startup-matrix-migration.integration.test.ts",
   "src/gateway/sessions-history-http.test.ts",
 ];
 
-export const gatewayServerExcludedTestFiles = [
-  "src/gateway/gateway.test.ts",
-  "src/gateway/server.startup-matrix-migration.integration.test.ts",
-];
+export const gatewayServerExcludedTestFiles = ["src/gateway/gateway.test.ts"];
 
 const gatewayServerBackedHttpTestFileSet = new Set(gatewayServerBackedHttpTestFiles);
 const gatewayServerExcludedTestFileSet = new Set(gatewayServerExcludedTestFiles);

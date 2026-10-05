@@ -132,11 +132,9 @@ function listQaSuiteScenarioChannels(scenarios: QaSeedScenario[]) {
   ];
 }
 
-function resolveQaSuiteScenarioChannel(params: {
-  defaultChannel: string;
-  explicitChannel?: string | null;
-  scenarios: QaSeedScenario[];
-}) {
+function resolveQaSuiteScenarioChannel(
+  params: Parameters<typeof resolveQaSuiteScenarioChannels>[0],
+) {
   const scenarioChannels = resolveQaSuiteScenarioChannels(params);
   const [scenarioChannel] = scenarioChannels;
   if (scenarioChannels.length === 1 && scenarioChannel) {

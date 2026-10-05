@@ -117,7 +117,7 @@ export default definePluginEntry({
         // codex config block, so a live block is the plugin-side default. Gating
         // on a feature flag (supervision) here would silently drop unrelated
         // harness settings such as appServer.homeScope; feature gates belong in
-        // the feature's own surface (see requireSupervisionEnabled).
+        // the feature's own surface (see requireLiveToolPolicy).
         enabledByDefault: livePluginConfig !== undefined,
       }).enabled;
       if (!enabled) {

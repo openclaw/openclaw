@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   buildSessionCreationStamp,
   inheritSessionGitContributorProfileIds,
 } from "../../../config/sessions/session-entry-provenance.js";
+import type { PreparedSessionSourceAuthority } from "../../../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry, SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { buildDashboardSessionTitleSource } from "../../../gateway/dashboard-session-title.js";
@@ -13,6 +15,10 @@ import {
   prepareSessionWorktreeCreation,
   resolveSessionProjectRoot,
 } from "../../../gateway/session-worktree-preparation.js";
+import {
+  assertExistingDatabaseIdentity,
+  readDatabasePathIdentitySync,
+} from "../../../infra/sqlite-worker-identity.js";
 import { waitForSessionParticipantRecording } from "../../../sessions/session-participant-recording.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
 import { resolveUserPath } from "../../../utils.js";
@@ -53,6 +59,7 @@ export async function createInitialSubagentSession(params: {
   >["childSessionPatch"];
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
+  inheritedToolPolicySource?: "sender";
   modelPatch: Partial<
     Extract<
       Awaited<ReturnType<typeof resolveSubagentModelAndThinkingPlan>>,
@@ -78,6 +85,9 @@ export async function createInitialSubagentSession(params: {
     ...admissionPatch,
     ...(subagentRole ? { subagentRole } : {}),
     inheritedToolPolicyVersion: 1,
+    ...(params.inheritedToolPolicySource
+      ? { inheritedToolPolicySource: params.inheritedToolPolicySource }
+      : {}),
     ...inheritedToolAllowPatch(params.inheritedToolAllowlist),
     ...inheritedToolDenyPatch(params.inheritedToolDenylist),
     ...modelPatch,
@@ -223,6 +233,61 @@ export async function createInitialSubagentSession(params: {
     }
     const commit = async (assertSourceCurrent?: () => void) => {
       await parentLineage.assertParentUnchanged();
+      const fields = ["sessionId", "lifecycleRevision", "skillLibrarySelections"] as const;
+      const expected = parentEntry?.skillLibrarySelections
+        ? {
+            sessionId: parentEntry.sessionId,
+            lifecycleRevision: parentEntry.lifecycleRevision,
+            skillLibrarySelections: parentEntry.skillLibrarySelections,
+          }
+        : undefined;
+      const refuse = (): never => {
+        throw new Error(
+          "Parent skill selection changed before spawn; retry from the current turn.",
+        );
+      };
+      const assertParentSkills = () => {
+        if (!expected) {
+          return;
+        }
+        const latest = loadSessionEntry({
+          storePath: parentStorePath,
+          sessionKey: parentTarget.canonicalKey,
+        });
+        if (!latest || fields.some((field) => !isDeepStrictEqual(latest[field], expected[field]))) {
+          refuse();
+        }
+      };
+      const source = expected
+        ? Object.assign(assertParentSkills, {
+            async prepareSessionSource(): Promise<PreparedSessionSourceAuthority> {
+              const identity = readDatabasePathIdentitySync(parentStorePath);
+              if (!identity.key.startsWith("file:")) {
+                return { nativeSource: true, assertCurrent: assertParentSkills, checks: [] };
+              }
+              return {
+                assertCurrent: () =>
+                  assertExistingDatabaseIdentity(parentStorePath, identity.key, identity.birthtime),
+                checks: [
+                  {
+                    predicate: {
+                      source: {
+                        agentId: parentTarget.readSource?.agentId ?? parentTarget.agentId,
+                        path: parentStorePath,
+                        databaseIdentity: identity.key.slice("file:".length),
+                        databaseBirthtime: identity.birthtime,
+                      },
+                      sessionKey: parentTarget.canonicalKey,
+                      fields: [...fields],
+                      expected,
+                    },
+                    refuse,
+                  },
+                ],
+              };
+            },
+          })
+        : undefined;
       return await upsertSessionEntryCore(
         {
           storePath: target.readSource?.path ?? target.storePath,
@@ -238,7 +303,9 @@ export async function createInitialSubagentSession(params: {
                 ...(!params.worktree
                   ? {
                       sessionRoot: resolveUserPath(
-                        params.spawnedWorkspaceDir ?? params.sessionPermissionPolicy.root,
+                        params.inheritedToolPolicySource === "sender"
+                          ? params.sessionPermissionPolicy.root
+                          : (params.spawnedWorkspaceDir ?? params.sessionPermissionPolicy.root),
                       ),
                     }
                   : {}),
@@ -267,26 +334,9 @@ export async function createInitialSubagentSession(params: {
           }),
         },
         {
-          assertCommitAllowed: () => {
-            params.assertActive?.();
-            assertSourceCurrent?.();
-            if (parentEntry?.skillLibrarySelections) {
-              const latest = loadSessionEntry({
-                storePath: parentStorePath,
-                sessionKey: parentTarget.canonicalKey,
-              });
-              if (
-                latest?.sessionId !== parentEntry.sessionId ||
-                latest.lifecycleRevision !== parentEntry.lifecycleRevision ||
-                JSON.stringify(latest.skillLibrarySelections) !==
-                  JSON.stringify(parentEntry.skillLibrarySelections)
-              ) {
-                throw new Error(
-                  "Parent skill selection changed before spawn; retry from the current turn.",
-                );
-              }
-            }
-          },
+          workerGuard: { assertCurrent: params.assertActive, source },
+          // Worktree source checks still own native session/registry reads.
+          ...(assertSourceCurrent ? { assertCommitAllowed: assertSourceCurrent } : {}),
         },
       );
     };

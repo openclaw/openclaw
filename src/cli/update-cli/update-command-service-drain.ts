@@ -19,6 +19,7 @@ import {
 } from "../../infra/gateway-shutdown-budget.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
+import { sleep } from "../../utils/sleep.js";
 import { resolveGatewayRestartProbeContext } from "../daemon-cli/restart-health-probe.js";
 import { allListenersOwnedByRuntimePid } from "../daemon-cli/restart-port-ownership.js";
 import { resolveUpdatedGatewayRestartPort } from "./update-command-service-plan.js";
@@ -333,17 +334,14 @@ export async function withGatewayMaintenanceDrain<T>(
         );
         return await finish();
       }
-      await new Promise<void>((resolve) => {
-        setTimeout(
-          resolve,
-          Math.min(
-            lastObservation && lastObservation.status !== "ready"
-              ? lastObservation.retryAfterMs
-              : 1_000,
-            remaining(),
-          ),
-        );
-      });
+      await sleep(
+        Math.min(
+          lastObservation && lastObservation.status !== "ready"
+            ? lastObservation.retryAfterMs
+            : 1_000,
+          remaining(),
+        ),
+      );
     }
   } finally {
     if (suspensionId && !stopped) {

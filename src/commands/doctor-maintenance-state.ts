@@ -147,7 +147,6 @@ export async function createDoctorMaintenanceState(options: {
           `Legacy state path is not a directory: ${legacy.source}; move it manually before rerunning Doctor.`,
         );
       }
-      options.assertCurrent?.();
       const acquired = await acquireDoctorGatewayMaintenanceOwner(
         path.resolve(resolveOpenClawStateSqlitePath(selectedEnv)),
         selectedEnv,

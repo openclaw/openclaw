@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as sourcePreparation from "../../../scripts/lib/source-update-artifact-preflight.mts";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { runNodeMain } from "../../../test/scripts/run-node-boundary.test-support.js";
 import * as serviceFiles from "../../daemon/inspect-files.js";
 import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
@@ -15,6 +17,7 @@ import { tryAcquireGatewayStateOwner } from "../../infra/gateway-state-owner.js"
 import * as portProbe from "../../infra/ports-probe.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
+import { retainCommandProcessCleanup } from "../../process/exec-spawn.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
@@ -231,13 +234,9 @@ export function prepareBundledPluginRuntime() {
           withPluginLifecycleLease({ env, waitMs: 0, leaseMs }, async (lease) => {
             // The worker acquires against its real clock; align the controlled timer clock afterward.
             vi.setSystemTime(readExpiry() - leaseMs);
-            const result = await completeSourceUpdateRuntime({
-              root,
-              sourceRuntimePrepared,
-              timeoutMs: 1_000,
-              lease,
-              beforePublication: park,
-              beforePersistentEffect: async () => {
+            const writeFile = fs.writeFile;
+            vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+              if (args[0] === artifact && args[1] === "candidate") {
                 const maintenance = getOpenClawDatabaseMaintenanceScope();
                 expect(maintenance).toBeDefined();
                 maintenance?.assertDatabaseAccess(lease.databasePath);
@@ -249,7 +248,14 @@ export function prepareBundledPluginRuntime() {
                 lease.assertOwned();
                 expect(readExpiry()).toBeGreaterThan(before + leaseMs * 3);
                 expect(lease.signal.aborted).toBe(false);
-              },
+              }
+              return await writeFile(...args);
+            });
+            const result = await completeSourceUpdateRuntime({
+              root,
+              sourceRuntimePrepared,
+              timeoutMs: 1_000,
+              beforePublication: park,
             });
             expect(getOpenClawDatabaseMaintenanceScope()).toBeUndefined();
             const afterPublication = readExpiry();
@@ -274,6 +280,47 @@ export function prepareBundledPluginRuntime() {
       }
     }),
 );
+
+it("holds the source-completion lease until accepted command cleanup settles", () =>
+  withRuntimePublicationFixture(async ({ root, env }) => {
+    vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("git");
+    const cleanupEntered = createDeferredCore();
+    const releaseCleanup = createDeferredCore();
+    let settled = false;
+    vi.spyOn(sourcePreparation, "loadSourceRuntimePreparation").mockResolvedValue(() => ({
+      changed: false,
+      async publish() {},
+      async cleanup() {
+        retainCommandProcessCleanup(releaseCleanup.promise);
+        cleanupEntered.resolve();
+      },
+    }));
+    const completion = completeSourceUpdateRuntime({
+      root,
+      sourceRuntimePrepared: false,
+      timeoutMs: 1_000,
+    }).finally(() => {
+      settled = true;
+    });
+    try {
+      await awaitGateBeforeSettlement(
+        cleanupEntered.promise,
+        completion,
+        "Runtime completion exited before its cleanup was admitted",
+      );
+      await expect(
+        withPluginLifecycleLease({ env, waitMs: 0 }, async () => "acquired"),
+      ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_HELD" });
+      expect(settled).toBe(false);
+    } finally {
+      releaseCleanup.resolve();
+      await completion;
+      closeOpenClawStateDatabaseForTest();
+    }
+    await expect(
+      withPluginLifecycleLease({ env, waitMs: 0 }, async () => "acquired"),
+    ).resolves.toBe("acquired");
+  }));
 
 it.each([
   "unknown runtime",

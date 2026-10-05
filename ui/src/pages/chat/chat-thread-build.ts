@@ -513,8 +513,12 @@ export function buildChatItems(
     }
     const tool = toolItems[i];
     if (tool && (props.showToolCalls || hasSessionsYieldCall(tool.projection.item.message))) {
-      const before = toolBeforeBoundaries.get(tool.runId, tool.callId);
-      const after = toolAfterBoundaries.get(tool.runId, tool.callId);
+      const before =
+        normalizeOptionalString(tool.projection.item.message.boundaryRunId) ??
+        toolBeforeBoundaries.get(tool.runId, tool.callId);
+      const after =
+        normalizeOptionalString(tool.projection.item.message.afterBoundaryRunId) ??
+        toolAfterBoundaries.get(tool.runId, tool.callId);
       tool.projection.bounds = resolveProjectionBounds(tool.runId, before, after);
       projections.push(tool.projection);
     }

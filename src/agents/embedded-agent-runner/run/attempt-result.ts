@@ -3,6 +3,7 @@ import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-co
 import { isTransientNetworkError } from "../../../infra/retryable-network-errors.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { isCloudCodeAssistFormatError } from "../../embedded-agent-helpers.js";
+import type { CompletedAssistantAnswer } from "../../embedded-agent-subscribe.handlers.types.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import { extractEmbeddedAssistantText } from "../../embedded-agent-utils.js";
 import {
@@ -63,6 +64,7 @@ export function createAttemptCarryover() {
 
 export type EmbeddedRunAttemptWithReceiptEvidence = EmbeddedRunAttemptResult & {
   answerSegments?: EmbeddedAttemptSubscription["answerSegments"];
+  keptAnswer?: CompletedAssistantAnswer;
   successfulNestedToolNames?: string[];
 };
 
@@ -334,6 +336,7 @@ export function completeEmbeddedAttemptResult(
     bootstrapPromptWarningSignature: bootstrapPromptWarning.signature,
     assistantTexts,
     answerSegments: subscription.answerSegments,
+    keptAnswer: subscription.getKeptAnswer(),
     latestMcpAppChannelView: subscription.getLatestMcpAppChannelView(),
     latestMcpConnectAction: subscription.getLatestMcpConnectAction(),
     lastAssistantTextMessageIndex: subscription.getLastAssistantTextMessageIndex(),

@@ -75,6 +75,18 @@ same-version readers can ignore the extra index, so binary rollback leaves it
 intact. The accepted design is recorded in the
 [session label index decision](https://github.com/openclaw/openclaw/pull/147837#issuecomment-5658783288).
 
+ACP resume lookups use two nonunique expression indexes on the existing
+`acp_sessions.identity_json` agent and ACPX session IDs. The shared-state worker
+selects only matching identities, and canonical session reads retain requester,
+backend, and lifecycle checks. Duplicate IDs retain session-key ordering; stale
+lifecycles do not authorize resume. Unresolved aliases and internal sessions stay
+ineligible, as in the canonical session listing. The writable schema owner installs the indexes
+on existing databases without changing the schema version or canonical rows.
+Construction scans ACP metadata once and uses temporary disk; subsequent metadata
+writes maintain both indexes. Older same-version readers ignore the extra indexes,
+so downgrade and binary rollback preserve rows and indexes. No new cache,
+retention policy, or operator configuration is introduced.
+
 Task and maintenance lookups added nonunique indexes without changing state
 schema 17 or agent schema 21: task requester sessions, worker placements by
 environment, and session entries whose validity is not yet confirmed. The task

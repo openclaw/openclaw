@@ -260,6 +260,8 @@ export function retainSessionHistoryWorkerDatabase(
           typeof received !== "boolean" &&
           !Array.isArray(received) &&
           (received.kind === "session-entry-read" ||
+            received.kind === "session-entry-list" ||
+            received.kind === "session-exact-entries" ||
             received.kind === "session-entry-current" ||
             received.kind === "session-runtime-target" ||
             received.kind === "session-diagnostic-text") &&

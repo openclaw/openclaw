@@ -1,7 +1,6 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
@@ -10,12 +9,7 @@ import {
   withPluginRuntimeGenerationScope,
 } from "../../plugins/runtime/generation-scope.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
-import {
-  AsyncWorkScope,
-  captureAsyncWorkTracker,
-  getAsyncWorkSignal,
-} from "../../shared/async-work-scope.js";
-import { createDeferredCore } from "../../shared/deferred.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
@@ -40,6 +34,7 @@ import {
   resolveAgentRunSessionTarget,
 } from "../run-session-target.js";
 import { resolveSystemPromptRepoRoot } from "../system-prompt-params.js";
+import { runForegroundCompactionWork } from "./compact.foreground-work.js";
 import type {
   CompactEmbeddedAgentSessionParams,
   CompactEmbeddedAgentSessionRuntimeParams,
@@ -222,6 +217,7 @@ export async function compactEmbeddedAgentSessionDirect(
   paramsInput: CompactEmbeddedAgentSessionRuntimeParams,
 ): Promise<EmbeddedAgentCompactResult> {
   const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
+  const parentSignal = getAsyncWorkSignal();
   const memoryTranscript = readCompactionAccountingRecorder(
     paramsBase.contextEngineRuntimeContext,
   )?.memoryTranscript;
@@ -232,7 +228,16 @@ export async function compactEmbeddedAgentSessionDirect(
       ...paramsBase,
       missingSessionKey: "resolve-existing",
     }));
-  const entry = loadSessionEntryReadOnly({ ...runSessionTarget, readConsistency: "latest" });
+  const assertReadCurrent = () => {
+    parentSignal?.throwIfAborted();
+    paramsBase.abortSignal?.throwIfAborted();
+    memoryTranscript?.assertActive();
+  };
+  const entry = await readSessionEntryReadOnlyInWorker(
+    { ...runSessionTarget, readConsistency: "latest" },
+    assertReadCurrent,
+  );
+  assertReadCurrent();
   const lockedHarnessRuntime = resolveSessionPinnedHarnessId(entry);
   const transcriptBytePreflightClaim = consumeTranscriptBytePreflightClaim(
     paramsBase,
@@ -317,17 +322,7 @@ export async function compactEmbeddedAgentSessionDirect(
         env: process.env,
       }),
   );
-  const callerResult = createDeferredCore<EmbeddedAgentCompactResult>();
-  const trackOwner = captureAsyncWorkTracker();
-  const parentSignal = getAsyncWorkSignal();
-  const cancellationSignal =
-    requestedParams.abortSignal && parentSignal
-      ? AbortSignal.any([requestedParams.abortSignal, parentSignal])
-      : (requestedParams.abortSignal ?? parentSignal);
-  const work = new AsyncWorkScope();
-  let context = work.run(() => AsyncLocalStorage.snapshot());
-  let releasePreparedRuntime: (() => Promise<void>) | undefined;
-  const runPreparedCompaction = async () => {
+  return await runForegroundCompactionWork(async (owner) => {
     // Compaction admits new work even when an engine restores a predecessor context.
     // Keep caller authority, but select metadata from the committed inventory.
     const preparedModelRuntimeLease = await runOutsidePluginRuntimeGenerationScope(() =>
@@ -397,7 +392,7 @@ export async function compactEmbeddedAgentSessionDirect(
         },
       ),
     );
-    releasePreparedRuntime = () => preparedModelRuntimeLease[Symbol.asyncDispose]();
+    owner.adoptLease(preparedModelRuntimeLease);
     try {
       const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
       const preparedConfig =
@@ -554,7 +549,7 @@ export async function compactEmbeddedAgentSessionDirect(
         return fallbackResult.result;
       };
       return await withPluginRuntimeGenerationScope(preparedModelRuntime, () => {
-        context = AsyncLocalStorage.snapshot();
+        owner.captureContext();
         return compactPrepared();
       });
     } catch (err) {
@@ -564,32 +559,5 @@ export async function compactEmbeddedAgentSessionDirect(
         reason: isFallbackSummaryError(err) ? err.message : formatErrorMessage(err),
       };
     }
-  };
-  // Logical completion reports promptly; actual attempt work retains this generation.
-  void trackOwner(async () => {
-    const closeWork = () => context(() => work.beginClose(cancellationSignal?.reason));
-    cancellationSignal?.addEventListener("abort", closeWork, { once: true });
-    if (cancellationSignal?.aborted) {
-      closeWork();
-    }
-    try {
-      callerResult.resolve(await work.track(runPreparedCompaction));
-    } catch (error) {
-      callerResult.reject(error);
-    } finally {
-      try {
-        await AsyncWorkScope.runWhenAllIdle(
-          () => [work],
-          () => context(() => work.drain()),
-        );
-      } finally {
-        try {
-          await releasePreparedRuntime?.();
-        } finally {
-          cancellationSignal?.removeEventListener("abort", closeWork);
-        }
-      }
-    }
-  }).catch(callerResult.reject);
-  return await callerResult.promise;
+  }, requestedParams.abortSignal);
 }

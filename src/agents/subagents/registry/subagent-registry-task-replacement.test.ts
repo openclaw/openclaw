@@ -742,7 +742,8 @@ it.each([
       createHookRunner(createEmptyPluginRegistry()),
     );
     const cleanup = createSubagentRegistryContextCleanup({
-      isEndedHookOwnerCurrent: (id, entry) => isSameSubagentRunOwner(subagentRuns.get(id), entry),
+      isEndedHookOwnerCurrent: (entry) =>
+        isSameSubagentRunOwner(subagentRuns.get(entry.runId), entry),
       warn: () => {},
     });
     const lateStamp =

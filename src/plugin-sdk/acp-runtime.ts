@@ -12,6 +12,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 export { getAcpSessionManager };
 export { AcpRuntimeError, isAcpRuntimeError } from "../acp/runtime/errors.js";
+export {
+  IncognitoSessionEndedError,
+  IncognitoSessionSyncAccessError,
+  rethrowIncognitoSessionError,
+} from "../state/incognito-session-error.js";
 export type { AcpRuntimeErrorCode } from "../acp/runtime/errors.js";
 export { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "../acp/runtime/registry.js";
 export type {
@@ -28,6 +33,10 @@ export type {
 /** @deprecated Shipped in v2026.9.4; use readAcpSessionEntryAsync for runtime reads. */
 export { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 export type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
+export type {
+  AcpSessionEntryPreparer,
+  PreparedAcpSessionEntryRead,
+} from "../acp/runtime/session-meta-read.js";
 export { tryDispatchAcpReplyHook } from "./acpx.js";
 
 /** Keep internal actor authority outside the released one-argument SDK contract. */

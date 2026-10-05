@@ -211,9 +211,9 @@ async function recoverRemovalWithAllocation(params: {
       throw preserved("Provisioned-file recovery requires its original archive owner");
     }
     // A projection can retain ignored guest data outside the ordinary Git capture.
-    const { localWorkspaceStore } =
+    const { hasLocalWorkspaceProjection } =
       await import("../../gateway/worker-environments/local-workspace-store.js");
-    if (localWorkspaceStore(params.env).revision(record.id) !== undefined) {
+    if (await hasLocalWorkspaceProjection(record.id, params.env)) {
       throw preserved("Projected worktree recovery requires its original archive owner");
     }
     const head = await requireGit(record.repoRoot, ["rev-parse", `${params.snapshot}^`], options);
@@ -527,11 +527,26 @@ async function recoverRemovalWithAllocation(params: {
     }
     await assertRefs(true);
     assertCurrent();
-    updateRegistryWorktree(
+    await updateRegistryWorktree(
       params.env,
       record.id,
       { removedAt: record.removedAt ?? params.now() },
-      { assertCurrent, removalToken: token },
+      {
+        assertCurrent,
+        removalToken: token,
+        workerAuthority: {
+          ...params.workerAuthority,
+          assertCurrent: () => {
+            params.workerAuthority?.assertCurrent?.();
+            assertDirectRefFiles();
+          },
+          predicates: [
+            ...(params.workerAuthority?.predicates ?? []),
+            { kind: "record", record },
+            { kind: "removal-claim", id: record.id, token },
+          ],
+        },
+      },
     );
     const finalized = JSON.stringify(getRegistryWorktree(params.env, record.id));
     await requireGit(record.repoRoot, ["update-ref", "--stdin"], {

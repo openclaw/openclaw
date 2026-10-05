@@ -19,7 +19,7 @@ import { findExtraGatewayServices, renderGatewayServiceCleanupHints } from "./in
 import { discoverManagedGatewayBindings } from "./managed-gateway-bindings.js";
 import * as taskLayout from "./schtasks-layout.js";
 import { resolveStartupEntryPath } from "./schtasks-layout.js";
-import * as taskProcesses from "./schtasks-process.js";
+import * as taskProcesses from "./schtasks-process-snapshot.js";
 import * as taskProbe from "./schtasks-state-probe.js";
 import { readGatewayServiceState, resolveGatewayService } from "./service.js";
 

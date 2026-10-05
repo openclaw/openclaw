@@ -360,10 +360,7 @@ async function loadRestartSentinelStartupTask(params: {
   const noticeContext = params.context;
   const queueContext = noticeContext.workerContext;
   const env = queueContext.environment;
-  const snapshot = await readRestartSentinelStartupSnapshot({
-    ...params,
-    warn: (message) => log.warn(message),
-  });
+  const snapshot = await readRestartSentinelStartupSnapshot(params);
   if (!snapshot) {
     return null;
   }

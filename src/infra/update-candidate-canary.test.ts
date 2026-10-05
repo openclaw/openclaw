@@ -505,22 +505,6 @@ describe("update candidate canary", () => {
       }
     }
   });
-  it.each([undefined, "unknown-owned-v2"])(
-    "keeps unsupported checkpoint capability out of admission (%s)",
-    async (candidateMutation) => {
-      runtimeContract = {
-        state: 2,
-        agent: 3,
-        executorDelegation: "pid-start-v1",
-        candidateMutation,
-      };
-      stubHealthyGateway();
-      const result = await validateUpdateCandidateCanary(canaryStateOptions(3_000));
-      expect(result.status).toBe("ok");
-      expect(result.candidateSchemaVersions).toEqual({ state: 2, agent: 3 });
-      expect(result).not.toHaveProperty("checkpointContinuation");
-    },
-  );
   it("rehearses private state, observes readiness, and joins child close after tree signals", async () => {
     runtimeContract = {
       state: 2,

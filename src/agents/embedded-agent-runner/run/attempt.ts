@@ -116,7 +116,6 @@ async function runEmbeddedAttemptOwned(
     emitCorePluginToolStageSummary,
     prepStages,
     sandbox,
-    sandboxSessionKey,
     sessionAgentId,
   } = setup;
 
@@ -491,8 +490,6 @@ async function runEmbeddedAttemptOwned(
           bundleMcpRuntime: sessionMcpRuntime,
           bundleLspRuntime: sessionLspRuntime,
           toolSearchCatalogRef,
-          sandboxSessionKey,
-          sessionAgentId,
           trajectoryEndRecorded: executionState.trajectoryEndRecorded,
           deferredLifecycleOwner: executionState.deferredLifecycleOwner,
           emitDiagnosticRunCompleted,

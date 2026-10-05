@@ -222,7 +222,6 @@ type CreateModelAuthAvailabilityResolverParams = {
   metadataSnapshot?: PluginMetadataSnapshot;
   externalCliProviderIds?: readonly string[];
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
-  allowPreparedRuntimeAuth?: boolean;
   preparedRuntimeAuthStore?: AuthProfileStore;
   preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
   preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
@@ -302,10 +301,7 @@ export function createModelAuthAvailabilityResolver(
       }
     : params.authStore;
   const runtimeStore =
-    params.preparedRuntimeAuthStore ??
-    (params.allowPreparedRuntimeAuth !== false
-      ? getRuntimeAuthProfileStoreSnapshotCore(params.agentDir)
-      : undefined);
+    params.preparedRuntimeAuthStore ?? getRuntimeAuthProfileStoreSnapshotCore(params.agentDir);
   const hydratedProfileIds = new Set<string>();
   const sameSecretRef = (
     left: ReturnType<typeof parseSecretRef>,
@@ -520,12 +516,6 @@ export function createModelAuthAvailabilityResolver(
       profileMode(profileId),
       profilePolicyFacts(provider, profileId).authRequirement,
     );
-  const profileCredential = (
-    profileId: string,
-    credential = store.profiles[profileId],
-  ): AuthProfileCredential | undefined => {
-    return credential ? runtimeCredentialOverlay(profileId, credential) : undefined;
-  };
   const profileEligibleForReadOnlyAvailability = (
     provider: string,
     profileId: string,
@@ -609,8 +599,12 @@ export function createModelAuthAvailabilityResolver(
     if (isConfiguredAwsSdkAuthProfileForProvider({ cfg: params.cfg, provider, profileId })) {
       return modeAllowed(provider, target, "aws-sdk");
     }
-    const credential = profileCredential(profileId);
-    if (!credential || !profileEligibleForReadOnlyAvailability(provider, profileId, credential)) {
+    const storedCredential = store.profiles[profileId];
+    if (!storedCredential) {
+      return false;
+    }
+    const credential = runtimeCredentialOverlay(profileId, storedCredential);
+    if (!profileEligibleForReadOnlyAvailability(provider, profileId, credential)) {
       return false;
     }
     return resolvedProfileAvailability(provider, profileId, credential, target);
@@ -669,9 +663,8 @@ export function createModelAuthAvailabilityResolver(
     }
     const binding = target.pinnedProfileId ? { kind: "none" as const } : providerBinding(provider);
     if (binding.kind === "profile") {
-      const credential = profileCredential(binding.profileId, binding.credential);
+      const credential = runtimeCredentialOverlay(binding.profileId, binding.credential);
       const availability =
-        credential &&
         !profileInCooldown(binding.profileId, target) &&
         profileEligibleForReadOnlyAvailability(
           binding.credential.provider,
@@ -683,7 +676,7 @@ export function createModelAuthAvailabilityResolver(
       return {
         availability,
         selectedProfileId: binding.profileId,
-        selectedAuthMode: credential?.type ?? binding.credential.type,
+        selectedAuthMode: credential.type,
         evidence: "profile",
       };
     }

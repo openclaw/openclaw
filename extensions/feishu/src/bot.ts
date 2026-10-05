@@ -1172,7 +1172,7 @@ export async function handleFeishuMessage(params: {
       }
 
       const storePath = resolveStorePath(cfg.session?.store, { agentId });
-      const previousThreadSessionTimestamp = core.channel.session.readSessionUpdatedAt({
+      const previousThreadSessionTimestamp = await core.channel.session.readSessionUpdatedAtAsync({
         storePath,
         sessionKey: agentSessionKey,
       });

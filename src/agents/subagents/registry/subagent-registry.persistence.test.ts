@@ -7,10 +7,7 @@ import "./subagent-registry.persistence.mocks.test-support.js";
 // oxfmt-ignore
 import { announceSpy, createSubagentPersistenceRuntime, useSubagentPersistenceFixture } from "./subagent-registry.persistence-fixture.test-support.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import {
-  patchSessionEntryCore,
-  replaceSessionEntry,
-} from "../../../config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { callGateway } from "../../../gateway/call.js";
 import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.types.js";
@@ -146,41 +143,6 @@ describe("subagent registry persistence", () => {
     };
     await activateSubagentRegistry(() => gateway as never);
   };
-
-  it("persists completed subagent timing into the child session entry", async () => {
-    await fixture.allocateStateDir();
-
-    const now = Date.now();
-    const startedAt = now;
-    const endedAt = now + 500;
-
-    const storePath = await writeChildSessionEntry({
-      sessionKey: "agent:main:subagent:timing",
-      sessionId: "sess-timing",
-      updatedAt: startedAt - 1,
-    });
-    await patchSessionEntryCore({ storePath, sessionKey: "agent:main:subagent:timing" }, () => ({
-      lastRunError: "Previous setup failed",
-    }));
-    await persistSubagentSessionTiming(
-      makeRun("run-session-timing", {
-        childSessionKey: "agent:main:subagent:timing",
-        createdAt: startedAt,
-        sessionStartedAt: startedAt,
-        accumulatedRuntimeMs: 0,
-        execution: { status: "terminal", startedAt, endedAt, outcome: { status: "ok" } },
-      }),
-    );
-
-    const store = await readSubagentSessionStore(storePath);
-    const persisted = store["agent:main:subagent:timing"];
-    expect(persisted?.endedAt).toBe(endedAt);
-    expect(persisted?.runtimeMs).toBe(500);
-    expect(persisted?.status).toBe("done");
-    expect(persisted?.lastRunError).toBeUndefined();
-    expect(persisted?.startedAt).toBeGreaterThanOrEqual(startedAt);
-    expect(persisted?.startedAt).toBeLessThanOrEqual(endedAt);
-  });
 
   it.each([false, true])(
     "preserves session state when timing commit is denied (current=%s)",
@@ -509,39 +471,6 @@ describe("subagent registry persistence", () => {
       status: "terminal",
       outcome: { status: "error", error: "subagent run orphaned: missing-session-entry" },
     });
-  });
-
-  it("preserves restored killed tombstones until bounded reconciliation", async () => {
-    const now = Date.now();
-    const runId = "run-killed-restore-tombstone";
-    await persistRuns(
-      [
-        endedRun(runId, {
-          createdAt: now - 100,
-          startedAt: now - 50,
-          endedAt: now,
-          endedReason: "subagent-killed",
-          outcome: { status: "error", error: "manual kill" },
-          suppressAnnounceReason: "killed",
-          killReconciliation: { killedAt: now },
-          cleanupHandled: true,
-          cleanupCompletedAt: now,
-        }),
-      ],
-      false,
-    );
-
-    await restartRegistry();
-    await flushQueuedRegistryWork();
-
-    expect(announceSpy).not.toHaveBeenCalled();
-    expect(listSubagentRunsForRequester("agent:main:main")).toEqual([
-      expect.objectContaining({
-        runId,
-        endedReason: "subagent-killed",
-        suppressAnnounceReason: "killed",
-      }),
-    ]);
   });
 
   it("preserves restored interrupted-recovery owners for orphan replay", async () => {

@@ -110,6 +110,16 @@ function resolveManualTokenExpiryMs(expiresIn: string | undefined): number | und
   return expires;
 }
 
+function requireManualAuthProvider(raw: string | undefined): string {
+  const provider = normalizeOptionalString(raw);
+  if (!provider) {
+    throw new Error(
+      `Missing --provider. Run ${formatCliCommand("openclaw models status")} or ${formatCliCommand("openclaw plugins list")} to choose a provider.`,
+    );
+  }
+  return normalizeManualAuthProvider(provider);
+}
+
 function guardCancel<T>(value: T | typeof import("@clack/prompts").CANCEL_SYMBOL): T {
   if (typeof value === "symbol") {
     cancel("Cancelled.");
@@ -205,18 +215,8 @@ function preferSetupAuthProviders(params: {
   requestedProvider?: string;
   ownerPluginId?: string;
 }): ProviderPlugin[] {
-  if (params.ownerPluginId) {
-    return mergeSetupProviders(
-      params.providers,
-      resolvePluginSetupRegistry({
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        pluginIds: [params.ownerPluginId],
-      }).providers.map((entry) => entry.provider),
-    );
-  }
   const requestedProvider = params.requestedProvider;
-  if (requestedProvider) {
+  if (!params.ownerPluginId && requestedProvider) {
     const setupProvider = resolvePluginSetupProviderCore({
       provider: requestedProvider,
       config: params.config,
@@ -228,6 +228,7 @@ function preferSetupAuthProviders(params: {
   const setupProviders = resolvePluginSetupRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
+    ...(params.ownerPluginId ? { pluginIds: [params.ownerPluginId] } : {}),
   }).providers.map((entry) => entry.provider);
   return mergeSetupProviders(params.providers, setupProviders);
 }
@@ -477,44 +478,34 @@ async function persistProviderAuthResult(params: {
   }
 }
 
-function resolveConfiguredAuthSelectionForProvider(
-  cfg: OpenClawConfig,
-  provider: string,
-): { createIfMissing: boolean; order?: string[] } {
-  const providerAuthKey = resolveProviderIdForAuth(provider, { config: cfg });
-  for (const [orderProvider, profileIds] of Object.entries(cfg.auth?.order ?? {})) {
-    if (
-      profileIds.length > 0 &&
-      resolveProviderIdForAuth(orderProvider, { config: cfg }) === providerAuthKey
-    ) {
-      return { createIfMissing: true, order: profileIds };
-    }
-  }
-  const profileIds = Object.entries(cfg.auth?.profiles ?? {})
-    .filter(
-      ([, profile]) =>
-        resolveProviderIdForAuth(profile.provider, { config: cfg, storedCredential: true }) ===
-        providerAuthKey,
-    )
-    .map(([profileId]) => profileId);
-  return profileIds.length > 0
-    ? { createIfMissing: true, order: profileIds }
-    : { createIfMissing: false };
-}
-
 async function promotePersistedAuthProfile(params: {
   config: OpenClawConfig;
   agentDir: string;
   provider: string;
   profileId: string;
 }): Promise<void> {
-  const selection = resolveConfiguredAuthSelectionForProvider(params.config, params.provider);
+  const cfg = params.config;
+  const providerAuthKey = resolveProviderIdForAuth(params.provider, { config: cfg });
+  const configuredOrder = Object.entries(cfg.auth?.order ?? {}).find(
+    ([orderProvider, profileIds]) =>
+      profileIds.length > 0 &&
+      resolveProviderIdForAuth(orderProvider, { config: cfg }) === providerAuthKey,
+  )?.[1];
+  const order =
+    configuredOrder ??
+    Object.entries(cfg.auth?.profiles ?? {})
+      .filter(
+        ([, profile]) =>
+          resolveProviderIdForAuth(profile.provider, { config: cfg, storedCredential: true }) ===
+          providerAuthKey,
+      )
+      .map(([profileId]) => profileId);
   const promotion = await promoteAuthProfileInOrder({
     agentDir: params.agentDir,
     provider: params.provider,
     profileId: params.profileId,
-    createIfMissing: selection.createIfMissing,
-    ...(selection.order ? { createFromOrder: selection.order } : {}),
+    createIfMissing: order.length > 0,
+    ...(order.length > 0 ? { createFromOrder: order } : {}),
   });
   if (!promotion.ok) {
     throw new ProviderCredentialsSavedError(
@@ -699,13 +690,7 @@ export async function modelsAuthPasteTokenCommand(
   runtime: RuntimeEnv,
 ) {
   const { agentId, agentDir } = await resolveModelsAuthAgent(opts.agent);
-  const rawProvider = normalizeOptionalString(opts.provider);
-  if (!rawProvider) {
-    throw new Error(
-      `Missing --provider. Run ${formatCliCommand("openclaw models status")} or ${formatCliCommand("openclaw plugins list")} to choose a provider.`,
-    );
-  }
-  const provider = normalizeManualAuthProvider(rawProvider);
+  const provider = requireManualAuthProvider(opts.provider);
   const profileId =
     normalizeOptionalString(opts.profileId) || resolveDefaultTokenProfileId(provider);
 
@@ -767,13 +752,7 @@ export async function modelsAuthPasteApiKeyCommand(
 ) {
   const config = (await loadValidConfigSnapshotOrThrow()).runtimeConfig;
   const { agentId, agentDir } = await resolveModelsAuthAgent(opts.agent, config);
-  const rawProvider = normalizeOptionalString(opts.provider);
-  if (!rawProvider) {
-    throw new Error(
-      `Missing --provider. Run ${formatCliCommand("openclaw models status")} or ${formatCliCommand("openclaw plugins list")} to choose a provider.`,
-    );
-  }
-  const provider = normalizeManualAuthProvider(rawProvider);
+  const provider = requireManualAuthProvider(opts.provider);
 
   const key = await readPastedSecret({
     message: `Paste API key for ${provider}`,

@@ -9,6 +9,7 @@ import type {
   SessionGoalOperation,
   SessionGoalOperationResult,
 } from "../../config/sessions/goals-operations.js";
+import { withSessionPendingInputAuthorityGuard } from "../../config/sessions/session-pending-input-authority.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import { logVerbose } from "../../globals.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -313,33 +314,54 @@ async function handleChatSendWithOptions(
       // ACK transfers input custody. Persist approved source bytes before
       // either a direct runtime or the in-memory collector can accept them.
       pendingStageAttempted = true;
-      const assertCustodyCurrent = () => {
+      const assertCustodyLifetimeCurrent = () => {
         admission.assertWorkAdmissionCurrent();
         admission.assertSessionTargetCurrent();
+        if (sessionRoutingChanged(context.getRuntimeConfig())) {
+          throw new Error("Session routing changed before input admission; refresh and retry.");
+        }
+      };
+      const assertCustodyCurrent = () => {
+        assertCustodyLifetimeCurrent();
         if (sessionMutationAuthorization?.assertAdmittedInputCurrent) {
           sessionMutationAuthorization.assertAdmittedInputCurrent();
         } else {
           sessionMutationCommitGuard?.();
           sessionMutationAuthorization?.assertCurrent();
         }
-        if (sessionRoutingChanged(context.getRuntimeConfig())) {
-          throw new Error("Session routing changed before input admission; refresh and retry.");
-        }
       };
+      let preparationFailure: { cause: unknown } | undefined;
+      const assertAdmittedCurrent =
+        req.expectedProfileId === undefined
+          ? assertCustodyCurrent
+          : createMessageInjectionAuthority(() => {
+              if (preparationFailure) {
+                throw preparationFailure.cause;
+              }
+              assertCustodyCurrent();
+              return true;
+            });
       const staged = await userTurnRecorder.stageApproved?.({
         runId: clientRunId,
+        authority: sessionMutationAuthorization?.admittedInputAuthority
+          ? withSessionPendingInputAuthorityGuard(
+              sessionMutationAuthorization.admittedInputAuthority,
+              assertCustodyLifetimeCurrent,
+              req.expectedProfileId === undefined
+                ? undefined
+                : (cause) => {
+                    preparationFailure ??= { cause };
+                    assertAdmittedCurrent();
+                    throw cause;
+                  },
+            )
+          : undefined,
         assertCurrent: () => {
           admission.assertClientUploadAllowed?.();
           sessionMutationCommitGuard?.();
           assertCustodyCurrent();
         },
-        assertAdmittedCurrent:
-          req.expectedProfileId === undefined
-            ? assertCustodyCurrent
-            : createMessageInjectionAuthority(() => {
-                assertCustodyCurrent();
-                return true;
-              }),
+        assertAdmittedCurrent,
       });
       if (userTurnRecorder.isPendingInputConsumed?.()) {
         admission.cleanupAdmittedRun();

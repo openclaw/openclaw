@@ -19,6 +19,23 @@ export function roundedChatSendTimingMs(value: number): number {
   return Math.max(0, Math.round(value * 1000) / 1000);
 }
 
+export function createFirstAssistantServerTiming(
+  timing: { firstAssistantEventSent?: boolean } | undefined,
+  emit: () => void,
+): () => void {
+  let emitted = false;
+  return () => {
+    if (emitted || timing?.firstAssistantEventSent) {
+      return;
+    }
+    emitted = true;
+    if (timing) {
+      timing.firstAssistantEventSent = true;
+    }
+    emit();
+  };
+}
+
 export function chatSendAckServerTimingAttributes(
   timing: ChatSendAckServerTiming | undefined,
 ): Record<string, number> {
@@ -66,10 +83,7 @@ export function emitOperatorChatSendServerTiming(params: {
   dispatchStartedAtMs?: number;
   extra?: Record<string, string | number>;
 }) {
-  const connId =
-    typeof params.client?.connId === "string" && params.client.connId.trim()
-      ? params.client.connId.trim()
-      : undefined;
+  const connId = params.client?.connId?.trim();
   if (!connId || !isOperatorUiClient(params.client?.connect?.client)) {
     return;
   }

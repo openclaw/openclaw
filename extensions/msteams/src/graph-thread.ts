@@ -92,11 +92,9 @@ export async function fetchThreadReplies(
   groupId: string,
   channelId: string,
   messageId: string,
-  limit = 50,
   deadline?: MSTeamsRequestDeadline,
 ): Promise<GraphThreadMessage[]> {
-  const top = Math.min(Math.max(limit, 1), 50);
-  const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/replies?$top=${top}`;
+  const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/replies?$top=50`;
   const res = await fetchGraphJson<GraphResponse<GraphThreadMessage>>({
     token,
     path,

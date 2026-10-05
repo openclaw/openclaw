@@ -141,6 +141,30 @@ propagate to the caller, and ingress retains its fail-closed handling. Prepared
 entries do not replace current message or channel authority. No schema, retention,
 or update migration is required, and no runtime warning is emitted.
 
+### Inbound envelope timestamps
+
+Await `readSessionUpdatedAtAsync` from `openclaw/plugin-sdk/session-store-runtime`
+or `runtime.channel.session.readSessionUpdatedAtAsync`. The existing session
+reader captures the physical store and reads current activity in its worker.
+Missing stores return `undefined` without creating or migrating a database.
+Read failures propagate; there is no synchronous fallback.
+
+From `openclaw/plugin-sdk/channel-inbound`, await
+`createChannelInboundEnvelopeBuilderAsync` or `resolveInboundSessionEnvelopeContextAsync`
+at the message's formatting boundary. Resolve the route through `resolveAgentRoute`
+from `openclaw/plugin-sdk/routing` before preparing its envelope.
+Create a fresh builder for each inbound message. Its returned formatter is
+synchronous and reuses that message's prepared timestamp; `previousTimestamp: null`
+still suppresses timestamps for history entries. Prepared timestamps describe
+activity and never replace current channel or session authority.
+
+The synchronous timestamp and envelope APIs shipped in OpenClaw 2026.9.8 remain
+deprecated compatibility until the next Plugin SDK major and explicit breaking-release
+approval. This includes the callback-based `inbound-envelope` helpers and
+`dispatchInboundDirectDmWithRuntime`; bundled callers use the awaited preparation
+and `dispatchInboundDirectDm`. Existing synchronous signatures and callback timing
+remain unchanged. No schema, stored data, retention, or update migration is required.
+
 ### Watched-session harness context
 
 `buildWatchedSessionsHarnessContext` from
@@ -260,6 +284,19 @@ The `acp-session-metadata-released-signatures` compatibility record is active:
 these APIs remain supported, with no deprecation warning or required migration.
 Worker activation must preserve them; changing these released contracts requires
 an explicitly approved Plugin SDK major release.
+
+### Memory session binding compatibility
+
+`openclaw/plugin-sdk/memory-core-host-engine-sessions` retains the readers
+published in `v2026.9.8`: `buildSessionEntry(path, options?)`,
+`listSessionTranscriptCorpusEntriesForAgent(agentId, options?)`, and
+`readSessionResetRecallCutoff(scope)`. Their Promise results and synchronous
+`onTranscriptMessage(message, observedAt)` observer remain unchanged. Internal
+incognito actor sources are not plugin arguments.
+
+The `memory-session-released-signatures` compatibility record is active. These
+APIs remain supported without warnings or a required migration; changing their
+released contracts requires an explicitly approved Plugin SDK major release.
 
 ### Native session generation authority
 

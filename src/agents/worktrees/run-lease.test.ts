@@ -32,7 +32,7 @@ import {
   acquireWorktreeRunLease,
   claimWorktreeRemoval,
   hasLiveWorktreeRunLease,
-  resolveWorktreeIdForPath,
+  resolveWorktreeForPath,
 } from "./run-lease.js";
 import { testing as runLeaseTesting } from "./run-lease.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
@@ -91,7 +91,7 @@ describe("worktree run lease", () => {
     service = new ManagedWorktreeService({ env });
   });
 
-  async function createSessionWorktree(): Promise<{ id: string; path: string }> {
+  async function createSessionWorktree() {
     const created = await service.create({
       repoRoot: repo,
       name: "run-lease-session",
@@ -99,7 +99,7 @@ describe("worktree run lease", () => {
       ownerKind: "session",
       ownerId: "agent:main:run-lease",
     });
-    return { id: created.id, path: created.path };
+    return created;
   }
 
   it("shares one worktree across concurrent runs and refcounts the git lock", async () => {
@@ -331,19 +331,28 @@ describe("worktree run lease", () => {
     expect(await lockState(record)).toEqual({ kind: "none" });
   });
 
-  it("resolves the worktree id for a nested workspace path with no session binding", async () => {
+  it("retains the selected nested-workspace identity through lease admission", async () => {
     const created = await createSessionWorktree();
     const nested = path.join(created.path, "workspace");
     await fs.mkdir(nested);
 
-    const resolved = await resolveWorktreeIdForPath({ candidatePaths: [nested], env });
-    expect(resolved).toBe(created.id);
+    const selected = await resolveWorktreeForPath({ candidatePaths: [nested], env });
+    expect(selected?.record.id).toBe(created.id);
 
-    const lease = await acquireWorktreeRunLease(created.id, { env });
+    const lease = await acquireWorktreeRunLease(created.id, { source: selected });
     await expect(
       claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover" }),
     ).rejects.toThrow("worktree is busy");
     await lease.release();
+
+    openOpenClawStateDatabase({ env })
+      .db.prepare("UPDATE worktrees SET branch = ? WHERE id = ?")
+      .run("replacement-branch", created.id);
+    await expect(acquireWorktreeRunLease(created.id, { source: selected })).rejects.toThrow(
+      /changed/,
+    );
+    expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
+    expect(await lockState(created)).toEqual({ kind: "none" });
   });
 
   it("prunes a dead owner lease so removal can proceed", async () => {
@@ -596,7 +605,7 @@ describe("worktree run lease", () => {
     });
 
     await expect(
-      resolveWorktreeIdForPath({
+      resolveWorktreeForPath({
         sessionEntry: { worktree: { id: created.id } },
         candidatePaths: [],
         env,

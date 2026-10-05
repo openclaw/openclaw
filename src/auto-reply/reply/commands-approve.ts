@@ -299,5 +299,3 @@ export async function handleApproveCommandFromContext(
 
   return commandReply(`✅ Approval ${parsed.decision} submitted for ${parsed.id}.`);
 }
-
-export const handleApproveCommand: CommandHandler = handleApproveCommandFromContext;

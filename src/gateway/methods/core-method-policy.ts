@@ -100,6 +100,13 @@ export function createCoreGatewayMethodDescriptors(
       handler,
       owner: { kind: "core", area: "gateway" },
       scope: spec.scope,
+      ...(spec.shareKey
+        ? {
+            shareKey: spec.shareKey,
+            shareInvalidationEvents: spec.shareInvalidationEvents,
+            shareMaxAgeMs: spec.shareMaxAgeMs,
+          }
+        : {}),
       profileAccess:
         spec.sessionAccess || isCoreGatewayMethodProfileDependent(spec.name)
           ? "required"

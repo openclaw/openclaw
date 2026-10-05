@@ -24,7 +24,6 @@ import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-packag
 
 type InstallSourceHardlinks = "package-manager" | "reject";
 
-const DEFAULT_INSTALL_SOURCE_HARDLINKS: InstallSourceHardlinks = "reject";
 const INSTALL_BASE_CHANGED_ERROR_MESSAGE = "install base directory changed during install";
 const INSTALL_BASE_CHANGED_ABORT_WARNING =
   "Install base directory changed during install; aborting staged publish.";
@@ -352,10 +351,7 @@ export async function installPackageDir<
     install: MovePathPublicationReceipt | null;
     restore: MovePathPublicationReceipt | null;
   } = { backup: null, install: null, restore: null };
-  const sourceHardlinks =
-    (params.sourceHardlinks ?? DEFAULT_INSTALL_SOURCE_HARDLINKS) === "package-manager"
-      ? "allow"
-      : "reject";
+  const sourceHardlinks = params.sourceHardlinks === "package-manager" ? "allow" : "reject";
   let quarantine:
     | { directory: string; identity: Awaited<ReturnType<typeof readDirectoryIdentity>> }
     | undefined;
@@ -529,8 +525,6 @@ export async function installPackageDir<
                 // stays quiet on success while preserving the actionable npm failure text.
                 resolveNpmCommand(
                   createSafeNpmInstallArgs({
-                    omitDev: true,
-                    loglevel: "error",
                     ignoreWorkspaces: true,
                   }),
                 ),

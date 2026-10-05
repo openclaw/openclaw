@@ -28,7 +28,7 @@ import {
   type CodexAppServerClientOptions,
 } from "./shared-client.js";
 import { createClientHarness, createCodexTestModel } from "./test-support.js";
-import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
+import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
 
 type NativeFixtureThread = {
   response: Record<string, unknown>;

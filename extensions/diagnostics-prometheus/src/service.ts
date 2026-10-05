@@ -29,8 +29,8 @@ import {
   type PrometheusMetricStore,
 } from "./prometheus-metric-store.js";
 import { recordChildProcessSpawn } from "./service-child-process.js";
-import { recordGatewayRpcEvent } from "./service-gateway-rpc.js";
 import { recordMemorySample } from "./service-memory.js";
+import { recordOperationTimingEvent } from "./service-operation-timing.js";
 
 const TOKEN_BUCKETS = [1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576];
 const BYTE_BUCKETS = [
@@ -191,7 +191,7 @@ function recordDiagnosticEvent(
   switch (evt.type) {
     case "diagnostic.phase.completed":
     case "gateway.rpc":
-      recordGatewayRpcEvent(store, evt, metadata);
+      recordOperationTimingEvent(store, evt, metadata);
       return;
     case "diagnostic.gc":
       store.histogram(

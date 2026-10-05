@@ -366,7 +366,9 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       }
       for (const activity of activityItems) {
         const previous = prepared.get(activity.itemId);
-        if (previous?.phase !== "end" || activity.phase === "end") {
+        // Only an explicitly unpaired history call yields to live progress.
+        // A real terminal receipt stays terminal even when its outcome is unknown.
+        if (previous?.phase !== "end" || previous.unpairedCall || activity.phase === "end") {
           prepared.set(activity.itemId, activity);
         }
       }

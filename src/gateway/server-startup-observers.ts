@@ -8,11 +8,54 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { sweepSessionStateWatchNotices } from "../sessions/session-state-events.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 
-/** The tracked startup tail owns both observers until their original work settles. */
+// Startup only needs orphan marking; keep resume and delivery runtime out of the pre-channel path.
+const loadMainSessionRestartRecoveryMarkingModule = createLazyRuntimeModule(
+  () => import("../agents/main-session-recovery/main-session-restart-recovery-marking.js"),
+);
+
+/** Mark predecessors before channels admit work, independently of plugin registration. */
+export async function markGatewayStartupMainSessionOrphans(params: {
+  cfg: OpenClawConfig;
+  startupCheckedStorePaths: Set<string>;
+  startupTrace?: GatewayStartupTrace;
+  log: { warn: (message: string) => void };
+}): Promise<void> {
+  await measureStartup(params.startupTrace, "sidecars.main-session-recovery", async () => {
+    try {
+      const { markStartupOrphanedMainSessionsForRecovery } = await measureStartup(
+        params.startupTrace,
+        "sidecars.main-session-recovery-load",
+        loadMainSessionRestartRecoveryMarkingModule,
+      );
+      await measureStartup(params.startupTrace, "sidecars.main-session-recovery-scan", () =>
+        markStartupOrphanedMainSessionsForRecovery({
+          cfg: params.cfg,
+          startupCheckedStorePaths: params.startupCheckedStorePaths,
+        }),
+      );
+    } catch (err) {
+      params.log.warn(
+        `main-session startup orphan marking failed before channel startup: ${String(err)}`,
+      );
+    }
+  });
+}
+
+type SubagentRegistryActivation = (
+  resolveGatewayContext: GatewayContextResolver,
+) => void | Promise<void>;
+
+/** The tracked post-ready tail owns recovery and observers until their original work settles. */
 export async function runGatewayStartupObservers(params: {
   registry: PluginRegistry;
+  resolveGatewayContext: GatewayContextResolver;
+  loadSubagentRegistryActivation: () =>
+    | SubagentRegistryActivation
+    | Promise<SubagentRegistryActivation>;
   signal: AbortSignal;
   port: number;
   config: OpenClawConfig;
@@ -33,11 +76,32 @@ export async function runGatewayStartupObservers(params: {
   refreshLatestUpdateRestartSentinel: () => Promise<unknown>;
 }): Promise<void> {
   await params.waitForPostReadyWork?.();
-  if (params.isClosing?.()) {
+  if (params.signal.aborted || params.isClosing?.()) {
+    return;
+  }
+  try {
+    await runWithGatewayIndependentRootWorkAdmission(
+      async () => {
+        await measureStartup(params.startupTrace, "sidecars.subagent-recovery", async () => {
+          const activateSubagentRegistry = await params.loadSubagentRegistryActivation();
+          if (!params.signal.aborted && params.isClosing?.() !== true) {
+            await activateSubagentRegistry(params.resolveGatewayContext);
+          }
+        });
+      },
+      "startup:subagent-recovery",
+      params.signal,
+    );
+  } catch (err) {
+    if (!params.signal.aborted && !params.isClosing?.()) {
+      params.log.warn(`subagent restart recovery failed to activate: ${String(err)}`);
+    }
+  }
+  if (params.signal.aborted || params.isClosing?.()) {
     return;
   }
   await nextTurn();
-  if (params.isClosing?.()) {
+  if (params.signal.aborted || params.isClosing?.()) {
     return;
   }
   const sentinelRefresh = runWithGatewayIndependentRootWorkAdmission(

@@ -234,9 +234,7 @@ async function waitForReachableControlUiDocument(
     if (remainingWait <= 0) {
       return false;
     }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, Math.min(REACHABLE_WAIT_INTERVAL_MS, remainingWait));
-    });
+    await sleepWithAbort(Math.min(REACHABLE_WAIT_INTERVAL_MS, remainingWait));
   }
 }
 

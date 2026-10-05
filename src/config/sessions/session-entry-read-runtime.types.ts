@@ -1,9 +1,9 @@
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
-import type { SessionEntrySnapshotField } from "./session-entry-snapshots.js";
 import type {
   SessionExactEntriesWorkerResult,
   SessionExactEntriesWorkerSelection,
-} from "./session-transcript-worker.types.js";
+} from "./session-entry-read.types.js";
+import type { SessionEntrySnapshotField } from "./session-entry-snapshots.js";
 
 export type SessionStoreWorkerReadScope = {
   agentId: string;

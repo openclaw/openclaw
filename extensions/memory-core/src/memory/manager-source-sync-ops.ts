@@ -9,7 +9,6 @@ import {
   runWithConcurrency,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { runSqliteImmediateTransaction } from "openclaw/plugin-sdk/sqlite-runtime";
 import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
 import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
 import type { MemoryIndexEntry } from "./manager-index-preparation.js";
@@ -19,7 +18,6 @@ import {
   resolveMemorySessionSyncPlan,
 } from "./manager-session-sync-state.js";
 import {
-  loadMemorySourceFileState,
   resolveMemorySourceFileEntries,
   type MemorySourceFileStateRow,
 } from "./manager-source-state.js";
@@ -135,8 +133,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       batch: this.batch.enabled,
       concurrency: this.getIndexConcurrency(),
     });
-    const existingRows = loadMemorySourceFileState({
-      db: this.db,
+    const existingRows = await this.database.readSourceState({
       source: "memory",
     });
     const existingHashes = new Map(existingRows.map((row) => [row.path, row.hash]));
@@ -193,11 +190,6 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     deferIndex?: boolean;
     prefixIndexItems?: MemoryIndexWorkItem[];
   }): Promise<void> {
-    const updateUnchangedSessionSourceMetadata = this.db.prepare(
-      `UPDATE memory_index_sources
-       SET mtime = ?, size = ?, hash = ?
-       WHERE path = ? AND source = 'sessions' AND hash = ?`,
-    );
     const corpusEntries = params.corpusEntries ?? (await this.listSessionCorpusEntries());
     const targetArchiveFiles = params.needsFullReindex
       ? null
@@ -221,8 +213,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       targetSessionFiles: targetArchiveFiles,
       existingRows: targetArchiveFiles
         ? null
-        : loadMemorySourceFileState({
-            db: this.db,
+        : await this.database.readSourceState({
             source: "sessions",
           }),
       sessionPathForFile: (file) => this.sessionPathForCorpusEntry(corpusEntryForPath(file)),
@@ -268,11 +259,12 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         .filter((pathname) => !activeCorpusPaths.has(pathname));
       // Resolve membership after indexing, in one snapshot regardless of target count.
       const existingSessionHashes = new Map(
-        loadMemorySourceFileState({
-          db: this.db,
-          source: "sessions",
-          paths: staleLivePaths,
-        }).map((row) => [row.path, row.hash]),
+        (
+          await this.database.readSourceState({
+            source: "sessions",
+            paths: staleLivePaths,
+          })
+        ).map((row) => [row.path, row.hash]),
       );
       for (const staleLivePath of staleLivePaths) {
         if (!existingSessionHashes.has(staleLivePath)) {
@@ -331,18 +323,15 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         // Converge restored source fingerprints without replacing unchanged chunks.
         if (
           (this.sessionsDirtyFiles.has(absPath) || existingHash !== hash) &&
-          !(await runSqliteImmediateTransaction(
-            this.db,
-            async () => () =>
-              updateUnchangedSessionSourceMetadata.run(
-                entry.mtimeMs,
-                entry.size,
-                hash,
-                entry.path,
-                existingHash,
-              ).changes === 1,
-            undefined,
-            (write) => this.withDatabaseWrite(write),
+          !(await database.refreshSourceState(
+            {
+              path: entry.path,
+              hash,
+              mtime: entry.mtimeMs,
+              size: entry.size,
+              expectedHash: existingHash,
+            },
+            assertCurrent,
           ))
         ) {
           throw new MemoryIndexRevisionConflictError(

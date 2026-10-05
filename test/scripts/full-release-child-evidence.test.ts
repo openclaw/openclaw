@@ -4,7 +4,10 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { classifyReleaseSnapshot } from "../../scripts/full-release-validation-policy.mjs";
+import {
+  classifyReleaseSnapshot,
+  releaseChildSpec,
+} from "../../scripts/full-release-validation-policy.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -13,13 +16,15 @@ const SHA = "a".repeat(40);
 const TARGET = "b".repeat(40);
 const PUBLISHER = "Seal full release child evidence / Seal child receipt";
 
-function fixture() {
+function fixture(role = "normalCi") {
+  const spec = releaseChildSpec(role);
+  const workflowSha = TARGET;
   const job = (id: number, name: string, conclusion: string | null = "success") => ({
     id,
     name,
     run_id: 101,
     run_attempt: 1,
-    head_sha: SHA,
+    head_sha: workflowSha,
     status: conclusion === null ? "in_progress" : "completed",
     conclusion,
     started_at: "2026-09-23T00:00:00Z",
@@ -32,10 +37,10 @@ function fixture() {
       id: 101,
       run_attempt: 1,
       event: "workflow_dispatch",
-      path: ".github/workflows/ci.yml@refs/heads/main",
-      display_title: "CI full-release-validation-77-1-ci",
+      path: `.github/workflows/${spec.workflow}@refs/heads/main`,
+      display_title: `${spec.displayName} full-release-validation-77-1${spec.suffix}`,
       head_branch: "main",
-      head_sha: SHA,
+      head_sha: workflowSha,
       status: "in_progress",
       conclusion: null,
       repository: { full_name: "openclaw/openclaw" },
@@ -43,13 +48,15 @@ function fixture() {
       actor: { login: "github-actions[bot]" },
       triggering_actor: { login: "github-actions[bot]" },
     },
-    lineage: { status: "ahead", merge_base_commit: { sha: SHA } },
     jobs,
     attempts: [jobs],
+    role,
   };
 }
 
 function seal(data = fixture(), runAttempt = 1) {
+  const role = data.role;
+  const spec = releaseChildSpec(role);
   const root = tempDirs.make("frv-child-receipt-");
   const bin = join(root, "bin");
   mkdirSync(bin);
@@ -62,7 +69,7 @@ function seal(data = fixture(), runAttempt = 1) {
     event,
     JSON.stringify({
       inputs: {
-        dispatch_id: "full-release-validation-77-1-ci",
+        dispatch_id: `full-release-validation-77-1${spec.suffix}`,
         target_ref: TARGET,
         release_scope: "full",
       },
@@ -77,8 +84,6 @@ const fixture = JSON.parse(fs.readFileSync(process.env.FRV_FIXTURE, "utf8"));
 const endpoint = process.argv.find((arg) => arg.startsWith("repos/"));
 if (endpoint === "repos/openclaw/openclaw/actions/runs/101") {
   process.stdout.write(JSON.stringify(fixture.run));
-} else if (endpoint === "repos/openclaw/openclaw/compare/${SHA}...main?per_page=1") {
-  process.stdout.write(JSON.stringify(fixture.lineage));
 } else if (endpoint.startsWith("repos/openclaw/openclaw/actions/runs/101/attempts/")) {
   const attempt = Number(endpoint.split("/").at(-2));
   const jobs = fixture.attempts[attempt - 1];
@@ -98,7 +103,7 @@ if (endpoint === "repos/openclaw/openclaw/actions/runs/101") {
       OPENCLAW_GH_BIN: gh,
       GH_TOKEN: "synthetic-test-token",
       FRV_FIXTURE: fixturePath,
-      FRV_CHILD_ROLE: "normalCi",
+      FRV_CHILD_ROLE: role,
       FRV_CHILD_TARGET_SHA: TARGET,
       FRV_CHILD_EVIDENCE_PATH: receipt,
       GITHUB_EVENT_PATH: event,
@@ -106,7 +111,7 @@ if (endpoint === "repos/openclaw/openclaw/actions/runs/101") {
       GITHUB_REPOSITORY: "openclaw/openclaw",
       GITHUB_RUN_ID: "101",
       GITHUB_RUN_ATTEMPT: String(runAttempt),
-      GITHUB_SHA: SHA,
+      GITHUB_SHA: data.run.head_sha,
       GITHUB_REF_NAME: "main",
     },
   });
@@ -208,7 +213,7 @@ describe("full release child evidence producer", () => {
         effectiveRunAttempt: 1,
         role: "normalCi",
         targetSha: TARGET,
-        workflowSha: SHA,
+        workflowSha: TARGET,
         workloadConclusion: conclusion,
         inputs: { release_scope: "full", target_ref: TARGET },
         publisher: { jobId: "3", jobName: PUBLISHER },
@@ -222,6 +227,19 @@ describe("full release child evidence producer", () => {
       expect(readFileSync(output, "utf8")).toBe(
         `artifact_name=full-release-child-evidence-${TARGET}-normalCi-101-1\n`,
       );
+    },
+  );
+
+  it.each(["pluginPrereleaseIndependent", "releaseChecksCandidate"])(
+    "seals %s evidence at the exact target SHA",
+    (role) => {
+      const { result, receipt } = seal(fixture(role));
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(receipt, "utf8"))).toMatchObject({
+        role,
+        targetSha: TARGET,
+        workflowSha: TARGET,
+      });
     },
   );
 
@@ -277,11 +295,11 @@ describe("full release child evidence producer", () => {
 
   it.each([
     {
-      name: "workflow outside main ancestry",
+      name: "workflow SHA different from the target",
       mutate: (data: ReturnType<typeof fixture>) => {
-        data.lineage.status = "diverged";
+        data.run.head_sha = SHA;
       },
-      error: "not a main ancestor",
+      error: "does not match the target SHA",
     },
     {
       name: "stale run attempt",

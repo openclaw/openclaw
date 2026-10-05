@@ -231,7 +231,6 @@ export async function runProviderPluginAuthMethod(params: {
   signal?: AbortSignal;
   isRemote?: boolean;
   beforePersistentEffect?: () => void | Promise<void>;
-  emitNotes?: boolean;
   secretInputMode?: ProviderAuthOptionBag["secretInputMode"];
   allowSecretRefPrompt?: boolean;
   opts?: Partial<ProviderAuthOptionBag>;
@@ -276,7 +275,7 @@ async function prepareProviderPluginAuthMethod(
     opts: params.opts,
   });
 
-  if (params.emitNotes !== false && result.notes && result.notes.length > 0) {
+  if (result.notes && result.notes.length > 0) {
     await params.prompter.note(result.notes.join("\n"), "Provider notes");
   }
 

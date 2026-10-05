@@ -29,6 +29,7 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
     signal: AbortSignal,
     options?: { includeConsumers?: boolean; includeCalls?: boolean },
   ): Promise<void>;
+  waitForIdle(signal: AbortSignal): Promise<void>;
   reserveReplacement(): () => void;
   retainConsumer(
     invoke?: <T>(run: () => T) => T,

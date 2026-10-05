@@ -1,5 +1,5 @@
 import type { SessionEntryWorkerRead } from "./session-entry-read-runtime.types.js";
-import type { SessionExactEntriesWorkerSelection } from "./session-transcript-worker.types.js";
+import type { SessionExactEntriesWorkerSelection } from "./session-entry-read.types.js";
 
 /** Ordinary and ordered readers capture the same selection and ancillary facts. */
 export function captureSessionEntryWorkerRequest(input: SessionEntryWorkerRead) {

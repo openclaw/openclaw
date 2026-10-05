@@ -30,8 +30,10 @@ import {
   findInstalledGatewayChildPid,
   findInstalledProcessPid,
   isNodeHostArgv,
-  probeProcessState,
   readWindowsProcessSnapshot,
+} from "./schtasks-process-snapshot.js";
+import {
+  probeProcessState,
   resolveGatewayListenerPids,
   readBoundedScheduledTaskProcess,
   resolveListenerBackedScheduledTaskRuntime,
@@ -543,12 +545,17 @@ export async function stopStartupEntry(
 export async function terminateInstalledStartupRuntime(
   env: GatewayServiceEnv,
   assertCurrent?: () => void,
+  beforeMutation?: () => Promise<void>,
 ): Promise<void> {
   if (!(await isStartupEntryInstalled(env))) {
     return;
   }
   const runtime = await resolveControllableFallbackRuntime(env);
   if (runtime.pid) {
+    if (beforeMutation) {
+      await beforeMutation();
+      assertCurrent?.();
+    }
     await terminateGatewayProcessTree(runtime.pid, assertCurrent);
   }
 }
@@ -600,6 +607,9 @@ export async function readScheduledTaskRuntime(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
   opts?: GatewayServiceReadOptions,
 ): Promise<GatewayServiceRuntime> {
+  if (opts?.commandInspection?.kind === "unavailable") {
+    throw opts.commandInspection.error;
+  }
   const deadlineMs = opts?.timeoutMs === undefined ? undefined : performance.now() + opts.timeoutMs;
   const probe = probeScheduledTaskState(resolveTaskName(env), opts?.timeoutMs);
   if (probe.status === "missing") {
@@ -618,20 +628,42 @@ export async function readScheduledTaskRuntime(
     probe.state === 4 ? "running" : probe.state === 1 || probe.state === 3 ? "stopped" : "unknown";
   // A detached/lingering process may outlive its task. Retain exact persisted-argv ownership
   // evidence (including PID) without treating it as proof of Scheduler supervision.
-  const installedCommand = opts?.requireLoaded
-    ? await readScheduledTaskCommand(env, {
-        ...opts,
-        timeoutMs: deadlineMs === undefined ? undefined : deadlineMs - performance.now(),
-      })
-    : undefined;
+  const readCommand = () =>
+    readScheduledTaskCommand(env, {
+      ...opts,
+      requireEffective: true,
+      requireLoaded: true,
+      timeoutMs: deadlineMs === undefined ? undefined : deadlineMs - performance.now(),
+    });
+  const installedCommand =
+    opts?.commandInspection?.kind === "absent"
+      ? null
+      : opts?.commandInspection?.kind === "present"
+        ? (opts.commandInspection.command ?? (await readCommand()))
+        : await readCommand();
   const observedRuntime = await resolveListenerBackedScheduledTaskRuntime(
     env,
     deadlineMs,
     installedCommand,
   );
+  if (!isDeepStrictEqual(installedCommand, await readCommand())) {
+    return createServiceRuntimeInspectionFailure(
+      "Scheduled Task definition changed during runtime inspection.",
+      opts?.timeoutMs,
+    );
+  }
   return {
     ...observedRuntime,
-    status: status === "unknown" ? status : (observedRuntime?.status ?? status),
+    status:
+      status === "unknown"
+        ? status
+        : (observedRuntime?.status ?? (status === "running" ? "unknown" : status)),
+    ...(!observedRuntime && status === "running"
+      ? {
+          detail:
+            "Scheduled Task is running, but no process matching its current command could be verified.",
+        }
+      : {}),
     state: ["Unknown", "Disabled", "Queued", "Ready", "Running"][probe.state ?? 0],
     lastRunTime: probe.lastRunTime,
     lastRunResult: probe.lastRunResult,

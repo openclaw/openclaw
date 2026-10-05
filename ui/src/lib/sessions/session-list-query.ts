@@ -163,6 +163,7 @@ export function canApplySessionListSnapshot(
           excluded.hasBoard !== options.hasBoard) ||
         (options.boardFace !== undefined && excluded.boardFace !== options.boardFace) ||
         (options.includeGlobal === false && excluded.kind === "global") ||
+        (options.excludeDock !== false && excluded.isDock === true) ||
         (options.includeUnknown === false && excluded.kind === "unknown"))
     ) {
       covered = true;
@@ -178,6 +179,7 @@ export function canApplySessionListSnapshot(
       !sessionMatchesArchivedFilter(existing, options.archivedFilter ?? "active") ||
       existing.sessionId !== next.sessionId ||
       existing.kind !== next.kind ||
+      (options.excludeDock !== false && (existing.isDock === true || next.isDock === true)) ||
       (existing.archived === true) !== (next.archived === true) ||
       (existing.pinned === true) !== (next.pinned === true) ||
       existing.pinnedAt !== next.pinnedAt ||
@@ -453,6 +455,7 @@ export function isPrimarySessionListQuery(options: SessionListScope): boolean {
     query.excludeSubagents !== true &&
     query.excludeCron !== true &&
     query.excludeSystem !== true &&
+    query.excludeDock !== false &&
     query.includeGlobal === true &&
     query.includeUnknown === true &&
     query.configuredAgentsOnly === true
@@ -483,6 +486,7 @@ export function prepareSessionRefreshOptions(
   const prepared = {
     ...options,
     source: options.source ?? "sidebar",
+    excludeDock: options.excludeDock ?? true,
     includeDerivedTitles: options.includeDerivedTitles ?? true,
   } satisfies SessionRefreshOptions;
   if (
