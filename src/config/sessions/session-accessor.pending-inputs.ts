@@ -27,6 +27,7 @@ import {
   parseSessionPendingInputMessage,
   hasRegisteredSessionPendingInputOwner,
   registerSessionPendingInputOwner,
+  getForeignLiveSessionPendingInputEntriesInScope,
   releaseSessionPendingInputOwner,
   assertRegisteredSessionPendingInputOwner,
   runWithSessionPendingInput,
@@ -38,6 +39,8 @@ import {
   type SessionPendingInputState,
 } from "./session-accessor.sqlite-pending-inputs.js";
 import {
+  assertSqliteTranscriptWriteIdentity,
+  prepareSqliteTranscriptReadScope,
   resolveSqliteSessionKey,
   resolveSqliteWriteAdmissionScope,
   toDatabaseOptions,
@@ -50,6 +53,25 @@ import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 export { withSessionPendingInputRelocation };
+
+/** Prepare physical ownership off-thread, then inspect live custody rather than consumed rows. */
+export async function getForeignLiveSessionPendingInputEntries(
+  scope: import("./session-accessor.types.js").SessionAccessScope & { sessionId: string },
+  signal?: AbortSignal,
+): Promise<ReadonlyMap<string, string>> {
+  signal?.throwIfAborted();
+  assertSqliteTranscriptWriteIdentity(scope);
+  const captured = {
+    ...scope,
+    env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
+  };
+  const resolved = await prepareSqliteTranscriptReadScope(captured, signal);
+  signal?.throwIfAborted();
+  return getForeignLiveSessionPendingInputEntriesInScope({
+    ...resolved,
+    sessionKey: resolveSqliteSessionKey(captured.sessionKey, resolved.agentId),
+  });
+}
 export type { SessionPendingInput, SessionPendingInputPage };
 export type SessionPendingInputReceipt = {
   state: "queued" | "consumed";

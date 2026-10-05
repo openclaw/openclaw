@@ -1,6 +1,9 @@
 import { isAnthropicOAuthApiKey, isDirectAnthropicModel } from "@openclaw/ai/internal/anthropic";
 import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core";
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
+import { getForeignLiveSessionPendingInputEntries } from "../../../config/sessions/session-accessor.pending-inputs.js";
+import { sameSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
+import { captureOwnedTranscriptWriteAssertion } from "../../../config/sessions/transcript-write-context.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import {
@@ -64,6 +67,7 @@ import {
   type InitialUserTurnReplayPreparation,
   preparePersistedCurrentUserTurn,
   reconcilePrePersistedCurrentUserTurn,
+  reconcileForeignPendingUserTurns,
 } from "./pre-persisted-user-turn.js";
 import {
   applyRuntimeContextCarrierRetention,
@@ -315,8 +319,24 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
   setCurrentUserTimestampOverride: (override: CurrentUserTimestampOverride | undefined) => void;
 }> {
   const { activeSession, attempt, isRawModelRun, sessionManager } = input;
-  setSteeringRuntimeContextRetention(activeSession, input.appendOnlyRuntimeContext === true);
   const preserveExactPrompt = isRawModelRun || attempt.operation === "settled-tool-finalization";
+  const liveInputTarget = preserveExactPrompt ? undefined : sessionManager.getSessionTarget();
+  let foreignEntries: ReadonlyMap<string, string> | undefined;
+  if (liveInputTarget) {
+    const assertOwned = captureOwnedTranscriptWriteAssertion(liveInputTarget);
+    input.abortSignal?.throwIfAborted();
+    assertOwned();
+    foreignEntries = await getForeignLiveSessionPendingInputEntries(
+      liveInputTarget,
+      input.abortSignal,
+    );
+    input.abortSignal?.throwIfAborted();
+    assertOwned();
+    if (!sameSessionTranscriptTargetBinding(liveInputTarget, sessionManager.getSessionTarget())) {
+      throw new Error("Session manager target changed during live input preparation");
+    }
+  }
+  setSteeringRuntimeContextRetention(activeSession, input.appendOnlyRuntimeContext === true);
   if (isRawModelRun) {
     // Raw probes measure only the requested provider prompt. Restored history,
     // queued work, and the normal system prompt would contaminate it.
@@ -349,7 +369,18 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
       durableUserTurnMessage: orphanRepairCandidate?.messageEntry.message,
       userTurnAlreadyPersisted: attempt.userTurnTranscriptRecorder?.hasPersisted() === true,
     });
-  const orphanRepair = reconciledCurrentUser ? undefined : orphanRepairCandidate;
+  const foreignInputs = preserveExactPrompt
+    ? undefined
+    : reconcileForeignPendingUserTurns({
+        activeSession,
+        entries: foreignEntries,
+        currentUserIdempotencyKey: currentUserTurnMessage?.idempotencyKey,
+      });
+  const orphanRepair =
+    reconciledCurrentUser ||
+    (orphanRepairCandidate && foreignInputs?.ownsEntry(orphanRepairCandidate.messageEntry.id))
+      ? undefined
+      : orphanRepairCandidate;
   if (orphanRepair?.removeLeaf) {
     const repairedTarget = await withSessionManagerWrite(sessionManager, async () => {
       input.abortSignal?.throwIfAborted();
@@ -421,12 +452,15 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
   const baseConvertToLlm = activeSession.agent.convertToLlm.bind(activeSession.agent);
   activeSession.agent.convertToLlm = async (messages) => {
     let removedRuntimeContext: AgentMessage[] | undefined;
-    const normalized = normalizeMessagesForLlmBoundary(messages, {
-      ...buildBoundaryOptions(),
-      onRuntimeContextCarrierRemoved: (removed) => {
-        removedRuntimeContext = removed;
+    const normalized = normalizeMessagesForLlmBoundary(
+      foreignInputs?.omitInput(messages) ?? messages,
+      {
+        ...buildBoundaryOptions(),
+        onRuntimeContextCarrierRemoved: (removed) => {
+          removedRuntimeContext = removed;
+        },
       },
-    });
+    );
     const converted = await baseConvertToLlm(
       // Persisted carriers stay after their user turn, including during tool loops;
       // moving one would change the prefix bound to later thinking signatures.

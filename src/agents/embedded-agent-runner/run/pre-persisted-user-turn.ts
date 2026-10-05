@@ -202,3 +202,36 @@ export function reconcilePrePersistedCurrentUserTurn(params: {
     params.currentUserTurnMessage?.excludeFromContext === true
   );
 }
+
+/** Keep live foreign turns durable while excluding them from this attempt and context rebuilds. */
+export function reconcileForeignPendingUserTurns(params: {
+  activeSession: { agent: { state: { messages: AgentMessage[] } } };
+  entries: ReadonlyMap<string, string> | undefined;
+  currentUserIdempotencyKey: string | undefined;
+}):
+  | {
+      ownsEntry: (entryId: string) => boolean;
+      omitInput: (messages: AgentMessage[]) => AgentMessage[];
+    }
+  | undefined {
+  const { entries } = params;
+  if (!entries?.size) {
+    return undefined;
+  }
+  // Keep the declared current prompt visible before receipt scope entry, while its row stays protected.
+  const keys = new Set(
+    [...entries.values()].filter((key) => key !== params.currentUserIdempotencyKey),
+  );
+  const omitInput = (messages: AgentMessage[]) =>
+    messages.filter(
+      (message) =>
+        !(
+          message.role === "user" &&
+          "idempotencyKey" in message &&
+          typeof message.idempotencyKey === "string" &&
+          keys.has(message.idempotencyKey)
+        ),
+    );
+  params.activeSession.agent.state.messages = omitInput(params.activeSession.agent.state.messages);
+  return { ownsEntry: (entryId: string) => entries.has(entryId), omitInput };
+}

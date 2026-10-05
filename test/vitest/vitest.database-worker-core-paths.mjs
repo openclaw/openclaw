@@ -529,6 +529,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/attempt-prompt-submit.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-prompt-submit.admission.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-boundary.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt-session-boundary.live-input.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.sessions-yield.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.test.ts",
   "src/audit/audit-events.test.ts",

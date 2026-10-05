@@ -22,6 +22,7 @@ import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pendin
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
+import { collectForeignLiveSessionPendingInputEntries } from "./session-pending-input-live-owner.js";
 
 export type SessionPendingInputState = "queued" | "interrupted" | "cancelled";
 export type SessionPendingInput = {
@@ -55,6 +56,8 @@ export type SessionPendingInputOwner = {
   assertCurrent: () => void;
   /** Published only after the exact input was consumed by a committed transcript write. */
   consumed?: true;
+  /** The committed aggregate retains its source owners until their turn finishes. */
+  promotedOwner?: SessionPendingInputOwner;
   /** Prompt authority is revoked; this owner still holds terminal disposition custody. */
   settling?: true;
   finish: (disposition: Exclude<SessionPendingInputState, "queued">) => void;
@@ -118,6 +121,9 @@ export function captureSessionPendingInputWorkerCustody() {
       for (const source of owner.sources ?? [owner]) {
         if (consumed.has(source.inputId)) {
           source.consumed = true;
+          if (owner.sources) {
+            source.promotedOwner = owner;
+          }
         }
       }
     },
@@ -245,6 +251,17 @@ function assertPendingInputOwnerCurrent(owner: SessionPendingInputOwner): void {
     );
   }
   owner.assertCurrent();
+}
+
+export function getForeignLiveSessionPendingInputEntriesInScope(
+  scope: ResolvedTranscriptScope,
+): ReadonlyMap<string, string> {
+  return collectForeignLiveSessionPendingInputEntries({
+    scope,
+    liveOwners: owners.live.values(),
+    currentOwner: owners.current.getStore(),
+    assertCurrent: assertPendingInputOwnerCurrent,
+  });
 }
 
 export function runWithSessionPendingInput<T>(owner: SessionPendingInputOwner, run: () => T): T {
@@ -689,6 +706,9 @@ export function consumeSessionPendingInput(
     commit: () => {
       for (const consumedOwner of consumedOwners) {
         consumedOwner.consumed = true;
+        if (owner?.sources) {
+          consumedOwner.promotedOwner = owner;
+        }
       }
     },
   });
