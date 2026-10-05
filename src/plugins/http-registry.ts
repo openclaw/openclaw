@@ -280,7 +280,7 @@ export function registerPluginHttpRoute(params: {
     ? getPluginInstanceOwner(instance)?.record
     : registry.plugins.find((entry) => entry.id === params.pluginId);
   const instanceOwner = record ? resolvePluginInstanceOwner(record, registry) : undefined;
-  if (instanceOwner) {
+  if (instanceOwner && !instanceOwner.revoked) {
     registry = instanceOwner.registry;
   }
   const suffix = params.accountId ? ` for account "${params.accountId}"` : "";

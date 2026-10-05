@@ -23,8 +23,8 @@ import type { SessionStateDeletePlan } from "./session-accessor.sqlite-archive-t
 import type { SqliteSessionArtifactPreparationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryStore } from "./session-accessor.sqlite-entry-store.js";
 import {
-  collectProjectedReferencedSessionIds,
   planSessionStateDeleteIfUnreferenced,
+  readReferencedSessionIds,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
   LifecycleArtifactCleanupInput,
@@ -359,9 +359,16 @@ export function planSessionLifecycleArtifactCleanup(
     if (diagnostics) {
       diagnostics.nodeRows = rows.length;
     }
+    const scopedRows = rows.filter(
+      (row) =>
+        sessionKeyBelongsToAgent(row.session_key, params.agentId) &&
+        sessionKeySegmentStartsWith(row.session_key, params.sessionKeySegmentPrefix),
+    );
     const removedSessionIds = new Set<string>();
     const entries: LifecycleArtifactCleanupPlan["entries"] = [];
-    const projectedStore = readSessionEntryStore(database);
+    const scopedStore = readSessionEntryStore(database, {
+      sessionKeys: scopedRows.map((row) => row.session_key),
+    });
     const foreignOwnedSessionIds = params.pluginOwnerId
       ? new Set(
           executeSqliteQuerySync(
@@ -374,14 +381,8 @@ export function planSessionLifecycleArtifactCleanup(
           ).rows.map((row) => row.session_id),
         )
       : undefined;
-    for (const row of rows) {
-      if (
-        !sessionKeyBelongsToAgent(row.session_key, params.agentId) ||
-        !sessionKeySegmentStartsWith(row.session_key, params.sessionKeySegmentPrefix)
-      ) {
-        continue;
-      }
-      const entry = projectedStore[row.session_key];
+    for (const row of scopedRows) {
+      const entry = scopedStore[row.session_key];
       const sessionIds = uniqueStrings([
         row.current_session_id,
         ...(entry ? collectSessionStateIdsForEntry(entry) : []),
@@ -411,22 +412,17 @@ export function planSessionLifecycleArtifactCleanup(
       for (const sessionId of sessionIds) {
         removedSessionIds.add(sessionId);
       }
-      entries.push({
-        expectedEntry: entry ? structuredClone(entry) : undefined,
-        sessionKey: row.session_key,
-      });
-      delete projectedStore[row.session_key];
+      entries.push({ expectedEntry: entry, sessionKey: row.session_key });
     }
 
     if (diagnostics) {
       diagnostics.selectedEntries = entries.length;
     }
     recordPhase("referencePlanningMs");
-    const referencedSessionIds = collectProjectedReferencedSessionIds({
+    const referencedSessionIds = readReferencedSessionIds(
       database,
-      excludedSessionKeys: entries.map((entry) => entry.sessionKey),
-      projectedStore,
-    });
+      new Set(entries.map((entry) => entry.sessionKey)),
+    );
     if (diagnostics) {
       diagnostics.referenceIds = referencedSessionIds.size;
     }

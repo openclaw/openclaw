@@ -1,7 +1,10 @@
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MessagePort, Worker } from "node:worker_threads";
-import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WorkerRetirementReason } from "@openclaw/worker-runtime";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -24,6 +27,7 @@ type WorkerSource = {
   heap?: {
     value: Pick<NodeJS.MemoryUsage, "heapUsed" | "heapTotal" | "external"> & {
       arrayBuffers?: number;
+      heapSizeLimitBytes?: number;
     };
     sampledAt: number;
   };
@@ -213,6 +217,7 @@ async function refreshWorkerHeap(worker: WorkerCpuHandle, source: WorkerSource):
           heapUsed: heap.used_heap_size,
           heapTotal: heap.total_heap_size,
           external: heap.external_memory,
+          heapSizeLimitBytes: process.versions.bun ? undefined : heap.heap_size_limit,
         },
         sampledAt: performance.now(),
       };
@@ -250,6 +255,7 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
     const heapTotal = asNonNegativeFiniteNumber(record.heapTotal);
     const external = asNonNegativeFiniteNumber(record.external);
     const arrayBuffers = asNonNegativeFiniteNumber(record.arrayBuffers);
+    const heapSizeLimitBytes = asPositiveFiniteNumber(record.heapSizeLimitBytes);
     if (
       heapUsed === undefined ||
       heapTotal === undefined ||
@@ -260,7 +266,7 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
       return;
     }
     source.heap = {
-      value: { heapUsed, heapTotal, external, arrayBuffers },
+      value: { heapUsed, heapTotal, external, arrayBuffers, heapSizeLimitBytes },
       sampledAt: performance.now(),
     };
     source.memoryPending = false;

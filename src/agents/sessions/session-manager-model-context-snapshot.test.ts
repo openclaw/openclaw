@@ -1,8 +1,8 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
-import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
@@ -97,15 +97,14 @@ it.each(
       };
       const spy = incognito
         ? undefined
-        : vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(async function (
-            this: WorkerTaskPool<unknown, unknown>,
-            ...args
-          ) {
-            spy!.mockRestore();
-            const result = await this.run(...args);
-            mutate();
-            return result;
-          });
+        : vi
+            .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
+            .mockImplementationOnce(async (...args) => {
+              spy!.mockRestore();
+              const result = await contextWorker.readSessionTranscriptModelContextInWorker(...args);
+              mutate();
+              return result;
+            });
       try {
         const pending = SessionManager.openModelContextAsync(scope, { through: terminal.anchor });
         if (incognito) {

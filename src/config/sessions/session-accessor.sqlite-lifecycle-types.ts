@@ -118,6 +118,8 @@ export type ProjectedLifecycleCommitResult = {
   maintenancePlans: SessionEntryMaintenancePlan[];
   removedSessionKeys: string[];
   pendingArchives: boolean;
+  progressCardResetKeys?: string[];
+  projectionReconcileSessionIds?: string[];
 };
 
 export type ProjectedLifecycleCommitInput = {

@@ -864,14 +864,9 @@ describe("application update overlays", () => {
   });
 
   it.each([
-    { name: "no active chat", activeSessionKey: undefined, options: undefined },
-    { name: "active chat", activeSessionKey: "agent:main:active", options: undefined },
-    {
-      name: "explicit chat override",
-      activeSessionKey: "agent:main:active",
-      options: { sessionKey: "agent:main:requested" },
-    },
-  ])("routes $name to the admitted update run", async ({ activeSessionKey, options }) => {
+    { name: "no active chat", activeSessionKey: undefined },
+    { name: "active chat", activeSessionKey: "agent:main:active" },
+  ])("routes $name to the admitted update run", async ({ activeSessionKey }) => {
     const run = updateRunFixture();
     const request = vi.fn<RequestFn>(async (method) => {
       if (method === "update.run") {
@@ -887,13 +882,12 @@ describe("application update overlays", () => {
       getActiveSessionKey: () => activeSessionKey,
     });
     try {
-      await overlays.runUpdate(options);
-      const sessionKey = options?.sessionKey ?? activeSessionKey;
+      await overlays.runUpdate();
       expect(
         request.mock.calls
           .filter(([method]) => method === "update.run")
           .map(([, params]) => params),
-      ).toEqual([sessionKey ? { sessionKey } : {}]);
+      ).toEqual([activeSessionKey ? { sessionKey: activeSessionKey } : {}]);
       expect(overlays.snapshot.updateRun).toEqual(run);
       expect(overlays.snapshot.updateRunning || overlays.snapshot.updateReconciliationPending).toBe(
         true,

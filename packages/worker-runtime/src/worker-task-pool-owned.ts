@@ -18,7 +18,10 @@ export function dispatchOwnedWorkerRequest<Input, Output>(
     closedError: () => Error;
   },
 ): void {
-  const context = { signal: task.controller.signal, yieldSignal: exchange.pressure.signal };
+  const context = {
+    signal: (task.controller ??= new AbortController()).signal,
+    yieldSignal: exchange.pressure.signal,
+  };
   const assertCurrent = () => {
     if (task.done || slot.task !== task) {
       throw owner.closedError();

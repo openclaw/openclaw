@@ -1,4 +1,4 @@
-import { html, type PropertyValues, type TemplateResult } from "lit";
+import { html, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
@@ -56,7 +56,7 @@ class ChatPastedText extends OpenClawLightDomContentsElement {
     super.disconnectedCallback();
   }
 
-  protected override willUpdate(_changed: PropertyValues<this>) {
+  protected override willUpdate() {
     const key = JSON.stringify([this.scope, this.src, this.sizeBytes]);
     if (key === this.key) {
       return;

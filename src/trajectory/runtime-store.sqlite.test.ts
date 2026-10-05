@@ -5,7 +5,11 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import {
+  clearNodeSqliteKyselyCacheForDatabase,
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -311,7 +315,10 @@ describe("SQLite trajectory runtime store", () => {
             type: `${sessionId}-${part}`,
             ts: new Date(now - (3 - index) * 24 * 60 * 60 * 1_000 + part).toISOString(),
           });
-          event.runId = sessionId === "middle" ? undefined : "shared-run";
+          event.runId =
+            sessionId === "middle" || (sessionId === "oldest" && part === 0)
+              ? undefined
+              : "shared-run";
           event.data = { payload: "日本語🦞".repeat(40) };
           return event;
         });
@@ -331,11 +338,58 @@ describe("SQLite trajectory runtime store", () => {
         (bytesBefore.get("middle") ?? 0) +
         delta;
 
-      vi.advanceTimersByTime(60 * 60 * 1_000);
-      appendSqliteTrajectoryRuntimeEvents(
-        { maxGlobalRuntimeBytes, sessionId: "session-1", storePath },
-        [trigger],
-      );
+      const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath() });
+      clearNodeSqliteKyselyCacheForDatabase(database.db);
+      const prepare = database.db.prepare.bind(database.db);
+      let aggregates = 0;
+      const prepareSpy = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+        const statement = prepare(sql);
+        if (sql.includes('group by "session_id", "run_id"')) {
+          const all = statement.all.bind(statement);
+          const iterate = statement.iterate.bind(statement);
+          const assertAggregate = (
+            rows: ReturnType<typeof statement.all>,
+            args: Parameters<typeof statement.all>,
+          ) => {
+            aggregates += 1;
+            const previousRows = prepare(`
+              WITH event_sizes AS MATERIALIZED (
+                SELECT session_id, run_id, created_at,
+                       octet_length(event_json) + 1 AS runtime_bytes
+                FROM trajectory_runtime_events
+              )
+              SELECT session_id, run_id, max(created_at) AS newest_created_at,
+                     sum(runtime_bytes) AS runtime_bytes
+              FROM event_sizes GROUP BY session_id, run_id
+            `).all();
+            expect(rows).toEqual(previousRows);
+            const plan = prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...args);
+            expect(plan.map((row) => row.detail)).toEqual([
+              expect.stringMatching(/SCAN trajectory_runtime_events USING COVERING INDEX/),
+            ]);
+            return rows;
+          };
+          vi.spyOn(statement, "all").mockImplementation((...args) =>
+            assertAggregate(all(...args), args),
+          );
+          vi.spyOn(statement, "iterate").mockImplementation(function* (...args) {
+            yield* assertAggregate([...iterate(...args)], args);
+            return undefined;
+          });
+        }
+        return statement;
+      });
+      try {
+        vi.advanceTimersByTime(60 * 60 * 1_000);
+        appendSqliteTrajectoryRuntimeEvents(
+          { maxGlobalRuntimeBytes, sessionId: "session-1", storePath },
+          [trigger],
+        );
+        expect(aggregates).toBe(1);
+      } finally {
+        clearNodeSqliteKyselyCacheForDatabase(database.db);
+        prepareSpy.mockRestore();
+      }
 
       await expect(runtimeEventTypes("oldest")).resolves.toEqual([]);
       await expect(runtimeEventTypes("middle")).resolves.toEqual([]);

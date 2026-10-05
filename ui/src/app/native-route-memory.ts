@@ -14,11 +14,8 @@ type StoredNativeRoute = {
   search: string;
 };
 
-function readStoredRoute(
-  storage?: Storage,
-  nativeHost = isNativeWebChromeHost(),
-): StoredNativeRoute | null {
-  const store = nativeHost ? (storage ?? getSafeLocalStorage()) : null;
+function readStoredRoute(storage?: Storage): StoredNativeRoute | null {
+  const store = storage ?? getSafeLocalStorage();
   if (!store) {
     return null;
   }
@@ -91,7 +88,7 @@ export function considerRouteRestore(
   if (!nativeHost || routeId !== "chat" || !pathname.endsWith("/chat") || search !== "") {
     return null;
   }
-  const stored = readStoredRoute(storage, nativeHost);
+  const stored = readStoredRoute(storage);
   if (
     !stored ||
     (stored.routeId === routeId && stored.pathname === pathname && stored.search === search)

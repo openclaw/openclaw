@@ -296,7 +296,7 @@ class SessionPrefetcher {
     // Every network request re-reads readiness: a presented pane can start
     // loading during the persisted snapshot read or between history pages.
     const mayRequest = () => isCurrent() && mayPrefetchHistory(this.snapshot, candidate.sessionKey);
-    if (!mayRequest() || this.isOpen(candidate.snapshotKey, this.snapshot)) {
+    if (!mayRequest() || this.isOpen(candidate.snapshotKey)) {
       return;
     }
     try {
@@ -356,7 +356,7 @@ class SessionPrefetcher {
           return;
         }
       }
-      if (this.isOpen(candidate.snapshotKey, this.snapshot)) {
+      if (this.isOpen(candidate.snapshotKey)) {
         return;
       }
       let cached: ChatSessionSnapshot;
@@ -520,7 +520,8 @@ class SessionPrefetcher {
     return found;
   }
 
-  private isOpen(snapshotKey: string, snapshot: SessionPrefetchSnapshot | null): boolean {
+  private isOpen(snapshotKey: string): boolean {
+    const snapshot = this.snapshot;
     return Boolean(
       snapshot?.openSessionKeys.some(
         (sessionKey) =>

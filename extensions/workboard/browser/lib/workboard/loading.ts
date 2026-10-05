@@ -1,6 +1,7 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { setWorkboardCards } from "./card-state.ts";
+import { normalizeWorkboardChange } from "./change-payload.ts";
 import { formatError } from "./normalization-utils.ts";
 import { normalizeCardsPayload } from "./normalization.ts";
 import {
@@ -97,34 +98,37 @@ async function loadWorkboardInternal(
           }
         }
       }
-      const payload = await client.request("workboard.cards.list", {});
+      const payload = await client.request(
+        "workboard.cards.list",
+        runtime.cardsRevision ? { sinceRevision: runtime.cardsRevision } : {},
+      );
+      if (!isCurrentWorkboardLoadGeneration(params.host, generation)) {
+        return false;
+      }
+      const unchanged = isRecord(payload) && payload.unchanged === true;
       if (
         catalogOnly &&
+        !unchanged &&
         (!isRecord(payload) || !Array.isArray(payload.cards) || !Array.isArray(payload.boards))
       ) {
         return false;
       }
-      const normalized = normalizeCardsPayload(payload);
-      if (!isCurrentWorkboardLoadGeneration(params.host, generation)) {
-        return false;
-      }
+      const normalized = unchanged ? state : normalizeCardsPayload(payload);
       if (catalogOnly) {
         state.boards = normalized.boards;
-        // Keep navigation current without replacing cards beneath an unfinished draft.
-        if (shouldDeferWorkboardLiveRefresh(state)) {
-          return true;
-        }
-        // Catalog hydration never establishes task freshness or authorizes stale edits.
-        setWorkboardCards(state, normalized.cards);
-        state.statuses = normalized.statuses;
-        return true;
       }
-      if (params.preserveError && shouldDeferWorkboardLiveRefresh(state)) {
-        return false;
+      // Keep navigation current without replacing cards beneath an unfinished draft.
+      if ((catalogOnly || params.preserveError) && shouldDeferWorkboardLiveRefresh(state)) {
+        return catalogOnly;
       }
+      runtime.cardsRevision = normalizeWorkboardChange(isRecord(payload) ? payload.revision : null);
       setWorkboardCards(state, normalized.cards);
       state.boards = normalized.boards;
       state.statuses = normalized.statuses;
+      // Catalog hydration never authorizes stale edits.
+      if (catalogOnly) {
+        return true;
+      }
       const recoveredLoadError = runtime.loadError;
       if (recoveredLoadError !== undefined && state.error === recoveredLoadError) {
         state.error = null;

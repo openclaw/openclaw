@@ -3,7 +3,10 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDeliveryState } from "../../agents/reply-completion.js";
-import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.js";
+import type {
+  PreparedReplyTranscriptStart,
+  ReplyDispatchRun,
+} from "../../auto-reply/get-reply-options.types.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
@@ -14,7 +17,6 @@ import {
 import type { ReplyDispatcherOptions } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import {
-  readSessionTranscriptWatermark,
   resolveSessionTranscriptDatabasePath,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
@@ -72,7 +74,10 @@ import {
   type DeliveredChatSendReply,
 } from "./chat-send-command-replies.js";
 import { observeChatSendCommentaryMedia } from "./chat-send-commentary-media.js";
-import { resolveChatReplyDeliveryFromAnchors } from "./chat-send-reply-delivery.js";
+import {
+  resolveChatReplyDeliveryFromAnchors,
+  resolveChatReplyTranscriptStart,
+} from "./chat-send-reply-delivery.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import {
@@ -160,32 +165,21 @@ export function createChatSendReplyDispatch(params: {
   const { backingSessionId, cfg, clientRunId } = session;
   // Extract scalar transcript bindings from borrowed entries; reread after asynchronous work.
   const sessionLoadOptions = { ...session.sessionLoadOptions, clone: false };
-  let assistantTranscriptRewriteState = {
-    sessionId: undefined as string | undefined,
-    generation: null as string | null,
-    afterSeq: 0,
-  };
+  let assistantTranscriptRewriteState: ReturnType<typeof resolveChatReplyTranscriptStart>;
   let agentRunId = clientRunId;
   let agentTranscriptLifecycleRevision: string | undefined;
-  const captureAgentTranscriptStart = (runId = clientRunId) => {
+  const captureAgentTranscriptStart = (
+    runId = clientRunId,
+    prepared?: PreparedReplyTranscriptStart | null,
+  ) => {
     agentRunId = runId;
     const current = loadSessionEntry(session.sessionKey, sessionLoadOptions);
-    const sessionId = current.entry?.sessionId ?? backingSessionId;
-    const watermark = sessionId
-      ? readSessionTranscriptWatermark({
-          agentId: session.agentId,
-          sessionId,
-          sessionKey: session.sessionKey,
-          storePath: current.storePath,
-        })
-      : { generation: null, maxSeq: null };
-    assistantTranscriptRewriteState = {
-      sessionId,
-      generation: watermark.generation,
-      afterSeq: watermark.maxSeq ?? 0,
-    };
-    agentTranscriptLifecycleRevision = current.entry?.lifecycleRevision;
-    return true;
+    const transcriptStart = resolveChatReplyTranscriptStart(session, current, prepared);
+    assistantTranscriptRewriteState = transcriptStart;
+    agentTranscriptLifecycleRevision = transcriptStart
+      ? current.entry?.lifecycleRevision
+      : undefined;
+    return transcriptStart !== undefined;
   };
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg,
@@ -245,7 +239,12 @@ export function createChatSendReplyDispatch(params: {
         }) === admission.storePath
       );
     };
-    if (!admission || transcriptStart.sessionId !== admission.sessionId || !isCurrent()) {
+    if (
+      !admission ||
+      !transcriptStart ||
+      transcriptStart.sessionId !== admission.sessionId ||
+      !isCurrent()
+    ) {
       return "missing";
     }
     const scope = admission;
@@ -496,12 +495,8 @@ export function createChatSendReplyDispatch(params: {
     } else if (assistantMessageIndex !== undefined && transcriptScope) {
       // Embedded runtimes identify their owned turn by message index, not a persisted key.
       // Require that exact current-turn row and media set so a sibling reply cannot be rewritten.
-      if (assistantTranscriptRewriteState.sessionId !== sessionId) {
-        assistantTranscriptRewriteState = {
-          sessionId,
-          generation: null,
-          afterSeq: 0,
-        };
+      if (assistantTranscriptRewriteState?.sessionId !== sessionId) {
+        return;
       }
       const indexedRewrite = await rewriteAssistantTranscriptMessageByTurnIndexAndMedia({
         afterSeq: assistantTranscriptRewriteState.afterSeq,
@@ -700,6 +695,7 @@ export function createChatSendReplyDispatch(params: {
         const commentaryRewrite = await commentaryMedia.close();
         if (
           commentaryRewrite &&
+          assistantTranscriptRewriteState &&
           commentaryRewrite.sessionId === assistantTranscriptRewriteState.sessionId
         ) {
           assistantTranscriptRewriteState.generation = commentaryRewrite.generation;

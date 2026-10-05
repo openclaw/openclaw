@@ -13,7 +13,7 @@ import {
   normalizeOptionalAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import { clearSessionLifecycleQueues, type ClearSessionQueueResult } from "./queue/cleanup.js";
+import { clearSessionLifecycleQueues } from "./queue/cleanup.js";
 import {
   clearReplyRunForResetBySessionId,
   resolveActiveReplyOperationForSessionId,
@@ -69,10 +69,6 @@ export async function stopSessionResetSubagents(
   }
 }
 
-type ClearSessionResetRuntimeStateResult = ClearSessionQueueResult & {
-  systemEventsCleared: number;
-};
-
 export function clearCommittedSessionResetRuntimeState(params: {
   previousSessionEntry: Pick<SessionEntry, "sessionId"> | undefined;
   agentId: string;
@@ -104,7 +100,7 @@ export function clearSessionResetRuntimeState(
     activeReplySessionId?: string;
     assertCurrent: () => void;
   },
-): ClearSessionResetRuntimeStateResult {
+): void {
   opts.assertCurrent();
   clearEmbeddedSessionPromptStates([opts.activeReplySessionId]);
   const cleared = clearSessionLifecycleQueues({
@@ -114,8 +110,6 @@ export function clearSessionResetRuntimeState(
     sessionId: opts.activeReplySessionId,
     assertCurrent: opts.assertCurrent,
   });
-  let systemEventsCleared = 0;
-
   for (const key of cleared.keys) {
     opts.assertCurrent();
     const owner = parseAgentSessionKey(key)?.agentId;
@@ -123,8 +117,7 @@ export function clearSessionResetRuntimeState(
       continue;
     }
     const queueKey = resolveSystemEventQueueKey(key, opts.agentId);
-    const removed = consumeSelectedSystemEventEntries(queueKey, peekSystemEventEntries(queueKey));
-    systemEventsCleared += removed.length;
+    consumeSelectedSystemEventEntries(queueKey, peekSystemEventEntries(queueKey));
   }
 
   if (opts.activeReplySessionId) {
@@ -145,9 +138,4 @@ export function clearSessionResetRuntimeState(
       clearReplyRunForResetBySessionId(opts.activeReplySessionId);
     }
   }
-
-  return {
-    ...cleared,
-    systemEventsCleared,
-  };
 }

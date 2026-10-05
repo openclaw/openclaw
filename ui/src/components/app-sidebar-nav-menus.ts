@@ -324,3 +324,40 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
     </wa-dropdown>
   `;
 }
+
+export function renderSidebarPluginNavigationMenu(params: {
+  position: SidebarMenuPosition;
+  item: ControlUiNavigationItem;
+  onSelect: (id: string) => Promise<void>;
+  onTabAway: () => void;
+  onClose: (restoreFocus: boolean) => void;
+}) {
+  return html`<wa-dropdown
+    class="sidebar-customize-menu sidebar-plugin-navigation-menu"
+    .open=${true}
+    placement="bottom-start"
+    .distance=${0}
+    aria-label=${params.item.label}
+    @wa-select=${(event: CustomEvent<{ item: { value: string } }>) => {
+      event.preventDefault();
+      void params.onSelect(event.detail.item.value);
+    }}
+    @keydown=${(event: KeyboardEvent) => trackDropdownKeyboardDismissal(event, params.onTabAway)}
+    @wa-after-hide=${(event: Event) => params.onClose(consumeDropdownKeyboardDismissal(event))}
+  >
+    ${renderSidebarMenuTrigger(params.position, params.item.label)}
+    ${(params.item.actions ?? []).map((action) => {
+      const icon =
+        // SAFETY: only own keys of the shared icon registry are admitted.
+        action.icon && Object.hasOwn(icons, action.icon) ? icons[action.icon as IconName] : nothing;
+      return html`<wa-dropdown-item
+        class="sidebar-customize-menu__item ${action.destructive ? "session-menu__item--destructive" : ""}"
+        value=${action.id}
+        variant=${action.destructive ? "danger" : "neutral"}
+      >
+        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icon}</span>
+        <span class="sidebar-customize-menu__text">${action.label}</span>
+      </wa-dropdown-item>`;
+    })}
+  </wa-dropdown>`;
+}

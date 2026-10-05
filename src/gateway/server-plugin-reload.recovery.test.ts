@@ -98,9 +98,9 @@ vi.mock("../plugins/plugin-lookup-table.js", async (importOriginal) => ({
   loadPluginLookUpTable: mocks.loadPluginLookUpTable,
 }));
 
-// These independent startup tasks do not participate in plugin replacement.
+// mock-isolation: Independent startup tasks do not participate in plugin replacement.
 vi.mock("./server-startup-handler-prewarm.js", () => ({
-  scheduleGatewayHandlerPrewarm: () => ({ stop() {} }),
+  scheduleGatewayPrewarm: () => [{ stop() {} }],
 }));
 vi.mock("../agents/main-session-recovery/main-session-restart-recovery.js", () => ({
   scheduleRestartAbortedMainSessionRecovery: () => undefined,

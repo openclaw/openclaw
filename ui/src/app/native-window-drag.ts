@@ -1,12 +1,5 @@
 import { webKitHostWindow } from "./native-webkit-bridge.ts";
 
-function getNativeWindowDragPoster() {
-  // Native desktop hosts install this handler before navigation; its absence
-  // (plain browsers, other hosts) keeps default mouse behavior.
-  const handler = webKitHostWindow()?.webkit?.messageHandlers?.openclawWindowDrag;
-  return handler?.postMessage.bind(handler);
-}
-
 const INTERACTIVE_TARGET_SELECTOR =
   "a, button, input, select, textarea, [role='button'], [role='tab'], [role='menu'], [role^='menuitem'], [contenteditable]";
 
@@ -26,7 +19,10 @@ export function beginNativeWindowDrag(event: MouseEvent): void {
       return;
     }
   }
-  const post = getNativeWindowDragPoster();
+  // Native desktop hosts install this handler before navigation; its absence
+  // (plain browsers, other hosts) keeps default mouse behavior.
+  const handler = webKitHostWindow()?.webkit?.messageHandlers?.openclawWindowDrag;
+  const post = handler?.postMessage.bind(handler);
   if (!post) {
     return;
   }

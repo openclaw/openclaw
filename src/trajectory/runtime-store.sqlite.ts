@@ -278,26 +278,16 @@ function sweepSqliteTrajectoryRuntimeRetention(
 
 function readSqliteTrajectoryRuntimeRuns(database: OpenClawAgentDatabase): TrajectoryRuntimeRun[] {
   const db = getTrajectoryKysely(database.db);
-  // Reduce bodies before grouping; otherwise SQLite carries event_json through
-  // the temporary sort instead of just the byte counts retention needs.
   const rows = executeSqliteQuerySync(
     database.db,
     db
-      .with(
-        (cte) => cte("event_sizes").materialized(),
-        (qb) =>
-          qb
-            .selectFrom("trajectory_runtime_events")
-            .select(["session_id", "run_id", "created_at"])
-            .select((eb) =>
-              eb(eb.fn<number>("octet_length", ["event_json"]), "+", 1).as("runtime_bytes"),
-            ),
-      )
-      .selectFrom("event_sizes")
+      .selectFrom("trajectory_runtime_events")
       .select(["session_id", "run_id"])
       .select((eb) => [
         eb.fn.max<number | bigint>("created_at").as("newest_created_at"),
-        eb.fn.sum<number | bigint>("runtime_bytes").as("runtime_bytes"),
+        eb.fn
+          .sum<number | bigint>(eb(eb.fn<number>("octet_length", ["event_json"]), "+", 1))
+          .as("runtime_bytes"),
       ])
       .groupBy(["session_id", "run_id"]),
   ).rows;

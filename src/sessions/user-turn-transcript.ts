@@ -7,10 +7,10 @@ import {
   withSessionPendingInputPersistence,
   publishTranscriptUpdate,
   resolveSessionTranscriptRuntimeTarget,
-  rewriteTranscriptMessageAtAnchor,
   type TranscriptEntryAnchor,
   type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
+import { rewritePreparedTranscriptMessageAtAnchor } from "../config/sessions/session-message-rewrite.js";
 import { readActiveTranscriptEntryAnchorAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
@@ -186,7 +186,7 @@ async function confirmPersistedSteerTargetRunId(params: {
     }
   | undefined
 > {
-  const rewritten = await rewriteTranscriptMessageAtAnchor(params.admission, (message) => {
+  const rewritten = await rewritePreparedTranscriptMessageAtAnchor(params.admission, (message) => {
     if (!isUserMessage(message)) {
       return undefined;
     }

@@ -1,3 +1,4 @@
+import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 import {
   assertTransactionUsable,
   runSqliteDeferredTransactionSync,
@@ -66,33 +67,39 @@ export function bindSqliteWorkerBackend(
         }
       });
       try {
-        const value = runSqliteWorkerTransactionSync(
-          context,
-          () => {
-            if (command.type === "boards.applyOps") {
-              return applyBoardOpsToDatabase(database, command.input.sessionKey, command.input.ops);
-            }
-            if (command.type === "boards.putWidget") {
-              return putBoardWidgetInDatabase(
+        const value = withSqlitePostCommitPublications(database.db, () =>
+          runSqliteWorkerTransactionSync(
+            context,
+            () => {
+              if (command.type === "boards.applyOps") {
+                return applyBoardOpsToDatabase(
+                  database,
+                  command.input.sessionKey,
+                  command.input.ops,
+                );
+              }
+              if (command.type === "boards.putWidget") {
+                return putBoardWidgetInDatabase(
+                  database,
+                  command.input.sessionKey,
+                  normalizeBoardWidgetPutParams(command.input.params, command.input.sessionKey),
+                  command.input.viewGeneration,
+                );
+              }
+              return grantBoardWidgetInDatabase(
                 database,
                 command.input.sessionKey,
-                normalizeBoardWidgetPutParams(command.input.params, command.input.sessionKey),
-                command.input.viewGeneration,
+                command.input.name,
+                command.input.decision,
+                command.input.revision,
+                command.input.instanceId,
               );
-            }
-            return grantBoardWidgetInDatabase(
-              database,
-              command.input.sessionKey,
-              command.input.name,
-              command.input.decision,
-              command.input.revision,
-              command.input.instanceId,
-            );
-          },
-          {
-            databaseLabel: database.path,
-            operationLabel: command.type,
-          },
+            },
+            {
+              databaseLabel: database.path,
+              operationLabel: command.type,
+            },
+          ),
         );
         return { value, changes };
       } finally {

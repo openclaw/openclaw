@@ -1741,7 +1741,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       toolCallId: "search-1",
       phase: "start",
       visible: true,
-      label: "🔎 Web Search",
+      label: "Web Search",
     },
     {
       name: "process",

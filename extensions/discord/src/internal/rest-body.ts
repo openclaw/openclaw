@@ -1,7 +1,6 @@
 export type RequestData = {
   body?: unknown;
   multipartStyle?: "message" | "form";
-  rawBody?: boolean;
   headers?: Record<string, string>;
 };
 
@@ -100,8 +99,6 @@ export function serializeRequestBody(
       return formData;
     }
   }
-  if (!data.rawBody) {
-    headers.set("Content-Type", "application/json");
-  }
-  return data.rawBody ? (data.body as BodyInit) : JSON.stringify(data.body);
+  headers.set("Content-Type", "application/json");
+  return JSON.stringify(data.body);
 }

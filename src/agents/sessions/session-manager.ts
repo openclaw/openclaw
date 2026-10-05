@@ -14,9 +14,6 @@ import {
   readSessionTranscriptContextMessages,
   readSessionTranscriptModelContext,
   type SessionModelContextLimits,
-  validateSessionTranscriptContextAdmission,
-  validateSessionTranscriptContextAnchor,
-  validateSessionTranscriptContextVersion,
 } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import { loadTranscriptReadSnapshotSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import { redactTranscriptMessageForStorage } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
@@ -25,11 +22,11 @@ import {
   assertCurrentSessionTranscriptHeader,
   findSessionTranscriptHeader,
 } from "../../config/sessions/session-entry-codec.js";
+import { readSessionTranscriptModelContextAsync } from "../../config/sessions/session-transcript-context-read.js";
 import {
   resolveSessionTranscriptReadFence,
   withSessionContextAdmission,
 } from "../../config/sessions/session-transcript-read-fence.js";
-import { readSessionTranscriptModelContextAsync } from "../../config/sessions/session-transcript-read-worker-runtime.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import {
@@ -45,10 +42,12 @@ import type { Message } from "../../llm/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
-import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { SessionManagerBranching } from "./session-manager-branching.js";
-import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
+import {
+  sessionManagerReadInitialContext,
+  sessionManagerReadTranscriptStart,
+} from "./session-manager-current-turn.js";
 import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
 import { receiveSessionManagerCommit } from "./session-manager-persistence-error.js";
 import type {
@@ -115,6 +114,22 @@ export class SessionManager extends SessionManagerBranching {
   ) {
     super(cwd, persistenceTarget, loadedEntries, boundedContext, transcriptMutationAt, version);
     this.retainTranscriptWriter();
+  }
+
+  [sessionManagerReadTranscriptStart]() {
+    this.assertTranscriptWriteActive();
+    const target = this.persistenceTarget;
+    const version = this.transcriptVersion;
+    return target && version
+      ? {
+          agentId: target.agentId,
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
+          storePath: target.storePath,
+          generation: version.generation,
+          maxSeq: version.rawSeq,
+        }
+      : null;
   }
 
   async [sessionManagerReadInitialContext]() {
@@ -628,37 +643,24 @@ export class SessionManager extends SessionManagerBranching {
       limits?: SessionModelContextLimits;
     } = {},
   ): Promise<SessionManager> {
-    const readTarget = { ...target };
+    const readTarget = captureSessionTranscriptTargetBinding(target);
     const receipt = options.admission ?? resolveSessionTranscriptReadFence(readTarget);
     const admission = receipt ? { ...receipt } : undefined;
     const through = options.through ? { ...options.through } : undefined;
     const limits = options.limits ? { ...options.limits } : undefined;
     options.signal?.throwIfAborted();
-    const context = await withSessionContextAdmission(readTarget, admission, () =>
-      // Incognito belongs to this process; capture its snapshot before the first await.
-      isIncognitoSessionKey(readTarget.sessionKey) ||
-      isIncognitoOpenClawAgentSqlitePath(readTarget.storePath, readTarget)
-        ? readSessionTranscriptModelContext(readTarget, through, limits)
-        : readSessionTranscriptModelContextAsync(
-            readTarget,
-            admission,
-            options.signal,
-            through,
-            limits,
-          ),
+    const manager = await withSessionContextAdmission(readTarget, admission, () =>
+      readSessionTranscriptModelContextAsync(
+        readTarget,
+        (context) => SessionManager.fromSelectedEntries(context.events, options.cwd),
+        admission,
+        options.signal,
+        through,
+        limits,
+      ),
     );
     options.signal?.throwIfAborted();
-    // Even process-local reads yield here. Admitted history may exclude later
-    // appends; unadmitted context must still match the snapshot being accepted.
-    if (admission) {
-      validateSessionTranscriptContextAdmission(readTarget, admission);
-    } else if (!through) {
-      validateSessionTranscriptContextVersion(readTarget, context.version);
-    }
-    if (through) {
-      validateSessionTranscriptContextAnchor(readTarget, through);
-    }
-    return SessionManager.fromSelectedEntries(context.events, options.cwd);
+    return manager;
   }
 
   private static fromSelectedEntries(contextEntries: unknown[], cwd?: string): SessionManager {

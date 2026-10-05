@@ -19,12 +19,8 @@ import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { parse as parseYaml } from "yaml";
 import {
   normalizePublicationIntent,
-  publicationAdmissionContract,
-  publicationDispatchEnvelope,
-  publicationSourceContract,
   type PublicationSelection,
 } from "./full-release-publication-contract.mjs";
 import {
@@ -166,7 +162,7 @@ Options:
   --tag <tag>                         Release tag. An existing tag must resolve to the target SHA.
   --target-sha <sha>                  Frozen release SHA. Defaults to the current HEAD.
   --workflow-ref <ref>                Trusted workflow ref. Default: main.
-  --workflow-sha <sha>                Trusted main ancestor to pin the tooling to; reuses or mints its release-publish/<sha12>-<epoch> tag.
+  --workflow-sha <sha>                Trusted helper/publisher SHA (P); reuses or mints its release-publish tag. Fresh qualification runs Q=C.
   --publish-workflow-ref <tag>         Protected publication tooling tag matching the trusted helper checkout.
   --publication-route <normal|prepared>
                                       Intended publication route. Default: normal; not inferred from a protected ref.
@@ -1306,48 +1302,73 @@ export function requireRunIdFromDispatchOutput(output: string, workflowFile: str
   return runId;
 }
 
-export function fullReleaseTrustedWorkflowFields({
-  workflowRef,
-  workflowSha,
-  workflowSource,
-  publicationIntent,
-}: {
-  workflowRef: string;
-  workflowSha: string;
-  workflowSource: string;
-  publicationIntent?: import("./full-release-publication-contract.mjs").PublicationIntent;
-}) {
-  const workflow: unknown = parseYaml(workflowSource);
-  const env = isRecord(workflow) && isRecord(workflow.env) ? workflow.env : undefined;
-  const contract = formatJsonValue(env?.RELEASE_ISOLATION_TOOLING_CONTRACT ?? "");
-  if (contract === "1") {
-    return {};
+/** The canonical helper alone owns admission, transport refs, and FRV dispatch. */
+function dispatchFullReleaseUsingHelper(
+  options: ReturnType<typeof parseArgs>,
+  targetSha: string,
+  toolingSha: string,
+) {
+  if (options.repo !== DEFAULT_REPO) {
+    throw new Error("Full Release Validation helper requires the canonical repository");
   }
-  if (contract !== "2") {
+  const requestFile = resolvePath(options.outputDir, "frv-request.json");
+  const retained = existsSync(requestFile);
+  const targetContextRef = releaseBranchForTag(options.tag) || options.tag;
+  const args = [
+    join(TOOLING_ROOT, "scripts/full-release-validation-at-sha.mjs"),
+    "--sha",
+    targetSha,
+    "--target-ref",
+    targetContextRef,
+    // Existing records reconcile their original Q/ref, not today's default.
+    ...(!retained
+      ? [
+          "--trusted-workflow-ref",
+          "candidate",
+          "--workflow-sha",
+          targetSha,
+          "--admission-workflow-sha",
+          toolingSha,
+          "--admission-workflow-ref",
+          options.publishWorkflowRef || options.workflowRef,
+        ]
+      : []),
+    "--request-file",
+    requestFile,
+    "--",
+    "-f",
+    "validation_purpose=publish",
+    "-f",
+    `publication_selection_json=${JSON.stringify(publicationSelectionForChecklist(options))}`,
+    "-f",
+    `provider=${options.provider}`,
+    "-f",
+    `mode=${options.mode}`,
+    "-f",
+    `release_profile=${options.releaseProfile}`,
+    "-f",
+    `run_release_soak=${options.releaseProfile !== "beta"}`,
+    "-f",
+    "rerun_group=all",
+  ];
+  run(process.execPath, args);
+  const record = readJson(requestFile, "Full Release Validation request");
+  const observed = isRecord(record.run) ? record.run : undefined;
+  if (
+    record.phase !== "observed" ||
+    !Number.isSafeInteger(observed?.id) ||
+    Number(observed?.id) < 1
+  ) {
+    const resumable =
+      record.kind === "openclaw.full-release-dispatch/v2" &&
+      record.phase === "prepared" &&
+      isRecord(record.refs) &&
+      record.refs.workflow === "intended";
     throw new Error(
-      "Full Release Validation does not declare a supported release tooling contract",
+      `No observed Full Release Validation run. Next: pnpm ci:full-release -- ${resumable ? "--resume-request" : "--reconcile-request"} ${shellQuote(requestFile)}. The canonical helper revalidates admission; never redispatch uncertain work.`,
     );
   }
-  const workflowDispatch =
-    isRecord(workflow) && isRecord(workflow.on) && isRecord(workflow.on.workflow_dispatch)
-      ? workflow.on.workflow_dispatch
-      : undefined;
-  const inputs =
-    workflowDispatch && isRecord(workflowDispatch.inputs) ? workflowDispatch.inputs : undefined;
-  if (!inputs || !Object.hasOwn(inputs, "trusted_workflow_json")) {
-    throw new Error(`Full Release Validation contract ${contract} requires trusted_workflow_json`);
-  }
-  if (!/^[a-f0-9]{40}$/u.test(workflowSha)) {
-    throw new Error("Full Release Validation trusted workflow SHA must be a full lowercase SHA");
-  }
-  const identity = { ref: workflowRef, fullRef: `refs/heads/${workflowRef}`, sha: workflowSha };
-  if (publicationSourceContract(workflowSource) === "1") {
-    if (!publicationIntent) {
-      throw new Error("Fresh FRV dispatch requires explicit source intent");
-    }
-    return { trusted_workflow_json: publicationDispatchEnvelope(identity, publicationIntent) };
-  }
-  return { trusted_workflow_json: JSON.stringify(identity) };
+  return String(observed!.id);
 }
 
 async function wait(ms: number) {
@@ -2045,18 +2066,6 @@ async function main() {
   options.fullReleaseRunId = candidateState.fullReleaseRunId;
   options.npmPreflightRunId = candidateState.npmPreflightRunId;
   if (!options.fullReleaseRunId && !options.skipDispatch) {
-    const workflowSource = readFileSync(
-      join(TOOLING_ROOT, ".github/workflows/full-release-validation.yml"),
-      "utf8",
-    );
-    if (
-      publicationSourceContract(workflowSource) !== "1" ||
-      publicationAdmissionContract(workflowSource) !== "1"
-    ) {
-      throw new Error(
-        "Fresh checklist dispatch requires source and registry admission in frozen tooling; existing run recovery is unchanged.",
-      );
-    }
     const version = parseReleaseVersion(options.tag.replace(/^v/u, ""));
     const train = version && classifyReleaseTrain(version);
     if (train === "unsupported-extended-stable-correction") {
@@ -2111,31 +2120,7 @@ async function main() {
     ? runLocalGeneratedCheckIfNeeded(options)
     : undefined;
   if (dispatchesValidation) {
-    const workflowFile = "full-release-validation.yml";
-    const targetContextRef = releaseBranchForTag(options.tag);
-    const trustedWorkflowFields = fullReleaseTrustedWorkflowFields({
-      workflowRef: options.workflowRef,
-      workflowSha: toolingSha,
-      workflowSource: readFileSync(
-        join(TOOLING_ROOT, ".github", "workflows", workflowFile),
-        "utf8",
-      ),
-      publicationIntent: {
-        validationPurpose: "publish",
-        publicationSelection: publicationSelectionForChecklist(options),
-      },
-    });
-    options.fullReleaseRunId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
-      ref: targetSha,
-      ...(targetContextRef ? { target_context_ref: targetContextRef } : {}),
-      ...trustedWorkflowFields,
-      provider: options.provider,
-      mode: options.mode,
-      release_profile: options.releaseProfile,
-      run_release_soak:
-        options.releaseProfile === "stable" || options.releaseProfile === "full" ? "true" : "false",
-      rerun_group: "all",
-    });
+    options.fullReleaseRunId = dispatchFullReleaseUsingHelper(options, targetSha, toolingSha);
     candidateState = updateReleaseCandidateState(statePath, candidateState, "dispatching", {
       fullReleaseRunId: options.fullReleaseRunId,
     });

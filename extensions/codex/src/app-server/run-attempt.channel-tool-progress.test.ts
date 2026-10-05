@@ -46,7 +46,7 @@ describe("Codex channel tool progress", () => {
     await progressReceived.promise;
 
     expect(onToolResult).toHaveBeenCalledWith({
-      text: "🛠️ Bash",
+      text: "Bash",
       channelData: { openclawToolProgressId: "tool:private-command-1" },
     });
     const toolStart = onAgentEvent.mock.calls

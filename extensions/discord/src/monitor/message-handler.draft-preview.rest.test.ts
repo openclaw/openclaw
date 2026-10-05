@@ -61,6 +61,22 @@ function createContinuationHarness(options?: {
 }
 
 describe("Discord draft preview REST lifecycle", () => {
+  it.each([
+    { name: "paragraph separators", text: `${"A".repeat(500)}\n\n${"B".repeat(500)}` },
+    { name: "split code fences", text: `\`\`\`text\n${"const value = 1;\n".repeat(60)}\`\`\`` },
+  ])("preserves $name when block previews edit one message", async ({ text }) => {
+    const { controller, visible } = createContinuationHarness({ mode: "block" });
+    try {
+      controller.updateFromPartial(text);
+      await controller.flush();
+      expect([...visible.values()]).toEqual([text]);
+      await controller.lifecycle.observeDelivery({ visibleReplySent: true });
+    } finally {
+      await controller.cleanup();
+    }
+    expect([...visible.values()]).toEqual([]);
+  });
+
   it.each([true, false])(
     "transfers a confirmed checklist only on a positive handoff (accepted: %s)",
     async (accepted) => {
@@ -297,7 +313,7 @@ describe("Discord draft preview REST lifecycle", () => {
     });
     const controller = createPreviewController(rest);
 
-    controller.draftStream?.update("🛠️ Exec: failed");
+    controller.draftStream?.update("Exec: failed");
     await controller.flush();
     await controller.lifecycle.deliver({
       kind: "final",

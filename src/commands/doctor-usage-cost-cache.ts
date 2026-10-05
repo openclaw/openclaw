@@ -39,11 +39,10 @@ function isLegacyUsageCostCacheTempName(name: string): boolean {
   );
 }
 
-async function detectLegacyUsageCostCacheFiles(params?: {
-  env?: NodeJS.ProcessEnv;
-  homedir?: () => string;
-}): Promise<string[]> {
-  const stateDir = resolveStateDir(params?.env ?? process.env, params?.homedir ?? os.homedir);
+async function detectLegacyUsageCostCacheFiles(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string[]> {
+  const stateDir = resolveStateDir(env, os.homedir);
   const sessionDirs = [path.join(stateDir, "sessions")];
   const agentsDir = path.join(stateDir, "agents");
   const agentEntries =
@@ -84,9 +83,8 @@ async function detectLegacyUsageCostCacheFiles(params?: {
 async function maybeRemoveLegacyUsageCostCacheFiles(params: {
   shouldRepair: boolean;
   env?: NodeJS.ProcessEnv;
-  homedir?: () => string;
 }): Promise<void> {
-  const files = await detectLegacyUsageCostCacheFiles(params).catch((error: unknown) => {
+  const files = await detectLegacyUsageCostCacheFiles(params.env).catch((error: unknown) => {
     const command = params.shouldRepair ? "openclaw doctor --fix" : "openclaw doctor";
     const action = params.shouldRepair ? "scan and cleanup" : "scan";
     note(
@@ -131,9 +129,8 @@ async function maybeRemoveLegacyUsageCostCacheFiles(params: {
 async function maybeRemoveLegacySkillUploadTree(params: {
   shouldRepair: boolean;
   env?: NodeJS.ProcessEnv;
-  homedir?: () => string;
 }): Promise<void> {
-  const stateDir = resolveStateDir(params.env ?? process.env, params.homedir ?? os.homedir);
+  const stateDir = resolveStateDir(params.env ?? process.env, os.homedir);
   const uploadRoot = path.join(stateDir, "tmp", "skill-uploads");
   if (!(await fs.lstat(uploadRoot).catch(() => null))) {
     return;

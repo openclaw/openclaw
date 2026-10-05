@@ -223,6 +223,7 @@ export async function finalizeChatSendDispatchedReplies(params: {
     cfg: context.getRuntimeConfig(),
     key: sessionKey,
     ...sessionLoadOptions,
+    projection: [],
   });
   const requestedTranscriptSession = transcriptMirrorOwner
     ? await loadGatewaySessionEntryReadOnlyInWorker({
@@ -230,6 +231,7 @@ export async function finalizeChatSendDispatchedReplies(params: {
         key: transcriptMirrorOwner.sessionKey,
         ...sessionLoadOptions,
         ...(transcriptMirrorOwner.agentId ? { agentId: transcriptMirrorOwner.agentId } : {}),
+        projection: [],
       })
     : undefined;
   if (!authorizeDelivery("session preparation")) {

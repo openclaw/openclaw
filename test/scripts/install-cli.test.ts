@@ -487,7 +487,6 @@ fi
         [[ "$1" == "$target" && "$2" == "main" ]] || return 1
         GIT_REF_KIND=moving
       }
-      ensure_pnpm_git_prepare_allowlist() { [[ "$1" == "$target" ]]; }
       ensure_pnpm() { [[ "$1" == "$target" ]]; }
       run_pnpm() {
         [[ "$1" == "-C" && "$2" == "$target" ]] || return 1
@@ -895,7 +894,6 @@ fi
             ? [
                 "preflight_fresh_git_disk_space() { :; }",
                 "ensure_pnpm() { :; }",
-                "ensure_pnpm_git_prepare_allowlist() { :; }",
                 "resolve_git_openclaw_ref() { printf 'main\\n'; }",
                 "checkout_git_openclaw_ref() { :; }",
                 "git_install_lockfile_flag() { printf '%s\\n' '--no-frozen-lockfile'; }",
@@ -1466,28 +1464,6 @@ fi
       "v24.16.0\n",
     );
     expect(readFileSync(packageFile, "utf8")).toBe('{"name":"openclaw","version":"2026.9.2"}\n');
-  });
-
-  it("removes the workspace rewrite temp file when rewriting fails", () => {
-    const tmp = tempDirs.make("openclaw-install-cli-workspace-cleanup-");
-    const repo = join(tmp, "repo");
-    const workspaceFile = join(repo, "pnpm-workspace.yaml");
-    const rewriteTemp = join(tmp, "workspace-rewrite");
-    const workspace = 'packages:\n  - "packages/*"\n\nallowBuilds:\n';
-    mkdirSync(repo, { recursive: true });
-    writeFileSync(workspaceFile, workspace);
-
-    const result = runInstallCliShell(
-      [
-        `mktemp() { : > ${JSON.stringify(rewriteTemp)}; printf '%s\\n' ${JSON.stringify(rewriteTemp)}; }`,
-        "awk() { return 43; }",
-        `ensure_pnpm_git_prepare_allowlist ${JSON.stringify(repo)}`,
-      ].join("\n"),
-    );
-
-    expect(result.status).toBe(43);
-    expect(() => lstatSync(rewriteTemp)).toThrow();
-    expect(readFileSync(workspaceFile, "utf8")).toBe(workspace);
   });
 
   it.each([

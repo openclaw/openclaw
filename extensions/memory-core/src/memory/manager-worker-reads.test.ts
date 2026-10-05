@@ -9,6 +9,7 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   observeHostDataSql,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -184,6 +185,9 @@ describe("memory manager retained worker reads", () => {
               : "Memory embedding generation changed during cache lookup",
           );
           expect(fixture.provider.embeddedBatchTexts).toEqual([]);
+        }
+        if (outcome === "revoked") {
+          await closeOpenClawAgentDatabasesAsync();
         }
         const current = openOpenClawAgentDatabase({ agentId: "main" }).db;
         expect(current.prepare("SELECT text FROM memory_index_chunks ORDER BY id").all()).toEqual(

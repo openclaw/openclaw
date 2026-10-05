@@ -63,6 +63,61 @@ function buildPlan(params: Partial<Parameters<typeof buildGatewayInstallPlan>[0]
 }
 
 describe("Gateway install PATH preservation", () => {
+  it.skipIf(process.platform === "win32")(
+    "derives a restored CLI plan from its retained package",
+    async () => {
+      const programArgs = await vi.importActual<typeof import("../daemon/program-args.js")>(
+        "../daemon/program-args.js",
+      );
+      const serviceEnv = await vi.importActual<typeof import("../daemon/service-env.js")>(
+        "../daemon/service-env.js",
+      );
+      mocks.resolveGatewayProgramArguments.mockImplementation(
+        programArgs.resolveGatewayProgramArguments,
+      );
+      mocks.buildServiceEnvironment.mockImplementation(serviceEnv.buildServiceEnvironment);
+      const root = fs.realpathSync(tmpDir);
+      for (const name of ["installer", "retained"]) {
+        const packageRoot = path.join(root, name);
+        fs.mkdirSync(path.join(packageRoot, "dist"), { recursive: true });
+        fs.mkdirSync(path.join(packageRoot, "bin"));
+        fs.writeFileSync(path.join(packageRoot, "package.json"), '{"name":"openclaw"}');
+        fs.writeFileSync(path.join(packageRoot, "openclaw.mjs"), "");
+        fs.writeFileSync(path.join(packageRoot, "dist", "index.js"), "");
+        fs.symlinkSync(
+          path.join(packageRoot, "openclaw.mjs"),
+          path.join(packageRoot, "bin", "openclaw"),
+        );
+      }
+      const executable = path.join(root, "runtime", "node");
+      const entrypoint = path.join(root, "retained", "openclaw.mjs");
+      const originalArgv = process.argv;
+      process.argv = [process.execPath, path.join(root, "installer", "src", "entry.ts")];
+      try {
+        const plan = await buildPlan({
+          env: {
+            HOME: root,
+            PATH: [path.join(root, "installer", "bin"), path.join(root, "retained", "bin")].join(
+              path.delimiter,
+            ),
+          },
+          runtimePath: executable,
+          serviceCli: { executable, entrypoint },
+          platform: "darwin",
+        });
+        expect(plan.programArguments[0]).toBe(executable);
+        expect(plan.programArguments).toContain(path.join(root, "retained", "dist", "index.js"));
+        expect(plan.programArguments.join(" ")).not.toContain(path.join(root, "installer"));
+        const pathDirs = plan.environment.PATH?.split(":");
+        expect(pathDirs).toContain(path.join(root, "retained", "bin"));
+        expect(pathDirs).toContain(path.dirname(executable));
+        expect(pathDirs).not.toContain(path.join(root, "installer", "bin"));
+      } finally {
+        process.argv = originalArgv;
+      }
+    },
+  );
+
   it.each([false, true])(
     "preserves custom vars excluding managed keys (tracked=%s)",
     async (managed) => {

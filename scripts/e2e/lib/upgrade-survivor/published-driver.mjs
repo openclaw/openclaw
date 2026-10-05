@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // One managed update across the published-driver/candidate boundary, with synthetic state only.
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -15,6 +16,7 @@ import {
   parseReleaseVersion,
 } from "../../../lib/release-version.mjs";
 import { stampFixtureVersion } from "../update-first-hop-package-fixtures.mjs";
+import { assertNoIncognitoArtifacts } from "./incognito-artifacts.mjs";
 import {
   assertPublishedDriverReclaimed,
   inspectPublishedDriverSqlite,
@@ -335,6 +337,58 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE,
       "utf8",
     );
+    const gateway = async (name, method, params) => {
+      await run(name, "openclaw", [
+        "gateway",
+        "call",
+        method,
+        "--url",
+        `ws://127.0.0.1:${port}`,
+        "--token",
+        token,
+        "--timeout",
+        "30000",
+        "--json",
+        "--params",
+        JSON.stringify(params),
+      ]);
+      return output(name);
+    };
+    const sessions = [];
+    for (const incognito of [false, true]) {
+      const kind = incognito ? "incognito" : "durable";
+      const marker = `published-driver-${kind}-${randomUUID()}`;
+      const created = await gateway(`${kind}-create`, "sessions.create", {
+        agentId: "main",
+        ...(incognito ? { incognito: true } : { key: "agent:main:update-cell" }),
+      });
+      assert(created.ok && created.key && created.sessionId);
+      assert.equal(created.runStarted, false, "Fixture unexpectedly started inference");
+      if (incognito) {
+        assert.equal(created.entry.incognito, true);
+      }
+      const params = { agentId: "main", sessionKey: created.key };
+      const injected = await gateway(`${kind}-inject`, "chat.inject", {
+        ...params,
+        message: marker,
+      });
+      assert(injected.ok && injected.messageId);
+      const history = await gateway(`${kind}-before`, "chat.history", { ...params, limit: 20 });
+      assert.equal(history.sessionId, created.sessionId);
+      assert(
+        JSON.stringify(history.messages).includes(marker),
+        `${kind} content missing before update`,
+      );
+      sessions.push({ kind, marker, params, sessionId: created.sessionId });
+    }
+    const inspectIncognito = (name) => {
+      const backups = fs
+        .readdirSync(path.dirname(packageRoot))
+        .filter((entry) => /^\.openclaw[.-]package-(?:backup|activation)-/u.test(entry))
+        .map((entry) => path.join(path.dirname(packageRoot), entry));
+      writeJson(name, assertNoIncognitoArtifacts([state, ...backups], sessions[1].marker));
+    };
+    inspectIncognito("incognito-artifacts-before");
     let update;
     let updateFailure;
     const sqliteBefore = legacySqlite ? inspectPublishedDriverSqlite(state, 0) : undefined;
@@ -413,6 +467,19 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     );
     assert.equal(target?.connect.ok, true);
     assert.equal(target.server.version, build.version);
+    for (const session of sessions) {
+      const history = await gateway(`${session.kind}-after`, "chat.history", {
+        ...session.params,
+        limit: 20,
+      });
+      if (session.kind === "incognito") {
+        assert.deepEqual(history.messages, [], "Incognito content survived restart");
+      } else {
+        assert.equal(history.sessionId, session.sessionId);
+        assert(JSON.stringify(history.messages).includes(session.marker), "Durable content lost");
+      }
+    }
+    inspectIncognito("incognito-artifacts-after");
     if (sqliteBefore) {
       assert.equal(typeof build.buildId, "string", "Candidate build identity is missing");
       assert.equal(target.server.buildId, build.buildId);

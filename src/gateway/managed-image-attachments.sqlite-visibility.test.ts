@@ -21,6 +21,10 @@ import {
 } from "../config/sessions/session-transcript-read-fence.js";
 import { appendSessionTranscriptMessageByIdentity } from "../plugin-sdk/session-transcript-runtime.js";
 import {
+  OpenClawAgentDatabaseReadOnlyScope,
+  withScopedOpenClawAgentDatabaseReadOnly,
+} from "../state/openclaw-agent-db-readonly-scope.js";
+import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
@@ -286,6 +290,47 @@ describe("managed attachment SQLite visibility", () => {
     ).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
   });
 
+  it("reads managed attachment membership without validating unrelated payloads", async () => {
+    const f = await fixture();
+    const marker = "unrelated-managed-download-payload";
+    await seed(f, [
+      message("first", null, "first visible content"),
+      message("unrelated", "first", marker.repeat(1024)),
+      message(f.messageId, "unrelated", [f.block]),
+    ]);
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const native = new DatabaseSync(":memory:");
+    const validate = native.prepare("SELECT json_valid(?) AS valid");
+    const readScope = new OpenClawAgentDatabaseReadOnlyScope();
+    const target = { agentId: "main", path: database.path };
+    let inspectedUnrelatedPayloads = 0;
+    try {
+      // Observe the managed-media reader's native queries without crossing a worker boundary.
+      await readScope.run(target, async () => {
+        const observed = withScopedOpenClawAgentDatabaseReadOnly(({ db }) => {
+          db.function("json_valid", { deterministic: true }, (value) => {
+            if (typeof value === "string" && value.includes(marker)) {
+              inspectedUnrelatedPayloads += 1;
+            }
+            return Number(validate.get(value)!.valid);
+          });
+        }, target);
+        expect(observed.found).toBe(true);
+        const reader = createReadonlySessionHistoryReader({
+          database: target,
+          transcript: { ...f.scope, sessionFile: f.scope.sessionKey },
+        });
+        expect(await reader.readSessionMessagesMatchingIdAsync(f.scope, f.messageId)).toMatchObject(
+          [{ content: [f.block], __openclaw: { id: f.messageId } }],
+        );
+        expect(inspectedUnrelatedPayloads).toBe(0);
+      });
+    } finally {
+      readScope.close();
+      native.close();
+    }
+  });
+
   it("preserves archive duplicates and full-reader oversized recovery", async () => {
     const f = await fixture();
     await seed(f, []);
@@ -541,7 +586,7 @@ describe("managed attachment SQLite visibility", () => {
           includeOffPathMessages: true,
         }),
       ).rejects.toBeInstanceOf(SyntaxError);
-      if (fault === "inactive-branch") {
+      if (fault === "inactive-branch" || fault === "unrelated-missing") {
         expect(await f.download()).toBeNull();
       } else {
         await expect(f.download()).rejects.toBeInstanceOf(SyntaxError);

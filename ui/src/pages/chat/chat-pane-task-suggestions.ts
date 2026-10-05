@@ -31,7 +31,6 @@ type TaskSuggestionOperation =
   | { action: "dismiss"; resolved: boolean }
   | {
       action: "accept";
-      resolved: boolean;
       suggestion: TaskSuggestion;
       mode: TaskSuggestionStartMode;
       cwd?: string;
@@ -185,7 +184,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       ]);
     } else {
       const operation = this.taskSuggestionOperations.get(event.taskId);
-      if (operation) {
+      if (operation?.action === "dismiss") {
         operation.resolved = true;
       }
       this.setTaskSuggestions(this.taskSuggestions.filter((item) => item.id !== event.taskId));
@@ -389,7 +388,6 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       action === "accept"
         ? {
             action,
-            resolved: false,
             suggestion: previous?.suggestion ?? suggestion,
             mode: previous?.mode ?? mode,
             cwd: cwd ?? previous?.cwd,

@@ -115,7 +115,7 @@ export function hasActiveInlineSlashArgumentPrefix(
 
 export function findDirectInlineSlashArgumentInvocation(
   text: string,
-  caret = text.length,
+  caret: number,
 ): InlineSlashArgumentInvocation | null {
   const boundedCaret = Math.max(0, Math.min(caret, text.length));
   const prefix = text.slice(0, boundedCaret);

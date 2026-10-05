@@ -297,6 +297,12 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           workKey: diagnosticCompactionRunId,
         });
         markDiagnosticEmbeddedRunStarted({ ...diagnosticOwner, owner: diagnosticOwner });
+        // Each request start and each streamed output delta is progress, so both the
+        // native and delegated watchdogs measure silence, not request duration.
+        const refreshCompactionWatchdogs = () => {
+          resetCompactionTimeout?.();
+          params.compactionTimeoutReset?.();
+        };
         session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(session.agent.streamFn, {
           config: params.config,
           runId: diagnosticCompactionRunId,
@@ -312,12 +318,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           contentCapture: resolveDiagnosticModelContentCapturePolicy(params.config),
           nextCallId: nextDiagnosticModelCallId,
           ownerGeneration: diagnosticOwner.generation,
-          // Multi-stage compaction intentionally serializes provider calls. Each new
-          // request is progress, so both native and delegated watchdogs get a fresh window.
-          onStarted: () => {
-            resetCompactionTimeout?.();
-            params.compactionTimeoutReset?.();
-          },
+          onStarted: refreshCompactionWatchdogs,
+          onOutputDelta: refreshCompactionWatchdogs,
         });
 
         const prior = await sanitizeSessionHistory({
@@ -514,6 +516,12 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               {
                 abortSignal: params.abortSignal,
                 onCancel: () => activeSession.abortCompaction(),
+                // Under a host ceiling, the summary stops one window early so its own
+                // timeout outcome (the deterministic reduction or a failure) can commit.
+                ...(params.compactionDeadlineAt !== undefined &&
+                summaryOutputPolicy !== "deterministic"
+                  ? { deadlineAt: params.compactionDeadlineAt - compactionTimeoutMs }
+                  : {}),
               },
             );
           try {

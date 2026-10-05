@@ -124,6 +124,38 @@ async function repair() {
 }
 
 describe.skipIf(process.platform === "win32")("public package repair of obsolete recovery", () => {
+  it.each(["current", "legacy launcher group"] as const)(
+    "retires an untouched prepared publication and admits the next update: %s",
+    async (shape) => {
+      const f = shape === "current" ? await fixtures.prepare() : await preparedOwnershipMismatch();
+      mocks.root.mockResolvedValue(f.packageRoot);
+      const prepared = openPackageActivationJournal(f.anchor).read();
+      expect(prepared).toMatchObject({ phase: "prepared", intent: null, publications: [] });
+      const launcher = fs.lstatSync(f.launcher);
+      const readLauncher = () =>
+        launcher.isSymbolicLink() ? fs.readlinkSync(f.launcher) : fs.readFileSync(f.launcher);
+      const launcherContents = readLauncher();
+      const packageBytes = fs.readFileSync(path.join(f.packageRoot, "package.json"));
+
+      await repair();
+
+      expect(readPackageActivationReceipt(f.packageRoot)).toMatchObject({ phase: "complete" });
+      expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+      expect(fs.existsSync(f.anchor)).toBe(false);
+      expect(fs.existsSync(resolvePackageActivationHelper(f.anchor))).toBe(false);
+      expect(packageActivationIdentity(f.packageRoot, true)).toBe(
+        prepared.descriptor.previous.identity,
+      );
+      expect(fs.readFileSync(path.join(f.packageRoot, "package.json"))).toEqual(packageBytes);
+      expect(fs.lstatSync(f.launcher).ino).toBe(launcher.ino);
+      expect(readLauncher()).toEqual(launcherContents);
+      expect(defaultRuntime.error).toHaveBeenCalledWith(
+        expect.stringContaining("publication-not-started"),
+      );
+      expect(mocks.finalize).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each(supersessionReasons)(
     "%s preserves evidence and admits the next package preparation",
     async (reason) => {
@@ -199,6 +231,9 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
       if (selected === "candidate") {
         fs.renameSync(f.packageRoot, `${f.packageRoot}.previous`);
         fs.renameSync(path.join(f.anchor, "candidate"), f.packageRoot);
+      } else {
+        fs.unlinkSync(f.launcher);
+        fs.symlinkSync("../lib/node_modules/foreign/openclaw.mjs", f.launcher);
       }
       const journal = fs.readFileSync(f.journal);
 

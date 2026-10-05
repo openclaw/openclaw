@@ -240,7 +240,7 @@ export function collectCrossAgentSessionAccessFindings(
         [...reachers, ...nonReachers, "Incognito sessions remain hidden."].join("\n") +
         trustDetail,
       remediation:
-        'Set tools.sessions.visibility to "agent", "tree", or "self"; restrict tools.agentToAgent.allow to the intended requester and target ids; or set tools.agentToAgent.enabled: false. See https://docs.openclaw.ai/gateway/config-tools#tools-agenttoagent and https://docs.openclaw.ai/gateway/security#scope-one-trust-boundary-per-gateway.',
+        'Set tools.sessions.visibility to "agent", "tree", or "self"; use agents.entries.<id>.tools.agentToAgent.send for explicit send-only destinations when needed. Restrict tools.agentToAgent.allow to the intended requester and target ids, or set tools.agentToAgent.enabled: false. See https://docs.openclaw.ai/gateway/config-tools#tools-agenttoagent and https://docs.openclaw.ai/gateway/security#scope-one-trust-boundary-per-gateway.',
     },
   ];
 }

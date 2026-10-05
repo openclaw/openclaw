@@ -23,10 +23,7 @@ import { RESTART_CONTINUATION_CONTEXT_PREFIX } from "../infra/heartbeat-events-f
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import {
   clearRestartSentinelIfRevision,
-  finalizeUpdateRestartSentinelRunningVersion,
   formatRestartSentinelMessage,
-  readRestartSentinel,
-  type RestartSentinelPayload,
   summarizeRestartSentinel,
 } from "../infra/restart-sentinel.js";
 import {
@@ -53,7 +50,6 @@ import { renderUpdateRunSummary } from "../infra/update-run-notice.js";
 import { updateRunReportInputFromSentinel } from "../infra/update-run-report.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
-import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
   mergeDeliveryContext,
@@ -78,6 +74,7 @@ import {
   type PendingUpdateSentinelIdentity,
 } from "./server-restart-sentinel-snapshot.js";
 import { finalizeRestartUpdateRun } from "./server-restart-update-run.js";
+import { recordLatestUpdateRestartSentinel } from "./server-update-sentinel.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { runStartupTasks, type StartupTask } from "./startup-tasks.js";
 import {
@@ -89,7 +86,6 @@ const log = createSubsystemLogger("gateway/restart-sentinel");
 const RESTART_CONTINUATION_BUSY_RETRY_DELAY_MS = process.env.VITEST ? 1 : 6_000;
 const CONTROL_PLANE_UPDATE_PENDING_RETRY_DELAY_MS = 2_000;
 const CONTROL_PLANE_UPDATE_PENDING_MAX_ATTEMPTS = 900;
-let latestUpdateRestartSentinel: RestartSentinelPayload | null = null;
 
 /** Settles every queue entry through its durable producer before cron cleanup. */
 export const settleQueuedSessionDelivery: SettleSessionDeliveryFn = async (
@@ -691,27 +687,4 @@ export async function scheduleRestartSentinelWake(params: {
     return;
   }
   await runStartupTasks({ tasks: [task], log });
-}
-
-export async function refreshLatestUpdateRestartSentinel(
-  env: NodeJS.ProcessEnv = captureDeliveryQueueStateContext().workerContext.environment,
-): Promise<RestartSentinelPayload | null> {
-  const current = await readRestartSentinel(env);
-  const sentinel =
-    current && isPendingControlPlaneUpdateRestartSentinel(current.payload)
-      ? current
-      : ((await finalizeUpdateRestartSentinelRunningVersion(undefined, env)) ?? current);
-  if (sentinel?.payload.kind === "update") {
-    latestUpdateRestartSentinel = freezeJsonSnapshot(sentinel.payload);
-  }
-  return latestUpdateRestartSentinel;
-}
-
-/** Readers share an immutable snapshot; publication preserves previously returned generations. */
-export function getLatestUpdateRestartSentinel(): RestartSentinelPayload | null {
-  return latestUpdateRestartSentinel;
-}
-
-export function recordLatestUpdateRestartSentinel(payload: RestartSentinelPayload): void {
-  latestUpdateRestartSentinel = freezeJsonSnapshot(structuredClone(payload));
 }

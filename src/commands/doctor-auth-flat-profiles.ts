@@ -957,9 +957,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       ) {
         if (sourceReceipts.length > 0) {
           const archived = sourceReceipts.map((receipt) => {
-            finalizeAuthProfileMigrationSource(receipt, "archived-unparsed", {
-              sourceLocked: true,
-            });
+            finalizeAuthProfileMigrationSource(receipt, "archived-unparsed");
             return receipt.archivePath;
           });
           result.warnings.push(
@@ -1154,7 +1152,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       }
       assertAuthProfileMigrationSourcesUnchanged(candidate, sourceReceipts);
       const archives = sourceReceipts.map((receipt) => {
-        finalizeAuthProfileMigrationSource(receipt, "completed", { sourceLocked: true });
+        finalizeAuthProfileMigrationSource(receipt, "completed");
         return receipt.archivePath;
       });
       for (const id of [

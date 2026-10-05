@@ -169,7 +169,6 @@ function renderEnvironmentHeading(
 }
 
 export function renderWhereChip(params: {
-  idPrefix?: string;
   autoPlacementMode?: "least-busy" | "eligible-order";
   state: WhereChipState;
   gatewayName: string;
@@ -278,7 +277,7 @@ export function renderWhereChip(params: {
   return html`
     <span class="new-session-page__select new-session-page__select--where">
       <button
-        id=${(params.idPrefix ?? "new-session") + "-where-trigger"}
+        id="new-session-where-trigger"
         type="button"
         class="new-session-page__trigger ${
           params.popoverHiding ? "new-session-page__trigger--hiding" : ""
@@ -305,7 +304,7 @@ export function renderWhereChip(params: {
     <wa-popover
       ${ref(syncPopoverLabel)}
       class="new-session-page__select new-session-page__where-popover new-session-page__picker-popover"
-      for=${(params.idPrefix ?? "new-session") + "-where-trigger"}
+      for="new-session-where-trigger"
       placement="bottom-start"
       without-arrow
       @wa-show=${(event: Event) => {
