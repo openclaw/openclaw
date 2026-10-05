@@ -1,5 +1,5 @@
 import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 
 export class SessionMutationAuthorizationChangedError extends Error {
   readonly error: ErrorShape;
