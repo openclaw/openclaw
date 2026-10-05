@@ -324,7 +324,6 @@ describe("Codex native configuration lifecycle", () => {
         appServer: {
           ...createAppServerOptions(),
           connectionClass: "local-loopback" as const,
-          remoteAppsSubstrate: "preconfigured" as const,
         },
       };
 

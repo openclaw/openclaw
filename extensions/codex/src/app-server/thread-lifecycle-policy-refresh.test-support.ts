@@ -15,7 +15,7 @@ import {
   retireSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
 import type { createClientHarness } from "./test-support.js";
-import type { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
+import type { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
 import type { CodexAttemptThreadInput as StartParams } from "./thread-lifecycle.test-fixtures.js";
 
 type PolicyRefreshFixtures = {

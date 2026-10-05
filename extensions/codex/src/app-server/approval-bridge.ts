@@ -507,23 +507,8 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
     cwd,
     signal: params.signal,
   });
-  if (nativeRelayOutcome?.blocked) {
-    return {
-      outcome: "denied",
-      reason: nativeRelayOutcome.reason,
-      ...(nativeRelayOutcome.failureDisposition
-        ? { failureDisposition: nativeRelayOutcome.failureDisposition }
-        : {}),
-    };
-  }
-  if (
-    nativeRelayOutcome?.outcome === "approved-once" ||
-    nativeRelayOutcome?.outcome === "approved-session"
-  ) {
-    return { outcome: nativeRelayOutcome.outcome };
-  }
-  if (nativeRelayOutcome?.handled) {
-    return { outcome: "allowed" };
+  if (nativeRelayOutcome) {
+    return nativeRelayOutcome;
   }
   const outcome = await params.paramsForRun.hostCapabilities.runBeforeToolCall({
     toolName: policyRequest.toolName,
@@ -568,20 +553,7 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
   assertActive: () => void;
   cwd?: string;
   signal?: AbortSignal;
-}): Promise<
-  | {
-      handled: true;
-      blocked: true;
-      reason: string;
-      failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">;
-    }
-  | {
-      handled: true;
-      blocked?: false;
-      outcome?: "approved-once" | "approved-session";
-    }
-  | undefined
-> {
+}): Promise<ApprovalPolicyOutcome | undefined> {
   const nativeHookRelay = params.nativeHookRelay;
   // Only command approvals correspond to Codex PreToolUse execution. File-change
   // and permission approvals stay on the app-server approval route below.
@@ -600,7 +572,7 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
   if (!payload) {
     return undefined;
   }
-  const resolveDeferredApproval = async () => {
+  const resolveDeferredApproval = async (): Promise<ApprovalPolicyOutcome> => {
     const approvalOutcome = await resolveNativeHookRelayDeferredToolApproval({
       relayId: nativeHookRelay.relayId,
       toolUseId: params.context.approvalId,
@@ -609,17 +581,16 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
     params.assertActive();
     if (approvalOutcome?.outcome === "denied") {
       return {
-        handled: true,
-        blocked: true,
+        outcome: "denied",
         reason: approvalOutcome.reason,
         ...(approvalOutcome.failureDisposition
           ? { failureDisposition: approvalOutcome.failureDisposition }
           : {}),
-      } as const;
+      };
     }
     return approvalOutcome?.outcome === "approved-once"
-      ? ({ handled: true, outcome: approvalOutcome.outcome } as const)
-      : ({ handled: true } as const);
+      ? { outcome: approvalOutcome.outcome }
+      : { outcome: "allowed" };
   };
   if (
     hasNativeHookRelayInvocation({
@@ -639,14 +610,9 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
       rawPayload: payload,
       requireGeneration: true,
     });
-    const decision = readNativeRelayPreToolUseDecision(response);
-    if (decision.blocked) {
-      return {
-        handled: true,
-        blocked: true,
-        reason: decision.reason,
-        ...(decision.failureDisposition ? { failureDisposition: decision.failureDisposition } : {}),
-      };
+    const denial = readNativeRelayPreToolUseDenial(response);
+    if (denial) {
+      return denial;
     }
     return await resolveDeferredApproval();
   } catch (error) {
@@ -663,8 +629,7 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
       return undefined;
     }
     return {
-      handled: true,
-      blocked: true,
+      outcome: "denied",
       reason: `OpenClaw native hook relay unavailable for Codex app-server approval: ${formatCodexDisplayText(
         coerceErrorMessage(error),
       )}`,
@@ -699,16 +664,12 @@ function buildNativeRelayPreToolUsePayload(params: {
   };
 }
 
-function readNativeRelayPreToolUseDecision(response: NativeHookRelayProcessResponse | undefined):
-  | {
-      blocked: true;
-      reason: string;
-      failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">;
-    }
-  | { blocked: false } {
+function readNativeRelayPreToolUseDenial(
+  response: NativeHookRelayProcessResponse | undefined,
+): Extract<ApprovalPolicyOutcome, { outcome: "denied" }> | undefined {
   if (!response || response.exitCode !== 0) {
     return {
-      blocked: true,
+      outcome: "denied",
       reason:
         sanitizeRelayDecisionReason(response?.stderr) ||
         sanitizeRelayDecisionReason(response?.stdout) ||
@@ -718,7 +679,7 @@ function readNativeRelayPreToolUseDecision(response: NativeHookRelayProcessRespo
   }
   const stdout = response.stdout?.trim();
   if (!stdout) {
-    return { blocked: false };
+    return undefined;
   }
   const parsed = safeParseJson<unknown>(stdout);
   const output =
@@ -727,7 +688,7 @@ function readNativeRelayPreToolUseDecision(response: NativeHookRelayProcessRespo
       : undefined;
   if (output?.permissionDecision === "deny") {
     return {
-      blocked: true,
+      outcome: "denied",
       reason:
         readString(output, "permissionDecisionReason") ||
         "OpenClaw native hook policy denied Codex app-server approval.",
@@ -737,7 +698,7 @@ function readNativeRelayPreToolUseDecision(response: NativeHookRelayProcessRespo
   // The app-server bridge invokes the relay in report mode, where the relay
   // contract is deny-or-silent. Any other structured decision fails closed.
   return {
-    blocked: true,
+    outcome: "denied",
     reason: output
       ? "OpenClaw native hook relay returned a non-deny Codex app-server approval decision."
       : "OpenClaw native hook relay returned an unreadable Codex app-server approval result.",

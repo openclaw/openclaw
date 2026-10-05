@@ -1041,7 +1041,7 @@ describe("buildCodexMigrationProvider", () => {
       const fixture = await createCodexFixture();
       const reportDir = path.join(fixture.root, "report");
       const configState = configWithCodex(fixture, {
-        appServer: { sandbox: "workspace-write" },
+        appServer: { command: "migration-codex", sandbox: "workspace-write" },
       });
       let targetPluginListCalls = 0;
       let targetPluginListCallsAtInstall = 0;
@@ -1112,6 +1112,7 @@ describe("buildCodexMigrationProvider", () => {
             ? { remoteMarketplaceName: marketplace, pluginName: "remote-calendar-id" }
             : { marketplacePath: `/marketplaces/${marketplace}`, pluginName: "google-calendar" },
       });
+      expect(installCall.startOptions).toMatchObject({ command: "migration-codex" });
       const pluginItem = findItem(result.items, "plugin:google-calendar");
       expectRecordFields(pluginItem, {
         status: "migrated",
@@ -1126,6 +1127,7 @@ describe("buildCodexMigrationProvider", () => {
       });
       expect(configState.plugins?.entries?.codex?.enabled).toBe(true);
       expect(configState.plugins?.entries?.codex?.config?.appServer).toEqual({
+        command: "migration-codex",
         sandbox: "workspace-write",
       });
       expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toEqual({

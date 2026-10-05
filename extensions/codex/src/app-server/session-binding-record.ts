@@ -24,11 +24,11 @@ import {
   readCodexNativeSubagentSubmissions,
   type CodexNativeSubagentSubmission,
 } from "./native-subagent-submission.js";
-import type { PluginAppPolicyContext } from "./plugin-thread-config.js";
 import {
   legacyAppPolicyEntrySchema,
   readStoredCodexAppServerBinding,
   type CodexAppServerThreadBinding,
+  type PluginAppPolicyContext,
   type StoredCodexAppServerBinding,
 } from "./session-binding-record-codec.js";
 

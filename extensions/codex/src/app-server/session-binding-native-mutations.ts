@@ -17,22 +17,12 @@ import {
 
 export type CodexNativeSubagentBindingMutation =
   | {
-      kind: "record-native-subagent-assignment";
+      kind: "record-native-subagent-assignment" | "consume-native-subagent-assignment";
       owner: CodexNativeSubagentHistoryOwner;
       assignment: CodexNativeSubagentPendingAssignment;
     }
   | {
-      kind: "consume-native-subagent-assignment";
-      owner: CodexNativeSubagentHistoryOwner;
-      assignment: CodexNativeSubagentPendingAssignment;
-    }
-  | {
-      kind: "record-native-subagent-submission";
-      owner: CodexNativeSubagentHistoryOwner;
-      receipt: CodexNativeSubagentSubmission;
-    }
-  | {
-      kind: "consume-native-subagent-submission";
+      kind: "record-native-subagent-submission" | "consume-native-subagent-submission";
       owner: CodexNativeSubagentHistoryOwner;
       receipt: CodexNativeSubagentSubmission;
     };

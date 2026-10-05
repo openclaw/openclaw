@@ -15,33 +15,30 @@ const approvalAppMetadata = {
 
 describe("Codex owned app approval metadata", () => {
   it("keeps approval checks conservative when tool metadata is absent", () => {
-    expect(toCodexPluginOwnedAccountApp(approvalAppMetadata, undefined)).not.toHaveProperty(
+    expect(toCodexPluginOwnedAccountApp(approvalAppMetadata)).not.toHaveProperty(
       "approvalOverrideToolConfigKeys",
     );
     expect(
-      toCodexPluginOwnedAccountApp({ ...approvalAppMetadata, toolSummaries: [] }, undefined)
+      toCodexPluginOwnedAccountApp({ ...approvalAppMetadata, toolSummaries: [] })
         .approvalOverrideToolConfigKeys,
     ).toStrictEqual([]);
   });
 
   it("retains disabled writable tools in the approval boundary", () => {
     expect(
-      toCodexPluginOwnedAccountApp(
-        {
-          ...approvalAppMetadata,
-          toolSummaries: [
-            {
-              name: "save_issue",
-              title: "Save issue",
-              description: "Create or update an issue.",
-              isEnabled: false,
-              disabledReason: "App policy",
-              isReadOnly: false,
-            },
-          ],
-        },
-        undefined,
-      ).approvalOverrideToolConfigKeys,
+      toCodexPluginOwnedAccountApp({
+        ...approvalAppMetadata,
+        toolSummaries: [
+          {
+            name: "save_issue",
+            title: "Save issue",
+            description: "Create or update an issue.",
+            isEnabled: false,
+            disabledReason: "App policy",
+            isReadOnly: false,
+          },
+        ],
+      }).approvalOverrideToolConfigKeys,
     ).toStrictEqual(["Save issue", "linear_save_issue", "save_issue"]);
   });
 
@@ -68,8 +65,10 @@ describe("Codex owned app approval metadata", () => {
       ],
     };
 
-    expect(
-      toCodexPluginOwnedAccountApp(app, undefined).approvalOverrideToolConfigKeys,
-    ).toStrictEqual(["Save issue", "linear_fetch", "linear_linear_fetch"]);
+    expect(toCodexPluginOwnedAccountApp(app).approvalOverrideToolConfigKeys).toStrictEqual([
+      "Save issue",
+      "linear_fetch",
+      "linear_linear_fetch",
+    ]);
   });
 });
