@@ -87,7 +87,7 @@ function injectToolCallThoughtSignatures(
   }
 }
 
-export const COMPLETIONS_REASONING_REPLAY_FIELDS = [
+const COMPLETIONS_REASONING_REPLAY_FIELDS = [
   "reasoning_details",
   "reasoning_content",
   "reasoning",
