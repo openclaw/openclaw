@@ -15,6 +15,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/qa-lab/src/gateway-child.test.ts",
   "extensions/qa-lab/src/providers/shared/auth-store.test.ts",
   "extensions/codex/src/app-server/auth-refresh-authority.integration.test.ts",
+  "extensions/voice-call/index.call-scope.test.ts",
   "extensions/agentsapi/agentsapi-attempt.test.ts",
   "extensions/agentsapi/agentsapi-harness.persistence.test.ts",
   "extensions/codex/src/migration/provider.auth.test.ts",
