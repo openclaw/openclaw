@@ -93,7 +93,9 @@ by newer update callers take precedence. Ordinary standalone restarts wait beyon
 On Windows, managed `gateway start` and `gateway restart` allow up to 90 minutes
 for cold startup, using three default update-step budgets for activation, loading,
 and readiness. Managed update restoration uses the same allowance unless an
-explicit `update --timeout` supplies its per-step budget. This accommodates large
+explicit `update --timeout` supplies its per-step budget. Implicit Windows update
+readiness checks use ten times the observed startup duration, bounded between
+90 and 120 minutes; the ceiling cannot truncate the cold-start floor. This accommodates large
 agent databases on slow storage; a service that exits or fails a health check can
 still report failure earlier. A live Gateway that remains in startup at the
 deadline is left running and reported as `still-starting`; updates retain the

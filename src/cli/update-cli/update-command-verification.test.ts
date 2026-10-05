@@ -2,6 +2,7 @@ import { once } from "node:events";
 import { createServer, type RequestListener, type Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import * as gatewayService from "../../daemon/service.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
@@ -680,17 +681,20 @@ describe("update readiness generation", () => {
   );
 
   it.each([
-    { timeout: undefined, readyAtMs: 44 * 60_000, expected: "ok", budgetMs: 5_400_000 },
+    { timeout: undefined, readyAtMs: 44 * 60_000, expected: "ok" },
     {
       timeout: undefined,
-      readyAtMs: 91 * 60_000,
+      readyAtMs: resolveGatewayStartupTiming("win32").deadlineMs + 60_000,
       expected: "readiness-pending",
-      budgetMs: 5_400_000,
     },
-    { timeout: "60", readyAtMs: 44 * 60_000, expected: "readiness-pending", budgetMs: 60_000 },
+    { timeout: "60", readyAtMs: 44 * 60_000, expected: "readiness-pending" },
   ])(
     "preserves Windows cold startup and an explicit update timeout ($timeout, ready at $readyAtMs)",
-    async ({ timeout, readyAtMs, expected, budgetMs }) => {
+    async ({ timeout, readyAtMs, expected }) => {
+      const budgetMs =
+        timeout === undefined
+          ? resolveGatewayStartupTiming("win32").deadlineMs
+          : Number(timeout) * 1_000;
       mockProcessPlatform("win32");
       const service = makeGatewayService({ status: "running", pid: 8000 });
       vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
