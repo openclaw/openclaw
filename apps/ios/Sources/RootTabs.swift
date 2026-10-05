@@ -169,6 +169,8 @@ struct RootTabs: View {
     private var uiTestReadinessMarker: some View {
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--openclaw-ui-test-readiness") {
+            let toolCount = ProcessInfo.processInfo.arguments.contains("--openclaw-reader-tool-churn-fixture")
+                ? self.appModel.chatPresentation.viewModel?.toolActivities.count ?? 0 : 0
             Color.clear
                 .frame(width: 1, height: 1)
                 .allowsHitTesting(false)
@@ -176,7 +178,8 @@ struct RootTabs: View {
                 .accessibilityIdentifier("RootTabs.Ready")
                 .accessibilityLabel(Text(verbatim: "OpenClaw test readiness"))
                 .accessibilityValue(
-                    "\(self.scenePhase == .active ? "ready" : "inactive"):\(self.selectedSidebarDestination.rawValue)")
+                    "\(self.scenePhase == .active ? "ready" : "inactive"):\(self.selectedSidebarDestination.rawValue)" +
+                        (toolCount > 0 ? ":tools=\(toolCount)" : ""))
         }
         #endif
     }

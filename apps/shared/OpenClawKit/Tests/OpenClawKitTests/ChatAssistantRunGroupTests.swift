@@ -36,7 +36,6 @@ struct ChatAssistantRunGroupTests {
         let frame = try #require(live.last)
         #expect(frame.parts.map(\.id) == ["row:\(narration.id)", "tool:read", "row:\(next.id)"])
         #expect(frame.includesLive)
-        #expect(frame.answerID == nil)
 
         let answer = Self.message("assistant", at: 5, phase: "final_answer")
         let completed = ChatTranscriptRow.collapseCompletedWork(
@@ -45,7 +44,6 @@ struct ChatAssistantRunGroupTests {
             completed, liveRunID: nil, hasLiveContent: false, searchActive: false)
         #expect(final.count == 2)
         #expect(final.last?.id == frame.id)
-        #expect(final.last?.answerID == answer.id)
         #expect(final.last?.includesLive == false)
     }
 

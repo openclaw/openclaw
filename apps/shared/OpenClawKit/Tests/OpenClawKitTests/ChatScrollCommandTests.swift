@@ -6,6 +6,55 @@ import Testing
 struct ChatScrollCommandTests {
     private let session = OpenClawChatSessionTarget(sessionKey: "main", agentID: "test")
 
+    @Test func `a removed history row cannot arm deferred preservation`() throws {
+        var command = ChatScrollCommand()
+        command.enqueue(to: UUID(), anchor: .top, sessionTarget: self.session, offsetFromRow: -60)
+        let queued = try #require(command.pending)
+        command.cancelMissingPreservation(in: [])
+        let consumed = command.take(queued, sessionTarget: self.session)
+        #expect(consumed == nil)
+        #expect(command.preserving == nil)
+    }
+
+    @Test func `prepend restores lazy frame refinements until reader departure and ignores stale geometry`() throws {
+        var command = ChatScrollCommand()
+        let rowID = UUID()
+        command.enqueue(to: rowID, anchor: .top, sessionTarget: self.session, offsetFromRow: -60)
+        let request = try #require(command.pending)
+        let consumed = command.take(request, sessionTarget: self.session)
+        let accepted = try #require(consumed)
+        command.beginPreservation(accepted)
+        let stale = ChatScrollRowGeometry(targetID: rowID, preservationID: nil, contentMinY: 900)
+        let staleOffset = command.preservedOffset(for: stale, sessionTarget: self.session)
+        #expect(staleOffset == nil)
+        let measured = ChatScrollRowGeometry(targetID: rowID, preservationID: request.id, contentMinY: 900)
+        let offset = command.preservedOffset(for: measured, sessionTarget: self.session)
+        #expect(offset == 840)
+        #expect(command.preserving == accepted)
+        let refined = ChatScrollRowGeometry(targetID: rowID, preservationID: request.id, contentMinY: 940)
+        #expect(command.preservedOffset(for: refined, sessionTarget: self.session) == 880)
+        command.cancel()
+        #expect(command.preservedOffset(for: refined, sessionTarget: self.session) == nil)
+    }
+
+    @Test func `reader departure or session change cancels post-layout preservation`() throws {
+        for departs in [false, true] {
+            var command = ChatScrollCommand()
+            let rowID = UUID()
+            command.enqueue(to: rowID, anchor: .top, sessionTarget: self.session, offsetFromRow: -60)
+            let request = try #require(command.pending)
+            let consumed = command.take(request, sessionTarget: self.session)
+            let accepted = try #require(consumed)
+            command.beginPreservation(accepted)
+            if departs { command.cancel() }
+            let measured = ChatScrollRowGeometry(targetID: rowID, preservationID: request.id, contentMinY: 900)
+            let current = departs ? self.session : OpenClawChatSessionTarget(sessionKey: "other", agentID: "test")
+            let offset = command.preservedOffset(for: measured, sessionTarget: current)
+            #expect(offset == nil)
+            #expect(command.preserving == nil)
+        }
+    }
+
     @Test func `a command is consumed before scrolling and cannot replay`() throws {
         var command = ChatScrollCommand()
         let targetID = UUID()

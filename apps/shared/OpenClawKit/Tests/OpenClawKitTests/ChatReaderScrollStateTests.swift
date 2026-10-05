@@ -41,9 +41,52 @@ struct ChatReaderScrollStateTests {
 
         let transition = chatReaderUserTransition(
             previousID: previousUserID,
-            visibleIDs: [previousUserID, newUserID])
+            visibleIDs: [previousUserID, newUserID],
+            liveTurnID: newUserID)
 
         #expect(transition == .added(newUserID))
+    }
+
+    @Test func `history hydration after opening is not a new turn`() {
+        let previous = UUID()
+        let restored = UUID()
+        #expect(chatReaderUserTransition(
+            previousID: previous,
+            visibleIDs: [previous, restored],
+            liveTurnID: nil) == .unchanged)
+    }
+
+    @Test func `late first history row is not a new turn`() {
+        #expect(chatReaderUserTransition(
+            previousID: nil,
+            visibleIDs: [UUID()],
+            liveTurnID: nil) == .unchanged)
+    }
+
+    @Test func `a live text or voice turn after opening still anchors`() {
+        let previous = UUID()
+        let live = UUID()
+        #expect(chatReaderUserTransition(
+            previousID: previous,
+            visibleIDs: [previous, live],
+            liveTurnID: live) == .added(live))
+    }
+
+    @Test func `undated history cannot steal the opening position`() {
+        #expect(chatReaderUserTransition(
+            previousID: nil,
+            visibleIDs: [UUID()],
+            liveTurnID: nil) == .unchanged)
+    }
+
+    @Test func `a live user anchors even when narration adds a later boundary`() {
+        let previous = UUID()
+        let user = UUID()
+        let notice = UUID()
+        #expect(chatReaderUserTransition(
+            previousID: previous,
+            visibleIDs: [previous, user, notice],
+            liveTurnID: user) == .added(user))
     }
 
     @Test func `removed transient content does not offer a latest jump`() {
@@ -76,10 +119,28 @@ struct ChatReaderScrollStateTests {
         #expect(chatReaderScrollReleasesFollow(.animating))
     }
 
-    @Test func `idle, touch-down, and deceleration phases keep the follow target`() {
+    @Test func `idle alone does not release following`() {
         #expect(!chatReaderScrollReleasesFollow(.idle))
-        #expect(!chatReaderScrollReleasesFollow(.tracking))
-        #expect(!chatReaderScrollReleasesFollow(.decelerating))
+    }
+
+    @Test func `touch down cancels following before a streaming tick can move the reader`() {
+        #expect(chatReaderScrollReleasesFollow(.tracking))
+        #expect(chatReaderScrollReleasesFollow(.decelerating))
+    }
+
+    @Test func `completed voice reply belongs only to its followed user turn`() throws {
+        func message(_ role: String) throws -> OpenClawChatMessage {
+            try JSONDecoder().decode(OpenClawChatMessage.self, from: Data(
+                "{\"role\":\"\(role)\",\"content\":[{\"type\":\"text\",\"text\":\"reply\"}]}".utf8))
+        }
+        let oldReply = try message("assistant")
+        let user = try message("user")
+        let reply = try message("assistant")
+        let nextUser = try message("user")
+        #expect(!chatReaderHasAssistantReply(after: user.id, rows: [.message(oldReply), .message(user)]))
+        #expect(chatReaderHasAssistantReply(after: user.id, rows: [.message(user), .message(reply)]))
+        #expect(!chatReaderHasAssistantReply(
+            after: user.id, rows: [.message(user), .message(nextUser), .message(reply)]))
     }
 
     @Test func `streaming at the live edge never offers a latest jump`() {
