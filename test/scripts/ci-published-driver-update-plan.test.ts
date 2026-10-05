@@ -22,6 +22,8 @@ describe("published-driver update selection", () => {
   it.each([
     { paths: ["src\\infra\\update-runner.ts"], expected: true },
     { paths: ["src/cli/update-cli/update-command.ts"], expected: true },
+    { paths: ["src/cli/runtime-cleanup-scope.ts"], expected: true },
+    { paths: ["src/cli/runtime-cleanup.ts"], expected: true },
     { paths: ["src/cli/startup-trace.ts"], expected: true },
     { paths: ["src/gateway/server-startup-trace.ts"], expected: true },
     { paths: ["src/state/openclaw-state-lease.ts"], expected: false },
