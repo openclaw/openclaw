@@ -1,11 +1,12 @@
 import { normalizePluginGatewayMethodScope } from "../../shared/gateway-method-policy.js";
 import { ADMIN_SCOPE, type OperatorScope } from "../operator-scopes.js";
-import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
+import type { GatewayClient } from "../server-methods/client-types.js";
 
 export type GatewayReadSharing = {
   /** Null keeps request-local reads out of response sharing. */
   shareKey: (
-    caller: Pick<GatewayRequestHandlerOptions, "client" | "context"> & {
+    caller: {
+      client: GatewayClient | null;
       read?: { shareable?: boolean };
     },
     params: Record<string, unknown>,

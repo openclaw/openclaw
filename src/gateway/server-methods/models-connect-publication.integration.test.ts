@@ -266,6 +266,11 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
         }
       }
       enterPhase("initial publication supersession");
+      await client.request("sessions.patch", {
+        key: sessionKey,
+        agentId: "alpha",
+        label: "Initial catalog publication race",
+      });
       const acquisitionStarted = createDeferred();
       const releaseAcquisition = createDeferred();
       const readPreparedCatalog = modelCatalogAuth.readPreparedCatalog;

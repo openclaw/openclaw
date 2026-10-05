@@ -104,13 +104,13 @@ export const modelsHandlers: GatewayRequestHandlers = {
           preparedScope.assertCurrent?.();
         };
         assertCurrent();
+        if (params.refresh !== true) {
+          refreshExpiredPreparedModelCatalog({ agentId: resolved.agentId, config: cfg });
+        }
         return {
           assertCurrent,
           release: preparedScope.release,
           run: async (respond) => {
-            if (params.refresh !== true) {
-              refreshExpiredPreparedModelCatalog({ agentId: resolved.agentId, config: cfg });
-            }
             const includeManualSelection = hasGatewayClientCap(
               client?.connect.caps,
               GATEWAY_CLIENT_CAPS.MODEL_SELECTION_POLICY,
@@ -135,7 +135,6 @@ export const modelsHandlers: GatewayRequestHandlers = {
                 readScope: scope,
                 publicationScope: preparedScope,
               }));
-            assertCurrent();
             const currentConfig = context.getRuntimeConfig();
             const projected =
               scope && params.view !== "provider-config"

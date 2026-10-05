@@ -204,6 +204,8 @@ is projected for the current session even when its model catalog is shared.
 Provider renewal with unchanged inventory and auth metadata preserves cached metadata
 without broadcasting `chat.metadata.changed`. Discovery progress alone does not
 invalidate metadata; catalog changes and `refreshFailed` transitions still do.
+Discovery progress retires shared RPC response bytes without rebuilding metadata
+or sending another client broadcast.
 Shared model or account replacement still gates these reads, and history
 uses only already-prepared catalogs without starting or waiting for preparation.
 The Models settings page uses `preparedOnly: true` for its initial load, then

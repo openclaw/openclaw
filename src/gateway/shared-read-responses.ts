@@ -107,24 +107,21 @@ export async function dispatchSharedRead(
       assertCurrent();
       if (response[0]) {
         read.assertCurrent?.();
+        read.beforeRespond?.();
       }
       (read.respond ?? options.respond)(...response);
-      if (response[0]) {
-        read.responded?.();
-      }
     };
     const caller = {
       client: options.client,
-      context: options.context,
       read: { shareable: read.shareable },
     };
     const shareKey = sharing.shareKey(caller, options.params);
     assertCurrent();
-    read.assertCurrent?.();
     if (shareKey === null) {
       await read.run(deliver);
       return;
     }
+    read.assertCurrent?.();
     const key = JSON.stringify([options.req.method, shareKey]);
     const existing = entries.get(key);
     const valid = (entry: Entry) =>

@@ -295,7 +295,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       return {
         respond: respondToCaller,
         assertCurrent,
-        responded: () => {
+        beforeRespond: () => {
           // An event delivered before roster admission may not have established its ancestor rows.
           if (client?.connId) {
             context.forgetConnectionAncestors(client.connId);

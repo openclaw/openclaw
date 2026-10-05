@@ -7,7 +7,7 @@ export type GatewayPreparedRead = {
   assertCurrent?: () => void;
   respond?: RespondFn;
   release?: (outcome: "returned" | "threw") => void;
-  responded?: () => void;
+  beforeRespond?: () => void;
 };
 
 export type GatewayReadPreparation = (
@@ -48,18 +48,16 @@ export async function withPreparedGatewayRead(
 export function createPreparedReadHandler(
   prepareRead: GatewayReadPreparation,
   onReadError?: GatewayReadErrorHandler,
-): GatewayRequestHandler {
-  const handler: GatewayRequestHandler = Object.assign(
-    async (options: GatewayRequestHandlerOptions) =>
+) {
+  const handler = Object.assign(
+    async (options: GatewayRequestHandlerOptions): Promise<void> =>
       withPreparedGatewayRead(handler, options, async (read) => {
         await read.run((...response) => {
           if (response[0]) {
             read.assertCurrent?.();
+            read.beforeRespond?.();
           }
           (read.respond ?? options.respond)(...response);
-          if (response[0]) {
-            read.responded?.();
-          }
         });
       }),
     { prepareRead, onReadError },

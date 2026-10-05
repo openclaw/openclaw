@@ -232,7 +232,7 @@ describe("shared read response dispatch", () => {
         if (++prepared === 25) {
           allPrepared.resolve();
         }
-        return { run: produce, release: released, responded: delivered };
+        return { run: produce, release: released, beforeRespond: delivered };
       }),
     );
     const requests = Array.from({ length: 25 }, (_, index) => harness.request(`request-${index}`));
@@ -386,7 +386,7 @@ describe("shared read response dispatch", () => {
               }
             },
             release: () => released(req.id),
-            responded: () => delivered(req.id),
+            beforeRespond: () => delivered(req.id),
           };
         }),
       );

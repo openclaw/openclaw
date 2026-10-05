@@ -47,6 +47,11 @@ it("retains completed catalog facts during runtime replacement and adopts comple
     const original = catalog.current;
     refreshed.mockClear();
     read.mockClear();
+    notifyPreparedModelRuntimePublication({ phase: "catalog-status", modelFactsChanged: false });
+    await catalog.refresh();
+    expect(catalog.current).toBe(original);
+    expect(read).not.toHaveBeenCalled();
+    expect(refreshed).not.toHaveBeenCalled();
     const first = createDeferredCore();
     notifyPreparedModelRuntimePublication({ phase: "invalidated", replacement: first.promise });
     next = new Map([["main", undefined]]);
