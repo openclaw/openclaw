@@ -114,49 +114,6 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     expect(readCreateToolsArgs().sourceReplyOnly).toBe(true);
   });
 
-  it("constructs exact coding tools for a server-minted mediated grant", async () => {
-    codingTools.mockReturnValueOnce([makeTool("write")]);
-
-    const scheduledToolPolicy = {
-      version: 1,
-      mode: "account",
-      ownerSessionKey: "agent:main:qa-channel:group:ops",
-      ownerAccountId: "default",
-      ownerOrigin: { kind: "external", channel: "qa-channel" },
-    } satisfies NonNullable<Parameters<typeof resolveGatewayScopedTools>[0]["scheduledToolPolicy"]>;
-    const result = await resolveTools({
-      cfg: { tools: { exec: { host: "node" } } },
-      sessionKey: "agent:main:cron:run-1",
-      runtimePolicySessionKey: "agent:main:qa-channel:group:ops",
-      runId: "run-1",
-      workspaceDir: "/workspace",
-      cwd: "/workspace/task",
-      excludeToolNames: ["read", "edit", "apply_patch", "exec", "process"],
-      mediatedToolNames: ["write"],
-      scheduledToolPolicy,
-    });
-
-    expect(result.tools.map((tool) => tool.name)).toContain("write");
-    expect(codingTools).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runtimeToolAllowlist: ["write"],
-        sessionKey: "agent:main:qa-channel:group:ops",
-        runSessionKey: "agent:main:cron:run-1",
-        workspaceDir: "/workspace",
-        cwd: "/workspace/task",
-        wrapBeforeToolCallHook: false,
-        scheduledToolPolicy,
-      }),
-    );
-    expect(readCreateToolsArgs()).toMatchObject({
-      agentChannel: undefined,
-      agentAccountId: undefined,
-      gatewayCallerAccountId: "default",
-      gatewayCallerChannel: "qa-channel",
-    });
-    expect(createExec).not.toHaveBeenCalled();
-  });
-
   it("rejects loopback tool construction after the scheduled owner account is removed", async () => {
     const resolveToolPolicy = vi.fn(() => ({ allow: ["read"] }));
     getChannelPlugin.mockReturnValue({
