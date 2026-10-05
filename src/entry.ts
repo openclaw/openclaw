@@ -287,7 +287,7 @@ export async function tryHandleRootHelpFastPath(argv: string[]): Promise<boolean
     const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
     const writeError = await prepareCliDiagnosticBlockWriter();
     await writeError(`[openclaw] Failed to display help: ${detail}\n`);
-    process.exit(1);
+    return process.exit(1);
   }
 }
 

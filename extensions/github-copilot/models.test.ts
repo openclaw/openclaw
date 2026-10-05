@@ -1,13 +1,35 @@
 import { streamSimpleOpenAIResponses } from "@openclaw/ai/internal/openai";
 // Github Copilot tests cover models plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { CopilotRuntimeAuthError } from "./runtime-auth-error.js";
 import { resolveCopilotRuntimeAuth } from "./runtime-auth.js";
 import { resolveCopilotStarterModel } from "./starter-model.js";
 import { fetchCopilotUsage } from "./usage.js";
+
+const catalogTransport = vi.hoisted(() => ({
+  lookup: vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]),
+  releases: [] as Array<() => Promise<void>>,
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: vi.fn(async (params: Parameters<typeof actual.fetchWithSsrFGuard>[0]) => {
+      const result = await actual.fetchWithSsrFGuard({
+        ...params,
+        lookupFn: catalogTransport.lookup,
+      });
+      const release = vi.fn(result.release);
+      catalogTransport.releases.push(release);
+      return { ...result, release };
+    }),
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/provider-model-shared", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-model-shared")>()),
@@ -25,6 +47,7 @@ vi.mock("openclaw/plugin-sdk/state-paths", () => ({
 
 import type { ProviderResolveDynamicModelContext } from "openclaw/plugin-sdk/core";
 import {
+  COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS,
   fetchCopilotModelCatalog,
   resolveCopilotForwardCompatModel,
   selectCopilotStarterModel,
@@ -431,7 +454,18 @@ describe("github-copilot runtime auth", () => {
 });
 
 describe("fetchCopilotModelCatalog", () => {
-  afterEach(() => vi.unstubAllGlobals());
+  beforeEach(() => {
+    catalogTransport.lookup.mockReset();
+    catalogTransport.releases.length = 0;
+    vi.mocked(fetchWithSsrFGuard).mockClear();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+    for (const release of catalogTransport.releases) {
+      expect(release).toHaveBeenCalledOnce();
+    }
+  });
 
   function fetchCatalogWithFetch({
     fetchImpl,
@@ -690,6 +724,7 @@ describe("fetchCopilotModelCatalog", () => {
     },
   );
   it("selects onboarding's starter model using the configured integration identity", async () => {
+    catalogTransport.lookup.mockResolvedValueOnce([{ address: "10.0.0.5", family: 4 }]);
     const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
       const requestUrl = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
       if (requestUrl.endsWith("/copilot_internal/user")) {
@@ -781,6 +816,13 @@ describe("fetchCopilotModelCatalog", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
 
+    expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.githubcopilot.com/models",
+        policy: { allowedOrigins: ["https://api.githubcopilot.com"] },
+      }),
+    );
+    expect(catalogTransport.lookup).toHaveBeenCalledWith("api.githubcopilot.com", { all: true });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     const [calledUrl, calledInit] = fetchImpl.mock.calls[0] ?? [];
     expect(calledUrl).toBe("https://api.githubcopilot.com/models");
@@ -948,6 +990,63 @@ describe("fetchCopilotModelCatalog", () => {
     });
     expect(out[1]).not.toHaveProperty("contextTokens");
   });
+
+  it.each(["redirect", "metadata DNS"] as const)(
+    "blocks unsafe catalog %s targets",
+    async (source) => {
+      const fetchImpl = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(
+          source === "redirect"
+            ? new Response(null, { status: 302, headers: { location: "http://127.0.0.1/private" } })
+            : makeResponse(200, { data: [] }),
+        );
+      if (source === "metadata DNS") {
+        catalogTransport.lookup.mockResolvedValueOnce([{ address: "169.254.169.254", family: 4 }]);
+      }
+      await expect(
+        fetchCatalogWithFetch({
+          copilotApiToken: "tid=test",
+          baseUrl: "https://api.githubcopilot.com",
+          fetchImpl,
+        }),
+      ).rejects.toThrow(/blocked|private|metadata/i);
+      expect(fetchImpl).toHaveBeenCalledTimes(source === "redirect" ? 1 : 0);
+    },
+  );
+
+  it.each(["timeout", "caller"] as const)(
+    "cancels pending catalog transport on %s abort",
+    async (source) => {
+      vi.useFakeTimers();
+      const started = Promise.withResolvers<void>();
+      const controller = new AbortController();
+      const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+        const signal = expectDefined(init?.signal, "catalog request signal");
+        return await new Promise<Response>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          started.resolve();
+        });
+      });
+      const pending = fetchCatalogWithFetch({
+        copilotApiToken: "tid=test",
+        baseUrl: "https://api.githubcopilot.com",
+        ...(source === "caller" ? { signal: controller.signal } : {}),
+        fetchImpl,
+      });
+      const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+      await started.promise;
+      if (source === "timeout") {
+        await vi.advanceTimersByTimeAsync(COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS);
+      } else {
+        expect(vi.getTimerCount()).toBe(0);
+        controller.abort();
+      }
+      await rejected;
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 
   it("cancels stalled non-2xx response bodies before the caller falls back", async () => {
     let canceled = false;

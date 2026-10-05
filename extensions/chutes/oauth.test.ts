@@ -19,33 +19,20 @@ afterAll(() => {
 });
 
 function boundedErrorResponse(body: string, status = 500) {
-  const encoded = new TextEncoder().encode(body);
-  let read = false;
-  const cancel = vi.fn(async () => undefined);
-  const releaseLock = vi.fn();
-  const text = vi.fn(async () => {
-    throw new Error("response.text() should not be called");
-  });
-  const response = {
-    ok: false,
-    status,
-    headers: new Headers(),
-    body: {
-      getReader: () => ({
-        read: async () => {
-          if (read) {
-            return { done: true, value: undefined };
-          }
-          read = true;
-          return { done: false, value: encoded };
-        },
-        cancel,
-        releaseLock,
-      }),
-    },
-    text,
-  } as unknown as Response;
-
+  const cancel = vi.fn();
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(body));
+      },
+      cancel,
+    }),
+    { status },
+  );
+  const releaseLock = vi.spyOn(ReadableStreamDefaultReader.prototype, "releaseLock");
+  const text = vi
+    .spyOn(response, "text")
+    .mockRejectedValue(new Error("response.text() should not be called"));
   return { response, cancel, releaseLock, text };
 }
 
@@ -204,6 +191,7 @@ describe("chutes plugin OAuth", () => {
     expect(errorResponse.text).not.toHaveBeenCalled();
     expect(errorResponse.cancel).toHaveBeenCalledTimes(1);
     expect(errorResponse.releaseLock).toHaveBeenCalledTimes(1);
+    expect(fetchFn.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
   });
 
   it("cancels oversized token exchange JSON body via the 16 MiB provider cap", async () => {
@@ -343,6 +331,7 @@ describe("chutes plugin OAuth", () => {
     });
     expect(timeoutSpy).toHaveBeenCalledOnce();
     expect(timeoutSpy).toHaveBeenCalledWith(30_000);
+    expect(fetchFn.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
   });
 
   it("falls back to CHUTES_CLIENT_ID when the credential has no client id", async () => {

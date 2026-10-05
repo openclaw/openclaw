@@ -30,7 +30,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     return result;
   };
   const readFile = async (...args: Parameters<typeof actual.readFile>) => {
-    const match = /^\/proc\/(\d+)\/stat$/.exec(String(args[0]));
+    const match = typeof args[0] === "string" ? /^\/proc\/(\d+)\/stat$/.exec(args[0]) : null;
     if (match && fixture.mocks?.listProcesses) {
       const row = fixture.linuxRows.get(Number(match[1]));
       if (!row) {
@@ -110,8 +110,8 @@ export function mockChromeMcpProcesses(mocks: ProcessMocks): void {
       if (!killProcess) {
         throw new Error("synthetic process census has no signal handler");
       }
-      if (typeof signal !== "string") {
-        throw new Error("expected a named process signal");
+      if (signal !== "SIGTERM" && signal !== "SIGKILL") {
+        throw new Error("expected a Chrome MCP cleanup signal");
       }
       killProcess(pid, signal);
       return true;

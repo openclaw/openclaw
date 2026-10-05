@@ -408,8 +408,7 @@ describe("waitForControlUiDocument", () => {
         headers: { "content-type": "text/html" },
       }),
     );
-    const fetch = vi
-      .spyOn(fetchGuard, "fetchConfiguredLocalOriginWithSsrFGuard")
+    vi.spyOn(fetchGuard, "fetchConfiguredLocalOriginWithSsrFGuard")
       .mockResolvedValueOnce(head)
       .mockResolvedValueOnce(repaired);
 

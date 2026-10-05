@@ -1,10 +1,16 @@
-import "./chrome-mcp-process.test-support.js";
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { ChromeMcpSession } from "./chrome-mcp-contracts.js";
-import { resetChromeMcpProcessMocks } from "./chrome-mcp-process.test-support.js";
 import { resetChromeMcpSessionsForTest } from "./chrome-mcp-session.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
+
+const { resetChromeMcpProcessMocks } = await vi.hoisted(
+  () => import("./chrome-mcp-process.test-support.js"),
+);
+
+export function waitForChromeMcpState<T>(assertion: () => T | Promise<T>): Promise<T> {
+  return vi.waitFor(assertion, { interval: 1 });
+}
 
 export type ToolCall = {
   name: string;

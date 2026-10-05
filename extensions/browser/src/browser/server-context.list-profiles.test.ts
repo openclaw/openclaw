@@ -1,13 +1,8 @@
-import "./chrome-mcp-process.test-support.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./server-context.chrome-test-harness.js";
-import {
-  mockChromeMcpProcesses,
-  resetChromeMcpProcessMocks,
-} from "./chrome-mcp-process.test-support.js";
 import {
   resetChromeMcpSessionsForTest,
   setChromeMcpSessionFactoryForTest,
@@ -20,6 +15,10 @@ import { createBrowserRouteApp, createBrowserRouteResponse } from "./routes/test
 import { createBrowserRouteContext } from "./server-context.js";
 import { beginProfileTransition } from "./server-context.lifecycle.js";
 import { makeBrowserProfile, makeBrowserServerState } from "./server-context.test-harness.js";
+
+const { mockChromeMcpProcesses, resetChromeMcpProcessMocks } = await vi.hoisted(
+  () => import("./chrome-mcp-process.test-support.js"),
+);
 
 beforeEach(() => {
   getChromeMcpModule.clear();

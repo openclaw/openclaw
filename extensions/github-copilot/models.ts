@@ -7,6 +7,10 @@ import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
+} from "openclaw/plugin-sdk/ssrf-runtime";
+import {
   asPositiveSafeInteger,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -305,16 +309,23 @@ export async function fetchCopilotModelCatalog(
   const timeoutId = controller
     ? setTimeout(() => controller.abort(), COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS)
     : undefined;
+  let release: (() => Promise<void>) | undefined;
   try {
-    const res = await fetch(url, {
-      method: "GET",
-      headers: {
-        Accept: "application/json",
-        ...buildCopilotRuntimeHeaders({ headers: params.headers }),
-        Authorization: `Bearer ${params.copilotApiToken}`,
-      },
+    const guarded = await fetchWithSsrFGuard({
+      url,
+      policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(trimmedBase),
       signal: params.signal ?? controller?.signal,
+      init: {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          ...buildCopilotRuntimeHeaders({ headers: params.headers }),
+          Authorization: `Bearer ${params.copilotApiToken}`,
+        },
+      },
     });
+    release = guarded.release;
+    const res = guarded.response;
     if (!res.ok) {
       // Failed discovery never consumes this body, so release the transport before cleanup.
       await res.body?.cancel().catch(() => undefined);
@@ -337,5 +348,6 @@ export async function fetchCopilotModelCatalog(
     if (timeoutId !== undefined) {
       clearTimeout(timeoutId);
     }
+    await release?.();
   }
 }

@@ -14,6 +14,7 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -273,36 +274,43 @@ export async function discoverMantleModels(params: {
   const endpoint = `${mantleEndpoint(region)}/v1/models`;
 
   try {
-    const response = await fetch(endpoint, {
-      method: "GET",
-      signal: AbortSignal.timeout(MANTLE_DISCOVERY_TIMEOUT_MS),
-      headers: {
-        Authorization: `Bearer ${bearerToken}`,
-        Accept: "application/json",
+    const { response, release } = await fetchWithSsrFGuard({
+      url: endpoint,
+      timeoutMs: MANTLE_DISCOVERY_TIMEOUT_MS,
+      requireHttps: true,
+      auditContext: "amazon-bedrock-mantle.discovery",
+      init: {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${bearerToken}`,
+          Accept: "application/json",
+        },
       },
     });
+    try {
+      if (!response.ok) {
+        throw new LiveModelCatalogHttpError("amazon-bedrock-mantle", response.status);
+      }
 
-    if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
-      throw new LiveModelCatalogHttpError("amazon-bedrock-mantle", response.status);
+      const body = await readMantleModelDiscoveryJson(response);
+      const models = body.data
+        .filter((model) => model.id?.trim())
+        .map((model) => ({
+          id: model.id,
+          name: model.id,
+          reasoning: inferReasoningSupport(model.id),
+          input: ["text" as const],
+          cost: DEFAULT_COST,
+          contextWindow: DEFAULT_CONTEXT_WINDOW,
+          maxTokens: DEFAULT_MAX_TOKENS,
+        }))
+        .toSorted((left, right) => left.id.localeCompare(right.id));
+
+      discoveryCache.set(region, { bearerToken, models, fetchedAt: Date.now() });
+      return models;
+    } finally {
+      await release();
     }
-
-    const body = await readMantleModelDiscoveryJson(response);
-    const models = body.data
-      .filter((model) => model.id?.trim())
-      .map((model) => ({
-        id: model.id,
-        name: model.id,
-        reasoning: inferReasoningSupport(model.id),
-        input: ["text" as const],
-        cost: DEFAULT_COST,
-        contextWindow: DEFAULT_CONTEXT_WINDOW,
-        maxTokens: DEFAULT_MAX_TOKENS,
-      }))
-      .toSorted((left, right) => left.id.localeCompare(right.id));
-
-    discoveryCache.set(region, { bearerToken, models, fetchedAt: Date.now() });
-    return models;
   } catch (error) {
     if (params.discoveryMode === "strict") {
       throw error;

@@ -1,4 +1,3 @@
-import "./chrome-mcp-process.test-support.js";
 import childProcess, { type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
@@ -11,13 +10,13 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createChromeMcpSession } from "./chrome-mcp-connect.js";
 import type { ChromeMcpSession } from "./chrome-mcp-contracts.js";
 import {
-  mockChromeMcpProcesses,
-  resetChromeMcpProcessMocks,
-} from "./chrome-mcp-process.test-support.js";
-import {
   getChromeMcpSessionOwner,
   setChromeMcpSessionFactoryForTest,
 } from "./chrome-mcp-session.js";
+
+const { mockChromeMcpProcesses, resetChromeMcpProcessMocks } = await vi.hoisted(
+  () => import("./chrome-mcp-process.test-support.js"),
+);
 
 vi.mock("openclaw/plugin-sdk/logging-core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/logging-core")>()),

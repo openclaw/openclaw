@@ -1,6 +1,30 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
+const catalogTransport = vi.hoisted(() => {
+  const releases: Array<() => Promise<void>> = [];
+  return {
+    lookup: vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]),
+    releases,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: async (params: Parameters<typeof actual.fetchWithSsrFGuard>[0]) => {
+      const result = await actual.fetchWithSsrFGuard({
+        ...params,
+        lookupFn: catalogTransport.lookup,
+      });
+      const release = vi.fn(result.release);
+      catalogTransport.releases.push(release);
+      return { ...result, release };
+    },
+  };
+});
+
 const getTokenProviderMock = vi.hoisted(() => vi.fn());
 vi.mock("@aws/bedrock-token-generator", () => ({ getTokenProvider: getTokenProviderMock }));
 
@@ -123,6 +147,10 @@ describe("bedrock mantle discovery", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    catalogTransport.lookup
+      .mockReset()
+      .mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    catalogTransport.releases.length = 0;
     getTokenProviderMock.mockReset();
     discoveryDebugSpy.mockClear();
     discoveryLoggerState.debugEnabled = true;
@@ -130,8 +158,14 @@ describe("bedrock mantle discovery", () => {
   });
 
   afterEach(() => {
-    vi.unstubAllGlobals();
-    vi.restoreAllMocks();
+    try {
+      for (const release of catalogTransport.releases) {
+        expect(release).toHaveBeenCalledOnce();
+      }
+    } finally {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
   });
 
   it("returns undefined when no bearer token env var is set", () => {
@@ -430,23 +464,46 @@ describe("bedrock mantle discovery", () => {
     expect(models[0]?.id).toBe("anthropic.claude-sonnet-4-6");
   });
 
-  it("passes a timeout signal to Mantle model discovery fetches", async () => {
-    const controller = new AbortController();
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
-    const mockFetch = vi.fn<typeof fetch>().mockResolvedValue(
-      modelDiscoveryResponse({
-        data: [{ id: "anthropic.claude-sonnet-4-6", object: "model" }],
-      }),
+  it("aborts Mantle discovery when its request deadline expires", async () => {
+    vi.useFakeTimers();
+    const started = createDeferred<AbortSignal>();
+    const mockFetch = vi.fn<typeof fetch>(
+      (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (!signal) {
+            reject(new Error("Missing discovery abort signal"));
+            return;
+          }
+          started.resolve(signal);
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        }),
     );
+    try {
+      const discovery = discover(mockFetch, { discoveryMode: "strict" });
+      const rejected = expect(discovery).rejects.toThrow("request timed out");
+      const signal = await started.promise;
+      expect(signal.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await rejected;
+      expect(signal.aborted).toBe(true);
+      expect(mockFetch).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
-    await discover(mockFetch);
+  it("rejects a private DNS destination before sending the bearer credential", async () => {
+    catalogTransport.lookup.mockResolvedValueOnce([{ address: "127.0.0.1", family: 4 }]);
+    const mockFetch = vi.fn<typeof fetch>().mockResolvedValue(modelDiscoveryResponse({ data: [] }));
 
-    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
-    expect(mockFetch).toHaveBeenNthCalledWith(
-      1,
-      expect.any(String),
-      expect.objectContaining({ signal: controller.signal }),
+    await expect(discover(mockFetch, { discoveryMode: "strict" })).rejects.toThrow(
+      /private|internal/i,
     );
+    expect(catalogTransport.lookup).toHaveBeenCalledWith(`bedrock-mantle.${testRegion}.api.aws`, {
+      all: true,
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("bounds successful Mantle model discovery JSON responses", async () => {

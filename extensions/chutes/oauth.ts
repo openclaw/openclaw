@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
 import {
   generatePkceVerifierChallenge,
@@ -17,6 +18,7 @@ import {
   type OAuthCredentials,
   type OAuthPrompt,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const CHUTES_AUTHORIZE_ENDPOINT = "https://api.chutes.ai/idp/authorize";
@@ -94,51 +96,65 @@ async function requestChutesTokenGrant(params: {
   now?: number;
   signal?: AbortSignal;
 }): Promise<{ access: string; refresh: string | undefined; expires: number }> {
-  const response = await fetch(CHUTES_TOKEN_ENDPOINT, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: params.body,
-    signal: buildOAuthRequestSignal({
-      timeoutMs: CHUTES_OAUTH_REQUEST_TIMEOUT_MS,
-      ...(params.signal ? { signal: params.signal } : {}),
+  const { response, release } = await fetchWithSsrFGuard(
+    withTrustedEnvProxyGuardedFetchMode({
+      url: CHUTES_TOKEN_ENDPOINT,
+      init: {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: params.body,
+      },
+      signal: buildOAuthRequestSignal({
+        timeoutMs: CHUTES_OAUTH_REQUEST_TIMEOUT_MS,
+        ...(params.signal ? { signal: params.signal } : {}),
+      }),
     }),
-  });
-  await assertOkOrThrowProviderError(response, `${params.responseLabel} failed`);
+  );
+  try {
+    await assertOkOrThrowProviderError(response, `${params.responseLabel} failed`);
 
-  const data = await readProviderJsonResponse<{
-    access_token?: string;
-    refresh_token?: string;
-    expires_in?: number;
-  }>(response, params.responseLabel);
-  const access = normalizeOptionalString(data.access_token);
-  const expires = resolveChutesExpiresAt(data.expires_in, params.now ?? Date.now());
-  if (!access) {
-    throw new Error(`${params.responseLabel} returned no access_token`);
+    const data = await readProviderJsonResponse<{
+      access_token?: string;
+      refresh_token?: string;
+      expires_in?: number;
+    }>(response, params.responseLabel);
+    const access = normalizeOptionalString(data.access_token);
+    const expires = resolveChutesExpiresAt(data.expires_in, params.now ?? Date.now());
+    if (!access) {
+      throw new Error(`${params.responseLabel} returned no access_token`);
+    }
+    if (expires === undefined) {
+      throw new Error(`${params.responseLabel} returned invalid expires_in`);
+    }
+    return { access, refresh: normalizeOptionalString(data.refresh_token), expires };
+  } finally {
+    await release();
   }
-  if (expires === undefined) {
-    throw new Error(`${params.responseLabel} returned invalid expires_in`);
-  }
-  return { access, refresh: normalizeOptionalString(data.refresh_token), expires };
 }
 
 async function fetchChutesUserInfo(params: {
   accessToken: string;
   signal?: AbortSignal;
 }): Promise<ChutesUserInfo | null> {
-  const response = await fetch(CHUTES_USERINFO_ENDPOINT, {
-    headers: { Authorization: `Bearer ${params.accessToken}` },
-    signal: buildOAuthRequestSignal({
-      timeoutMs: CHUTES_OAUTH_REQUEST_TIMEOUT_MS,
-      ...(params.signal ? { signal: params.signal } : {}),
+  const { response, release } = await fetchWithSsrFGuard(
+    withTrustedEnvProxyGuardedFetchMode({
+      url: CHUTES_USERINFO_ENDPOINT,
+      init: { headers: { Authorization: `Bearer ${params.accessToken}` } },
+      signal: buildOAuthRequestSignal({
+        timeoutMs: CHUTES_OAUTH_REQUEST_TIMEOUT_MS,
+        ...(params.signal ? { signal: params.signal } : {}),
+      }),
     }),
-  });
-  if (!response.ok) {
-    // Release the connection instead of leaving the error body to idle timeout.
-    await response.body?.cancel().catch(() => undefined);
-    return null;
+  );
+  try {
+    if (!response.ok) {
+      return null;
+    }
+    const data = await readProviderJsonResponse<unknown>(response, "Chutes userinfo");
+    return data && typeof data === "object" ? (data as ChutesUserInfo) : null;
+  } finally {
+    await release();
   }
-  const data = await readProviderJsonResponse<unknown>(response, "Chutes userinfo");
-  return data && typeof data === "object" ? (data as ChutesUserInfo) : null;
 }
 
 async function exchangeChutesCodeForTokens(params: {

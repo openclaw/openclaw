@@ -20,7 +20,9 @@ async function runRootHelp(
     vi
       .spyOn(helpMetadata, "outputPrecomputedRootHelpText")
       .mockImplementation(setup.outputPrecomputedRootHelpText ?? (() => false)),
-    vi.spyOn(rootHelp, "outputRootHelp").mockImplementation(setup.outputRootHelp ?? (() => {})),
+    vi
+      .spyOn(rootHelp, "outputRootHelp")
+      .mockImplementation(setup.outputRootHelp ?? (async () => {})),
     vi
       .spyOn(liveHelp, "loadRootHelpRenderOptionsForConfigSensitivePlugins")
       .mockImplementation(

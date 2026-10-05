@@ -11,11 +11,13 @@ const cryptoRequire = vi.hoisted(() =>
 
 vi.mock("node:module", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:module")>();
-  return {
-    ...actual,
-    createRequire: (url: string | URL) =>
-      /\/matrix\/deps\.[jt]s$/.test(String(url)) ? cryptoRequire : actual.createRequire(url),
-  };
+  const createRequire = (url: string | URL) =>
+    /\/matrix\/deps\.[jt]s$/.test(String(url)) ? cryptoRequire : actual.createRequire(url);
+  return new Proxy(actual, {
+    get(target, property, receiver) {
+      return property === "createRequire" ? createRequire : Reflect.get(target, property, receiver);
+    },
+  });
 });
 
 function resolveTestNativeBindingFilename(): string | null {

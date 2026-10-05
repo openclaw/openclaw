@@ -14,7 +14,7 @@ import {
   GatewayLockError,
   resolveGatewayLockPaths,
 } from "../infra/gateway-lock.js";
-import * as gatewayLock from "../infra/gateway-lock.js";
+import * as gatewayLockModule from "../infra/gateway-lock.js";
 import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
 import { prepareGithubIssue } from "../infra/github-issue.js";
 import { createSessionSqliteMigrationRun } from "../infra/session-sqlite-migration-manifest.js";
@@ -48,8 +48,8 @@ async function createLockFixture() {
     OPENCLAW_STATE_DIR: stateDir,
     VITEST: "1",
   };
-  const acquireLock = gatewayLock.acquireGatewayLock;
-  vi.spyOn(gatewayLock, "acquireGatewayLock").mockImplementation((options) =>
+  const acquireLock = gatewayLockModule.acquireGatewayLock;
+  vi.spyOn(gatewayLockModule, "acquireGatewayLock").mockImplementation((options) =>
     acquireLock(
       options?.role === "sqlite-maintenance"
         ? {
@@ -236,7 +236,7 @@ describe("doctor SQLite maintenance lock", () => {
 
   it("preserves a failed lock operation and its recovery action without running maintenance", async () => {
     const run = vi.fn();
-    vi.spyOn(gatewayLock, "acquireGatewayLock").mockRejectedValue(
+    vi.spyOn(gatewayLockModule, "acquireGatewayLock").mockRejectedValue(
       new GatewayLockError(
         "failed to acquire gateway state ownership",
         Object.assign(new Error("permission denied"), { code: "EACCES" }),
