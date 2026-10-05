@@ -7,6 +7,8 @@ import type {
 
 export function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCommand {
   if (
+    command.type === "localWorkspace.get" ||
+    command.type === "localWorkspace.exists" ||
     command.type === "pairing.allowFrom" ||
     command.type === "secrets.metadata" ||
     command.type === "secrets.execEnvironment" ||
@@ -410,6 +412,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   }
   if (command.type === "subagents.forChildSession") {
     return bytes + Buffer.byteLength(command.childSessionKey, "utf8");
+  }
+  if (command.type === "localWorkspace.get" || command.type === "localWorkspace.exists") {
+    return bytes + Buffer.byteLength(command.input.id, "utf8");
   }
   if (command.type === "sandboxRegistry.get") {
     return bytes + Buffer.byteLength(command.containerName, "utf8");

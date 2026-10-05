@@ -33,6 +33,7 @@ import { runVectorKnnInSubprocess } from "./manager-search-knn-subprocess.js";
 import { searchVector } from "./manager-search-vector.js";
 import { prepareExactPathMatcher } from "./manager-search.js";
 import type { MemoryKeywordWorkerResult } from "./manager-search.worker.js";
+import { assertMemoryShadowIdentity, readMemoryShadowIdentity } from "./manager-shadow-task.js";
 import { applyProjectRanking, prepareActiveProjectKeys } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
@@ -125,7 +126,23 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       200,
       Math.max(1, Math.floor(maxResults * hybrid.candidateMultiplier)),
     );
-    const keywordOptions = { boostFallbackRanking: true, signal: opts?.signal };
+    const fuseRecallMetadata =
+      (opts?.lexicalOnly === true || this.providerRequirement.mode === "fts-only") &&
+      sourceFilterList.length === 1 &&
+      sourceFilterList[0] === "sessions";
+    const keywordOptions = { boostFallbackRanking: true, signal: opts?.signal, fuseRecallMetadata };
+    const database = this.publishedDatabase;
+    const databasePath = resolveUserPath(this.settings.store.databasePath);
+    const fileIdentity = fuseRecallMetadata ? readMemoryShadowIdentity(databasePath) : undefined;
+    const assertReadOwner = () => {
+      opts?.signal?.throwIfAborted();
+      if (database.closed || !database.db.isOpen || this.publishedDatabase !== database) {
+        throw new Error("Memory retrieval changed its captured database owner");
+      }
+      if (fileIdentity) {
+        assertMemoryShadowIdentity(databasePath, fileIdentity);
+      }
+    };
     let preparedKeyword: MemoryKeywordWorkerResult | undefined;
     let releaseGeneration: (() => Promise<void>) | undefined;
     const releaseReadGeneration = async () => {
@@ -138,7 +155,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       releaseGeneration ??= await acquireMemoryIndexReadGeneration(
         this.settings.store.databasePath,
         opts?.signal,
+        fuseRecallMetadata,
       );
+      assertReadOwner();
       preparedKeyword = undefined;
       if (
         sourceFilterAllowed &&
@@ -223,7 +242,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         return [];
       }
       const recoveringEmbeddingProvider = this.embeddingBootstrapFailure !== undefined;
-      if (recoveringEmbeddingProvider) {
+      if (recoveringEmbeddingProvider || (fuseRecallMetadata && !this.providerInitialized)) {
         await releaseReadGeneration();
       }
       const embeddingBootstrapKeywordOnly = await this.ensureEmbeddingProviderForSearch(
@@ -248,6 +267,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         // Reinitialize it before identity validation; leaving the lifecycle pending
         // makes a valid existing index look mismatched and drops keyword results.
         this.resetProviderInitializationForRetry();
+        if (fuseRecallMetadata) {
+          await releaseReadGeneration();
+        }
         await this.ensureProviderInitialized();
       }
       this.assertRequiredProviderAvailable("search");
@@ -256,6 +278,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         !this.provider &&
         this.providerLifecycle.mode === "degraded"
       ) {
+        if (fuseRecallMetadata) {
+          await releaseReadGeneration();
+        }
         const activatedFallback = await this.activateFallbackProvider(
           this.providerLifecycle.reason,
         ).catch((fallbackErr: unknown) => {
@@ -608,7 +633,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     };
     return await this.withManagerOperation(async () => {
       try {
-        return await runSearch();
+        const results = await runSearch();
+        assertReadOwner();
+        return results;
       } finally {
         await releaseReadGeneration();
       }
@@ -686,6 +713,6 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       },
       sourceFilterVec: this.buildSourceFilter("c", sourceFilterList),
     });
-    return this.attachRecallMetadata(results, signal, sourceFilterList);
+    return this.attachRecallMetadata(results, signal);
   }
 }

@@ -36,7 +36,7 @@ export async function finalizeManagedWorktreeRemoval(params: {
   options.beforeRun();
   const removedAt = params.now();
   // A failed housekeeping command must not make a deleted checkout appear live.
-  updateRegistryWorktree(
+  await updateRegistryWorktree(
     env,
     record.id,
     {
@@ -44,7 +44,11 @@ export async function finalizeManagedWorktreeRemoval(params: {
       snapshotRef,
       ...(params.runEndCleanup ? { runEndCleanup: params.runEndCleanup } : {}),
     },
-    { assertCurrent: options.beforeRun, removalToken: params.claimToken },
+    {
+      assertCurrent: options.beforeRun,
+      removalToken: params.claimToken,
+      workerAuthority: params.workerAuthority,
+    },
   );
   params.onFinalized();
   try {
@@ -79,7 +83,7 @@ export async function finalizeManagedWorktreeRemoval(params: {
     }
     if (params.runEndCleanup) {
       try {
-        updateRegistryWorktree(
+        await updateRegistryWorktree(
           env,
           record.id,
           {
@@ -89,9 +93,16 @@ export async function finalizeManagedWorktreeRemoval(params: {
               reason: truncateUtf16Safe(formatErrorMessage(error), 500),
             },
           },
-          { assertCurrent: options.beforeRun, removalToken: params.claimToken },
+          {
+            assertCurrent: options.beforeRun,
+            removalToken: params.claimToken,
+            workerAuthority: params.workerAuthority,
+          },
         );
-      } catch {
+      } catch (outcomeError) {
+        if (hasSqliteWorkerOutcomeUnknown(outcomeError)) {
+          throw outcomeError;
+        }
         // Preserve the housekeeping failure if its outcome cannot be recorded.
       }
     }

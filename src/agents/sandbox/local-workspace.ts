@@ -50,8 +50,9 @@ export async function prepareLocalSandboxWorkspace(params: {
         },
         (allocation) => {
           allocated();
-          return withLocalWorkspaceProjection(owner, (state) =>
-            state.prepare({ sandbox: params.sandbox, allocation }),
+          return withLocalWorkspaceProjection(
+            { ...owner, workerAuthority: allocation.workerAuthority },
+            (state) => state.prepare({ sandbox: params.sandbox, allocation }),
           );
         },
       );

@@ -991,9 +991,20 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["recordMemorySessionTombstonesInDatabase"],
+        operations: ["recordMemorySessionTombstonesInDatabase", "hasMemorySessionTombstone"],
         evidence:
-          "memory-entry-origins.worker.ts:76 -> memory-forget-kernel.ts:40 is the only production writer; manager-cpu-entrypoints.ts:38 registers the worker backend. The separate hasMemorySessionTombstone host reader stays T1.",
+          "memory-entry-origins.worker.ts -> memory-forget-kernel.ts owns tombstone writes; manager-publication.worker.ts owns every hasMemorySessionTombstone call, including the session.current predicate retained under workspace custody for shadow publication.",
+      },
+    ],
+  ],
+  [
+    "extensions/memory-core/src/memory/manager-source-state.ts",
+    [
+      {
+        tier: "W",
+        operations: ["loadMemorySourceFileState", "refreshMemorySessionSourceState"],
+        evidence:
+          "manager-publication.worker.ts source.state and manager-search.worker.ts source-state/recall-metadata are the only runtime callers. Source synchronization and inspection await MemoryIndexDatabase.readSourceState; the kernel remains directly callable only by isolated tests.",
       },
     ],
   ],
@@ -1192,9 +1203,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["readCuratedCandidateBatch"],
+        operations: ["readCuratedCandidateBatch", "readMemoryRecallMetadata"],
         evidence:
-          "extensions/memory-core/src/memory/manager-search.worker.ts:160,161 → curated readers → memory-recall-metadata.ts:162; SDK barrels only re-export.",
+          "extensions/memory-core/src/memory/manager-search.worker.ts owns curated and recall-metadata reads, including fused session-only keyword requests. The private-local-only memory-core-host-engine-storage facade only re-exports kernels; no host runtime reader remains.",
       },
     ],
   ],
@@ -1900,6 +1911,7 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/gateway/worker-environments/local-workspace-store.kernel.ts", // Projection read/write workers and worktree retirement worker only.
   "src/skills/library/import.kernel.ts", // Upload commands execute only in the shared-state writer.
   "src/skills/library/service.kernel.ts", // Library catalog and revision reads use the shared-state read registry.
   "src/config/sessions/conversation-delivery-store.kernel.ts", // Agent execution registry writes and session transcript worker reads only.

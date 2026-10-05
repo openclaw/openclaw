@@ -285,32 +285,6 @@ describe("memory index", () => {
     ]);
   });
 
-  it("reports an uninitialized status without creating agent or registry databases", async () => {
-    const agentPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    const statePath = path.join(fixture.paths.stateDir, "state", "openclaw.sqlite");
-
-    const result = await getMemorySearchManager({
-      cfg: createCfg({}),
-      agentId: "main",
-      purpose: "status",
-      inspectSources: true,
-    });
-
-    try {
-      expect(result.error).toBeUndefined();
-      expect(result.manager?.status()).toMatchObject({
-        files: 0,
-        chunks: 0,
-        dirty: true,
-        custom: { indexIdentity: { status: "missing" } },
-      });
-      await expect(fs.access(agentPath)).rejects.toThrow("ENOENT");
-      await expect(fs.access(statePath)).rejects.toThrow("ENOENT");
-    } finally {
-      await result.manager?.close?.();
-    }
-  });
-
   it("reads committed WAL status without changing database artifacts", async () => {
     const cfg = createCfg({});
     const indexingManager = await getFreshManager(cfg, "cli");

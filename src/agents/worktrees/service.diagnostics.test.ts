@@ -27,6 +27,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
 import { killPidIfAlive } from "../../test-utils/process-tree.js";
+import { WORKTREE_MUTATION_LEASE_SCOPE } from "./capacity-contract.js";
 import * as worktreeRunLease from "./run-lease.js";
 import { ManagedWorktreeService, WorktreeSnapshotError } from "./service.js";
 import {
@@ -430,6 +431,10 @@ describe("ManagedWorktreeService removal timing", { concurrent: false }, () => {
     let callbackResult: unknown;
     const acquire = stateLease.withOpenClawStateLeaseAsync;
     vi.spyOn(stateLease, "withOpenClawStateLeaseAsync").mockImplementation(async (...args) => {
+      // Nested reconciliation settles inside the removal body.
+      if (args[0].scope !== WORKTREE_MUTATION_LEASE_SCOPE) {
+        return await acquire(...args);
+      }
       admissionEntered.resolve();
       await releaseAdmission.promise;
       const result = await acquire(...args);

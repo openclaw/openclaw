@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { getMockCallOutput } from "./test-runtime-capture.js";
@@ -102,6 +103,7 @@ describe("update-cli", () => {
       await fs.writeFile(wrapperPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
       const stateDir = profileStateDir("wrapper-service");
       initializeExistingUpdateProfile({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
+      openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } });
       tempDirsToCleanup.add(stateDir);
       await fs.mkdir(stateDir, { recursive: true });
       const configPath = path.join(stateDir, "openclaw.json");
@@ -312,6 +314,12 @@ describe("update-cli", () => {
       await Promise.all([fs.mkdir(callerState), fs.mkdir(managedState)]);
       initializeExistingUpdateProfile({ ...process.env, OPENCLAW_STATE_DIR: callerState });
       initializeExistingUpdateProfile({ ...process.env, OPENCLAW_STATE_DIR: managedState });
+      openOpenClawStateDatabase({
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: serviceOwnership === "owned" ? managedState : callerState,
+        },
+      });
       tempDirsToCleanup.add(callerState);
       tempDirsToCleanup.add(managedState);
       const callerBytes = '{"gateway":{"mode":"local"},"env":{"vars":{"CANARY":"caller"}}}\n';

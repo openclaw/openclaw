@@ -1,4 +1,4 @@
-import { hasLocalWorkspaceProjectionInDatabase } from "../../gateway/worker-environments/local-workspace-store.js";
+import { hasLocalWorkspaceProjectionInDatabase } from "../../gateway/worker-environments/local-workspace-store.kernel.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { requestSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db-contract.js";

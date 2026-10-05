@@ -21,6 +21,22 @@ export function createUserTurnProcessingCompletion(
   let processingCompletion: Result<AgentRunTerminalOutcome, unknown> | undefined;
   let processingCompletionPromise: Promise<AgentRunTerminalOutcome | undefined> | undefined;
   return {
+    withPendingInputCurrent: async <T>(run: () => T): Promise<Awaited<T>> => {
+      const pendingInput = readPendingInput();
+      return await (pendingInput?.runAsync
+        ? pendingInput.runAsync(run)
+        : pendingInput
+          ? pendingInput.run(run)
+          : run());
+    },
+    assertPendingInputLifetimeCurrent: () => {
+      const pendingInput = readPendingInput();
+      if (pendingInput?.assertLifetimeCurrent) {
+        pendingInput.assertLifetimeCurrent();
+      } else {
+        pendingInput?.run(() => {});
+      }
+    },
     getProcessingCompletion: () =>
       processingCompletion?.ok ? processingCompletion.value : readPendingInput()?.completion,
     completeProcessing: (outcome: AgentRunTerminalOutcome) => {
