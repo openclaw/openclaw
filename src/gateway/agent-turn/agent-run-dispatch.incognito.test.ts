@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { deliverAgentCommandResult } from "../../agents/command/delivery.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { replayAgentTurnIfCached } from "./agent-dedupe.js";
+import { captureAgentJobSession, setGatewayDedupeEntry } from "./agent-job.js";
 import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
 import { createTrackedDispatch } from "./agent-run-dispatch.test-support.js";
 
@@ -72,6 +74,54 @@ function createDispatch(session: (typeof sessionCases)[number]) {
 
 describe.each(sessionCases)("Gateway agent diagnostic output: $name", (session) => {
   const isPrivate = session.name !== "ordinary";
+
+  it("retains private replay diagnostics when a prior cancellation wins cleanup settlement", async () => {
+    const params = createDispatch(session);
+    const dedupeKeys = [`agent:${params.runId}`];
+    const cleanup = new CommandProcessCleanupError();
+    setGatewayDedupeEntry({
+      dedupe: params.context.dedupe,
+      key: dedupeKeys[0]!,
+      session: captureAgentJobSession(params.admittedRunEntry),
+      entry: {
+        ts: 200,
+        ok: true,
+        payload: { runId: params.runId, status: "timeout", stopReason: "rpc", endedAt: 200 },
+      },
+    });
+    mocks.command.mockImplementationOnce(async () => {
+      params.abortController.abort();
+      throw new Error(privateReply, { cause: cleanup });
+    });
+    await dispatchAgentRunFromGateway({ ...params, dedupeKeys });
+    expect(params.context.dedupe.get(dedupeKeys[0]!)).toMatchObject({
+      ok: false,
+      ...(isPrivate ? { incognito: true } : {}),
+      payload: {
+        status: "timeout",
+        stopReason: "rpc",
+        endedAt: 200,
+        summary: expect.stringContaining(cleanup.message),
+      },
+    });
+    params.context.chatAbortControllers.clear();
+    const emitAcceptance = vi.fn();
+    expect(
+      replayAgentTurnIfCached({
+        preflight: { runId: params.runId, agentDedupeKeys: dedupeKeys },
+        context: params.context,
+        io: { emitAcceptance, emitFinal: vi.fn() },
+      }),
+    ).toBe(true);
+    const [frame, metadata] = emitAcceptance.mock.calls[0] ?? [];
+    expect(frame?.[1]).toMatchObject({ summary: expect.stringContaining(privateReply) });
+    const diagnostics = JSON.stringify({ errorMessage: frame?.[2]?.message, ...metadata });
+    if (isPrivate) {
+      expect(diagnostics).not.toContain(privateReply);
+    } else {
+      expect(diagnostics).toContain(privateReply);
+    }
+  });
 
   it.each(session.modes)(
     "preserves the live result without persisting private %s output",

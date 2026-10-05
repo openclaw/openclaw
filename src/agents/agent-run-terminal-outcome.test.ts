@@ -1,5 +1,6 @@
 /** Tests normalized agent run terminal outcomes and sticky timeout/cancel behavior. */
 import { describe, expect, it } from "vitest";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { extractAgentRunTerminalError } from "./agent-run-result.js";
 import {
   buildAgentRunTerminalOutcome,
@@ -17,6 +18,89 @@ import {
 } from "./agent-run-terminal-outcome.js";
 
 describe("agent run terminal outcome", () => {
+  it.each(["rpc", "restart", "superseded", "timeout"])(
+    "retains %s while refining cleanup diagnostics in either observation order",
+    (stopReason) => {
+      const selected = buildAgentRunTerminalOutcome({
+        status: "timeout",
+        stopReason,
+        ...(stopReason === "timeout" ? { timeoutPhase: "provider" } : {}),
+        startedAt: 100,
+        endedAt: 200,
+        error: "Earlier provider diagnostic",
+      });
+      const nativeError = new CommandProcessCleanupError();
+      const cleanup = buildAgentRunTerminalOutcome({
+        status: "error",
+        endedAt: 300,
+        error: new AggregateError(
+          [new Error("Provider failed"), nativeError],
+          "Run settlement failed",
+        ),
+      });
+      for (const [first, second] of [
+        [selected, cleanup],
+        [cleanup, selected],
+      ]) {
+        const merged = mergeAgentRunTerminalOutcome(first, second!);
+        expect(merged).toMatchObject({
+          reason: selected.reason,
+          status: selected.status,
+          stopReason,
+          startedAt: 100,
+          endedAt: 200,
+          cleanupError: nativeError.message,
+        });
+        expect(merged.error).toContain("Earlier provider diagnostic");
+        expect(merged.error?.split(nativeError.message)).toHaveLength(2);
+        expect(mergeAgentRunTerminalOutcome(merged, cleanup)).toBe(merged);
+        expect(mergeAgentRunTerminalOutcome(merged, selected)).toBe(merged);
+      }
+      expect(
+        mergeAgentRunTerminalOutcome(
+          selected,
+          buildAgentRunTerminalOutcome({
+            status: "error",
+            error: "Ordinary late failure",
+            endedAt: 300,
+          }),
+        ),
+      ).toBe(selected);
+    },
+  );
+
+  it("keeps soft timeout precedence while retaining cleanup diagnostics", () => {
+    const timeout = buildAgentRunTerminalOutcome({ status: "timeout", endedAt: 200 });
+    const cleanup = buildAgentRunTerminalOutcome({
+      status: "error",
+      endedAt: 300,
+      error: new CommandProcessCleanupError(),
+    });
+    expect(mergeAgentRunTerminalOutcome(timeout, cleanup)).toMatchObject({
+      reason: "failed",
+      endedAt: 300,
+      cleanupError: cleanup.cleanupError,
+    });
+    expect(mergeAgentRunTerminalOutcome(cleanup, timeout)).toMatchObject({
+      reason: "timed_out",
+      endedAt: 200,
+      cleanupError: cleanup.cleanupError,
+    });
+  });
+
+  it("bounds cleanup diagnostics and does not infer provenance from error text", () => {
+    const message = new CommandProcessCleanupError().message;
+    expect(
+      buildAgentRunTerminalOutcome({ status: "error", error: new Error(message) }).cleanupError,
+    ).toBeUndefined();
+    const outcome = buildAgentRunTerminalOutcome({
+      status: "error",
+      error: new Error("x".repeat(10_000), { cause: new CommandProcessCleanupError() }),
+    });
+    expect(outcome.error!.length).toBeLessThanOrEqual(1_282);
+    expect(outcome.error).toMatch(new RegExp(`${message}$`));
+  });
+
   it.each([
     ["completed", "success"],
     ["hard_timeout", "timeout"],

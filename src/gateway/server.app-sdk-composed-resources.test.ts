@@ -35,7 +35,6 @@ import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import { environmentsHandlers } from "./server-methods/environments.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./server-methods/types.js";
-import * as lifecycleState from "./session-lifecycle-state.js";
 import {
   installGatewayTestHooks,
   startServer,
@@ -427,6 +426,8 @@ async function proveDeterministicGatewayContracts(): Promise<void> {
 }
 
 async function proveRealGatewayContracts(): Promise<void> {
+  // Gateway hooks reset event listeners; import lifecycle owners after that reset.
+  const lifecycleState = await import("./session-lifecycle-state.js");
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sdk-a2-gateway-"));
   const sessionKey = "agent:main:sdk-real-gateway";
   const sessionId = "sdk-real-gateway-session";

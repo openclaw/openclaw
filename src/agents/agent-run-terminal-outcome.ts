@@ -9,13 +9,20 @@ import {
 } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { asFiniteNumber as asFiniteTimestamp } from "@openclaw/normalization-core/number-coercion";
 import { readNonBlankString as asNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../infra/errors.js";
+import { redactSensitiveText } from "../logging/redact.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+} from "../process/exec-result.js";
 import {
   formatAbandonedLivenessError,
   formatBlockedLivenessError,
   isAbandonedLivenessState,
   isBlockedLivenessState,
 } from "../shared/agent-liveness.js";
+import { mergeAgentRunTerminalOutcome } from "./agent-run-terminal-outcome-merge.js";
 import type { AgentRunTerminalOutcome } from "./agent-run-terminal-outcome.types.js";
 import {
   AGENT_RUN_ABORTED_ERROR,
@@ -385,11 +392,13 @@ export {
   hasExecutionSettlement,
   isDefinitiveRunLifecycle,
 } from "@openclaw/normalization-core/agent-run-terminal-outcome";
-export { mergeAgentRunTerminalOutcome } from "./agent-run-terminal-outcome-merge.js";
+export { mergeAgentRunTerminalOutcome };
+export { selectAgentRunTerminalOutcome } from "./agent-run-terminal-outcome-merge.js";
 
 /** Raw terminal input collected from run wait/liveness/timeout paths. */
 type AgentRunTerminalInput = AgentRunTerminalFactInput & {
   error?: unknown;
+  cleanupError?: unknown;
   startedAt?: unknown;
   endedAt?: unknown;
 };
@@ -420,9 +429,19 @@ export function isStickyAgentRunTerminalOutcome(
 
 function formatAgentRunTerminalOutcome(
   facts: AgentRunTerminalFacts,
-  input: Pick<AgentRunTerminalInput, "error" | "startedAt" | "endedAt">,
+  input: Pick<AgentRunTerminalInput, "error" | "cleanupError" | "startedAt" | "endedAt">,
 ): AgentRunTerminalOutcome {
   const { reason, status, ...metadata } = facts;
+  // Inspect the branded cause before formatting erases native cleanup provenance.
+  const cleanupError = truncateUtf16Safe(
+    redactSensitiveText(
+      hasCommandProcessCleanupError(input.error)
+        ? new CommandProcessCleanupError({ cause: input.error }).message
+        : (asNonEmptyString(input.cleanupError) ?? ""),
+      { mode: "tools" },
+    ),
+    256,
+  );
   const rawError =
     input.error == null ? undefined : asNonEmptyString(formatErrorMessage(input.error));
   const error =
@@ -437,10 +456,11 @@ function formatAgentRunTerminalOutcome(
             : isAbandonedLivenessState(facts.livenessState)
               ? formatAbandonedLivenessError(rawError)
               : rawError;
-  return {
+  return mergeAgentRunTerminalOutcome(undefined, {
     reason,
     status,
     ...(error ? { error } : {}),
+    ...(cleanupError ? { cleanupError } : {}),
     ...metadata,
     ...(asFiniteTimestamp(input.startedAt) !== undefined
       ? { startedAt: asFiniteTimestamp(input.startedAt) }
@@ -448,7 +468,7 @@ function formatAgentRunTerminalOutcome(
     ...(asFiniteTimestamp(input.endedAt) !== undefined
       ? { endedAt: asFiniteTimestamp(input.endedAt) }
       : {}),
-  };
+  });
 }
 
 /** Builds the normalized terminal outcome from raw run status metadata. */
@@ -474,6 +494,7 @@ export function buildAgentRunTerminalOutcomeFromLifecycleEvent(input: {
   const facts = resolveAgentRunLifecycleTerminalFacts({ phase: input.phase, data, abortFields });
   return formatAgentRunTerminalOutcome(facts, {
     error: data?.error,
+    cleanupError: data?.cleanupError,
     startedAt: input.startedAt ?? data?.startedAt,
     endedAt: input.endedAt ?? data?.endedAt,
   });

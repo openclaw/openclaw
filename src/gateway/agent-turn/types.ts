@@ -66,6 +66,7 @@ export type AgentJobTerminalSnapshot = {
   startedAt?: number;
   endedAt?: number;
   error?: string;
+  cleanupError?: string;
   stopReason?: string;
   livenessState?: string;
   yielded?: boolean;

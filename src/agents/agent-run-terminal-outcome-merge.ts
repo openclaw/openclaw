@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentRunTerminalOutcome } from "./agent-run-terminal-outcome.types.js";
 
 function completedBeforeOrAtTimeout(params: {
@@ -13,7 +14,7 @@ function completedBeforeOrAtTimeout(params: {
 }
 
 /** Merges observations without overwriting a proven cancellation or hard timeout. */
-export function mergeAgentRunTerminalOutcome(
+export function selectAgentRunTerminalOutcome(
   current: AgentRunTerminalOutcome | undefined,
   incoming: AgentRunTerminalOutcome,
 ): AgentRunTerminalOutcome {
@@ -55,4 +56,42 @@ export function mergeAgentRunTerminalOutcome(
       : incoming;
   }
   return incoming;
+}
+
+/** Cleanup uncertainty refines diagnostics, never the selected cancellation or timeout. */
+export function mergeAgentRunTerminalOutcome(
+  current: AgentRunTerminalOutcome | undefined,
+  incoming: AgentRunTerminalOutcome,
+): AgentRunTerminalOutcome {
+  const selected = selectAgentRunTerminalOutcome(current, incoming);
+  const cleanupError = current?.cleanupError ?? incoming.cleanupError;
+  if (!cleanupError) {
+    return selected;
+  }
+  const details: string[] = [];
+  for (const error of [
+    selected.error,
+    current?.error,
+    incoming.cleanupError ? incoming.error : undefined,
+  ]) {
+    const detail = error?.endsWith(cleanupError)
+      ? error.slice(0, -cleanupError.length).trim()
+      : error;
+    if (!detail || details.some((previous) => previous.includes(detail))) {
+      continue;
+    }
+    for (let index = details.length - 1; index >= 0; index -= 1) {
+      if (detail.includes(details[index]!)) {
+        details.splice(index, 1);
+      }
+    }
+    details.push(detail);
+  }
+  const boundedDetails = truncateUtf16Safe(details.join("\n\n"), 1_024);
+  const error = boundedDetails.includes(cleanupError)
+    ? boundedDetails
+    : [boundedDetails, cleanupError].filter(Boolean).join("\n\n");
+  return selected.cleanupError === cleanupError && selected.error === error
+    ? selected
+    : { ...selected, cleanupError, error };
 }

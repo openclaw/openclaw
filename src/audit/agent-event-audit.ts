@@ -10,6 +10,7 @@ import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
   mergeAgentRunTerminalOutcome,
+  selectAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
 import { isAllowedToolCallName } from "../agents/tool-call-shared.js";
@@ -324,7 +325,11 @@ export function createAgentEventAuditRecorder(options: {
         selected = existing;
       } else {
         const merged = mergeAgentRunTerminalOutcome(existing.outcome, incoming.outcome);
-        selected = merged === existing.outcome ? existing : incoming;
+        const owner =
+          selectAgentRunTerminalOutcome(existing.outcome, incoming.outcome) === existing.outcome
+            ? existing
+            : incoming;
+        selected = merged === owner.outcome ? owner : { ...owner, outcome: merged };
       }
       clearTimeout(existing.timer);
     }

@@ -613,7 +613,9 @@ export function abortChatRunById(
       status: "cancelled",
       aborted: true,
       stopReason,
-      ...(active.toolErrorSummary ? { toolErrorSummary: active.toolErrorSummary } : {}),
+      ...(active.toolErrorSummary
+        ? { toolErrorSummary: active.toolErrorSummary, error: active.toolErrorSummary }
+        : {}),
       // Pre-execution admission time is not an execution start.
       startedAt: active.executionStarted === false ? undefined : active.startedAtMs,
       ...(active.executionStarted === false

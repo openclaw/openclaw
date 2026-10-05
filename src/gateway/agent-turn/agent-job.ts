@@ -1,8 +1,9 @@
-// Agent job tracking owns terminal run state and `agent.wait` resolution.
-// Gateway dedupe retains response payloads only for idempotent RPC replay.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+// Agent job tracking owns terminal run state and `agent.wait` resolution.
+// Gateway dedupe retains response payloads only for idempotent RPC replay.
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { normalizeAgentRunTerminalDeliverySnapshot } from "../../agents/agent-run-terminal-delivery.js";
 import {
   AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
@@ -11,6 +12,7 @@ import {
   hasExecutionSettlement,
   isStickyAgentRunTerminalOutcome,
   mergeAgentRunTerminalOutcome,
+  selectAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
 import { normalizeAgentRunTerminalReceipt } from "../../agents/agent-run-terminal-receipt.js";
@@ -133,6 +135,40 @@ export function getAgentJobSession(
   return session?.lifecycleGeneration === getAgentRunLifecycleGeneration() ? session : undefined;
 }
 
+/** Reads exact terminal facts for late settlement; session status cannot prove timeout custody. */
+export function readAgentJobTerminalOutcome(
+  runId: string,
+  session: Readonly<AgentJobSession>,
+): AgentRunTerminalOutcome | undefined {
+  if (session.lifecycleGeneration !== getAgentRunLifecycleGeneration()) {
+    return undefined;
+  }
+  pruneAgentRunCache();
+  const sources = new Map(
+    [...(agentJobs.get(runId)?.snapshotsBySource ?? [])].filter(([, snapshot]) =>
+      sameAgentJobSession(snapshot.session, session),
+    ),
+  );
+  const snapshots = [
+    getCanonicalAgentRunSnapshot(sources),
+    pendingAgentRunErrors.get(runId)?.snapshot,
+    pendingAgentRunTimeouts.get(runId)?.snapshot,
+  ]
+    .filter(
+      (snapshot): snapshot is AgentRunObservation =>
+        snapshot !== undefined && sameAgentJobSession(snapshot.session, session),
+    )
+    .toSorted((left, right) => left.version - right.version);
+  let outcome: AgentRunTerminalOutcome | undefined;
+  for (const snapshot of snapshots) {
+    const terminal = terminalOutcomeFromSnapshot(snapshot);
+    if (terminal) {
+      outcome = mergeAgentRunTerminalOutcome(outcome, terminal);
+    }
+  }
+  return outcome;
+}
+
 function nextAgentRunVersion(): number {
   agentJobState.version += 1;
   return agentJobState.version;
@@ -180,16 +216,38 @@ function terminalOutcomeFromSnapshot(
   return buildAgentRunTerminalOutcome(snapshot);
 }
 
-function shouldPreserveTerminalSnapshot(
-  existing: AgentJobTerminalSnapshot,
-  incoming: AgentJobTerminalSnapshot,
-): boolean {
+function mergeTerminalSnapshot<T extends AgentJobObservation>(existing: T, incoming: T): T {
   const existingOutcome = terminalOutcomeFromSnapshot(existing);
   const incomingOutcome = terminalOutcomeFromSnapshot(incoming);
   if (!existingOutcome || !incomingOutcome) {
-    return false;
+    return incoming;
   }
-  return mergeAgentRunTerminalOutcome(existingOutcome, incomingOutcome) === existingOutcome;
+  const selected =
+    selectAgentRunTerminalOutcome(existingOutcome, incomingOutcome) === existingOutcome
+      ? existing
+      : incoming;
+  if (!sameAgentJobSession(existing.session, incoming.session)) {
+    return selected;
+  }
+  const outcome = mergeAgentRunTerminalOutcome(existingOutcome, incomingOutcome);
+  if (outcome === existingOutcome) {
+    return existing;
+  }
+  if (outcome === incomingOutcome) {
+    return incoming;
+  }
+  return {
+    ...selected,
+    status: outcome.status,
+    error: outcome.error,
+    cleanupError: outcome.cleanupError,
+    startedAt: outcome.startedAt,
+    endedAt: outcome.endedAt,
+    stopReason: outcome.stopReason,
+    livenessState: outcome.livenessState,
+    timeoutPhase: outcome.timeoutPhase,
+    providerStarted: outcome.providerStarted,
+  };
 }
 
 function sameAgentJobSession(
@@ -211,7 +269,7 @@ function mergeSnapshot(
   if (!existing) {
     return incoming;
   }
-  const canonical = shouldPreserveTerminalSnapshot(existing, incoming) ? existing : incoming;
+  const canonical = mergeTerminalSnapshot(existing, incoming);
   if (!sameAgentJobSession(existing.session, incoming.session)) {
     return canonical;
   }
@@ -282,7 +340,7 @@ function mergePendingAgentRunTerminal(snapshot: AgentRunObservation): AgentRunOb
   // Phase-owned pending maps can both contain sticky cancellations or hard timeouts.
   return [pendingAgentRunErrors, pendingAgentRunTimeouts].reduce((current, pendingRuns) => {
     const pending = pendingRuns.get(snapshot.runId)?.snapshot;
-    return pending && shouldPreserveTerminalSnapshot(pending, current) ? pending : current;
+    return pending ? mergeTerminalSnapshot(pending, current) : current;
   }, snapshot);
 }
 
@@ -294,6 +352,12 @@ function schedulePendingAgentRunTerminal(
   if (terminalSnapshot !== snapshot) {
     // Keep its original retry deadline while exposing the newer event to fresh waiters.
     terminalSnapshot.version = snapshot.version;
+    for (const pending of [pendingAgentRunErrors, pendingAgentRunTimeouts]) {
+      const retained = pending.get(snapshot.runId);
+      if (retained) {
+        retained.snapshot = terminalSnapshot;
+      }
+    }
     return;
   }
   const replacesPendingTimeout = pendingAgentRunTimeouts.has(snapshot.runId);
@@ -370,6 +434,7 @@ function createSnapshotFromLifecycleEvent(params: {
     startedAt,
     endedAt,
     error: legacyBareAbort ? undefined : terminalOutcome.error,
+    ...(terminalOutcome.cleanupError ? { cleanupError: terminalOutcome.cleanupError } : {}),
     stopReason: legacyBareAbort ? undefined : terminalOutcome.stopReason,
     livenessState: terminalOutcome.livenessState,
     ...(data?.yielded === true ? { yielded: true } : {}),
@@ -478,6 +543,7 @@ function parseDedupeObservation(
       errorMessage === undefined
         ? undefined
         : formatErrorMessageForDisplay(entry.error, errorMessage),
+    cleanupError: entry.cleanupError,
     stopReason,
     livenessState,
     timeoutPhase: payload?.timeoutPhase ?? resultMeta?.timeoutPhase,
@@ -490,6 +556,7 @@ function parseDedupeObservation(
       startedAt,
       endedAt,
       error: terminalOutcome.status === "ok" ? undefined : terminalOutcome.error,
+      ...(terminalOutcome.cleanupError ? { cleanupError: terminalOutcome.cleanupError } : {}),
       stopReason,
       livenessState,
       ...(payload?.yielded === true || resultMeta?.yielded === true ? { yielded: true } : {}),
@@ -541,20 +608,67 @@ export function setGatewayDedupeEntry(params: {
     incomingObservation.state === "terminal"
       ? terminalOutcomeFromSnapshot(incomingObservation.snapshot)
       : undefined;
+  // Stop may have reached lifecycle persistence while replay still holds acceptance.
+  // Only cleanup refinement joins that exact session's prior terminal here.
+  const lifecycleOutcome = executionTiming && terminalOutcomeFromSnapshot(executionTiming);
+  const retainedOutcome =
+    lifecycleOutcome &&
+    (incomingOutcome?.cleanupError ||
+      existingOutcome?.cleanupError ||
+      lifecycleOutcome.cleanupError)
+      ? mergeAgentRunTerminalOutcome(existingOutcome, lifecycleOutcome)
+      : existingOutcome;
+  const mergedOutcome = incomingOutcome
+    ? mergeAgentRunTerminalOutcome(retainedOutcome, incomingOutcome)
+    : undefined;
   if (
     existingOutcome &&
     isStickyAgentRunTerminalOutcome(existingOutcome) &&
     !(params.startNewAttempt && incomingObservation.state === "active") &&
-    (!incomingOutcome ||
-      mergeAgentRunTerminalOutcome(existingOutcome, incomingOutcome) === existingOutcome)
+    (!incomingOutcome || mergedOutcome === existingOutcome)
   ) {
     return;
   }
 
   // Terminal writers own outcomes, not request identity; never erase the admission binding.
-  const entry = existing?.requestIdentity
+  let entry = existing?.requestIdentity
     ? { ...params.entry, requestIdentity: existing.requestIdentity }
     : params.entry;
+  if (mergedOutcome?.cleanupError) {
+    // Replay and agent.wait must observe the same refined terminal, including
+    // a Stop acknowledgement that preceded native settlement.
+    const selected =
+      existingOutcome &&
+      incomingOutcome &&
+      selectAgentRunTerminalOutcome(existingOutcome, incomingOutcome) === existingOutcome
+        ? existing!
+        : entry;
+    const payload = asOptionalRecord(selected.payload);
+    entry = {
+      ...selected,
+      ...(entry.incognito ? { incognito: true } : {}),
+      ...(entry.requestIdentity ? { requestIdentity: entry.requestIdentity } : {}),
+      ok: false,
+      cleanupError: mergedOutcome.cleanupError,
+      error: {
+        ...(entry.error ?? errorShape(ErrorCodes.UNAVAILABLE, "")),
+        message: mergedOutcome.error!,
+      },
+      payload: {
+        ...payload,
+        status:
+          mergedOutcome.reason === "cancelled" || mergedOutcome.reason === "superseded"
+            ? "timeout"
+            : mergedOutcome.status,
+        summary: mergedOutcome.error,
+        stopReason: mergedOutcome.stopReason,
+        startedAt: mergedOutcome.startedAt,
+        endedAt: mergedOutcome.endedAt,
+        timeoutPhase: mergedOutcome.timeoutPhase,
+        providerStarted: mergedOutcome.providerStarted,
+      },
+    };
+  }
   params.dedupe.set(params.key, entry);
   if (!key) {
     return;
@@ -563,23 +677,24 @@ export function setGatewayDedupeEntry(params: {
     beginAgentJob(key.runId);
     return;
   }
-  if (incomingObservation.state === "terminal") {
+  const publishedObservation = parseDedupeObservation(entry, executionTiming);
+  if (publishedObservation.state === "terminal") {
     if (
       key.source === "chat" &&
-      incomingObservation.snapshot.status === "ok" &&
+      publishedObservation.snapshot.status === "ok" &&
       lifecycle?.status === "ok" &&
       lifecycle.yielded === true
     ) {
       // Chat completion closes delivery, not the runtime's yielded execution.
-      incomingObservation.snapshot.yielded = true;
-      incomingObservation.snapshot.livenessState = lifecycle.livenessState;
+      publishedObservation.snapshot.yielded = true;
+      publishedObservation.snapshot.livenessState = lifecycle.livenessState;
     }
     recordAgentRunSnapshot({
-      ...incomingObservation.snapshot,
+      ...publishedObservation.snapshot,
       runId: key.runId,
       source: key.source,
       session: params.session ? { ...params.session } : undefined,
-      recordedAt: params.entry.ts,
+      recordedAt: entry.ts,
     });
   }
 }

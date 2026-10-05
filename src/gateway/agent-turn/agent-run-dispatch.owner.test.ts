@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentCommandDeliveryResult } from "../../agents/command/delivery-result.js";
 import type { AgentCommandOpts } from "../../agents/command/types.js";
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { SessionFollowupCompletion } from "../../agents/subagents/completion/session-followup-completion.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
+import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "../chat-abort.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
@@ -96,6 +98,64 @@ describe("Gateway dispatch run ownership", () => {
     };
     return { f, owner, dispatch };
   }
+
+  it("preserves ordinary formatted failure codes in the terminal result", async () => {
+    const { params } = createDispatch();
+    mocks.agentCommand.mockRejectedValueOnce(
+      Object.assign(new Error("Provider unavailable"), { code: "E_PROVIDER" }),
+    );
+    const result = await dispatchAgentRunFromGateway(params);
+    expect(result.terminalOutcome.error).toContain("E_PROVIDER");
+    expect(result.terminalOutcome.cleanupError).toBeUndefined();
+    expect(params.io.emitFinal).toHaveBeenCalledWith(
+      [
+        false,
+        expect.objectContaining({ summary: result.terminalOutcome.error }),
+        expect.objectContaining({ message: result.terminalOutcome.error }),
+      ],
+      expect.anything(),
+    );
+  });
+
+  it.each(["stop", "restart", "timeout"])(
+    "reports failed cleanup after %s while retaining cancellation attribution",
+    async (reason) => {
+      const { entry, params } = createDispatch(true);
+      const finish = createDeferred();
+      const cleanup = new CommandProcessCleanupError();
+      mocks.agentCommand.mockImplementationOnce(async () => {
+        await finish.promise;
+        throw new Error("Run settlement failed", { cause: cleanup });
+      });
+      const completion = dispatchAgentRunFromGateway(params);
+      entry.controller.abort(
+        reason === "restart"
+          ? createAgentRunRestartAbortError()
+          : reason === "timeout"
+            ? new DOMException("deadline", "TimeoutError")
+            : undefined,
+      );
+      finish.resolve();
+      const result = await completion;
+      expect(result.terminalOutcome).toMatchObject({
+        reason: reason === "timeout" ? "timed_out" : "cancelled",
+        cleanupError: cleanup.message,
+      });
+      expect(params.io.emitFinal).toHaveBeenCalledWith(
+        [
+          false,
+          expect.objectContaining({ summary: expect.stringContaining(cleanup.message) }),
+          expect.objectContaining({ message: expect.stringContaining(cleanup.message) }),
+        ],
+        expect.anything(),
+      );
+      expect(setGatewayDedupeEntries).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          entry: expect.objectContaining({ ok: false, cleanupError: cleanup.message }),
+        }),
+      );
+    },
+  );
 
   it("joins a captured terminal save when command startup fails before its delivery hook", async () => {
     const { entry, params } = createDispatch(true);

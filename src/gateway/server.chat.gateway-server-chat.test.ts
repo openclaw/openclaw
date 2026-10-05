@@ -46,7 +46,6 @@ import {
   createGatewayHistoryDeliveryMirror,
   hasGatewayHistoryMessageToolMirror,
 } from "./session-history-fixtures.test-support.js";
-import * as sessionLifecycleState from "./session-lifecycle-state.js";
 import { removeChatTestDirectory as removeTempDir } from "./session-test-directories.test-support.js";
 import {
   agentDiscoveryMock,
@@ -1105,6 +1104,7 @@ describe("gateway server chat", () => {
       const releasePersistence = createDeferred();
       let dispatchStarted = false;
       const persistenceEntered = createDeferred();
+      const sessionLifecycleState = await import("./session-lifecycle-state.js");
       const persistLifecycleEvent = sessionLifecycleState.persistGatewaySessionLifecycleEvent;
       const persistSpy = vi
         .spyOn(sessionLifecycleState, "persistGatewaySessionLifecycleEvent")

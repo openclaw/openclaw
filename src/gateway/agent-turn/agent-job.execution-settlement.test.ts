@@ -5,12 +5,172 @@ import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { createAgentLifecycleTerminalBackstop } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import type { DedupeEntry } from "../server-shared.js";
-import { getAgentJobSession, setGatewayDedupeEntry, waitForAgentJob } from "./agent-job.js";
+import {
+  getAgentJobSession,
+  readAgentJobTerminalOutcome,
+  setGatewayDedupeEntry,
+  waitForAgentJob,
+} from "./agent-job.js";
 
 let runSequence = 0;
 
 describe("waitForAgentJob settled execution", () => {
+  it.each([
+    { source: "agent", stopSource: "replay" },
+    { source: "chat", stopSource: "replay" },
+    { source: "agent", stopSource: "lifecycle" },
+    { source: "chat", stopSource: "lifecycle" },
+  ] as const)(
+    "retains $stopSource cancellation timing in $source replay and wait diagnostics exactly once",
+    async ({ source, stopSource }) => {
+      const runId = `cleanup-after-stop-${runSequence++}`;
+      const key = `${source}:${runId}`;
+      const dedupe = new Map<string, DedupeEntry>();
+      const session = {
+        sessionKey: "agent:main:cleanup",
+        sessionId: "cleanup-session",
+        agentId: "main",
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      };
+      setGatewayDedupeEntry({
+        dedupe,
+        key,
+        session,
+        entry: {
+          ts: 200,
+          ok: true,
+          payload:
+            stopSource === "lifecycle"
+              ? { runId, status: "accepted" }
+              : {
+                  runId,
+                  status: "timeout",
+                  stopReason: "rpc",
+                  startedAt: 100,
+                  endedAt: 200,
+                  summary: "Earlier provider diagnostic",
+                },
+        },
+      });
+      if (stopSource === "lifecycle") {
+        emitAgentEvent({
+          runId,
+          ...session,
+          stream: "lifecycle",
+          data: {
+            phase: "end",
+            aborted: true,
+            stopReason: "rpc",
+            startedAt: 100,
+            endedAt: 200,
+            error: "Earlier provider diagnostic",
+            executionSettled: true,
+          },
+        });
+      }
+      const cleanup = buildAgentRunTerminalOutcome({
+        status: "error",
+        error: new CommandProcessCleanupError(),
+      });
+      for (let observation = 0; observation < 2; observation += 1) {
+        setGatewayDedupeEntry({
+          dedupe,
+          key,
+          session,
+          entry: {
+            ts: 300 + observation,
+            ok: false,
+            cleanupError: cleanup.cleanupError,
+            payload: { runId, status: "error", summary: cleanup.error, endedAt: 300 },
+          },
+        });
+        const replay = dedupe.get(key);
+        expect(replay).toMatchObject({
+          ok: false,
+          payload: {
+            status: "timeout",
+            stopReason: "rpc",
+            startedAt: 100,
+            endedAt: 200,
+            summary: expect.stringContaining("Earlier provider diagnostic"),
+          },
+        });
+        expect(replay?.ts).toBe(stopSource === "replay" ? 200 : 300);
+        const result = await waitForAgentJob({ runId, source, timeoutMs: 0 });
+        expect(result).toMatchObject({
+          status: "error",
+          stopReason: "rpc",
+          startedAt: 100,
+          endedAt: 200,
+        });
+        expect(result?.error).toContain(cleanup.cleanupError);
+        expect(result?.error?.split(cleanup.cleanupError!)).toHaveLength(2);
+      }
+    },
+  );
+
+  it.each(["sessionKey", "sessionId", "agentId", "lifecycleGeneration"] as const)(
+    "does not merge cleanup with a lifecycle terminal from another %s",
+    async (field) => {
+      const runId = `cleanup-other-owner-${runSequence++}`;
+      const key = `agent:${runId}`;
+      const dedupe = new Map<string, DedupeEntry>();
+      const session = {
+        sessionKey: "agent:main:cleanup",
+        sessionId: "cleanup-session",
+        agentId: "main",
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      };
+      setGatewayDedupeEntry({
+        dedupe,
+        key,
+        session,
+        entry: { ts: 100, ok: true, payload: { runId, status: "accepted" } },
+      });
+      emitAgentEvent({
+        runId,
+        ...session,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          aborted: true,
+          stopReason: "rpc",
+          endedAt: 200,
+          error: "Earlier owner diagnostic",
+          executionSettled: true,
+        },
+      });
+      const cleanup = buildAgentRunTerminalOutcome({
+        status: "error",
+        error: new CommandProcessCleanupError(),
+      });
+      setGatewayDedupeEntry({
+        dedupe,
+        key,
+        session: { ...session, [field]: `${session[field]}-replacement` },
+        entry: {
+          ts: 300,
+          ok: false,
+          cleanupError: cleanup.cleanupError,
+          payload: { runId, status: "error", summary: cleanup.error, endedAt: 300 },
+        },
+      });
+      expect(dedupe.get(key)?.payload).toMatchObject({ status: "error", endedAt: 300 });
+      expect(JSON.stringify(dedupe.get(key))).not.toContain("Earlier owner diagnostic");
+      expect(readAgentJobTerminalOutcome(runId, session)).toMatchObject({
+        reason: "cancelled",
+        endedAt: 200,
+        error: "Earlier owner diagnostic",
+      });
+      expect(
+        readAgentJobTerminalOutcome(runId, { ...session, lifecycleGeneration: "old-generation" }),
+      ).toBeUndefined();
+      const observed = await waitForAgentJob({ runId, timeoutMs: 0 });
+      expect(observed?.error).not.toContain(cleanup.cleanupError);
+    },
+  );
   it("observes completed hidden refreshes without treating acceptance as completion", async () => {
     const runId = `progress-card-refresh:completed-${runSequence++}`;
     const dedupe = new Map<string, DedupeEntry>();

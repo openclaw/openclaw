@@ -28,6 +28,7 @@ import { agentCommandFromGatewayIngress } from "../../commands/agent.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { errorShapeFromError } from "../error-shape.js";
 import type { GatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
@@ -351,7 +352,10 @@ export function dispatchAgentRunFromGateway(params: {
       return { terminalOutcome, settled };
     })
     .catch(async (cause: unknown) => {
-      const aborted = isGatewayAgentAbortRejection(cause, params.abortController.signal);
+      const cleanupUncertain = hasCommandProcessCleanupError(cause);
+      const aborted =
+        isGatewayAgentAbortRejection(cause, params.abortController.signal) ||
+        (cleanupUncertain && params.abortController.signal.aborted);
       const error = errorShapeFromError(ErrorCodes.UNAVAILABLE, cause);
       const renderedErr = error.message;
       const stopReason = aborted
@@ -361,7 +365,7 @@ export function dispatchAgentRunFromGateway(params: {
           : undefined;
       let terminalOutcome = buildAgentRunTerminalOutcome({
         status: aborted || isTimeoutError(cause) ? "timeout" : "error",
-        error: renderedErr,
+        error: cleanupUncertain ? cause : renderedErr,
         stopReason,
         timeoutPhase: stopReason === "restart" ? "gateway_draining" : undefined,
       });
@@ -376,17 +380,20 @@ export function dispatchAgentRunFromGateway(params: {
           diagnostics.warning("input completion persistence failed")(completionError);
         }
       }
+      if (cleanupUncertain && terminalOutcome.error) {
+        error.message = terminalOutcome.error;
+      }
       const responseStatus = projectRejectedGatewayStatus(terminalOutcome);
       await settleFollowup({
         ...terminalOutcome,
-        error: renderedErr,
+        error: cleanupUncertain ? (terminalOutcome.error ?? renderedErr) : renderedErr,
         endedAt: terminalOutcome.endedAt ?? Date.now(),
       });
       Object.defineProperty(error, "cause", { value: cause });
       const payload = {
         runId: params.runId,
         status: responseStatus,
-        summary: aborted ? "aborted" : renderedErr,
+        summary: cleanupUncertain ? terminalOutcome.error : aborted ? "aborted" : renderedErr,
         ...(aborted
           ? {
               stopReason,
@@ -399,9 +406,10 @@ export function dispatchAgentRunFromGateway(params: {
       const persistTerminalDedupe = (settlementPersisted: boolean) => {
         publishReplay({
           ts: Date.now(),
-          ok: aborted && settlementPersisted,
+          ok: aborted && settlementPersisted && !cleanupUncertain,
           payload,
-          ...(aborted ? {} : { error }),
+          ...(terminalOutcome.cleanupError ? { cleanupError: terminalOutcome.cleanupError } : {}),
+          ...(aborted && !cleanupUncertain ? {} : { error }),
         });
       };
       const settled = await settle({
@@ -410,10 +418,10 @@ export function dispatchAgentRunFromGateway(params: {
       });
       persistTerminalDedupe(settled);
       cleanupRunOwner();
-      const responseError = aborted && settled ? undefined : error;
-      params.io.emitFinal([aborted && settled, payload, responseError], {
+      const responseError = aborted && settled && !cleanupUncertain ? undefined : error;
+      params.io.emitFinal([aborted && settled && !cleanupUncertain, payload, responseError], {
         runId: params.runId,
-        ...diagnostics.errorMeta(responseError?.message, !aborted),
+        ...diagnostics.errorMeta(responseError?.message, !aborted || cleanupUncertain),
       });
       return { terminalOutcome, settled };
     })

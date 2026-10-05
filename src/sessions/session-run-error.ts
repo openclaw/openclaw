@@ -79,11 +79,11 @@ export async function recordGatewaySessionRunFailure(
 }
 
 export function resolveSessionRunError(
-  outcome: { error?: string; errorKind?: unknown },
+  outcome: { error?: string; errorKind?: unknown; cleanupError?: string },
   status: SessionRunStatus,
 ): string | undefined {
   if (
-    (status !== "failed" && status !== "timeout") ||
+    (status !== "failed" && status !== "timeout" && !outcome.cleanupError) ||
     typeof outcome.error !== "string" ||
     !outcome.error.trim()
   ) {

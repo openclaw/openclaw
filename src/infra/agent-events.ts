@@ -451,6 +451,13 @@ function enrichAgentEvent(
       ? (ownedLifecycleGeneration ?? currentLifecycleGeneration)
       : ownedLifecycleGeneration;
   const agentId = event.agentId ?? routing?.agentId;
+  const cleanupError = event.stream === "lifecycle" ? event.data.cleanupError : undefined;
+  if (cleanupError !== undefined) {
+    // Runtime terminal owners need this fact; public event payloads already
+    // carry its safe diagnostic in error and must not gain an internal field.
+    data = { ...data };
+    Object.defineProperty(data, "cleanupError", { value: cleanupError, enumerable: false });
+  }
   const enriched: AgentEventRuntimePayload = {
     ...event,
     data,

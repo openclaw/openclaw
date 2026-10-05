@@ -19,4 +19,6 @@ export type DedupeEntry = {
   incognito?: true;
   payload?: unknown;
   error?: ErrorShape;
+  /** Internal settlement provenance; never projected as a public response field. */
+  cleanupError?: string;
 };

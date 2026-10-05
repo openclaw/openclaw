@@ -5,6 +5,8 @@ import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
+  isStickyAgentRunTerminalOutcome,
+  mergeAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
 import { projectMainSessionRecoveryLifecycle } from "../agents/main-session-recovery/main-session-recovery-lifecycle.js";
@@ -26,6 +28,7 @@ import {
 } from "../sessions/session-run-error.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
+import { captureAgentJobSession, readAgentJobTerminalOutcome } from "./agent-turn/agent-job.js";
 import { loadSessionEntry } from "./session-utils.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
@@ -33,7 +36,7 @@ const restartRecoveryLog = createSubsystemLogger("main-session-restart-recovery"
 
 type LifecyclePhase = "start" | "end" | "error";
 
-type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
+type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId" | "sessionKey" | "agentId"> & {
   controlUiVisible?: boolean;
   isHeartbeat?: boolean;
   contextClaimId?: string;
@@ -48,6 +51,7 @@ type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
     aborted?: unknown;
     stopReason?: unknown;
     error?: unknown;
+    cleanupError?: unknown;
     errorKind?: unknown;
     executionStarted?: unknown;
     livenessState?: unknown;
@@ -101,11 +105,15 @@ const SESSION_STATUS_BY_TERMINAL_CLASSIFICATION = {
 } as const satisfies Record<ReturnType<typeof classifyAgentRunTerminalOutcome>, SessionRunStatus>;
 
 function resolveTerminalOutcome(event: LifecycleEventLike): AgentRunTerminalOutcome {
-  return buildAgentRunTerminalOutcomeFromLifecycleEvent({
+  const incoming = buildAgentRunTerminalOutcomeFromLifecycleEvent({
     phase: event.data?.phase === "error" ? "error" : "end",
     data: event.data,
     endedAt: event.data?.endedAt ?? event.ts,
   });
+  const session = incoming.cleanupError ? captureAgentJobSession(event) : undefined;
+  return session && event.runId
+    ? mergeAgentRunTerminalOutcome(readAgentJobTerminalOutcome(event.runId, session), incoming)
+    : incoming;
 }
 
 function resolveSettledLifecycleTerminalOutcome(
@@ -163,7 +171,9 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
   }
 
   const existing = params.session ?? undefined;
+  const terminal = resolveSettledLifecycleTerminalOutcome(params.event);
   const startedAt = resolveLifecycleTimestamp(
+    terminal?.cleanupError ? terminal.startedAt : undefined,
     params.event.data?.startedAt,
     existing?.startedAt,
     params.event.ts,
@@ -183,9 +193,12 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
     };
   }
 
-  const endedAt = resolveLifecycleTimestamp(params.event.data?.endedAt, params.event.ts);
+  const endedAt = resolveLifecycleTimestamp(
+    terminal?.endedAt,
+    params.event.data?.endedAt,
+    params.event.ts,
+  );
   const updatedAt = endedAt ?? existing?.updatedAt;
-  const terminal = resolveSettledLifecycleTerminalOutcome(params.event);
   // Cancellation must preserve recovery even when the bulk shutdown marker failed.
   // Use the normalized outcome so a prior hard timeout still owns the terminal state.
   const interruptedForRestart =
@@ -216,6 +229,20 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
   };
 }
 
+/** Cleanup may refine only the current run, including resets that retain a session id. */
+function isGatewaySessionCleanupRunCurrent(params: {
+  entry?: Pick<SessionEntry, "lifecycleRunId" | "lastRunId"> | null;
+  event: Pick<LifecycleEventLike, "runId" | "clientRunId" | "lifecycleGeneration">;
+}): boolean {
+  const runId = normalizeLifecycleRunId(params.event.runId);
+  const clientRunId = normalizeLifecycleRunId(params.event.clientRunId) ?? runId;
+  const currentRunId = params.entry?.lifecycleRunId ?? params.entry?.lastRunId;
+  return (
+    params.event.lifecycleGeneration === getAgentEventLifecycleGeneration() &&
+    Boolean(currentRunId && (currentRunId === runId || currentRunId === clientRunId))
+  );
+}
+
 function derivePersistedSessionLifecyclePatch(params: {
   entry?: Partial<PersistedLifecycleSessionShape> | null;
   event: LifecycleEventLike;
@@ -223,6 +250,10 @@ function derivePersistedSessionLifecyclePatch(params: {
   const phase = resolveLifecyclePhase(params.event);
   // Queued request settlement cannot end the turn that owns this session.
   if ((phase === "end" || phase === "error") && params.event.data?.executionStarted === false) {
+    return {};
+  }
+  const terminal = resolveSettledLifecycleTerminalOutcome(params.event);
+  if (terminal?.cleanupError && !isGatewaySessionCleanupRunCurrent(params)) {
     return {};
   }
   const snapshot = deriveGatewaySessionLifecycleSnapshot({
@@ -234,6 +265,26 @@ function derivePersistedSessionLifecyclePatch(params: {
       : undefined,
     event: params.event,
   });
+  if (terminal?.cleanupError) {
+    const outcome = mergeAgentRunTerminalOutcome(
+      { ...terminal, cleanupError: undefined, error: params.entry?.lastRunError },
+      terminal,
+    );
+    snapshot.lastRunError = resolveSessionRunError(outcome, snapshot.status ?? "failed");
+    if (
+      isStickyAgentRunTerminalOutcome(terminal) &&
+      snapshot.status === params.entry?.status &&
+      snapshot.startedAt === params.entry?.startedAt &&
+      snapshot.endedAt === params.entry?.endedAt &&
+      snapshot.abortedLastRun === params.entry?.abortedLastRun
+    ) {
+      // Only a matching authoritative Stop/restart/timeout is diagnostic-only.
+      // Ordinary completion must still become failure when joined cleanup fails.
+      return snapshot.lastRunError === params.entry?.lastRunError
+        ? {}
+        : { lastRunError: snapshot.lastRunError };
+    }
+  }
   const snapshotPatch: Partial<PersistedLifecycleSessionShape> = {
     ...snapshot,
     updatedAt: typeof snapshot.updatedAt === "number" ? snapshot.updatedAt : undefined,
@@ -244,7 +295,22 @@ function derivePersistedSessionLifecyclePatch(params: {
   const projection = projectMainSessionRecoveryLifecycle({
     currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
     entry: params.entry,
-    event: params.event,
+    event: terminal?.cleanupError
+      ? {
+          ...params.event,
+          data: {
+            ...params.event.data,
+            ...terminal,
+            phase: terminal.status === "ok" ? "end" : "error",
+            aborted: false,
+            yielded: undefined,
+            stopReason: terminal.stopReason,
+            livenessState: terminal.livenessState,
+            timeoutPhase: terminal.timeoutPhase,
+            providerStarted: terminal.providerStarted,
+          },
+        }
+      : params.event,
     snapshotPatch,
   });
   if (projection.action === "suppress") {

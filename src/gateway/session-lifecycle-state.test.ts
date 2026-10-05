@@ -2,8 +2,10 @@
  * Session lifecycle state derivation tests.
  */
 import { describe, expect, it, vi } from "vitest";
+import { buildAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
-import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 
 const persistenceMocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
@@ -72,6 +74,161 @@ function persistLifecycle(
 }
 
 describe("session lifecycle state", () => {
+  it.each(["current", "new run", "new generation", "reset"])(
+    "records late cleanup only for its exact cancelled owner: %s",
+    async (owner) => {
+      const runId = `cancelled-run-${owner}`;
+      const entry: SessionEntry = {
+        sessionId: owner === "reset" ? "replacement" : "session-a",
+        updatedAt: 200,
+        status: "killed",
+        startedAt: 100,
+        endedAt: 200,
+        runtimeMs: 100,
+        abortedLastRun: true,
+        lastRunId: owner === "new run" ? "new-run" : runId,
+        lastRunError: "Earlier provider diagnostic",
+      };
+      const cleanup = new CommandProcessCleanupError();
+      const event = {
+        sessionId: "session-a",
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        runId,
+        ts: 300,
+        lifecycleGeneration:
+          owner === "new generation" ? "old-generation" : getAgentEventLifecycleGeneration(),
+        data: {
+          phase: "error",
+          ...buildAgentRunTerminalOutcome({
+            status: "error",
+            error: cleanup,
+            stopReason: "rpc",
+            endedAt: 300,
+          }),
+        },
+      };
+      emitAgentEvent({
+        ...event,
+        stream: "lifecycle",
+        data: { phase: "end", aborted: true, stopReason: "rpc", startedAt: 100, endedAt: 200 },
+      });
+      const next = await persistLifecycle(entry, event);
+      if (owner !== "current") {
+        expect(next).toEqual(entry);
+        return;
+      }
+      expect(next).toEqual({
+        ...entry,
+        lastRunError: `Earlier provider diagnostic ${cleanup.message}`,
+      });
+      expect(await persistLifecycle(next, event)).toEqual(next);
+    },
+  );
+
+  it.each([
+    { name: "completion", prior: {}, expectedStatus: "failed", expectedEnd: 300 },
+    {
+      name: "soft timeout",
+      prior: { status: "timeout" },
+      expectedStatus: "failed",
+      expectedEnd: 300,
+    },
+    {
+      name: "pending provider timeout",
+      prior: { phase: "error", timeoutPhase: "provider", providerStarted: true },
+      expectedStatus: "timeout",
+      expectedEnd: 200,
+    },
+    {
+      name: "Stop",
+      prior: { aborted: true, stopReason: "rpc" },
+      expectedStatus: "killed",
+      expectedEnd: 200,
+    },
+    {
+      name: "restart",
+      prior: { aborted: true, stopReason: "restart" },
+      expectedStatus: "running",
+      expectedEnd: undefined,
+    },
+    {
+      name: "completion then unpersisted Stop",
+      prior: {},
+      expectedStatus: "killed",
+      expectedEnd: 250,
+    },
+    {
+      name: "uncached timeout",
+      prior: { status: "timeout" },
+      expectedStatus: "failed",
+      expectedEnd: 300,
+    },
+  ] as const)(
+    "projects and persists canonical cleanup after $name",
+    async ({ name, prior, expectedStatus, expectedEnd }) => {
+      const runId = `cleanup-after-${name}`;
+      const routing = {
+        sessionId: "session-a",
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        runId,
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      };
+      const first = {
+        ...routing,
+        ts: 200,
+        data: { phase: "end", startedAt: 100, endedAt: 200, ...prior },
+      };
+      if (name !== "uncached timeout") {
+        emitAgentEvent({ ...first, stream: "lifecycle" });
+      }
+      const entry = await persistLifecycle(
+        {
+          ...goalEntry,
+          sessionId: routing.sessionId,
+          updatedAt: 100,
+          startedAt: 100,
+          lifecycleRunId: runId,
+          goal: { ...goalEntry.goal!, createdAt: 100, updatedAt: 100 },
+        },
+        first,
+      );
+      if (name === "completion then unpersisted Stop") {
+        emitAgentEvent({
+          ...routing,
+          stream: "lifecycle",
+          data: { phase: "end", aborted: true, stopReason: "rpc", startedAt: 100, endedAt: 250 },
+        });
+      }
+      const cleanup = new CommandProcessCleanupError();
+      const event = {
+        ...routing,
+        ts: 300,
+        data: {
+          phase: "error",
+          ...buildAgentRunTerminalOutcome({ status: "error", error: cleanup, endedAt: 300 }),
+        },
+      };
+      const projection = deriveGatewaySessionLifecycleProjectionPatch({ entry, event });
+      const projected = { ...entry, ...projection };
+      const next = await persistLifecycle(entry, event);
+      const expected = {
+        status: expectedStatus,
+        startedAt: 100,
+        endedAt: expectedEnd,
+        lastRunError: cleanup.message,
+      };
+      expect(projected).toMatchObject(expected);
+      expect(next).toMatchObject(expected);
+      if (name === "completion") {
+        expect(entry.goal?.status).toBe("active");
+        expect(next.goal).toMatchObject({ status: "paused", updatedAt: 300 });
+      }
+      expect(await persistLifecycle(next, event)).toEqual(next);
+    },
+  );
+
   const goalEntry: SessionEntry = {
     sessionId: "goal-session",
     updatedAt: 1_000,
