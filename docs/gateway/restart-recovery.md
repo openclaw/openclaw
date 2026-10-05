@@ -139,6 +139,11 @@ gateway stops accepting new work, then waits for active agent turns and
 background tasks to finish, up to a drain budget (5 minutes by default). Most
 restarts therefore interrupt nothing at all.
 
+CLI shutdown drains process-wide work. Closing an individual Gateway drains its
+own active chat runs and queued turns, and waits on the process-wide pending-reply
+count. Both report remaining work as named counts; categories can overlap and
+should not be added as distinct turns.
+
 Read-only RPC waits (`agent.wait`, approval decision waits, `question.waitAnswer`,
 and `device.scopes.waitUpgrade`) stop observing when their client disconnects.
 When shutdown drain begins, connected waiters receive retryable `UNAVAILABLE`
@@ -810,11 +815,12 @@ An interruption alone is not a blocker; the parent continues until the request
 is finished or a specific blocker requires user input or unavailable authority.
 Existing cleanup and retention settings still apply.
 
-Startup skips superseded requester completion claims and logs the affected run.
+Startup retires superseded requester completion claims through the registry's
+cleanup owner before restoring the surviving claim.
 Those historical rows do not block current children in the same requester turn
 or recovery of other subagents. Saved yield intent is evaluated from the same
-current children used for the transfer. The existing cleanup owner settles historical rows;
-interrupted current children still report their restart outcome to the parent.
+current children used for the transfer. Interrupted current children still report
+their restart outcome to the parent.
 Turns with only superseded children need no requester settlement.
 
 If a parent yielded while waiting for children, its saved batch collects both

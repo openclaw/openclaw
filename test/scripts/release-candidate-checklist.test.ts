@@ -1122,14 +1122,13 @@ describe("release candidate checklist", () => {
     );
     const result = runInNewContext(
       stripNodeTypeScriptTypes(
-        `${summary}\n${owner}\ncollectPluginPlan("scripts/plugin-npm-release-plan.ts", {})`,
+        `${summary}\n${owner}\ncollectPluginPlan("scripts/plugin-npm-release-plan.ts", { pluginPublishScope: "all-publishable" })`,
       ),
       {
         TOOLING_ROOT: "/trusted/tooling",
         console: { log },
         isRecord,
         join,
-        pluginPlanArgs: () => ["--selection-mode", "all-publishable"],
         run: runPlanner,
       },
     );
