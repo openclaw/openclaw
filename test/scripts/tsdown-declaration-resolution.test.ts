@@ -736,7 +736,7 @@ console.log("workspace/AI native compilation settled after success and failure")
     {
       name: "SDK",
       groups: TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
-      run: async (command: CommandFixture, root: string, env = {}) =>
+      run: async (command: CommandFixture, root: string, env?: NodeJS.ProcessEnv) =>
         await runWriter(command, root, false, env),
     },
     { name: "unified", groups: TSDOWN_UNIFIED_DTS_CONFIG_GROUPS, run: runUnifiedWriter },
