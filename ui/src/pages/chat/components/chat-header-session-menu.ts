@@ -435,7 +435,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
     const menuLabel = t("chat.sidebar.sessionMenu", { session: this.session.label });
     return html`
       <wa-dropdown
-        class=${`session-menu chat-header-session-menu${this.compact ? " chat-header-session-menu--compact" : ""}${this.compact && this.compactView === "sharing" ? " chat-header-session-menu--compact-sharing" : ""}`}
+        class=${`session-menu chat-header-session-menu${this.compact ? " session-menu--compact chat-header-session-menu--compact" : ""}${this.compact && this.compactView === "sharing" ? " chat-header-session-menu--compact-sharing" : ""}`}
         placement="bottom-end"
         aria-label=${menuLabel}
         @keydown=${(event: KeyboardEvent) => {

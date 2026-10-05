@@ -6,7 +6,7 @@ import {
 } from "../agents/admitted-run-context.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "../agents/agent-scope.js";
 import { applyToolAvailabilityDescriptions } from "../agents/agent-tools.deferred-followup.js";
-import { createOpenClawCodingTools } from "../agents/agent-tools.js";
+import { createOpenClawCodingToolsAsync } from "../agents/agent-tools.js";
 import { filterToolsByMessageProvider } from "../agents/agent-tools.message-provider-policy.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
@@ -15,7 +15,7 @@ import { resolveCoreToolFactoryFamily } from "../agents/core-tool-factory-descri
 import { applyDelegationCapability } from "../agents/delegation-capability.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { createLazyExecTool, resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
-import { createOpenClawTools } from "../agents/openclaw-tools.js";
+import { createOpenClawToolsAsync } from "../agents/openclaw-tools.js";
 import { filterRequesterYieldTools } from "../agents/openclaw-tools.requester-yield.js";
 import {
   applySwarmCollectorToolContract,
@@ -51,7 +51,10 @@ import {
 } from "../agents/tools/cron-tool.js";
 import { createChannelQuestionPromptDelivery } from "../agents/tools/question-prompt-send.js";
 import { prepareSessionPortalToolTarget } from "../agents/tools/session-portal-target.js";
-import { hasSessionControlAuthority } from "../agents/tools/sessions-control-authority.js";
+import {
+  hasSessionControlAuthority,
+  prepareSandboxSessionRename,
+} from "../agents/tools/sessions-operator-authority.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -67,11 +70,12 @@ import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
+import { captureGatewayToolResolutionAuthority } from "./tool-resolution-authority.js";
 
 type GatewayScopedToolSurface = "http" | "loopback";
 
 /** Resolve the tools visible to a gateway caller after agent, channel, and surface policy. */
-export function resolveGatewayScopedTools(
+export async function resolveGatewayScopedTools(
   params: Omit<
     McpLoopbackRequestContext,
     | "senderIsOwner"
@@ -120,7 +124,13 @@ export function resolveGatewayScopedTools(
     pairedNodeComputerUse?: import("../agents/computer-use-node-capabilities.js").PreparedPairedComputerUse;
     skillWorkshop?: SkillWorkshopRunOptions;
   },
+  assertPreparationCurrent?: () => void,
 ) {
+  const { assertCurrent, assertInvocationCurrent } = captureGatewayToolResolutionAuthority(
+    params,
+    assertPreparationCurrent,
+  );
+  assertCurrent();
   const runtimePolicySessionKey = params.runtimePolicySessionKey?.trim() || params.sessionKey;
   const sessionAgentId = resolveSessionAgentIds({
     config: params.cfg,
@@ -244,11 +254,19 @@ export function resolveGatewayScopedTools(
   const sandboxed = params.rootedExecution
     ? Boolean(params.rootedExecution.sandbox)
     : sandboxRuntime.sandboxed;
-  const sandboxPolicy = params.rootedExecution
+  const preparedSandboxPolicy = params.rootedExecution
     ? params.rootedExecution.sandbox?.tools
     : sandboxRuntime.sandboxed
       ? sandboxRuntime.toolPolicy
       : undefined;
+  const sessionControlAuthority = readAdmittedRunOperatorAuthority(params.admittedRunContext);
+  const { policy: sandboxPolicy, renameOnly: sandboxSessionRenameOnly } =
+    prepareSandboxSessionRename({
+      policy: preparedSandboxPolicy,
+      senderIsOwner:
+        surface === "loopback" && params.admittedRunContext ? params.senderIsOwner : undefined,
+      authority: sessionControlAuthority,
+    });
   const excludedToolNames = params.excludeToolNames ? Array.from(params.excludeToolNames) : [];
   const mediatedToolNames = new Set(
     Array.from(params.mediatedToolNames ?? [], (name) => normalizeToolPolicyName(name)).filter(
@@ -279,7 +297,6 @@ export function resolveGatewayScopedTools(
     surface === "loopback" &&
     params.admittedRunContext &&
     getAdmittedRunDelegatedAuthority(params.admittedRunContext);
-  const sessionControlAuthority = readAdmittedRunOperatorAuthority(params.admittedRunContext);
   const ownerOnlyGatewayDeny = [
     ...(params.senderIsOwner === false || (surface === "http" && params.senderIsOwner !== true)
       ? GATEWAY_OWNER_ONLY_CORE_TOOLS.filter(
@@ -343,10 +360,11 @@ export function resolveGatewayScopedTools(
   // bound to that same collector session.
   const swarmCollectorAdmission = {
     childSessionKey: params.sessionKey,
+    childAgentId: sessionAgentId,
     admittedRunId: surface === "loopback" ? params.runId : undefined,
   };
   const swarmCollectorContext = resolveSwarmCollectorToolContext(swarmCollectorAdmission);
-  const openClawTools = createOpenClawTools({
+  const openClawToolOptions: Parameters<typeof createOpenClawToolsAsync>[0] = {
     sessionPortalTarget,
     gatewayConfigReadAllowed,
     agentSessionKey: params.sessionKey,
@@ -364,15 +382,7 @@ export function resolveGatewayScopedTools(
       : undefined,
     runId: params.runId,
     assertInputCommitAllowed: params.assertInputCommitAllowed,
-    assertInvocationCurrent:
-      params.assertInvocationCurrent || params.isGrantCurrent
-        ? () => {
-            params.assertInvocationCurrent?.();
-            if (params.isGrantCurrent && !params.isGrantCurrent()) {
-              throw new Error("Gateway tool invocation grant is no longer active");
-            }
-          }
-        : undefined,
+    assertInvocationCurrent,
     ...(swarmCollectorContext
       ? {
           swarmCollector: true,
@@ -420,6 +430,7 @@ export function resolveGatewayScopedTools(
     senderIsOwner: params.senderIsOwner,
     requesterSenderId: senderId,
     sessionControlAuthority,
+    sandboxSessionRenameOnly,
     conversationReadOrigin: params.conversationReadOrigin,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     skillWorkshop: params.skillWorkshop,
@@ -460,7 +471,9 @@ export function resolveGatewayScopedTools(
     cronCreatorToolAllowlistCaptureRef,
     inheritedToolAllowlist,
     inheritedToolDenylist,
-  });
+  };
+  const openClawTools = await createOpenClawToolsAsync(openClawToolOptions, { assertCurrent });
+  assertCurrent();
   const execDefaults =
     nodeExecSurface || mediatedToolNames.size > 0
       ? resolveExecDefaults({
@@ -487,7 +500,7 @@ export function resolveGatewayScopedTools(
   const includeMediatedShellTools = mediatedToolFamilies.has("shell");
   const mediatedCodingTools =
     surface === "loopback" && (includeMediatedBaseCodingTools || includeMediatedShellTools)
-      ? createOpenClawCodingTools({
+      ? await createOpenClawCodingToolsAsync({
           config: params.cfg,
           sessionConfigSource: "runtime",
           agentId: policyAgentId,
@@ -527,6 +540,7 @@ export function resolveGatewayScopedTools(
           inputProvenance: params.inputProvenance,
           trustedInternalHandoff: params.trustedInternalHandoff,
           trigger: params.trigger,
+          continuesConversation: params.continuesConversation,
           approvalReviewerDeviceId: params.approvalReviewerDeviceId,
           sourceReplyDeliveryMode,
           taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
@@ -559,6 +573,7 @@ export function resolveGatewayScopedTools(
           wrapBeforeToolCallHook: false,
         })
       : [];
+  assertCurrent();
   // CLI backends already own their local shell. This extra surface is deliberately
   // fixed to node so it cannot become a second path to Gateway-local execution.
   const baseTools = nodeExecSurface

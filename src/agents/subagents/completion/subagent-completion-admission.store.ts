@@ -196,6 +196,22 @@ function parseMutationReceipt(
   };
 }
 
+function hasNewerGeneration(current: SubagentRunRecord): boolean {
+  return [...getSubagentRunsForChildSession(current.childSessionKey, current.childAgentId)].some(
+    (candidate) => compareSubagentRunGeneration(candidate, current) > 0,
+  );
+}
+
+function decodeAcknowledgedRow(row: SubagentRunSqliteRow): SubagentRunRecord {
+  const record = rowToSubagentRunRecord(row);
+  if (!record) {
+    throw new SubagentRegistryCommitReceiptError(
+      new Error("Subagent completion acknowledged an undecodable native record"),
+    );
+  }
+  return record;
+}
+
 async function executeCompletionCommand<T>(
   context: OpenClawStateWorkerContext,
   command: CompletionCommand,
@@ -284,11 +300,7 @@ export async function admitSubagentCompletionDelivery(params: {
     [params.runId],
     (rows) => {
       const current = currentCompletionOwner(rows, expected);
-      if (
-        [...getSubagentRunsForChildSession(current.childSessionKey)].some(
-          (candidate) => compareSubagentRunGeneration(candidate, current) > 0,
-        )
-      ) {
+      if (hasNewerGeneration(current)) {
         throw new SubagentCompletionSourceChangedError("Subagent completion source was replaced");
       }
       const prepared = params.plan(current);
@@ -327,12 +339,7 @@ export async function admitSubagentCompletionDelivery(params: {
           authority.assertCurrent,
           (value) => parseAdmissionReceipt(value, input.writeId, params.runId),
         );
-        const subagent = rowToSubagentRunRecord(receipt.row);
-        if (!subagent) {
-          throw new SubagentRegistryCommitReceiptError(
-            new Error("Subagent completion acknowledged an undecodable native record"),
-          );
-        }
+        const subagent = decodeAcknowledgedRow(receipt.row);
         subagent.cleanupHandled = planned.expected.cleanupHandled;
         return {
           value: {
@@ -457,12 +464,7 @@ async function mutateCompletion(
           postimages.set(runId, null);
         }
         for (const native of receipt.records) {
-          const record = rowToSubagentRunRecord(native.row);
-          if (!record) {
-            throw new SubagentRegistryCommitReceiptError(
-              new Error("Subagent completion acknowledged an undecodable native record"),
-            );
-          }
+          const record = decodeAcknowledgedRow(native.row);
           record.cleanupHandled = native.cleanupHandled;
           postimages.set(record.runId, record);
         }
@@ -583,12 +585,7 @@ export async function reconcileRetiredSubagentCancellation(
   try {
     const result = await mutateCompletion([expected], (rows) => {
       const current = currentCompletionOwner(rows, expected);
-      if (
-        retiredCancellationEndedAt(current, now) !== endedAt ||
-        [...getSubagentRunsForChildSession(current.childSessionKey)].some(
-          (candidate) => compareSubagentRunGeneration(candidate, current) > 0,
-        )
-      ) {
+      if (retiredCancellationEndedAt(current, now) !== endedAt || hasNewerGeneration(current)) {
         throw new SubagentCompletionSourceChangedError("Subagent completion source was replaced");
       }
       return { kind: "reconcileCancelled", expected: current, now };

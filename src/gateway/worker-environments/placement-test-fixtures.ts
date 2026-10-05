@@ -55,21 +55,21 @@ export async function advancePlacementFixtureToActive(
     seedAttachedPlacementEnvironment(database, environment);
   }
   let placement = await store.startDispatch(identity);
-  placement = store.transition({
+  placement = await store.transition({
     sessionId: identity.sessionId,
     from: "requested",
     to: "provisioning",
     expectedGeneration: placement.generation,
     patch: { environmentId },
   });
-  placement = store.transition({
+  placement = await store.transition({
     sessionId: identity.sessionId,
     from: "provisioning",
     to: "syncing",
     expectedGeneration: placement.generation,
     patch: { workerBundleHash },
   });
-  placement = store.transition({
+  placement = await store.transition({
     sessionId: identity.sessionId,
     from: "syncing",
     to: "starting",
@@ -79,7 +79,7 @@ export async function advancePlacementFixtureToActive(
   if (seedEnvironment === "before-activation") {
     seedAttachedPlacementEnvironment(database, environment);
   }
-  const active = store.transition({
+  const active = await store.transition({
     sessionId: identity.sessionId,
     from: "starting",
     to: "active",

@@ -1267,7 +1267,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       const cfg = {
         session: { dmScope: "per-peer" },
         agents: {
-          list: [{ id: "main", default: true }, { id: "strategist" }],
+          entries: { main: {}, strategist: {} },
         },
         bindings: [
           {
@@ -1799,10 +1799,10 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       agents:
         owner === "runtime"
           ? {
-              list: [
-                { id: "main", default: true },
-                { id: "review", groupChat: { mentionPatterns: ["\\breviewbot\\b"] } },
-              ],
+              entries: {
+                main: {},
+                review: { groupChat: { mentionPatterns: ["\\breviewbot\\b"] } },
+              },
             }
           : undefined,
       channels: { slack: { enabled: true, replyToMode: mode, groupPolicy: "open", channels } },

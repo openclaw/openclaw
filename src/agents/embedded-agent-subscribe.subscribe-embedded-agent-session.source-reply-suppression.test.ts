@@ -32,8 +32,7 @@ function createBlockReplyHarness(
   // Harness exposes both emitted block replies and subscription state so tests
   // can distinguish suppression from missing delivery tracking.
   const { session, emit: rawEmit } = createStubSessionHarness();
-  const sessionManager = {};
-  Object.assign(session, { sessionManager });
+  const sessionManager = session.sessionManager;
   const emit = (evt: unknown) => {
     const event = asOptionalRecord(evt);
     const details = asOptionalRecord(asOptionalRecord(event?.result)?.details);
@@ -585,8 +584,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     "keeps source progress distinct from final receipts for $action (final=$final)",
     async ({ action, final }) => {
       const { session, emit } = createStubSessionHarness();
-      const sessionManager = {};
-      Object.assign(session, { sessionManager });
+      const sessionManager = session.sessionManager;
       const onBlockReply = vi.fn();
       const onDeliveredMessageToolOnlySourceReply = vi.fn();
       const subscription = subscribeEmbeddedAgentSession({
@@ -657,8 +655,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     "reports whether the last tool batch was source progress after $name",
     async ({ batch, later, endsWithProgress }) => {
       const { session, emit } = createStubSessionHarness();
-      const sessionManager = {};
-      Object.assign(session, { sessionManager });
+      const sessionManager = session.sessionManager;
       const subscription = subscribeEmbeddedAgentSession({
         session,
         runId: "trailing-progress",

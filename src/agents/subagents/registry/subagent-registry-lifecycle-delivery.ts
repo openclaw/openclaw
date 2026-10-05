@@ -1,16 +1,13 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { resolveSessionStorePathForScope } from "../../../config/sessions/session-store-path.js";
-import { formatErrorMessage, readErrorName } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import {
   getGatewayContextResolver,
   withPluginRuntimeGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
-import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import {
@@ -20,12 +17,12 @@ import {
 import { isSilentAgentReplyText } from "../../embedded-agent-runner/message-visibility.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
+import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   ensureCompletionState,
   ensureDeliveryState,
   loadPendingFinalDeliveryPayload,
 } from "./subagent-delivery-state.js";
-import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import { capFrozenResultText } from "./subagent-registry-helpers.js";
 import type {
   SubagentLifecycleCommonContext,
@@ -40,24 +37,6 @@ import { compareSubagentRunGeneration, isSameSubagentRunOwner } from "./subagent
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
 const DELIVERY_MIRROR_HISTORY_MAX_CHARS = 128 * 1024;
-
-export function buildSafeLifecycleErrorMeta(error: unknown): Record<string, string> {
-  const message = formatErrorMessage(error);
-  const name = readErrorName(error);
-  return name ? { name, message } : { message };
-}
-
-export function maskLifecycleIdentifier(value: string, kind: "run" | "session"): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "unknown";
-  }
-  return kind === "session"
-    ? `${trimmed.split(":").slice(0, 2).join(":") || "session"}:…`
-    : trimmed.length <= 8
-      ? "***"
-      : `${sliceUtf16Safe(trimmed, 0, 4)}…${sliceUtf16Safe(trimmed, -4)}`;
-}
 
 export const formatAnnounceDeliveryError = (delivery: SubagentAnnounceDeliveryResult): string => {
   const errors = [
@@ -237,7 +216,6 @@ export const captureSubagentRunResult = async (
     const current = getCurrentSubagentRunOwner(params.runs, entry);
     return (
       current !== undefined &&
-      isSameSubagentRunOwner(current, entry) &&
       current.pauseReason !== "sessions_yield" &&
       !context.newerGenerationOwnsSession(current)
     );
@@ -252,7 +230,8 @@ export const captureSubagentRunResult = async (
   try {
     const transcriptTarget = entry.execution.transcriptTarget;
     const agentId =
-      transcriptTarget?.agentId ?? resolveAgentIdFromSessionKey(entry.childSessionKey);
+      transcriptTarget?.agentId ??
+      resolveSubagentChildSessionOwner(entry, params.getRuntimeConfig()).agentId;
     const sessionKey = transcriptTarget?.sessionKey ?? entry.childSessionKey;
     const configuredStorePath = agentId
       ? (transcriptTarget?.storePath ??
@@ -347,7 +326,6 @@ export const refreshFrozenResultFromSession = async (
   const previousCapturedAt = entry.completion?.capturedAt;
   const isCurrent = (current = getCurrentSubagentRunOwner(params.runs, entry)) =>
     current !== undefined &&
-    isSameSubagentRunOwner(current, entry) &&
     current.pauseReason !== "sessions_yield" &&
     current.cleanupCompletedAt === undefined &&
     current.completion?.resultText === previousResultText &&
@@ -396,24 +374,6 @@ export const refreshFrozenResultFromSession = async (
     },
   });
   return true;
-};
-
-export const emitCompletionEndedHookIfNeeded = async (
-  params: SubagentLifecycleOptions,
-  entry: SubagentRunRecord,
-  reason: SubagentLifecycleEndedReason,
-  isCurrent?: () => boolean,
-  prepareCurrent?: () => Promise<boolean>,
-) => {
-  if (params.shouldEmitEndedHookForRun({ entry, reason })) {
-    await params.emitSubagentEndedHookForRun({
-      entry,
-      reason,
-      sendFarewell: true,
-      isCurrent,
-      prepareCurrent,
-    });
-  }
 };
 
 export const markPendingFinalDelivery = (args: { entry: SubagentRunRecord; error?: string }) => {

@@ -46,7 +46,7 @@ describe("createOpenClawCodingTools availability guidance", () => {
       const availableNames = new Set<string>(available);
       const toolOptions = {
         config: {
-          agents: { entries: { main: { default: true } } },
+          agents: { entries: { main: {} } },
           tools: { swarm: true },
         },
         agentSessionKey: "agent:main:main",

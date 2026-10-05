@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as fsSafe from "./fs-safe.js";
@@ -105,7 +106,7 @@ it.each(["directory", "invalid YAML"])("rejects a listed .modules.yaml %s", asyn
   ).rejects.toThrow();
 });
 
-it.each(["auto", "off"] as const)(
+it.each(["auto", "off", "clone-denied"] as const)(
   "isolates plugin bytes and modes with native copying %s",
   async (nativeMode) => {
     const metadataStat = vi.spyOn(fsSync, "lstatSync");
@@ -126,10 +127,27 @@ it.each(["auto", "off"] as const)(
     const linked = `${f.file}.linked`;
     const before = await fs.stat(f.file, { bigint: true });
     const mkdir = vi.spyOn(fs, "mkdir");
-    vi.stubEnv("FS_SAFE_NATIVE_MODE", nativeMode);
+    if (nativeMode === "clone-denied") {
+      const openRoot = fsSafe.root;
+      vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
+        const root = await openRoot(...args);
+        const copyIn = root.copyIn.bind(root);
+        vi.spyOn(root, "copyIn").mockImplementation((relative, input, options) => {
+          if (options?.clone !== "never") {
+            throw new fsSafe.FsSafeError("helper-failed", "native file copy failed", {
+              cause: Object.assign(new Error("FICLONE: denied"), { code: "EPERM" }),
+            });
+          }
+          return copyIn(relative, input, options);
+        });
+        return root;
+      });
+    }
+    const configuredMode = nativeMode === "off" ? "off" : "auto";
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", configuredMode);
     try {
       // FreeBSD has no native binding; "off" exercises the real portable fallback.
-      expect(getFsSafeNativeConfig().mode).toBe(nativeMode);
+      expect(getFsSafeNativeConfig().mode).toBe(configuredMode);
       await f.copy();
     } finally {
       vi.unstubAllEnvs();
@@ -322,11 +340,126 @@ it("drains concurrent file copies before reporting a failure or publishing links
   }
 });
 
+it.each(["inventory", "bindings", "admission", "completion", "verification"] as const)(
+  "settles bounded %s reads before a metadata failure reaches cleanup",
+  async (phase) => {
+    const peerEntered = createDeferredCore();
+    const releasePeers = createDeferredCore();
+    const failure = new Error("plugin metadata unavailable");
+    const started: string[] = [];
+    let active = 0;
+    let maximum = 0;
+    let activeAtRejection: number | undefined;
+    let selectedDirectory = "";
+    let enabled = phase === "inventory" || phase === "bindings" || phase === "admission";
+    const intercept = async <T>(file: unknown, read: () => Promise<T>): Promise<T> => {
+      if (
+        !enabled ||
+        typeof file !== "string" ||
+        path.dirname(file) !== selectedDirectory ||
+        !path.basename(file).startsWith("read-")
+      ) {
+        return await read();
+      }
+      started.push(file);
+      active += 1;
+      maximum = Math.max(maximum, active);
+      try {
+        if (started.length === 1) {
+          await read();
+          throw failure;
+        }
+        peerEntered.resolve();
+        await releasePeers.promise;
+        return await read();
+      } finally {
+        active -= 1;
+      }
+    };
+    const installReadSpy = () => {
+      if (phase === "bindings") {
+        const realpath = fs.realpath;
+        vi.spyOn(fs, "realpath").mockImplementation((...args) =>
+          intercept(args[0], () => realpath(...args)),
+        );
+      } else {
+        const lstat = fs.lstat;
+        vi.spyOn(fs, "lstat").mockImplementation((...args) =>
+          intercept(args[0], () => lstat(...args)),
+        );
+      }
+    };
+    const preparing = fixture(false, async (source) => {
+      selectedDirectory = source;
+      for (let index = 0; index < 9; index += 1) {
+        const file = path.join(source, `read-${index}.txt`);
+        if (phase === "bindings") {
+          await fs.symlink("payload.txt", file);
+        } else {
+          await fs.writeFile(file, `plugin payload ${index}`);
+        }
+      }
+      if (phase === "completion") {
+        await fs.symlink("payload.txt", path.join(source, "copy-complete"));
+      }
+      if (phase === "inventory") {
+        installReadSpy();
+      }
+    });
+    const operation = (async () => {
+      const f = await preparing;
+      if (phase !== "inventory") {
+        installReadSpy();
+      }
+      if (phase === "completion") {
+        const symlink = fs.symlink;
+        vi.spyOn(fs, "symlink").mockImplementation(async (...args) => {
+          const result = await symlink(...args);
+          if (args[1] === path.join(f.destination, "copy-complete")) {
+            enabled = true;
+          }
+          return result;
+        });
+      } else if (phase === "verification") {
+        selectedDirectory = f.destination;
+        const readdir = fs.readdir;
+        vi.spyOn(fs, "readdir").mockImplementation((...args) => {
+          if (args[0] === f.destination) {
+            enabled = true;
+          }
+          return readdir(...args);
+        });
+      }
+      await f.copy();
+    })().catch((error: unknown) => {
+      activeAtRejection = active;
+      return error;
+    });
+    try {
+      await awaitGateBeforeSettlement(
+        peerEntered.promise,
+        operation,
+        "metadata reads did not overlap before rejection",
+      );
+      expect(activeAtRejection).toBeUndefined();
+      releasePeers.resolve();
+      expect(await operation).toBe(failure);
+      expect(activeAtRejection).toBe(0);
+      expect(started.length).toBeGreaterThan(1);
+      expect(maximum).toBeLessThanOrEqual(4);
+    } finally {
+      releasePeers.resolve();
+      await operation;
+    }
+  },
+);
+
 it("copies a linked workspace dependency without reading or changing Git update transactions", async () => {
   let dependency = "";
   let abandoned = "";
   let rollback = "";
   const sdkLink = "../../../../packages/plugin-sdk";
+  const required = "store.openclaw-update-00000000-0000-4000-8000-000000000011.tmp";
   const f = await fixture(false, async (source) => {
     const workspace = path.join(path.dirname(source), "workspace");
     dependency = path.join(workspace, "extensions", "a2a");
@@ -360,8 +493,14 @@ it("copies a linked workspace dependency without reading or changing Git update 
     await fs.writeFile(path.join(rollback, "previous", "keep.txt"), "rollback bytes");
     await fs.mkdir(path.join(dependency, "ordinary.tmp"));
     await fs.writeFile(path.join(dependency, "ordinary.tmp", "asset.txt"), "plugin asset");
+    await fs.mkdir(path.join(source, required));
+    await fs.writeFile(path.join(source, required, "required.txt"), "explicit dependency");
+    await fs.symlink(path.join(required, "required.txt"), path.join(source, "required.txt"));
   });
   await f.copy();
+  expect(await fs.readFile(path.join(f.destination, "required.txt"), "utf8")).toBe(
+    "explicit dependency",
+  );
   const copied = path.join(f.destination, "node_modules", "workspace-dependency");
   expect(await fs.readFile(path.join(copied, "data.txt"), "utf8")).toBe("live dependency");
   expect(await fs.readFile(path.join(copied, "ordinary.tmp", "asset.txt"), "utf8")).toBe(
@@ -394,16 +533,3 @@ it.each(["ordinary.tmp", "node_modules.openclaw-update-operator.tmp"])(
     ).rejects.toThrow("Cannot privately copy plugin dependency");
   },
 );
-
-it("retains explicitly linked inputs inside a Git transaction namespace", async () => {
-  const name = "store.openclaw-update-00000000-0000-4000-8000-000000000011.tmp";
-  const f = await fixture(false, async (source) => {
-    await fs.mkdir(path.join(source, name));
-    await fs.writeFile(path.join(source, name, "required.txt"), "explicit dependency");
-    await fs.symlink(path.join(name, "required.txt"), path.join(source, "required.txt"));
-  });
-  await f.copy();
-  expect(await fs.readFile(path.join(f.destination, "required.txt"), "utf8")).toBe(
-    "explicit dependency",
-  );
-});

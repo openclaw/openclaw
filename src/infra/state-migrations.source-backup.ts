@@ -14,7 +14,7 @@ import {
 } from "./state-migrations.source-snapshot.js";
 
 /** Resume the existing claim protocol without changing the original receipt identity. */
-export async function recoverLegacyStateSource(params: {
+async function recoverLegacyStateSource(params: {
   filePath: string;
   claimPaths?: readonly string[];
   assertCurrent: () => void;

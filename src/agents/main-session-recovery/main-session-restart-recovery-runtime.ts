@@ -25,6 +25,7 @@ import {
 import {
   loadExpectedRestartRecoveryTarget,
   recoverStore,
+  type MainSessionRecoverySkipReason,
 } from "./main-session-restart-recovery-store.js";
 
 type RecoveryCounts = { started: number; settled: number; failed: number; skipped: number };
@@ -79,6 +80,7 @@ export async function recoverRestartAbortedMainSessions(params: {
   recoveryCapacity?: ReturnType<typeof createMainSessionRecoveryCapacity>;
 }): Promise<RecoveryCounts> {
   const result = { started: 0, settled: 0, failed: 0, skipped: 0 };
+  const skipReasons = new Map<MainSessionRecoverySkipReason, number>();
   const handledSessionKeys = params.handledSessionKeys ?? new Set<string>();
 
   for (const target of await discoverRestartRecoveryStoreTargets({
@@ -97,6 +99,9 @@ export async function recoverRestartAbortedMainSessions(params: {
       storeAgentId: target.agentId,
       handledSessionKeys,
       recoveryCapacity: params.recoveryCapacity,
+      onSkipped: (reason) => {
+        skipReasons.set(reason, (skipReasons.get(reason) ?? 0) + 1);
+      },
     });
     result.started += storeResult.started;
     result.settled += storeResult.settled;
@@ -104,9 +109,16 @@ export async function recoverRestartAbortedMainSessions(params: {
     result.skipped += storeResult.skipped;
   }
 
-  if (result.started > 0 || result.settled > 0 || result.failed > 0) {
+  if (result.started > 0 || result.settled > 0 || result.failed > 0 || result.skipped > 0) {
+    const skipSummary =
+      result.started === 0 && skipReasons.size > 0
+        ? ` skipReasons=${[...skipReasons]
+            .toSorted(([left], [right]) => left.localeCompare(right))
+            .map(([reason, count]) => `${reason}:${count}`)
+            .join(",")}`
+        : "";
     mainSessionRecoveryLog.info(
-      `main-session restart recovery startup complete: started=${result.started} settled=${result.settled} failed=${result.failed} skipped=${result.skipped}`,
+      `main-session restart recovery startup complete: started=${result.started} settled=${result.settled} failed=${result.failed} skipped=${result.skipped}${skipSummary}`,
     );
   }
   return result;

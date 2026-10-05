@@ -1,19 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { markGatewayRestartTrace, measureGatewayRestartTrace } from "./restart-trace.js";
 import type { GatewayCloseOptions } from "./server-public.js";
-
-/** Create a timeout promise plus cleanup hook for shutdown races. */
-export function createGatewayShutdownTimeout<T>(timeoutMs: number, onTimeout: () => T) {
-  const { promise, resolve } = createDeferredCore<T>();
-  const timer = setTimeout(() => resolve(onTimeout()), timeoutMs);
-  timer.unref?.();
-  return {
-    promise,
-    clear: () => clearTimeout(timer),
-  };
-}
 
 /** Record a shutdown warning once. */
 export function recordGatewayShutdownWarning(warnings: string[], name: string): void {
@@ -112,9 +100,7 @@ export function runGatewayCloseSteps(params: {
 /** Failed acquisition retains its owner when native cleanup cannot finish. */
 export class GatewayStartupCleanupError extends AggregateError {
   constructor(startupError: unknown, cleanupError: unknown) {
-    super([startupError, cleanupError], "Gateway startup failed and cleanup did not complete", {
-      cause: startupError,
-    });
+    super([startupError, cleanupError], formatErrorMessage(startupError), { cause: startupError });
     this.name = "GatewayStartupCleanupError";
   }
 }

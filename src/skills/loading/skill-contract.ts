@@ -1,7 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SourceInfo } from "../../agents/sessions/source-info.js";
 import { decodeXml, escapeXml } from "../../shared/xml.js";
-import { resolveSkillReadPath } from "./workspace-skill-read-path.js";
+import { resolveSkillReadPath } from "../workspace-skill-read-path.js";
 
 export interface Skill {
   name: string;

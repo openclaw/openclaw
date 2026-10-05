@@ -87,11 +87,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     flush: flushBlockTtsText,
   } = createDispatchBlockReplyHandler(state);
   const flushDeferredFinalText = async () => {
-    const delivered = await flushDispatchDeferredFinalText({
-      deferFinalTtsText,
-      isHeartbeat: params.replyOptions?.isHeartbeat === true,
-      state,
-    });
+    const delivered = await flushDispatchDeferredFinalText(state);
     didDeliverVisiblePartialReply ||= delivered;
     return delivered;
   };
@@ -133,6 +129,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
             ctx,
             {
               ...state.getReplyOptions(),
+              preparedTtsPreferences: state.preparedTtsPreferences,
               [REPLY_OPERATION_RUN_STATE]: state.replyOperationRunState,
               sourceReplyDeliveryMode: state.sourceReplyDeliveryMode,
               sessionPromptSourceReplyDeliveryMode: state.sessionStableSourceReplyDeliveryMode,

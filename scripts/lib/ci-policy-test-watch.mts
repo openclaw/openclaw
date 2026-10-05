@@ -558,15 +558,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/state/openclaw-state.worker.ts",
     ],
   },
-  {
-    testFile: "src/commands/doctor-sandbox-legacy-registry.test.ts",
-    watchGlobs: [
-      "src/agents/sandbox/registry-import.worker.ts",
-      "src/infra/sqlite-store.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
-      "src/state/openclaw-state.worker.ts",
-    ],
-  },
   ...[
     "src/commands/doctor-skill-workshop-relocation.reservations.test.ts",
     "src/commands/doctor-skill-workshop-sqlite.relocation.test.ts",
@@ -1966,28 +1957,13 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   },
   {
+    // Sole CI owner of the skill's node:test and Python suites: no Vitest config
+    // routes those files, so test-only skill edits must select this wrapper.
     testFile: "test/scripts/telegram-e2e-userbot-skill.test.ts",
     watchGlobs: [
-      ".agents/skills/telegram-e2e-userbot/scripts/followup-drain-control-preload.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/published-upgrade-artifact.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/published-upgrade-scenario.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/qa-credential-lease.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/run-mock-sut-user-e2e.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/run-published-upgrade-user-e2e.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/scenario.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-api-ignore-abort-preload.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-binding-checkpoint.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-binding-forum.py",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-binding-upgrade-verdict.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-run-scope.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-test-api-proxy.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-test-credential.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-test-doctor.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-test-group.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-test-recover.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/triage-mock-openai.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/user-driver.py",
-      ".agents/skills/telegram-e2e-userbot/scripts/user-record.py",
+      ".agents/skills/telegram-e2e-userbot/agents/openai.yaml",
+      ".agents/skills/telegram-e2e-userbot/scripts/**",
+      "test/scripts/fixtures/triage-fixture-startup.mjs",
     ],
   },
   {

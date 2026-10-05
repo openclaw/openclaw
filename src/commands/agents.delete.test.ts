@@ -28,6 +28,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { createTestConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const configMocks = vi.hoisted(() => ({
@@ -107,10 +108,19 @@ const credentialsError = () =>
   });
 function config(stateDir: string): OpenClawConfig {
   const entries = {
-    main: { default: true, workspace: path.join(stateDir, "workspace-main") },
+    main: { workspace: path.join(stateDir, "workspace-main") },
     ops: { workspace: path.join(stateDir, "workspace-ops") },
   };
-  return { agents: { entries } };
+  return {
+    agents: {
+      ownership: "explicit",
+      defaults: {
+        systemAgent: { agentId: "main" },
+        sessionStore: { agentId: "main" },
+      },
+      entries,
+    },
+  };
 }
 function expectNoLocalMutation() {
   expect(configMocks.replaceConfigFile).not.toHaveBeenCalled();
@@ -187,7 +197,9 @@ describe("agents delete command", () => {
 
   it("refuses deleting the legacy shared-auth owner even when another agent is default", async () => {
     await withStateDirEnv("agents-delete-", async ({ stateDir }) => {
-      const cfg: OpenClawConfig = { agents: { entries: { main: {}, ops: { default: true } } } };
+      const cfg = createCanonicalAgentConfigFixture({
+        agents: { entries: { main: {}, ops: { default: true } } },
+      }).config;
       const sessions = { "agent:main:main": { sessionId: "main", updatedAt: 1 } };
       await arrange({ stateDir, cfg, deletedAgentId: "main", sessions });
       writePersistedAuthProfileStoreRaw(sharedAuthStore, path.join(stateDir, "agents/main/agent"));
@@ -209,7 +221,7 @@ describe("agents delete command", () => {
 
   it("refuses deleting the sole configured agent", async () => {
     await withStateDirEnv("agents-delete-", async ({ stateDir }) => {
-      const cfg: OpenClawConfig = { agents: { entries: { ops: { default: true } } } };
+      const cfg: OpenClawConfig = { agents: { entries: { ops: {} } } };
       const sessions = { "agent:ops:main": { sessionId: "ops", updatedAt: 1 } };
       await arrange({ stateDir, cfg, sessions });
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
@@ -227,6 +239,7 @@ describe("agents delete command", () => {
     await withStateDirEnv("agents-delete-", async () => {
       const cfg: OpenClawConfig = {
         agents: {
+          ownership: "explicit",
           defaults: { authInheritance: { agentId: "ops" } },
           entries: { ops: {}, research: {} },
         },
@@ -438,11 +451,13 @@ describe("agents delete command", () => {
       const cfg: OpenClawConfig = {
         agents: {
           ownership: "explicit",
-          defaults: { systemAgent: { agentId: "ops" } },
+          defaults: {
+            systemAgent: { agentId: "ops" },
+            authInheritance: { agentId: "ops" },
+          },
           entries: {
             main: { workspace: path.join(stateDir, "workspace-main") },
             ops: {
-              default: true,
               agentDir: opsAgentDir,
               workspace: path.join(stateDir, "workspace-ops"),
             },

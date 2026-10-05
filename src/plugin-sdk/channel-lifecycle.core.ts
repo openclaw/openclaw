@@ -48,35 +48,6 @@ export function createAccountStatusSink(params: {
   };
 }
 
-function createTrackedRunState(params: ChannelRunQueueParams) {
-  const runStarts = new Map<symbol, number>();
-  const oldestRunStart = () => Math.min(...runStarts.values());
-  const runState = createRunStateMachine({
-    setStatus: (patch) => {
-      params.setStatus?.({
-        ...patch,
-        activeRunStartedAt: runStarts.size > 0 ? oldestRunStart() : null,
-      });
-    },
-    abortSignal: params.abortSignal,
-  });
-
-  return {
-    isActive: () => runState.isActive(),
-    deactivate: runState.deactivate,
-    onRunStart() {
-      const handle = Symbol("channel-run");
-      runStarts.set(handle, Date.now());
-      runState.onRunStart();
-      return handle;
-    },
-    onRunEnd(handle: symbol) {
-      runStarts.delete(handle);
-      runState.onRunEnd();
-    },
-  };
-}
-
 /**
  * Serialize channel work per key while keeping lifecycle/busy accounting out of
  * channel-specific message handlers. The queue does not impose run timeouts;
@@ -84,7 +55,17 @@ function createTrackedRunState(params: ChannelRunQueueParams) {
  */
 export function createChannelRunQueue(params: ChannelRunQueueParams): ChannelRunQueue {
   const queue = new KeyedAsyncQueue();
-  const runState = createTrackedRunState(params);
+  const runStarts = new Map<symbol, number>();
+  const runState = createRunStateMachine({
+    setStatus: (patch) => {
+      params.setStatus?.({
+        ...patch,
+        activeRunStartedAt: runStarts.size > 0 ? Math.min(...runStarts.values()) : null,
+      });
+    },
+    abortSignal: params.abortSignal,
+  });
+
   const reportError = (error: unknown) => {
     try {
       params.onError?.(error);
@@ -101,7 +82,9 @@ export function createChannelRunQueue(params: ChannelRunQueueParams): ChannelRun
           if (!runState.isActive()) {
             return;
           }
-          const runHandle = runState.onRunStart();
+          const runHandle = Symbol("channel-run");
+          runStarts.set(runHandle, Date.now());
+          runState.onRunStart();
           try {
             // Deactivation can happen while this key waited behind older work.
             if (!runState.isActive()) {
@@ -109,7 +92,8 @@ export function createChannelRunQueue(params: ChannelRunQueueParams): ChannelRun
             }
             await task({ lifecycleSignal: params.abortSignal });
           } finally {
-            runState.onRunEnd(runHandle);
+            runStarts.delete(runHandle);
+            runState.onRunEnd();
           }
         })
         .catch(reportError);

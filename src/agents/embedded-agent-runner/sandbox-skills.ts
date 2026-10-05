@@ -5,11 +5,11 @@
  * copies instead of reusing host-path snapshots.
  */
 import path from "node:path";
+import { isPathRelativeEscape } from "@openclaw/fs-safe/path";
 import { indexFirstByKey } from "../../shared/dedupe-by-key.js";
 import { resolveExplicitSkillSelectionFileHost } from "../../skills/discovery/skill-command-provenance.js";
-import { clearSkillFileHost } from "../../skills/loading/skill-file-host.js";
 import { formatSkillsForPromptBounded } from "../../skills/loading/skill-prompt-limits.js";
-import { resolveSkillReadPath } from "../../skills/loading/workspace-skill-read-path.js";
+import { clearSkillFileHost } from "../../skills/skill-file-host.js";
 import type {
   SkillEligibilityContext,
   ExplicitSkillSelection,
@@ -17,6 +17,7 @@ import type {
   SkillUsagePath,
   SkillEntry,
 } from "../../skills/types.js";
+import { resolveSkillReadPath } from "../../skills/workspace-skill-read-path.js";
 import type { SandboxContext } from "../sandbox/types.js";
 
 const MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS = [".openclaw", "sandbox-skills"] as const;
@@ -41,14 +42,6 @@ function containerJoin(root: string, ...parts: string[]): string {
   return suffix ? `${normalizedRoot}/${suffix}` : normalizedRoot;
 }
 
-function pathEscapesRoot(relativePath: string): boolean {
-  return (
-    relativePath === ".." ||
-    relativePath.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relativePath)
-  );
-}
-
 function mapPathFromWorkspaceToContainer(params: {
   filePath: string | undefined;
   sourceWorkspaceDir: string;
@@ -61,7 +54,7 @@ function mapPathFromWorkspaceToContainer(params: {
     path.resolve(params.sourceWorkspaceDir),
     path.resolve(params.filePath),
   );
-  if (pathEscapesRoot(relativePath)) {
+  if (isPathRelativeEscape(relativePath)) {
     return params.filePath;
   }
   if (!relativePath) {

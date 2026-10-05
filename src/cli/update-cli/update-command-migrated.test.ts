@@ -66,11 +66,37 @@ vi.mock("../../state/openclaw-state-db-contract.js", async (importOriginal) => {
 
 const runtimeFixture = createFixtureLifetime();
 let candidateRoot: string;
+let candidateContract: Awaited<ReturnType<typeof childCommands.runUtf8CommandWithTimeout>>;
 beforeAll(async () => {
   const runtime = await runtimeFixture.run(() =>
     prepareCandidateAuthorityRuntime(runtimeFixture.createTempDir("migrated-candidate-runtime-")),
   );
   candidateRoot = fileURLToPath(new URL("../../", runtime.worker));
+  const stateDir = runtimeFixture.createTempDir("migrated-candidate-contract-");
+  // The immutable candidate's compatibility probe is shared; each delegated
+  // finalizer still runs in its own process with its own live executor grant.
+  candidateContract = await runtimeFixture.run(() =>
+    childCommands.runUtf8CommandWithTimeout(
+      [
+        process.execPath,
+        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(migratedFinalizeFixtureEntrypoint)),
+        JSON.stringify({ readOnlyEntrypoint: runtimeProcessEntrypoints.sqliteReadOnly }),
+        "--check",
+      ],
+      {
+        cwd: candidateRoot,
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+        },
+        timeoutMs: 30_000,
+        killProcessTree: true,
+        requireProcessTreeExtinction: true,
+      },
+    ),
+  );
+  expect(candidateContract).toMatchObject({ code: 0, termination: "exit", cleanup: "normal" });
 });
 afterAll(() => runtimeFixture.cleanup());
 
@@ -92,6 +118,7 @@ it.each([
   { agentId: "verification", changed: "none", blocked: undefined },
   { agentId: "main", changed: "shared", blocked: "state-migrated-no-rollback" },
   { agentId: "main", changed: "agent", blocked: "state-migrated-no-rollback" },
+  { agentId: "main", changed: "incomplete", blocked: "state-migrated-no-rollback" },
 ])(
   "classifies activation after first-use database creation (agent=$agentId, changed=$changed)",
   async ({ agentId, changed, blocked }) => {
@@ -135,7 +162,7 @@ it.each([
       { agentId, env },
     );
     closeOpenClawAgentDatabasesForTest();
-    if (changed !== "none") {
+    if (changed === "shared" || changed === "agent") {
       const db = new DatabaseSync(changed === "shared" ? shared.path : agentPath);
       try {
         db.exec(
@@ -160,13 +187,25 @@ it.each([
           schemaVersions,
           candidateSchemaVersions: {
             state: OPENCLAW_STATE_SCHEMA_VERSION + Number(changed === "shared"),
-            agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+            agent: OPENCLAW_AGENT_SCHEMA_VERSION + Number(changed === "incomplete"),
           },
           config: {},
           env,
         }),
       ),
     ).resolves.toBe(blocked);
+    if (changed === "incomplete") {
+      expect(result).toMatchObject({
+        status: "error",
+        reason: "openclaw doctor",
+        steps: [
+          expect.objectContaining({
+            exitCode: 1,
+            stderrTail: expect.stringContaining(agentPath),
+          }),
+        ],
+      });
+    }
   },
 );
 
@@ -567,29 +606,32 @@ it.each([
     let replayChild: Awaited<ReturnType<typeof nativeCommand>> | undefined;
     vi.spyOn(childCommands, "runUtf8CommandWithTimeout").mockImplementation(
       async (argv, options): ReturnType<typeof nativeCommand> => {
-        const child = await nativeCommand(
-          legacy
-            ? argv
-            : [
-                process.execPath,
-                ...resolveRuntimeWorkerArgv(
-                  resolveRuntimeWorkerUrl(migratedFinalizeFixtureEntrypoint),
-                ),
-                JSON.stringify({
-                  readOnlyEntrypoint: runtimeProcessEntrypoints.sqliteReadOnly,
-                  ...(replay
-                    ? {
-                        replay: {
-                          path: replayEvents,
-                          refuseStep: replay === "refused" ? "receiver-second" : undefined,
-                        },
-                      }
-                    : {}),
-                }),
-                ...argv.slice(2),
-              ],
-          options,
-        );
+        const child =
+          !legacy && argv.at(-1) === "--check"
+            ? candidateContract
+            : await nativeCommand(
+                legacy
+                  ? argv
+                  : [
+                      process.execPath,
+                      ...resolveRuntimeWorkerArgv(
+                        resolveRuntimeWorkerUrl(migratedFinalizeFixtureEntrypoint),
+                      ),
+                      JSON.stringify({
+                        readOnlyEntrypoint: runtimeProcessEntrypoints.sqliteReadOnly,
+                        ...(replay
+                          ? {
+                              replay: {
+                                path: replayEvents,
+                                refuseStep: replay === "refused" ? "receiver-second" : undefined,
+                              },
+                            }
+                          : {}),
+                      }),
+                      ...argv.slice(2),
+                    ],
+                options,
+              );
         if (replay && argv.at(-1) !== "--check") {
           replayChild = child;
         }

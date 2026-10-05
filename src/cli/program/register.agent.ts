@@ -1,16 +1,11 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { hasExplicitOptions } from "../command-options.js";
 import { formatHelpExamples } from "../help-format.js";
 import { collectOption } from "./helpers.js";
 
 type RuntimeModule = typeof import("../../runtime.js");
-
-const loadAgentsBindModule = createLazyRuntimeModule(
-  () => import("../../commands/agents.commands.bind.js"),
-);
 
 async function runAgentsCommandAction(
   action: (runtime: RuntimeModule["defaultRuntime"]) => Promise<void>,
@@ -52,7 +47,7 @@ export function registerAgentsCommands(program: Command): void {
     .option("--json", "Output JSON instead of text", false)
     .action(async (opts): Promise<void> => {
       await runAgentsCommandAction(async (runtime) => {
-        const { agentsBindingsCommand } = await loadAgentsBindModule();
+        const { agentsBindingsCommand } = await import("../../commands/agents.commands.bind.js");
         await agentsBindingsCommand(opts, runtime);
       });
     });
@@ -70,7 +65,7 @@ export function registerAgentsCommands(program: Command): void {
     .option("--json", "Output JSON summary", false)
     .action(async (opts): Promise<void> => {
       await runAgentsCommandAction(async (runtime) => {
-        const { agentsBindCommand } = await loadAgentsBindModule();
+        const { agentsBindCommand } = await import("../../commands/agents.commands.bind.js");
         await agentsBindCommand(opts, runtime);
       });
     });
@@ -84,7 +79,7 @@ export function registerAgentsCommands(program: Command): void {
     .option("--json", "Output JSON summary", false)
     .action(async (opts): Promise<void> => {
       await runAgentsCommandAction(async (runtime) => {
-        const { agentsUnbindCommand } = await loadAgentsBindModule();
+        const { agentsUnbindCommand } = await import("../../commands/agents.commands.bind.js");
         await agentsUnbindCommand(opts, runtime);
       });
     });

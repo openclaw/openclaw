@@ -88,9 +88,9 @@ export function registerSessionOperatorPreparationTests(fixture: {
           method === "sessions.patchMany"
             ? { targets: change === "duplicate" ? [target, { key }] : [target], patch }
             : change === "durable"
-              ? { ...patch }
+              ? { agentId: "main", ...patch }
               : change === "incognito"
-                ? { ...patch, incognito: true }
+                ? { agentId: "main", ...patch, incognito: true }
                 : change === "explicit-incognito"
                   ? {
                       key: key.replace(":prepare-", ":incognito-prepare-"),
@@ -369,7 +369,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
       const caller = fixture.personClient(fixture.profileId(), ["operator.admin"]);
       delete caller.authenticatedUserProfile;
       caller.internal = { operatorRoleActor: { kind: "system" } };
-      const params = { incognito: true, model: "openai/gpt-5.6-sol" };
+      const params = { agentId: "main", incognito: true, model: "openai/gpt-5.6-sol" };
       const responses: Parameters<RespondFn>[] = [];
       await sessionCreateHandlers["sessions.create"]!({
         req: { type: "req", id: "system-incognito", method: "sessions.create", params },

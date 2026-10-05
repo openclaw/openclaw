@@ -7,6 +7,7 @@ import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/
 import {
   capCompactionSummary,
   fitCompactionSummary,
+  formatRequiredAskContext,
   MAX_COMPACTION_SUMMARY_CHARS,
   SUMMARY_TRUNCATED_MARKER,
 } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
@@ -84,8 +85,6 @@ const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
 const MAX_RECENT_TURNS_PRESERVE = 12;
 const MAX_QUALITY_GUARD_MAX_RETRIES = 3;
 const MAX_RECENT_TURN_TEXT_CHARS = 600;
-const MAX_REQUIRED_ASK_CONTEXT_CHARS = 2_000;
-const REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER = "\n[... split-turn ask context truncated ...]\n";
 const PREVIOUS_SUMMARY_REDISTILL_PREFIX =
   "Previous compaction summary to re-distill with the current conversation. " +
   "Prune stale, duplicate, or superseded details instead of preserving it verbatim.";
@@ -138,22 +137,13 @@ function normalizeLegacySplitTurnSummary(summary: string | undefined): string | 
 }
 
 /**
- * Messages the model currently sees: the last reset/compaction boundary's kept
- * tail plus everything after it. Never the raw branch — that re-reads history
- * behind every boundary and turns one compaction into dozens of model calls.
- */
-function collectSessionContextMessages(sessionManager: unknown): AgentMessage[] {
-  return projectBranchEntries(readSessionBranch(sessionManager));
-}
-
-/**
  * The boundary-scoped range a preparation was meant to cover: everything the
  * current context holds before its kept tail, minus the prior summary message
  * (that is re-distilled separately). Bounded by construction — it can never
  * reach behind the last reset/compaction boundary.
  */
 function collectPreparationRangeMessages(
-  sessionManager: unknown,
+  sessionManager: ExtensionContext["sessionManager"],
   firstKeptEntryId: string,
 ): AgentMessage[] {
   const entries = readSessionBranch(sessionManager);
@@ -171,10 +161,11 @@ function collectPreparationRangeMessages(
   ).filter((message) => message.role !== "compactionSummary");
 }
 
-function readSessionBranch(sessionManager: unknown): CoreSessionTreeEntry[] {
+function readSessionBranch(
+  sessionManager: ExtensionContext["sessionManager"],
+): CoreSessionTreeEntry[] {
   try {
-    const entries: unknown = (sessionManager as { getBranch?: () => unknown })?.getBranch?.();
-    return Array.isArray(entries) ? (entries as CoreSessionTreeEntry[]) : [];
+    return sessionManager.getBranch() as CoreSessionTreeEntry[];
   } catch {
     return [];
   }
@@ -227,15 +218,7 @@ type CompactionSuffix = {
   contextRanges: Array<{ start: number; end: number; segmentStarts: number[] }>;
 };
 
-type SummaryQualityRetention = {
-  auditSummary?: string;
-  identifiers: string[];
-  latestAsk: string | null;
-  latestAskInRetainedTurn?: boolean;
-  latestUnresolvedUserRequest?: string;
-  requiredAskContext: string;
-  identifierPolicy: "strict" | "off" | "custom";
-};
+type SummaryQualityRetention = Parameters<typeof createSummaryQualityRetentionPlan>[2];
 
 function assembleSuffix(parts: {
   splitTurnSection?: ContextSection;
@@ -345,11 +328,7 @@ function buildCompactionSummaryHeaders(params: {
   };
 }
 
-function clampNonNegativeInt(
-  value: unknown,
-  fallback: number,
-  max = Number.POSITIVE_INFINITY,
-): number {
+function clampNonNegativeInt(value: unknown, fallback: number, max: number): number {
   const normalized = typeof value === "number" && Number.isFinite(value) ? value : fallback;
   return Math.min(max, Math.max(0, Math.floor(normalized)));
 }
@@ -447,10 +426,6 @@ function formatToolFailuresSection(failures: ToolFailure[]): string {
   return `\n\n## Tool Failures\n${lines.join("\n")}`;
 }
 
-function normalizeCompactionSuffix(suffix: string | CompactionSuffix): CompactionSuffix {
-  return typeof suffix === "string" ? { text: suffix, contextRanges: [] } : suffix;
-}
-
 function resolveSuffixTailStart(suffix: CompactionSuffix, tailBudget: number): number {
   const desiredStart = Math.max(0, suffix.text.length - tailBudget);
   const containingRange = suffix.contextRanges.find(
@@ -465,8 +440,7 @@ function resolveSuffixTailStart(suffix: CompactionSuffix, tailBudget: number): n
   );
 }
 
-function capCompactionSuffix(suffixInput: string | CompactionSuffix, maxChars: number): string {
-  const suffix = normalizeCompactionSuffix(suffixInput);
+function capCompactionSuffix(suffix: CompactionSuffix, maxChars: number): string {
   if (suffix.text.length <= maxChars) {
     return suffix.text;
   }
@@ -486,11 +460,10 @@ function capCompactionSuffix(suffixInput: string | CompactionSuffix, maxChars: n
 
 function budgetCompactionSummary(
   summaryBody: string,
-  suffixInput: string | CompactionSuffix,
+  suffix: CompactionSuffix,
   maxChars: number,
   qualityRetention?: SummaryQualityRetention,
 ) {
-  const suffix = normalizeCompactionSuffix(suffixInput);
   const joined = `${summaryBody}${suffix.text}`;
   // A body that fits still goes through the retention plan when it omits an
   // audited identifier or lets an audit section outgrow its cap; both would
@@ -777,27 +750,15 @@ function buildSplitTurnContextSection(messages: AgentMessage[]): ContextSection 
   });
 }
 
-function formatGeneratedSplitTurnSection(summary: string, onTruncated?: () => void): string {
+function formatGeneratedSplitTurnSection(summary: string, onTruncated: () => void): string {
   const heading = `${SPLIT_TURN_SECTION_HEADING}\n\n`;
   const summaryBudget = MAX_SPLIT_TURN_CONTEXT_CHARS - heading.length;
   const nestedSummary = nestMarkdownHeadings(summary);
   const cappedSummary = capCompactionSummary(nestedSummary, summaryBudget);
   if (cappedSummary.length < nestedSummary.length) {
-    onTruncated?.();
+    onTruncated();
   }
   return `${heading}${cappedSummary}`;
-}
-
-function formatRequiredAskContext(rawAsk: string): string {
-  const source = rawAsk.trim();
-  if (source.length <= MAX_REQUIRED_ASK_CONTEXT_CHARS) {
-    return source;
-  }
-  const contentBudget =
-    MAX_REQUIRED_ASK_CONTEXT_CHARS - REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER.length;
-  const headBudget = Math.floor(contentBudget / 2);
-  const tailBudget = contentBudget - headBudget;
-  return `${truncateUtf16Safe(source, headBudget)}${REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER}${sliceUtf16Safe(source, -tailBudget)}`;
 }
 
 function extractLatestUserAsk(messages: AgentMessage[]): string | null {
@@ -918,7 +879,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     const hasRealConversation =
       containsRealConversation([...baseMessagesToSummarize, ...baseTurnPrefixMessages]) ||
       containsRealConversation(
-        stripRuntimeContextCustomMessages(collectSessionContextMessages(ctx.sessionManager)),
+        stripRuntimeContextCustomMessages(
+          // Project the current boundary; raw branch history would re-summarize
+          // messages hidden by earlier resets and compactions.
+          projectBranchEntries(readSessionBranch(ctx.sessionManager)),
+        ),
       );
     setCompactionSafeguardCancellation(ctx.sessionManager, undefined);
     const cancelCompaction = (reason: string, error?: unknown) => {

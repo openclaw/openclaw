@@ -157,29 +157,26 @@ export function createAcpReplyProjector(params: {
     liveIdleTimer = undefined;
   };
 
-  const drainChunker = (force: boolean) => {
-    if (settings.deliveryMode === "final_only" && !force) {
-      return;
-    }
+  const drainChunker = () => {
     chunker.drain({
-      force,
+      force: true,
       emit: (chunk) => {
         blockReplyPipeline.enqueue({ text: chunk });
       },
     });
   };
 
-  const flushLiveBuffer = (opts?: { force?: boolean; idle?: boolean }) => {
+  const flushLiveBuffer = (idle = false) => {
     if (settings.deliveryMode !== "live" || !liveBufferText) {
       return;
     }
-    if (opts?.idle && !shouldFlushLiveBufferOnIdle(liveBufferText)) {
+    if (idle && !shouldFlushLiveBufferOnIdle(liveBufferText)) {
       return;
     }
     const text = liveBufferText;
     liveBufferText = "";
     chunker.append(text);
-    drainChunker(opts?.force === true);
+    drainChunker();
   };
 
   const scheduleLiveIdleFlush = () => {
@@ -188,42 +185,35 @@ export function createAcpReplyProjector(params: {
     }
     clearLiveIdleTimer();
     liveIdleTimer = setTimeout(() => {
-      flushLiveBuffer({ force: true, idle: true });
+      flushLiveBuffer(true);
       if (liveBufferText) {
         scheduleLiveIdleFlush();
       }
     }, liveIdleFlushMs);
   };
 
-  const flushBufferedToolDeliveries = async (force: boolean) => {
-    if (!(settings.deliveryMode === "final_only" && force)) {
-      return;
-    }
-    if (!shouldSendToolSummaries()) {
-      pendingToolDeliveries.length = 0;
-      return;
-    }
-    for (const entry of pendingToolDeliveries.splice(0)) {
-      await params.deliver("tool", entry.payload, entry.meta);
-    }
-  };
-
-  const flush = async (force = false): Promise<void> => {
+  const flush = async (): Promise<void> => {
     if (settings.deliveryMode === "live") {
       clearLiveIdleTimer();
-      flushLiveBuffer({ force: true });
+      flushLiveBuffer();
     }
-    await flushBufferedToolDeliveries(force);
     if (settings.deliveryMode === "final_only") {
-      if (force && finalOnlyOutputText.trim().length > 0) {
+      if (shouldSendToolSummaries()) {
+        for (const entry of pendingToolDeliveries.splice(0)) {
+          await params.deliver("tool", entry.payload, entry.meta);
+        }
+      } else {
+        pendingToolDeliveries.length = 0;
+      }
+      if (finalOnlyOutputText.trim().length > 0) {
         const text = finalOnlyOutputText;
         finalOnlyOutputText = "";
         await params.deliver("final", { text });
       }
     } else {
-      drainChunker(force);
+      drainChunker();
     }
-    await blockReplyPipeline.flush({ force });
+    await blockReplyPipeline.flush({ force: true });
   };
 
   const emitSystemStatus = async (text: string, opts?: { dedupe?: boolean }) => {
@@ -245,7 +235,7 @@ export function createAcpReplyProjector(params: {
         payload: { text: formatted },
       });
     } else {
-      await flush(true);
+      await flush();
       await params.deliver("tool", { text: formatted });
     }
     lastStatusHash = hash;
@@ -255,8 +245,7 @@ export function createAcpReplyProjector(params: {
     if (!event.tag || !HIDDEN_BOUNDARY_TAGS.has(event.tag)) {
       return;
     }
-    const status = normalizeOptionalLowercaseString(event.status);
-    const isTerminal = resolveAcpToolTerminalOutcome(status) !== undefined;
+    const isTerminal = resolveAcpToolTerminalOutcome(event.status) !== undefined;
     pendingHiddenBoundary = pendingHiddenBoundary || event.tag === "tool_call" || isTerminal;
   };
 
@@ -306,7 +295,7 @@ export function createAcpReplyProjector(params: {
       });
       markHiddenToolBoundary(event);
     } else {
-      await flush(true);
+      await flush();
       await params.deliver("tool", { text: toolSummary }, deliveryMeta);
     }
     lastToolHash = hash;
@@ -359,7 +348,7 @@ export function createAcpReplyProjector(params: {
           liveBufferText += safeText;
           if (shouldFlushLiveBufferOnBoundary(liveBufferText)) {
             clearLiveIdleTimer();
-            flushLiveBuffer({ force: true });
+            flushLiveBuffer();
           } else {
             scheduleLiveIdleFlush();
           }

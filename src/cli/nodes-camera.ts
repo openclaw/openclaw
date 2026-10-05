@@ -66,10 +66,7 @@ type CameraSnapPayload = {
   height: number;
 };
 
-type CameraClipPayload = {
-  format: string;
-  base64?: string;
-  url?: string;
+type CameraClipPayload = Pick<CameraSnapPayload, "format" | "base64" | "url"> & {
   durationMs: number;
   hasAudio: boolean;
 };

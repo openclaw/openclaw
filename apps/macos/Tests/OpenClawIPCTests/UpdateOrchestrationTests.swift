@@ -388,7 +388,7 @@ struct UpdateOrchestrationTests {
 
     @Test func `dashboard exposes update bridge only for available updater`() throws {
         let url = try #require(URL(string: "http://127.0.0.1:18789/control/"))
-        let auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
+        let auth = DashboardWindowAuth.unauthenticated
         let available = TestUpdater(isAvailable: true)
         let enabled = DashboardWindowController(
             url: url,

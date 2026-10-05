@@ -1,4 +1,4 @@
-import type { WorkerTaskControl } from "../../infra/worker-task-native-sections.js";
+import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
 import type { SessionTranscriptHydrationWorkerRequest } from "./session-transcript-hydration.types.js";
 import type { SessionTranscriptWorkerValues } from "./session-transcript-worker.types.js";
@@ -9,6 +9,20 @@ export async function readSessionTranscriptHydrationRequest(
   channel: WorkerTaskChannel | undefined,
   control: WorkerTaskControl,
 ): Promise<SessionTranscriptWorkerValues[SessionTranscriptHydrationWorkerRequest["kind"]]> {
+  if (request.kind === "transcript-maintenance") {
+    const { withOpenClawAgentDatabaseReadOnly } =
+      await import("../../state/openclaw-agent-db-readonly.js");
+    const { readSessionTranscriptMaintenance } =
+      await import("./session-transcript-maintenance-read.js");
+    const result = withOpenClawAgentDatabaseReadOnly(
+      (database) => readSessionTranscriptMaintenance(database, request.target, request.request),
+      { ...request.database, env: request.target.env },
+    );
+    if (!result.found) {
+      throw new Error("Session transcript is unavailable for maintenance planning");
+    }
+    return result.value;
+  }
   const { readOpenClawDatabaseQuarantineFailure } =
     await import("../../state/openclaw-quarantine-store.js");
   const quarantine = readOpenClawDatabaseQuarantineFailure("agent", request.database.path, {

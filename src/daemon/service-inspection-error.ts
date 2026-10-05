@@ -160,10 +160,7 @@ export class ServiceDefinitionInspectionError extends Error {
 }
 
 export class GatewayServiceStopUnsafeError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "GatewayServiceStopUnsafeError";
-  }
+  override name = "GatewayServiceStopUnsafeError";
 }
 
 /** Native preparation can wrap a custody refusal alongside an authority or cleanup failure. */

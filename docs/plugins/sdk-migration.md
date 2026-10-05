@@ -74,7 +74,16 @@ deprecated for runtime use. Ordinary ACP manager and Gateway callers use
 `readAcpSessionEntryAsync` and `getAcpSessionManager().resolveSessionAsync()`.
 Discord and Telegram startup binding cleanup retain their existing synchronous
 reader until conditional deletion can validate metadata at the mutation owner.
-That cleanup migration remains unfinished. Removing the synchronous contracts
+Their inactive incognito composition accepts a prepared session reader whose
+current-source assertion reaches the binding transaction and commit grants.
+The preparation retains the original actor revision and ACP metadata publication
+fence until cleanup releases it. Production does not supply that reader until
+the atomic incognito activation; guarded durable cleanup remains separate work.
+`IncognitoSessionEndedError` and `IncognitoSessionSyncAccessError`, exposed through
+the local `openclaw/plugin-sdk/acp-runtime` facade, must propagate through cleanup and status
+probes. Use `rethrowIncognitoSessionError(error)` before treating other failures
+as an absent session or an uncertain probe; it also recognizes nested refusals.
+Removing the synchronous contracts
 requires a separately announced breaking SDK release. Incognito reads retain
 their existing native in-memory owner until that owner's worker migration.
 
@@ -110,6 +119,10 @@ The anchors from the single-page version still resolve here.
 
 [How to migrate a plugin](/plugins/sdk-migration/how-to-migrate) — the ordered migration steps.
 
+- [Await personal model-account operations](/plugins/sdk-migration/how-to-migrate#await-personal-model-account-operations)
+- [Await session transcript persistence](/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence)
+- [Await extension session changes](/plugins/sdk-migration/how-to-migrate#await-extension-session-changes)
+- [Await provider replay metadata](/plugins/sdk-migration/how-to-migrate#await-provider-replay-metadata)
 - <a id="how-to-migrate"></a>[How to migrate](/plugins/sdk-migration/how-to-migrate#how-to-migrate)
 - <a id="migrate-runtime-config-load%2Fwrite-helpers"></a>[Migrate runtime config load/write helpers](/plugins/sdk-migration/how-to-migrate#migrate-runtime-config-load%2Fwrite-helpers)
 - <a id="migrate-embedded-tool-result-extensions-to-middleware"></a>[Migrate embedded tool-result extensions to middleware](/plugins/sdk-migration/how-to-migrate#migrate-embedded-tool-result-extensions-to-middleware)

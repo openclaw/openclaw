@@ -85,6 +85,8 @@ type ProfileFixture = {
   id: string;
   emails: readonly string[];
   role?: string;
+  effectiveRole?: string;
+  roleSource?: "assigned" | "githubLogin" | "default";
   mergedInto?: string | null;
   githubIdentity?: { login: string } | null;
 };
@@ -134,8 +136,14 @@ export function visitorProfileFixture(
     async request() {
       throw new Error("Expected a mocked Gateway request");
     },
+    subscribeSessionChanges() {
+      throw new Error("Unexpected session change subscription");
+    },
     async readSessionFacts() {
       throw new Error("Unexpected session facts request");
+    },
+    async openPluginPanel() {
+      throw new Error("Unexpected plugin panel request");
     },
     withUserProfileIdentity,
   };

@@ -112,6 +112,7 @@ export function createLazyChannelApprovalNativeRuntimeAdapter<
       onDuplicateSkipped: (runtimeParams) =>
         loadedRuntime?.observe?.onDuplicateSkipped?.(runtimeParams),
       onDelivered: (runtimeParams) => loadedRuntime?.observe?.onDelivered?.(runtimeParams),
+      onFinalized: (runtimeParams) => loadedRuntime?.observe?.onFinalized?.(runtimeParams),
     },
     // `capabilityBoundary` opts into the non-generic registration contract;
     // otherwise this object preserves every type inferred from `load`.

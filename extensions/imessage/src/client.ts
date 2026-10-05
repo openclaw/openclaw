@@ -1,9 +1,14 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  captureChannelReadAuthority,
+  captureEffectAuthority,
+} from "openclaw/plugin-sdk/fetch-runtime";
 import { logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { recoverIMessageBridge } from "./bridge-recovery.js";
 import { expandIMessageUserPath } from "./cli-path.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
@@ -253,6 +258,24 @@ export class IMessageRpcClient {
   async request<T = unknown>(
     method: string,
     params?: Record<string, unknown>,
+    opts?: { timeoutMs?: number; assertCurrent?: () => void },
+  ): Promise<T> {
+    const child = this.child;
+    const stdin = child?.stdin;
+    const assertReadAuthority = captureChannelReadAuthority();
+    return captureEffectAuthority().initiate(() => {
+      if (child !== this.child || stdin !== this.child?.stdin) {
+        throw new Error("imsg rpc process changed before request initiation");
+      }
+      assertReadAuthority?.();
+      opts?.assertCurrent?.();
+      return this.initiateRequest<T>(method, params, opts);
+    });
+  }
+
+  private async initiateRequest<T>(
+    method: string,
+    params?: Record<string, unknown>,
     opts?: { timeoutMs?: number },
   ): Promise<T> {
     if (!this.child || !this.child.stdin) {
@@ -338,19 +361,11 @@ export class IMessageRpcClient {
     if (this.isReaped) {
       return true;
     }
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([
-        this.reaped.then(() => true),
-        new Promise<boolean>((resolve) => {
-          timer = setTimeout(() => resolve(false), timeoutMs);
-        }),
-      ]);
-    } finally {
-      if (timer) {
-        clearTimeout(timer);
-      }
-    }
+    return await raceWithTimeout(
+      this.reaped.then(() => true),
+      timeoutMs,
+      () => false,
+    );
   }
 
   private signalChild(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {

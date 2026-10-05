@@ -1,5 +1,6 @@
 /** The node-local command surface owns both advertised commands and their capabilities. */
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
+import { SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY } from "../../packages/gateway-protocol/src/system-run-execution-context.js";
 import { NODE_CLAUDE_SKILLS_CAPABILITY } from "../infra/node-claude-skill-protocol.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
@@ -13,6 +14,10 @@ import {
 import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import type { listRegisteredNodeHostCapsAndCommands } from "./plugin-node-host.js";
+
+export const preferMacAppExecHost =
+  process.platform === "darwin" &&
+  process.env.OPENCLAW_NODE_EXEC_HOST?.trim().toLowerCase() === "app";
 
 export type NodeHostManifest = {
   caps: string[];
@@ -32,6 +37,7 @@ export function buildNodeHostManifest(params: {
 }): NodeHostManifest {
   const { pluginManifest, commandAllowlist } = params;
   const builtins: Array<[string, readonly string[]]> = [
+    [SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY, preferMacAppExecHost ? [] : ["system.run"]],
     [
       "system",
       [

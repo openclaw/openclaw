@@ -3,8 +3,8 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { getChatCommands } from "../../auto-reply/commands-registry.data.js";
-import { resolveSkillReadPath } from "../loading/workspace-skill-read-path.js";
 import type { ExplicitSkillSelection, SkillCommandSpec } from "../types.js";
+import { resolveSkillReadPath } from "../workspace-skill-read-path.js";
 import {
   recordExplicitSkillSelectionFileHost,
   resolveExplicitSkillSelectionFileHost,
@@ -115,7 +115,7 @@ export function hasSkillReferenceCandidate(text: string): boolean {
 export function resolveSkillCommandInvocation(params: {
   commandBodyNormalized: string;
   skillCommands: SkillCommandSpec[];
-}): { command: SkillCommandSpec; args?: string; inline?: boolean } | null {
+}): { command: SkillCommandSpec; args?: string } | null {
   const match = params.commandBodyNormalized.trim().match(/^\/([^\s]+)(?:\s+([\s\S]+))?$/);
   if (!match) {
     return null;

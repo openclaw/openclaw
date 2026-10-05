@@ -1,3 +1,4 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import {
   isGatewayRestartDraining,
@@ -248,10 +249,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
       return 0;
     }
 
-    const endedAt =
-      typeof params.endedAt === "number" && Number.isFinite(params.endedAt)
-        ? params.endedAt
-        : Date.now();
+    const endedAt = asFiniteNumber(params.endedAt) ?? Date.now();
     const entry = currentEntry({ ...params, runId });
     const generation = entry?.generation;
     if (

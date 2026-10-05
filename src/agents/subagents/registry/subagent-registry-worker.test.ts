@@ -31,7 +31,10 @@ import {
   restoreSubagentRunsFromDisk,
   SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
-import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
+import {
+  getSubagentRegistryPublicationRevision,
+  subscribeSubagentRunChanges,
+} from "./subagent-registry-publication.js";
 import { recoverSubagentRunGatewayOwner } from "./subagent-registry-restore.js";
 import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry-state.fixture.test-support.js";
@@ -240,6 +243,86 @@ it("bounds repeated foreign conflicts and leaves the latest authoritative row pu
   expect(subagentRuns.get("contended")?.label).toBe("foreign-3");
   expect(loadSubagentRegistryFromSqlite().get("contended")?.cleanupCompletedAt).toBeUndefined();
 });
+
+it.each(["payload bytes", "indexed field", "removed", "inserted", "undecodable"] as const)(
+  "rejects an entire cohort before companion events when one selected row is foreign %s",
+  async (conflict) => {
+    const kept = entry("cohort-kept");
+    const deleted = entry("cohort-deleted");
+    const guarded = entry("cohort-guarded");
+    await register(kept, deleted, ...(conflict === "inserted" ? [] : [guarded]));
+    const { db } = openOpenClawStateDatabase();
+    const rows = () => db.prepare("SELECT * FROM subagent_runs ORDER BY run_id").all();
+    let foreignRows: ReturnType<typeof rows> = [];
+    let injected = false;
+    const intercept = interceptWrites((phase) => {
+      if (phase !== "before" || injected) {
+        return;
+      }
+      injected = true;
+      if (conflict === "inserted" || conflict === "removed") {
+        saveSubagentRegistryChangesToSqlite(
+          new Map(conflict === "inserted" ? [[guarded.runId, guarded]] : []),
+          [guarded.runId],
+        );
+      } else if (conflict === "indexed field") {
+        db.prepare("UPDATE subagent_runs SET created_at = created_at + 1 WHERE run_id = ?").run(
+          guarded.runId,
+        );
+      } else {
+        const original = db
+          .prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
+          .get(guarded.runId);
+        db.prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?").run(
+          conflict === "undecodable" ? "{" : `${String(original?.payload_json)} `,
+          guarded.runId,
+        );
+      }
+      foreignRows = rows();
+    });
+    const plan = vi.fn(() => {
+      if (injected) {
+        throw new SubagentRegistryMutationRejectedError("Cohort changed after planning");
+      }
+      return {
+        value: undefined,
+        postimages: new Map<string, SubagentRunRecord | null>([
+          [kept.runId, { ...kept, label: "must not be written" }],
+          [deleted.runId, null],
+        ]),
+        terminalEvents: [
+          {
+            input: {
+              event: {
+                sessionKey: kept.childSessionKey,
+                agentId: "main",
+                kind: "run_completed" as const,
+                actorType: "agent" as const,
+                runId: kept.runId,
+                summary: "must not be recorded",
+              },
+              now: 10,
+            },
+          },
+        ],
+      };
+    });
+    try {
+      await expect(
+        mutateSubagentRuns([kept.runId, deleted.runId, guarded.runId], plan),
+      ).rejects.toBeInstanceOf(SubagentRegistryMutationRejectedError);
+      expect(plan).toHaveBeenCalledTimes(conflict === "undecodable" ? 1 : 2);
+      expect(rows()).toEqual(foreignRows);
+      expect(
+        db.prepare("SELECT * FROM session_state_events WHERE run_id = ?").all(kept.runId),
+      ).toEqual([]);
+    } finally {
+      intercept.mockRestore();
+      // An undecodable foreign row is intentionally absent from the canonical cleanup reader.
+      saveSubagentRegistryChangesToSqlite(new Map(), [guarded.runId]);
+    }
+  },
+);
 
 it("fences an uncertain row through source close until canonical restoration", async () => {
   await register(entry("uncertain"));
@@ -480,8 +563,24 @@ it.each(["transaction", "commit"] as const)(
 );
 
 it("keeps an acknowledged row and notifies readers when its custody callback fails", async () => {
-  await register(entry("callback"));
-  const observed = vi.fn();
+  vi.stubEnv("OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE", "1");
+  await register({ ...entry("callback"), execution: { status: "queued" } });
+  await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+  const readStates = () =>
+    [
+      getSubagentRunsSnapshotForRead,
+      getSubagentMaintenanceRunsSnapshotForRead,
+      getSubagentSessionListRunsSnapshotForRead,
+    ].map((read) => read(new Map()).get("callback")?.execution.status);
+  expect(readStates()).toEqual(["queued", "queued", "queued"]);
+  const revision = getSubagentRegistryPublicationRevision();
+  let writes = 0;
+  interceptWrites((phase) => {
+    if (phase === "before") {
+      writes += 1;
+    }
+  });
+  const observed = vi.fn(readStates);
   const stop = subscribeSubagentRunChanges("persistence", observed);
   try {
     await expect(
@@ -489,7 +588,16 @@ it("keeps an acknowledged row and notifies readers when its custody callback fai
         ["callback"],
         (rows) => ({
           value: undefined,
-          postimages: new Map([["callback", { ...rows.get("callback")!, label: "committed" }]]),
+          postimages: new Map([
+            [
+              "callback",
+              {
+                ...rows.get("callback")!,
+                label: "committed",
+                execution: { status: "running" as const },
+              },
+            ],
+          ]),
         }),
         {
           onPublished: () => {
@@ -499,6 +607,9 @@ it("keeps an acknowledged row and notifies readers when its custody callback fai
       ),
     ).rejects.toMatchObject({ outcome: "committed", publication: "published" });
     expect(observed).toHaveBeenCalledOnce();
+    expect(observed).toHaveReturnedWith(["running", "running", "running"]);
+    expect(getSubagentRegistryPublicationRevision()).toBe(revision + 1);
+    expect(writes).toBe(1);
     expect(subagentRuns.get("callback")?.label).toBe("committed");
     expect(loadSubagentRegistryFromSqlite().get("callback")?.label).toBe("committed");
     await change("callback", (row) => {
@@ -509,39 +620,73 @@ it("keeps an acknowledged row and notifies readers when its custody callback fai
   }
 });
 
-it("reports a superseded known commit instead of publishing into a replacement database", async () => {
-  await register(entry("source"));
-  const original = captureOpenClawStateWorkerContext();
-  const reached = createDeferredCore();
-  const release = createDeferredCore();
-  interceptWrites(async (phase) => {
-    if (phase === "after") {
-      reached.resolve();
-      await release.promise;
-    }
-  });
-  const pending = change("source", (row) => {
-    row.label = "old database commit";
-  });
-  const outcome = pending.catch((error: unknown) => error);
-  try {
-    await awaitGateBeforeSettlement(reached.promise, pending, "write missed its ACK gate");
-    vi.spyOn(workerContext, "captureOpenClawStateWorkerContext").mockReturnValue({
-      ...original,
-      admission: {
-        ...original.admission,
-        identity: { ...original.admission.identity, key: "replacement" },
-      },
+it.each(["before ACK", "inside callback", "inside failing callback"] as const)(
+  "keeps an old-source commit from notifying a replacement database (%s)",
+  async (transition) => {
+    await register(entry("source"));
+    const original = captureOpenClawStateWorkerContext();
+    const reached = createDeferredCore();
+    const release = createDeferredCore();
+    const observed = vi.fn();
+    const stop = subscribeSubagentRunChanges("persistence", observed);
+    const revision = getSubagentRegistryPublicationRevision();
+    const replaceSource = () => {
+      vi.spyOn(workerContext, "captureOpenClawStateWorkerContext").mockReturnValue({
+        ...original,
+        admission: {
+          ...original.admission,
+          identity: { ...original.admission.identity, key: "replacement" },
+        },
+      });
+    };
+    interceptWrites(async (phase) => {
+      if (phase === "after" && transition === "before ACK") {
+        reached.resolve();
+        await release.promise;
+      }
     });
-    release.resolve();
-    expect(await outcome).toMatchObject({ outcome: "committed", publication: "superseded" });
-    expect(subagentRuns.get("source")?.label).toBeUndefined();
-    expect(loadSubagentRegistryFromSqlite().get("source")?.label).toBe("old database commit");
-  } finally {
-    release.resolve();
-    await outcome;
-  }
-});
+    const pending = mutateSubagentRuns(
+      ["source"],
+      (rows) => ({
+        value: undefined,
+        postimages: new Map([["source", { ...rows.get("source")!, label: "old database commit" }]]),
+      }),
+      {
+        onPublished: () => {
+          if (transition !== "before ACK") {
+            replaceSource();
+            if (transition === "inside failing callback") {
+              throw new Error("Synthetic custody failure after source replacement");
+            }
+          }
+        },
+      },
+    );
+    const outcome = pending.catch((error: unknown) => error);
+    try {
+      if (transition === "before ACK") {
+        await awaitGateBeforeSettlement(reached.promise, pending, "write missed its ACK gate");
+        replaceSource();
+        release.resolve();
+      }
+      expect(await outcome).toMatchObject({
+        outcome: "committed",
+        publication: transition === "before ACK" ? "superseded" : "published",
+      });
+      // Callback retirement cannot undo old-source rows that were already installed.
+      expect(subagentRuns.get("source")?.label).toBe(
+        transition === "before ACK" ? undefined : "old database commit",
+      );
+      expect(loadSubagentRegistryFromSqlite().get("source")?.label).toBe("old database commit");
+      expect(observed).not.toHaveBeenCalled();
+      expect(getSubagentRegistryPublicationRevision()).toBe(revision);
+    } finally {
+      release.resolve();
+      await outcome;
+      stop();
+    }
+  },
+);
 
 it("retains prepared announcement authority across bookkeeping and revokes it for a new terminal result", async () => {
   const child = entry("announcement");

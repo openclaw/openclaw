@@ -2,10 +2,12 @@
 import { Blob as NodeBlob } from "node:buffer";
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { createSidebarFullMessageLoader } from "../chat-pane-sidebar-layout.ts";
+import { createTestChatPane } from "../chat-pane.test-support.ts";
 import "./chat-detail-slot.ts";
 import type {
   SidebarContent,
@@ -20,6 +22,24 @@ type Panel = HTMLElement & {
   connectionEpoch?: number;
   updateComplete: Promise<unknown>;
 };
+
+type NativeOutputCase = [
+  name: string,
+  (
+    | { output: string; exitCode: number }
+    | { literal: string }
+    | {
+        execution: {
+          output: string;
+          chunk_id: string;
+          wall_time_seconds: number;
+          session_id?: number;
+          exit_code?: number;
+          extra?: string;
+        };
+      }
+  ),
+];
 
 function outputCard(overrides: Partial<ToolCard> = {}): ToolCard {
   return {
@@ -95,107 +115,109 @@ describe("tool output inspection", () => {
     },
   );
 
-  it.each([
-    {
-      name: "JSON lexemes",
-      output: '{"id":9007199254740993,"overflow":1e400,"zero":-0,"state":"before","state":"after"}',
-      exitCode: 0,
-    },
-    { name: "failed command without a chunk ID", output: "service unavailable\n", exitCode: 1 },
-    { name: "literal markup", output: "<script>danger()</script>\n**literal**", exitCode: 0 },
-  ])(
-    "unwraps $name while retaining the original response for inspection and copy",
-    async ({ output, exitCode }) => {
-      const raw = JSON.stringify(
-        [
-          { type: "input_text", text: "Script completed\nWall time 0.8 seconds\nOutput:\n" },
-          {
-            type: "input_text",
-            text: JSON.stringify({
-              ...(exitCode === 0 ? { chunk_id: "chunk" } : {}),
-              wall_time_seconds: 0.7,
-              exit_code: exitCode,
-              output,
-            }),
-          },
-        ],
-        null,
-        2,
-      );
-      const panel = mount(
-        outputCard({ outputText: raw }),
-        vi.fn<SidebarFullMessageLoader>().mockResolvedValue(result(raw)),
-      );
-      await vi.waitFor(() =>
-        expect(panel.querySelector("[aria-busy]")?.getAttribute("aria-busy")).toBe("false"),
-      );
-      const shown = panel.querySelector(".chat-tool-output__text")?.textContent ?? "";
-      expect(shown).not.toContain("chunk_id");
-      expect(shown).not.toContain("input_text");
-      expect(panel.querySelector("script, strong")).toBeNull();
-      if (output.startsWith("{")) {
-        expect(shown).toContain('"id": 9007199254740993');
-        expect(shown).toContain('"overflow": 1e400');
-        expect(shown).toContain('"zero": -0');
-        expect(shown).toContain('"state": "before",');
-        expect(shown).toContain('"state": "after"');
-      } else {
-        expect(shown).toContain(output);
-      }
-      if (exitCode !== 0) {
-        expect(shown).toContain("Exit code 1");
-      }
-      const rawBody = panel.querySelector<HTMLElement>(".chat-tool-card__raw-body")!;
-      expect(rawBody.hidden).toBe(true);
-      button(panel, t("chat.toolCards.rawDetails")).click();
-      expect(rawBody.hidden).toBe(false);
-      expect(rawBody.querySelector("code")?.textContent).toBe(raw);
-      const copy = vi.fn().mockResolvedValue(undefined);
-      vi.stubGlobal("navigator", { clipboard: { writeText: copy } });
-      button(panel, t("chat.toolCards.copyOutput")).click();
-      expect(copy).toHaveBeenCalledWith(raw);
-    },
-  );
-
-  it.each([
-    { name: "incomplete response", text: '[{"type":"input_text","text":"partial' },
-    {
-      name: "mixed media",
-      text: '[{"type":"input_text","text":"caption"},{"type":"input_image","omitted":true}]',
-    },
-    { name: "ordinary JSON", text: '{"output":"data","state":"before","state":"after"}' },
-  ])("keeps $name intact", async ({ text }) => {
+  it.each<NativeOutputCase>([
+    [
+      "JSON lexemes",
+      {
+        output:
+          '{"id":9007199254740993,"overflow":1e400,"zero":-0,"state":"before","state":"after"}',
+        exitCode: 0,
+      },
+    ],
+    ["failed command without a chunk ID", { output: "service unavailable\n", exitCode: 1 }],
+    ["literal markup", { output: "<script>danger()</script>\n**literal**", exitCode: 0 }],
+    ["incomplete response", { literal: '[{"type":"input_text","text":"partial' }],
+    [
+      "mixed media",
+      { literal: '[{"type":"input_text","text":"caption"},{"type":"input_image","omitted":true}]' },
+    ],
+    ["ordinary JSON", { literal: '{"output":"data","state":"before","state":"after"}' }],
+    [
+      "process handle",
+      {
+        execution: {
+          session_id: 321,
+          output: "still running",
+          chunk_id: "chunk",
+          wall_time_seconds: 0.7,
+        },
+      },
+    ],
+    [
+      "additional response fields",
+      {
+        execution: {
+          exit_code: 0,
+          extra: "keep this field",
+          output: "done",
+          chunk_id: "chunk",
+          wall_time_seconds: 0.7,
+        },
+      },
+    ],
+  ])("preserves %s during native output inspection", async (_name, testCase) => {
+    const raw =
+      "literal" in testCase
+        ? testCase.literal
+        : "execution" in testCase
+          ? JSON.stringify([{ type: "input_text", text: JSON.stringify(testCase.execution) }])
+          : JSON.stringify(
+              [
+                { type: "input_text", text: "Script completed\nWall time 0.8 seconds\nOutput:\n" },
+                {
+                  type: "input_text",
+                  text: JSON.stringify({
+                    ...(testCase.exitCode === 0 ? { chunk_id: "chunk" } : {}),
+                    wall_time_seconds: 0.7,
+                    exit_code: testCase.exitCode,
+                    output: testCase.output,
+                  }),
+                },
+              ],
+              null,
+              2,
+            );
     const panel = mount(
-      outputCard({ outputText: text }),
-      vi.fn<SidebarFullMessageLoader>().mockResolvedValue(result(text)),
+      outputCard({ outputText: raw }),
+      vi.fn<SidebarFullMessageLoader>().mockResolvedValue(result(raw)),
     );
     await vi.waitFor(() =>
       expect(panel.querySelector("[aria-busy]")?.getAttribute("aria-busy")).toBe("false"),
     );
-    expect(panel.querySelector(".chat-tool-output__text")?.textContent).toBe(text);
-  });
-
-  it.each([
-    { session_id: 321, output: "still running", chunk_id: "chunk", wall_time_seconds: 0.7 },
-    {
-      exit_code: 0,
-      extra: "keep this field",
-      output: "done",
-      chunk_id: "chunk",
-      wall_time_seconds: 0.7,
-    },
-  ])("keeps process handles and additional response fields visible", async (execution) => {
-    const text = JSON.stringify([{ type: "input_text", text: JSON.stringify(execution) }]);
-    const panel = mount(
-      outputCard({ outputText: text }),
-      vi.fn<SidebarFullMessageLoader>().mockResolvedValue(result(text)),
-    );
-    await vi.waitFor(() =>
-      expect(panel.querySelector("[aria-busy]")?.getAttribute("aria-busy")).toBe("false"),
-    );
-    expect(JSON.parse(panel.querySelector(".chat-tool-output__text")?.textContent ?? "")).toEqual(
-      execution,
-    );
+    const shown = panel.querySelector(".chat-tool-output__text")?.textContent ?? "";
+    if ("literal" in testCase) {
+      expect(shown).toBe(raw);
+      return;
+    }
+    if ("execution" in testCase) {
+      expect(JSON.parse(shown)).toEqual(testCase.execution);
+      return;
+    }
+    const { output, exitCode } = testCase;
+    expect(shown).not.toContain("chunk_id");
+    expect(shown).not.toContain("input_text");
+    expect(panel.querySelector("script, strong")).toBeNull();
+    if (output.startsWith("{")) {
+      expect(shown).toContain('"id": 9007199254740993');
+      expect(shown).toContain('"overflow": 1e400');
+      expect(shown).toContain('"zero": -0');
+      expect(shown).toContain('"state": "before",');
+      expect(shown).toContain('"state": "after"');
+    } else {
+      expect(shown).toContain(output);
+    }
+    if (exitCode !== 0) {
+      expect(shown).toContain("Exit code 1");
+    }
+    const rawBody = panel.querySelector<HTMLElement>(".chat-tool-card__raw-body")!;
+    expect(rawBody.hidden).toBe(true);
+    button(panel, t("chat.toolCards.rawDetails")).click();
+    expect(rawBody.hidden).toBe(false);
+    expect(rawBody.querySelector("code")?.textContent).toBe(raw);
+    const copy = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText: copy } });
+    button(panel, t("chat.toolCards.copyOutput")).click();
+    expect(copy).toHaveBeenCalledWith(raw);
   });
 
   it.each(["plain", "native"])("opens long %s output as an inspectable result", (shape) => {
@@ -227,26 +249,6 @@ describe("tool output inspection", () => {
     expect(card.outputText).toBe(output);
   });
 
-  it("starts loading in the first render without scheduling a redundant update", async () => {
-    let complete!: (value: ReturnType<typeof result>) => void;
-    const pending = new Promise<ReturnType<typeof result>>((resolve) => {
-      complete = resolve;
-    });
-    const panel = mount(outputCard(), vi.fn<SidebarFullMessageLoader>().mockReturnValue(pending));
-    try {
-      await expect(panel.updateComplete).resolves.toBe(true);
-      expect(panel.querySelector("[aria-busy]")?.getAttribute("aria-busy")).toBe("true");
-      expect(panel.querySelector(".chat-tool-output__actions")).toBeNull();
-    } finally {
-      complete(result("resolved output"));
-    }
-    await vi.waitFor(() =>
-      expect(panel.querySelector(".chat-tool-output__text")?.textContent).toBe("resolved output"),
-    );
-    expect(button(panel, t("chat.toolCards.copyOutput"))).toBeDefined();
-    expect(button(panel, t("chat.toolCards.downloadOutput"))).toBeDefined();
-  });
-
   it("defers detached selection changes and retrieves the new result when reattached", async () => {
     const load = vi
       .fn<SidebarFullMessageLoader>()
@@ -270,7 +272,9 @@ describe("tool output inspection", () => {
   it("retrieves and exports exact text beyond the inherited detail and Markdown caps", async () => {
     const text =
       "  \r\n" + "x".repeat(600_000) + "\r\n\x60\x60\x60\n<strong>literal</strong> 🦞 TAIL\r\n";
+    const pending = createDeferred();
     const request = vi.fn(async (_method: string, params: { maxChars: number }) => {
+      await pending.promise;
       const response = result(text.slice(0, params.maxChars));
       return {
         ...response,
@@ -283,15 +287,24 @@ describe("tool output inspection", () => {
         },
       };
     });
-    const loader = createSidebarFullMessageLoader(
-      { client: { request } as unknown as GatewayBrowserClient, connected: true },
-      false,
-    )!;
+    const { state, pane } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+    });
+    const loader = createSidebarFullMessageLoader(state, pane.context.gateway)!;
     const panel = mount(outputCard(), loader);
+    try {
+      await expect(panel.updateComplete).resolves.toBe(true);
+      expect(panel.querySelector("[aria-busy]")?.getAttribute("aria-busy")).toBe("true");
+      expect(panel.querySelector(".chat-tool-output__actions")).toBeNull();
+    } finally {
+      pending.resolve();
+    }
     await vi.waitFor(() =>
       expect(panel.querySelector(".chat-tool-output__text")?.textContent?.length).toBe(text.length),
     );
     expect(panel.querySelector(".chat-tool-output__text")?.textContent).toBe(text);
+    expect(button(panel, t("chat.toolCards.copyOutput"))).toBeDefined();
+    expect(button(panel, t("chat.toolCards.downloadOutput"))).toBeDefined();
     expect(request).toHaveBeenCalledWith("chat.message.get", {
       sessionKey: "global",
       agentId: "work",
@@ -325,27 +338,35 @@ describe("tool output inspection", () => {
     expect(revoke).toHaveBeenCalledWith("blob:output-fixture");
   });
 
-  it.each([
-    undefined,
-    {
-      source: "execution" as const,
-      modelInput: "unverified" as const,
-      captureTruncated: true as const,
-    },
-  ])(
-    "marks recorded capture loss unavailable without offering a false recovery (%s)",
-    async (toolOutput) => {
-      const card = outputCard({
-        toolOutput,
-        outputText:
-          "prefix\n...(OpenClaw truncated Codex native tool output: original 20000 chars, showing 10000; rerun with narrower args.)",
-      });
+  it.each(["legacy capture", "recorded capture", "oversized", "not_found"] as const)(
+    "keeps available output when full output is unavailable: %s",
+    async (reason) => {
       const load = vi.fn<SidebarFullMessageLoader>();
+      const retrieved = reason === "oversized" || reason === "not_found";
+      if (reason === "oversized" || reason === "not_found") {
+        load.mockResolvedValue({ ok: false, unavailableReason: reason });
+      }
+      const card = retrieved
+        ? outputCard()
+        : outputCard({
+            toolOutput:
+              reason === "legacy capture"
+                ? undefined
+                : {
+                    source: "execution",
+                    modelInput: "unverified",
+                    captureTruncated: true,
+                  },
+            outputText:
+              "prefix\n...(OpenClaw truncated Codex native tool output: original 20000 chars, showing 10000; rerun with narrower args.)",
+          });
       const panel = mount(card, load);
       await vi.waitFor(() =>
         expect(panel.textContent).toContain(t("chat.toolCards.fullOutputUnavailable")),
       );
-      expect(load).not.toHaveBeenCalled();
+      if (!retrieved) {
+        expect(load).not.toHaveBeenCalled();
+      }
       expect(panel.querySelector(".chat-tool-output__text")?.textContent).toBe(card.outputText);
     },
   );
@@ -412,20 +433,6 @@ describe("tool output inspection", () => {
       await Promise.resolve();
       await panel.updateComplete;
       expect(panel.querySelector(".chat-tool-output__text")?.textContent).toBe("new selection");
-    },
-  );
-
-  it.each(["oversized", "not_found"] as const)(
-    "keeps available output when retrieval reports %s",
-    async (unavailableReason) => {
-      const panel = mount(
-        outputCard(),
-        vi.fn<SidebarFullMessageLoader>().mockResolvedValue({ ok: false, unavailableReason }),
-      );
-      await vi.waitFor(() =>
-        expect(panel.textContent).toContain(t("chat.toolCards.fullOutputUnavailable")),
-      );
-      expect(panel.querySelector(".chat-tool-output__text")?.textContent).toBe("preview");
     },
   );
 });

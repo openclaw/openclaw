@@ -9,9 +9,11 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import * as agentWriteAdmission from "../../state/openclaw-agent-write-admission.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -317,90 +319,119 @@ it("cancels a contended persistent admission without claiming the reply or poiso
   });
 });
 
-it("keeps successors behind physical claim release when another agent occupies the idle slot", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const activePath = path.join(state.sessionsDir(), "agent.sqlite");
-    const idlePath = path.join(state.sessionsDir("other"), "agent.sqlite");
-    const activeKey = "agent:main:completion-close";
-    const idleKey = "agent:other:completion-idle";
-    const activeSessionId = "completion-active-session";
-    const idleSessionId = "completion-idle-session";
-    for (const [storePath, sessionKey, sessionId] of [
-      [activePath, activeKey, activeSessionId],
-      [idlePath, idleKey, idleSessionId],
-    ] as const) {
-      replaceSessionEntrySync({ storePath, sessionKey }, { sessionId, updatedAt: 1 });
-      await closeOpenClawAgentDatabaseByPathAsync(storePath);
-    }
-    const shared = openOpenClawStateDatabase({ env: state.env });
-    const leases = shared.db.prepare("SELECT lease_id FROM agent_database_leases WHERE path = ?");
-    let active: Admission | undefined;
-    let idle: Admission | undefined;
-    try {
-      active = await admitReplyTurn({
-        storePath: activePath,
-        sessionKey: activeKey,
-        sessionId: activeSessionId,
-        expectedSessionId: activeSessionId,
-        kind: "visible",
-        resetTriggered: false,
-      });
-      idle = await admitReplyTurn({
-        storePath: idlePath,
-        sessionKey: idleKey,
-        agentId: "other",
-        sessionId: idleSessionId,
-        expectedSessionId: idleSessionId,
-        kind: "visible",
-        resetTriggered: false,
-      });
-      if (active.status !== "owned" || !active.databaseClaim || idle.status !== "owned") {
-        throw new Error("Fixture requires two admitted persistent reply owners");
+it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
+  "keeps successors behind physical claim release after %s while another agent is idle",
+  async (ending) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const activePath = path.join(state.sessionsDir(), "agent.sqlite");
+      const idlePath = path.join(state.sessionsDir("other"), "agent.sqlite");
+      const activeKey = "agent:main:completion-close";
+      const idleKey = "agent:other:completion-idle";
+      const activeSessionId = "completion-active-session";
+      const idleSessionId = "completion-idle-session";
+      for (const [storePath, sessionKey, sessionId] of [
+        [activePath, activeKey, activeSessionId],
+        [idlePath, idleKey, idleSessionId],
+      ] as const) {
+        replaceSessionEntrySync({ storePath, sessionKey }, { sessionId, updatedAt: 1 });
+        await closeOpenClawAgentDatabaseByPathAsync(storePath);
       }
-      await completeAdmission(idle, idleKey);
-      expect(leases.all(activePath)).toHaveLength(1);
-      expect(leases.all(idlePath)).toHaveLength(1);
-
-      const holder = holdStateDatabaseWriteTransaction(shared.path, 10_000);
-      await holder.ready;
-      const releaseWriter = async () => {
-        holder.release();
-        await holder.joined;
-      };
-      const sql = observeMainThreadSql({ includeClose: true });
-      sql.calibrate();
-      const opened = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
-      let successor: ReturnType<typeof waitForReplyRunSuccessorAdmission> | undefined;
+      const shared = openOpenClawStateDatabase({ env: state.env });
+      const leases = shared.db.prepare("SELECT lease_id FROM agent_database_leases WHERE path = ?");
+      let active: Admission | undefined;
+      let idle: Admission | undefined;
+      const work = new AsyncWorkScope();
       try {
-        active.operation.complete();
-        expect(active.databaseClaim.isCurrent()).toBe(false);
-        let settled = false;
-        successor = waitForReplyRunSuccessorAdmission(activeKey, null).then((result) => {
-          settled = true;
-          return result;
+        active = await work.run(() =>
+          admitReplyTurn({
+            storePath: activePath,
+            sessionKey: activeKey,
+            sessionId: activeSessionId,
+            expectedSessionId: activeSessionId,
+            kind: "visible",
+            resetTriggered: false,
+          }),
+        );
+        idle = await admitReplyTurn({
+          storePath: idlePath,
+          sessionKey: idleKey,
+          agentId: "other",
+          sessionId: idleSessionId,
+          expectedSessionId: idleSessionId,
+          kind: "visible",
+          resetTriggered: false,
         });
-        await setImmediate();
-        expect(Atomics.load(holder.released, 0)).toBe(0);
-        expect(settled).toBe(false);
-        await releaseWriter();
-        expect(await successor).toMatchObject({ settled: true });
-        expect(replyRunRegistry.get(activeKey)).toBeUndefined();
-        sql.expectIdle();
-        expect(opened).not.toHaveBeenCalled();
-      } finally {
-        try {
-          await releaseWriter();
-          await successor;
-        } finally {
-          opened.mockRestore();
-          sql.restore();
+        if (active.status !== "owned" || !active.databaseClaim || idle.status !== "owned") {
+          throw new Error("Fixture requires two admitted persistent reply owners");
         }
+        await completeAdmission(idle, idleKey);
+        expect(leases.all(activePath)).toHaveLength(1);
+        expect(leases.all(idlePath)).toHaveLength(1);
+
+        const holder = holdStateDatabaseWriteTransaction(shared.path, 10_000);
+        await holder.ready;
+        const releaseWriter = async () => {
+          holder.release();
+          await holder.joined;
+        };
+        const sql = observeMainThreadSql({ includeClose: true });
+        sql.calibrate();
+        const opened = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+        let successor: ReturnType<typeof waitForReplyRunSuccessorAdmission> | undefined;
+        try {
+          if (ending !== "complete") {
+            active.operation.setPhase("running");
+            active.operation.attachBackend({
+              kind: "embedded",
+              runId: "completion-run",
+              cancel() {},
+            });
+            if (ending === "frozen-restart") {
+              active.operation.freezeAbort();
+              work.beginClose(createAgentRunRestartAbortError());
+              expect(active.operation.abortForRestart()).toBe(false);
+              expect(active.operation.abortSignal.aborted).toBe(false);
+            } else {
+              expect(
+                ending === "restart-abort"
+                  ? active.operation.abortForRestart()
+                  : active.operation.abortByUser(),
+              ).toBe(true);
+            }
+            expect(active.databaseClaim.isCurrent()).toBe(ending === "user-abort");
+            expect(replyRunRegistry.get(activeKey)).toBe(active.operation);
+          }
+          active.operation.complete();
+          expect(active.databaseClaim.isCurrent()).toBe(false);
+          let settled = false;
+          successor = waitForReplyRunSuccessorAdmission(activeKey, null).then((result) => {
+            settled = true;
+            return result;
+          });
+          await setImmediate();
+          expect(Atomics.load(holder.released, 0)).toBe(0);
+          expect(settled).toBe(false);
+          await releaseWriter();
+          expect(await successor).toMatchObject({ settled: true });
+          expect(replyRunRegistry.get(activeKey)).toBeUndefined();
+          sql.expectIdle();
+          expect(opened).not.toHaveBeenCalled();
+        } finally {
+          try {
+            await releaseWriter();
+            await successor;
+          } finally {
+            opened.mockRestore();
+            sql.restore();
+          }
+        }
+        expect(leases.all(activePath)).toEqual([]);
+        expect(leases.all(idlePath)).toHaveLength(1);
+      } finally {
+        await completeAdmission(active, activeKey);
+        await completeAdmission(idle, idleKey);
+        await work.drain();
       }
-      expect(leases.all(activePath)).toEqual([]);
-      expect(leases.all(idlePath)).toHaveLength(1);
-    } finally {
-      await completeAdmission(active, activeKey);
-      await completeAdmission(idle, idleKey);
-    }
-  });
-});
+    });
+  },
+);

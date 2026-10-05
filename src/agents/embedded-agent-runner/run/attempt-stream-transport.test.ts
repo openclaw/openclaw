@@ -424,7 +424,7 @@ describe("prepareEmbeddedAttemptTransport", () => {
       workspaceDir,
       "marketing",
     );
-    input.attempt.config = { agents: { list: [{ id: "marketing", workspace: workspaceDir }] } };
+    input.attempt.config = { agents: { entries: { marketing: { workspace: workspaceDir } } } };
 
     try {
       await prepareEmbeddedAttemptTransport(input);

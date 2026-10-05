@@ -52,7 +52,7 @@ export function createChatSendMessageInjectionStarter(params: {
   >;
   admittedSessionSettings?: Readonly<Pick<SessionEntry, "permissionMode" | "toolOverrides">>;
   turn: Pick<
-    ReturnType<typeof prepareChatSendUserTurn>,
+    Awaited<ReturnType<typeof prepareChatSendUserTurn>>,
     "ctx" | "isInternalTextSlashCommandTurn" | "replyOptionImages" | "replyOptionMedia"
   >;
   imageOrder: ReplyBackendQueueMessageOptions["imageOrder"];

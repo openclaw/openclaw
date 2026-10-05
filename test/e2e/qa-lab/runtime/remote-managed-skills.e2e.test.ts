@@ -11,15 +11,18 @@ import { requireGit } from "../../../../src/agents/worktrees/git.js";
 import { ManagedWorktreeService } from "../../../../src/agents/worktrees/service.js";
 import { ensureSkillSnapshot } from "../../../../src/auto-reply/reply/session-updates.js";
 import type { SessionEntry } from "../../../../src/config/sessions/types.js";
-import { createTestPluginApi } from "../../../../src/plugin-sdk/plugin-test-api.js";
-import type { OpenClawPluginApi, OpenClawPluginService } from "../../../../src/plugins/types.js";
-import { resolveSkillFileHost } from "../../../../src/skills/loading/skill-file-host.js";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "../../../../src/plugin-sdk/plugin-test-api.js";
+import type { OpenClawPluginApi } from "../../../../src/plugins/types.js";
 import { prepareWorkspaceSkills } from "../../../../src/skills/loading/workspace-skill-loader.js";
 import { closeSkillsWatchers } from "../../../../src/skills/runtime/refresh.js";
 import {
   prepareSkillResourceDelivery,
   materializeSkillResources,
 } from "../../../../src/skills/runtime/resources.js";
+import { resolveSkillFileHost } from "../../../../src/skills/skill-file-host.js";
 import { writeSkill } from "../../../../src/skills/test-support/e2e-test-helpers.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -127,7 +130,7 @@ it.skipIf(process.platform === "win32").each(["empty", "repository"] as const)(
       agents: { entries: { main: { workspace: local, agentDir: path.join(stateDir, "agent") } } },
       plugins: { enabled: false, entries: { "file-transfer": { config: pluginConfig } } },
     };
-    let service!: OpenClawPluginService;
+    let service!: Parameters<OpenClawPluginApi["registerService"]>[0];
     const api = createTestPluginApi({
       registrationMode: "full",
       config,
@@ -142,7 +145,9 @@ it.skipIf(process.platform === "win32").each(["empty", "repository"] as const)(
     registerNodeWorkspaces(api);
     const transport = createNodeWorkspaceTestTransport(api, remote);
     const requests: Array<{ operation: string; request: string }> = [];
+    const scheduler = createTestPluginServiceScheduler();
     const context = {
+      scheduler,
       config,
       logger: api.logger,
       stateDir,
@@ -242,8 +247,13 @@ it.skipIf(process.platform === "win32").each(["empty", "repository"] as const)(
         cause: { message: expect.stringContaining("denied by the node file read policy") },
       });
     } finally {
-      await service.stop?.(context);
-      await closeSkillsWatchers(true);
+      scheduler.beginClose();
+      try {
+        await service.stop?.(context);
+      } finally {
+        await scheduler.stop();
+        await closeSkillsWatchers(true);
+      }
     }
     expect(() => getAgentWorkspaceAccess(local)).toThrow("stopped or not ready");
     await expect(

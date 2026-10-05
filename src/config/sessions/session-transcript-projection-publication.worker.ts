@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import {
   assertTransactionUsable,
-  runSqliteImmediateTransactionSync,
+  runSqliteWorkerTransactionSync,
 } from "../../infra/sqlite-transaction.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
+import type { SqliteWorkerDatabaseContext } from "../../infra/sqlite-worker-database-context.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
 import {
@@ -20,7 +20,7 @@ import {
 } from "./session-transcript-projection-rebuild.js";
 
 export type TranscriptProjectionPublicationOperations = {
-  preflight: { input: undefined; output: boolean };
+  preflight: { input: undefined; output: number };
   claim: {
     input: { plan: PreparedSessionTranscriptProjectionMetadata; claimId: number };
     output: boolean;
@@ -41,25 +41,17 @@ export type TranscriptProjectionPublicationOperations = {
 };
 
 /** The canonical agent executor lends its connection for each bounded publication. */
-export function bindSqliteWorkerBackend(
-  _input: undefined,
-  context: {
-    databasePath: string;
-    database: DatabaseSync;
-    admit(stage: "transaction" | "commit"): void;
-  },
-): SqliteWorkerBackend<TranscriptProjectionPublicationOperations> {
+export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorkerDatabaseContext) {
   const db = context.database;
   return {
     execute(command) {
-      return runSqliteImmediateTransactionSync(
-        db,
+      return runSqliteWorkerTransactionSync(
+        context,
         () => {
-          context.admit("transaction");
           switch (command.type) {
             case "preflight":
               deleteOrphanedTranscriptIndexRowsInTransaction(db);
-              return listSessionsNeedingTranscriptIndexReconcile(db).length > 0;
+              return listSessionsNeedingTranscriptIndexReconcile(db).length;
             case "claim":
               return claimPreparedSessionTranscriptProjectionInTransaction(
                 db,
@@ -97,10 +89,6 @@ export function bindSqliteWorkerBackend(
           operationLabel: `sessions.transcript-index.${command.type}`,
           busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
           databaseLabel: context.databasePath,
-          withCommit(commit) {
-            context.admit("commit");
-            commit();
-          },
         },
       );
     },
@@ -111,5 +99,5 @@ export function bindSqliteWorkerBackend(
       }
     },
     close() {},
-  };
+  } satisfies SqliteWorkerBackend<TranscriptProjectionPublicationOperations>;
 }

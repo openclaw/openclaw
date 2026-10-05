@@ -1,8 +1,5 @@
 import { WebClient, type WebAPICallResult } from "@slack/web-api";
-import {
-  buildChannelInboundEventContext,
-  resolveChannelInboundRouteEnvelope,
-} from "openclaw/plugin-sdk/channel-inbound";
+import { resolveChannelInboundRouteEnvelope } from "openclaw/plugin-sdk/channel-inbound";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { removeSlackReaction } from "../../actions.js";
 import { createSlackDispatchSetup } from "./dispatch-setup.js";
@@ -67,23 +64,6 @@ async function fixture(
     accountId: "default",
     peer: { kind: "group", id: "C1" },
   });
-  const ctxPayload = buildChannelInboundEventContext({
-    channel: "slack",
-    accountId: "default",
-    messageId: "1.000",
-    from: "slack:channel:C1",
-    sender: { id: "U1" },
-    conversation: { kind: "group", id: "C1", threadId: "1.000" },
-    route: {
-      agentId: route.agentId,
-      dmScope: route.dmScope,
-      accountId: route.accountId,
-      routeSessionKey: route.sessionKey,
-      dispatchSessionKey: route.sessionKey,
-    },
-    reply: { to: "channel:C1", originatingTo: "channel:C1", messageThreadId: "1.000" },
-    message: { body: "hello", bodyForAgent: "hello", rawBody: "hello", commandBody: "hello" },
-  });
   const prepared: PreparedSlackMessage = {
     ctx,
     account: createSlackTestAccount({ streaming: { mode: "off" } }),
@@ -98,7 +78,14 @@ async function fixture(
     route,
     channelConfig: null,
     replyTarget: "channel:C1",
-    ctxPayload,
+    ctxPayload: {
+      Body: "hello",
+      CommandAuthorized: false,
+      ChatType: "group",
+      SessionKey: route.sessionKey,
+      OriginatingTo: "channel:C1",
+      MessageThreadId: "1.000",
+    },
     turn: { record: {} },
     replyToMode: "all",
     isDirectMessage: false,
@@ -121,33 +108,34 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("Slack terminal status diagnostics", () => {
-  it("reports a rejected Slack request without copying private error data to the normal log", async () => {
-    const f = await fixture({ active: new Error("synthetic-private-detail") });
-    await f.start();
-    await f.start();
-    await f.stop();
-    await f.stop();
-    expect(f.error).toHaveBeenCalledExactlyOnceWith(expect.any(String));
-    expect(f.error.mock.calls.flat().join(" ")).not.toMatch(
-      /synthetic-private-detail|C1|1\.000|xoxb-test/,
-    );
-    expect(f.api).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps unsupported or failed processing writes quiet at normal level", async () => {
-    const f = await fixture({ processing: { ok: false }, active: { ok: false } });
-    await f.start();
-    await f.stop();
-    expect(f.error).not.toHaveBeenCalled();
-    expect(f.api).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not confuse aggregate processing with a failed active write", async () => {
-    const f = await fixture({ active: { ok: true, status: "processing", agent_status: "active" } });
-    await f.start();
-    await f.stop();
-    expect(f.error).not.toHaveBeenCalled();
-  });
+  it.each<[string, SlackSessionResponse, SlackSessionResponse | Error, boolean]>([
+    ["rejected active write", { ok: true }, new Error("synthetic-private-detail"), true],
+    ["rejected processing write", { ok: false }, { ok: false }, false],
+    [
+      "aggregate processing",
+      { ok: true },
+      { ok: true, status: "processing", agent_status: "active" },
+      false,
+    ],
+  ])(
+    "reports only terminal failures after accepted processing: %s",
+    async (_, processing, active, report) => {
+      const f = await fixture({ processing, active });
+      await f.start();
+      await f.start();
+      await f.stop();
+      await f.stop();
+      if (report) {
+        expect(f.error).toHaveBeenCalledExactlyOnceWith(expect.any(String));
+      } else {
+        expect(f.error).not.toHaveBeenCalled();
+      }
+      expect(f.error.mock.calls.flat().join(" ")).not.toMatch(
+        /synthetic-private-detail|C1|1\.000|xoxb-test/,
+      );
+      expect(f.api).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("continues typing-reaction cleanup if the diagnostic logger throws", async () => {
     const f = await fixture({ active: { ok: false }, typingReaction: true });

@@ -89,7 +89,6 @@ describe("node-host runtime worker supervisor lifetime", () => {
         nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true, capacity: 2 } },
       },
       env: { ...fixture.env, PATH: process.env.PATH },
-      enableWorkerRuns: true,
       platform: "linux",
     });
     expect(prepared.workerHostingEnabled, prepared.workerHostingDisabledReason).toBe(true);

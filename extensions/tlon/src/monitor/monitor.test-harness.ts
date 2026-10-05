@@ -56,7 +56,6 @@ const {
   },
   settingsManagerMock: {
     load: vi.fn().mockResolvedValue({}),
-    onChange: vi.fn().mockReturnValue(() => {}),
     startSubscription: vi.fn().mockResolvedValue(undefined),
   },
   realUrbitFixture: {

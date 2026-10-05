@@ -1,9 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
-import { getNodeSqliteKysely, prepareSqliteQueryIterator } from "../../infra/kysely-sync.js";
+import {
+  createSqliteQueryCache,
+  getNodeSqliteKysely,
+  prepareSqliteQueryIterator,
+} from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
-
-const readersByDatabase = new WeakMap<DatabaseSync, ReturnType<typeof createAgeReaders>>();
 
 function createAgeReaders(database: DatabaseSync) {
   const db =
@@ -113,11 +115,4 @@ function createAgeReaders(database: DatabaseSync) {
   };
 }
 
-export function readSessionMaintenanceAgeQueries(database: DatabaseSync) {
-  let readers = readersByDatabase.get(database);
-  if (!readers) {
-    readers = createAgeReaders(database);
-    readersByDatabase.set(database, readers);
-  }
-  return readers;
-}
+export const readSessionMaintenanceAgeQueries = createSqliteQueryCache(createAgeReaders);

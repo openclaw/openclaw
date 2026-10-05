@@ -169,13 +169,7 @@ export class UrbitSSEClient {
     return subId;
   }
 
-  private async sendSubscription(subscription: {
-    id: number;
-    action: "subscribe";
-    ship: string;
-    app: string;
-    path: string;
-  }) {
+  private async sendSubscription(subscription: UrbitSSEClient["subscriptions"][number]) {
     const { response, release } = await putUrbitChannel(this.channelRequestContext(), {
       body: [subscription],
       timeoutMs: 30_000,
@@ -424,16 +418,10 @@ export class UrbitSSEClient {
   }
 
   async scry(path: string) {
-    return await scryUrbitPath(
-      {
-        baseUrl: this.url,
-        cookie: this.cookie,
-        ssrfPolicy: this.ssrfPolicy,
-        lookupFn: this.lookupFn,
-        fetchImpl: this.fetchImpl,
-      },
-      { path, auditContext: "tlon-urbit-scry" },
-    );
+    return await scryUrbitPath(this.channelRequestContext(), {
+      path,
+      auditContext: "tlon-urbit-scry",
+    });
   }
 
   updateCookie(newCookie: string): void {

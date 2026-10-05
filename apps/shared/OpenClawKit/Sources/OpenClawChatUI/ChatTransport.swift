@@ -332,18 +332,10 @@ public struct OpenClawChatSessionSettingsRouteLease: Sendable {
         _ agentID: String?,
         _ patch: OpenClawChatSessionSettingsPatch) async throws -> OpenClawChatModelPatchResult?
 
-    private let patchSessionSettingsImpl: PatchSessionSettings
+    public let patchSessionSettings: PatchSessionSettings
 
     public init(patchSessionSettings: @escaping PatchSessionSettings) {
-        self.patchSessionSettingsImpl = patchSessionSettings
-    }
-
-    public func patchSessionSettings(
-        sessionKey: String,
-        agentID: String?,
-        patch: OpenClawChatSessionSettingsPatch) async throws -> OpenClawChatModelPatchResult?
-    {
-        try await self.patchSessionSettingsImpl(sessionKey, agentID, patch)
+        self.patchSessionSettings = patchSessionSettings
     }
 }
 
@@ -492,10 +484,10 @@ public struct OpenClawChatSessionGroupsRouteLease: Sendable {
     public typealias RenameGroup = @Sendable (String, String) async throws -> OpenClawChatSessionGroupsMutationResponse
     public typealias DeleteGroup = @Sendable (String) async throws -> OpenClawChatSessionGroupsMutationResponse
 
-    private let listGroupsImpl: ListGroups
-    private let putGroupsImpl: PutGroups
-    private let renameGroupImpl: RenameGroup
-    private let deleteGroupImpl: DeleteGroup
+    public let listGroups: ListGroups
+    public let putGroups: PutGroups
+    public let renameGroup: RenameGroup
+    public let deleteGroup: DeleteGroup
 
     public init(
         listGroups: @escaping ListGroups,
@@ -503,26 +495,10 @@ public struct OpenClawChatSessionGroupsRouteLease: Sendable {
         renameGroup: @escaping RenameGroup,
         deleteGroup: @escaping DeleteGroup)
     {
-        self.listGroupsImpl = listGroups
-        self.putGroupsImpl = putGroups
-        self.renameGroupImpl = renameGroup
-        self.deleteGroupImpl = deleteGroup
-    }
-
-    public func listGroups() async throws -> OpenClawChatSessionGroupsResponse? {
-        try await self.listGroupsImpl()
-    }
-
-    public func putGroups(names: [String]) async throws -> OpenClawChatSessionGroupsMutationResponse {
-        try await self.putGroupsImpl(names)
-    }
-
-    public func renameGroup(name: String, to: String) async throws -> OpenClawChatSessionGroupsMutationResponse {
-        try await self.renameGroupImpl(name, to)
-    }
-
-    public func deleteGroup(name: String) async throws -> OpenClawChatSessionGroupsMutationResponse {
-        try await self.deleteGroupImpl(name)
+        self.listGroups = listGroups
+        self.putGroups = putGroups
+        self.renameGroup = renameGroup
+        self.deleteGroup = deleteGroup
     }
 }
 
@@ -538,19 +514,15 @@ public struct OpenClawChatNewSessionRouteLease: Sendable {
         _ worktree: Bool?,
         _ worktreeBaseRef: String?) async throws -> OpenClawChatCreateSessionResponse
 
-    private let loadAgentsImpl: LoadAgents
+    public let loadAgents: LoadAgents
     private let createSessionImpl: CreateSession
 
     public init(
         loadAgents: @escaping LoadAgents,
         createSession: @escaping CreateSession)
     {
-        self.loadAgentsImpl = loadAgents
+        self.loadAgents = loadAgents
         self.createSessionImpl = createSession
-    }
-
-    public func loadAgents(onUpdate: @escaping OpenClawChatAgentCatalogUpdate) async throws {
-        try await self.loadAgentsImpl(onUpdate)
     }
 
     public func createSession(
@@ -800,23 +772,15 @@ public struct OpenClawChatSwarmRouteLease: Sendable {
     public typealias IsEnabled = @Sendable (_ sessionKey: String) async throws -> Bool
     public typealias ListChildSessions = @Sendable (_ parentKey: String) async throws -> OpenClawChatChildSessionsResult
 
-    private let isEnabledImpl: IsEnabled
-    private let listChildSessionsImpl: ListChildSessions
+    public let isEnabled: IsEnabled
+    public let listChildSessions: ListChildSessions
 
     public init(
         isEnabled: @escaping IsEnabled,
         listChildSessions: @escaping ListChildSessions)
     {
-        self.isEnabledImpl = isEnabled
-        self.listChildSessionsImpl = listChildSessions
-    }
-
-    public func isEnabled(sessionKey: String) async throws -> Bool {
-        try await self.isEnabledImpl(sessionKey)
-    }
-
-    public func listChildSessions(parentKey: String) async throws -> OpenClawChatChildSessionsResult {
-        try await self.listChildSessionsImpl(parentKey)
+        self.isEnabled = isEnabled
+        self.listChildSessions = listChildSessions
     }
 }
 
@@ -1455,7 +1419,7 @@ public enum OpenClawChatSessionRoutingContract {
         serverSupportsGuard: Bool) -> String?
     {
         guard serverSupportsGuard else { return nil }
-        return self.normalize(contract)
+        return contract?.trimmedNonEmpty?.lowercased()
     }
 
     public static func make(
@@ -1463,9 +1427,9 @@ public enum OpenClawChatSessionRoutingContract {
         mainKey: String?,
         defaultAgentID: String?) -> String?
     {
-        let normalizedScope = self.normalize(scope)
-        let normalizedMainKey = self.normalize(mainKey)
-        let normalizedDefaultAgentID = self.normalize(defaultAgentID)
+        let normalizedScope = scope?.trimmedNonEmpty?.lowercased()
+        let normalizedMainKey = mainKey?.trimmedNonEmpty?.lowercased()
+        let normalizedDefaultAgentID = defaultAgentID?.trimmedNonEmpty?.lowercased()
         guard let normalizedScope, let normalizedMainKey, let normalizedDefaultAgentID else { return nil }
         return "\(normalizedScope)|\(normalizedMainKey)|\(normalizedDefaultAgentID)"
     }
@@ -1473,7 +1437,7 @@ public enum OpenClawChatSessionRoutingContract {
     /// Scope and agent ids cannot contain `|`; parse from both ends so an
     /// older custom main key containing the delimiter still round-trips.
     public static func parse(_ contract: String?) -> Components? {
-        guard let normalized = normalize(contract),
+        guard let normalized = contract?.trimmedNonEmpty?.lowercased(),
               let firstSeparator = normalized.firstIndex(of: "|"),
               let lastSeparator = normalized.lastIndex(of: "|"),
               firstSeparator != lastSeparator
@@ -1483,11 +1447,6 @@ public enum OpenClawChatSessionRoutingContract {
         let defaultAgentID = String(normalized[normalized.index(after: lastSeparator)...])
         guard !scope.isEmpty, !mainKey.isEmpty, !defaultAgentID.isEmpty else { return nil }
         return Components(scope: scope, mainKey: mainKey, defaultAgentID: defaultAgentID)
-    }
-
-    private static func normalize(_ value: String?) -> String? {
-        let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return normalized?.isEmpty == false ? normalized : nil
     }
 }
 

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
@@ -36,6 +37,8 @@ type SqliteInstruction = {
   opcode: string;
   p1: number;
   p2: number;
+  p3: number;
+  p4: string | null;
   p5: number;
 };
 
@@ -183,13 +186,20 @@ it.each(readers)("sizes %s without reading transcript overflow payloads", async 
           .filter((op) => op.opcode === "OpenRead" && op.p2 === table?.rootpage)
           .map((op) => op.p1),
       );
-      const payloadReads = instructions.filter(
-        (op) => op.opcode === "Column" && transcriptCursors.has(op.p1) && op.p2 === column?.cid,
-      );
-      expect(payloadReads.length).toBeGreaterThan(0);
-      // SQLite's OPFLAG_BYTELENARG (sqliteInt.h) tells OP_Column to skip overflow pages.
-      // Inspect the executed production query, not a hand-copied SQL expression or timing threshold.
-      expect(payloadReads.every((op) => (op.p5 & 0xc0) === 0xc0)).toBe(true);
+      let sizingCalls = 0;
+      for (const [index, op] of instructions.entries()) {
+        if ((op.opcode !== "Function" && op.opcode !== "PureFunc") || op.p4 !== "octet_length(1)") {
+          continue;
+        }
+        sizingCalls++;
+        // Header discovery may also read JSON in this query. The sizing function's input
+        // must use SQLite's OPFLAG_BYTELENARG so it never reads overflow payload pages.
+        const input = expectDefined(instructions[index - 1], "byte-length input instruction");
+        expect(input).toMatchObject({ opcode: "Column", p2: column?.cid, p3: op.p2 });
+        expect(transcriptCursors.has(input.p1)).toBe(true);
+        expect(input.p5 & 0xc0).toBe(0xc0);
+      }
+      expect(sizingCalls).toBeGreaterThan(0);
     }
   });
 });

@@ -372,11 +372,7 @@ class OpenClawShell
       )
       .watchStore(
         () => this.context?.placementStartup,
-        () => {
-          if (this.context) {
-            this.recoverDeletedActiveSession(this.context.sessions.state);
-          }
-        },
+        () => this.recoverDeletedActiveSession(),
       )
       .watch(
         () => this.context?.runtimeConfig,
@@ -632,10 +628,17 @@ class OpenClawShell
     if (isSessionRouteId(routeId) && this.activeSessionKey) {
       primaryContext = this.chatTitleContext(context, outboxScopeHost) || primaryContext;
     }
-    const gatewayDisconnected = context.gateway.snapshot.phase !== "connected";
+    const { phase, lastError } = context.gateway.snapshot;
+    // A warm shell renders before hello; initial loading is not a lost connection.
+    const gatewayDisconnected =
+      phase !== "connected" &&
+      (Boolean(lastError) ||
+        phase === "reconnecting" ||
+        phase === "offline" ||
+        phase === "reload-required");
     let title = formatDocumentTitle({
       context: primaryContext,
-      attentionCount: context.overlays.snapshot.approvalQueue.length,
+      attentionCount: phase === "connected" ? context.overlays.snapshot.approvalQueue.length : 0,
       gatewayDisconnected,
     });
     const environment = context.config?.current.environment;

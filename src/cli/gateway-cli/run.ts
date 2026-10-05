@@ -439,9 +439,7 @@ async function maybeWriteGatewayStartupFailureBundle(
   const { writeDiagnosticStabilityBundleForFailureSync } =
     await import("../../logging/diagnostic-stability-bundle.js");
   const result = writeDiagnosticStabilityBundleForFailureSync(reason, err);
-  if ("message" in result) {
-    gatewayLog.warn(result.message);
-  }
+  gatewayLog.warn(result.message);
 }
 
 async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRuntimeHooks = {}) {

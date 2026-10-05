@@ -151,7 +151,7 @@ actor TalkModeRuntime {
         if enabled {
             await start()
         } else {
-            await self.stop()
+            await self.stop(reconfigurationGeneration: nil, lifecycleGeneration: nil)
         }
     }
 
@@ -251,17 +251,12 @@ actor TalkModeRuntime {
         generation == self.lifecycleGeneration && self.isEnabled
     }
 
-    func stop() async {
-        await self.stop(reconfigurationGeneration: nil, lifecycleGeneration: nil)
-    }
-
     func detachResourcesForRealtimeStop() -> RealtimeTalkRelaySession? {
         let realtimeSession = self.realtimeSession
         self.realtimeSession = nil
         self.audioInputObserver?.stop()
         self.audioInputObserver = nil
-        self.silenceTask?.cancel()
-        self.silenceTask = nil
+        SimpleTaskSupport.stop(task: &self.silenceTask)
         self.lastTranscript = ""
         self.lastHeard = nil
         self.lastSpeechEnergyAt = nil
@@ -418,8 +413,7 @@ actor TalkModeRuntime {
         self.audioEngine?.stop()
         self.audioEngine = nil
         self.activeInputResolution = nil
-        self.rmsTask?.cancel()
-        self.rmsTask = nil
+        SimpleTaskSupport.stop(task: &self.rmsTask)
     }
 
     private func startRMSTicker(meter: LockIsolated<Double>) {
@@ -445,7 +439,7 @@ actor TalkModeRuntime {
 
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         if self.phase == .speaking, self.interruptOnSpeech {
-            if await shouldInterrupt(transcript: trimmed, hasConfidence: update.hasConfidence) {
+            if self.shouldInterrupt(transcript: trimmed, hasConfidence: update.hasConfidence) {
                 await stopSpeaking(reason: .speech)
                 self.lastTranscript = ""
                 self.lastHeard = nil
@@ -1434,10 +1428,12 @@ extension TalkModeRuntime {
         }
     }
 
-    private func shouldInterrupt(transcript: String, hasConfidence: Bool) async -> Bool {
+    private func shouldInterrupt(transcript: String, hasConfidence: Bool) -> Bool {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 3 else { return false }
-        if self.isLikelyEcho(of: trimmed) {
+        if let spoken = self.lastSpokenText?.lowercased(), !spoken.isEmpty,
+           spoken.contains(trimmed.lowercased())
+        {
             return false
         }
         let now = Date()
@@ -1445,11 +1441,5 @@ extension TalkModeRuntime {
             return false
         }
         return hasConfidence
-    }
-
-    private func isLikelyEcho(of transcript: String) -> Bool {
-        guard let spoken = lastSpokenText?.lowercased(), !spoken.isEmpty else { return false }
-        let probe = transcript.lowercased()
-        return spoken.contains(probe)
     }
 }

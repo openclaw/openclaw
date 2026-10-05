@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { parse } from "yaml";
+import { parse, stringify } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { evaluateWorkflowExpression } from "./ci-workflow.test-support.js";
 
@@ -28,16 +28,44 @@ describe("Apple build cache contracts", () => {
       "packages/mermaid-renderer/vite.config.ts",
       "packages/normalization-core/src/record-coerce.ts",
       "package.json",
-      "pnpm-lock.yaml",
       "pnpm-workspace.yaml",
       ".npmrc",
       "tsconfig.json",
     ]) {
       put(file, "{}");
     }
-    mkdirSync(path.join(root, "scripts"));
+    const lock = {
+      importers: {
+        "packages/mermaid-renderer": {
+          dependencies: {
+            mermaid: { specifier: "12.0.0", version: "12.0.0" },
+            "@openclaw/normalization-core": { version: "link:../normalization-core" },
+          },
+          devDependencies: { vite: { version: "8.3.1" } },
+        },
+        "packages/normalization-core": {},
+        ".": { dependencies: { unrelated: { version: "1.0.0" } } },
+      },
+      packages: {
+        "mermaid@12.0.0": { resolution: { integrity: "mermaid-bytes" } },
+        "vite@8.3.1": { resolution: { integrity: "vite-bytes" } },
+        "bundler@1.0.0": { resolution: { integrity: "bundler-bytes" } },
+        "unrelated@1.0.0": { resolution: { integrity: "unrelated-bytes" } },
+      },
+      snapshots: {
+        "mermaid@12.0.0": {},
+        "vite@8.3.1": { optionalDependencies: { bundler: "1.0.0" } },
+        "bundler@1.0.0": {},
+        "unrelated@1.0.0": {},
+      },
+    };
+    const writeLock = () => put("pnpm-lock.yaml", stringify(lock));
+    writeLock();
+    mkdirSync(path.join(root, "scripts/lib"), { recursive: true });
+    mkdirSync(path.join(root, "patches"));
     for (const file of [
       "prepare-apple-mermaid.mjs",
+      "lib/pnpm-lockfile-documents.mjs",
       "pnpm-runner.mts",
       "windows-cmd-helpers.mjs",
       "run-node-package-bin.mts",
@@ -53,6 +81,13 @@ fs.mkdirSync(target, { recursive: true });
 fs.writeFileSync(target + "/native.js", "verified bundle");
 fs.appendFileSync("builds", "built\\n");`,
     );
+    const key = spawnSync(process.execPath, ["scripts/prepare-apple-mermaid.mjs", "--cache-key"], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(key.status, key.stderr).toBe(0);
+    expect(key.stdout.trim()).toMatch(/^[a-z0-9-]+-v[\d.]+-[a-f0-9]{64}$/);
+    expect(() => readFileSync(path.join(root, "builds"))).toThrow();
     const run = () => {
       const result = spawnSync(process.execPath, ["scripts/prepare-apple-mermaid.mjs"], {
         cwd: root,
@@ -68,9 +103,14 @@ fs.appendFileSync("builds", "built\\n");`,
     expect(run()).toBe(1);
     expect(() => readFileSync(path.join(root, resources, "obsolete.js"))).toThrow();
     expect(readFileSync(path.join(root, resources, "native.js"), "utf8")).toBe("verified bundle");
+    put("package.json", JSON.stringify({ dependencies: { unrelated: "2.0.0" } }));
+    lock.packages["unrelated@1.0.0"].resolution.integrity = "unrelated-change";
+    writeLock();
+    expect(run()).toBe(1);
     put("packages/mermaid-renderer/vite.config.ts", "changed config");
     expect(run()).toBe(2);
-    put("pnpm-lock.yaml", "changed dependency");
+    lock.packages["bundler@1.0.0"].resolution.integrity = "changed-optional-transitive-build-input";
+    writeLock();
     expect(run()).toBe(3);
     put("packages/normalization-core/src/record-coerce.ts", "changed workspace dependency");
     expect(run()).toBe(4);

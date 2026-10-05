@@ -10,11 +10,15 @@ import {
   createPluginSourceLinkCapture,
 } from "./plugin-generation-file-capture.js";
 import { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
-import { createPluginGenerationSourceLookup } from "./plugin-generation-source-lookup.js";
+import {
+  createPluginGenerationSourceLookup,
+  createPluginResolvedModuleCapture,
+} from "./plugin-generation-source-lookup.js";
 import {
   createPluginNativeAdmission,
   type PluginNativeRecovery,
 } from "./plugin-native-admission.js";
+import { createPluginNativeImportPattern } from "./plugin-native-resolution.js";
 import {
   capturePluginPackageMetadata,
   capturePluginDependencies,
@@ -48,6 +52,7 @@ export function capturePluginGenerationArtifact(
   execute?: <T>(run: () => T) => T,
   moduleSource?: (filename: string) => string,
   nativeRecovery?: PluginNativeRecovery,
+  dependencyLookupBoundary?: Parameters<typeof createPluginDependencyResolver>[0],
 ) {
   const sourceCapture = createPluginSourceCapture(execute);
   const directory = sourceCapture.directory;
@@ -83,7 +88,7 @@ export function capturePluginGenerationArtifact(
     return acquired;
   };
   const moduleCaptures = new Map<string, PluginModuleCapture>();
-  const resolveDependency = createPluginDependencyResolver();
+  const resolveDependency = createPluginDependencyResolver(dependencyLookupBoundary);
   // Callers canonicalize roots; already-captured packages survive removal of their original files.
   const copyPackage = (
     root: string,
@@ -116,17 +121,16 @@ export function capturePluginGenerationArtifact(
       parentName.startsWith("@") ? parentName : "",
       path.basename(boundary),
     );
-    const capturedBoundary = destination;
     sourceAliases[root] = destination;
     receipt.marker(`${packageId}\0`);
     const owner: PluginPackageCapture = {
       destination,
-      capturedRoot: capturedBoundary,
+      capturedRoot: destination,
       sourceRoot: boundary,
       links: new Set<string>(),
       state: "metadata",
       captureTarget(filename) {
-        const source = path.join(boundary, path.relative(capturedBoundary, filename));
+        const source = path.join(boundary, path.relative(destination, filename));
         if (
           !capturedPaths.has(source) &&
           !packageMap.hasMissingTarget(source) &&
@@ -198,10 +202,10 @@ export function capturePluginGenerationArtifact(
       // Preserve real nested installs; synthetic per-file node_modules confuse native addon roots.
       // Installed peers also need sibling paths for native assets read directly from disk.
       const lookupDirectory = inPackage(boundary, dependency.lookupDirectory)
-        ? path.join(capturedBoundary, path.relative(boundary, dependency.lookupDirectory))
+        ? path.join(destination, path.relative(boundary, dependency.lookupDirectory))
         : path.join(dependency.lookupDirectory, "node_modules") === sourceModuleRoot
           ? path.dirname(moduleRoot)
-          : capturedBoundary;
+          : destination;
       const link = path.join(lookupDirectory, "node_modules", name);
       packages.get(dependency.root)!.links.add(link);
       if (!fs.existsSync(link)) {
@@ -225,6 +229,9 @@ export function capturePluginGenerationArtifact(
     const scannedDirectories = new Set<string>();
     const captureFile = (source: string, options?: JitiOptions): void => {
       const existingSource = capturedPaths.get(path.resolve(source));
+      if (existingSource) {
+        assertModuleAvailable(existingSource);
+      }
       if (
         existingSource &&
         (!/\.[cm]?[jt]sx?$/.test(source) || moduleCaptures.has(existingSource))
@@ -466,6 +473,7 @@ export function capturePluginGenerationArtifact(
             : undefined;
         const known = inputFilename && capturedPaths.get(path.resolve(inputFilename));
         if (execute && known) {
+          assertModuleAvailable(known);
           return { target: capturedPluginModuleUrl(known, specifier, conditions) };
         }
         const name = packageName(specifier);
@@ -481,9 +489,11 @@ export function capturePluginGenerationArtifact(
             conditions.includes("require") ? "require" : "import",
             conditions,
           );
-          if (mapped && capturedPaths.has(path.resolve(mapped))) {
+          const captured = mapped && capturedPaths.get(path.resolve(mapped));
+          if (captured) {
             captureDependencies();
-            return { target: pathToFileURL(capturedPaths.get(path.resolve(mapped))!) };
+            assertModuleAvailable(captured);
+            return { target: pathToFileURL(captured) };
           }
         }
         const dependencyPrepared = prepareDependency(specifier);
@@ -491,12 +501,13 @@ export function capturePluginGenerationArtifact(
           return dependencyPrepared ? { retryNative: true } : undefined;
         }
         if (dependencyPrepared === "package-map") {
-          const filename = resolvePluginPackageMapTarget(specifier, target, conditions);
-          if (!filename) {
+          const selected = resolvePluginPackageMapTarget(specifier, target, conditions);
+          if (!selected) {
             return undefined;
           }
-          if (inPackage(capturedBoundary, filename)) {
-            const original = path.join(boundary, path.relative(capturedBoundary, filename));
+          const filename = fileURLToPath(selected);
+          if (inPackage(destination, filename)) {
+            const original = path.join(boundary, path.relative(destination, filename));
             if (packageMap.hasMissingTarget(original)) {
               return undefined;
             }
@@ -523,14 +534,15 @@ export function capturePluginGenerationArtifact(
         if (!captured) {
           return undefined;
         }
+        assertModuleAvailable(captured);
         return { target: capturedPluginModuleUrl(captured, specifier, conditions) };
       };
-      const nativeScope = getNativeScope(source, scope?.manifest);
       const moduleCapture: PluginModuleCapture = {
+        isNativeImportPattern: createPluginNativeImportPattern(scope?.manifest.imports),
         isRequireReference: (specifier) =>
           observed.has(`require\0${specifier}`) && !observed.has(`import\0${specifier}`),
         prepareDependency,
-        nativeScope,
+        nativeScope: getNativeScope(source, scope?.manifest),
         capture: captureModule,
       };
       moduleCaptures.set(target, moduleCapture);
@@ -627,12 +639,8 @@ export function capturePluginGenerationArtifact(
         nativeAdmission.reconcileSourceInputs(inputs);
       },
       sourceForCaptured: (file: string) => originalSources.get(path.resolve(file)),
-      isRequireReference: (importer: string, specifier: string) =>
-        moduleCaptures.get(importer)?.isRequireReference(specifier) ?? false,
-      isRequirePreview: (importer: string, specifier: string) => {
-        const imports = moduleCaptures.get(importer)?.staticImports;
-        return imports !== undefined && !imports.has(specifier);
-      },
+      moduleFacts: (importer: string): Readonly<PluginModuleCapture> | undefined =>
+        moduleCaptures.get(importer),
       boundaryRoot: directory,
       // The receipt attests the initial snapshot; first-demand inputs extend only its identity ledger.
       sourceDigest: initialReceipt.sourceDigest,
@@ -687,26 +695,14 @@ export function capturePluginGenerationArtifact(
         );
         return result.value ? { ...result.value, additions: result.additions } : undefined;
       },
-      captureResolvedModule: (filename: string) => {
-        const known = capturedPaths.get(path.resolve(filename));
-        if (known) {
-          assertModuleAvailable(known);
-          return known;
-        }
-        return captureAdmitted(() => {
-          const captured = findPluginCapturedPackage(packages, filename, directory);
-          // import.meta.url can name a deferred peer through a private dependency link.
-          const original = captured
-            ? path.join(captured.owner.sourceRoot, path.relative(captured.root, filename))
-            : filename;
-          const source = captureExecutableFile(original);
-          const target = source ? capturedPaths.get(source) : undefined;
-          if (target) {
-            capturedPaths.set(path.resolve(filename), target);
-          }
-          return target;
-        }).value;
-      },
+      captureResolvedModule: createPluginResolvedModuleCapture({
+        capturedPaths,
+        assertModuleAvailable,
+        captureAdmitted,
+        captureExecutableFile,
+        packages,
+        directory,
+      }),
       dispose: () => {
         sourceCapture.dispose();
         clearCaptures();

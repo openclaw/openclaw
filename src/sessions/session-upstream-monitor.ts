@@ -53,23 +53,6 @@ type SessionUpstreamMissingCounter = {
   linkUpdatedAt: number;
 };
 
-function currentProviders(): SessionCatalogProvider[] {
-  return (getPluginRegistryState()?.activeRegistry?.sessionCatalogs ?? []).map(
-    (registration) => registration.provider,
-  );
-}
-
-function databaseOptions(options: SessionUpstreamMonitorOptions): OpenClawStateDatabaseOptions {
-  return {
-    ...(options.env ? { env: options.env } : {}),
-    ...(options.path ? { path: options.path } : {}),
-  };
-}
-
-function normalizeUserText(text: string): string {
-  return text.trim().replace(/\s+/g, " ");
-}
-
 // Stable identity of the physical upstream source (host/thread/ref). A re-Continue
 // can rebase a session onto a new source whose activity ids (e.g. Claude byte
 // offsets) collide with the old source; hashing this into dedupe keys and the CAS
@@ -198,7 +181,7 @@ async function loadOwnRecentUserTexts(
     preferUpstreamUserText: true,
     role: "user",
   });
-  return recent.map((item) => normalizeUserText(item.text)).filter(Boolean);
+  return recent.map((item) => item.text.trim().replace(/\s+/g, " ")).filter(Boolean);
 }
 
 async function probeProvenanceUnchanged(
@@ -224,7 +207,10 @@ async function runSessionUpstreamMonitorTick(
   if (options.signal?.aborted) {
     return;
   }
-  const dbOptions = databaseOptions(options);
+  const dbOptions = {
+    ...(options.env ? { env: options.env } : {}),
+    ...(options.path ? { path: options.path } : {}),
+  };
   const linksByCatalog = await listWatchedSessionUpstreamLinks(dbOptions);
   if (options.signal?.aborted) {
     return;
@@ -238,7 +224,11 @@ async function runSessionUpstreamMonitorTick(
       missingCounts.delete(key);
     }
   }
-  const providers = options.providers ?? currentProviders();
+  const providers =
+    options.providers ??
+    (getPluginRegistryState()?.activeRegistry?.sessionCatalogs ?? []).map(
+      (registration) => registration.provider,
+    );
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   for (const [catalogId, links] of linksByCatalog) {
     const provider = providerById.get(catalogId);

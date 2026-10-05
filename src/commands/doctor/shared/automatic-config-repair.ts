@@ -13,6 +13,7 @@ import {
 import { stampConfigWriteMetadata } from "../../../config/io.meta.js";
 import { containsConfigIncludeDirective } from "../../../config/io.read-helpers.js";
 import { prepareConfigWriteTopology } from "../../../config/io.write-topology.js";
+import { inheritLegacyDefaultAgentId } from "../../../config/legacy.default-agent-owner.js";
 import { findLegacyConfigIssues, findLegacyConfigRuleIssues } from "../../../config/legacy.js";
 import { copyConfigResolutionFactsThroughRewrite } from "../../../config/resolution-facts.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
@@ -70,7 +71,6 @@ function prepareAutomaticConfigRepairWrite(snapshot: ConfigFileSnapshot, config:
       unsetPaths,
     ),
     undefined,
-    undefined,
     snapshot.parsed,
   );
 }
@@ -97,11 +97,14 @@ function planConfigRepair(
       pluginContracts,
     }),
   );
-  const config = preserveDeferredPluginMigrationConfig({
-    sourceConfig: snapshot.sourceConfig,
-    nextConfig: migration.next ?? snapshot.sourceConfig,
-    pending: deferredPluginMigrations ?? [],
-  });
+  const config = inheritLegacyDefaultAgentId(
+    migration.next ?? snapshot.sourceConfig,
+    preserveDeferredPluginMigrationConfig({
+      sourceConfig: snapshot.sourceConfig,
+      nextConfig: migration.next ?? snapshot.sourceConfig,
+      pending: deferredPluginMigrations ?? [],
+    }),
+  );
   if (isDeepStrictEqual(config, snapshot.sourceConfig)) {
     return null;
   }
@@ -202,7 +205,7 @@ export async function commitAutomaticConfigRepair(
       auditOrigin: "doctor",
       skipOutputLogs: true,
       skipRuntimeSnapshotRefresh: true,
-      // The reader retired legacy markers; persist their canonical owners in this write.
+      // Doctor retired legacy markers; persist their canonical owners in this write.
       // Planning above validates the same writer topology preparation.
       persistCanonicalAgentRoster: true,
     },

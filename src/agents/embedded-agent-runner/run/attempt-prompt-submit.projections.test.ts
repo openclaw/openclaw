@@ -29,16 +29,19 @@ describe("tool-result projection persistence at dispatch", () => {
       ambiguousToolResultBaseKeys: [],
       frozenToolResults: [{ key, sourceHash: "source", texts: [key] }],
     });
-    manager.appendCustomEntry("openclaw.cache-ttl", snapshot("older"));
-    const activeMarker = manager.appendCustomEntry("openclaw.cache-ttl", snapshot("active"));
-    manager.appendCustomEntry("openclaw.cache-ttl", snapshot("sibling"));
-    manager.branch(activeMarker);
+    await manager.appendCustomEntryAsync("openclaw.cache-ttl", snapshot("older"));
+    const activeMarker = await manager.appendCustomEntryAsync(
+      "openclaw.cache-ttl",
+      snapshot("active"),
+    );
+    await manager.appendCustomEntryAsync("openclaw.cache-ttl", snapshot("sibling"));
+    await manager.branchAsync(activeMarker);
 
     const restored = createToolResultPromptProjectionState();
     restoreCacheTtlToolResultProjections(restored, manager.getBranch());
     expect(serializeCacheTtlToolResultProjections(restored)).toEqual(snapshot("active"));
     const appendEntry = (customType: string, data: unknown) =>
-      manager.appendCustomEntry(customType, data);
+      manager.appendCustomEntryAsync(customType, data);
     const markers = () =>
       manager
         .getEntries()
@@ -48,7 +51,7 @@ describe("tool-result projection persistence at dispatch", () => {
 
     restored.replacements.set("active", { content: [{ type: "text", text: "changed" }] });
     await expect(
-      persistToolResultProjections(restored, () => {
+      persistToolResultProjections(restored, async () => {
         throw new Error("write failed");
       }),
     ).rejects.toThrow("write failed");
@@ -86,7 +89,6 @@ describe("tool-result projection persistence at dispatch", () => {
       onFinalPromptText: () => {},
       onSteeringAcknowledged: () => {},
       runtimeOnly: false,
-      sessionPromptState,
       systemPrompt: "test prompt",
       toolResultAggregateMaxChars: 8_000,
       toolResultMaxChars: 4_000,

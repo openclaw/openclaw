@@ -10,12 +10,10 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { serializeSystemdEnvironmentFile } from "../../src/daemon/systemd-environment-files.js";
 import { readLoadedSystemdServiceRuntime } from "../../src/daemon/systemd-loaded-runtime.js";
 import { readSystemdServiceRuntime } from "../../src/daemon/systemd-runtime.js";
-import {
-  readSystemdServiceExecStart,
-  serializeSystemdEnvironmentFile,
-} from "../../src/daemon/systemd-service-files.js";
+import { readSystemdServiceExecStart } from "../../src/daemon/systemd-service-files.js";
 import { buildSystemdUnit } from "../../src/daemon/systemd-unit.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {

@@ -285,7 +285,7 @@ async function readPagesViaPlaywright(
     requireCompleteTargetList?: boolean;
   },
   signal: AbortSignal,
-): Promise<PlaywrightPageEnumeration> {
+): Promise<Array<{ targetId: string; title: string; url: string; type: "page" }>> {
   return await withPlaywrightSafeReadReconnect(
     { cdpUrl: opts.cdpUrl, ssrfPolicy: opts.ssrfPolicy, signal, engine: opts.engine },
     async (browser) => {
@@ -393,20 +393,12 @@ async function readPagesViaPlaywright(
               if (isBlockedTarget(opts.cdpUrl, targetInfo.targetId)) {
                 return { status: "blocked" as const };
               }
-              let url = "";
-              try {
-                url = page.url();
-              } catch (err) {
-                if (isRecoverablePlaywrightDisconnectError(err)) {
-                  throw err;
-                }
-              }
               return {
                 status: "available" as const,
                 page: {
                   targetId: targetInfo.targetId,
                   title: targetInfo.title,
-                  url,
+                  url: page.url(),
                   type: "page" as const,
                 },
               };
@@ -436,10 +428,10 @@ async function readPagesViaPlaywright(
             (opts.requireCompleteTargetList || resolvedPages.length === 0) &&
             pageResults.some((result) => result.status === "unresolved")
           ) {
-            return { status: "unavailable", reason: "target-identity-unresolved" };
+            throw new Error("Playwright page target identities are temporarily unavailable.");
           }
           if (!remainingTargetIds?.size) {
-            return { status: "available", pages: resolvedPages };
+            return resolvedPages;
           }
           await publication.promise;
         }
@@ -456,13 +448,6 @@ async function readPagesViaPlaywright(
     },
   );
 }
-
-type PlaywrightPageEnumeration =
-  | {
-      status: "available";
-      pages: Array<{ targetId: string; title: string; url: string; type: "page" }>;
-    }
-  | { status: "unavailable"; reason: "target-identity-unresolved" };
 
 /** List pages through the persistent Playwright connection. */
 export async function listPagesViaPlaywright(opts: {
@@ -501,14 +486,7 @@ export async function listPagesViaPlaywright(opts: {
     timer.unref?.();
   }
   try {
-    const enumeration = await Promise.race([
-      readPagesViaPlaywright(opts, controller.signal),
-      cancelled.promise,
-    ]);
-    if (enumeration.status === "unavailable") {
-      throw new Error("Playwright page target identities are temporarily unavailable.");
-    }
-    return enumeration.pages;
+    return await Promise.race([readPagesViaPlaywright(opts, controller.signal), cancelled.promise]);
   } finally {
     if (timer) {
       clearTimeout(timer);

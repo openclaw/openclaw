@@ -7,18 +7,19 @@ import { assertCronRuntimeAuthorityCandidate } from "./isolated-agent/run-admiss
 import { normalizeCronRuntimeAuthority } from "./runtime-authority.js";
 
 describe("required execution root admission", () => {
-  it("admits the enforcing Codex route without making unsupported runtimes eligible", () => {
-    expect(supportsCronExecutionRoot("codex", false)).toBe(true);
-    expect(() => assertCronExecutionRootRuntime("/workshop", "codex", false)).not.toThrow();
-    expect(supportsCronExecutionRoot("unsupported", false)).toBe(false);
-    expect(() => assertCronExecutionRootRuntime("/workshop", "unsupported", false)).toThrow(
-      "enforces the Workshop root",
-    );
-  });
-
-  it("keeps unrooted and existing rooted CLI admission unchanged", () => {
-    expect(() => assertCronExecutionRootRuntime(undefined, "unsupported", false)).not.toThrow();
-    expect(() => assertCronExecutionRootRuntime("/workshop", "cli", true)).not.toThrow();
+  it.each([
+    { root: "/workshop", runtime: "codex", cli: false, supported: true },
+    { root: "/workshop", runtime: "unsupported", cli: false, supported: false },
+    { root: undefined, runtime: "unsupported", cli: false, supported: false },
+    { root: "/workshop", runtime: "cli", cli: true, supported: true },
+  ])("enforces execution root admission: $runtime, $root", ({ root, runtime, cli, supported }) => {
+    expect(supportsCronExecutionRoot(runtime, cli)).toBe(supported);
+    const admission = () => assertCronExecutionRootRuntime(root, runtime, cli);
+    if (root && !supported) {
+      expect(admission).toThrow("enforces the Workshop root");
+    } else {
+      expect(admission).not.toThrow();
+    }
   });
 
   it("does not replace captured Codex authority with another rooted runtime or CLI", () => {

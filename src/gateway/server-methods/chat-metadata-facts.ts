@@ -18,7 +18,7 @@ import type {
 } from "./chat-metadata-session-projection.js";
 import type { GatewayModelCatalogContext } from "./models-list-context.js";
 
-export type PreparedAgentFacts = ChatMetadataProjectionFacts & {
+type PreparedAgentFacts = ChatMetadataProjectionFacts & {
   authStoreRevision: string;
   catalogRefreshFailed: boolean;
   skillsVersion: number;

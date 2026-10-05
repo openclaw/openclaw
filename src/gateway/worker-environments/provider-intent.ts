@@ -6,6 +6,7 @@ import { resolveConfiguredGitHubToolIdentity } from "../../agents/github-tool-id
 import { resolveGitRepositoryPaths } from "../../agents/worktrees/git.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import type { WorkerExecutionMode, WorkerProfile, WorkerProvider } from "../../plugins/types.js";
+import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
 import {
   createWorkerProjectPreparationIdentity,
   readWorkerProjectPreparation,
@@ -14,25 +15,20 @@ import {
 import { readWorkerProjectSetupRecipe, readWorkerProjectSnapshot } from "./project-preparation.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import { prepareRepositoryWorkerProjectSource } from "./repository-project-admission.js";
-import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
+import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
-import { requireInheritedWorkerProfileAuthorization } from "./service-validation.js";
+import {
+  requireInheritedWorkerProfileAuthorization,
+  requireWorkerProfile,
+} from "./service-validation.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 import { prepareWorkerProjectSnapshot, workerLocalProjectKey } from "./workspace-git-base.js";
 
 type WorkerProviderIntentOptions = Pick<
   WorkerProviderLifecycleOptions,
-  | "store"
-  | "getConfig"
-  | "projectNamespace"
-  | "prepareNodeArtifacts"
-  | "isStopping"
-  | "inState"
-  | "withLock"
-  | "serviceError"
+  "store" | "getConfig" | "projectNamespace" | "prepareNodeArtifacts" | "isStopping" | "withLock"
 > & {
   providerFor: (providerId: string) => WorkerProvider;
-  requireWorkerProfile: (value: unknown) => WorkerProfile;
   resumeProvision: (
     record: WorkerEnvironmentRecord,
     provider?: WorkerProvider,
@@ -91,22 +87,11 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
   const assertPreparedIntentCurrent = (profileId: string, intent: WorkerProviderPreparedIntent) => {
     const prepared = preparedIntents.get(intent);
     if (!prepared || prepared.profileId !== profileId) {
-      throw options.serviceError(
-        "invalid_state",
-        "Worker preparation is not owned by this lifecycle",
-      );
+      throw serviceError("invalid_state", "Worker preparation is not owned by this lifecycle");
     }
     prepared.assertCurrent();
   };
-  const {
-    store,
-    inState,
-    serviceError,
-    withLock,
-    providerFor,
-    requireWorkerProfile,
-    resumeProvision,
-  } = options;
+  const { store, withLock, providerFor, resumeProvision } = options;
   const requireProfileId = (profileId: string, signal?: AbortSignal) => {
     signal?.throwIfAborted();
     if (options.isStopping()) {
@@ -142,7 +127,6 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
         providerId,
         inherited.profileSnapshot.settings,
         configuredProfile?.provider,
-        serviceError,
       );
       provider = providerFor(providerId);
       const resolvedProviderId = normalizeCapabilityProviderId(provider.id) ?? provider.id;
@@ -563,7 +547,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
         if (existing.destroyRequestedAtMs !== null) {
           return existing;
         }
-        if (!existing.leaseId && inState(existing, "requested", "provisioning")) {
+        if (!existing.leaseId && ["requested", "provisioning"].includes(existing.state)) {
           return resumeProvision(existing, undefined, signal);
         }
         return existing;

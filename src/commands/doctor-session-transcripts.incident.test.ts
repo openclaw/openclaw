@@ -60,7 +60,7 @@ describe("doctor incident-scale Codex binding repair", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", incidentStateDir);
     const env = process.env;
     const config: OpenClawConfig = {
-      agents: { entries: { main: { default: true } } },
+      agents: { entries: { main: {} } },
       plugins: { entries: { codex: { enabled: true } } },
     };
 

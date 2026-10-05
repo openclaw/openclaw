@@ -13,11 +13,7 @@ const MOBILE_REAUTH_PATH = "scripts/mobile-reauth.sh";
 const SETUP_AUTH_SYSTEM_PATH = "scripts/setup-auth-system.sh";
 const AUTH_MONITOR_SERVICE_PATH = "scripts/systemd/openclaw-auth-monitor.service";
 const AUTH_MONITOR_TIMER_PATH = "scripts/systemd/openclaw-auth-monitor.timer";
-const TERMUX_WIDGET_PATHS = [
-  "scripts/termux-auth-widget.sh",
-  "scripts/termux-quick-auth.sh",
-  "scripts/termux-sync-widget.sh",
-];
+const TERMUX_WIDGET_PATHS = ["scripts/termux-auth-widget.sh", "scripts/termux-quick-auth.sh"];
 
 function readScript(path: string): string {
   return readFileSync(path, "utf8");
@@ -131,9 +127,6 @@ describe("auth monitoring scripts", () => {
     for (const script of TERMUX_WIDGET_PATHS.map(readScript)) {
       expect(script).toContain('SERVER="${OPENCLAW_SERVER:-openclaw-host}"');
     }
-    expect(readScript("scripts/termux-sync-widget.sh")).toContain(
-      "'$HOME/openclaw/scripts/sync-claude-code-auth.sh'",
-    );
   });
 
   it("bounds ntfy notification requests", () => {

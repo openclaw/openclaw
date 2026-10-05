@@ -20,6 +20,7 @@ const itemStatuses = new Map<string, CodexItemStatus>([
   ["completed", "completed"],
   ["failed", "failed"],
   ["error", "failed"],
+  ["interrupted", "failed"],
   ["declined", "blocked"],
   ["inProgress", "running"],
   ["in_progress", "running"],

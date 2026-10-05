@@ -61,23 +61,25 @@ it.each(["omitted", "disabled-task", "disabled-trigger", "native-defaults", "mis
   },
 );
 
-it("verifies a refreshed restored task after Windows omits default fields", async () => {
-  const f = await fixture("win32");
-  const execute = native.task.getMockImplementation()!;
-  native.task.mockImplementation(async (args: string[]) => {
-    const result = await execute(args);
-    if (args[0] === "/Create") {
-      f.setTask(omitDefaults(f.task()));
+it.each(["omitted by Windows", "omitted in backup"])(
+  "verifies task defaults %s",
+  async (direction) => {
+    const f = await fixture("win32");
+    if (direction === "omitted by Windows") {
+      const execute = native.task.getMockImplementation()!;
+      native.task.mockImplementation(async (args: string[]) => {
+        const result = await execute(args);
+        if (args[0] === "/Create") {
+          f.setTask(omitDefaults(f.task()));
+        }
+        return result;
+      });
+      await expect(f.install()).resolves.toBeUndefined();
+      await expect(f.capture.hooks.beforeWrite()).resolves.toBeUndefined();
+    } else {
+      const expectedXml = omitDefaults(f.task());
+      await f.capture.hooks.taskPrepared(expectedXml);
+      await expect(f.capture.hooks.taskWritten(expectedXml)).resolves.toBeUndefined();
     }
-    return result;
-  });
-  await expect(f.install()).resolves.toBeUndefined();
-  await expect(f.capture.hooks.beforeWrite()).resolves.toBeUndefined();
-});
-
-it("verifies restored XML when Windows exports defaults omitted in the backup", async () => {
-  const f = await fixture("win32");
-  const expectedXml = omitDefaults(f.task());
-  await f.capture.hooks.taskPrepared(expectedXml);
-  await expect(f.capture.hooks.taskWritten(expectedXml)).resolves.toBeUndefined();
-});
+  },
+);

@@ -6,12 +6,11 @@ import { describe, expect, it } from "vitest";
 import type { MigrationItem, MigrationPlan } from "../../plugins/types.js";
 import { applyMigrationItemSelection } from "./item-selection.js";
 import {
-  applyMigrationSelectedPluginItemIds,
-  applyMigrationSelectedSkillItemIds,
+  applyMigrationSelectedItemIds,
   applyMigrationSelections,
-  formatMigrationPluginSelectionHint,
+  formatMigrationSelectionHint,
   getDefaultMigrationSelectionValues,
-  getSelectableMigrationPluginItems,
+  getSelectableMigrationItems,
   MIGRATION_SELECTION_TOGGLE_ALL_OFF,
   MIGRATION_SELECTION_TOGGLE_ALL_ON,
   reconcileInteractiveMigrationEnterValues,
@@ -256,7 +255,7 @@ describe("applyMigrationSelections skills", () => {
   });
 
   it("allows interactive selection to choose no skills", () => {
-    const selected = applyMigrationSelectedSkillItemIds(
+    const selected = applyMigrationSelectedItemIds(
       plan([
         skillItem({ id: "skill:alpha", name: "alpha" }),
         skillItem({ id: "skill:beta", name: "beta" }),
@@ -269,6 +268,7 @@ describe("applyMigrationSelections skills", () => {
         },
       ]),
       new Set(),
+      "skill",
     );
 
     expectSummaryFields(selected.summary, { planned: 0, skipped: 3 });
@@ -305,13 +305,10 @@ describe("applyMigrationSelections skills", () => {
         MIGRATION_SELECTION_TOGGLE_ALL_ON,
         MIGRATION_SELECTION_TOGGLE_ALL_OFF,
       ]),
-    ).toEqual({ action: "select", selectedItemIds: new Set() });
+    ).toEqual(new Set());
     expect(
       resolveInteractiveMigrationSelection(items, [MIGRATION_SELECTION_TOGGLE_ALL_ON]),
-    ).toEqual({
-      action: "select",
-      selectedItemIds: new Set(["skill:alpha", "skill:beta"]),
-    });
+    ).toEqual(new Set(["skill:alpha", "skill:beta"]));
   });
 
   it("reconciles live interactive bulk toggle checkbox state", () => {
@@ -439,7 +436,7 @@ describe("applyMigrationSelections plugins", () => {
       details: { value },
     };
 
-    const selected = applyMigrationSelectedPluginItemIds(plan([item]), new Set());
+    const selected = applyMigrationSelectedItemIds(plan([item]), new Set(), "plugin");
 
     expect(selected.items[0]).toBe(item);
   });
@@ -449,7 +446,7 @@ describe("applyMigrationSelections plugins", () => {
     { kind: "archive", action: "merge" },
   ])("does not filter plugin-shaped data outside config merges: %j", (identity) => {
     const item = { ...codexPluginConfigItem(["gmail"]), ...identity };
-    const selected = applyMigrationSelectedPluginItemIds(plan([item]), new Set());
+    const selected = applyMigrationSelectedItemIds(plan([item]), new Set(), "plugin");
 
     expect(selected.items[0]).toBe(item);
     expectSummaryFields(selected.summary, { planned: 1, skipped: 0 });
@@ -522,13 +519,14 @@ describe("applyMigrationSelections plugins", () => {
   });
 
   it("allows interactive selection to choose no plugins", () => {
-    const selected = applyMigrationSelectedPluginItemIds(
+    const selected = applyMigrationSelectedItemIds(
       plan([
         pluginItem({ id: "plugin:google-calendar", name: "google-calendar" }),
         pluginItem({ id: "plugin:gmail", name: "gmail" }),
         codexPluginConfigItem(["google-calendar", "gmail"]),
       ]),
       new Set(),
+      "plugin",
     );
 
     expectSummaryFields(selected.summary, { planned: 0, skipped: 3 });
@@ -560,12 +558,12 @@ describe("applyMigrationSelections plugins", () => {
       }),
     ];
 
-    expect(getSelectableMigrationPluginItems(plan(items)).map((item) => item.id)).toEqual([
+    expect(getSelectableMigrationItems(plan(items), "plugin").map((item) => item.id)).toEqual([
       "plugin:google-calendar",
       "plugin:gmail",
     ]);
     expect(
-      formatMigrationPluginSelectionHint(expectDefined(items[1], "items[1] test invariant")),
+      formatMigrationSelectionHint(expectDefined(items[1], "items[1] test invariant"), "plugin"),
     ).toBe("openai-curated plugin already installed in workspace");
   });
 
@@ -580,17 +578,13 @@ describe("applyMigrationSelections plugins", () => {
         MIGRATION_SELECTION_TOGGLE_ALL_ON,
         MIGRATION_SELECTION_TOGGLE_ALL_OFF,
       ]),
-    ).toEqual({ action: "select", selectedItemIds: new Set() });
+    ).toEqual(new Set());
     expect(
       resolveInteractiveMigrationSelection(items, [MIGRATION_SELECTION_TOGGLE_ALL_ON]),
-    ).toEqual({
-      action: "select",
-      selectedItemIds: new Set(["plugin:google-calendar", "plugin:gmail"]),
-    });
-    expect(resolveInteractiveMigrationSelection(items, ["plugin:gmail"])).toEqual({
-      action: "select",
-      selectedItemIds: new Set(["plugin:gmail"]),
-    });
+    ).toEqual(new Set(["plugin:google-calendar", "plugin:gmail"]));
+    expect(resolveInteractiveMigrationSelection(items, ["plugin:gmail"])).toEqual(
+      new Set(["plugin:gmail"]),
+    );
   });
 
   it("accepts item ids as non-interactive plugin selectors", () => {

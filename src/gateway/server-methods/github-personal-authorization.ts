@@ -1,4 +1,8 @@
-import { operatorScopeSatisfied, roleScopesAllow } from "../../shared/operator-scope-compat.js";
+import {
+  intersectOperatorScopes,
+  operatorScopeSatisfied,
+  roleScopesAllow,
+} from "../../shared/operator-scope-compat.js";
 import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
 import { resolvePersonalGitHubOwner } from "../../state/user-github-connections.js";
 import type { PersonalGitHubAction } from "../github-personal-oauth.js";
@@ -30,7 +34,7 @@ type Request = Pick<GatewayRequestHandlerOptions, "client" | "context" | "signal
 function currentGitHubClient(
   options: Request,
   scope: "operator.read" | "operator.write" | "operator.sessions.read",
-  owner?: string | { profileId: string; role: string | null },
+  owner?: string | { profileId: string; role: string | null; githubLogin?: string | null },
 ) {
   const { client, context } = options;
   if (
@@ -54,22 +58,17 @@ function currentGitHubClient(
   const profileId = typeof owner === "string" ? owner : owner?.profileId;
   const policy =
     typeof owner === "object"
-      ? resolveOperatorRolePolicyForAssignment(owner.profileId, owner.role, cfg)
+      ? resolveOperatorRolePolicyForAssignment(
+          owner.profileId,
+          owner.role,
+          cfg,
+          owner.githubLogin ?? null,
+        )
       : profileId
         ? resolveOperatorRolePolicyForProfile(profileId, cfg)
         : resolveOperatorRolePolicy(client, cfg);
   const granted = client.connect.scopes ?? [];
-  const scopes = policy
-    ? [...new Set([...granted, ...policy.scopes])].filter((candidate) =>
-        [granted, policy.scopes].every((allowedScopes) =>
-          roleScopesAllow({
-            role: "operator",
-            requestedScopes: [candidate],
-            allowedScopes,
-          }),
-        ),
-      )
-    : granted;
+  const scopes = policy ? intersectOperatorScopes(granted, policy.scopes) : granted;
   if (
     client.connect.role !== "operator" ||
     !roleScopesAllow({
@@ -156,6 +155,7 @@ export async function prepareGitHubPublicationOptionsRead(
           sessionKey: loaded.canonicalKey,
           agentId: loaded.agentId,
           lifecycleRevision: loaded.entry.lifecycleRevision ?? null,
+          archivedAt: loaded.entry.archivedAt ?? null,
         }
       : null;
   };
@@ -163,20 +163,30 @@ export async function prepareGitHubPublicationOptionsRead(
   if (!session) {
     throw new Error("GitHub publication session was not found.");
   }
+  // sessionId/lifecycleRevision pin the incarnation; archivedAt is re-read below because
+  // archiving flips it without touching either identity field.
+  const readCurrent = () => {
+    const current = readSession(session.sessionKey, session.agentId);
+    if (
+      !current ||
+      current.sessionId !== session.sessionId ||
+      current.lifecycleRevision !== session.lifecycleRevision
+    ) {
+      throw new Error("GitHub publication session access changed; select the session again.");
+    }
+    return current;
+  };
   return {
     personal,
     session,
     sessionScoped: authority.sessionScope === "operator.sessions.read",
-    currentSession: () => {
-      const current = readSession(session.sessionKey, session.agentId);
-      if (
-        !current ||
-        current.sessionId !== session.sessionId ||
-        current.lifecycleRevision !== session.lifecycleRevision
-      ) {
+    currentSession: readCurrent,
+    // Callbacks may refresh live facts, but must not replace the response's archive snapshot.
+    assertSessionUnchanged: (snapshot: ReturnType<typeof readCurrent>): void => {
+      const current = readCurrent();
+      if (current.archivedAt !== snapshot.archivedAt) {
         throw new Error("GitHub publication session access changed; select the session again.");
       }
-      return session;
     },
   };
 }

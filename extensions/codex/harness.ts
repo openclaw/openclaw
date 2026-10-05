@@ -11,6 +11,7 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_NATIVE_TOOL_REQUIREMENTS } from "./native-tool-policy.js";
 import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
 import { sessionBindingIdentity } from "./src/app-server/session-binding-record.js";
@@ -240,6 +241,26 @@ export function createCodexAppServerAgentHarness(
     },
     readModelCatalogReadiness: (params) =>
       modelCatalog?.read(params, resolveAttemptPluginConfig(params.config)),
+    filterModelServiceTiers: ({ config, serviceTiers }) => {
+      const appServer = asOptionalRecord(
+        asOptionalRecord(resolveAttemptPluginConfig(config))?.appServer,
+      );
+      return appServer?.enableUltrafast === false
+        ? serviceTiers.filter((tier) => tier !== "ultrafast")
+        : serviceTiers;
+    },
+    acquireMcpAppRuntime: async (params) => {
+      const { acquireCodexMcpAppRuntime } =
+        await import("./src/app-server/effective-mcp-catalog.js");
+      if (disposed) {
+        return undefined;
+      }
+      params.assertCurrent();
+      return await acquireCodexMcpAppRuntime(params, {
+        bindingStore: options.bindingStore,
+        pluginConfig: resolveAttemptPluginConfig(params.config),
+      });
+    },
     loadMcpToolCatalog: async (params) => {
       const { loadCodexEffectiveMcpCatalog } =
         await import("./src/app-server/effective-mcp-catalog.js");

@@ -55,6 +55,13 @@ prompt body for Gateway replies, queued followups, ACP, CLI, and embedded
 OpenClaw runs. Stored visible user turns use that transcript body instead of
 the runtime-enriched prompt.
 
+Compaction and saved CLI session notes exclude the reserved
+`openclaw.runtime-context` custom message type, including older entries without
+carrier metadata and entries that opt out of provider replay. Provider carrier
+metadata controls replay authority; it does not make private context eligible
+for summaries or saved notes. Existing transcripts receive this filtering when
+read, without rewriting stored history.
+
 For legacy sessions that already persisted runtime wrappers, Gateway history
 surfaces apply a display projection before returning messages to WebChat,
 TUI, REST, or SSE clients.
@@ -118,11 +125,20 @@ Implementation:
 
 ## Global rule: tool result pairing
 
+The live runner rewrites a provider ID that repeats an earlier call, keeping IDs
+unique across responses within an embedded run attempt, including after compaction.
+Persisted older transcripts still use occurrence-based pairing.
+
 Tool results are paired to tool-call occurrences within each assistant turn before
 provider-specific call IDs are rewritten. Provider-generated IDs may repeat on later
 turns, so a result adjacent to a repeated call stays with that occurrence. A displaced
 result is moved only when exactly one unresolved occurrence can own it; ambiguous
 extras are dropped and missing occurrences receive synthetic error results.
+
+Synthetic missing results tell the model that the outcome is unknown: retry only
+read-only or idempotent operations, and verify current state before repeating an
+operation that may have had side effects. Responses-family transports retain
+their `aborted` placeholder. Neither placeholder proves that the tool did not run.
 
 Implementation: `sanitizeToolUseResultPairing` in
 `src/agents/session-transcript-repair.ts`
@@ -186,6 +202,10 @@ inter-session user turns that only have provenance metadata.
 - Preserve replayable OpenAI Responses reasoning item payloads, including
   encrypted empty-summary items, so manual/WebSocket replay keeps required
   `rs_*` state paired with assistant output items.
+- Node turns canonicalize fresh reasoning signatures before returning the
+  completed assistant message, so live continuation and transcript storage use
+  the same signature bytes. Encrypted reasoning bytes, executable tool arguments,
+  and previously approved history remain unchanged.
 - Native ChatGPT Codex Responses follows Codex wire parity by replaying
   prior Responses reasoning/message/function payloads without prior item
   IDs while preserving session `prompt_cache_key`.
@@ -224,12 +244,15 @@ inter-session user turns that only have provenance metadata.
   as hidden custom messages immediately after their user turn and replay them in
   place. Inline inbound metadata on older user turns is also retained. This
   model-scoped append-only policy includes Bedrock, Vertex, and Foundry routes.
-  Carriers contain only the delimited context body; the shared instruction lives
-  once in the stable system prompt. Carriers remain user-role context and
-  are excluded from chat history and compaction summarization. Other Claude
-  models and Anthropic-compatible models keep transient carriers, avoiding
-  repeated cache-read charges and context use for old carriers when nothing
-  binds the prefix.
+  Agent core marks carriers with typed runtime-context metadata on a user-role
+  compatibility message. Provider adapters project the message at the strongest
+  authority their protocol supports; Anthropic-family and external plugin adapters
+  retain the labeled user representation, while OpenAI-compatible adapters use
+  system or developer authority.
+  Carriers are excluded from chat history and compaction summarization. Other
+  Claude models and Anthropic-compatible models keep transient carriers, avoiding
+  repeated cache-read charges and context use for old carriers when nothing binds
+  the prefix.
 - Tool result pairing repair and synthetic tool results.
 - Turn validation (merge consecutive user turns to satisfy strict
   alternation). For prefix-binding models on the Messages API, append-only replay keeps

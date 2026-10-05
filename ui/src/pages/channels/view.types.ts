@@ -2,14 +2,9 @@
 import type {
   ChannelAccountSnapshot,
   ChannelsPairingRequest,
-  DiscordStatus,
-  GoogleChatStatus,
-  IMessageStatus,
+  ChannelStatus,
   NostrProfile,
   NostrStatus,
-  SignalStatus,
-  SlackStatus,
-  TelegramStatus,
   WhatsAppStatus,
 } from "../../api/types.ts";
 import type { ChannelsState } from "../../lib/channels/index.ts";
@@ -73,12 +68,12 @@ export type ChannelsProps = {
 
 export type ChannelsChannelData = {
   whatsapp?: WhatsAppStatus;
-  telegram?: TelegramStatus;
-  discord?: DiscordStatus | null;
-  googlechat?: GoogleChatStatus | null;
-  slack?: SlackStatus | null;
-  signal?: SignalStatus | null;
-  imessage?: IMessageStatus | null;
+  telegram?: ChannelStatus;
+  discord?: ChannelStatus | null;
+  googlechat?: ChannelStatus | null;
+  slack?: ChannelStatus | null;
+  signal?: ChannelStatus | null;
+  imessage?: ChannelStatus | null;
   nostr?: NostrStatus | null;
   channelAccounts?: Record<string, ChannelAccountSnapshot[]> | null;
 };

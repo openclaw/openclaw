@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
 import { upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { projectChatSessionMetadata } from "./server-methods/chat-metadata-session-projection.js";
+import { createChatMetadataHarness } from "./server-methods/chat-metadata-runtime.test-support.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { projectSessionPatchResult } from "./session-utils-model.js";
 import { buildGatewaySessionRow } from "./session-utils-row.js";
@@ -75,11 +77,16 @@ describe("session runtime selection ownership projection", () => {
               }),
             });
           }
+          const [acpMeta] = await readAcpSessionMetaForEntries({
+            cfg,
+            entries: [{ agentId: "main", sessionKey: key, entry }],
+          });
           const row = buildGatewaySessionRow({
             cfg,
             agentId: "main",
             key,
             entry,
+            preparedAcpMeta: acpMeta ?? null,
             store: { [key]: entry },
             storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
             modelCatalog: catalog,
@@ -91,16 +98,28 @@ describe("session runtime selection ownership projection", () => {
           if (kind === "runtime-pin") {
             expect(row.agentRuntime?.source).toBe("session-key");
           }
-          const metadata = projectChatSessionMetadata(
-            { agentId: "main", sessionKey: key, sessionEntry: entry },
-            { models: [], swarmEnabled: false },
-            cfg,
-          );
-          expect(metadata.runtimeSelectionLocked).toBe(locked);
+          const metadata = createChatMetadataHarness(cfg);
+          await metadata.runtime.refresh();
+          const hostSql = observeHostDataSql();
+          try {
+            const params = { agentId: "main", sessionKey: key, sessionEntry: entry };
+            expect((await metadata.runtime.read(params)).runtimeSelectionLocked).toBe(locked);
+            expect(
+              (await metadata.runtime.readStartup(params))?.metadata?.runtimeSelectionLocked,
+            ).toBe(locked);
+            expect(
+              await metadata.runtime.readStartup({ ...params, readPolicy: "ready" }),
+            ).not.toHaveProperty("metadata");
+            expect(hostSql.queries.filter((sql) => /\bacp_sessions\b/i.test(sql))).toEqual([]);
+          } finally {
+            hostSql.restore();
+            await metadata.runtime.stop();
+          }
           const patched = projectSessionPatchResult({
             cfg,
             canonicalKey: key,
             entry,
+            preparedAcpMeta: acpMeta ?? null,
             targetAgentId: "main",
             storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
             modelCatalog: catalog,

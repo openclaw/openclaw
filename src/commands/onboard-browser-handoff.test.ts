@@ -165,7 +165,7 @@ describe("runBrowserHatchHandoff", () => {
   it("opens once when the browser is available", async () => {
     const platform = "darwin";
     const env = {};
-    sharedMocks.detectBrowserOpenSupport.mockResolvedValueOnce({ ok: true, command: "opener" });
+    sharedMocks.detectBrowserOpenSupport.mockResolvedValueOnce({ ok: true });
     const prompter = createWizardPrompter();
     const openBrowser = vi.fn(async () => true);
     const probePresence = vi
@@ -359,7 +359,6 @@ describe("runBrowserHatchHandoff", () => {
     async ({ openBrowser }) => {
       sharedMocks.detectBrowserOpenSupport.mockResolvedValueOnce({
         ok: true,
-        command: "xdg-open",
       });
       const prompter = createWizardPrompter();
       const pollForClient = vi.fn(async () => ({
@@ -405,7 +404,7 @@ describe("runBrowserHatchHandoff", () => {
   );
 
   it("prints the one-time pairing URL when browser launch fails", async () => {
-    sharedMocks.detectBrowserOpenSupport.mockResolvedValueOnce({ ok: true, command: "open" });
+    sharedMocks.detectBrowserOpenSupport.mockResolvedValueOnce({ ok: true });
     const prompter = createWizardPrompter();
 
     await runBrowserHatchHandoff(
@@ -650,7 +649,7 @@ describe("runBrowserHatchHandoff", () => {
   });
 
   it("bounds the final presence probe by the remaining handoff time", async () => {
-    sharedMocks.detectBrowserOpenSupport.mockResolvedValueOnce({ ok: true, command: "open" });
+    sharedMocks.detectBrowserOpenSupport.mockResolvedValueOnce({ ok: true });
     const prompter = createWizardPrompter();
     const probeTimeouts: number[] = [];
     let elapsedMs = 0;
@@ -777,7 +776,7 @@ describe("runBrowserHatchHandoff", () => {
   });
 
   it("fails safely when a browser bootstrap cannot be issued", async () => {
-    sharedMocks.detectBrowserOpenSupport.mockResolvedValueOnce({ ok: true, command: "open" });
+    sharedMocks.detectBrowserOpenSupport.mockResolvedValueOnce({ ok: true });
     const prompter = createWizardPrompter();
     sharedMocks.issueControlUiBrowserHandoff.mockRejectedValue(new Error("state unavailable"));
     const openBrowser = vi.fn();

@@ -3,7 +3,10 @@ import type {
   SqliteWalPeriodicRequest,
   SqliteWalPeriodicResult,
 } from "../infra/sqlite-wal-write-admission.js";
-import type { SqliteWorkerEphemeralTarget } from "../infra/sqlite-worker-contract.js";
+import type {
+  SqliteWorkerEphemeralTarget,
+  SqliteWorkerStore,
+} from "../infra/sqlite-worker-contract.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import type {
   SqliteWorkerAdmissionFactory,
@@ -33,6 +36,35 @@ export type AgentDatabaseGenerationClaim = {
   readonly identity: string;
   readonly incarnation: string;
   assertCurrent(): void;
+};
+
+export type AgentDatabaseExecutionScope = Pick<
+  SqliteWorkerStore<AgentDatabaseOperations>,
+  "execute"
+>;
+
+export type OpenClawAgentDatabaseExecution = {
+  readonly agentId: string;
+  readonly path: string;
+  /** The accepted native receipt; reading this never adopts the current pathname. */
+  readonly fileIdentity: AgentDatabaseExecutionFileIdentity | undefined;
+  assertCurrent(): void;
+  captureGenerationClaim(): AgentDatabaseGenerationClaim;
+  /** Reuse only a native generation whose preparation and registration publication settled. */
+  capturePreparedGenerationClaim(): AgentDatabaseGenerationClaim | undefined;
+  /** Initialize first-use storage through the same admitted native owner. */
+  prepare(source: AgentDatabaseRequestExecutionSource, signal?: AbortSignal): Promise<void>;
+  /** Admit a write against existing storage; a missing store remains missing. */
+  runExisting<T>(
+    source: AgentDatabaseRequestExecutionSource,
+    operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
+    options?: { retireNativeOnFailure: true },
+  ): Promise<T | undefined>;
+  /**
+   * Join this reference's work; native cleanup failures remain with its resource owner.
+   * The owner may retain one bounded idle generation.
+   */
+  release(): Promise<void>;
 };
 
 export type AgentDatabaseFileExecutionOpen = {
@@ -76,15 +108,6 @@ export type AgentDatabaseIncognitoOperations = IncognitoSessionOperations & {
 };
 
 export type AgentDatabaseIncognitoAuthority = { assertCurrent(): void };
-
-export class IncognitoSessionEndedError extends Error {
-  readonly code = "INCOGNITO_SESSION_ENDED";
-
-  constructor(options?: ErrorOptions) {
-    super("Incognito session ended. Create a new incognito session to continue.", options);
-    this.name = "IncognitoSessionEndedError";
-  }
-}
 
 export type AgentDatabaseOperations = AgentDatabaseDomainOperations &
   RegisteredAgentWorkerOperations & {

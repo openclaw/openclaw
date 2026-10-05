@@ -15,6 +15,7 @@ import {
   readExactSessionEntryRow,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
+import { captureSessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
 import {
   applySessionEntryMaintenanceInDatabase,
   emptySessionEntryMaintenancePlan,
@@ -33,7 +34,11 @@ export function prepareSessionEntryReplacementPublication(
   result: SessionEntryReplacementCommitted,
   database: OpenClawAgentDatabase,
 ): SessionEntryReplacementPublication {
-  const archived = new Set(result.maintenancePlans.flatMap((plan) => plan.archivedSessionKeys));
+  const archived = new Set(
+    result.maintenancePlans.flatMap((plan) =>
+      plan.archivedEntries.map(({ sessionKey }) => sessionKey),
+    ),
+  );
   const invalidated = new Set([...result.membershipInvalidatedKeys, ...archived]);
   const current = new Map<string, SessionEntry>();
   for (const key of result.current.keys()) {
@@ -60,6 +65,13 @@ export function prepareSessionEntryReplacementPublication(
       ]),
     ),
     current,
+    ageChanges: [...current].map(([sessionKey, entry]) =>
+      captureSessionEntryMaintenanceAgeChange({
+        sessionKey,
+        entry,
+        previousEntry: result.previous.get(sessionKey),
+      }),
+    ),
     ...(getAdmittedSqliteSchemaFacts(database.db)
       ? {
           source: {
@@ -68,13 +80,7 @@ export function prepareSessionEntryReplacementPublication(
           },
         }
       : {}),
-    changedKeys: [
-      ...new Set([
-        ...result.previous.keys(),
-        ...result.current.keys(),
-        ...result.maintenancePlans.flatMap((plan) => plan.archivedSessionKeys),
-      ]),
-    ],
+    changedKeys: [...new Set([...result.previous.keys(), ...result.current.keys(), ...archived])],
   };
 }
 

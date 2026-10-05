@@ -79,7 +79,6 @@ describe("embedded provider dispatch admission", () => {
           onSteeringAcknowledged: vi.fn(),
           persistToolResultProjections: async () => {},
           runtimeOnly: false,
-          sessionPromptState: getEmbeddedSessionPromptState(sessionId),
           systemPrompt: "system prompt",
           toolResultAggregateMaxChars: 8_000,
           toolResultMaxChars: 4_000,

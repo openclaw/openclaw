@@ -1,14 +1,9 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { composeTranscriptDisplay } from "../../chat/transcript-display-position.js";
 import type {
   ChatHistoryPage,
   ChatHistoryPageParams,
   ChatHistoryResponsePage,
 } from "../../config/sessions/session-history-types.js";
-import {
-  isForwardedUserMessage,
-  isProjectedForwardedMessage,
-} from "../chat-display-projection.helpers.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import { capArrayByJsonBytes } from "../session-transcript-readers.js";
 import {
@@ -16,7 +11,6 @@ import {
   createChatHistoryActivityProjection,
   createChatHistoryByteCounter,
   replaceOversizedChatHistoryMessages,
-  trimChatHistoryActivity,
 } from "./chat-history-budget.js";
 import {
   capChatHistoryAroundMessage,
@@ -28,16 +22,16 @@ export function prepareChatHistoryResponsePage(
   historyPage: ChatHistoryPage,
   {
     entry: historyEntry,
-    maxHistoryBytes,
+    compactionMetrics,
+    maxHistoryBytes: responseHistoryBytes,
     messageId,
-  }: Pick<ChatHistoryPageParams, "entry" | "maxHistoryBytes" | "messageId">,
+  }: Pick<ChatHistoryPageParams, "entry" | "compactionMetrics" | "maxHistoryBytes" | "messageId">,
 ): ChatHistoryResponsePage {
-  const normalized = enrichChatHistoryCompactionMarkers(historyPage.messages, historyEntry);
-  // Imported snapshots have no back-scroll cursor. Preserve their complete
-  // snapshot budget until the external history owner supports pagination.
-  const responseHistoryBytes = historyPage.completeCliImport
-    ? getMaxChatHistoryMessagesBytes()
-    : maxHistoryBytes;
+  const normalized = enrichChatHistoryCompactionMarkers(
+    historyPage.messages,
+    historyEntry,
+    compactionMetrics,
+  );
   // A smaller page budget must not replace otherwise readable messages. The
   // tail cap keeps one whole message; the server's single-message cap still applies.
   const activity = createChatHistoryActivityProjection(normalized, historyPage.activity);
@@ -50,33 +44,19 @@ export function prepareChatHistoryResponsePage(
       getMaxChatHistoryMessagesBytes(),
     ),
   });
-  // Terminal imports have no older-page cursor. Anchored reads retain their
-  // existing neighborhood selector instead of changing which groups surround the anchor.
-  const prioritized =
-    historyPage.completeCliImport && !messageId
-      ? trimChatHistoryActivity({
-          messages: replaced.messages,
-          maxBytes: responseHistoryBytes,
-          byteCounter,
-        })
-      : replaced.messages;
   const capped = messageId
     ? capChatHistoryAroundMessage({
-        messages: prioritized,
+        messages: replaced.messages,
         messageId,
         // A nonempty JSON array costs one framing byte plus each message and its separator.
-        maxCost: responseHistoryBytes - 1 - byteCounter.framingBytes(prioritized),
+        maxCost: responseHistoryBytes - 1 - byteCounter.framingBytes(replaced.messages),
         messageCost: (message) => byteCounter.messageBytes(message) + 1,
       })
     : capArrayByJsonBytes(
-        prioritized,
-        responseHistoryBytes - byteCounter.framingBytes(prioritized),
+        replaced.messages,
+        responseHistoryBytes - byteCounter.framingBytes(replaced.messages),
         byteCounter.messageBytes,
       ).items;
-  const historyBudgetPreserved =
-    replaced.replacedCount === 0 &&
-    capped.length === normalized.length &&
-    capped.every((message, index) => message === normalized[index]);
   const pagination = historyPage.pagination;
   const candidateNextOffset =
     pagination === undefined
@@ -87,10 +67,11 @@ export function prepareChatHistoryResponsePage(
           offset: pagination.offset,
           rawPageMessages: pagination.rawPageMessages,
           projected: normalized,
+          messageSequences: pagination.messageSequences,
         });
   const hasMore =
     pagination !== undefined && candidateNextOffset !== undefined
-      ? pagination.exhausted !== true && candidateNextOffset < pagination.totalMessages
+      ? candidateNextOffset < pagination.totalMessages
       : undefined;
   const survivors = new Set(capped);
   const omittedCount = normalized.reduce<number>(
@@ -110,41 +91,17 @@ export function prepareChatHistoryResponsePage(
     ...(hasMore ? { nextOffset: candidateNextOffset } : {}),
     ...(hasMore !== undefined ? { hasMore } : {}),
     ...(pagination !== undefined ? { totalMessages: pagination.totalMessages } : {}),
-    ...(historyPage.completeCliImport && !hasMore && historyBudgetPreserved
-      ? { completeSnapshot: true }
-      : {}),
   };
 }
 
-/** Keep host-owned live labels and legacy enrichment on the object path. */
 export function encodeChatHistoryResponsePage(
   page: ChatHistoryPage,
   params: ChatHistoryPageParams,
 ): ChatHistoryPage {
-  if (
-    !params.encodeResponse ||
-    page.messages.some((value) => {
-      const message = asOptionalRecord(value);
-      const metadata = asOptionalRecord(message?.["__openclaw"]);
-      return (
-        !message ||
-        isForwardedUserMessage(message) ||
-        isProjectedForwardedMessage(message) ||
-        metadata?.kind === "compaction" ||
-        (message.role === "user" && asOptionalRecord(metadata?.senderIdentity)?.type === "profile")
-      );
-    })
-  ) {
+  if (!params.encodeResponse) {
     return page;
   }
   const response = prepareChatHistoryResponsePage(page, params);
-  if (
-    (response.omission?.normalizedBytes ?? response.messagesBytes) <
-      CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES ||
-    response.messagesBytes > getMaxChatHistoryMessagesBytes()
-  ) {
-    return page;
-  }
   return {
     ...page,
     messages: [],

@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.types.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import type { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import { saveSubagentRegistryToSqlite } from "./subagent-registry-state.fixture.test-support.js";
@@ -31,8 +32,14 @@ export function registerStaleRequesterWakeBatchTests({
       const oldDone = createDeferredCore<boolean>();
       let oldParams: WakeParams | undefined;
       let siblingGatewayOpen = true;
-      const anchorGateway = { resolveGatewayContext: () => anchorGateway as never };
-      const nextGateway = { resolveGatewayContext: () => nextGateway as never };
+      const anchorGateway = {
+        chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
+        resolveGatewayContext: () => anchorGateway as never,
+      };
+      const nextGateway = {
+        chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
+        resolveGatewayContext: () => nextGateway as never,
+      };
       vi.useFakeTimers();
       try {
         await withRegistryState(async () => {

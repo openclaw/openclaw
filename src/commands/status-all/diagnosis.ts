@@ -146,6 +146,10 @@ export async function appendStatusAllDiagnosis(params: {
   agentStatus?: AgentStatusLike;
   gatewayReachable: boolean;
   gatewayStartupPhase?: string;
+  localGatewayHealthy?: boolean;
+  gatewayServer?: NonNullable<
+    Parameters<typeof formatUpdateRestartStatusValue>[1]
+  >["gatewayServer"];
   health: Awaited<ReturnType<typeof resolveStatusGatewayHealthSafe>> | null | undefined;
   nodeOnlyGateway: NodeOnlyGatewayInfo | null;
 }) {
@@ -217,7 +221,10 @@ export async function appendStatusAllDiagnosis(params: {
     lines.push(
       `  ${muted(`${summarizeRestartSentinel(params.sentinel.payload)} · ${formatTimeAgo(Date.now() - params.sentinel.payload.ts)}`)}`,
     );
-    const updateRestartValue = formatUpdateRestartStatusValue(params.sentinel.payload);
+    const updateRestartValue = formatUpdateRestartStatusValue(params.sentinel.payload, {
+      localGatewayHealthy: params.localGatewayHealthy,
+      gatewayServer: params.gatewayServer,
+    });
     if (updateRestartValue) {
       lines.push(`  ${muted(`Update restart: ${updateRestartValue}`)}`);
     }
@@ -396,7 +403,7 @@ export async function appendStatusAllDiagnosis(params: {
     try {
       // macOS supervised installs write stdout/stderr differently than node-managed gateway logs.
       return process.platform === "darwin"
-        ? resolveGatewaySupervisorLogPaths(process.env, { platform: "darwin" })
+        ? resolveGatewaySupervisorLogPaths(process.env)
         : resolveGatewayLogPaths(process.env);
     } catch {
       return null;

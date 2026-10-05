@@ -3,6 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyCostUsageTotals } from "../../infra/session-cost-usage-totals.js";
 import type { SessionCostSummary } from "../../infra/session-cost-usage.types.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
@@ -74,9 +75,13 @@ import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store
 import { loadCombinedSessionStoreForGatewayCore } from "../session-utils.js";
 import { usageHandlers } from "./usage.js";
 
-let TEST_RUNTIME_CONFIG = {
+let TEST_RUNTIME_CONFIG: OpenClawConfig = {
   session: {},
-  agents: { list: [{ id: "main", default: true }, { id: "opus" }] },
+  agents: {
+    ownership: "explicit",
+    defaults: { systemAgent: { agentId: "main" } },
+    entries: { main: {}, opus: {} },
+  },
 };
 const BASE_USAGE_RANGE = { startDate: "2026-02-01", endDate: "2026-02-02", limit: 10 };
 async function runSessionsUsageMethod(

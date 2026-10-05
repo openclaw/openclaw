@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
+import type { SessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 export type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
@@ -21,29 +22,23 @@ export type SessionEntryCacheSnapshot = {
 
 export type SessionSharingEntry = Pick<
   InternalSessionEntry,
-  | "sessionId"
-  | "updatedAt"
-  | "lifecycleRevision"
-  | "lifecycleRunId"
-  | "activeWriterRunId"
-  | "subagentRecovery"
-  | "archivedAt"
-  | "repositoryWorkspaceId"
-  | "visibility"
-  | "incognito"
-  | "createdActor"
-  | "owner"
-  | "sandbox"
-  | "spawnedBy"
-  | "spawnDepth"
-  | "parentSessionKey"
-  | "sessionStartedAt"
+  keyof ReturnType<typeof projectSessionSharingEntry>
 >;
 
-export function projectSessionSharingEntry(entry: InternalSessionEntry): SessionSharingEntry {
+export function projectSessionSharingEntry(entry: InternalSessionEntry) {
   return {
     sessionId: entry.sessionId,
+    previousSessionId: entry.previousSessionId,
     updatedAt: entry.updatedAt,
+    createdAt: entry.createdAt,
+    initializationPending: entry.initializationPending,
+    providerReview: entry.providerReview ? structuredClone(entry.providerReview) : undefined,
+    mainRestartRecovery: entry.mainRestartRecovery
+      ? structuredClone(entry.mainRestartRecovery)
+      : undefined,
+    modelSelectionLocked: entry.modelSelectionLocked,
+    pendingProjectGitUrl: entry.pendingProjectGitUrl,
+    pendingWorktree: entry.pendingWorktree ? structuredClone(entry.pendingWorktree) : undefined,
     lifecycleRevision: entry.lifecycleRevision,
     lifecycleRunId: entry.lifecycleRunId,
     activeWriterRunId: entry.activeWriterRunId,
@@ -111,6 +106,7 @@ export type SessionEntryPublicationSource = {
   birthtime: string | undefined;
   incarnation: string;
   filename: string;
+  canonicalPath?: string;
   revision?: number;
 };
 
@@ -125,6 +121,7 @@ export type SessionEntryReplacementPublication = {
   pendingArchiveRecovery: boolean;
   previous: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision">>;
   current: Map<string, SessionEntry>;
+  ageChanges: SessionEntryMaintenanceAgeChange[];
   source?: SessionEntryPublicationSource;
   changedKeys: string[];
   membershipInvalidatedKeys: string[];
@@ -158,14 +155,19 @@ export type PlaceholderReceipt = {
   committed: boolean;
 };
 
-export type SessionEntryPublicationRecord =
+export type SessionEntryPublicationRecord = {
+  databaseIdentity?: string | symbol;
+  canonicalPath?: string;
+} & (
+  | { kind: "source" }
   | { kind: "marker"; sharingChange: "changed" | "unchanged" }
   | {
       kind: "metadata";
       sharingChange: "changed" | "unchanged";
       prepared: PreparedSessionEntryChanges;
     }
-  | { kind: "placeholder"; sharingChange: "changed"; receipt: PlaceholderReceipt };
+  | { kind: "placeholder"; sharingChange: "changed"; receipt: PlaceholderReceipt }
+);
 
 export type PendingSessionEntryPublication = {
   superseded: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined>;
@@ -174,6 +176,7 @@ export type PendingSessionEntryPublication = {
   membershipInvalidated: Set<string>;
   sharingUnchanged: Set<string>;
   settled: boolean;
+  completion: Promise<void>;
 };
 
 export function readSessionEntryCreationIdentity(creation: CreationRecord): DatabaseSync | string {

@@ -79,7 +79,7 @@ describe("persistUserTurnTranscript", () => {
       expect(
         await runSessionColdStorageMaintenance({
           config: {
-            agents: { list: [{ id: target.agentId }] },
+            agents: { entries: { [target.agentId]: {} } },
             session: {
               store: target.storePath,
               maintenance: { coldStorage: { enabled: true, afterDays: 30 } },

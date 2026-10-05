@@ -1,9 +1,12 @@
+import type { HeapSpaceInfo } from "node:v8";
+
 export type DiagnosticMemoryUsage = {
   rssBytes: number;
   heapTotalBytes: number;
   heapUsedBytes: number;
   externalBytes: number;
   arrayBuffersBytes: number;
+  heapSpaces?: HeapSpaceInfo[];
   workerCount?: number;
   workerHeapSampledCount?: number;
   workerHeapTotalBytes?: number;
@@ -24,6 +27,8 @@ export type DiagnosticMemoryUsage = {
     script: string;
     heapUsed: number;
     heapTotal: number;
+    /** Actual V8 isolate limit; unavailable on runtimes without V8. */
+    heapSizeLimitBytes?: number;
     threadId?: number;
     external?: number;
     /** Missing for native-only samplers; zero is a measured value. Included in external. */
@@ -38,9 +43,31 @@ export type DiagnosticMemoryUsage = {
   }[];
 };
 
+export const DIAGNOSTIC_MEMORY_PRESSURE_METRICS = [
+  "thresholdBytes",
+  "limitBytes",
+  "usedBytes",
+  "workerThreadId",
+  "rssGrowthBytes",
+  "windowMs",
+] as const;
+
+export type DiagnosticMemoryPressureMetrics = Partial<
+  Record<(typeof DIAGNOSTIC_MEMORY_PRESSURE_METRICS)[number], number>
+>;
+
+export type DiagnosticMemoryPressureFields = DiagnosticMemoryPressureMetrics & {
+  type: "diagnostic.memory.pressure";
+  level: "warning" | "critical";
+  reason: "rss_threshold" | "heap_threshold" | "worker_heap_threshold" | "rss_growth";
+  memory: DiagnosticMemoryUsage;
+};
+
 export type DiagnosticChildProcessSpawnFields = {
   type: "diagnostic.child_process.spawn";
   family: string;
+  /** Bounded Git owner/operation; unknown for unattributed Git and none for other families. */
+  operation?: string;
   count: number;
   intervalMs: number;
 };

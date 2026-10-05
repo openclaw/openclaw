@@ -168,10 +168,9 @@ type CodexNodeSessionTranscriptParams = {
   limit: number;
 };
 
-function readNodeTranscriptParams(value: unknown): CodexNodeSessionTranscriptParams {
-  if (!isRecord(value)) {
-    throw new CatalogParamsError("Codex session read parameters must be an object");
-  }
+function readNodeTranscriptParams(
+  value: Record<string, unknown>,
+): CodexNodeSessionTranscriptParams {
   requireOnlyKeys(value, new Set(["threadId", "cursor", "limit"]));
   const threadId = readBoundedOptionalString(value, "threadId", MAX_SESSION_ID_LENGTH);
   if (!threadId) {

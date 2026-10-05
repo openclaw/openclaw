@@ -157,40 +157,33 @@ export function hasRequesterCompletionCohort(entry: SubagentRunRecord): boolean 
   );
 }
 
-/** A frozen completion cohort can own distinct tasks that share one child session. */
+/**
+ * A newer task cannot revoke another task's exact completion custody. A
+ * yield-paused run holds no result, only its continuation: a newer execution of
+ * its session without its own completion audience continues it, so the pause
+ * notice no longer owes a wake. A sibling that owes its own delivery is
+ * independent and leaves the paused task resumable.
+ */
 export function isRequesterCompletionCohortCurrent(
   entry: SubagentRunRecord,
-  cohort: readonly SubagentRunRecord[],
   latestForSession: (
     sessionKey: string,
     matches?: (candidate: SubagentRunRecord) => boolean,
+    childAgentId?: string,
   ) => SubagentRunRecord | null,
 ): boolean {
   const taskRunId = entry.taskRunId ?? entry.runId;
-  const task = latestForSession(
+  const paused = entry.pauseReason === "sessions_yield";
+  const owner = latestForSession(
     entry.childSessionKey,
-    (candidate) => (candidate.taskRunId ?? candidate.runId) === taskRunId,
+    (candidate) =>
+      (candidate.taskRunId ?? candidate.runId) === taskRunId ||
+      (paused && candidate.expectsCompletionMessage !== true),
+    entry.childAgentId,
   );
-  if (
-    entry.killReconciliation?.supersededAt !== undefined ||
-    (task && compareSubagentRunGeneration(task, entry) > 0)
-  ) {
-    return false;
-  }
-  const latest = latestForSession(entry.childSessionKey);
   return (
-    !latest ||
-    compareSubagentRunGeneration(latest, entry) <= 0 ||
-    cohort.some(
-      (candidate) =>
-        candidate.runId === latest.runId &&
-        candidate.generation === latest.generation &&
-        candidate.requesterSessionKey === entry.requesterSessionKey &&
-        candidate.requesterAgentId === entry.requesterAgentId &&
-        candidate.requesterStorePath === entry.requesterStorePath &&
-        candidate.requesterTurnRunId === entry.requesterTurnRunId &&
-        (candidate.taskRunId ?? candidate.runId) !== taskRunId,
-    )
+    entry.killReconciliation?.supersededAt === undefined &&
+    (!owner || compareSubagentRunGeneration(owner, entry) <= 0)
   );
 }
 
@@ -273,7 +266,7 @@ export function resolveCurrentRequesterSettleWakeBatch(params: {
     const wake = entry?.requesterSettleWake;
     if (
       !entry ||
-      entry.requesterTurnRunId ||
+      (entry.expectsCompletionMessage === true && entry.requesterTurnRunId) ||
       !isRequesterSettleRunBindingCurrent(entry, observed) ||
       !wake ||
       wake.rearmGeneration !== params.rearmGeneration ||

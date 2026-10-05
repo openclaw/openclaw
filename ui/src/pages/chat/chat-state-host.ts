@@ -20,7 +20,7 @@ import type { ChatSendTimingEntry } from "./chat-send-ack.ts";
 import type { ChatHost, ChatSendSubmitOptions } from "./chat-send-contract.ts";
 import type { ChatProps } from "./chat-view.ts";
 import type { SessionWorkspaceHost } from "./components/chat-session-workspace.ts";
-import type { SidebarSelection } from "./components/chat-sidebar.ts";
+import type { SidebarSelection } from "./components/chat-sidebar-content-types.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
 import type { handleAbortChat } from "./run-lifecycle.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
@@ -40,8 +40,6 @@ export type ChatPageHost = ChatHost &
     reviewQueuedMessageEdit?: () => void;
     captureComposerRecoveryReload?: () => () => Promise<boolean>;
     chatMetadataIsPresented?: () => boolean;
-    password: string;
-    onboarding: boolean;
     assistantName: string;
     assistantAvatar: string | null;
     assistantAvatarStatus: "none" | "local" | "remote" | "data" | null;
@@ -97,7 +95,6 @@ export type ChatPageHost = ChatHost &
     chatRunStatus: ChatProps["runStatus"];
     chatModelsLoading: boolean;
     sessionsLoading: boolean;
-    lastErrorCode: string | null;
     chatStreamRenderFrame: number | null;
     chatLastScrollHeight: number;
     sidebarLayout: SidebarLayout;
@@ -109,7 +106,6 @@ export type ChatPageHost = ChatHost &
     imageLightboxRequestVersion: number;
     querySelector: (selectors: string) => Element | null;
     resetToolStream: () => void;
-    resetChatScroll: () => void;
     resetChatInputHistoryNavigation: () => void;
     scrollToBottom: (opts?: { smooth?: boolean }) => void;
     loadAssistantIdentity: () => Promise<void>;
@@ -143,6 +139,5 @@ export type ChatPageHost = ChatHost &
     beginImageOpen: () => number;
     handleOpenImage: (item: ImageLightboxItem, requestVersion?: number) => void;
     handleCloseImage: () => void;
-    announceSessionSwitch?: (sessionKey: string, label: string) => void;
     retireSessionCompanion?: (sessionKey: string, agentId?: string | null) => void;
   };

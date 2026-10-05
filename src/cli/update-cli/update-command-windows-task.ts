@@ -4,6 +4,7 @@ import {
 } from "../../daemon/schtasks.js";
 import { finishUpdateRun } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   registerSignalExitBarrier,
   registerSignalExitGate,
@@ -49,16 +50,13 @@ export function createWindowsTaskAutoStartRecovery(params: {
   let closed = false;
   let interrupted = false;
   let unregisterSignalExitBarrier = () => {};
-  let finishUpdate: (() => void) | undefined;
   const assertCurrentService = async (phase?: "restore") => {
     params.assertCurrent?.(phase);
     await guard?.();
     params.assertCurrent?.(phase);
   };
-  const updateFinished = new Promise<void>((resolve) => {
-    finishUpdate = resolve;
-  });
-  const unregisterSignalExitGate = registerSignalExitGate(updateFinished);
+  const updateFinished = createDeferredCore();
+  const unregisterSignalExitGate = registerSignalExitGate(updateFinished.promise);
   const onSignal = (exitCode: number) => {
     interrupted = true;
     void waitForSignalExitBarriers()
@@ -151,7 +149,7 @@ export function createWindowsTaskAutoStartRecovery(params: {
           cause instanceof Error ? cause : new Error("Windows native recovery failed", { cause });
       }
       try {
-        if (finishUpdate && recordInterruption && params.updateRun) {
+        if (recordInterruption && params.updateRun) {
           params.assertCurrent?.("restore");
           const failed = restorationFailed || !restartSafe;
           finishUpdateRun(
@@ -181,8 +179,7 @@ export function createWindowsTaskAutoStartRecovery(params: {
           : settlementFailure;
       } finally {
         removeSignalHandlers();
-        finishUpdate?.();
-        finishUpdate = undefined;
+        updateFinished.resolve();
         unregisterSignalExitGate();
       }
       if (failure) {

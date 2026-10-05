@@ -115,9 +115,9 @@ export async function recoverDoctorSessionSqliteTargets(params: {
             artifact.outcome === "blocked" || artifact.reason === "unsupported-target-ownership",
         ))
     ) {
-      return summarizeRecoverReport(retainedReports);
+      return summarizeDoctorSessionSqliteReport("recover", retainedReports);
     }
-    return summarizeRecoverReport([
+    return summarizeDoctorSessionSqliteReport("recover", [
       createSyntheticRecoverTargetReport(
         params.env,
         "No failed session SQLite migration manifest found.",
@@ -165,7 +165,10 @@ export async function recoverDoctorSessionSqliteTargets(params: {
       message: `${conflict.sourcePath}: ${conflict.reason}`,
     })),
   );
-  const report = summarizeRecoverReport(targetReports.length > 0 ? targetReports : [reportTarget]);
+  const report = summarizeDoctorSessionSqliteReport(
+    "recover",
+    targetReports.length > 0 ? targetReports : [reportTarget],
+  );
   if (report.totals.issues === 0) {
     report.migrationRun = {
       manifestPath: failedRun.manifestPath,
@@ -398,13 +401,4 @@ function createEmptyRecoverTargetReport(
     sqlitePath,
     storePath: target.storePath,
   });
-}
-
-function summarizeRecoverReport(
-  targets: DoctorSessionSqliteTargetReport[],
-): DoctorSessionSqliteReport {
-  const report = summarizeDoctorSessionSqliteReport("recover", targets);
-  delete report.totals.archivedLegacyStoreFiles;
-  delete report.totals.reclaimedBytes;
-  return report;
 }

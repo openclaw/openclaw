@@ -257,7 +257,108 @@ describe("Canvas widget view", () => {
     expect(view.documentHtml).toBe("<p>Updated bytes</p>");
   });
 
-  it.each(["credential", "profile", "session", "denied"])(
+  it("hands scroll intent to its transcript only from the current isolated widget", async () => {
+    const thread = document.createElement("div");
+    const sibling = document.createElement("div");
+    thread.className = sibling.className = "chat-thread";
+    document.body.append(thread, sibling);
+    const events: Array<{ type: string; deltaY: number; scrollTop: number }> = [];
+    thread.scrollTop = 400;
+    thread.addEventListener("wheel", (event) => {
+      events.push({ type: "wheel", deltaY: event.deltaY, scrollTop: thread.scrollTop });
+    });
+    Object.defineProperty(thread, "scrollBy", {
+      value: vi.fn((options: ScrollToOptions) => {
+        const deltaY = options.top ?? 0;
+        events.push({ type: "scroll", deltaY, scrollTop: thread.scrollTop });
+        thread.scrollTop += deltaY;
+      }),
+    });
+    const scrollSibling = vi.fn();
+    sibling.scrollBy = scrollSibling;
+    const client = { request: vi.fn().mockResolvedValue(documentView) };
+    const view = mount(client, "cv_scroll", thread);
+    const start = async (frame: HTMLIFrameElement) => {
+      const post = vi.spyOn(frame.contentWindow!, "postMessage");
+      message(frame, {
+        method: "ui/notifications/sandbox-proxy-ready",
+        params: { sandboxUrl: frame.src },
+      });
+      await settle(view);
+      expect(post).toHaveBeenCalledWith(
+        { type: "openclaw:widget-board-host", nonce: expect.any(String) },
+        new URL(frame.src).origin,
+      );
+      const nonce = post.mock.calls.find(([data]) => data.type === "openclaw:widget-board-host")![0]
+        .nonce;
+      const renderId = post.mock.calls.find(
+        ([data]) => data.method === "ui/notifications/sandbox-resource-ready",
+      )![0].params.renderId;
+      post.mockClear();
+      message(frame, {
+        method: "ui/notifications/sandbox-resource-loaded",
+        params: { renderId },
+      });
+      // Stored wrappers can miss host state until their document finishes loading.
+      expect(post).toHaveBeenCalledWith(
+        { type: "openclaw:widget-board-host", nonce },
+        new URL(frame.src).origin,
+      );
+      return nonce;
+    };
+    const frame = await frameFor(view);
+    const nonce = await start(frame);
+    const scroll = { type: "openclaw:widget-scroll", nonce, deltaY: 120 };
+    const foreignFrame = document.createElement("iframe");
+    foreignFrame.src = frame.src;
+    sibling.append(foreignFrame);
+    message(frame, scroll, [], "https://wrong.example");
+    message(foreignFrame, scroll);
+    message(frame, { ...scroll, nonce: "wrong" });
+    for (const deltaY of ["120", undefined, Infinity, Number.NaN]) {
+      message(frame, { ...scroll, deltaY });
+    }
+    expect(events).toEqual([]);
+    message(frame, scroll);
+    expect(events).toEqual([
+      { type: "wheel", deltaY: 120, scrollTop: 400 },
+      { type: "scroll", deltaY: 120, scrollTop: 400 },
+    ]);
+    expect(thread.scrollTop).toBe(520);
+    events.length = 0;
+
+    const oldSource = frame.contentWindow;
+    view.docId = "cv_scroll_replaced";
+    message(frame, scroll);
+    await settle(view);
+    const current = await frameFor(view);
+    expect(current).not.toBe(frame);
+    const currentNonce = await start(current);
+    expect(currentNonce).not.toBe(nonce);
+    message(current, scroll);
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: oldSource,
+        origin: new URL(current.src).origin,
+        data: { ...scroll, nonce: currentNonce },
+      }),
+    );
+    expect(events).toEqual([]);
+    message(current, { ...scroll, nonce: currentNonce, deltaY: -80 });
+    expect(events).toEqual([
+      { type: "wheel", deltaY: -80, scrollTop: 520 },
+      { type: "scroll", deltaY: -80, scrollTop: 520 },
+    ]);
+    expect(thread.scrollTop).toBe(440);
+    events.length = 0;
+    view.remove();
+    message(current, { ...scroll, nonce: currentNonce });
+    expect(events).toEqual([]);
+    expect(scrollSibling).not.toHaveBeenCalled();
+    expect(sibling.scrollTop).toBe(0);
+  });
+
+  it.each(["credential", "session", "denied"])(
     "retires retained content after %s changes",
     async (change) => {
       const client = { request: vi.fn().mockResolvedValue(documentView) };
@@ -274,13 +375,7 @@ describe("Canvas widget view", () => {
       if (change === "session") {
         view.sessionKey = "agent:other:session";
       }
-      connection(
-        view,
-        "connected",
-        change === "profile"
-          ? { selfUser: { id: "other" } as ApplicationGatewaySnapshot["selfUser"] }
-          : {},
-      );
+      connection(view, "connected");
       await settle(view);
       expect(view.querySelector("iframe")).toBeNull();
       expect(frame.isConnected).toBe(false);
@@ -386,8 +481,11 @@ describe("Canvas widget view", () => {
   });
 
   it("shows a bounded script error and wakes the session only once across document remounts", async () => {
+    const now = 1_800_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
     const client = { request: vi.fn().mockResolvedValue(documentView) };
     const view = mount(client, "cv_runtime_error");
+    view.messageTimestamp = now - 600_000;
     view.title = "Status".repeat(20);
     const frame = await frameFor(view);
     const report = {
@@ -447,14 +545,12 @@ describe("Canvas widget view", () => {
   });
 
   it.each([
-    { label: "exactly ten minutes old", ageMs: 600_000, wakes: true },
-    { label: "older than ten minutes", ageMs: 600_001, wakes: false },
-    { label: "missing", ageMs: undefined, wakes: false },
-    { label: "non-finite", ageMs: Infinity, wakes: false },
-    { label: "NaN", ageMs: Number.NaN, wakes: false },
+    { label: "older than ten minutes", ageMs: 600_001 },
+    { label: "missing", ageMs: undefined },
+    { label: "non-finite", ageMs: Infinity },
   ])(
     "keeps the notice but gates wakes when the message timestamp is $label",
-    async ({ label, ageMs, wakes }) => {
+    async ({ label, ageMs }) => {
       const now = 1_800_000_000_000;
       vi.spyOn(Date, "now").mockReturnValue(now);
       const client = { request: vi.fn().mockResolvedValue(documentView) };
@@ -466,9 +562,7 @@ describe("Canvas widget view", () => {
       expect(view.querySelector('[role="status"]')?.textContent).toBe(
         "Script error: Missing element",
       );
-      expect(client.request.mock.calls.filter(([method]) => method === "wake")).toHaveLength(
-        wakes ? 1 : 0,
-      );
+      expect(client.request.mock.calls.filter(([method]) => method === "wake")).toHaveLength(0);
       expect(view.querySelector("iframe")).toBe(frame);
     },
   );

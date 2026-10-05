@@ -1,3 +1,6 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
+
 type ComparableSubagentRun = {
   runId: string;
   createdAt: number;
@@ -6,10 +9,10 @@ type ComparableSubagentRun = {
 
 type GenerationalSubagentRun = ComparableSubagentRun & {
   childSessionKey?: string;
+  childAgentId?: string;
 };
 
 export type SubagentRunIdentity = GenerationalSubagentRun & {
-  childAgentId?: string;
   collect?: boolean;
   swarmRunId?: string;
   schedulerSlotId?: string;
@@ -113,15 +116,22 @@ export function isSameSubagentRunOwner(
   );
 }
 
+/** The live row when `observed`'s owner still holds its run id; otherwise `observed` itself. */
+export function currentSubagentRunOrObserved<T extends SubagentRunIdentity>(
+  runs: ReadonlyMap<string, T>,
+  observed: T,
+): T {
+  const current = runs.get(observed.runId);
+  return current && isSameSubagentRunOwner(current, observed) ? current : observed;
+}
+
 export function copySubagentRunRuntimeOwner<T extends object>(source: object, copy: T): T {
   bindSubagentRunRuntimeKey(copy, getSubagentRunRuntimeKey(source));
   return copy;
 }
 
 function normalizeGeneration(entry: ComparableSubagentRun): number {
-  return typeof entry.generation === "number" && Number.isFinite(entry.generation)
-    ? entry.generation
-    : 0;
+  return asFiniteNumber(entry.generation) ?? 0;
 }
 
 /** Orders runs that share a child session, including legacy rows without a generation. */
@@ -173,10 +183,11 @@ export function latestSubagentRun<T extends ComparableSubagentRun>(
 export function nextSubagentRunGeneration(
   runs: Iterable<GenerationalSubagentRun>,
   childSessionKey: string,
+  childAgentId?: string,
 ): number {
   let generation = 0;
   for (const entry of runs) {
-    if (entry.childSessionKey === childSessionKey) {
+    if (matchesSubagentChildSessionOwner(entry, childSessionKey, childAgentId)) {
       generation = Math.max(generation, normalizeGeneration(entry));
     }
   }

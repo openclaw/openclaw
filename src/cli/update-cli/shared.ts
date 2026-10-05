@@ -89,7 +89,9 @@ export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"
   dryRun?: boolean;
   channel?: string;
   tag?: string;
+  sha?: string;
   timeout?: string;
+  drainTimeout?: string;
   yes?: boolean;
 };
 
@@ -153,16 +155,17 @@ export class UpdatePreMutationError<Reason extends string = string> extends Erro
   }
 }
 
-const INVALID_TIMEOUT_ERROR = "--timeout must be a positive integer (seconds)";
-
 /** Parse the shared timeout contract without exiting an owning operation. */
-export function parseUpdateTimeoutMs(timeout?: string): number | undefined {
+export function parseUpdateTimeoutMs(
+  timeout?: string,
+  option: "--timeout" | "--drain-timeout" = "--timeout",
+): number | undefined {
   if (timeout === undefined) {
     return undefined;
   }
   const milliseconds = positiveSecondsToSafeMilliseconds(timeout.trim());
   if (milliseconds === undefined) {
-    throw new Error(INVALID_TIMEOUT_ERROR);
+    throw new Error(`${option} must be a positive integer (seconds)`);
   }
   return milliseconds;
 }
@@ -209,12 +212,7 @@ export async function resolveTargetVersion(
 }
 
 export async function isGitCheckout(root: string): Promise<boolean> {
-  try {
-    await fs.stat(path.join(root, ".git"));
-    return true;
-  } catch {
-    return false;
-  }
+  return pathExists(path.join(root, ".git"));
 }
 
 export async function isEmptyDir(targetPath: string): Promise<boolean> {

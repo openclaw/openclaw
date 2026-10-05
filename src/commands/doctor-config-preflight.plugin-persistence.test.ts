@@ -79,6 +79,7 @@ async function withPreflightPluginFixture(
     };
     await writeVersion("1.0.0");
     const config: OpenClawConfig = {
+      meta: { migrations: { webhookListeners: true } },
       ...(workspaceNames.length
         ? {
             agents: {
@@ -270,7 +271,7 @@ describe("startup plugin persistence", () => {
           }
         });
         const metadataScope = createDoctorPluginMetadataSnapshotScope({
-          baseSnapshot: aggregate,
+          getBaseSnapshot: () => aggregate,
         });
         // Unqualified Doctor work inherits its prepared view, not the system-agent workspace.
         metadataScope.run({ config: sourceConfig }, () => {

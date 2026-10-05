@@ -125,26 +125,33 @@ beforeEach(() => {
   });
   vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "0");
   vi.stubEnv("OPENAI_API_KEY", "");
+  // Hold catalog deadlines while deferred auth/DNS and worker admission settle.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
+});
 
 describe("selected account catalog physical dispatch", () => {
-  it("sends one authorized credentialed request through the production HTTP owner", async () => {
-    const outcomes = await load();
-    expect(outcomes).toMatchObject([{ provider: "openai", profileId, status: "ready" }]);
-    expect(requests).toEqual([
-      { path: "/models", authorization: "Bearer synthetic-account-token" },
-    ]);
-  });
+  it.each(["owner", "foreign"])(
+    "dispatches credentials only for the authorized principal: %s",
+    async (requester) => {
+      principal = requester;
+      if (requester === "foreign") {
+        await expect(load()).rejects.toThrow("authority revoked");
+        expect(transport.resolveAuth).not.toHaveBeenCalled();
+        expect(requests).toEqual([]);
+      } else {
+        expect(await load()).toMatchObject([{ provider: "openai", profileId, status: "ready" }]);
+        expect(requests).toEqual([
+          { path: "/models", authorization: "Bearer synthetic-account-token" },
+        ]);
+      }
+    },
+  );
 
-  it("rejects a foreign principal before resolving auth or sending HTTP", async () => {
-    principal = "foreign";
-    await expect(load()).rejects.toThrow("authority revoked");
-    expect(transport.resolveAuth).not.toHaveBeenCalled();
-    expect(requests).toEqual([]);
-  });
-
-  it.each(["auth", "transport"])(
+  it.each(["auth", "transport", "generation"])(
     "sends zero requests when revoked during deferred %s",
     async (boundary) => {
       const entered = createDeferred();
@@ -164,29 +171,19 @@ describe("selected account catalog physical dispatch", () => {
       const result = load();
       const settled = result.catch((error: unknown) => error);
       await entered.promise;
-      authorized = false;
+      if (boundary === "generation") {
+        generationCurrent = false;
+      } else {
+        authorized = false;
+      }
       release.resolve();
       await settled;
       expect(requests).toEqual([]);
-      await expect(result).rejects.toThrow("authority revoked");
+      if (boundary !== "generation") {
+        await expect(result).rejects.toThrow("authority revoked");
+      }
     },
   );
-
-  it("sends zero requests when the prepared generation closes during DNS", async () => {
-    const entered = createDeferred();
-    const release = createDeferred();
-    transport.preflight.mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-    });
-    const result = load();
-    const settled = result.catch((error: unknown) => error);
-    await entered.promise;
-    generationCurrent = false;
-    release.resolve();
-    await settled;
-    expect(requests).toEqual([]);
-  });
 
   it("does not revoke unrelated ambient discovery", async () => {
     authorized = false;
@@ -384,11 +381,6 @@ describe("Gateway automatic account dispatch authority", () => {
             expect(transport.resolveAuth).toHaveBeenCalledWith(
               expect.objectContaining({ profileId: selected, lockedProfile: true }),
             );
-            console.info("catalog authority trace", {
-              scenario,
-              ordinaryAccepted: response.mock.calls[0]?.[0],
-              outboundRequests: requests.length,
-            });
             if (scenario === "allowed") {
               expect(response.mock.calls[0]?.[0]).toBe(true);
               expect(requests).toHaveLength(1);

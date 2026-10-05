@@ -10,11 +10,8 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
-import {
-  getUserPreferences,
-  setCanonicalUserPreferences,
-  setUserPreferences,
-} from "./user-preferences.js";
+import { setCanonicalUserPreferences } from "./user-preferences.js";
+import { getUserPreferences, setUserPreferences } from "./user-preferences.test-support.js";
 import {
   prepareUserProfileGitHubAttribution,
   resolveUserProfileGitHubAttribution,

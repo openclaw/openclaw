@@ -44,7 +44,7 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
     }
 
     private func response(for url: URL) -> CanvasResponse {
-        guard let scheme = url.scheme, CanvasScheme.allSchemes.contains(scheme) else {
+        guard url.scheme == CanvasScheme.scheme else {
             return self.html("Invalid scheme.")
         }
         guard let session = url.host, !session.isEmpty else {

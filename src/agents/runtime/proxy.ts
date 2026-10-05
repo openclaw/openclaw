@@ -8,11 +8,12 @@ import {
   createSseByteGuard,
   parseStreamingJson,
   parseTerminalToolCallArguments,
-  type SseByteGuard,
   type ToolArgumentPreviewSchedule,
 } from "@openclaw/ai/internal/runtime";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { resolvePositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { readResponseWithLimit } from "../../infra/http-body.js";
+import { withResponseBodyTimeout } from "../../infra/http-response-body-timeout.js";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -184,38 +185,6 @@ async function readProxyErrorData(
   return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as { error?: string };
 }
 
-async function readProxySseChunk(
-  reader: Pick<SseByteGuard, "read">,
-  readIdleTimeoutMs: number,
-  cancel: (reason?: unknown) => Promise<void>,
-): Promise<ReadableStreamReadResult<Uint8Array>> {
-  let timedOut = false;
-  return await new Promise((resolve, reject) => {
-    const timeoutError = new Error(
-      `Proxy SSE stream stalled: no data received for ${readIdleTimeoutMs}ms`,
-    );
-    const timeoutId = setTimeout(() => {
-      timedOut = true;
-      void cancel(timeoutError);
-      reject(timeoutError);
-    }, readIdleTimeoutMs);
-    void reader.read().then(
-      (result) => {
-        clearTimeout(timeoutId);
-        if (!timedOut) {
-          resolve(result);
-        }
-      },
-      (error: unknown) => {
-        clearTimeout(timeoutId);
-        if (!timedOut) {
-          reject(error instanceof Error ? error : new Error(String(error)));
-        }
-      },
-    );
-  });
-}
-
 function assertProxySsePendingBufferWithinLimit(buffer: string): void {
   const size = new TextEncoder().encode(buffer).byteLength;
   if (size <= PROXY_SSE_PENDING_BUFFER_MAX_BYTES) {
@@ -334,7 +303,16 @@ export function streamProxy(
       };
 
       while (!terminalEventSeen) {
-        const { done, value } = await readProxySseChunk(sseReader, readIdleTimeoutMs, cancelReader);
+        const { done, value } = await withResponseBodyTimeout({
+          timeoutMs: readIdleTimeoutMs,
+          onTimeout: () =>
+            new Error(`Proxy SSE stream stalled: no data received for ${readIdleTimeoutMs}ms`),
+          cancel: cancelReader,
+          read: () =>
+            sseReader.read().catch((error: unknown) => {
+              throw toStringifiedError(error);
+            }),
+        });
         if (done) {
           readerReachedEof = cancellation === undefined;
           break;

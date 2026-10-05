@@ -42,7 +42,6 @@ export type LocalPackageOverridesResult = {
 };
 
 export type LocalPackageOverridesPlan = {
-  packageRoot: string;
   recoveryDir: string;
   changes: LocalPackageOverrideChange[];
   result: LocalPackageOverridesResult;
@@ -81,7 +80,6 @@ export type LocalPackageOverrideTargetProbe =
   | {
       status: "present";
       hardlinked: boolean;
-      mode: number;
       safeFile: boolean;
     };
 
@@ -93,7 +91,6 @@ export async function probeLocalOverrideTarget(
     return {
       status: "present",
       hardlinked: stats.nlink > 1n,
-      mode: Number(stats.mode & 0o777n),
       safeFile: stats.isFile() && !stats.isSymbolicLink(),
     };
   } catch (error) {
@@ -230,7 +227,6 @@ export async function inspectLocalOverrideTarget(params: {
   const target = await params.packageFs.read(params.relativePath, {
     hardlinks: "reject",
     maxBytes: params.expectedSize,
-    nonBlockingRead: true,
     symlinks: "reject",
   });
   return {
@@ -272,11 +268,11 @@ export function mergeLocalOverrideFileMode(targetMode: number, overrideMode: num
 export async function writeFileWithMode(
   content: Buffer,
   destination: string,
-  mode?: number,
+  mode: number,
 ): Promise<void> {
   await fs.mkdir(path.dirname(destination), { recursive: true });
   await fs.writeFile(destination, content);
-  if (mode !== undefined && process.platform !== "win32") {
+  if (process.platform !== "win32") {
     await fs.chmod(destination, mode);
   }
 }

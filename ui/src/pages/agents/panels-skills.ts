@@ -1,7 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { html, nothing } from "lit";
-import type { SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
+import type { SkillStatusReport } from "../../api/types.ts";
 import {
   renderSettingsEmpty,
   renderSettingsRow,
@@ -11,7 +11,7 @@ import {
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveAgentConfig, resolveAgentSkillsFilter } from "../../lib/agents/display.ts";
-import { groupSkills, type SkillGroup } from "../../lib/skills-grouping.ts";
+import { groupSkills } from "../../lib/skills-grouping.ts";
 import {
   computeSkillMissing,
   computeSkillReasons,
@@ -19,14 +19,6 @@ import {
 } from "../../lib/skills-shared.ts";
 
 registerSettingsEnglish();
-
-type AgentSkillControls = {
-  agentId: string;
-  allowSet: Set<string>;
-  usingAllowlist: boolean;
-  editable: boolean;
-  onToggle: (agentId: string, skillName: string, enabled: boolean) => void;
-};
 
 export function renderAgentSkills(params: {
   agentId: string;
@@ -172,78 +164,64 @@ export function renderAgentSkills(params: {
             ? renderSettingsEmpty(t("agents.skillsPanel.empty"))
             : html`
                 <div class="agents-panel-body agent-skills-groups">
-                  ${groups.map((group) =>
-                    renderAgentSkillGroup(group, {
-                      agentId: params.agentId,
-                      allowSet,
-                      usingAllowlist,
-                      editable,
-                      filterActive: Boolean(filter),
-                      onToggle: params.onToggle,
-                    }),
+                  ${groups.map(
+                    (group) => html`
+                      <details
+                        class="agent-skills-group"
+                        ?open=${Boolean(filter) || (group.id !== "workspace" && group.id !== "built-in")}
+                      >
+                        <summary class="agent-skills-header">
+                          <span>${group.label}</span>
+                          <span class="muted">${group.skills.length}</span>
+                        </summary>
+                        <div class="list skills-grid">
+                          ${group.skills.map((skill) => {
+                            const enabled = !usingAllowlist || allowSet.has(skill.name);
+                            const missing = computeSkillMissing(skill);
+                            const reasons = computeSkillReasons(skill);
+                            return html`
+                              <div class="settings-row agent-skill-row">
+                                <div class="settings-row__text">
+                                  <span class="settings-row__title"
+                                    >${skill.emoji ? `${skill.emoji} ` : ""}${skill.name}</span
+                                  >
+                                  <span class="settings-row__desc">${skill.description}</span>
+                                  ${renderSkillStatusChips({ skill })}
+                                  ${
+                                    missing.length > 0
+                                      ? html`<span class="settings-row__desc">
+                                          ${t("agents.skillsPanel.missing", { items: missing.join(", ") })}
+                                        </span>`
+                                      : nothing
+                                  }
+                                  ${
+                                    reasons.length > 0
+                                      ? html`<span class="settings-row__desc">
+                                          ${t("agents.skillsPanel.reason", { items: reasons.join(", ") })}
+                                        </span>`
+                                      : nothing
+                                  }
+                                </div>
+                                <div class="settings-row__control">
+                                  ${renderSettingsToggle({
+                                    checked: enabled,
+                                    disabled: !editable,
+                                    ariaLabel: skill.name,
+                                    onChange: (checked) =>
+                                      params.onToggle(params.agentId, skill.name, checked),
+                                  })}
+                                </div>
+                              </div>
+                            `;
+                          })}
+                        </div>
+                      </details>
+                    `,
                   )}
                 </div>
               `
         }
       `,
     )}
-  `;
-}
-
-function renderAgentSkillGroup(
-  group: SkillGroup,
-  params: AgentSkillControls & { filterActive: boolean },
-) {
-  const collapsedByDefault =
-    !params.filterActive && (group.id === "workspace" || group.id === "built-in");
-  return html`
-    <details class="agent-skills-group" ?open=${!collapsedByDefault}>
-      <summary class="agent-skills-header">
-        <span>${group.label}</span>
-        <span class="muted">${group.skills.length}</span>
-      </summary>
-      <div class="list skills-grid">
-        ${group.skills.map((skill) => renderAgentSkillRow(skill, params))}
-      </div>
-    </details>
-  `;
-}
-
-function renderAgentSkillRow(skill: SkillStatusEntry, params: AgentSkillControls) {
-  const enabled = params.usingAllowlist ? params.allowSet.has(skill.name) : true;
-  const missing = computeSkillMissing(skill);
-  const reasons = computeSkillReasons(skill);
-  return html`
-    <div class="settings-row agent-skill-row">
-      <div class="settings-row__text">
-        <span class="settings-row__title"
-          >${skill.emoji ? `${skill.emoji} ` : ""}${skill.name}</span
-        >
-        <span class="settings-row__desc">${skill.description}</span>
-        ${renderSkillStatusChips({ skill })}
-        ${
-          missing.length > 0
-            ? html`<span class="settings-row__desc">
-                ${t("agents.skillsPanel.missing", { items: missing.join(", ") })}
-              </span>`
-            : nothing
-        }
-        ${
-          reasons.length > 0
-            ? html`<span class="settings-row__desc">
-                ${t("agents.skillsPanel.reason", { items: reasons.join(", ") })}
-              </span>`
-            : nothing
-        }
-      </div>
-      <div class="settings-row__control">
-        ${renderSettingsToggle({
-          checked: enabled,
-          disabled: !params.editable,
-          ariaLabel: skill.name,
-          onChange: (checked) => params.onToggle(params.agentId, skill.name, checked),
-        })}
-      </div>
-    </div>
   `;
 }

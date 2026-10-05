@@ -189,12 +189,7 @@ describe("models set + fallbacks", () => {
     await modelsSetCommand("clawrouter/google/gemini-3.5-flash", makeRuntime());
 
     const written = getWrittenConfig();
-    const persisted = stampConfigWriteMetadata(
-      written,
-      "2026-07-18T00:00:00.000Z",
-      "test",
-      mocks.currentConfig,
-    );
+    const persisted = stampConfigWriteMetadata(written, "test", mocks.currentConfig);
     const policy = createModelVisibilityPolicy({
       cfg: persisted,
       catalog: [],

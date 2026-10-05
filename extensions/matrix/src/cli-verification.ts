@@ -197,9 +197,9 @@ async function runMatrixCliSelfVerificationCommand(
       cli.printMatrixVerificationSummary(summary);
       console.log(`Device verified by owner: ${summary.deviceOwnerVerified ? "yes" : "no"}`);
       cli.printVerificationTrustDiagnostics(summary.ownerVerification);
-      cli.printVerificationBackupSummary(summary.ownerVerification);
+      cli.printBackupSummary(summary.ownerVerification.backup);
       if (verbose) {
-        cli.printVerificationBackupStatus(summary.ownerVerification);
+        cli.printBackupStatus(summary.ownerVerification.backup);
       }
       console.log("Self-verification complete.");
     },

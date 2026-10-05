@@ -1,5 +1,6 @@
 /** Session MCP runtime manager lifecycle: maps, idle sweep, dispose, advertised catalog. */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { logWarn } from "../logger.js";
 import { sessionMcpRuntimeOwners } from "./agent-bundle-mcp-runtime-owner.js";
@@ -56,48 +57,10 @@ export type SessionMcpRuntimeManagerOpts = {
 };
 
 function parseRuntimeCacheSessionId(runtimeKey: string): string {
-  if (!runtimeKey.startsWith("{")) {
-    return runtimeKey;
-  }
-  try {
-    const parsed = JSON.parse(runtimeKey) as { sessionId?: unknown };
-    return typeof parsed.sessionId === "string" ? parsed.sessionId : runtimeKey;
-  } catch {
-    return runtimeKey;
-  }
-}
-
-export function createSessionMcpRuntimeManagerStore(
-  opts: SessionMcpRuntimeManagerOpts,
-  createSessionMcpRuntime: CreateSessionMcpRuntime,
-): SessionMcpRuntimeManagerStore {
-  return {
-    // Keys are bare sessionId for static runtimes, or requester composite JSON keys.
-    runtimesBySessionId: new Map<string, SessionMcpRuntime>(),
-    sessionIdBySessionKey: new Map<string, string>(),
-    deferredRetirementSessionIds: new Set<string>(),
-    requiredRetirementSessionIds: new Set<string>(),
-    // Manager-side only: connection hash + resolve time. Never stores raw url/headers.
-    connectionMetaByRuntimeKey: new Map(),
-    /**
-     * Session-stable advertised catalogs for requester-scoped servers.
-     * Keyed by sessionId → serverName. Specs must not vary per sender or shared
-     * Codex threads rotate (dynamicToolsFingerprint churn).
-     */
-    advertisedScopedCatalogBySessionId: new Map(),
-    /**
-     * Per-runtimeKey serialization for acquisition and dispose.
-     * Sections never overlap for one key, so a slow resolve cannot clobber a newer install.
-     * Entries are removed when their chain drains.
-     */
-    runtimeWorkChains: new Map(),
-    pendingDisposals: new Map(),
-    createRuntime: opts.createRuntime ?? createSessionMcpRuntime,
-    runtimeSlots: new WeakMap(),
-    liveRuntimeSlots: new Set(),
-    scheduler: opts.scheduler,
-    idleSweepJob: undefined,
-  };
+  const sessionId = runtimeKey.startsWith("{")
+    ? safeParseJsonRecord(runtimeKey)?.sessionId
+    : undefined;
+  return typeof sessionId === "string" ? sessionId : runtimeKey;
 }
 
 export type SessionMcpRuntimeManagerLifecycle = ReturnType<
@@ -120,7 +83,37 @@ function scopedCatalogToolsSignature(tools: readonly McpCatalogTool[]): string {
   );
 }
 
-export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntimeManagerStore) {
+export function createSessionMcpRuntimeManagerLifecycle(
+  options: SessionMcpRuntimeManagerOpts,
+  createSessionMcpRuntime: CreateSessionMcpRuntime,
+) {
+  const store: SessionMcpRuntimeManagerStore = {
+    // Keys are bare sessionId for static runtimes, or requester composite JSON keys.
+    runtimesBySessionId: new Map<string, SessionMcpRuntime>(),
+    sessionIdBySessionKey: new Map<string, string>(),
+    deferredRetirementSessionIds: new Set<string>(),
+    requiredRetirementSessionIds: new Set<string>(),
+    // Manager-side only: connection hash + resolve time. Never stores raw url/headers.
+    connectionMetaByRuntimeKey: new Map(),
+    /**
+     * Session-stable advertised catalogs for requester-scoped servers.
+     * Keyed by sessionId → serverName. Specs must not vary per sender or shared
+     * Codex threads rotate (dynamicToolsFingerprint churn).
+     */
+    advertisedScopedCatalogBySessionId: new Map(),
+    /**
+     * Per-runtimeKey serialization for acquisition and dispose.
+     * Sections never overlap for one key, so a slow resolve cannot clobber a newer install.
+     * Entries are removed when their chain drains.
+     */
+    runtimeWorkChains: new Map(),
+    pendingDisposals: new Map(),
+    createRuntime: options.createRuntime ?? createSessionMcpRuntime,
+    runtimeSlots: new WeakMap(),
+    liveRuntimeSlots: new Set(),
+    scheduler: options.scheduler,
+    idleSweepJob: undefined,
+  };
   let cleanupUncertain = false;
   const schedulers = new Set<GatewayScheduler>();
   let schedulerScope = store.scheduler.scope();
@@ -232,12 +225,10 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
         keys.add(runtimeKey);
       }
     }
-    for (const runtimeKey of store.runtimeWorkChains.keys()) {
-      if (parseRuntimeCacheSessionId(runtimeKey) === sessionId) {
-        keys.add(runtimeKey);
-      }
-    }
-    for (const runtimeKey of store.pendingDisposals.keys()) {
+    for (const runtimeKey of [
+      ...store.runtimeWorkChains.keys(),
+      ...store.pendingDisposals.keys(),
+    ]) {
       if (parseRuntimeCacheSessionId(runtimeKey) === sessionId) {
         keys.add(runtimeKey);
       }

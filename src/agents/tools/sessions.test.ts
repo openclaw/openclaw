@@ -5,9 +5,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
-import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
-import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   getOwnedSessionTranscriptWriterFence,
@@ -18,6 +16,10 @@ import { GatewayClientRequestError } from "../../gateway/client.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import {
+  resolveSessionConversationStub,
+  resolveSessionTargetStub,
+} from "./sessions-channel-fixture.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-exact-session-send-");
 
@@ -48,7 +50,9 @@ vi.mock("../../gateway/call.js", async (importOriginal) => {
     callGateway: (opts: unknown) => callGatewayMock(opts),
   };
 });
+// mock-isolation: Keep transport inside this fixture; real loopback and admission have Gateway integration coverage.
 vi.mock("./in-process-gateway.js", () => ({
+  bindAgentToolGatewayRequest: () => callGatewayMock,
   callAgentToolGatewayRequest: (opts: unknown) => callGatewayMock(opts),
   callInProcessGatewayToolWithCreation: (method: unknown, params: unknown, creation: unknown) =>
     inProcessCreationMock(method, params, creation),
@@ -144,17 +148,6 @@ const PEER_ONLY_ROUTING_CONFIG: Pick<OpenClawConfig, "agents" | "bindings"> = {
     },
   ],
 };
-const resolveSessionConversationStub: NonNullable<
-  ChannelMessagingAdapter["resolveSessionConversation"]
-> = ({ rawId }) => ({
-  id: rawId,
-});
-const resolveSessionTargetStub: NonNullable<ChannelMessagingAdapter["resolveSessionTarget"]> = ({
-  kind,
-  id,
-  threadId,
-}) => (threadId ? `${kind}:${id}:thread:${threadId}` : `${kind}:${id}`);
-
 const requireRecord = createRequireRecord("record", "expected-label");
 
 function requireDetails(result: { details?: unknown }, label = "result details") {
@@ -311,12 +304,12 @@ it("fails closed for cross-agent and resolution-derived bare keys", async () => 
     agents: { ownership: "explicit" as const, entries: { main: {}, other: {} } },
     tools: { agentToAgent: { enabled: false }, sessions: { visibility: "all" as const } },
   };
-  const send = async (retained: boolean) =>
+  const send = async () =>
     requireDetails(
       await createSessionsSendTool({
         agentId: "main",
         agentSessionKey: MAIN_AGENT_SESSION_KEY,
-        config: retained ? retainLegacyDefaultAgentId(config, "main") : config,
+        config,
       }).execute("authorization", {
         sessionKey: bareKey,
         message: "status?",
@@ -328,7 +321,7 @@ it("fails closed for cross-agent and resolution-derived bare keys", async () => 
     .mockImplementation(async (request: { method?: string }) =>
       request.method === "sessions.resolve" ? { key: "incident-42", agentId: "other" } : {},
     );
-  expect(await send(false)).toMatchObject({
+  expect(await send()).toMatchObject({
     status: "forbidden",
     error: expect.stringContaining("Agent-to-agent messaging is disabled"),
   });
@@ -346,7 +339,7 @@ it("fails closed for cross-agent and resolution-derived bare keys", async () => 
       }
       return request.params?.sessionId ? { key: "incident-42" } : {};
     });
-  expect(await send(true)).toMatchObject({
+  expect(await send()).toMatchObject({
     status: "forbidden",
     error: expect.stringContaining("Upgrade the gateway"),
   });

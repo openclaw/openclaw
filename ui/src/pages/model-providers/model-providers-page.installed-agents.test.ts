@@ -82,9 +82,13 @@ describe("ModelProvidersPage installed agents", () => {
     expect(requestCount(request, "acpx.agents.list")).toBe(1);
   });
 
-  it("keeps native catalog failures visible and lets Check again recover their models", async () => {
+  it("distinguishes failed and pending discovery and lets Check again recover models", async () => {
     const { context, request } = createAgentsHarness(async () => ({
-      agents: [agent("qwen", "Qwen Code"), agent("kilocode", "Kilo Code")],
+      agents: [
+        agent("qwen", "Qwen Code"),
+        agent("kilocode", "Kilo Code"),
+        agent("opencode", "OpenCode"),
+      ],
     }));
     const originalRequest = request.getMockImplementation()!;
     let recovered = false;
@@ -98,6 +102,7 @@ describe("ModelProvidersPage installed agents", () => {
             }
           : {
               models: [],
+              pendingProviders: ["acp-opencode"],
               providerOutcomes: [
                 { provider: "acp-qwen", status: "auth-rejected" },
                 { provider: "acp-kilocode", status: "unavailable" },
@@ -111,7 +116,12 @@ describe("ModelProvidersPage installed agents", () => {
     await waitForFast(() => {
       expect(agentRow(page, "qwen")?.textContent).toMatch(/sign in required/i);
       expect(agentRow(page, "kilocode")?.textContent).toMatch(/models unavailable/i);
+      expect(agentRow(page, "opencode")?.textContent).toMatch(/discovering models/i);
+      expect(agentRow(page, "opencode")?.textContent).not.toMatch(/sign.in/i);
     });
+    expect(agentRow(page, "opencode")?.querySelector("wa-switch")?.hasAttribute("disabled")).toBe(
+      false,
+    );
     page
       .querySelector<HTMLButtonElement>(
         ".model-providers__installed-agents .model-providers__refresh-button",
@@ -121,27 +131,6 @@ describe("ModelProvidersPage installed agents", () => {
       expect(agentRow(page, "qwen")?.textContent).toMatch(/models available/i);
       expect(agentRow(page, "qwen")?.textContent).not.toMatch(/sign in required/i);
     });
-  });
-
-  it("shows pending-only native discovery without suggesting an authentication failure", async () => {
-    const { context, request } = createAgentsHarness(async () => ({
-      agents: [agent("opencode", "OpenCode")],
-    }));
-    const originalRequest = request.getMockImplementation()!;
-    request.mockImplementation(async (method) =>
-      method === "models.list"
-        ? { models: [], pendingProviders: ["acp-opencode"] }
-        : originalRequest(method),
-    );
-    const page = appendPage(context);
-    await waitForProviders(page);
-    await waitForFast(() => {
-      expect(agentRow(page, "opencode")?.textContent).toMatch(/discovering models/i);
-      expect(agentRow(page, "opencode")?.textContent).not.toMatch(/sign.in/i);
-    });
-    expect(agentRow(page, "opencode")?.querySelector("wa-switch")?.hasAttribute("disabled")).toBe(
-      false,
-    );
   });
 
   it("saves the enabled flag and keeps it over a list read that started earlier", async () => {

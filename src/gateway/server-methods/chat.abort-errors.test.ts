@@ -38,7 +38,7 @@ import {
 import { isPathInside } from "../../infra/path-guards.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.test-support.js";
@@ -62,7 +62,7 @@ async function corruptChildDatabase(storePath: string, sessionKey: string) {
     (item) => item.agentId === "broken" && isPathInside(fixture.stateDir, item.path),
   );
   expect(database).toBeDefined();
-  expect(closeOpenClawAgentDatabaseByPath(database!.path)).toBe(true);
+  expect(await closeOpenClawAgentDatabaseByPathAsync(database!.path, "broken")).toBe(true);
   await writeFile(database!.path, "not a SQLite database");
   expect(() => loadExactSessionEntryReadOnly({ storePath, sessionKey })).toThrow();
 }

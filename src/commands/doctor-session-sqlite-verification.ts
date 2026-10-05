@@ -9,6 +9,7 @@ import {
 } from "../config/sessions/session-entry-snapshots.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import {
@@ -165,7 +166,7 @@ export function verifyHistoricalMigrationArtifact(params: {
           return false;
         }
         attachSessionEntrySnapshots(current, row);
-        const entry = { ...raw, sessionId, updatedAt: raw.updatedAt };
+        const entry: SessionEntry = { ...raw, sessionId, updatedAt: raw.updatedAt };
         const normalized = migrateLegacySessionCreator(normalizeLegacySessionEntryDelivery(entry));
         if (
           Object.entries(normalized).some(

@@ -10,7 +10,7 @@ import {
 } from "./session-row-projection-record.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 
-const cfg = { agents: { list: [{ id: "main", default: true }] } };
+const cfg = { agents: { entries: { main: {} } } };
 const noop = () => {};
 const archive = { demote: (row: Row) => row, forget: noop };
 

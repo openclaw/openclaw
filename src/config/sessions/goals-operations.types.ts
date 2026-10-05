@@ -1,4 +1,5 @@
 import type { SessionsGoalMutationResult } from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 
 type SessionGoalOperationIdentity = {
   operationId: string;
@@ -17,14 +18,27 @@ export type SessionGoalOperation = SessionGoalOperationIdentity &
 
 export type SessionGoalOperationResult = Omit<SessionsGoalMutationResult, "replayed">;
 
-export type SessionGoalOperationErrorCode =
-  | "expired"
-  | "operation-conflict"
-  | "session-rebound"
-  | "goal-rebound"
-  | "capacity"
-  | "receipt-invalid"
-  | "invalid";
+export const SESSION_GOAL_OPERATION_ERROR_CODES = [
+  "expired",
+  "operation-conflict",
+  "session-rebound",
+  "goal-rebound",
+  "capacity",
+  "receipt-invalid",
+  "invalid",
+] as const;
+
+export type SessionGoalOperationErrorCode = (typeof SESSION_GOAL_OPERATION_ERROR_CODES)[number];
+
+export class SessionGoalOperationError extends Error {
+  readonly code: SessionGoalOperationErrorCode;
+
+  constructor(code: SessionGoalOperationErrorCode, message: string) {
+    super(message);
+    this.code = code;
+    this.name = "SessionGoalOperationError";
+  }
+}
 
 export type SessionGoalOperationLookup = {
   sessionKey: string;
@@ -41,6 +55,13 @@ export type SessionTranscriptTurnMutation = {
   kind: "goal";
   /** Private live authority; never serialized into operation fingerprints or receipts. */
   assertCurrent?: () => void;
+  routingPredicate?: {
+    config: OpenClawConfig;
+    key: string;
+    agentId: string;
+    storePath: string;
+    canonicalKey: string;
+  };
   operation: SessionGoalOperation & { action: "start" | "resume" };
   runId: string;
 };

@@ -14,7 +14,7 @@ import { expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
 import { CallManager } from "./manager.js";
 import { createTestStorePath, FakeProvider, makePersistedCall } from "./manager.test-harness.js";
-import { CALL_RECORD_EVENTS_NAMESPACE, findCallInStore } from "./manager/store.js";
+import { findCallInStore } from "./manager/store.js";
 import * as callStore from "./manager/store.js";
 import { setVoiceCallStateRuntime } from "./runtime-state.js";
 import { CallRecordSchema, type InitiateCallInput } from "./types.js";
@@ -53,7 +53,7 @@ async function withDelayedStore(
         return {
           ...store,
           async register(...args: Parameters<typeof store.register>) {
-            if (options.namespace === CALL_RECORD_EVENTS_NAMESPACE && nextWrite) {
+            if (options.namespace === "call-record-events" && nextWrite) {
               const hold = nextWrite;
               nextWrite = undefined;
               await hold();

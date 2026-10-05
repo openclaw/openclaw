@@ -42,25 +42,62 @@ function sessionScope(store: TestStore) {
 }
 
 describe("runDoctorSessionSqlite", () => {
-  it.each([
-    ["provider", "channel"],
-    ["lastProvider", "lastChannel"],
-    ["room", "groupChannel"],
-  ])("refuses pre-July session field %s without changing the source", async (field, canonical) => {
+  it("refuses retired room grouping without changing the source", async () => {
     const store = createLegacyStore({
-      entryOverrides: { [field]: "legacy", [canonical]: undefined },
+      entryOverrides: { room: "legacy", groupChannel: undefined },
     });
     const originalStore = fs.readFileSync(store.storePath, "utf8");
     const originalTranscript = fs.readFileSync(store.transcriptPath, "utf8");
 
     await expect(importLegacyStore(store)).rejects.toThrow(
-      `Session field "${field}" predates July 2026 and is no longer supported`,
+      'Session field "room" predates July 2026 and is no longer supported',
     );
 
     expect(fs.readFileSync(store.storePath, "utf8")).toBe(originalStore);
     expect(fs.readFileSync(store.transcriptPath, "utf8")).toBe(originalTranscript);
     expect(loadExactSessionEntry(sessionScope(store))).toBeUndefined();
   });
+
+  it.each(["provider", "lastProvider"])(
+    "imports supported July %s routing and archives original source bytes",
+    async (field) => {
+      const store = createLegacyStore({
+        entryOverrides: {
+          channel: undefined,
+          lastChannel: undefined,
+          [field]: "telegram",
+          lastTo: "123",
+          lastAccountId: "work",
+        },
+      });
+      const originalStore = fs.readFileSync(store.storePath, "utf8");
+      const originalTranscript = fs.readFileSync(store.transcriptPath, "utf8");
+
+      const report = await importLegacyStore(store);
+
+      expect(report.totals).toMatchObject({ importedEntries: 1, issues: 0 });
+      const imported = loadExactSessionEntry(sessionScope(store))?.entry;
+      expect(imported).toMatchObject({
+        delivery: {
+          kind: "external",
+          context: { channel: "telegram", to: "123", accountId: "work" },
+        },
+      });
+      expect(imported).not.toHaveProperty(field);
+      const manifest = readMigrationManifest(report.migrationRun?.manifestPath);
+      const target = expectDefined(manifest.targets[0], "imported target");
+      for (const [kind, original] of [
+        ["legacy-store", originalStore],
+        ["transcript", originalTranscript],
+      ] as const) {
+        const archived = expectDefined(
+          target.completedMoves.find((move) => move.kind === kind),
+          `archived ${kind}`,
+        );
+        expect(fs.readFileSync(archived.archivePath, "utf8")).toBe(original);
+      }
+    },
+  );
 
   it("repairs legacy transcript and route shapes at the import boundary", async () => {
     const store = createLegacyStore({

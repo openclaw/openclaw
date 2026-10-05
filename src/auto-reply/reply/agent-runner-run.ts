@@ -44,7 +44,7 @@ import { deliverPreparedBlockReply } from "./agent-runner-presentation.js";
 import { runReplyQuestionInput } from "./agent-runner-question-input.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
-import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
+import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import {
   type CompactionNoticePhase,
@@ -495,7 +495,7 @@ export async function runReplyAgent(
             accountId: sessionCtx.AccountId,
             chunking: blockReplyChunking,
           }).coalescing,
-          buffer: createAudioAsVoiceBuffer({ isAudioPayload }),
+          isAudioPayload,
         })
       : null;
   const resolveVisibleReplyDelivery = async () => {
@@ -680,6 +680,7 @@ export async function runReplyAgent(
     await cleanupReplyAgentRun({
       blockReplyPipeline,
       clearRestartRecoveryDeliveryClaim,
+      isHeartbeat,
       providedReplyOperation,
       queueKey,
       replyOperation,

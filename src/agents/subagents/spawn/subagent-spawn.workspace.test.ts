@@ -53,10 +53,10 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     config = createSubagentSpawnTestConfig("/tmp/workspace-main", {
       session: { threadBindings: { defaultSpawnContext: "isolated" } },
       agents: {
-        list: [
-          { id: "main", workspace: "/tmp/workspace-main", subagents: { allowAgents: ["ops"] } },
-          { id: "ops", workspace: "/tmp/workspace-ops" },
-        ],
+        entries: {
+          main: { workspace: "/tmp/workspace-main", subagents: { allowAgents: ["ops"] } },
+          ops: { workspace: "/tmp/workspace-ops" },
+        },
       },
     });
   });

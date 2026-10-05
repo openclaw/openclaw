@@ -359,7 +359,7 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
 
 /** Restart the Gateway service or a verified unmanaged listener, then prove health. */
 export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
-  const preserveDefinition = Boolean(opts.preserveDefinition);
+  let preserveDefinition = Boolean(opts.preserveDefinition);
   if (preserveDefinition) {
     assertGatewayServiceMutationAllowed("restart the gateway");
     if (opts.safe) {
@@ -511,7 +511,18 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       }
       return null;
     },
-    postRestartCheck: async ({ warnings, fail, stdout, warn, activationAccepted: accepted }) => {
+    postRestartCheck: async ({
+      warnings,
+      fail,
+      stdout,
+      warn,
+      activationAccepted: accepted,
+      preserveDefinition: preserved,
+    }) => {
+      if (preserved) {
+        preserveDefinition = true;
+        managedRestartPort = managedRestartContext.port;
+      }
       let activationAccepted = accepted;
       const reportHealthFailure = (statusLines: string[], diagnostics: string[]) => {
         if (jsonOutput) {

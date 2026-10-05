@@ -141,18 +141,6 @@ export function assignOtelLogEventAttributes(
   assignOtelEventAttributes(attributes, eventAttributes, "openclaw.");
 }
 
-function assignOtelSecurityEventAttributes(
-  attributes: Record<string, string | number | boolean>,
-  eventAttributes: Record<string, string | number | boolean> | undefined,
-): void {
-  assignOtelEventAttributes(
-    attributes,
-    eventAttributes,
-    "openclaw.security.attribute.",
-    normalizeDiagnosticValue,
-  );
-}
-
 export function securitySeverityText(
   severity: Extract<DiagnosticEventPayload, { type: "security.event" }>["severity"],
 ): SecuritySeverityText {
@@ -229,5 +217,10 @@ export function assignOtelSecurityAttributes(
       assignOtelLogAttribute(attributes, "openclaw.security.control.family", evt.control.family);
     }
   }
-  assignOtelSecurityEventAttributes(attributes, evt.attributes);
+  assignOtelEventAttributes(
+    attributes,
+    evt.attributes,
+    "openclaw.security.attribute.",
+    normalizeDiagnosticValue,
+  );
 }

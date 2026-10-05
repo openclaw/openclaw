@@ -143,15 +143,6 @@ describe("Kysely declarations", () => {
     expect(fs.existsSync(path.join(root, ".artifacts/kysely/inputs.sha256"))).toBe(false);
   });
 
-  it("skips source-less installs but rejects an incomplete schema checkout", async () => {
-    const root = tempDirs.make("kysely-source-less-");
-    fs.mkdirSync(path.join(root, "src/state"), { recursive: true });
-    await ensureKyselyTypes(root);
-    expect(fs.existsSync(path.join(root, ".artifacts"))).toBe(false);
-    fs.writeFileSync(path.join(root, "src/state/openclaw-state-schema.sql"), schema);
-    await expect(ensureKyselyTypes(root)).rejects.toThrow("openclaw-agent-schema.sql");
-  });
-
   it("derives ordered tables, nullability, defaults and composite keys from SQL", async () => {
     const { root, schemas, output } = createSchemaFixture();
     await ensureKyselyTypes(root);

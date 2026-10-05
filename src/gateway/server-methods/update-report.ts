@@ -15,7 +15,7 @@ import {
 } from "../../infra/update-failure-report.js";
 import { findActiveUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
 import { classifyUpdateOutcome, isReportableUpdateRun } from "../../shared/update-outcome.js";
-import { refreshLatestUpdateRestartSentinel } from "../server-restart-sentinel.js";
+import { refreshLatestUpdateRestartSentinel } from "../server-update-sentinel.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 

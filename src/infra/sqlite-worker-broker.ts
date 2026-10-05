@@ -2,6 +2,7 @@ import { availableParallelism } from "node:os";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { getChildLogger } from "../logging/logger.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { notifyListeners } from "../shared/listeners.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { captureSqliteWorkerClosePolicy } from "./bun-sqlite-library.js";
 import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
@@ -153,6 +154,7 @@ export class SqliteWorkerBroker {
     options: PreparedSqliteWorkerOpen,
     client: object,
   ): Promise<SqliteWorkerStore<Operations> | undefined> {
+    const { maintenanceScope } = options;
     options.assertCurrent?.();
     const { databasePath, inputHash, identity, key } =
       await prepareSqliteWorkerDatabaseAdmission(options);
@@ -282,8 +284,10 @@ export class SqliteWorkerBroker {
     }
     const admittedActor = actor;
     try {
-      retainSqliteWorkerAdmissionCleanup(admittedActor, options.retainCleanup, () =>
-        this.lifecycle.closeActor(admittedActor, options.maintenanceScope),
+      retainSqliteWorkerAdmissionCleanup(
+        admittedActor,
+        options.retainCleanup,
+        this.lifecycle.closeActor.bind(this.lifecycle, admittedActor, maintenanceScope),
       );
       options.onNativeStopped?.(actor.nativeStopped, () => admittedActor.closeReceipt);
       await actor.opened;
@@ -372,7 +376,7 @@ export class SqliteWorkerBroker {
           await owned.slot.exit;
         }
         if (!owned.references) {
-          await this.lifecycle.closeActor(owned, options.maintenanceScope);
+          await this.lifecycle.closeActor(owned, maintenanceScope);
         }
       },
     });
@@ -661,13 +665,7 @@ export class SqliteWorkerBroker {
       if (actor.backendClosed) {
         continue;
       }
-      for (const observe of actor.nativeLostObservers ?? []) {
-        try {
-          observe(slot.failed);
-        } catch {
-          // Observer failure cannot interrupt native custody or queued settlement.
-        }
-      }
+      notifyListeners(actor.nativeLostObservers ?? [], slot.failed);
     }
     for (const resume of this.waiters.get(slot) ?? []) {
       resume(slot.failed);

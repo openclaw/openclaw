@@ -19,7 +19,6 @@ import {
   normalizeCodexMcpServerConfig,
 } from "../codex-mcp-config.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
-import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { requiresMcpBearerProjection, resolveMcpBearerBundleConfig } from "../mcp-auth-profile.js";
 import { partitionMcpServersByConnectionScope } from "../mcp-connection-resolver.js";
 import { applyPreparedNativeMcpPolicy, prepareNativeMcpPolicy } from "../native-mcp-policy.js";
@@ -183,7 +182,9 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRuntime(
 
 /** Prepares canonical native MCP policy and projects it into Codex before thread creation. */
 export async function buildCodexUserMcpServersThreadConfigPatchForRun(params: {
-  run: Omit<EmbeddedRunAttemptParams, "admittedRunContext">;
+  run:
+    | import("../harness/types.js").AgentHarnessAttemptParams
+    | import("../harness/types.js").AgentHarnessSessionRuntimeParamsV1;
   cwd: string;
   agentId?: string;
   allowLiteralOAuthProjection?: boolean;

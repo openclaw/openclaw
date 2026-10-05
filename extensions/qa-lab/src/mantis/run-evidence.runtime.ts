@@ -9,7 +9,6 @@ export type MantisScenarioConfig = {
   candidateLabel: string;
   candidateScreenshotAlt: string;
   defaultBaselineRef: string;
-  id: string;
   title: string;
 };
 

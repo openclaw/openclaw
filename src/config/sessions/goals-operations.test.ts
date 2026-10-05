@@ -23,7 +23,11 @@ import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
-import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import {
+  resolveSqliteScope,
+  runExclusiveSqliteSessionWrite,
+  toDatabaseOptions,
+} from "./session-accessor.sqlite-scope.js";
 import { hasPendingCanonicalSessionValidation } from "./session-canonical-validation.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 
@@ -46,6 +50,21 @@ describe("typed Goal operation persistence", () => {
     objective: "  clear the backlog 🦞\n/with literal café text\n\t",
   });
   const database = () => openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope())));
+  const writeFixture = (write: (db: ReturnType<typeof database>["db"]) => void) =>
+    runExclusiveSqliteSessionWrite(
+      resolveSqliteScope(scope()),
+      async () => write(database().db),
+      "session.goal.mutate",
+    );
+  const fillReceipts = () =>
+    writeFixture((db) => {
+      db.prepare(
+        `WITH RECURSIVE receipts(i) AS (
+          VALUES (0) UNION ALL SELECT i + 1 FROM receipts WHERE i < 4095
+        ) INSERT INTO session_goal_operations
+          SELECT ?, 'retained-' || i, ?, 'fingerprint', '{}', ? FROM receipts`,
+      ).run(sessionKey, sessionId, Number.MAX_SAFE_INTEGER);
+    });
   const admit = (operation = startOperation(), extra: { shouldAppend?: () => boolean } = {}) =>
     persistSessionTranscriptTurn(scope(), {
       expectedSessionId: sessionId,
@@ -66,7 +85,6 @@ describe("typed Goal operation persistence", () => {
     });
 
   beforeEach(async () => {
-    vi.spyOn(Date, "now").mockReturnValue(now);
     await upsertSessionEntryCore(scope(), {
       sessionId,
       updatedAt: now,
@@ -88,7 +106,9 @@ describe("typed Goal operation persistence", () => {
       lookupSessionGoalOperation({ ...lookup, storePath: missing }),
     ).resolves.toBeUndefined();
     expect(existsSync(missing)).toBe(false);
-    database().db.exec("DROP TABLE session_goal_operations");
+    await writeFixture((db) => {
+      db.exec("DROP TABLE session_goal_operations");
+    });
     await expect(lookupSessionGoalOperation(lookup)).resolves.toBeUndefined();
     expect(
       database()
@@ -119,15 +139,10 @@ describe("typed Goal operation persistence", () => {
     let turn: Awaited<ReturnType<typeof admit>>;
     try {
       turn = await admit();
-      // Bound session-node reads on the writable connection, including header validation.
-      expect.soft(reads.counts.sessionNodeSelects).toBeLessThanOrEqual(11);
-      expect.soft(reads.rowCounts.sessionNodeSelects).toBeGreaterThan(0);
-      expect
-        .soft(reads.textBytes.sessionNodeSelects)
-        .toBeGreaterThan(Buffer.byteLength(skillsSnapshot.prompt));
-      expect
-        .soft(reads.textBytes.sessionNodeSelects)
-        .toBeLessThan(8.5 * Buffer.byteLength(skillsSnapshot.prompt));
+      // Target selection and the compound transaction both execute in workers.
+      expect.soft(reads.counts.sessionNodeSelects).toBe(0);
+      expect.soft(reads.rowCounts.sessionNodeSelects).toBe(0);
+      expect.soft(reads.textBytes.sessionNodeSelects).toBe(0);
       expect(identityMutation).not.toHaveBeenCalled();
     } finally {
       reads.restore();
@@ -325,9 +340,12 @@ describe("typed Goal operation persistence", () => {
     async (corrupt) => {
       await admit();
       await clearSessionGoal(scope());
-      database()
-        .db.prepare("UPDATE session_goal_operations SET result_json = ? WHERE operation_id = ?")
-        .run(corrupt, "start-1");
+      await writeFixture((db) => {
+        db.prepare("UPDATE session_goal_operations SET result_json = ? WHERE operation_id = ?").run(
+          corrupt,
+          "start-1",
+        );
+      });
       const eventsBefore = await loadTranscriptEvents(scope());
       await expect(
         lookupSessionGoalOperation({
@@ -343,10 +361,13 @@ describe("typed Goal operation persistence", () => {
   );
 
   it("rolls back Goal, lifecycle, and transcript when receipt persistence fails", async () => {
-    database().db.exec(
-      `CREATE TRIGGER reject_goal_receipt BEFORE INSERT ON session_goal_operations BEGIN SELECT RAISE(ABORT, 'receipt write failed'); END;`,
-    );
-    await expect(admit()).rejects.toThrow("receipt write failed");
+    await fillReceipts();
+    const retained = database()
+      .db.prepare("SELECT * FROM session_goal_operations ORDER BY operation_id")
+      .all();
+    const rejected = admit();
+    await expect(rejected).rejects.toBeInstanceOf(SessionGoalOperationError);
+    await expect(rejected).rejects.toMatchObject({ code: "capacity" });
     expect(loadSessionEntry(scope())).toMatchObject({ status: "done" });
     expect(loadSessionEntry(scope())?.goal).toBeUndefined();
     expect(await loadTranscriptEvents(scope())).toEqual([]);
@@ -357,7 +378,12 @@ describe("typed Goal operation persistence", () => {
         operation: startOperation(),
       }),
     ).toBeUndefined();
-    database().db.exec("DROP TRIGGER reject_goal_receipt");
+    expect(
+      database().db.prepare("SELECT * FROM session_goal_operations ORDER BY operation_id").all(),
+    ).toEqual(retained);
+    await writeFixture((db) => {
+      db.exec("DELETE FROM session_goal_operations");
+    });
     await expect(admit()).resolves.toMatchObject({
       appendedCount: 1,
       sessionTurnMutationResult: { replayed: false },
@@ -459,22 +485,24 @@ describe("typed Goal operation persistence", () => {
 
   it("rejects expired operations after pruning and preserves unexpired receipts at capacity", async () => {
     const db = database().db;
-    const insert = db.prepare("INSERT INTO session_goal_operations VALUES (?, ?, ?, ?, ?, ?)");
-    for (let i = 0; i < 4096; i += 1) {
-      insert.run(sessionKey, `retained-${i}`, sessionId, "fingerprint", "{}", now + 60_000);
-    }
+    await fillReceipts();
     await expect(admit()).rejects.toMatchObject({ code: "capacity" });
     expect(loadSessionEntry(scope())?.goal).toBeUndefined();
     expect(await loadTranscriptEvents(scope())).toEqual([]);
-    vi.mocked(Date.now).mockReturnValue(now + 60_001);
+    await writeFixture((current) => {
+      current.prepare("UPDATE session_goal_operations SET expires_at = ?").run(now - 1);
+    });
     await admit();
     expect(db.prepare("SELECT count(*) AS count FROM session_goal_operations").get()).toEqual({
       count: 1,
     });
     await clearSessionGoal(scope());
-    vi.mocked(Date.now).mockReturnValue(now + 24 * 60 * 60 * 1000);
-    db.prepare("DELETE FROM session_goal_operations").run();
-    await expect(admit()).rejects.toMatchObject({ code: "expired" });
+    await writeFixture((current) => {
+      current.prepare("DELETE FROM session_goal_operations").run();
+    });
+    await expect(
+      admit({ ...startOperation(), issuedAtMs: now - 24 * 60 * 60 * 1000 }),
+    ).rejects.toMatchObject({ code: "expired" });
     expect(loadSessionEntry(scope())?.goal).toBeUndefined();
   });
 

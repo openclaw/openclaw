@@ -10,14 +10,17 @@ import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { getCliHistoryWriter, runWithCliHistoryWriter } from "./cli-history-boundary.js";
 import type {
   SessionTranscriptContextVersion,
-  TranscriptAppendRefusal,
+  SessionTranscriptWriteScope,
 } from "./session-accessor.sqlite-contract.js";
+import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 import {
   captureSessionTranscriptStorageEnvironment,
   sameSessionTranscriptStorageEnvironment,
   sameSessionTranscriptTargetBinding,
   type SessionTranscriptTargetBinding,
 } from "./transcript-target-binding.js";
+
+export { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 
 export type SessionMetadataChange =
   | Pick<ModelChangeEntry, "type" | "provider" | "modelId">
@@ -63,6 +66,7 @@ type SessionTranscriptWriteTarget = {
   env?: Readonly<NodeJS.ProcessEnv>;
   expectedLifecycleRevision?: string;
   expectedWriterRunId?: string;
+  expectedOwner?: SessionTranscriptWriteScope["expectedOwner"];
 };
 
 export type OwnedSessionTranscriptWriteContext = {
@@ -89,6 +93,7 @@ function captureWriteTarget(target: SessionTranscriptWriteTarget): SessionTransc
     ...target,
     ...(storePath ? { storePath: path.resolve(storePath) } : {}),
     env: captureSessionTranscriptStorageEnvironment(target.env ?? process.env),
+    ...(target.expectedOwner ? { expectedOwner: { ...target.expectedOwner } } : {}),
   };
 }
 
@@ -404,7 +409,7 @@ export function captureOwnedTranscriptWriteAssertion(
   return () => assertTranscriptWriteContext(context, target);
 }
 
-/** Applies the admitted-run fence inherited by a matching synchronous writer. */
+/** Applies the admitted-run fence inherited by a matching writer. */
 export function withOwnedSessionTranscriptWriterFence<T extends SessionTranscriptWriteTarget>(
   scope: T,
 ): T {
@@ -413,14 +418,12 @@ export function withOwnedSessionTranscriptWriterFence<T extends SessionTranscrip
     sessionKey: target.sessionKey,
     sessionTarget: target,
   });
-  return fence ? { ...scope, ...fence } : scope;
-}
-
-export class SessionTranscriptWriterClaimReboundError extends Error {
-  constructor(cause?: TranscriptAppendRefusal) {
-    super("session writer claim changed before transcript persistence", { cause });
-    this.name = "SessionTranscriptWriterClaimReboundError";
+  const context = ownedTranscriptWriteContext.getStore();
+  const expectedOwner = context?.sessionTarget?.expectedOwner;
+  if (expectedOwner && context && ownsRequestedSession({ context, sessionTarget: target })) {
+    return { ...scope, ...fence, expectedOwner: { ...expectedOwner } };
   }
+  return fence ? { ...scope, ...fence } : scope;
 }
 
 export async function runWithOwnedSessionTranscriptWrite<T>(

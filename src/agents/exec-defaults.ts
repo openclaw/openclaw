@@ -84,16 +84,19 @@ export function resolveExecConfigState(params: {
 }
 
 /** Resolves whether node exec is usable and any effective node binding. */
-export function resolveNodeExecEligibility(params: {
-  cfg?: OpenClawConfig;
-  execApprovals?: ExecApprovalsFile;
-  sessionEntry?: ExecSessionDefaults;
-  execOverrides?: ExecPolicyOverrides;
-  agentId?: string;
-  sessionKey?: string;
-  sandboxAvailable?: boolean;
-}): { canExec: boolean; node?: string } {
-  const defaults = resolveExecDefaults(params);
+export function resolveNodeExecEligibility(
+  params: {
+    cfg?: OpenClawConfig;
+    execApprovals?: ExecApprovalsFile;
+    sessionEntry?: ExecSessionDefaults;
+    execOverrides?: ExecPolicyOverrides;
+    agentId?: string;
+    sessionKey?: string;
+    sandboxAvailable?: boolean;
+  },
+  preparedDefaults?: ResolvedExecDefaults,
+): { canExec: boolean; node?: string } {
+  const defaults = preparedDefaults ?? resolveExecDefaults(params);
   const systemRunDenied = params.cfg?.gateway?.nodes?.commands?.deny?.some(
     (command) => command.trim() === "system.run",
   );

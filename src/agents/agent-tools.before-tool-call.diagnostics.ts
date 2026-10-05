@@ -37,16 +37,16 @@ import { redactToolDetail } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
-import { resolveSkillFileHost } from "../skills/loading/skill-file-host.js";
 import {
   resolveSkillTelemetrySource,
   resolveSkillTelemetrySourceValue,
 } from "../skills/loading/source.js";
+import { resolveSkillFileHost } from "../skills/skill-file-host.js";
+import type { SkillSnapshot, SkillTelemetrySource } from "../skills/types.js";
 import {
   isWorkspaceSkillReadPath,
   resolveSkillReadPath,
-} from "../skills/loading/workspace-skill-read-path.js";
-import type { SkillSnapshot, SkillTelemetrySource } from "../skills/types.js";
+} from "../skills/workspace-skill-read-path.js";
 import { isPlainObject, truncateUtf16Safe } from "../utils.js";
 import { buildAdjustedParamsKey } from "./agent-tools.before-tool-call.state.js";
 import type {
@@ -691,7 +691,6 @@ export async function recordLoopOutcome(args: {
       toolCallId: args.toolCallId,
       result: args.result,
       error: args.error,
-      config: args.ctx.loopDetection,
       ...(args.ctx.runId && { runId: args.ctx.runId }),
     });
     const churnContinues =

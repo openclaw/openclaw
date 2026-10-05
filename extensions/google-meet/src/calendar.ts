@@ -146,48 +146,26 @@ function rankCalendarEvent(event: GoogleMeetCalendarEvent, nowMs: number): numbe
   return nowMs - startMs + 30 * 24 * 60 * 60 * 1000;
 }
 
-function chooseBestMeetCalendarEvent(
-  events: GoogleMeetCalendarEvent[],
-  now: Date,
-): GoogleMeetCalendarLookupResult["event"] | undefined {
-  const nowMs = now.getTime();
-  let selected: GoogleMeetCalendarEvent | undefined;
-  let selectedRank = Number.POSITIVE_INFINITY;
-  for (const event of events) {
-    if (event.status === "cancelled" || !extractGoogleMeetUriFromCalendarEvent(event)) {
-      continue;
-    }
-    const rank = rankCalendarEvent(event, nowMs);
-    if (!selected || rank < selectedRank) {
-      selected = event;
-      selectedRank = rank;
-    }
-  }
-  return selected;
-}
-
 type GoogleMeetCalendarQuery = {
   accessToken: string;
   calendarId?: string;
   eventQuery?: string;
   timeMin?: string;
   timeMax?: string;
-  maxResults?: number;
-  now?: Date;
 };
 
 async function fetchGoogleCalendarEvents(
   params: GoogleMeetCalendarQuery,
 ): Promise<{ calendarId: string; events: GoogleMeetCalendarEvent[]; now: Date }> {
   const calendarId = params.calendarId?.trim() || "primary";
-  const now = params.now ?? new Date();
+  const now = new Date();
   const defaultTimeMax = new Date(now);
   defaultTimeMax.setDate(defaultTimeMax.getDate() + 7);
   return requestGoogleApi(
     {
       url: `${GOOGLE_CALENDAR_API_BASE_URL}/calendars/${encodeURIComponent(calendarId)}/events`,
       query: {
-        maxResults: params.maxResults ?? 50,
+        maxResults: 50,
         orderBy: "startTime",
         q: params.eventQuery?.trim() || undefined,
         showDeleted: false,
@@ -218,16 +196,27 @@ export async function listGoogleMeetCalendarEvents(
   params: GoogleMeetCalendarQuery,
 ): Promise<GoogleMeetCalendarEventsResult> {
   const { calendarId, events, now } = await fetchGoogleCalendarEvents(params);
-  const best = chooseBestMeetCalendarEvent(events, now);
-  return {
-    calendarId,
-    events: events
-      .map((event) => {
-        const meetingUri = extractGoogleMeetUriFromCalendarEvent(event);
-        return meetingUri ? { event, meetingUri, selected: event === best } : undefined;
-      })
-      .filter((event): event is GoogleMeetCalendarEventsResult["events"][number] => Boolean(event)),
-  };
+  const meetEvents: GoogleMeetCalendarEventsResult["events"] = [];
+  let best: GoogleMeetCalendarEvent | undefined;
+  let bestRank = Number.POSITIVE_INFINITY;
+  for (const event of events) {
+    const meetingUri = extractGoogleMeetUriFromCalendarEvent(event);
+    if (!meetingUri) {
+      continue;
+    }
+    meetEvents.push({ event, meetingUri, selected: false });
+    if (event.status !== "cancelled") {
+      const rank = rankCalendarEvent(event, now.getTime());
+      if (!best || rank < bestRank) {
+        best = event;
+        bestRank = rank;
+      }
+    }
+  }
+  for (const entry of meetEvents) {
+    entry.selected = entry.event === best;
+  }
+  return { calendarId, events: meetEvents };
 }
 
 export async function findGoogleMeetCalendarEvent(

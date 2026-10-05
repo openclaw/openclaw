@@ -13,6 +13,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { RouteLocation } from "@openclaw/uirouter";
 import type { LitElement } from "lit";
 import { z } from "zod";
+import { registerListener } from "../../../src/shared/listeners.js";
 import { routeIdFromPath } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import type { StoredSidebarSessionFacts } from "../lib/chat/outbox-store-projection.ts";
@@ -420,14 +421,13 @@ export function createNativeConversationBridge(
           await page?.updateComplete;
           const pane = page?.querySelector<ChatPaneBase>(".chat-pane-cache__pane--active");
           await pane?.updateComplete;
-          const menu = pane?.querySelector("openclaw-chat-header-session-menu");
-          if (!active() || !targetSelected() || !menu) {
+          if (!active() || !targetSelected() || !pane) {
             return "unavailable";
           }
           const { openNativeSessionMenu } =
             await import("../pages/chat/components/native-session-menu.runtime.ts");
           const opened = await openNativeSessionMenu({
-            menu,
+            pane,
             signal,
             isCurrent: () => active() && targetSelected(),
           });
@@ -557,10 +557,7 @@ export function createNativeConversationBridge(
     get presentation() {
       return presentation;
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     interceptNavigation,
     publishSessionFacts,
     dispose() {

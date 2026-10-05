@@ -232,6 +232,7 @@ function scheduleDmTopicLabel(params: {
       const label = await generateTopicLabel({
         userMessage,
         prompt: autoTopicConfig.prompt,
+        maxLength: 128,
         cfg: params.cfg,
         agentId: context.route.agentId,
         agentDir: resolveAgentDir(params.cfg, context.route.agentId),

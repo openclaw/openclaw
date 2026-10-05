@@ -20,6 +20,8 @@ export type LegacyConfigMigrationContext = {
   authoredRaw: unknown;
   /** Configuration after include and environment resolution. */
   resolvedRaw: unknown;
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
 };
 
 type LegacyConfigMigration = {

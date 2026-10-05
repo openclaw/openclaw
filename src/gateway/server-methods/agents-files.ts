@@ -185,7 +185,6 @@ async function readWorkspaceFileContent(
     const workspaceRoot = await root(workspaceDir);
     const safeRead = await workspaceRoot.read(name, {
       hardlinks: "reject",
-      nonBlockingRead: true,
     });
     return safeRead.buffer.toString("utf-8");
   } catch (err) {
@@ -246,7 +245,6 @@ async function readWorkspaceFileHash(
   try {
     const safeRead = await workspaceRoot.read(name, {
       hardlinks: "reject",
-      nonBlockingRead: true,
     });
     return sha256Hex(safeRead.buffer);
   } catch (err) {
@@ -345,7 +343,6 @@ export const agentFileHandlers: Pick<
         const workspaceRoot = await root(workspaceDir);
         safeRead = await workspaceRoot.read(name, {
           hardlinks: "reject",
-          nonBlockingRead: true,
         });
       } catch (err) {
         if (isMissingPathError(err)) {

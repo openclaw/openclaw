@@ -322,46 +322,38 @@ async function applyUpdateMetadataMutation(params: {
   };
 }
 
-async function applyMemoryWikiMutationUnlocked(params: {
-  config: ResolvedMemoryWikiConfig;
-  mutation: ApplyMemoryWikiMutation;
-  signal?: AbortSignal;
-}): Promise<ApplyMemoryWikiMutationResult> {
-  await initializeMemoryWikiVault(
-    params.config,
-    params.signal ? { signal: params.signal } : undefined,
-  );
-  params.signal?.throwIfAborted();
-  const result =
-    params.mutation.op === "create_synthesis"
-      ? await applyCreateSynthesisMutation({
-          config: params.config,
-          mutation: params.mutation,
-        })
-      : await applyUpdateMetadataMutation({
-          config: params.config,
-          mutation: params.mutation,
-        });
-  params.signal?.throwIfAborted();
-  const compile = await compileMemoryWikiVault(
-    params.config,
-    params.signal ? { signal: params.signal } : undefined,
-  );
-  return {
-    changed: result.changed,
-    operation: params.mutation.op,
-    pagePath: result.pagePath,
-    ...(result.pageId ? { pageId: result.pageId } : {}),
-    compile,
-  };
-}
-
 export async function applyMemoryWikiMutation(params: {
   config: ResolvedMemoryWikiConfig;
   mutation: ApplyMemoryWikiMutation;
   signal?: AbortSignal;
 }): Promise<ApplyMemoryWikiMutationResult> {
-  return await withMemoryWikiVaultMutation(params.config.vault.path, () =>
-    applyMemoryWikiMutationUnlocked(params),
-  );
+  return await withMemoryWikiVaultMutation(params.config.vault.path, async () => {
+    await initializeMemoryWikiVault(
+      params.config,
+      params.signal ? { signal: params.signal } : undefined,
+    );
+    params.signal?.throwIfAborted();
+    const result =
+      params.mutation.op === "create_synthesis"
+        ? await applyCreateSynthesisMutation({
+            config: params.config,
+            mutation: params.mutation,
+          })
+        : await applyUpdateMetadataMutation({
+            config: params.config,
+            mutation: params.mutation,
+          });
+    params.signal?.throwIfAborted();
+    const compile = await compileMemoryWikiVault(
+      params.config,
+      params.signal ? { signal: params.signal } : undefined,
+    );
+    return {
+      changed: result.changed,
+      operation: params.mutation.op,
+      pagePath: result.pagePath,
+      ...(result.pageId ? { pageId: result.pageId } : {}),
+      compile,
+    };
+  });
 }

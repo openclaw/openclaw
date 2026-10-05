@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { RequestFrame } from "../../../../packages/gateway-protocol/src/index.js";
+import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { runOutsideGatewayRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 
@@ -14,8 +15,13 @@ type StartBudget = {
   connections: Map<string, StartConnection>;
 };
 type StartConnection = { id: string; count: number };
-type RequestStart = {
+type StartWork = {
   grant: () => void;
+  preparation: boolean;
+  settled: Promise<void>;
+  signal?: AbortSignal;
+};
+type RequestStart = StartWork & {
   budget: StartBudget;
   frameBytes: number;
   connection: StartConnection;
@@ -41,17 +47,29 @@ const pending: RequestStart[] = [];
 const MAX_CONTROL_FRAME_BYTES = 4096;
 const MAX_STARTS_PER_TURN = 64;
 const START_WORK_BUDGET_MS = 12;
+const MAX_CONCURRENT_PREPARATIONS = 4;
+const preparations = new Set<Promise<void>>();
+let notifyPreparationSettled: (() => void) | undefined;
 let active = false;
 
-async function grantStarts(first: () => void): Promise<void> {
-  let current: (() => void) | undefined = first;
+async function grantStarts(first: StartWork): Promise<void> {
+  let current: StartWork | undefined = first;
   let turnStartedAt = 0;
   let turnStarts = MAX_STARTS_PER_TURN;
   while (current) {
     // Include ready caller continuations in the work budget without awaiting
     // an unresolved RPC or inheriting its root admission.
     await new Promise<void>(queueMicrotask);
+    if (current.preparation) {
+      while (preparations.size >= MAX_CONCURRENT_PREPARATIONS && !current.signal?.aborted) {
+        const changed = createDeferredCore();
+        notifyPreparationSettled = changed.resolve;
+        await racePromiseWithAbortSignal(changed.promise, current.signal).catch(() => {});
+        notifyPreparationSettled = undefined;
+      }
+    }
     if (
+      current.preparation ||
       turnStarts >= MAX_STARTS_PER_TURN ||
       performance.now() - turnStartedAt >= START_WORK_BUDGET_MS
     ) {
@@ -60,7 +78,15 @@ async function grantStarts(first: () => void): Promise<void> {
       turnStarts = 0;
     }
     turnStarts++;
-    current();
+    if (current.preparation && !current.signal?.aborted) {
+      const settled = current.settled;
+      preparations.add(settled);
+      void settled.then(() => {
+        preparations.delete(settled);
+        notifyPreparationSettled?.();
+      });
+    }
+    current.grant();
     const next = pending.shift();
     if (next) {
       next.budget.count--;
@@ -70,19 +96,28 @@ async function grantStarts(first: () => void): Promise<void> {
         next.budget.connections.delete(next.connection.id);
       }
     }
-    current = next?.grant;
+    current = next;
   }
   active = false;
 }
 
-/** Grants operator router-start permission, or null when its waiting budget is exhausted. */
+/** Queues operator starts in FIFO order; snapshots retain capacity through settlement. */
 export function scheduleGatewayRequestStart(
   frameBytes: number,
   request: Pick<RequestFrame, "method" | "params">,
   connId: string,
+  settled: Promise<void>,
+  signal?: AbortSignal,
 ): Promise<void> | null {
   return runOutsideGatewayRootWorkAdmission(() => {
-    // Approval replay and roster snapshots retain the ordinary work budget.
+    // Handshakes bypass this queue. Yield before each snapshot/replay start so
+    // ready upgrade/hello I/O runs before another preparation resumes on the main thread.
+    const preparation =
+      request.method === "sessions.subscribe" ||
+      request.method === "sessions.list" ||
+      request.method === "models.list" ||
+      (request.method === "sessions.messages.subscribe" &&
+        asOptionalRecord(request.params)?.includeApprovals === true);
     const control =
       frameBytes <= MAX_CONTROL_FRAME_BYTES &&
       (request.method === "sessions.messages.unsubscribe" ||
@@ -101,6 +136,7 @@ export function scheduleGatewayRequestStart(
       return null;
     }
     const { promise, resolve: grant } = createDeferredCore();
+    const work = { grant, preparation, settled, signal };
     if (active) {
       const queuedConnection = connection ?? { id: connId, count: 0 };
       budget.count++;
@@ -109,10 +145,10 @@ export function scheduleGatewayRequestStart(
       if (!connection) {
         budget.connections.set(connId, queuedConnection);
       }
-      pending.push({ grant, budget, frameBytes, connection: queuedConnection });
+      pending.push({ ...work, budget, frameBytes, connection: queuedConnection });
     } else {
       active = true;
-      void grantStarts(grant);
+      void grantStarts(work);
     }
     return promise;
   });

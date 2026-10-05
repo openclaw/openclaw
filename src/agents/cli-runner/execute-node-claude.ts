@@ -129,19 +129,23 @@ export function createCliAbortError(): Error {
 }
 
 async function waitForNodeOperation<T>(params: {
-  operation: Promise<T>;
+  operation: () => Promise<T>;
   signal?: AbortSignal;
 }): Promise<T> {
-  if (!params.signal) {
-    return await params.operation;
-  }
-  if (params.signal.aborted) {
+  if (params.signal?.aborted) {
     throw createCliAbortError();
+  }
+  const operation = params.operation();
+  if (!params.signal) {
+    return await operation;
   }
   return await new Promise<T>((resolve, reject) => {
     const onAbort = () => reject(createCliAbortError());
     params.signal?.addEventListener("abort", onAbort, { once: true });
-    void params.operation.then(resolve, reject).finally(() => {
+    if (params.signal?.aborted) {
+      onAbort();
+    }
+    void operation.then(resolve, reject).finally(() => {
       params.signal?.removeEventListener("abort", onAbort);
     });
   });
@@ -244,30 +248,32 @@ export async function executeNodeClaudeRun(params: {
       skillRuntime?.assertCurrent();
       const approvalId = crypto.randomUUID();
       const registration = await waitForNodeOperation({
-        operation: params.deps.registerExecApprovalRequestForHostOrThrow({
-          approvalId,
-          command: approval.systemRunPlan.commandText,
-          commandArgv: approval.systemRunPlan.argv,
-          systemRunPlan: approval.systemRunPlan,
-          workdir: approval.systemRunPlan.cwd ?? undefined,
-          host: "node",
-          nodeId: params.nodePlacement.nodeId,
-          security: approval.security,
-          ask: approval.ask,
-          unavailableDecisions: ["allow-always"],
-          agentId: contextParams.agentId,
-          sessionKey: contextParams.sessionKey,
-          ...(contextParams.approvalReviewerDeviceId
-            ? { approvalReviewerDeviceIds: [contextParams.approvalReviewerDeviceId] }
-            : {}),
-        }),
+        operation: () =>
+          params.deps.registerExecApprovalRequestForHostOrThrow({
+            approvalId,
+            command: approval.systemRunPlan.commandText,
+            commandArgv: approval.systemRunPlan.argv,
+            systemRunPlan: approval.systemRunPlan,
+            workdir: approval.systemRunPlan.cwd ?? undefined,
+            host: "node",
+            nodeId: params.nodePlacement.nodeId,
+            security: approval.security,
+            ask: approval.ask,
+            unavailableDecisions: ["allow-always"],
+            agentId: contextParams.agentId,
+            sessionKey: contextParams.sessionKey,
+            ...(contextParams.approvalReviewerDeviceId
+              ? { approvalReviewerDeviceIds: [contextParams.approvalReviewerDeviceId] }
+              : {}),
+          }),
         signal: skillRuntime?.signal ?? nodeAbortController.signal,
       });
       const decision = await waitForNodeOperation({
-        operation: params.deps.resolveRegisteredExecApprovalDecision({
-          approvalId: registration.id,
-          preResolvedDecision: registration.finalDecision,
-        }),
+        operation: () =>
+          params.deps.resolveRegisteredExecApprovalDecision({
+            approvalId: registration.id,
+            preResolvedDecision: registration.finalDecision,
+          }),
         signal: skillRuntime?.signal ?? nodeAbortController.signal,
       });
       if (decision === "allow-once" || decision === "allow-always") {

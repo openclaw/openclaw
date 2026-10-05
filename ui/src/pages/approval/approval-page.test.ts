@@ -171,6 +171,40 @@ afterEach(async () => {
 });
 
 describe("ApprovalPage", () => {
+  it.each([
+    {
+      kind: "exec",
+      scope: {
+        kind: "standing-grant",
+        automation: "Nightly workspace check",
+        command: "printf safe",
+        expiresInDays: 14,
+      },
+      expected:
+        'Always allow runs this exact command for "Nightly workspace check" without asking, for 14 days (revocable)',
+    },
+    {
+      kind: "plugin",
+      scope: { kind: "payment", amount: "12.34", currency: "USD", target: "Synthetic vendor" },
+      expected: "Pays 12.34 USD to Synthetic vendor",
+    },
+  ] as const)("shows the supplied $kind approval scope before a decision", async (scenario) => {
+    const pending = scenario.kind === "exec" ? pendingApproval() : pluginApproval();
+    if (pending.presentation.kind === "system-agent") {
+      throw new Error("Expected an exec or plugin approval");
+    }
+    pending.presentation.scope = scenario.scope;
+    const request = vi.fn(async () => ({ approval: pending }));
+    const { page } = createPage({
+      client: { request } as unknown as GatewayBrowserClient,
+      id: pending.id,
+    });
+    await settle(page);
+
+    expect(page.textContent).toContain(scenario.expected);
+    expect(page.textContent).toContain("Waiting for your decision");
+  });
+
   it("keeps a no-auth approval readable without enabling its decisions", async () => {
     const request = vi.fn(
       async (_method: string) => ({ approval: pendingApproval() }) satisfies ApprovalGetResult,

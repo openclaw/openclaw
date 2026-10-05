@@ -127,8 +127,7 @@ type TestRunCliAgent = (
   params: Omit<Parameters<ProductionRunCliAgent>[0], "admittedRunContext">,
 ) => ReturnType<ProductionRunCliAgent>;
 let runCliAgent: TestRunCliAgent;
-let restoreCliRunnerTestDeps: typeof import("./cli-runner.js").restoreCliRunnerTestDeps;
-let setCliRunnerTestDeps: typeof import("./cli-runner.js").setCliRunnerTestDeps;
+let authProfiles: typeof import("./auth-profiles.js");
 
 async function captureRejectedClaudeRun(
   params: Parameters<typeof runCliAgent>[0],
@@ -199,21 +198,21 @@ beforeEach(() => {
   authStoreMock.mockReset();
   authFailureMock.mockReset().mockResolvedValue(undefined);
   authSuccessMock.mockReset().mockResolvedValue(undefined);
-  setCliRunnerTestDeps?.({
-    loadAuthProfileStoreForRuntime: authStoreMock,
-    markAuthProfileFailure: authFailureMock,
-    markAuthProfileSuccess: authSuccessMock,
-  });
+  vi.spyOn(authProfiles, "loadAuthProfileStoreForRuntime").mockImplementation(authStoreMock);
+  vi.spyOn(authProfiles, "markAuthProfileFailure").mockImplementation(authFailureMock);
+  vi.spyOn(authProfiles, "markAuthProfileSuccess").mockImplementation(authSuccessMock);
 });
 
 beforeAll(async () => {
   const cliRunner = await import("./cli-runner.js");
   runCliAgent = wrapRunWithTestPreparedAdmission(cliRunner.runCliAgent);
-  ({ restoreCliRunnerTestDeps, setCliRunnerTestDeps } = cliRunner);
+  authProfiles = await import("./auth-profiles.js");
 });
 
 afterEach(() => {
-  restoreCliRunnerTestDeps();
+  vi.mocked(authProfiles.loadAuthProfileStoreForRuntime).mockRestore();
+  vi.mocked(authProfiles.markAuthProfileFailure).mockRestore();
+  vi.mocked(authProfiles.markAuthProfileSuccess).mockRestore();
   cliBackendsTesting.resetDepsForTest();
   vi.clearAllMocks();
   resetDiagnosticEventsForTest();

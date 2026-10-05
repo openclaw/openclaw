@@ -296,15 +296,14 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
                 },
               },
             },
-            list: [
-              {
-                id: "research",
+            entries: {
+              research: {
                 model: {
                   primary: "anthropic/claude-opus-4-6",
                   fallbacks: ["openai/gpt-5.4"],
                 },
               },
-            ],
+            },
           },
         },
       }),

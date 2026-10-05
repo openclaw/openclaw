@@ -96,86 +96,86 @@ async function withManager(
   }
 }
 
-it("hands the authorized operator request to the bound OCM environment and reads the same job", async () => {
-  await withManager(async ({ job }) => {
-    normalizeUpdateChannelMock.mockReturnValue("beta");
-    let response: unknown;
-    await invokeUpdateRun(
-      {},
-      (_ok, value) => {
-        response = value;
-      },
-      { update: { channel: "beta" } },
-    );
-    expect(response).toMatchObject({ runId: `ocm:${job.id}`, ok: true });
-    expect(exec.mock.calls.map(([executable, args]) => [executable, args])).toContainEqual([
-      "/trusted/ocm",
-      [
-        "upgrade",
-        "job",
-        "start",
-        "fixture",
-        "--request-id",
-        job.id,
-        "--if-binding",
-        "runtime:stable",
-        "--channel",
-        "beta",
-        "--json",
-      ],
-    ]);
-    expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
-    expect(listUpdateRuns()).toEqual([]);
-    job.state = "succeeded";
-    job.updatedAt = "2026-09-26T00:00:01Z";
-    job.result = { outcome: "up-to-date", runtimeReleaseVersion: "2026.9.6", note: null };
-    const respond = vi.fn();
-    const { updateHandlers } = await import("./update.js");
-    await expectDefined(
-      updateHandlers["update.runs.get"],
-      "update.runs.get handler",
-    )({ params: { runId: `ocm:${job.id}` }, respond } as never);
-    expect(respond).toHaveBeenCalledWith(true, {
-      run: expect.objectContaining({
-        runId: `ocm:${job.id}`,
-        status: "skipped",
-        reason: "already-current",
-        verification: {},
-      }),
-    });
-  });
-});
-
 it.each([
-  ["source-updated", "succeeded"],
-  ["local-command", "skipped"],
-] as const)("projects source outcome %s as %s", async (outcome, status) => {
-  await withManager(async ({ capability, job }) => {
-    capability.bindingKind = "launcher";
-    capability.bindingName = "main";
-    capability.operations = ["source-upgrade"];
-    job.state = "succeeded";
-    job.result = { outcome, bindingKind: "launcher", runtimeReleaseVersion: null, note: null };
-    const respond = vi.fn();
-    await invokeUpdateRun({}, respond);
-    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ runId: `ocm:${job.id}` }));
-    capability.operations = [];
-    const { updateHandlers } = await import("./update.js");
-    await expectDefined(
-      updateHandlers["update.runs.get"],
-      "update.runs.get handler",
-    )({
-      params: { runId: `ocm:${job.id}` },
-      respond,
-    } as never);
-    expect(respond).toHaveBeenLastCalledWith(true, {
-      run: expect.objectContaining({
-        status,
-        target: { kind: "git", installationMethod: "ocm" },
-      }),
+  { binding: "runtime", outcome: "up-to-date", status: "skipped" },
+  { binding: "launcher", outcome: "source-updated", status: "succeeded" },
+  { binding: "launcher", outcome: "local-command", status: "skipped" },
+])(
+  "hands off $binding updates and projects $outcome as $status",
+  async ({ binding, outcome, status }) => {
+    await withManager(async ({ capability, job }) => {
+      const source = binding === "launcher";
+      capability.bindingKind = binding;
+      capability.bindingName = source ? "main" : "stable";
+      capability.operations = [source ? "source-upgrade" : "packaged-upgrade"];
+      const result = {
+        outcome,
+        ...(source ? { bindingKind: "launcher" } : {}),
+        runtimeReleaseVersion: source ? null : "2026.9.6",
+        note: null,
+      };
+      if (source) {
+        job.state = "succeeded";
+        job.result = result;
+      }
+      normalizeUpdateChannelMock.mockReturnValue("beta");
+      const respond = vi.fn();
+      await invokeUpdateRun({}, respond, { update: { channel: "beta" } });
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ runId: `ocm:${job.id}`, ok: true }),
+      );
+      const starts = exec.mock.calls.filter(([, args]) => args[2] === "start");
+      expect(starts).toHaveLength(1);
+      if (source) {
+        expect(starts[0]?.[1]).not.toContain("--channel");
+        // Recorded source outcomes survive a later runtime rebind and disabled upgrades.
+        capability.bindingKind = "runtime";
+        capability.operations = [];
+      } else {
+        expect(exec.mock.calls.map(([executable, args]) => [executable, args])).toContainEqual([
+          "/trusted/ocm",
+          [
+            "upgrade",
+            "job",
+            "start",
+            "fixture",
+            "--request-id",
+            job.id,
+            "--if-binding",
+            "runtime:stable",
+            "--channel",
+            "beta",
+            "--json",
+          ],
+        ]);
+      }
+      expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+      expect(listUpdateRuns()).toEqual([]);
+      job.state = "succeeded";
+      job.updatedAt = "2026-09-26T00:00:01Z";
+      job.result = result;
+      const { updateHandlers } = await import("./update.js");
+      await expectDefined(
+        updateHandlers["update.runs.get"],
+        "update.runs.get handler",
+      )({
+        params: { runId: `ocm:${job.id}` },
+        respond,
+      } as never);
+      expect(respond).toHaveBeenLastCalledWith(true, {
+        run: expect.objectContaining({
+          runId: `ocm:${job.id}`,
+          status,
+          verification: {},
+          ...(source
+            ? { target: { kind: "git", installationMethod: "ocm" } }
+            : { reason: "already-current" }),
+        }),
+      });
     });
-  });
-});
+  },
+);
 
 it("keeps accepted source jobs readable when another source update is unavailable", async () => {
   await withManager(async ({ capability, job }) => {
@@ -244,8 +244,9 @@ it("hands legacy-supervised source updates to the injected OCM manager", async (
     capability.operations = ["source-upgrade"];
     deleteTestEnvValue("OPENCLAW_SUPERVISOR_MODE");
     setTestEnvValue("OPENCLAW_NO_RESPAWN", "1");
+    normalizeUpdateChannelMock.mockReturnValue("beta");
     const respond = vi.fn();
-    await invokeUpdateRun({}, respond);
+    await invokeUpdateRun({}, respond, { update: { channel: "beta" } });
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
@@ -253,53 +254,22 @@ it("hands legacy-supervised source updates to the injected OCM manager", async (
         handoff: { status: "started" },
       }),
     );
-    expect(exec.mock.calls.filter(([, args]) => args[2] === "start")).toHaveLength(1);
+    const starts = exec.mock.calls.filter(([, args]) => args[2] === "start");
+    expect(starts).toHaveLength(1);
+    expect(starts[0]?.[1]).not.toContain("--channel");
   });
 });
 
-it.each(["runtime", "launcher", "dev", "none"])(
-  "keeps a completed source result unchanged after rebinding to %s",
-  async (bindingKind) => {
-    await withManager(async ({ capability, job }) => {
-      capability.bindingKind = bindingKind;
-      job.state = "succeeded";
-      job.result = { outcome: "source-updated", runtimeReleaseVersion: null, note: null };
-      exec.mockImplementation(async (_command, args) => ({
-        stdout: JSON.stringify(
-          args[2] === "capabilities"
-            ? capability
-            : {
-                ...job,
-                result: { ...job.result, bindingKind: "launcher" },
-              },
-        ),
-        stderr: "",
-      }));
-      const { updateHandlers } = await import("./update.js");
-      const respond = vi.fn();
-      await expectDefined(
-        updateHandlers["update.runs.get"],
-        "update.runs.get handler",
-      )({
-        params: { runId: `ocm:${job.id}` },
-        respond,
-      } as never);
-      expect(respond).toHaveBeenCalledWith(true, {
-        run: expect.objectContaining({
-          status: "succeeded",
-          target: { kind: "git", installationMethod: "ocm" },
-        }),
-      });
-    });
-  },
-);
-
-it.each(["launcher", "dev", "none"])(
-  "keeps native history and refusal when the %s binding has no update operation or recorded job",
+it.each(["launcher", "none", "unbound", "external-chat"])(
+  "preserves native history and update refusal for %s",
   async (bindingKind) => {
     await withManager(async ({ capability }) => {
-      capability.bindingKind = bindingKind;
+      capability.bindingKind =
+        bindingKind === "unbound" || bindingKind === "external-chat" ? "runtime" : bindingKind;
       capability.operations = ["packaged-upgrade"];
+      if (bindingKind === "unbound") {
+        delete capability.bindingName;
+      }
       exec.mockImplementation(async (_command, args) => ({
         stdout: JSON.stringify(args[2] === "capabilities" ? capability : null),
         stderr: "",
@@ -308,22 +278,29 @@ it.each(["launcher", "dev", "none"])(
       finishUpdateRun(run.runId, { status: "succeeded" });
       const { updateHandlers } = await import("./update.js");
       const respond = vi.fn();
-      await expectDefined(
-        updateHandlers["update.status"],
-        "update.status handler",
-      )({
-        params: {},
-        respond,
-        context: { getRuntimeConfig: () => ({ update: { channel: "dev" } }) },
-      } as never);
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          lastRun: expect.objectContaining({ runId: run.runId, status: "succeeded" }),
-        }),
-      );
+      if (bindingKind !== "external-chat") {
+        await expectDefined(
+          updateHandlers["update.status"],
+          "update.status handler",
+        )({
+          params: {},
+          respond,
+          context: { getRuntimeConfig: () => ({ update: { channel: "dev" } }) },
+        } as never);
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            lastRun: expect.objectContaining({ runId: run.runId, status: "succeeded" }),
+          }),
+        );
+      }
       respond.mockClear();
-      await invokeUpdateRun({}, respond);
+      await invokeUpdateRun(
+        bindingKind === "external-chat"
+          ? { requester: { channel: "slack", senderId: "C0123ABC" } }
+          : {},
+        respond,
+      );
       expect(respond.mock.calls.at(-1)?.[1]).toMatchObject({
         result: { reason: "external-supervisor-update-required" },
       });
@@ -332,56 +309,66 @@ it.each(["launcher", "dev", "none"])(
   },
 );
 
-it.each(["stable", "beta", "extended-stable"] as const)(
-  "leaves source channel %s decisions with the native updater",
-  async (channel) => {
+it.each([true, false])(
+  "reconciles a failed start without resubmitting (job exists=%s)",
+  async (exists) => {
     await withManager(async ({ capability, job }) => {
-      capability.bindingKind = "launcher";
-      capability.bindingName = "main";
-      capability.operations = ["source-upgrade"];
-      normalizeUpdateChannelMock.mockReturnValue(channel);
+      exec.mockImplementation(async (_command, args) => {
+        if (args[2] === "start") {
+          job.id = args[args.indexOf("--request-id") + 1]!;
+          throw new Error(exists ? "reply lost" : "Another update is active");
+        }
+        if (!exists && args[2] !== "capabilities") {
+          throw new Error("No such job");
+        }
+        return {
+          stdout: JSON.stringify(args[2] === "capabilities" ? capability : job),
+          stderr: "",
+        };
+      });
       const respond = vi.fn();
-      await invokeUpdateRun({}, respond, { update: { channel } });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ runId: `ocm:${job.id}`, handoff: { status: "started" } }),
-      );
-      const starts = exec.mock.calls.filter(([, args]) => args[2] === "start");
-      expect(starts).toHaveLength(1);
-      expect(starts[0]?.[1]).not.toContain("--channel");
+      if (exists) {
+        await invokeUpdateRun({}, respond);
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ runId: `ocm:${job.id}` }),
+        );
+      } else {
+        await expect(invokeUpdateRun({})).rejects.toThrow("Another update is active");
+      }
+      expect(exec.mock.calls.filter(([, args]) => args[2] === "start")).toHaveLength(1);
+      expect(exec.mock.calls.at(-1)?.[1]).toEqual([
+        "upgrade",
+        "job",
+        "status",
+        "fixture",
+        "--request-id",
+        job.id,
+        "--json",
+      ]);
     });
   },
 );
 
-it("reconciles a lost start response by exact request ID without resubmitting", async () => {
-  await withManager(async ({ capability, job }) => {
-    exec.mockImplementation(async (_command, args) => {
-      if (args[2] === "start") {
-        job.id = args[args.indexOf("--request-id") + 1]!;
-        throw new Error("reply lost");
-      }
-      return { stdout: JSON.stringify(args[2] === "capabilities" ? capability : job), stderr: "" };
-    });
-    const respond = vi.fn();
-    await invokeUpdateRun({}, respond);
-    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ runId: `ocm:${job.id}` }));
-    expect(exec.mock.calls.filter(([, args]) => args[2] === "start")).toHaveLength(1);
-    expect(exec.mock.calls.at(-1)?.[1]).toEqual([
-      "upgrade",
-      "job",
-      "status",
-      "fixture",
-      "--request-id",
-      job.id,
-      "--json",
-    ]);
-  });
-});
-
-it.each(["authority", "scope", "git-target"])(
+it.each(["authority", "browser-authority", "scope", "git-target"])(
   "refuses an invalid %s before submitting to OCM",
   async (refusal) => {
-    await withManager(async ({ capability }) => {
+    await withManager(async ({ capability, job }) => {
+      let current = true;
+      if (refusal === "browser-authority") {
+        exec.mockImplementation(async (_command, args) => {
+          if (args[2] === "capabilities") {
+            current = false;
+          }
+          if (args[2] === "start") {
+            job.id = args[args.indexOf("--request-id") + 1]!;
+          }
+          return {
+            stdout: JSON.stringify(args[2] === "capabilities" ? capability : job),
+            stderr: "",
+          };
+        });
+      }
       if (refusal === "scope") {
         capability.envName = "another-env";
       }
@@ -394,6 +381,7 @@ it.each(["authority", "scope", "git-target"])(
           undefined,
           {},
           {
+            hasCurrentClientAuthority: refusal === "browser-authority" ? () => current : undefined,
             sessionMutationCommitGuard:
               refusal === "authority"
                 ? () => {
@@ -404,6 +392,8 @@ it.each(["authority", "scope", "git-target"])(
         );
       if (refusal === "git-target") {
         await start();
+      } else if (refusal === "browser-authority") {
+        await expect(start()).rejects.toThrow("Gateway requester authority changed");
       } else {
         await expect(start()).rejects.toThrow();
       }
@@ -413,24 +403,15 @@ it.each(["authority", "scope", "git-target"])(
   },
 );
 
-it("preserves OCM's admission refusal when no correlated job was created", async () => {
-  await withManager(async ({ capability }) => {
-    exec.mockImplementation(async (_command, args) => {
-      if (args[2] === "capabilities") {
-        return { stdout: JSON.stringify(capability), stderr: "" };
-      }
-      throw new Error(args[2] === "start" ? "Another update is active" : "No such job");
-    });
-    await expect(invokeUpdateRun({})).rejects.toThrow("Another update is active");
-  });
-});
-
-it("does not execute a manager selected through config environment values", async () => {
+it.each([
+  ["OCM_SELF", "/trusted/ocm"],
+  ["OCM_INTERNAL_NPM_BIN", "/config-owned/npm"],
+] as const)("excludes config-owned %s from the trusted manager environment", async (key, value) => {
   await withManager(async () => {
-    const config = {
-      env: { vars: { OCM_SELF: "/trusted/ocm" } },
-    };
-    deleteTestEnvValue("OCM_SELF");
+    const config = { env: { vars: { [key]: value } } };
+    if (key === "OCM_SELF") {
+      deleteTestEnvValue(key);
+    }
     const rollback = prepareConfigRuntimeEnv({
       previousConfig: {},
       nextConfig: config,
@@ -439,21 +420,36 @@ it("does not execute a manager selected through config environment values", asyn
     try {
       const respond = vi.fn();
       await invokeUpdateRun({}, respond, config);
-      expect(exec.mock.calls.length).toBe(0);
-      expect(respond.mock.calls.at(-1)?.[1]).toMatchObject({
-        result: { reason: "external-supervisor-update-required" },
-      });
+      if (key === "OCM_SELF") {
+        expect(exec.mock.calls.length).toBe(0);
+        expect(respond.mock.calls.at(-1)?.[1]).toMatchObject({
+          result: { reason: "external-supervisor-update-required" },
+        });
+      } else {
+        expect(process.env.OCM_INTERNAL_NPM_BIN).toBe("/config-owned/npm");
+        expect(exec.mock.calls.length).toBe(2);
+        expect(
+          exec.mock.calls.every((call) => {
+            const options = call[2];
+            return (
+              typeof options === "object" && options.baseEnv?.OCM_INTERNAL_NPM_BIN === undefined
+            );
+          }),
+        ).toBe(true);
+      }
     } finally {
       rollback();
     }
   });
 });
 
-it.each(["home-only", "self-only", "env-exec"])(
-  "keeps %s context on the native path",
+it.each(["home-only", "self-only", "env-exec", "incomplete"])(
+  "does not probe a manager with %s context",
   async (context) => {
     await withManager(async () => {
-      if (context === "env-exec") {
+      if (context === "incomplete") {
+        deleteTestEnvValue("OCM_ACTIVE_ENV_ROOT");
+      } else if (context === "env-exec") {
         deleteTestEnvValue("OCM_SELF");
       } else {
         deleteTestEnvValue("OCM_ACTIVE_ENV");
@@ -461,23 +457,19 @@ it.each(["home-only", "self-only", "env-exec"])(
         deleteTestEnvValue(context === "home-only" ? "OCM_SELF" : "OCM_HOME");
       }
       const respond = vi.fn();
-      await invokeUpdateRun({}, respond);
+      if (context === "incomplete") {
+        await expect(invokeUpdateRun({})).rejects.toThrow("OCM update binding is incomplete");
+        expect(listUpdateRuns()).toEqual([]);
+      } else {
+        await invokeUpdateRun({}, respond);
+        expect(respond.mock.calls.at(-1)?.[1]).toMatchObject({
+          result: { reason: "external-supervisor-update-required" },
+        });
+      }
       expect(exec).not.toHaveBeenCalled();
-      expect(respond.mock.calls.at(-1)?.[1]).toMatchObject({
-        result: { reason: "external-supervisor-update-required" },
-      });
     });
   },
 );
-
-it("refuses an incomplete claimed manager binding before probing", async () => {
-  await withManager(async () => {
-    deleteTestEnvValue("OCM_ACTIVE_ENV_ROOT");
-    await expect(invokeUpdateRun({})).rejects.toThrow("OCM update binding is incomplete");
-    expect(exec).not.toHaveBeenCalled();
-    expect(listUpdateRuns()).toEqual([]);
-  });
-});
 
 it("preserves native read-only history with an older manager while refusing managed writes and reads", async () => {
   await withManager(async () => {
@@ -578,80 +570,6 @@ it.each(["timeout", "authentication", "malformed", "binding", "identity", "job-r
     });
   },
 );
-
-it("does not pass config-owned host tool overrides into the trusted manager", async () => {
-  await withManager(async () => {
-    const config = { env: { vars: { OCM_INTERNAL_NPM_BIN: "/config-owned/npm" } } };
-    const rollback = prepareConfigRuntimeEnv({
-      previousConfig: {},
-      nextConfig: config,
-      env: process.env,
-    }).publish();
-    try {
-      await invokeUpdateRun({}, undefined, config);
-      expect(process.env.OCM_INTERNAL_NPM_BIN).toBe("/config-owned/npm");
-      expect(exec.mock.calls.length).toBe(2);
-      expect(
-        exec.mock.calls.every((call) => {
-          const options = call[2];
-          return typeof options === "object" && options.baseEnv?.OCM_INTERNAL_NPM_BIN === undefined;
-        }),
-      ).toBe(true);
-    } finally {
-      rollback();
-    }
-  });
-});
-
-it("rechecks browser authority after awaiting the manager without an explicit session guard", async () => {
-  await withManager(async ({ capability, job }) => {
-    let current = true;
-    exec.mockImplementation(async (_command, args) => {
-      if (args[2] === "capabilities") {
-        current = false;
-      }
-      if (args[2] === "start") {
-        job.id = args[args.indexOf("--request-id") + 1]!;
-      }
-      return { stdout: JSON.stringify(args[2] === "capabilities" ? capability : job), stderr: "" };
-    });
-    await expect(
-      invokeUpdateRun(
-        {},
-        undefined,
-        undefined,
-        {},
-        {
-          hasCurrentClientAuthority: () => current,
-        },
-      ),
-    ).rejects.toThrow("Gateway requester authority changed");
-    expect(exec.mock.calls.some(([, args]) => args[2] === "start")).toBe(false);
-  });
-});
-
-it("keeps source and external-chat requests on the existing refusal path", async () => {
-  await withManager(async ({ capability }) => {
-    capability.bindingKind = "launcher";
-    const respond = vi.fn();
-    await invokeUpdateRun({}, respond);
-    expect(respond.mock.calls.at(-1)?.[1]).toMatchObject({
-      result: { reason: "external-supervisor-update-required" },
-    });
-    capability.bindingKind = "runtime";
-    delete capability.bindingName;
-    await invokeUpdateRun({}, respond);
-    expect(respond.mock.calls.at(-1)?.[1]).toMatchObject({
-      result: { reason: "external-supervisor-update-required" },
-    });
-    capability.bindingName = "stable";
-    await invokeUpdateRun({ requester: { channel: "slack", senderId: "C0123ABC" } }, respond);
-    expect(respond.mock.calls.at(-1)?.[1]).toMatchObject({
-      result: { reason: "external-supervisor-update-required" },
-    });
-    expect(exec.mock.calls.some(([, args]) => args[2] === "start")).toBe(false);
-  });
-});
 
 it("redacts manager diagnostics before RPC/UI projection and probe errors", async () => {
   await withManager(async ({ job }) => {

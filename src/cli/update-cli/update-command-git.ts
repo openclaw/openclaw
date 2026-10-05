@@ -5,7 +5,7 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readRegularFile } from "../../infra/fs-safe.js";
-import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
 import { assessInitialUpdateSnapshotCapacity } from "../../infra/update-candidate-snapshot.js";
@@ -62,11 +62,8 @@ import {
   resolveGlobalManager,
   runUpdateStep,
 } from "./shared.js";
-import {
-  prepareGitPackageExposure,
-  readPackageUpdateIdentity,
-  runPackageUpdateDoctor,
-} from "./update-command-package.js";
+import { readPackageUpdateIdentity } from "./update-command-package-identity.js";
+import { prepareGitPackageExposure, runPackageUpdateDoctor } from "./update-command-package.js";
 import { gatewayServiceCommandUsesRoot } from "./update-command-service-plan.js";
 
 export async function retireStandaloneGitWrapper(params: {
@@ -455,7 +452,7 @@ export async function updateGitInstall(params: {
       status: "error",
       mode: "git",
       root: params.root,
-      reason: "npm lifecycle policy preflight",
+      reason: "npm-lifecycle-policy-preflight",
       recovery: await (params.installKind === "git"
         ? readCurrentGitUpdateRecovery(params.root, effectiveTimeout)
         : verifyPackageUpdateRecovery(params.root)),
@@ -620,7 +617,7 @@ export async function updateGitInstall(params: {
         status: "error",
         mode: "git",
         root: params.root,
-        reason: cloneStep.name,
+        reason: "git-clone-failed",
         recovery: await (params.installKind === "git"
           ? readCurrentGitUpdateRecovery(params.root, effectiveTimeout)
           : verifyPackageUpdateRecovery(params.root)),

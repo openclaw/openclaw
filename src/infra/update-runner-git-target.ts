@@ -19,7 +19,7 @@ import {
   type UpdateChannel,
 } from "./update-channels.js";
 import { compareSemverStrings } from "./update-check.js";
-import type { DevUpdateTarget } from "./update-dev-target.js";
+import { isFullGitObjectId, type DevUpdateTarget } from "./update-dev-target.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { reportUpdateStepCompletion, runStep } from "./update-runner-command.js";
@@ -342,9 +342,7 @@ export async function prepareGitMutation(params: {
   beforeGitMutation: UpdateRunnerOptions["beforeGitMutation"];
 }): Promise<void> {
   const target = await readGitTargetSchemaVersions(params);
-  const sha = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(params.revision)
-    ? params.revision.toLowerCase()
-    : undefined;
+  const sha = isFullGitObjectId(params.revision) ? params.revision.toLowerCase() : undefined;
   await params.beforeGitMutation({
     ...(sha ? { sha } : {}),
     ...(target.status === "ok"
@@ -431,6 +429,48 @@ export async function fetchGitUpdateTarget(params: {
   const { root, channel, devTarget, name, step: targetStep, workStep, steps } = params;
   const refreshedRemotes: string[] = [];
   const result = (ok: boolean) => ({ ok, refreshedRemotes });
+  if (channel === "dev" && devTarget?.mode === "detached" && isFullGitObjectId(devTarget.ref)) {
+    // A pinned commit needs no remote freshness. Probe privately without allowing
+    // promised-object hydration; the normal candidate/transfer owners still verify its contents.
+    const options = targetStep(
+      "git-resolve-target",
+      [
+        "git",
+        "-C",
+        root,
+        "--no-lazy-fetch",
+        "cat-file",
+        "--batch-check=%(objectname) %(objecttype)",
+      ],
+      root,
+    );
+    const cached = await runStep({
+      ...options,
+      input: `${devTarget.ref}\n`,
+      progress: { ...options.progress, onStepComplete: undefined },
+    });
+    const interrupted =
+      cached.termination === "signal" || cached.exitCode === 130 || cached.exitCode === 143;
+    const available =
+      !isFailedUpdateStep(cached) &&
+      !cached.signal &&
+      !interrupted &&
+      cached.stdoutTail?.trim() === `${devTarget.ref.toLowerCase()} commit`;
+    if (!interrupted && isFailedUpdateStep(cached)) {
+      cached.advisory = {
+        kind: "recoverable-maintenance",
+        message: `Could not inspect the cached target; continuing remote discovery. ${cached.stderrTail ?? ""}`,
+      };
+    }
+    await reportUpdateStepCompletion(options.progress, {
+      ...cached,
+      index: options.stepIndex,
+      total: options.totalSteps,
+    });
+    if (interrupted || available) {
+      return result(available);
+    }
+  }
   const remote = await runStep(targetStep("git-remote", ["git", "-C", root, "remote"], root));
   if (remote.exitCode !== 0) {
     return result(false);
@@ -484,7 +524,7 @@ export async function fetchGitUpdateTarget(params: {
     ? [authority]
     : channel !== "dev" || remoteRef || targetRef?.startsWith("refs/tags/")
       ? []
-      : targetRef && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(targetRef)
+      : targetRef && !isFullGitObjectId(targetRef)
         ? remotes.filter((candidate) => candidate === "origin")
         : remotes;
   for (const fetchRemote of fetchRemotes) {
@@ -640,7 +680,7 @@ export async function readPreferredGitChannelTarget(params: {
         },
       );
       const sha = resolved.code === 0 ? resolved.stdout.trim() : "";
-      if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(sha)) {
+      if (!isFullGitObjectId(sha)) {
         return undefined;
       }
       // Fetch preserves operator-only tags. A selected cached tag is not a fresh remote fact.

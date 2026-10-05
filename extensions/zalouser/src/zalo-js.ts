@@ -393,10 +393,7 @@ async function ensureApi(
     if (!stored || !isCurrent()) {
       throw new Error(`No saved Zalo session for profile "${profile}"`);
     }
-    const zalo = await createZalo({
-      logging: false,
-      selfListen: false,
-    });
+    const zalo = await createZalo();
     const api = await withTimeout(
       zalo.login({
         imei: stored.imei,
@@ -960,11 +957,10 @@ export async function sendZaloDeliveredEvent(params: {
   profile?: string | null;
   isGroup?: boolean;
   message: ZaloEventMessage;
-  isSeen?: boolean;
 }): Promise<void> {
   await withZaloApi(params.profile, async (api) => {
     const type = params.isGroup ? ThreadType.Group : ThreadType.User;
-    await api.sendDeliveredEvent(params.isSeen === true, params.message, type);
+    await api.sendDeliveredEvent(true, params.message, type);
   });
 }
 
@@ -1096,7 +1092,7 @@ export async function startZaloQrLogin(params: {
     login.waitPromise = (async () => {
       let capturedCredentials: ZaloCredentialPayload | null = null;
       try {
-        const zalo = await createZalo({ logging: false, selfListen: false });
+        const zalo = await createZalo();
         const api = await zalo.loginQR(undefined, (event: LoginQRCallbackEvent) => {
           const current = activeQrLogins.get(profile);
           if (!current || current.id !== login.id) {

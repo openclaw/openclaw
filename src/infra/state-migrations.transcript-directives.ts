@@ -118,28 +118,23 @@ function writeMigrationCursor(
 ): void {
   const now = Date.now();
   const db = getNodeSqliteKysely<TranscriptDirectiveMigrationDatabase>(database);
+  const row = {
+    agent_id: agentId,
+    app_version: JSON.stringify(cursor),
+    role: "agent",
+    schema_version: 1,
+    updated_at: now,
+  };
   executeSqliteQuerySync(
     database,
     db
       .insertInto("schema_meta")
       .values({
-        agent_id: agentId,
-        app_version: JSON.stringify(cursor),
+        ...row,
         created_at: now,
         meta_key: MIGRATION_META_KEY,
-        role: "agent",
-        schema_version: 1,
-        updated_at: now,
       })
-      .onConflict((conflict) =>
-        conflict.column("meta_key").doUpdateSet({
-          agent_id: agentId,
-          app_version: JSON.stringify(cursor),
-          role: "agent",
-          schema_version: 1,
-          updated_at: now,
-        }),
-      ),
+      .onConflict((conflict) => conflict.column("meta_key").doUpdateSet(row)),
   );
 }
 

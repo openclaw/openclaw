@@ -43,8 +43,8 @@ import {
   readCommittedSessionEntryCache,
   readSessionEntryCache,
 } from "./session-accessor.sqlite-entry-cache.js";
-import { recordSessionParticipant } from "./session-accessor.sqlite-participants.js";
 import { updateSessionGroupCategoriesInWorker } from "./session-group-categories.js";
+import { recordSessionParticipantInWorker as recordSessionParticipant } from "./session-sharing-store.async.js";
 import {
   addSessionMember,
   listSessionMembersInWorker,
@@ -276,7 +276,7 @@ it("commits aliased worker membership and participant facts before publishing, a
       updatedAt: 1,
       createdActor: { type: "human" as const, source: "profile" as const, id: "owner" },
     };
-    await upsertSessionEntryCore(scope, entry);
+    replaceSessionEntrySync(scope, entry);
     const expectedEntry = {
       sessionId: entry.sessionId,
       createdActor: entry.createdActor,

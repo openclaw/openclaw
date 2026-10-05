@@ -23,8 +23,7 @@ import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
-import { immutableSubagentRun } from "./subagent-registry-persistence.js";
+import { immutableSubagentRun, subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type RegistryTestApi = {
@@ -39,7 +38,6 @@ type RegistryTestApi = {
   releaseSubagentRun(runId: string): Promise<void>;
   resetSubagentRegistryForTests(opts?: { persist?: boolean }): Promise<void>;
   testing: {
-    failQueuedSubagentRun(runId: string, error: string): Promise<boolean>;
     sweepOnceForTests(): Promise<void>;
     runSweeperTickForTests(): Promise<void>;
   };
@@ -100,8 +98,6 @@ export async function finalizeInterruptedSubagentRun(params: {
 }
 
 export const testing = {
-  failQueuedSubagentRun: (runId: string, error: string) =>
-    getRegistryTestApi().testing.failQueuedSubagentRun(runId, error),
   sweepOnceForTests: () => getRegistryTestApi().testing.sweepOnceForTests(),
   runSweeperTickForTests: () => getRegistryTestApi().testing.runSweeperTickForTests(),
 };

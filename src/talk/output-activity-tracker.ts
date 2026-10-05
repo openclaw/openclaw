@@ -17,7 +17,7 @@ export type RealtimeVoiceOutputActivityDelta = {
 };
 
 /** Current output counters and playback timestamps. */
-export type RealtimeVoiceOutputActivitySnapshot = {
+type RealtimeVoiceOutputActivitySnapshot = {
   audioMs: number;
   chunks: number;
   sourceAudioBytes: number;

@@ -76,11 +76,9 @@ export type {
   SessionLifecycleArtifactCleanupParams,
   SessionLifecycleArtifactCleanupResult,
   SessionLifecycleStoreTarget,
-  SessionLifecycleTranscriptInfo,
   SessionParentForkDecision,
   SessionPatchProjectionContext,
   SessionPatchProjectionFailure,
-  SessionPatchProjectionOperation,
   SessionPatchProjectionResult,
   SessionPatchProjectionSnapshot,
   SessionPatchProjectionTarget,
@@ -190,12 +188,13 @@ export {
   type RestartTombstoneRecoveryResult,
 } from "./session-accessor.sqlite-recovery.js";
 export { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
-export { updateSessionProfileInvolvement } from "./session-accessor.sqlite-involvement.js";
 export {
-  MAX_SESSION_PARTICIPANTS,
-  recordSessionParticipant,
-  type RecordSessionParticipantResult,
-} from "./session-accessor.sqlite-participants.js";
+  updateSessionProfileInvolvement,
+  updateSessionProfileInvolvementAsync,
+} from "./session-involvement-store.js";
+export { MAX_SESSION_PARTICIPANTS } from "./session-entry-provenance.js";
+export type { RecordSessionParticipantResult } from "./session-accessor.sqlite-participants.native.js";
+export { recordSessionParticipantInWorker as recordSessionParticipant } from "./session-sharing-store.async.js";
 export { type SessionParticipantRecord } from "./session-accessor.sqlite-participant-projection.js";
 export {
   listCanonicalSessionRepairFacts,
@@ -208,7 +207,6 @@ export {
   applySessionEntryLifecycleMutation,
   applySessionEntryReplacements,
   applySessionPatchProjection,
-  applySessionPatchProjections,
   cleanupPluginHostSessionStore,
   cleanupSessionLifecycleArtifactsCore,
   deleteSessionEntryLifecycle,
@@ -243,6 +241,7 @@ export {
   loadTranscriptHeaderSync,
   loadTranscriptSuffixEventsBoundedSync,
   persistCompactionBoundaryWithSessionEntrySync,
+  persistCompactionBoundaryWithSessionEntryAsync,
   preflightSessionTranscriptForManualCompact,
   publishTranscriptUpdate,
   readLatestTranscriptAssistantText,

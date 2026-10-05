@@ -1,3 +1,5 @@
+import type { UserProfileIdentity } from "../../state/user-profiles.types.js";
+
 /** Server-attested identity facts shared by RPC and transport client records. */
 export type GatewayWsBrowserOrigin = {
   requestHost?: string;
@@ -5,8 +7,4 @@ export type GatewayWsBrowserOrigin = {
   isLocalClient?: boolean;
 };
 
-export type PreparedSessionProfile = {
-  profileId: string;
-  aliases: ReadonlySet<string>;
-  role: string | null;
-};
+export type PreparedSessionProfile = UserProfileIdentity;

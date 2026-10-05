@@ -29,9 +29,13 @@ import { OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import type { AcceptedCompactionSuccessor } from "../embedded-agent-runner/compaction-successor.js";
 import { buildMainSessionRecoveryClearPatch } from "../main-session-recovery/main-session-recovery-clear.js";
+import { inspectRecoveryLifecycleEvent } from "../main-session-recovery/main-session-recovery-lifecycle.js";
 import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
 import type { AgentRunSessionTarget } from "../run-session-target.types.js";
-import { throwAgentRunRestartAbortReason } from "../run-termination.js";
+import {
+  createAgentRunRestartAbortError,
+  throwAgentRunRestartAbortReason,
+} from "../run-termination.js";
 import type { SessionMaintenanceRequest } from "../session-maintenance/run.js";
 import { persistAssistantTranscriptRepairRecord } from "./assistant-transcript-repair.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
@@ -57,19 +61,28 @@ type EmbeddedAgentAttempt = Awaited<ReturnType<typeof runEmbeddedAgentAttempt>>;
 const log = createSubsystemLogger("agents/agent-command");
 
 export async function clearCommandRecoveryClaim(params: {
-  prepared: PreparedAgentCommandExecution;
+  prepared: Pick<
+    PreparedAgentCommandExecution,
+    "sessionStore" | "sessionKey" | "storePath" | "runId" | "sessionAgentId"
+  >;
   sessionEntry?: SessionEntry;
   runOwnedSessionId: string;
   sessionReboundDuringRun: boolean;
   trackedRestartRecoveryDeliveryClaim: boolean;
   terminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidenceResult;
+  terminalEvent: Parameters<typeof inspectRecoveryLifecycleEvent>[0]["event"];
+  abortSignal?: AbortSignal;
 }): Promise<void> {
   const { sessionStore, sessionKey, storePath, runId } = params.prepared;
+  const interruptedForRestart = () =>
+    inspectRecoveryLifecycleEvent({ event: params.terminalEvent, abortSignal: params.abortSignal })
+      .interrupted;
   if (
     params.sessionReboundDuringRun ||
     !params.trackedRestartRecoveryDeliveryClaim ||
     !sessionStore ||
-    !sessionKey
+    !sessionKey ||
+    interruptedForRestart()
   ) {
     return;
   }
@@ -93,7 +106,13 @@ export async function clearCommandRecoveryClaim(params: {
           ...buildMainSessionRecoveryClearPatch(entry),
           updatedAt: Date.now(),
         },
+        assertCommitAllowed: () => {
+          if (interruptedForRestart()) {
+            throw createAgentRunRestartAbortError();
+          }
+        },
         shouldPersist: (current) =>
+          !interruptedForRestart() &&
           shouldPersistRestartRecoveryCleanup(current, params.runOwnedSessionId, runId),
       });
     }
@@ -200,6 +219,11 @@ export async function finalizeEmbeddedAgentCommand(params: {
     lifecycleGeneration,
   } = params.attempt;
   const { skillsSnapshot, runContext } = params.embeddedSessionState;
+  const interruptedForRestart = () =>
+    inspectRecoveryLifecycleEvent({
+      event: { data: { phase: "end", ...terminal.outcome } },
+      abortSignal: deferredLifecycle.signal,
+    }).interrupted;
   const effectiveCwd = cwd ?? workspaceDir;
   const isHeartbeatLifecycleRun = isHeartbeatLifecycleRunKind(params.opts.bootstrapContextRunKind);
   let sessionEntry = params.sessionEntry;
@@ -434,6 +458,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
               model: agentMeta?.model ?? fallbackModel,
               thinkLevel: effectiveTurnThinkLevel,
               auth: params.attempt.maintenanceAuthProfile,
+              senderIsOwner: params.opts.senderIsOwner,
             }),
             sessionId: runOwnedSessionId,
             lifecycleRevision: sessionEntry.lifecycleRevision,
@@ -594,7 +619,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
       sessionKey &&
       !isSubagentSessionKey(sessionKey) &&
       !params.suppressVisibleSessionEffects &&
-      !sessionReboundDuringRun
+      !sessionReboundDuringRun &&
+      !interruptedForRestart()
     ) {
       const entry =
         (await resolveFreshSessionEntryForDelivery?.()) ?? sessionStore[sessionKey] ?? sessionEntry;
@@ -650,7 +676,13 @@ export async function finalizeEmbeddedAgentCommand(params: {
               : {}),
             ...(clearsRecoveryCycle ? buildMainSessionRecoveryClearPatch(entry) : {}),
           },
+          assertCommitAllowed: () => {
+            if (interruptedForRestart()) {
+              throw createAgentRunRestartAbortError();
+            }
+          },
           shouldPersist: (current) =>
+            !interruptedForRestart() &&
             shouldPersistCurrentRunSessionCleanup(current, runOwnedSessionId) &&
             (!recoveryClaimEntry ||
               current?.restartRecoveryDeliveryRunId === runId ||

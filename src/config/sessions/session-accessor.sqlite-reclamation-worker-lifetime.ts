@@ -35,7 +35,7 @@ import type {
   SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import type {
-  SqliteSessionReclamationPlan,
+  SqliteArchiveReclamationPlan,
   SqliteSessionReclamationResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import { revokeSqliteReclamationCommit } from "./session-accessor.sqlite-reclamation-commit.js";
@@ -73,7 +73,7 @@ import {
   type SqliteMutationWorkerTransport,
 } from "./session-accessor.sqlite-worker-transport.js";
 
-type DatabaseOptions = SqliteSessionReclamationPlan["databaseOptions"];
+type DatabaseOptions = SqliteArchiveReclamationPlan["databaseOptions"];
 type SqliteMutationWorkerRequest =
   | SqliteReclamationWorkerRequest
   | SqliteReclamationPrepareRequest
@@ -239,7 +239,7 @@ export class SqliteReclamationWorker {
   async prepare(
     params: Omit<MutationRunParams<SqliteReclamationPreparation>, "claim"> & {
       expectedSource: SqliteReclamationExistingSource;
-      plan: SqliteSessionReclamationPlan;
+      plan: SqliteArchiveReclamationPlan;
       assertCurrent: () => void;
     },
   ): Promise<
@@ -320,7 +320,7 @@ export class SqliteReclamationWorker {
 
   run(
     params: MutationRunParams<SqliteSessionReclamationResult> & {
-      plan: SqliteSessionReclamationPlan;
+      plan: SqliteArchiveReclamationPlan;
       transferList: ArrayBuffer[];
     },
   ): Promise<SqliteSessionReclamationResult> {
@@ -706,7 +706,7 @@ export class SqliteReclamationWorker {
   }
 }
 
-function reclamationSessionId(plan: SqliteSessionReclamationPlan): string | undefined {
+function reclamationSessionId(plan: SqliteArchiveReclamationPlan): string | undefined {
   return plan.kind === "entry"
     ? plan.preparedTargetSnapshot[0]?.entry.sessionId
     : plan.kind === "historical-generation" || plan.kind === "history-eviction"

@@ -250,6 +250,14 @@ test("exports Gateway RPC phase metrics with real SDK aggregation and upstream t
   try {
     emit({ ...base, phase: "received" });
     emit({ ...base, phase: "response", outcome: "ok", durationMs: 250 });
+    emit({
+      ...base,
+      phase: "response",
+      outcome: "ok",
+      durationMs: 750,
+      responseBytes: 8192,
+      firstResponse: false,
+    });
     emit({ ...base, phase: "handler", outcome: "returned", durationMs: 400, admissionMs: 100 });
     emit({
       ...base,

@@ -156,9 +156,10 @@ function copySessionTitleText(text: string | null): string | null {
 function hydrateSqliteTitleFields(
   target: SessionTranscriptReadTarget,
   opts?: SessionTitleReadOptions,
+  env?: NodeJS.ProcessEnv,
 ): SessionTitleFields {
   try {
-    const scope = toTranscriptReadScope(target);
+    const scope = { ...toTranscriptReadScope(target), ...(env ? { env } : {}) };
     const cacheKey = sqliteTitleFieldCacheKey(target);
     const watermark = readSessionTranscriptWatermark(scope);
     if (watermark.maxSeq === null) {
@@ -262,7 +263,7 @@ export function readSessionTitleFieldsFromTranscript(
   scope: SessionTranscriptReadScope,
   opts?: SessionTitleReadOptions,
 ): SessionTitleFields {
-  return hydrateSqliteTitleFields(resolveSessionTranscriptReadTarget(scope), opts);
+  return hydrateSqliteTitleFields(resolveSessionTranscriptReadTarget(scope), opts, scope.env);
 }
 
 /** Reuse the bounded title cache in the existing history worker without transporting session metadata. */

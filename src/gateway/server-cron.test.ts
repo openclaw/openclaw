@@ -5,13 +5,22 @@ import os from "node:os";
 import path from "node:path";
 import { setImmediate as waitForImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createRequireRecord } from "../../test/helpers/record.js";
 import { AgentDeletionCommitUncertainError } from "../agents/agent-lifecycle-registry.js";
+import {
+  abortAndDrainEmbeddedAgentRun,
+  clearActiveEmbeddedRun,
+  isEmbeddedAgentRunHandleActive,
+  setActiveEmbeddedRun,
+} from "../agents/embedded-agent-runner/runs.js";
+import {
+  createEmbeddedRunHandle,
+  testing as embeddedRunsTesting,
+} from "../agents/embedded-agent-runner/runs.test-support.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { CronService } from "../cron/service.js";
 import { onTimer as onCronTimer } from "../cron/service/timer.test-support.js";
 import { resolveSkillCollectionReviewMonitorSpecs } from "../cron/skill-collection-review-monitor.js";
@@ -101,7 +110,9 @@ const {
     hasHooks: (hookName: string) => hookName === "cron_changed",
     runCronChanged: runCronChangedMock,
   })),
-  abortAndDrainEmbeddedAgentRunMock: vi.fn(async () => ({
+  abortAndDrainEmbeddedAgentRunMock: vi.fn<
+    typeof import("../agents/embedded-agent.js").abortAndDrainEmbeddedAgentRun
+  >(async () => ({
     aborted: true,
     drained: true,
     forceCleared: false,
@@ -926,44 +937,6 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("pins ownerless jobs only when a retained legacy owner is present", async () => {
-    const tmpDir = path.join(os.tmpdir(), `server-cron-retained-owner-${Date.now()}`);
-    const cfg = retainLegacyDefaultAgentId(
-      {
-        cron: { store: path.join(tmpDir, "cron.json") },
-        agents: {
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId: "ops" } },
-          entries: { ops: {}, research: {} },
-        },
-      } as OpenClawConfig,
-      "ops",
-    );
-    loadConfigMock.mockReturnValue(cfg);
-    const initial = createCronService(cfg);
-    await initial.cron.start();
-    const job = await addCronJob(
-      initial,
-      "legacy retained owner",
-      { kind: "agentTurn", message: "pin once" },
-      {
-        schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
-      },
-    );
-    expect(job.agentId).toBe("ops");
-    initial.cron.stop();
-
-    const restartedCfg = structuredClone(cfg);
-    loadConfigMock.mockReturnValue(restartedCfg);
-    const restarted = createCronService(restartedCfg);
-    try {
-      await restarted.cron.start();
-      expect((await restarted.cron.readJob(job.id))?.agentId).toBe("ops");
-    } finally {
-      restarted.cron.stop();
-    }
-  });
-
   it("passes the persisted payload tool cap to trigger evaluation", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-14T12:00:00.000Z"));
@@ -1547,6 +1520,61 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  describe("timed-out agent run cleanup", () => {
+    const sessionId = "shared-main-session";
+    const sessionKey = "agent:main:main";
+
+    async function cleanupTimedOutCronRun(state: CronServiceFixture) {
+      const job = await addAgentTurnJob(state, "shared session turn", "work");
+      abortAndDrainEmbeddedAgentRunMock.mockImplementation(abortAndDrainEmbeddedAgentRun);
+      await getCronDeps(state).cleanupTimedOutAgentRun?.({
+        job,
+        timeoutMs: 600_000,
+        execution: { jobId: job.id, sessionId, sessionKey, runId: "cron-run" },
+      });
+    }
+
+    function registerRun(runId: string) {
+      const handle = createEmbeddedRunHandle({
+        runId,
+        abort: vi.fn(() => clearActiveEmbeddedRun(sessionId, handle, sessionKey)),
+      });
+      setActiveEmbeddedRun(sessionId, handle, sessionKey);
+      return handle;
+    }
+
+    afterEach(() => {
+      embeddedRunsTesting.resetActiveEmbeddedRuns();
+      abortAndDrainEmbeddedAgentRunMock.mockReset();
+    });
+
+    it("leaves a replacement run and its MCP runtime intact after the cron run ended", async () => {
+      await withCronService(createCronConfig("server-cron-timeout-replacement"), async (state) => {
+        const replacement = registerRun("replacement-run");
+
+        await cleanupTimedOutCronRun(state);
+
+        expect(replacement.abort).not.toHaveBeenCalled();
+        expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
+        expect(retireSessionMcpRuntimeMock).not.toHaveBeenCalled();
+      });
+    });
+
+    it("aborts the cron run and retires its MCP runtime while it still owns the session", async () => {
+      await withCronService(createCronConfig("server-cron-timeout-owner"), async (state) => {
+        const original = registerRun("cron-run");
+
+        await cleanupTimedOutCronRun(state);
+
+        expect(original.abort).toHaveBeenCalledOnce();
+        expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(false);
+        expect(retireSessionMcpRuntimeMock).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ sessionId, reason: "cron-timeout-cleanup" }),
+        );
+      });
+    });
+  });
+
   it("keeps a stream source running when a conditional or invalid update is rejected", async () => {
     const watched = createWatchedRun();
     const { cancel, detachOutput } = watched;
@@ -1907,7 +1935,7 @@ describe("buildGatewayCronService", () => {
 
   it("cron_changed hook event includes agentId from the job", async () => {
     const cfg = createCronConfig("server-cron-hook-agentId");
-    cfg.agents = { entries: { main: { default: true }, yinze: {} } };
+    cfg.agents = { entries: { main: {}, yinze: {} } };
     await withCronService(cfg, async (state) => {
       const job = await addAgentTurnJob(state, "agent-scoped-job", "agent check", {
         agentId: "yinze",
@@ -3183,7 +3211,7 @@ describe("buildGatewayCronService", () => {
       cron: { store: path.join(os.tmpdir(), `server-cron-untargeted-${Date.now()}`, "cron.json") },
       agents: {
         entries: {
-          primary: { default: true, model: "test/primary" },
+          primary: { model: "test/primary" },
           ops: { model: "test/ops" },
         },
       },
@@ -3222,7 +3250,7 @@ describe("buildGatewayCronService", () => {
           },
         },
         entries: {
-          primary: { default: true },
+          primary: {},
         },
       },
     } as OpenClawConfig;
@@ -3331,7 +3359,7 @@ describe("buildGatewayCronService", () => {
     const cfg = createCronConfig("server-cron-unknown-agent");
     cfg.agents = {
       entries: {
-        primary: { default: true, model: "test/primary" },
+        primary: { model: "test/primary" },
         ops: { model: "test/ops" },
       },
     };
@@ -3367,7 +3395,7 @@ describe("buildGatewayCronService", () => {
       },
       agents: {
         entries: {
-          primary: { default: true, model: "test/primary" },
+          primary: { model: "test/primary" },
           ops: { model: "test/ops" },
         },
       },
@@ -3413,7 +3441,7 @@ describe("buildGatewayCronService", () => {
       ...createCronConfig("server-cron-system-owner-wake"),
       agents: {
         defaults: { systemAgent: { agentId: "ops" } },
-        entries: { main: { default: true }, ops: {} },
+        entries: { main: {}, ops: {} },
       },
     } as OpenClawConfig;
     const state = loadCronService(cfg);
@@ -3577,13 +3605,13 @@ describe("buildGatewayCronService", () => {
     startupCfg.agents = {
       defaults: { workspace: path.join(tmpDir, "workspace") },
       entries: {
-        main: { default: true },
+        main: {},
         yinze: { workspace: path.join(tmpDir, "workspace-yinze") },
       },
     };
     const reloadedCfg = {
       ...startupCfg,
-      agents: { ...startupCfg.agents, entries: { main: { default: true } } },
+      agents: { ...startupCfg.agents, entries: { main: {} } },
     } as OpenClawConfig;
     await withCronService(startupCfg, async (state) => {
       const job = await addAgentTurnJob(state, "isolated-subagent-workspace", "read SOW.md", {
@@ -3608,7 +3636,7 @@ describe("buildGatewayCronService", () => {
       cron: { store: path.join(tmpDir, "cron.json") },
       agents: {
         defaults: { workspace: path.join(tmpDir, "workspace") },
-        entries: { main: { default: true }, yinze: {}, other: {} },
+        entries: { main: {}, yinze: {}, other: {} },
       },
     } as OpenClawConfig;
     const state = loadCronService(cfg);
@@ -3644,7 +3672,7 @@ describe("buildGatewayCronService", () => {
     const tmpDir = path.join(os.tmpdir(), `server-cron-agent-uncertain-${Date.now()}`);
     const cfg = {
       cron: { store: path.join(tmpDir, "cron.json") },
-      agents: { entries: { main: { default: true }, yinze: {}, other: {} } },
+      agents: { entries: { main: {}, yinze: {}, other: {} } },
     } as OpenClawConfig;
     await withCronService(cfg, async (state) => {
       for (const [agentId, name] of [
@@ -3706,7 +3734,7 @@ describe("buildGatewayCronService", () => {
     const tmpDir = path.join(os.tmpdir(), `server-cron-agent-fenced-${Date.now()}`);
     const cfg = {
       cron: { store: path.join(tmpDir, "cron.json") },
-      agents: { entries: { main: { default: true }, yinze: {} } },
+      agents: { entries: { main: {}, yinze: {} } },
     } as OpenClawConfig;
     await withCronService(cfg, async (state) => {
       const job = await addAgentTurnJob(state, "fenced-job", "must not run", {
@@ -3731,12 +3759,12 @@ describe("buildGatewayCronService", () => {
       cron: { store: path.join(tmpDir, "cron.json") },
       agents: {
         defaults: { workspace: path.join(tmpDir, "workspace") },
-        entries: { main: { default: true }, yinze: {} },
+        entries: { main: {}, yinze: {} },
       },
     } as OpenClawConfig;
     const deletedCfg = {
       ...cfg,
-      agents: { ...cfg.agents, entries: { main: { default: true } } },
+      agents: { ...cfg.agents, entries: { main: {} } },
     } as OpenClawConfig;
     const state = loadCronService(cfg);
     const commitStarted = createDeferred();
@@ -3793,7 +3821,7 @@ describe("buildGatewayCronService", () => {
           },
         },
         entries: {
-          main: { default: true },
+          main: {},
           yinze: {
             workspace: path.join(tmpDir, "workspace-yinze"),
             heartbeat: {
@@ -3819,7 +3847,7 @@ describe("buildGatewayCronService", () => {
             deliveryFormat: "text",
           },
         },
-        entries: { main: { default: true } },
+        entries: { main: {} },
       },
     } as OpenClawConfig;
     loadConfigMock.mockReturnValue(reloadedCfg);

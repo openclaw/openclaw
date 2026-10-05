@@ -91,9 +91,14 @@ it("refuses unsafe SQLite even when the candidate engine accepts the version", a
   expect(result.env).toBeUndefined();
 });
 
-it.each(["node", "bun"])(
-  "preserves scoped package tools while binding qualified Node under %s",
-  async (runtime) => {
+it.each([
+  { runtime: "node", selectedFirst: false },
+  { runtime: "bun", selectedFirst: false },
+  { runtime: "node", selectedFirst: true },
+  { runtime: "bun", selectedFirst: true },
+])(
+  "preserves scoped package tools under $runtime (selected Node first: $selectedFirst)",
+  async ({ runtime, selectedFirst }) => {
     vi.mocked(runtimes.resolveNodeRuntimeInfo).mockRestore();
     vi.mocked(executables.resolveExecutableFromPathEnv).mockRestore();
     const realNode = resolveTestNodeExecPath();
@@ -132,7 +137,10 @@ it.each(["node", "bun"])(
       Object.defineProperty(process, "execPath", { value: path.join(selectedBin, executable) });
     }
     const result = await prepareGitCandidateNodeRuntime(root, {
-      PATH: [scopedBin, shadowBin, selectedBin].join(path.delimiter),
+      PATH: (selectedFirst
+        ? [selectedBin, scopedBin, shadowBin, selectedBin]
+        : [scopedBin, shadowBin, selectedBin]
+      ).join(path.delimiter),
     });
     expect(result.step).toBeUndefined();
     const observed = await runCommandWithTimeout([manager], {

@@ -150,14 +150,12 @@ describe("local gateway request context", () => {
   it("defaults local model catalog snapshot reads to read-only", async () => {
     const cfg = {
       agents: {
-        list: [
-          {
-            id: "worker",
-            default: true,
+        entries: {
+          worker: {
             agentDir: "/tmp/local-model-catalog-agent",
             workspace: "/tmp/local-model-catalog-workspace",
           },
-        ],
+        },
       },
     } as OpenClawConfig;
     const loadOwner = vi
@@ -203,14 +201,12 @@ describe("local gateway request context", () => {
   it("refreshes local models.list auth after login and logout", async () => {
     const cfg = {
       agents: {
-        list: [
-          {
-            id: "main",
-            default: true,
+        entries: {
+          main: {
             agentDir: "/tmp/local-model-auth-agent",
             workspace: "/tmp/local-model-auth-workspace",
           },
-        ],
+        },
       },
     } as OpenClawConfig;
     const model = {
@@ -300,14 +296,12 @@ describe("local gateway request context", () => {
   it("uses the prepared local owner without starting a catalog load", async () => {
     const cfg = {
       agents: {
-        list: [
-          {
-            id: "main",
-            default: true,
+        entries: {
+          main: {
             agentDir: "/tmp/local-model-timeout-agent",
             workspace: "/tmp/local-model-timeout-workspace",
           },
-        ],
+        },
       },
     } as OpenClawConfig;
     const candidate = {

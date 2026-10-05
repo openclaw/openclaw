@@ -66,9 +66,10 @@ devtunnel host my-openclaw-bot
 
 Alternatives: `ngrok http 18789` or `tailscale funnel 18789` (URLs may change each session). Use your configured Gateway port if it differs. When configuring a reverse proxy, expose only the required webhook path.
 
-The previous port `3978` remains available by default through the Gateway-owned
-compatibility listener. After verifying delivery through the Gateway port, set
-`channels.msteams.legacyWebhook: false` to close the old port.
+New installations use only the Gateway port. Doctor preserves port `3978` on
+existing installations with a one-shot `channels.msteams.legacyWebhook` pin.
+After moving the callback and verifying delivery through the Gateway port,
+remove that pin to close the old port.
 
 **3. Create the app**
 

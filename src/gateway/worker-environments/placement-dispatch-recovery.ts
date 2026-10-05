@@ -10,7 +10,10 @@ import {
   type WorkerActiveDispatchPlacement,
   type WorkerDispatchEnvironmentService,
 } from "./placement-dispatch-failure.js";
-import { cleanupPendingWorkspaceResultOrphans } from "./placement-dispatch-orphan-cleanup.js";
+import {
+  cleanupPendingWorkspaceResultOrphans,
+  type PendingWorkspaceResultOrphanCleanup,
+} from "./placement-dispatch-orphan-cleanup.js";
 import { recoverPendingWorkspaceResults } from "./placement-dispatch-pending-results.js";
 import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
@@ -64,9 +67,9 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       return claim ? [serializeWorkerSessionTurnClaim(claim)] : [];
     }),
   );
-  // Orphan Git refs carry no live authority. Scan them once in the tracked full
-  // post-start sweep, never on readiness or targeted turn recovery.
-  let orphanCleanupPending = false;
+  // Retire orphan refs in bounded post-start sweeps, never on readiness or targeted recovery.
+  // Completed roots belong to this startup pass; settlement removes new refs itself.
+  let orphanCleanupPending: PendingWorkspaceResultOrphanCleanup | undefined;
 
   const reconcileActivePlacement = async (
     initialPlacement: WorkerActiveDispatchPlacement,
@@ -329,7 +332,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
             return;
           }
           const claimId = `reclaim-${randomUUID()}`;
-          const claim = placements.claimReclaimWorkspaceResult(
+          const claim = await placements.claimReclaimWorkspaceResult(
             {
               sessionId: placement.sessionId,
               sessionKey: placement.sessionKey,
@@ -340,7 +343,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
             },
             (recoveryClaim) => environments.fenceWorkerTurnForRecovery(recoveryClaim),
           );
-          placements.handoffWorkspaceResultRecovery(claim);
+          await placements.handoffWorkspaceResultRecovery(claim);
         });
         const environmentId = abandonedEnvironmentId;
         if (environmentId) {
@@ -369,13 +372,17 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     }
     const candidates = await placements.readRecoveryCandidates();
     if (mode === "startup") {
-      orphanCleanupPending = true;
+      orphanCleanupPending = { rootsBySession: new Map(), completedRoots: new Set() };
     }
     for (const { sessionId } of candidates) {
       await admit([sessionId], () => recoverSession(sessionId, mode ?? "restart"));
     }
-    if (mode !== "startup" && orphanCleanupPending) {
-      orphanCleanupPending = !(await cleanupPendingWorkspaceResultOrphans(deps, admit));
+    if (
+      mode !== "startup" &&
+      orphanCleanupPending &&
+      (await cleanupPendingWorkspaceResultOrphans(deps, admit, orphanCleanupPending))
+    ) {
+      orphanCleanupPending = undefined;
     }
   };
 
@@ -398,8 +405,12 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
         recoverSession(candidate.sessionId, "runtime", environmentId, mode),
       );
     }
-    if (orphanCleanupPending && environmentId === undefined) {
-      orphanCleanupPending = !(await cleanupPendingWorkspaceResultOrphans(deps, admit));
+    if (
+      orphanCleanupPending &&
+      environmentId === undefined &&
+      (await cleanupPendingWorkspaceResultOrphans(deps, admit, orphanCleanupPending))
+    ) {
+      orphanCleanupPending = undefined;
     }
   };
 

@@ -159,7 +159,8 @@ export function computeRawDiff(
   }
 }
 
-function truncateValue(value: unknown, maxLen = 40): string {
+function truncateValue(value: unknown): string {
+  const maxLen = 40;
   if (Array.isArray(value)) {
     return t(value.length === 1 ? "configView.itemCount" : "configView.itemCountPlural", {
       count: String(value.length),
@@ -172,10 +173,7 @@ function truncateValue(value: unknown, maxLen = 40): string {
   } catch {
     str = String(value);
   }
-  if (str.length <= maxLen) {
-    return str;
-  }
-  return truncateUtf16Safe(str, maxLen - 3) + "...";
+  return str.length <= maxLen ? str : truncateUtf16Safe(str, maxLen - 3) + "...";
 }
 
 function hintKeyMatchesPathPrefix(hintKey: string, path: ConfigDiffPath): boolean {

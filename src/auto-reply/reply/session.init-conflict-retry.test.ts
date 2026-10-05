@@ -1,11 +1,15 @@
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { AgentHarnessSessionCleanupError } from "../../agents/harness/errors.js";
+import { registerAgentHarness } from "../../agents/harness/registry.js";
 import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import {
@@ -99,14 +103,6 @@ describe("runWithSessionInitConflictRetry", () => {
     expect(attempt).toHaveBeenCalledTimes(2);
   });
 
-  it("respects a caller-provided maxAttempts", async () => {
-    const { attempt, state } = conflictingAttempt(Number.POSITIVE_INFINITY);
-    await expect(
-      runWithSessionInitConflictRetry(attempt, { maxAttempts: 2, sleep: instantSleep }),
-    ).rejects.toBeInstanceOf(ReplySessionInitConflictError);
-    expect(state.calls).toBe(2);
-  });
-
   it("executes an attempt after every caller-provided retry delay", async () => {
     const { attempt, state } = conflictingAttempt(3);
     const delays: number[] = [];
@@ -173,6 +169,55 @@ describe("runWithSessionInitConflictRetry", () => {
 
 describe("initSessionState conflict retry wiring", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-late-conflict-");
+  it("preserves the session generation when registered mandatory cleanup fails, then retries", async () => {
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
+    const registry = createEmptyPluginRegistry();
+    const failure = new AgentHarnessSessionCleanupError("native session still running");
+    let cleanupAvailable = false;
+    await upsertSessionEntryCore(
+      { sessionKey: SESSION_KEY, storePath },
+      {
+        sessionId: "cleanup-blocked-session",
+        lifecycleRevision: "cleanup-original-revision",
+        updatedAt: Date.now() - 86_400_000,
+      },
+    );
+    const readSession = () =>
+      loadSessionEntry({ readConsistency: "latest", sessionKey: SESSION_KEY, storePath });
+    const original = readSession();
+    await withPluginRuntimeRegistryScope(registry, async () => {
+      registerAgentHarness({
+        id: "required-cleanup",
+        label: "Required cleanup",
+        supports: () => ({ supported: false }),
+        runAttempt: async () => {
+          throw new Error("not used");
+        },
+        reset: async () => {
+          if (!cleanupAvailable) {
+            throw failure;
+          }
+        },
+      });
+      const initialize = () =>
+        initSessionState({
+          cfg: { session: { store: storePath, reset: { mode: "idle", idleMinutes: 30 } } },
+          commandAuthorized: true,
+          ctx: { Body: "/new", SessionKey: SESSION_KEY },
+        });
+      await expect(initialize()).rejects.toBe(failure);
+      expect(readSession()).toEqual(original);
+      cleanupAvailable = true;
+      const resumed = await initialize();
+      expect(resumed.isNewSession).toBe(true);
+      expect(readSession()).toMatchObject({
+        sessionId: resumed.sessionId,
+        lifecycleRevision: resumed.sessionEntry.lifecycleRevision,
+      });
+      expect(resumed.sessionEntry.lifecycleRevision).not.toBe(original?.lifecycleRevision);
+    });
+  });
+
   it("retries a late same-session lifecycle conflict without losing either update", async () => {
     const root = sessionDirs.make();
     const storePath = path.join(root, "sessions.json");

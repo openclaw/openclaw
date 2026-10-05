@@ -21,6 +21,7 @@ import {
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   resolveCollapsedToolArgumentPreview as toolArgumentPreview,
+  resolveToolCardDisplay,
   resolveToolCardOutcome,
 } from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
@@ -269,7 +270,7 @@ function renderToolRowContent(
   const displayLabel = formatCollapsedToolSummaryText(summary.label) ?? summary.label;
   const displayName = distinctSummaryText(summary.name, displayLabel);
   return html`
-    ${summary.label !== toolLabel ? html`<span class="chat-tool-msg-summary__label">${displayLabel}</span>` : nothing}
+    ${!displayName || summary.label !== toolLabel ? html`<span class="chat-tool-msg-summary__label">${displayLabel}</span>` : nothing}
     ${
       displayName ? html`<span class="chat-tool-msg-summary__names">${displayName}</span>` : nothing
     }
@@ -421,7 +422,7 @@ export function renderToolApprovalReviews(card: ToolCard) {
 }
 
 export function renderToolCard(
-  card: ToolCard,
+  originalCard: ToolCard,
   opts: ToolRenderOptions & {
     expanded: boolean;
     onToggleExpanded: (id: string) => void;
@@ -430,10 +431,11 @@ export function renderToolCard(
     activityCards?: readonly ToolCard[];
   },
 ) {
+  const card = resolveToolCardDisplay(originalCard);
   const outcome = resolveToolCardOutcome(card, opts.runActive);
   const progressReceipt = renderProgressCardReceipt(card, outcome);
   if (progressReceipt && !opts.children) {
-    return renderPluginToolResult(card, opts, progressReceipt);
+    return renderPluginToolResult(originalCard, opts, progressReceipt);
   }
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
@@ -467,8 +469,9 @@ export function renderToolCard(
     <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
   `;
 
+  // Plugin replacements receive the raw invocation, paired with its own output.
   return renderPluginToolResult(
-    card,
+    originalCard,
     opts,
     html`
       <div
@@ -513,12 +516,12 @@ export function renderToolCard(
                   <details class="chat-tool-wrapper-details">
                     <summary>${t("chat.toolCards.toolInput")}</summary>
                     <div class="chat-tool-msg-body">
-                      ${renderExpandedToolCardContent(card, opts)}
+                      ${renderExpandedToolCardContent(originalCard, opts)}
                     </div>
                   </details>
                 </div>`
               : html`<div class="chat-tool-msg-body">
-                  ${renderExpandedToolCardContent(card, opts)}
+                  ${renderExpandedToolCardContent(originalCard, opts)}
                 </div>`
             : nothing
         }

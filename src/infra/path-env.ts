@@ -34,10 +34,6 @@ function isExecutable(filePath: string): boolean {
   }
 }
 
-function splitPathParts(pathEnv: string): Set<string> {
-  return new Set(normalizeStringEntries(pathEnv.split(path.delimiter)));
-}
-
 function isKnownPathDir(existingPathParts: ReadonlySet<string>, dirPath: string): boolean {
   return existingPathParts.has(dirPath) || safeStatSync(dirPath)?.isDirectory() === true;
 }
@@ -104,24 +100,6 @@ function normalizeTrustedPackageManagerRoot(params: {
   return normalized;
 }
 
-function isLinuxbrewPath(dirPath: string): boolean {
-  return dirPath.split(path.sep).includes(".linuxbrew");
-}
-
-function resolvePathBootstrapBrewDirs(params: {
-  homeDir: string;
-  platform: NodeJS.Platform;
-  existingPathParts: ReadonlySet<string>;
-}): string[] {
-  const candidates = resolveBrewPathDirs({ homeDir: params.homeDir });
-  if (params.platform !== "darwin") {
-    return candidates;
-  }
-  return candidates.filter(
-    (candidate) => !isLinuxbrewPath(candidate) || params.existingPathParts.has(candidate),
-  );
-}
-
 function resolveMiseDataDir(params: { homeDir: string; platform: NodeJS.Platform }): string {
   const miseDataDir = process.env.MISE_DATA_DIR;
   if (miseDataDir !== undefined) {
@@ -139,14 +117,6 @@ function resolveMiseDataDir(params: { homeDir: string; platform: NodeJS.Platform
     return path.join(localAppData, "mise");
   }
   return path.join(params.homeDir, ".local", "share", "mise");
-}
-
-function mergePath(params: { existing: string; prepend?: string[]; append?: string[] }): string {
-  return normalizeUniqueStringEntries([
-    ...(params.prepend ?? []),
-    ...params.existing.split(path.delimiter),
-    ...(params.append ?? []),
-  ]).join(path.delimiter);
 }
 
 function candidateBinDirs(
@@ -193,7 +163,14 @@ function candidateBinDirs(
   // shadow trusted OS binaries.
   // This includes Brew/Homebrew dirs, which are useful for finding `openclaw`
   // in launchd/minimal environments but must not be treated as trusted.
-  append.push(...resolvePathBootstrapBrewDirs({ homeDir, platform, existingPathParts }));
+  append.push(
+    ...resolveBrewPathDirs({ homeDir }).filter(
+      (candidate) =>
+        platform !== "darwin" ||
+        !candidate.split(path.sep).includes(".linuxbrew") ||
+        existingPathParts.has(candidate),
+    ),
+  );
   const pnpmHome = normalizeTrustedPackageManagerRoot({
     value: process.env.PNPM_HOME,
     cwd,
@@ -250,13 +227,17 @@ export function ensureOpenClawCliOnPath(opts: EnsureOpenClawPathOpts = {}) {
   process.env.OPENCLAW_PATH_BOOTSTRAPPED = "1";
 
   const existing = opts.pathEnv ?? process.env.PATH ?? "";
-  const existingPathParts = splitPathParts(existing);
+  const existingPathParts = new Set(normalizeStringEntries(existing.split(path.delimiter)));
   const { prepend, append } = candidateBinDirs(opts, existingPathParts);
   if (prepend.length === 0 && append.length === 0) {
     return;
   }
 
-  const merged = mergePath({ existing, prepend, append });
+  const merged = normalizeUniqueStringEntries([
+    ...prepend,
+    ...existing.split(path.delimiter),
+    ...append,
+  ]).join(path.delimiter);
   if (merged) {
     process.env.PATH = merged;
   }

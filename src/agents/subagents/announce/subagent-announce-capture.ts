@@ -1,3 +1,5 @@
+import { sleep } from "../../../utils/sleep.js";
+
 // Completion output can lag behind lifecycle state, so capture retries briefly
 // before sending an empty or stale announcement.
 export async function readLatestSubagentOutputWithRetryUsing<Outcome = unknown>(params: {
@@ -21,10 +23,7 @@ export async function readLatestSubagentOutputWithRetryUsing<Outcome = unknown>(
     if (remainingMs <= 0) {
       return result;
     }
-    const sleepMs = Math.min(params.retryIntervalMs, remainingMs);
-    await new Promise((resolve) => {
-      setTimeout(resolve, sleepMs);
-    });
+    await sleep(Math.min(params.retryIntervalMs, remainingMs));
   }
 }
 

@@ -7,6 +7,7 @@ import {
   MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
   MAX_WORKSPACE_MANIFEST_BYTES,
 } from "./workspace-inventory-limits.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 
 export type WorkerWorkspaceManifestEntry =
@@ -155,9 +156,8 @@ function validateAndProjectEntries(values: unknown[]): {
     if (byPath.has(entry.path) || (previous && previous >= entry.path)) {
       throw new Error("Worker workspace manifest paths are not unique and sorted");
     }
-    const segments = entry.path.split("/");
-    for (let index = 1; index < segments.length; index += 1) {
-      if (byPath.get(segments.slice(0, index).join("/"))?.type !== "directory") {
+    for (const ancestor of workspacePathAncestors(entry.path)) {
+      if (byPath.get(ancestor)?.type !== "directory") {
         throw new Error("Worker workspace manifest entry has a non-directory parent");
       }
     }

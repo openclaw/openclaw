@@ -39,11 +39,13 @@ export type WorkerInferenceCancellation = {
   }): Promise<string[]>;
 };
 
-type WorkerInferenceSessionControl = {
-  reserveDrain: (sessionId: string) => WorkerInferenceSessionDrainReservation;
-  captureCancel: (sessionId: string, runId?: string) => WorkerInferenceCancellation;
-  resolveTarget: (runId: string) => BoundAgentRunSessionTarget | undefined;
-};
+type WorkerInferenceSessionControl = Pick<
+  ReturnType<typeof createWorkerInferenceSessionControls>,
+  | "hasSession"
+  | "reserveSessionDrain"
+  | "captureSessionCancellation"
+  | "resolveSessionTargetForRunId"
+>;
 
 // Session lifecycle needs a stronger control without widening the inferred public service shape.
 // The weak registration follows the concrete service instance's lifetime.
@@ -56,35 +58,13 @@ export function registerWorkerInferenceSessionControl(
   sessionControlByService.set(service, control);
 }
 
-export function reserveWorkerInferenceSessionDrain(
+export function getWorkerInferenceSessionControl(
   service: unknown,
-  sessionId: string,
-): WorkerInferenceSessionDrainReservation | undefined {
+): WorkerInferenceSessionControl | undefined {
   if (typeof service !== "object" || service === null) {
     return undefined;
   }
-  return sessionControlByService.get(service)?.reserveDrain(sessionId);
-}
-
-export function captureWorkerInferenceCancellation(
-  service: unknown,
-  sessionId: string,
-  runId?: string,
-): WorkerInferenceCancellation | undefined {
-  if (typeof service !== "object" || service === null) {
-    return undefined;
-  }
-  return sessionControlByService.get(service)?.captureCancel(sessionId, runId);
-}
-
-export function resolveWorkerInferenceTarget(
-  service: unknown,
-  runId: string,
-): BoundAgentRunSessionTarget | undefined {
-  if (typeof service !== "object" || service === null) {
-    return undefined;
-  }
-  return sessionControlByService.get(service)?.resolveTarget(runId);
+  return sessionControlByService.get(service);
 }
 
 export function safeRevalidate(
@@ -223,11 +203,8 @@ export function createWorkerInferenceSessionControls(params: {
     predicate: (entry: ActiveInference) => boolean,
     reason: WorkerInferenceErrorReason,
   ) => cancelCaptured(captureCancellationEntries(predicate), reason);
-  const cancelEnvironment = (
-    environmentId: string,
-    reason: WorkerInferenceErrorReason = "session-not-attached",
-  ): Promise<void> =>
-    cancelWhere((entry) => entry.identity.environmentId === environmentId, reason);
+  const cancelEnvironment = (environmentId: string): Promise<void> =>
+    cancelWhere((entry) => entry.identity.environmentId === environmentId, "session-not-attached");
   const cancelClaim = (claimKey: string): Promise<void> =>
     cancelWhere((entry) => entry.claimKey === claimKey, "session-not-attached");
   const captureSessionCancellation = (

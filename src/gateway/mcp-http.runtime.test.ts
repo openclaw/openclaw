@@ -268,59 +268,69 @@ describe("McpLoopbackToolCache", () => {
     },
   );
 
-  it("does not cache tools when cancellation overtakes discovery", async () => {
-    const cache = new McpLoopbackToolCache();
-    const params = scopeParams({ nodeExecAllowed: true, grantToken: "cancelled-grant" });
-    const controller = new AbortController();
-    const reason = new Error("synthetic request cancelled");
-    const entered = createDeferred();
-    const inventory = createDeferred<unknown[]>();
-    listNodes.mockImplementationOnce(() => {
-      entered.resolve();
-      return inventory.promise;
-    });
-    const rejected = expect(cache.resolve({ ...params, signal: controller.signal })).rejects.toBe(
-      reason,
-    );
-    await entered.promise;
-    expect(listNodes).toHaveBeenCalledWith(controller.signal);
-    controller.abort(reason);
-    inventory.resolve([]);
-    await rejected;
-    expect(cache.evictGrant("cancelled-grant")).toBe(false);
-    const next = new AbortController();
-    await cache.resolve({ ...params, signal: next.signal });
-    next.abort();
-    await cache.resolve({ ...params, signal: new AbortController().signal });
-    expect(resolveGatewayScopedTools).toHaveBeenCalledOnce();
-    expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).not.toHaveProperty("signal");
-  });
+  it.each(["discovery", "construction"] as const)(
+    "does not cache tools when cancellation overtakes %s",
+    async (stage) => {
+      const cache = new McpLoopbackToolCache();
+      const params = scopeParams({ nodeExecAllowed: true, grantToken: "cancelled-grant" });
+      const controller = new AbortController();
+      const reason = new Error("synthetic request cancelled");
+      const entered = createDeferred();
+      const resume = createDeferred();
+      if (stage === "discovery") {
+        listNodes.mockImplementationOnce(async () => {
+          entered.resolve();
+          await resume.promise;
+          return [];
+        });
+      } else {
+        resolveGatewayScopedTools.mockImplementationOnce(async () => {
+          entered.resolve();
+          await resume.promise;
+          return scopedToolFixture(["memory_search"]);
+        });
+      }
+      const rejected = expect(cache.resolve({ ...params, signal: controller.signal })).rejects.toBe(
+        reason,
+      );
+      await entered.promise;
+      expect(listNodes).toHaveBeenCalledWith(controller.signal);
+      controller.abort(reason);
+      resume.resolve();
+      await rejected;
+      expect(cache.evictGrant("cancelled-grant")).toBe(false);
+      const next = new AbortController();
+      await cache.resolve({ ...params, signal: next.signal });
+      next.abort();
+      await cache.resolve({ ...params, signal: new AbortController().signal });
+      expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(stage === "discovery" ? 1 : 2);
+      expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).not.toHaveProperty("signal");
+    },
+  );
 
-  it("refreshes cached bound tools when node matching preferences change", async () => {
+  it("refreshes cached bound tools when node display names change", async () => {
     const cache = new McpLoopbackToolCache();
     const params = scopeParams({ nodeExecAllowed: true, execOverrides: { node: "shared-name" } });
     resolveGatewayScopedTools.mockImplementation(({ nodeExecAvailable, execOverrides }) =>
       scopedToolFixture(nodeExecAvailable(execOverrides.node) ? ["exec"] : []),
     );
-    for (const eligibleIsCurrent of [false, true, false]) {
+    for (const eligibleMatches of [false, true, false]) {
       listNodes.mockResolvedValue([
         {
           nodeId: "phone",
-          displayName: "shared-name",
+          displayName: eligibleMatches ? "other-name" : "shared-name",
           connected: true,
           commands: [],
-          clientId: eligibleIsCurrent ? "clawdbot-node" : "openclaw-node",
         },
         {
           nodeId: "worker",
-          displayName: "shared-name",
+          displayName: eligibleMatches ? "shared-name" : "other-name",
           connected: true,
           commands: ["system.run"],
-          clientId: eligibleIsCurrent ? "openclaw-node" : "clawdbot-node",
         },
       ]);
       const scoped = await cache.resolve(params);
-      expect(scoped.tools.map((tool) => tool.name)).toEqual(eligibleIsCurrent ? ["exec"] : []);
+      expect(scoped.tools.map((tool) => tool.name)).toEqual(eligibleMatches ? ["exec"] : []);
     }
   });
 
@@ -407,9 +417,7 @@ describe("MCP loopback Computer Use schema", () => {
       const computerDenied = cfg.tools?.deny?.includes("computer");
       return {
         agentId: "main",
-        tools: computerDenied
-          ? []
-          : [createComputerTool({ modelHasVision: true, pairedNodeComputerUse })],
+        tools: computerDenied ? [] : [createComputerTool({ pairedNodeComputerUse })],
       };
     });
   });

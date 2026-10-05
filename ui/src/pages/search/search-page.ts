@@ -372,9 +372,6 @@ class SearchPage extends OpenClawLightDomElement {
                   path: credential.path,
                   value: readConfigValue(config, credential.path),
                   disabled: !this.canEdit || this.busy,
-                  onPatch: (path, value) => {
-                    void patch(path, value);
-                  },
                 },
                 credential,
                 {

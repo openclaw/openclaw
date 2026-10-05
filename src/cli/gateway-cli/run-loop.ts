@@ -19,11 +19,10 @@ import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { cleanupSnapshotOperations } from "../../infra/sqlite-readonly-location-cleanup.js";
 import { findStartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { runOutsideGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { runWithProcessCleanupBudget } from "../../process/supervisor/cleanup-budget.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { formatCliCommand } from "../command-format.js";
+import { measureGatewayBootstrapStep } from "../startup-trace.js";
 import { createGatewayHostLifecycle } from "./host-lifecycle.js";
 import { installGatewayHostLifeline } from "./host-lifeline.js";
 import { drainGatewayActiveWork } from "./run-loop-drain.js";
@@ -45,6 +44,7 @@ import {
   createGatewayRestartRecovery,
   createGatewayStartupOperations,
   prepareGatewayRestartIteration,
+  prepareGatewayRunLoop,
   type GatewayRunLoopStartOptions,
   type GatewayRestartStartupFailureHandler,
 } from "./run-loop-startup.js";
@@ -58,10 +58,6 @@ const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
 const HARD_EXIT_WATCHDOG_GRACE_MS = 2_000;
 
 type ShutdownFailure = { step: string; error: unknown };
-
-const gatewayLifecycleRuntimeLoader = createLazyImportLoader(
-  () => import("./lifecycle.runtime.js"),
-);
 
 export async function runGatewayLoop(params: {
   start: (
@@ -83,27 +79,14 @@ export async function runGatewayLoop(params: {
     process.title = "openclaw-gateway";
   }
   let startupStartedAt: number;
-  // Prime the lifecycle graph before signals can run. An in-place update rotates
-  // dist chunks; a late import can fail and leave the restart token unconsumed,
-  // coalescing every subsequent restart.
-  const eagerLifecycleRuntime = await gatewayLifecycleRuntimeLoader.load();
-  // Keep admission transitions synchronous through this primed runtime so an
-  // accepted signal cannot yield between token handling and closing root admission.
-  const supervisor = eagerLifecycleRuntime.detectGatewayRespawnSupervisorIdentity(
-    process.env,
-    process.platform,
-    { includeLinuxOpenClawGatewayServiceMarker: true },
-  );
-  const supervisorMode = supervisor?.kind ?? null;
-  const restartDecision = eagerLifecycleRuntime.resolveGatewayRestartDecision();
-  let lock = await acquireGatewayLock({
-    port: params.lockPort,
-    listenerMode: supervisorMode ? "supervised" : "foreground",
+  const initial = await prepareGatewayRunLoop(params);
+  const {
+    lifecycleRuntime: eagerLifecycleRuntime,
     supervisor,
-    ...(params.lifecycleLockDeadlineMs !== undefined
-      ? { lifecycleDeadlineMs: params.lifecycleLockDeadlineMs }
-      : {}),
-  });
+    supervisorMode,
+    restartDecision,
+  } = initial;
+  let lock = initial.lock;
   // Process-owned signal handling must survive gaps with no listening server.
   // Node's signal listeners and pending promises do not retain the event loop.
   const processLifetime = params.ownsProcessLifecycle ? new MessageChannel() : undefined;
@@ -774,7 +757,7 @@ export async function runGatewayLoop(params: {
       const drainBudget = resolveGatewayShutdownDrainBudget({
         budget,
         action,
-        forceRestart: Boolean(restartIntent?.force || restartIntent?.drainBudgetExhausted),
+        forceRestart: restartIntent?.force === true,
         restartWithoutSupervisor,
         acceptedAtMs: acceptedRequest.acceptedAtMs,
         requestedRestartDrainTimeoutMs: isRestart
@@ -1237,9 +1220,8 @@ export async function runGatewayLoop(params: {
         isServing: () => server !== null && restartResolver !== null && !shuttingDown,
         getShutdownBudget: () => (shuttingDown ? reportedBudget : startupBudget),
         acceptStop: () =>
-          runOutsideGatewayRootWorkAdmission(() =>
-            request("stop", "hosted Gateway stop", undefined, undefined, iterationHost),
-          ),
+          request("stop", "hosted Gateway stop", undefined, undefined, iterationHost),
+        commitExternalStop: () => request("stop", "SIGTERM"),
       });
       hostLifecycle = iterationHost;
       let startupFailedBeforeServerHandle = false;
@@ -1257,7 +1239,9 @@ export async function runGatewayLoop(params: {
           completeBoot(pendingRestartCompletion);
         }
         startupStartedAt = Date.now();
-        await params.beginBoot?.(startupStartedAt);
+        await measureGatewayBootstrapStep("cli.bootstrap.boot-lifecycle", () =>
+          params.beginBoot?.(startupStartedAt),
+        );
         if (installationReplacement) {
           await exitReplacedInstallation(installationReplacement);
           return;

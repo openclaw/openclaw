@@ -5,7 +5,6 @@ import type { GatewayRequestContext } from "../../gateway/server-methods/types.j
 import { resolveWorkerToolAuthority } from "../../gateway/worker-environments/worker-tool-authority.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
-import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
 import { mergeAcceptedSessionSpawnsForRun } from "../accepted-session-spawn.js";
 import {
   prepareSystemAgentRunAdmission,
@@ -14,7 +13,6 @@ import {
 import { createSubscribedSessionHarness } from "../embedded-agent-subscribe.e2e-harness.js";
 import type { ExecSessionDefaults } from "../exec-defaults.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
-import type { SessionPlacementTurnParams } from "../session-placement-admission.js";
 import {
   createEmbeddedRunReplayState,
   type EmbeddedRunReplayState,
@@ -37,6 +35,11 @@ vi.mock("../../gateway/github-publication-availability.js", () => ({
 
 vi.mock("../delegation-capability.js", () => ({
   resolveDelegationCapability: vi.fn(() => undefined),
+}));
+
+// mock-isolation: Dispatch fixtures provide an empty auth store and no credential database.
+vi.mock("../auth-profiles/source-check.js", () => ({
+  hasAnyAuthProfileStoreSourceAsync: async () => false,
 }));
 
 vi.mock("../model-auth.js", () => ({
@@ -221,74 +224,37 @@ describe("embedded run retry dispatch", () => {
   });
   afterEach(() => admission.close());
 
-  it.each(["agent:main:policy"])(
-    "dispatches a global plugin attempt with its prepared owner (%s)",
-    async (sandboxSessionKey) => {
-      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
-      input.runInput.runParams.config = {
-        agents: {
-          ownership: "explicit",
-          defaults: { sandbox: { mode: "off" } },
-          list: [{ id: "main" }, { id: "marketing" }],
+  it.each([
+    {
+      session: { execHost: "node", execNode: "session-node", execCwd: "/remote/default" },
+      expected: { host: "node", security: "full", ask: "off", node: "session-node", safeBins: [] },
+    },
+    {
+      session: { sandbox: "required" },
+      expected: { host: "sandbox", security: "deny", ask: "off", safeBins: [] },
+    },
+  ] satisfies Array<{
+    session: ExecSessionDefaults;
+    expected: Awaited<ReturnType<typeof resolveWorkerToolAuthority>>["exec"];
+  }>)(
+    "resolves a projected $expected.host session's execution authority",
+    async ({ session, expected }) => {
+      const result = await dispatchExecSession(session);
+
+      const authority = await resolveWorkerToolAuthority({
+        modelRef: { provider: "openai", model: "gpt-5.6-luna" },
+        turn: {
+          ...result.preparedAttempt,
+          model: result.preparedAttempt.model.id,
+          fastMode: false,
         },
-      };
-      input.runInput.runParams.sessionKey = "global";
-      input.runInput.runParams.sandboxSessionKey = sandboxSessionKey;
-      input.runInput.workspaceResolution.agentId = "marketing";
-      input.runInput.resolvedSessionKey = "global";
-      input.runInput.workspaceDir = tempDirs.make("openclaw-global-plugin-attempt-");
-
-      const { dispatchedAttempt: result } = await prepareAndDispatchEmbeddedRunAttempt(input);
-
-      expect(result.preparedAttempt).toMatchObject({
-        agentId: "marketing",
-        sessionKey: "global",
-        sandbox: null,
+        placement: { agentId: "main", sessionKey: "agent:main:session-1" },
+        assertCurrent: () => {},
       });
-      expect(mocks.runAttempt).toHaveBeenCalledTimes(1);
-      expect(mocks.runAttempt.mock.calls[0]?.[0]).toEqual(result.preparedAttempt);
-      expect(mocks.runAttempt.mock.calls[0]?.[1]).toBeUndefined();
+
+      expect(authority.exec).toEqual(expected);
     },
   );
-
-  it("resolves a projected node session with its node and cwd", async () => {
-    const result = await dispatchExecSession({
-      execHost: "node",
-      execNode: "session-node",
-      execCwd: "/remote/default",
-    });
-
-    const authority = resolveWorkerToolAuthority({
-      launchToolNames: WORKER_TOOL_NAMES,
-      modelRef: { provider: "openai", model: "gpt-5.6-luna" },
-      turn: result.preparedAttempt as unknown as SessionPlacementTurnParams,
-    });
-
-    expect(authority.toolAuthority.exec).toEqual({
-      host: "node",
-      security: "full",
-      ask: "off",
-      node: "session-node",
-      safeBins: [],
-    });
-  });
-
-  it("resolves a projected sandbox-required session as sandbox", async () => {
-    const result = await dispatchExecSession({ sandbox: "required" });
-
-    const authority = resolveWorkerToolAuthority({
-      launchToolNames: WORKER_TOOL_NAMES,
-      modelRef: { provider: "openai", model: "gpt-5.6-luna" },
-      turn: result.preparedAttempt as unknown as SessionPlacementTurnParams,
-    });
-
-    expect(authority.toolAuthority.exec).toEqual({
-      host: "sandbox",
-      security: "deny",
-      ask: "off",
-      safeBins: [],
-    });
-  });
 
   it("forwards private commit accounting before queued notices and thrown attempt cleanup", async () => {
     const flushStarted = createDeferred();

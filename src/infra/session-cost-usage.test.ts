@@ -17,7 +17,7 @@ import {
   readSessionCostUsageRollupRows,
   writeLegacyUsageCostRollupForTest,
 } from "./session-cost-usage-cache.test-support.js";
-import { listUsageCountedTranscriptStats } from "./session-cost-usage-collection.js";
+import { listUsageCountedTranscriptStats } from "./session-cost-usage-collection.test-support.js";
 import {
   loadCostUsageSummary,
   loadCostUsageSummaryFromCache,
@@ -585,7 +585,7 @@ describe("session cost usage", () => {
     expect(readSessionCostUsageRollupRows("main")).toEqual(rowsBefore);
   });
 
-  it("limits synchronous cold aggregate rebuilds to the requested range", async () => {
+  it("refreshes the requested range before background aggregate catch-up", async () => {
     const oldSessionFile = path.join(sessionsDir, "sess-cache-cold-sync-old.jsonl");
     const currentSessionFile = path.join(sessionsDir, "sess-cache-cold-sync-current.jsonl");
     await writeTranscript(
@@ -610,11 +610,14 @@ describe("session cost usage", () => {
       new Date("2025-12-05T12:00:00.000Z"),
     );
 
+    await refreshCostUsageCacheForAgent({
+      agentId: "main",
+      startMs: Date.UTC(2026, 1, 5),
+    });
     const summary = await loadCostUsageSummaryFromCache({
       agentId: "main",
       startMs: Date.UTC(2026, 1, 5),
       endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
-      refreshMode: "sync-when-empty",
     });
 
     expect(summary.totals.totalTokens).toBe(30);

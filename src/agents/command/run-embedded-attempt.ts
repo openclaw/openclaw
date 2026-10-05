@@ -1,6 +1,7 @@
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-handling.model-runtime.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import { clearAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal-writes.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -340,6 +341,13 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
         },
         abortSignal: deferredLifecycle.signal,
         onFallbackStep: (step) => {
+          emitAgentEvent({
+            runId,
+            lifecycleGeneration,
+            ...(sessionKey ? { sessionKey } : {}),
+            stream: "lifecycle",
+            data: { phase: "fallback_step", ...step },
+          });
           fallbackTrajectoryRecorder?.recordEvent("model.fallback_step", step);
         },
         runCandidate: async (providerOverride, modelOverride, runOptions) => {

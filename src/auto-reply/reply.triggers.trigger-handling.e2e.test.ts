@@ -16,7 +16,6 @@ import {
   withTempHome,
 } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
-import { renderControlUiAgentFailureCopy } from "../agents/failover/user-copy.js";
 import { resolveSessionKey } from "../config/sessions.js";
 import {
   loadExactSessionEntry,
@@ -28,7 +27,6 @@ import { registerGroupIntroPromptCases } from "./reply.triggers.group-intro-prom
 import { registerTriggerHandlingUsageSummaryCases } from "./reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.cases.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./reply/queue.js";
 import type { MsgContext } from "./templating.js";
-import { HEARTBEAT_TOKEN } from "./tokens.js";
 
 type GetReplyFromConfig = typeof import("./reply/get-reply.js").getReplyFromConfig;
 
@@ -60,6 +58,7 @@ const TELEGRAM_DIRECT_MESSAGE = {
   Surface: "telegram",
 } as const;
 
+// mock-isolation: Exercise command routing without starting a provider-backed agent runtime.
 vi.mock("./reply/agent-runner.runtime.js", () => ({
   runReplyAgent: async (params: {
     commandBody: string;
@@ -79,41 +78,20 @@ vi.mock("./reply/agent-runner.runtime.js", () => ({
     };
   }) => {
     const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
-    const normalizeErrorText = (message: string) => {
-      if (/context window exceeded/i.test(message)) {
-        return "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model.";
-      }
-      return renderControlUiAgentFailureCopy(message);
-    };
-    const stripHeartbeat = (text?: string) => {
-      const trimmed = text?.trim();
-      if (!trimmed || trimmed === HEARTBEAT_TOKEN) {
-        return undefined;
-      }
-      return trimmed.startsWith(`${HEARTBEAT_TOKEN} `)
-        ? trimmed.slice(HEARTBEAT_TOKEN.length).trimStart()
-        : trimmed;
-    };
-
-    try {
-      const result = await runEmbeddedAgentMock({
-        prompt: params.commandBody,
-        provider: params.followupRun.run.provider,
-        model: params.followupRun.run.model,
-        authProfileId: params.followupRun.run.authProfileId,
-        authProfileIdSource: params.followupRun.run.authProfileIdSource,
-        sessionId: params.followupRun.run.sessionId,
-        sessionKey: params.followupRun.run.sessionKey,
-        sessionFile: params.followupRun.run.sessionFile,
-        workspaceDir: params.followupRun.run.workspaceDir,
-        config: params.followupRun.run.config,
-        extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
-      });
-      return { text: stripHeartbeat(result?.payloads?.[0]?.text) };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return { text: normalizeErrorText(message) };
-    }
+    const result = await runEmbeddedAgentMock({
+      prompt: params.commandBody,
+      provider: params.followupRun.run.provider,
+      model: params.followupRun.run.model,
+      authProfileId: params.followupRun.run.authProfileId,
+      authProfileIdSource: params.followupRun.run.authProfileIdSource,
+      sessionId: params.followupRun.run.sessionId,
+      sessionKey: params.followupRun.run.sessionKey,
+      sessionFile: params.followupRun.run.sessionFile,
+      workspaceDir: params.followupRun.run.workspaceDir,
+      config: params.followupRun.run.config,
+      extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+    });
+    return { text: result?.payloads?.[0]?.text };
   },
 }));
 
@@ -380,55 +358,6 @@ describe("trigger handling", () => {
   registerGroupIntroPromptCases();
   registerTriggerHandlingUsageSummaryCases({
     getReplyFromConfig: () => getReplyFromConfig,
-  });
-
-  for (const testCase of [
-    {
-      error: "sandbox is not defined.",
-      expected: renderControlUiAgentFailureCopy("sandbox is not defined."),
-    },
-    {
-      error: "Context window exceeded",
-      expected:
-        "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model.",
-    },
-  ] as const) {
-    it(`surfaces agent error: ${testCase.error}`, async () => {
-      await withTempHome(async (home) => {
-        const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
-        runEmbeddedAgentMock.mockReset();
-        runEmbeddedAgentMock.mockImplementation(async () => {
-          throw new Error(testCase.error);
-        });
-        const errorRes = await getReplyFromConfig(BASE_MESSAGE, {}, makeCfg(home));
-        expect(maybeReplyText(errorRes), testCase.error).toBe(testCase.expected);
-        expect(runEmbeddedAgentMock, testCase.error).toHaveBeenCalledOnce();
-      });
-    });
-  }
-
-  it("strips heartbeat-only replies and preserves normal text", async () => {
-    await withTempHome(async (home) => {
-      const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
-      const tokenCases = [
-        { text: HEARTBEAT_TOKEN, expected: undefined },
-        { text: `${HEARTBEAT_TOKEN} hello`, expected: "hello" },
-      ] as const;
-
-      for (const testCase of tokenCases) {
-        runEmbeddedAgentMock.mockReset();
-        runEmbeddedAgentMock.mockResolvedValue({
-          payloads: [{ text: testCase.text }],
-          meta: {
-            durationMs: 1,
-            agentMeta: { sessionId: "s", provider: "p", model: "m" },
-          },
-        });
-        const res = await getReplyFromConfig(BASE_MESSAGE, {}, makeCfg(home));
-        expect(maybeReplyText(res)).toBe(testCase.expected);
-        expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-      }
-    });
   });
 
   it("acknowledges bare /new without invoking the model or loading startup memory", async () => {

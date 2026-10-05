@@ -8,6 +8,31 @@ import {
 } from "./session-manager.test-helpers.js";
 
 describe("TerminalSessionManager agent session lifecycle", () => {
+  it("keeps terminal admission fenced until every overlapping drain releases", async () => {
+    const manager = new TerminalSessionManager({
+      emit: vi.fn(),
+      spawn: async () => makeFakePty(),
+    });
+    const owner = agentTerminalOwner("agent:main:archive-target");
+    const first = manager.beginAgentSessionDrain(owner);
+    const second = manager.beginAgentSessionDrain(owner);
+    try {
+      await Promise.all([first.drained, second.drained]);
+      first.release();
+      first.release();
+      await expect(manager.open(baseOpenRequest({ owner }))).resolves.toMatchObject({
+        ok: false,
+        code: "closed",
+      });
+      second.release();
+      await expect(manager.open(baseOpenRequest({ owner }))).resolves.toMatchObject({ ok: true });
+    } finally {
+      first.release();
+      second.release();
+      manager.disposeAll();
+    }
+  });
+
   it("drains one agent incarnation while admitting its same-key replacement", async () => {
     const oldPty = makeFakePty();
     const pendingPty = makeFakePty();

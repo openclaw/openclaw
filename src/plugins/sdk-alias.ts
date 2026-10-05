@@ -35,6 +35,7 @@ import { getPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
   createJitiAliasContentCacheKey,
   normalizePluginLoaderAliasMapForJiti,
+  sanitizeJitiCachePathSegment,
 } from "./sdk-alias-normalization.js";
 import {
   WORKSPACE_PACKAGE_ALIAS_ENTRIES,
@@ -71,11 +72,6 @@ function readSdkJsonFile(filePath: string): unknown {
   });
   const parsed = file.ok ? parsePluginCacheJson(file) : undefined;
   return parsed?.ok ? parsed.value : null;
-}
-
-function sanitizeJitiCachePathSegment(value: string): string {
-  const normalized = value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
-  return normalized.length > 0 ? normalized : "unknown";
 }
 
 function resolveJitiFsCacheRoot(): string {
@@ -248,9 +244,9 @@ function resolveTrustedOpenClawRootFromArgvHint(params: {
   return hasTrustedOpenClawRootIndicator({ packageRoot, packageJson }) ? packageRoot : null;
 }
 
-function findNearestPluginSdkPackageRoot(startDir: string, maxDepth = 12): string | null {
+function findNearestPluginSdkPackageRoot(startDir: string): string | null {
   let cursor = path.resolve(startDir);
-  for (let i = 0; i < maxDepth; i += 1) {
+  for (let i = 0; i < 12; i += 1) {
     const subpaths = readPluginSdkSubpathsFromPackageRoot(cursor);
     if (subpaths) {
       return cursor;
@@ -297,7 +293,6 @@ function dedupeResolvedPaths(paths: readonly string[]): string[] {
 function listAncestorPluginRuntimeModuleCandidates(params: {
   starts: readonly (string | undefined)[];
   orderedKinds: readonly PluginSdkAliasCandidateKind[];
-  maxDepth?: number;
 }): string[] {
   const candidates: string[] = [];
   for (const start of params.starts) {
@@ -305,8 +300,7 @@ function listAncestorPluginRuntimeModuleCandidates(params: {
       continue;
     }
     let cursor = path.resolve(start);
-    const maxDepth = params.maxDepth ?? 12;
-    for (let i = 0; i < maxDepth; i += 1) {
+    for (let i = 0; i < 12; i += 1) {
       candidates.push(...listPluginRuntimeModuleCandidates(cursor, params.orderedKinds));
       const parent = path.dirname(cursor);
       if (parent === cursor) {
@@ -394,6 +388,7 @@ const PRIVATE_QA_ONLY_PLUGIN_SDK_SUBPATHS = new Set([
   "channel-ingress-test-runtime",
   "channel-target-testing",
   "channel-test-helpers",
+  "compiled-subprocess-testing",
   "plugin-test-api",
   "plugin-test-contracts",
   "plugin-state-test-runtime",

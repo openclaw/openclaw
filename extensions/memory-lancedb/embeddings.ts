@@ -12,6 +12,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { textResult, type AgentToolResult } from "openclaw/plugin-sdk/tool-results";
 import type { MemoryConfig } from "./config.js";
 
@@ -420,21 +421,18 @@ export async function runWithTimeout<T>(params: {
   timeoutMs: number;
   task: (deadlineAtMs: number) => Promise<T>;
 }): Promise<{ status: "ok"; value: T } | { status: "timeout" }> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
   const TIMEOUT = Symbol("timeout");
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
   // Share one absolute deadline with native work so the outer race cannot
   // abandon a still-running operation after reporting a timeout.
   const deadlineAtMs = Date.now() + timeoutMs;
-  const timeoutPromise = new Promise<typeof TIMEOUT>((resolve) => {
-    timeout = setTimeout(() => resolve(TIMEOUT), timeoutMs);
-    timeout.unref?.();
-  });
-  const taskPromise = params.task(deadlineAtMs);
-  taskPromise.catch(() => undefined);
-
   try {
-    const result = await Promise.race([taskPromise, timeoutPromise]);
+    const result = await raceWithTimeout(
+      () => params.task(deadlineAtMs),
+      timeoutMs,
+      (): typeof TIMEOUT => TIMEOUT,
+      { ref: false },
+    );
     if (result === TIMEOUT || Date.now() >= deadlineAtMs) {
       return { status: "timeout" };
     }
@@ -444,10 +442,6 @@ export async function runWithTimeout<T>(params: {
       return { status: "timeout" };
     }
     throw error;
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
   }
 }
 

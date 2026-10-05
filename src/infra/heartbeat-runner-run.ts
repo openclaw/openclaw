@@ -135,7 +135,12 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
           timeoutOverrideSeconds: prepared.hasTaskContinuation
             ? undefined
             : resolveHeartbeatTimeoutOverrideSeconds(cfg, heartbeat),
-          bootstrapContextMode: heartbeat?.lightContext === true ? "lightweight" : undefined,
+          // A conversation's continuation keeps its full context and cached prompt prefix.
+          bootstrapContextMode:
+            heartbeat?.lightContext === true && !wake.preflight.conversationRoute
+              ? "lightweight"
+              : undefined,
+          continuesConversation: Boolean(wake.preflight.conversationRoute),
           disableBlockStreaming: true,
           suppressToolProgressMessages: true,
           suppressDefaultToolProgressMessages: true,
@@ -163,6 +168,9 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
         {
           sessionKey: prepared.inspectsRunQueue ? prepared.sessionKey : runSessionKey,
           events: prepared.inspectsRunQueue ? prepared.genericEvents : [],
+          deferredEventIds: prepared.deferredGenericEvents
+            .map((event) => event.id)
+            .filter((id): id is string => typeof id === "string"),
         },
       ),
       dispatcherOptions: {

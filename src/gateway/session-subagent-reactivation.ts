@@ -38,12 +38,12 @@ export async function reactivateCompletedSubagentSession(params: {
     return false;
   }
   const stateContext = captureOpenClawStateWorkerContext();
-  if (
-    !getLatestLiveSubagentRunByChildSessionKey(
+  const liveSource = () =>
+    getLatestLiveSubagentRunByChildSessionKey(
       params.sessionKey,
       (entry) => entry.runId === existing.runId,
-    )
-  ) {
+    );
+  if (!liveSource()) {
     await restoreSubagentRunsFromDisk({
       runs: subagentRuns,
       mergeOnly: true,
@@ -51,24 +51,17 @@ export async function reactivateCompletedSubagentSession(params: {
       assertCurrent: params.assertCurrent,
     });
   }
-  const selected = getLatestLiveSubagentRunByChildSessionKey(
-    params.sessionKey,
-    (entry) => entry.runId === existing.runId,
-  );
-  if (!selected || !isSameSubagentRun(selected, existing)) {
+  const source = liveSource();
+  if (!source || !isSameSubagentRun(source, existing)) {
     return false;
   }
   const latest = getLatestLiveSubagentRunByChildSessionKey(params.sessionKey);
-  const source = selected;
   const assertOriginalOwnerCurrent = () => {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
-    const current = getLatestLiveSubagentRunByChildSessionKey(
-      params.sessionKey,
-      (entry) => entry.runId === existing.runId,
-    );
+    const current = liveSource();
     const currentLatest = getLatestLiveSubagentRunByChildSessionKey(params.sessionKey);
     if (
-      !isSameSubagentRunOwner(current, selected) ||
+      !isSameSubagentRunOwner(current, source) ||
       (latest ? !isSameSubagentRunOwner(currentLatest, latest) : currentLatest !== undefined) ||
       (current && typeof current.execution.endedAt !== "number")
     ) {
@@ -100,6 +93,7 @@ export async function reactivateCompletedSubagentSession(params: {
       : await runtime.replaceSubagentRunAfterSteerCore({
           previousRunId: source.runId,
           nextRunId: runId,
+          preserveCompletedRun: true,
           runTimeoutSeconds: source.runTimeoutSeconds ?? 0,
           ...(hasTask ? { task } : {}),
           assertCurrent: assertOriginalOwnerCurrent,

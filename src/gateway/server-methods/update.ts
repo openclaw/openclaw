@@ -22,7 +22,6 @@ import { readPackageVersion } from "../../infra/package-json.js";
 import { resolveGatewayRestartDeferralTimeoutMs } from "../../infra/restart-budget.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import {
-  type RestartSentinelPayload,
   writeRestartSentinel,
   formatDoctorNonInteractiveHint,
 } from "../../infra/restart-sentinel.js";
@@ -69,7 +68,7 @@ import {
 } from "../../utils/message-channel.js";
 import { VERSION } from "../../version.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
-import { recordLatestUpdateRestartSentinel } from "../server-restart-sentinel.js";
+import { recordLatestUpdateRestartSentinel } from "../server-update-sentinel.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import { resolveUpdateRunNoticeTarget } from "../update-run-notice-target.js";
 import { wakeUpdateRunWatcher } from "../update-run-watcher.js";
@@ -81,6 +80,7 @@ import {
   createUnexpectedUpdateFailureResult,
   recordHandoffFailure,
   resolveGatewayUpdateAdmission,
+  reportImmutableGatewayUpdateRefusal,
 } from "./update-admission.js";
 import { recordGatewayUpdateOutcome } from "./update-outcome-observation.js";
 import { updateReportHandler } from "./update-report.js";
@@ -221,6 +221,9 @@ export const updateHandlers: GatewayRequestHandlers = {
     let ownsUpdateOutcome = false;
     const updateLifecycle = currentUpdateCheckLifecycle();
     let adoptedCampaignId: string | undefined;
+    const ownsAdoptedCampaign = () =>
+      adoptedCampaignId === undefined ||
+      updateLifecycle.campaign?.getState()?.id === adoptedCampaignId;
     const refuseUnauthorizedChatUpdate = () => {
       // Chat update authority is revocable; internal or channel-less requesters
       // retain the operator authority established at admission.
@@ -293,6 +296,10 @@ export const updateHandlers: GatewayRequestHandlers = {
         steps: [],
         durationMs: 0,
       });
+      if (installSurface.kind === "immutable") {
+        reportImmutableGatewayUpdateRefusal(runId, installSurface, respond);
+        return;
+      }
       const effectiveChannel = resolveEffectiveUpdateChannel({
         configChannel,
         currentVersion: VERSION,
@@ -625,10 +632,8 @@ export const updateHandlers: GatewayRequestHandlers = {
     }
 
     // Rejected requests and retired campaigns cannot replace another update's outcome.
-    if (ownsUpdateOutcome && adoptedCampaignId !== undefined) {
-      ownsUpdateOutcome = updateLifecycle.campaign?.getState()?.id === adoptedCampaignId;
-    }
-    const payload: RestartSentinelPayload = buildUpdateRestartSentinelPayload({
+    ownsUpdateOutcome &&= ownsAdoptedCampaign();
+    const payload = buildUpdateRestartSentinelPayload({
       result,
       meta: sentinelMeta,
     });
@@ -637,9 +642,15 @@ export const updateHandlers: GatewayRequestHandlers = {
     let sentinelFailure: { error: unknown } | undefined;
     if (ownsUpdateOutcome) {
       try {
-        await writeRestartSentinel(payload);
+        await writeRestartSentinel(payload, undefined, () => {
+          if (!ownsAdoptedCampaign()) {
+            throw new Error("Update campaign retired before restart sentinel persistence");
+          }
+        });
         sentinelPersisted = true;
-        recordLatestUpdateRestartSentinel(payload);
+        if (ownsAdoptedCampaign()) {
+          recordLatestUpdateRestartSentinel(payload);
+        }
       } catch (error) {
         sentinelFailure = { error };
       }
@@ -679,7 +690,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       ownsUpdateOutcome &&
       handoff?.status !== "started" &&
       adoptedCampaignId !== undefined &&
-      updateLifecycle.campaign?.getState()?.id === adoptedCampaignId
+      ownsAdoptedCampaign()
     ) {
       updateLifecycle.campaign?.clear();
       context?.logGateway?.info("update.run failed; adopted campaign cleared", {

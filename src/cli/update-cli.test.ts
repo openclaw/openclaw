@@ -208,27 +208,41 @@ describe("update-cli", () => {
     );
   });
 
-  it("renders update status when unrelated config validation would fail", async () => {
-    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
-      ...baseSnapshot,
-      valid: false,
-      config: {} as OpenClawConfig,
-    });
-    vi.mocked(readSourceConfigBestEffort).mockResolvedValue({
-      update: { channel: "dev" },
-    } as OpenClawConfig);
+  it.each([false, true])(
+    "renders update status before invalid config warnings with json=%s",
+    async (json) => {
+      const sourceConfig = {
+        update: { channel: "dev" as const },
+        meta: { lastTouchedVersion: "2026.7.35", lastTouchedAt: "2026-07-31T12:00:00.000Z" },
+      };
+      vi.mocked(readSourceConfigBestEffort).mockResolvedValue(sourceConfig);
 
-    await updateStatusCommand({ json: true });
+      await updateStatusCommand({ json });
 
-    const last = requireValue(lastWriteJsonCall(), "update status JSON output");
-    const parsed = last as Record<string, unknown>;
-    const channel = parsed.channel as { value?: unknown; config?: unknown };
-    expect(channel.value).toBe("dev");
-    expect(channel.config).toBe("dev");
-    expect(checkUpdateStatus).toHaveBeenCalledWith(
-      expect.objectContaining({ useDetachedDevUpstream: true }),
-    );
-  });
+      const issue = 'meta: Unrecognized key: "lastTouchedAt"';
+      if (json) {
+        expect(requireValue(lastWriteJsonCall(), "update status JSON output")).toMatchObject({
+          channel: { value: "dev", config: "dev" },
+          configWarnings: expect.arrayContaining([
+            expect.stringContaining(issue),
+            expect.stringContaining("openclaw doctor --fix"),
+          ]),
+        });
+      } else {
+        const output = getLogOutput();
+        expect(output).toContain("OpenClaw update status");
+        expect(output).toContain(`Warning: ${issue}`);
+        expect(output).toContain("openclaw doctor --fix");
+        expect(output.indexOf(`Warning: ${issue}`)).toBeGreaterThan(output.indexOf("Channel"));
+      }
+      expect(checkUpdateStatus).toHaveBeenCalledWith(
+        expect.objectContaining({ useDetachedDevUpstream: true }),
+      );
+      expect(readSourceConfigBestEffort).toHaveBeenCalledOnce();
+      expect(readConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(sourceConfig.meta.lastTouchedAt).toBe("2026-07-31T12:00:00.000Z");
+    },
+  );
 
   it.each([
     {

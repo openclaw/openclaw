@@ -157,6 +157,8 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   );
   @consume({ context: applicationContext, subscribe: true })
   protected context!: ApplicationContext;
+  @property({ attribute: false })
+  mcpAppLaunch?: import("../../components/mcp-app-launch.ts").McpAppOpenDetail;
   @property({ attribute: false }) paneId = "single";
   @property({ attribute: false }) paneLabel?: string;
   @property({ attribute: false }) presentationId = "single";
@@ -170,6 +172,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @property({ attribute: false }) agentId?: string;
   @property({ attribute: false }) inputRegion: ChatInputRegion = "page";
   @property({ attribute: false }) compact = false;
+  @property({ attribute: false }) onBackToSubagents?: () => void;
   @property({ attribute: false }) workContext?: ChatWorkContext;
   // Route ownership settles after retained-pane preview; dashboard activity follows
   // the pane the user can already see so its warmed runtime paints immediately.

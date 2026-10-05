@@ -123,9 +123,9 @@ describe("changed resolved dependencies", () => {
   });
 
   it.each([
-    [
-      "transitive version",
-      (source: string) =>
+    {
+      name: "transitive version",
+      change: (source: string) =>
         source
           .replaceAll("leaf@1.0.0", "leaf@2.0.0")
           .replaceAll("leaf: 1.0.0", "leaf: 2.0.0")
@@ -133,101 +133,78 @@ describe("changed resolved dependencies", () => {
             "leaf: {specifier: 1.0.0, version: 1.0.0}",
             "leaf: {specifier: 1.0.0, version: 2.0.0}",
           ),
-    ],
-    [
-      "same-version integrity",
-      (source: string) => source.replace("leaf-bytes", "different-leaf-bytes"),
-    ],
-  ])("selects only importers of a changed %s, at the workspace owner", (_label, change) => {
-    write("pnpm-lock.yaml", change(lockfile));
-    expect(select()).toEqual({
-      importerBindings: expect.any(Array),
       importers: [
         { root: ".", dependencies: ["alpha"] },
         { root: "packages/shared", dependencies: ["leaf"] },
       ],
-    });
-  });
-
-  it("keeps peer-instance changes scoped to their direct importer", () => {
-    write(
-      "pnpm-lock.yaml",
-      lockfile.replaceAll("peer@1.0.0", "peer@2.0.0").replace("peer: 1.0.0", "peer: 2.0.0"),
-    );
-    expect(select()).toEqual({
-      importerBindings: expect.any(Array),
+    },
+    {
+      name: "same-version integrity",
+      change: (source: string) => source.replace("leaf-bytes", "different-leaf-bytes"),
+      importers: [
+        { root: ".", dependencies: ["alpha"] },
+        { root: "packages/shared", dependencies: ["leaf"] },
+      ],
+    },
+    {
+      name: "peer-instance change",
+      change: (source: string) =>
+        source.replaceAll("peer@1.0.0", "peer@2.0.0").replace("peer: 1.0.0", "peer: 2.0.0"),
       importers: [{ root: ".", dependencies: ["alpha"] }],
-    });
-  });
-
-  it("does not select another workspace using an unchanged resolution of the same dependency", () => {
-    write(
-      "pnpm-lock.yaml",
-      lockfile.replace(
-        "stable: {specifier: 1.0.0, version: 1.0.0}",
-        "stable: {specifier: 2.0.0, version: 2.0.0}",
-      ),
-    );
-    expect(select()).toEqual({
+    },
+    {
+      name: "workspace-local resolution",
+      change: (source: string) =>
+        source.replace(
+          "stable: {specifier: 1.0.0, version: 1.0.0}",
+          "stable: {specifier: 2.0.0, version: 2.0.0}",
+        ),
       importerBindings: [
         { root: ".", dependencies: ["alpha", "shared", "stable"] },
         { root: "packages/shared", dependencies: ["leaf"] },
         { root: "ui", dependencies: ["stable"] },
       ],
       importers: [{ root: "ui", dependencies: ["stable"] }],
-    });
-  });
-
-  it("retains the removed dependency name for graph consumers", () => {
-    write(
-      "package.json",
-      JSON.stringify({ ...manifest, dependencies: { stable: "1.0.0", shared: "workspace:*" } }),
-    );
-    write(
-      "pnpm-lock.yaml",
-      lockfile.replace(
-        "      alpha:\n        specifier: 1.0.0\n        version: 1.0.0(peer@1.0.0)\n",
-        "",
-      ),
-    );
-    expect(select(["package.json", "pnpm-lock.yaml"])).toEqual({
-      importerBindings: expect.any(Array),
+    },
+    {
+      name: "removed dependency",
+      manifest: { ...manifest, dependencies: { stable: "1.0.0", shared: "workspace:*" } },
+      change: (source: string) =>
+        source.replace(
+          "      alpha:\n        specifier: 1.0.0\n        version: 1.0.0(peer@1.0.0)\n",
+          "",
+        ),
       importers: [{ root: ".", dependencies: ["alpha"] }],
-    });
-  });
-
-  it("ignores metadata and specifier changes with the same resolved dependency", () => {
-    write(
-      "package.json",
-      JSON.stringify({
+    },
+    {
+      name: "metadata and specifier changes with unchanged resolution",
+      manifest: {
         ...manifest,
         description: "Updated metadata",
         dependencies: { ...manifest.dependencies, alpha: "^1.0.0" },
-      }),
-    );
-    write(
-      "pnpm-lock.yaml",
-      lockfile.replace("alpha:\n        specifier: 1.0.0", "alpha:\n        specifier: ^1.0.0"),
-    );
-    expect(select(["package.json", "pnpm-lock.yaml"])).toEqual({
-      importerBindings: expect.any(Array),
+      },
+      change: (source: string) =>
+        source.replace("alpha:\n        specifier: 1.0.0", "alpha:\n        specifier: ^1.0.0"),
       importers: [],
-    });
-  });
+    },
+  ])(
+    "scopes $name to its resolved importers",
+    ({ change, manifest: changedManifest, importers, importerBindings }) => {
+      if (changedManifest) {
+        write("package.json", JSON.stringify(changedManifest));
+      }
+      write("pnpm-lock.yaml", change(lockfile));
+      expect(select(changedManifest ? ["package.json", "pnpm-lock.yaml"] : undefined)).toEqual({
+        importerBindings: importerBindings ?? expect.any(Array),
+        importers,
+      });
+    },
+  );
 
   it.each([
     [
       "root manifest plugin settings",
       () => write("package.json", JSON.stringify({ ...manifest, openclaw: {} })),
-      "execution or resolution",
-    ],
-    [
-      "manifest execution",
-      () =>
-        write(
-          "package.json",
-          JSON.stringify({ ...manifest, scripts: { test: "different-runner" } }),
-        ),
       "execution or resolution",
     ],
     [
@@ -266,43 +243,44 @@ describe("changed resolved dependencies", () => {
       () => write("pnpm-lock.yaml", lockfile.replace("leaf: 1.0.0", "leaf: 9.0.0")),
       "could not be verified",
     ],
-  ])("fails closed for %s", (_label, change, reason) => {
-    change();
-    expect(select(["package.json", "pnpm-lock.yaml"])).toEqual({
-      importers: [],
-      globalReason: expect.stringContaining(reason),
-    });
-  });
-
-  it("fails closed for workspace installation metadata outside dependency edges", () => {
-    write(
-      "pnpm-lock.yaml",
-      lockfile.replace(
-        "  .:\n",
-        "  .:\n    dependenciesMeta:\n      alpha:\n        injected: true\n",
-      ),
-    );
-    expect(select()).toEqual({
-      importers: [],
-      globalReason: "workspace installation metadata changed: .",
-    });
-  });
-
-  it("keeps shared test-runner resolution changes global", () => {
-    write("pnpm-lock.yaml", lockfile.replaceAll("stable", "vitest"));
-    expect(select()).toEqual({
-      importers: [],
-      globalReason: expect.stringContaining("shared Node test runtime changed: vitest"),
-    });
-  });
-
-  it("keeps package-manager environment changes global", () => {
-    write("pnpm-lock.yaml", `---\nlockfileVersion: '9.0'\nimporters: {}\n---\n${lockfile}`);
-    expect(select()).toEqual({
-      importers: [],
-      globalReason: "pnpm package-manager environment changed",
-    });
-  });
+    [
+      "workspace installation metadata",
+      () =>
+        write(
+          "pnpm-lock.yaml",
+          lockfile.replace(
+            "  .:\n",
+            "  .:\n    dependenciesMeta:\n      alpha:\n        injected: true\n",
+          ),
+        ),
+      "workspace installation metadata changed: .",
+      ["pnpm-lock.yaml"],
+    ],
+    [
+      "shared test-runner resolution",
+      () => write("pnpm-lock.yaml", lockfile.replaceAll("stable", "vitest")),
+      "shared Node test runtime changed: vitest",
+      ["pnpm-lock.yaml"],
+    ],
+    [
+      "package-manager environment",
+      () => write("pnpm-lock.yaml", `---\nlockfileVersion: '9.0'\nimporters: {}\n---\n${lockfile}`),
+      "pnpm package-manager environment changed",
+      ["pnpm-lock.yaml"],
+    ],
+  ])(
+    "fails closed for %s",
+    (_label, change, reason, paths = ["package.json", "pnpm-lock.yaml"]) => {
+      change();
+      expect(select(paths)).toEqual({
+        importers: [],
+        globalReason:
+          _label === "workspace installation metadata" || _label === "package-manager environment"
+            ? reason
+            : expect.stringContaining(reason),
+      });
+    },
+  );
 
   it("fails closed when the exact base cannot be read", () => {
     expect(

@@ -56,15 +56,8 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   const rows = new Map<string, records.Row>();
   const creators = createSessionRowCreatorIndex();
   const membership = createSessionMembershipProjection();
-  const {
-    invalidateRowMembership,
-    readSessionRowEntry: readStoredSessionRowEntry,
-    createStoreRead,
-  } = rowMembership.createSessionRowEntryReadAccess(membership);
-  const readSessionRowEntry = (row: records.Row) =>
-    row.publishedSource && row.storedEntry && row.sharingEntry === row.storedEntry
-      ? row.storedEntry
-      : readStoredSessionRowEntry(row);
+  const { invalidateRowMembership, readSessionRowEntry, createStoreRead } =
+    rowMembership.createSessionRowEntryReadAccess(membership);
   let stores = new Map<string, records.SessionRowStore>();
   const byStore = new Map<string, Set<string>>(),
     byAgent = new Map<string, Set<string>>();
@@ -170,6 +163,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       creators.update(row);
       records.index(row, indexes, true);
       rows.delete(id);
+      revisions.publishSelection(row, true);
       // Cold dependents reselect only after the removed parent is absent from the inventory.
       markRelated(row);
       if (row.entry && !byKey.has(`id:${row.entry.sessionId}`)) {
@@ -181,7 +175,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   }
   function put(row: records.Row) {
     const previous = rows.get(records.identity(row));
-    revisions.replace(previous, row);
     creators.update(previous, row);
     if (previous) {
       if (previous.generation !== row.generation) {
@@ -195,6 +188,8 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     placementFacts.update(row, previous, (sessionId) =>
       [...(byKey.get(`id:${sessionId}`) ?? [])].flatMap((id) => rows.get(id) ?? []),
     );
+    // Index updates are synchronous; publish only after the accepted row is installed.
+    revisions.replace(previous, row);
   }
   function acquireEntry(row: records.Row, storedEntry: SessionEntry | undefined) {
     if (storedEntry?.archivedAt !== undefined) {
@@ -261,34 +256,36 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       const discovery = { env, snapshot: prepared.snapshot };
       const revision = epoch;
       const storeRead = createStoreRead({ stores, rows, byStore, env });
-      const loaded = storeRead.loadCombinedStore(nextConfig, discovery);
-      prepared.assertCurrent();
-      if (!topologyCurrent()) {
-        return;
-      }
-      cfg = nextConfig;
-      const acquisitions = records.seedSessionRowEntries({
-        targets: loaded.targetsBySessionKey,
-        rows,
-        replaced: storeRead.replaced,
-        remove,
-        put,
+      await storeRead.loadCombinedStore(nextConfig, discovery, (load) => {
+        prepared.assertCurrent();
+        if (!topologyCurrent() || epoch !== revision) {
+          return;
+        }
+        const loaded = load();
+        cfg = nextConfig;
+        const acquisitions = records.seedSessionRowEntries({
+          targets: loaded.targetsBySessionKey,
+          rows,
+          replaced: storeRead.replaced,
+          remove,
+          put,
+        });
+        stores = storeRead.sources;
+        // Every stored identity must be visible before an earlier store selects a later parent.
+        for (const { row, entry } of acquisitions) {
+          enqueue(acquireEntry(row, entry));
+          markRelated(row);
+        }
+        storeRead.updateMembership();
+        scope = rowScope.prepareSessionRowScopes(
+          cfg,
+          byAgent.keys(),
+          new Map([...stores].map(([locator, source]) => [source.filename, locator])),
+          discovery,
+        );
+        revisions.publishSelection();
+        topologyDirty = epoch !== revision;
       });
-      stores = storeRead.sources;
-      // Every stored identity must be visible before an earlier store selects a later parent.
-      for (const { row, entry } of acquisitions) {
-        enqueue(acquireEntry(row, entry));
-        markRelated(row);
-      }
-      storeRead.updateMembership();
-      scope = rowScope.prepareSessionRowScopes(
-        cfg,
-        byAgent.keys(),
-        new Map([...stores].map(([locator, source]) => [source.filename, locator])),
-        discovery,
-      );
-      revisions.invalidate(true);
-      topologyDirty = epoch !== revision;
     }).finally(() => {
       preparingTopology = undefined;
     }));
@@ -325,11 +322,11 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     }
     epoch++;
     const presentationOnly = metadata.invalidate(change) && !change.factsInvalidated;
+    const catalogOnly = "all" in change && change.scope === "catalog" && !change.factsInvalidated;
     if (!presentationOnly) {
-      revisions.invalidate(true);
+      revisions.invalidate(!catalogOnly);
     }
     if ("all" in change) {
-      const catalogOnly = change.scope === "catalog" && !change.factsInvalidated;
       if (!presentationOnly && !catalogOnly) {
         databaseRevision++;
       }
@@ -416,11 +413,12 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     if (!isIncognitoSessionKey(row.key)) {
       placementFacts.register(row.entry.sessionId);
     }
-    revisions.invalidate(row.hasBoard !== prepared.hasBoard);
+    const previousBoard = row.hasBoard;
     Object.assign(row, prepared, {
       materializedSequence: ++materializedCount,
       ...metadata.materializedRevisions,
     });
+    revisions.materialized(row, previousBoard);
     return true;
   }
   const {
@@ -546,8 +544,8 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     },
   });
   function dispose() {
-    revisions.invalidate(true);
     disposed = true;
+    revisions.dispose();
     registryRead.dispose();
     generations.invalidate();
     disposeRefresh();
@@ -612,20 +610,24 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       prepareRowFacts: rowFacts.prepare,
     });
   const projection = {
+    onSelectionChange: revisions.onSelectionChange,
     observeGeneration: generations.observeGeneration,
     readPreparedRowContext: () =>
       disposed ? undefined : inOwnerContext(() => metadata.readPrepared(epoch)),
     readPreparedSpawnedBy,
-    capture: rowReads.createSessionRowCapture(
-      lookup,
-      (row) =>
+    capture(query: records.Lookup) {
+      const row = lookup(query);
+      // Capture retains published identity while category facts wait for reconciliation.
+      return row &&
+        row.unresolvedDatabaseFacts !== "category" &&
         !topologyDirty &&
         !row.entry &&
         row.storedEntry !== undefined &&
         row.unresolvedDatabaseFacts !== true &&
-        Boolean(inOwnerContext(subagents.snapshotIdentity)),
-      (row) => acquireEntry(row, row.storedEntry),
-    ),
+        inOwnerContext(subagents.snapshotIdentity)
+        ? (acquireEntry(row, row.storedEntry) ?? row)
+        : row;
+    },
     findBySessionId(query: Parameters<typeof rowReads.findSessionRowById>[0]) {
       return rowReads.findSessionRowById(query, { disposed, lookup, matching, scope });
     },

@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import fs from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
@@ -18,7 +19,7 @@ afterEach(() => vi.restoreAllMocks());
 
 async function withLogsGateway(
   options: {
-    source?: "config" | "environment";
+    source?: "config" | "environment" | "malformed";
     denied?: boolean;
     failure?: "timeout" | "disconnect" | "malformed";
   },
@@ -47,6 +48,9 @@ async function withLogsGateway(
           ...(options.source === "config" ? { remote: { url: "ws://remote.example:19001" } } : {}),
         },
       });
+      if (options.source === "malformed") {
+        await fs.writeFile(state.configPath, "{ gateway:");
+      }
       const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
       const requests: string[] = [];
       const tailParams: Array<Record<string, unknown>> = [];
@@ -230,21 +234,27 @@ describe("logs local port selection", () => {
     },
   );
 
-  it("honors an explicit URL even with an unusable default URL", async () => {
-    await withLogsGateway({ source: "config" }, async ({ port, requests, stdout }) => {
-      await runLogs([
-        "--url",
-        `ws://127.0.0.1:${port}`,
-        "--token",
-        "fixture-token",
-        "--json",
-        "--timeout",
-        "1500",
-      ]);
-      expect(requests).toEqual(["connect", "logs.tail"]);
-      expect(stdout.join("")).toContain("selected local log");
-    });
-  });
+  it.each(["config", "malformed"] as const)(
+    "honors an explicit URL with unusable %s",
+    async (source) => {
+      await withLogsGateway({ source }, async ({ port, requests, stdout, stderr }) => {
+        await runLogs([
+          "--url",
+          `ws://127.0.0.1:${port}`,
+          "--token",
+          "fixture-token",
+          "--json",
+          "--timeout",
+          "1500",
+        ]);
+        expect(requests).toEqual(["connect", "logs.tail"]);
+        expect(stdout.join("")).toContain("selected local log");
+        if (source === "malformed") {
+          expect(stderr.join("")).toContain("openclaw doctor --fix");
+        }
+      });
+    },
+  );
 
   it.each(["config", "environment"] as const)(
     "still rejects an unsafe %s target without an override",

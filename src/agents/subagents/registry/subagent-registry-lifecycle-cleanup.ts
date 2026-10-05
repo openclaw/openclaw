@@ -85,7 +85,7 @@ export function isSubagentCompletionDeliveryAllowed(
       committedDeliveryOwner.requesterSettleWake?.rearmGeneration &&
     entry.requesterSettleWake?.batchRunIds?.toSorted().join("\0") ===
       committedDeliveryOwner.requesterSettleWake?.batchRunIds?.toSorted().join("\0");
-  const { runId, requesterSessionKey, requesterStorePath, requesterAgentId } = entry;
+  const { requesterSessionKey, requesterStorePath, requesterAgentId } = entry;
   const allowed =
     !subagentRuns.isCompletionAuthorityRetired(entry) &&
     entry.suppressCompletionDelivery !== true &&
@@ -95,7 +95,7 @@ export function isSubagentCompletionDeliveryAllowed(
         committedDelivery?.status === "delivered" &&
         committedDelivery.generation === entry.delivery.generation &&
         committedDelivery.deliveredAt === entry.delivery.deliveredAt)) &&
-    context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration);
+    context.isCleanupAttemptCurrent(entry, cleanupGeneration);
   if (
     !allowed ||
     isSystemEventStoreCurrent(requesterSessionKey, requesterStorePath, requesterAgentId)
@@ -190,7 +190,7 @@ export function retireSupersededCleanupInBackground(
   // A late delivery callback still owns retirement through its original source.
   void runWithSubagentCleanupWorkAdmission(async () => {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
-    await retireSupersededCleanupIfNeeded(context, runId, entry, generation);
+    await retireSupersededCleanupIfNeeded(context, entry, generation);
   }).catch((error: unknown) => {
     defaultRuntime.log(
       `[warn] subagent superseded cleanup retirement failed (${runId}): ${String(error)}`,

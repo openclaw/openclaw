@@ -18,6 +18,10 @@ import {
   resolveSubagentRegistryContextEngine,
 } from "./subagent-registry-deps.js";
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
+import {
+  buildSafeLifecycleErrorMeta,
+  maskLifecycleIdentifier,
+} from "./subagent-registry-lifecycle-log.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteOutcomeKnown,
@@ -32,7 +36,7 @@ import type {
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 export function createSubagentRegistryContextCleanup(config: {
-  isEndedHookOwnerCurrent: (runId: string, entry: SubagentRunRecord) => boolean;
+  isEndedHookOwnerCurrent: (entry: SubagentRunRecord) => boolean;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }) {
   const { warn } = config;
@@ -82,7 +86,11 @@ export function createSubagentRegistryContextCleanup(config: {
       await runContextEngineSubagentEnded(params, options);
       return true;
     } catch (err) {
-      warn(warning, { err });
+      warn(warning, {
+        error: buildSafeLifecycleErrorMeta(err),
+        childSessionKey: maskLifecycleIdentifier(params.childSessionKey, "session"),
+        reason: params.reason,
+      });
       return false;
     }
   }
@@ -212,7 +220,7 @@ export function createSubagentRegistryContextCleanup(config: {
         );
         if (
           params.entry.generation !== generation ||
-          !config.isEndedHookOwnerCurrent(params.entry.runId, params.entry) ||
+          !config.isEndedHookOwnerCurrent(params.entry) ||
           params.isCurrent?.() === false
         ) {
           throw new Error("Subagent ended hook lost its original owner");

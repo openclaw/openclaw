@@ -98,6 +98,21 @@ function retireStoredIncognitoDrafts(store: StoredComposerState): boolean {
 
 // Keep the original recovery bound; excess whole legacy sources remain available.
 const MAX_RECOVERY_ROWS = 80;
+
+function retireEmptyComposerRecovery(store: StoredComposerState): void {
+  for (const [key, { session }] of Object.entries(store.recovery)) {
+    if (
+      !hasStoredComposerDraftInput(session) &&
+      !session.queue?.length &&
+      session.draftRevision !== undefined
+    ) {
+      // Draft writers consult sessions, not recovery snapshots. Keep those
+      // canonical clear fences and legacyReceipts (which prevent source replay),
+      // but retire empty recovery copies before they consume the bounded budget.
+      delete store.recovery[key];
+    }
+  }
+}
 const pendingLegacyTransfers = new WeakMap<
   StoredComposerState,
   Array<{ key: string; raw: string }>
@@ -290,7 +305,7 @@ function holdComposerRecovery(
 ): void {
   const { queue, ...draft } = session;
   const groups = new Map<string | undefined, ChatQueueItem[]>();
-  if (hasStoredComposerDraftInput(draft) || (!queue?.length && draft.draftRevision !== undefined)) {
+  if (hasStoredComposerDraftInput(draft)) {
     groups.set(undefined, []);
   }
   for (const item of queue ?? []) {
@@ -501,6 +516,7 @@ export function readStoredOutboxStore(
         );
       }
     }
+    retireEmptyComposerRecovery(store);
     if (Object.keys(store.recovery).length > MAX_RECOVERY_ROWS) {
       // Keep existing recovery usable while the next whole source waits for space.
       store.sessions = previousSessions;
@@ -565,6 +581,7 @@ export function writeStoredOutboxStore(
   // Queue and recovery mutations share this owner: none may carry a legacy
   // private draft forward alongside the separately retained submitted message.
   retireStoredIncognitoDrafts(store);
+  retireEmptyComposerRecovery(store);
   const previous = storage.getItem(target.key);
   projectedStoreByStorage.get(storage)?.delete(target.key);
   if (Object.keys(store.recovery).length > MAX_RECOVERY_ROWS) {

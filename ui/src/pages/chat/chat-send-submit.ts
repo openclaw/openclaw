@@ -434,11 +434,6 @@ export async function handleSendChat(
         ) {
           clearComposer("all");
         }
-        if (dispatchResult === "failed") {
-          if (messageOverride != null || submittedCommandScopeIsVisible(host, recovery)) {
-            opts?.onLocalCommandSendRejected?.();
-          }
-        }
         if (dispatchResult === "failed" || dispatchResult === "cancelled") {
           settleChatCommandComposer(host, recovery, false, recovery.composer?.previousAttachments);
         } else if (dispatchResult === "completed") {

@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   MigrationApplyResult,
   MigrationPlan,
@@ -90,8 +91,20 @@ it("registers synchronously and loads only the invoked migration operations", as
       sensitive: 0,
     },
   };
-  mocks.plan.mockResolvedValue(plan);
-  const planned = await Promise.all([provider.plan(ctx), provider.plan(ctx)]);
+  const firstPlanStarted = createDeferred<void>();
+  const secondPlanStarted = createDeferred<void>();
+  const finishPlans = createDeferred<MigrationPlan>();
+  mocks.plan.mockImplementation(() => {
+    (mocks.plan.mock.calls.length === 1 ? firstPlanStarted : secondPlanStarted).resolve();
+    return finishPlans.promise;
+  });
+  const firstPlan = provider.plan(ctx);
+  // Keep both plans pending without concurrent Vitest manual-mock imports.
+  await firstPlanStarted.promise;
+  const secondPlan = provider.plan(ctx);
+  await secondPlanStarted.promise;
+  finishPlans.resolve(plan);
+  const planned = await Promise.all([firstPlan, secondPlan]);
   expect(planned[0]).toBe(plan);
   expect(planned[1]).toBe(plan);
   expect(mocks.plan).toHaveBeenNthCalledWith(1, ctx);

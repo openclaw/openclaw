@@ -11,7 +11,6 @@ import {
 import { CONFIG_DIR, resolveConfigDir } from "../../utils.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import type { Skill } from "./skill-contract.js";
-import { copySkillFileHost } from "./skill-file-host.js";
 import { tryRealpath } from "./symlink-targets.js";
 
 export function resolvePluginSkillsDir(): string {
@@ -65,14 +64,12 @@ export function compactPromptSkills(
   }
   const preservedRoots = resolvePreservedPromptSkillPathRoots(options);
   const tildeRoots = resolvePromptTildeRoots();
-  return skills.map((skill) =>
-    copySkillFileHost(skill, {
-      ...skill,
-      filePath: shouldPreservePromptSkillPath(skill.filePath, preservedRoots, tildeRoots)
-        ? skill.filePath
-        : compactHomePath(skill.filePath, prefixes),
-    }),
-  );
+  return skills.map((skill) => ({
+    ...skill,
+    filePath: shouldPreservePromptSkillPath(skill.filePath, preservedRoots, tildeRoots)
+      ? skill.filePath
+      : compactHomePath(skill.filePath, prefixes),
+  }));
 }
 
 function resolvePreservedPromptSkillPathRoots(options: {

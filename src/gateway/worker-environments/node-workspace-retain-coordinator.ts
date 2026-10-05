@@ -36,7 +36,7 @@ export type NodeWorkerBundleRetention = {
 
 type NodeWorkspaceRetainCoordinatorOptions = {
   gatewayNamespace: string;
-  placements: Pick<WorkerSessionPlacementStore, "list" | "listPendingWorkspaceResults">;
+  placements: Pick<WorkerSessionPlacementStore, "list" | "prepareRuntimeRefresh">;
   environments: Pick<WorkerEnvironmentService, "list">;
   bundleRetention?: NodeWorkerBundleRetention;
   additionalManifestRefs?: (
@@ -49,6 +49,8 @@ type PreparedManifestRefs = ReadonlyMap<
   string,
   { placement: WorkerSessionPlacementRecord; current: () => readonly string[] | null }
 >;
+type PreparedPlacement = Awaited<ReturnType<WorkerSessionPlacementStore["prepareRuntimeRefresh"]>>;
+type PreparedPlacementFacts = ReadonlyMap<string, PreparedPlacement>;
 
 function nodeEnvironments(options: NodeWorkspaceRetainCoordinatorOptions, nodeId: string) {
   return options.environments.list().filter((environment) => environment.nodeDeviceId === nodeId);
@@ -88,12 +90,10 @@ function snapshotEntriesForNode(
   options: NodeWorkspaceRetainCoordinatorOptions,
   nodeId: string,
   preparedManifestRefs: PreparedManifestRefs,
+  preparedPlacements: PreparedPlacementFacts,
 ): NodeWorkerWorkspaceRetainEntry[] {
   const placements = new Map(
     options.placements.list().map((placement) => [placement.sessionId, placement] as const),
-  );
-  const pendingResults = new Map(
-    options.placements.listPendingWorkspaceResults().map((result) => [result.sessionId, result]),
   );
   return nodeEnvironments(options, nodeId)
     .flatMap((environment): NodeWorkerWorkspaceRetainEntry[] => {
@@ -105,10 +105,21 @@ function snapshotEntriesForNode(
       }
       const sessionId = environment.attachedSessionIds[0]!;
       const placement = placements.get(sessionId);
-      const pending = pendingResults.get(sessionId);
+      const facts = preparedPlacements.get(sessionId);
+      const pending = facts?.pendingResult;
+      let factsCurrent = false;
+      if (facts) {
+        try {
+          facts.assertCurrent();
+          factsCurrent = isDeepStrictEqual(facts.placement, placement);
+        } catch {
+          // Unknown custody preserves every remote manifest until a later snapshot.
+        }
+      }
       // The base is not a complete reachability set until reconciliation settles. Pending
       // results preserve this protection across restarts, when node-local transfer pins are lost.
       const unsettled =
+        !factsCurrent ||
         placement?.turnClaim ||
         (pending?.environmentId === environment.environmentId &&
           pending.ownerEpoch === environment.ownerEpoch);
@@ -173,9 +184,10 @@ export function createNodeWorkspaceRetainCoordinator(
   let started = false;
   let stopped = false;
 
-  const publishSnapshot = async (
+  const publishPreparedSnapshot = async (
     currentTransport: NodeWorkerSupervisorTransport,
     node: NodeWorkerSupervisorNodeProof,
+    preparedPlacements: PreparedPlacementFacts,
   ): Promise<void> => {
     // Environment-owned cloud nodes prepare under their enrollment/mode owner.
     // Persistent hosts keep the current build when installed; maintenance never installs it.
@@ -246,7 +258,12 @@ export function createNodeWorkspaceRetainCoordinator(
       gatewayNamespace: options.gatewayNamespace,
       controllerId,
       sequence: (sequence += 1),
-      retain: snapshotEntriesForNode(options, node.nodeId, preparedManifestRefs),
+      retain: snapshotEntriesForNode(
+        options,
+        node.nodeId,
+        preparedManifestRefs,
+        preparedPlacements,
+      ),
     };
     const priorGeneration = acknowledgedBundleGenerationByNode.get(node.nodeId);
     const acknowledgedBundleGeneration =
@@ -296,7 +313,7 @@ export function createNodeWorkspaceRetainCoordinator(
         isCurrent() &&
         isDeepStrictEqual(
           input.retain,
-          snapshotEntriesForNode(options, node.nodeId, preparedManifestRefs),
+          snapshotEntriesForNode(options, node.nodeId, preparedManifestRefs, preparedPlacements),
         );
       if (!isDispatchAuthorized()) {
         currentTransport.acceptBundleStatus?.(node, undefined);
@@ -341,15 +358,13 @@ export function createNodeWorkspaceRetainCoordinator(
         const currentStatusTarget = requestedBundleHash
           ? (hostBuild ?? bundleStatusTargetForNode(options, node.nodeId))
           : undefined;
-        const statusTargetMatches =
-          currentStatusTarget != null &&
-          requestedBundleHash !== undefined &&
-          currentStatusTarget.bundleHash === requestedBundleHash;
-        const statusMatches =
+        if (
           retained.applied &&
-          statusTargetMatches &&
-          bundleStatus?.bundleHash === requestedBundleHash;
-        if (statusMatches && currentStatusTarget && bundleStatus) {
+          currentStatusTarget &&
+          bundleStatus &&
+          currentStatusTarget.bundleHash === requestedBundleHash &&
+          bundleStatus.bundleHash === requestedBundleHash
+        ) {
           currentTransport.acceptBundleStatus?.(node, {
             bundleHash: currentStatusTarget.bundleHash,
             status:
@@ -361,6 +376,34 @@ export function createNodeWorkspaceRetainCoordinator(
           currentTransport.acceptBundleStatus?.(node, undefined);
         }
         return;
+      }
+    }
+  };
+
+  const publishSnapshot = async (
+    currentTransport: NodeWorkerSupervisorTransport,
+    node: NodeWorkerSupervisorNodeProof,
+  ): Promise<void> => {
+    const prepared = new Map<string, PreparedPlacement>();
+    try {
+      const sessionIds = new Set(
+        nodeEnvironments(options, node.nodeId).flatMap((environment) =>
+          !isTerminalWorkerEnvironmentState(environment.state) &&
+          environment.attachedSessionIds.length === 1
+            ? environment.attachedSessionIds
+            : [],
+        ),
+      );
+      for (const sessionId of sessionIds) {
+        prepared.set(sessionId, await options.placements.prepareRuntimeRefresh(sessionId));
+        if (stopped || transport !== currentTransport || !currentTransport.isCurrent(node)) {
+          return;
+        }
+      }
+      await publishPreparedSnapshot(currentTransport, node, prepared);
+    } finally {
+      for (const facts of prepared.values()) {
+        facts.release();
       }
     }
   };

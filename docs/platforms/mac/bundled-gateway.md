@@ -321,6 +321,23 @@ for recovery. Pausing and relaunching before migration finishes preserves the
 Node resume path; it does not skip the version update or enable the hosting
 toggle early.
 
+Before an app-owned install through the bundled CLI, the app reads runtime intent
+with that same CLI, runtime, and environment using `gateway status --deep --json`.
+It passes the observed revision and service definition to the installer after its
+final local custody checks. Failed or unknown inspection stops the install. If an
+operator changes the service or runtime pin before installation begins, the CLI
+preserves that selection and the app reports it without retrying or rolling it
+back.
+
+Node rollback and prior-build restoration use this app's bundled CLI with the
+same runtime-intent observation. The installer restores the retained package's
+runtime and entrypoint, and its SQLite library for Bun, rather than its own.
+Recovery does not require the failed replacement service to be running. An
+operator change is preserved and reported without retry. If the app's bundled
+runtime is missing or incompatible, recovery stops; reinstall OpenClaw.app.
+The core updater step still runs the installed CLI and is not covered by this
+installation fence.
+
 Channel-policy installs, independently managed services, and services with
 saved operator runtime pins are not migrated. This includes a saved pin pointing
 at the app's Node tools. This registered-service migration does not run

@@ -19,10 +19,6 @@ final class WatchMessageAcknowledgment: @unchecked Sendable {
         self.reply(["ok": false, "error": reason])
     }
 
-    func rejectUnsupportedPayload() {
-        self.reject(reason: "unsupported_payload")
-    }
-
     private func reply(_ payload: [String: Any]) {
         let shouldReply = self.lock.withLock {
             guard !self.didReply else { return false }

@@ -94,26 +94,6 @@ export async function runDiscordTaskWithTimeout(params: {
   }
 }
 
-export async function raceWithTimeout<T, U>(params: {
-  promise: Promise<T>;
-  timeoutMs: number;
-  onTimeout: () => U;
-}): Promise<T | U> {
-  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
-  let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<U>((resolve) => {
-    timeoutTimer = setTimeout(() => resolve(params.onTimeout()), timeoutMs);
-    timeoutTimer.unref?.();
-  });
-  try {
-    return await Promise.race([params.promise, timeoutPromise]);
-  } finally {
-    if (timeoutTimer) {
-      clearTimeout(timeoutTimer);
-    }
-  }
-}
-
 export async function withAbortTimeout<T>(params: {
   timeoutMs: number;
   createTimeoutError: () => Error;
@@ -124,8 +104,9 @@ export async function withAbortTimeout<T>(params: {
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutTimer = setTimeout(() => {
-      controller.abort();
+      // Settle the deadline before synchronous abort listeners can settle the work.
       reject(params.createTimeoutError());
+      controller.abort();
     }, timeoutMs);
     timeoutTimer.unref?.();
   });

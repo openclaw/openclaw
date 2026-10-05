@@ -92,7 +92,7 @@ function createHarness(
     doRequest,
   }) as unknown as MatrixClient;
   const cfg: CoreConfig = {
-    agents: { list: [{ id: "planner" }] },
+    agents: { entries: { planner: {} } },
     bindings: [{ agentId: "planner", match: { channel: "matrix", accountId: "work" } }],
     channels: { matrix: { accounts: { work: {} } } },
   };

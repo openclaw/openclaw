@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "../../shared/entry-status.js";
 import { CONFIG_DIR } from "../../utils.js";
-import { loadSkillLibrarySelection } from "../library/selection.js";
+import { prepareSkillLibrarySelection } from "../library/selection.js";
 import { resolveBundledSkillsDir } from "../loading/bundled-dir.js";
 import {
   hasBinary,
@@ -15,7 +15,6 @@ import {
   resolveSkillsInstallPreferences,
 } from "../loading/config.js";
 import { resolveSkillKey } from "../loading/frontmatter.js";
-import { resolveSkillFileHost } from "../loading/skill-file-host.js";
 import { resolveSkillSource } from "../loading/source.js";
 import {
   loadWorkspaceSkills,
@@ -23,6 +22,7 @@ import {
 } from "../loading/workspace-skill-loader.js";
 import type { WorkspaceSkillSources } from "../loading/workspace-skill-sources.js";
 import { mergeRemoteNodeSkillEntries } from "../runtime/remote-skills.js";
+import { resolveSkillFileHost } from "../skill-file-host.js";
 import type {
   SkillEntry,
   SkillEligibilityContext,
@@ -123,18 +123,11 @@ function normalizeInstallOptions(
   }
 
   const install = entry.metadata?.install ?? [];
-  if (install.length === 0) {
-    return [];
-  }
-
   const supportsPlatform = (spec: SkillInstallSpec) => {
     const osList = spec.os ?? [];
     return osList.length === 0 || osList.includes(platform);
   };
   const filtered = install.filter(supportsPlatform);
-  if (filtered.length === 0) {
-    return [];
-  }
 
   const toOption = (spec: SkillInstallSpec, index: number): SkillInstallOption => {
     const id = (spec.id ?? `${spec.kind}-${index}`).trim();
@@ -355,7 +348,7 @@ export async function prepareWorkspaceSkillStatus(
   }
   const localEntries = sources.status
     ? [
-        ...loadSkillLibrarySelection(opts?.librarySelections ?? []),
+        ...(await prepareSkillLibrarySelection(opts?.librarySelections ?? [], {}, () => {})),
         ...sources.entries.filter((entry) => resolveSkillFileHost(entry.skill) === "gateway"),
       ]
     : sources.entries;

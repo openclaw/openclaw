@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { shouldIncludeAgentHarnessRuntimeContext } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
-  buildWatchedSessionsHarnessContext,
   embeddedAgentLog,
+  prepareWatchedSessionsHarnessContext,
   type AgentMessage,
   type ContextEngineProjection,
   type EmbeddedContextFile,
@@ -377,19 +377,21 @@ export function buildCodexOpenClawPromptContext(params: {
  * Sessions section must be re-surfaced here or Codex-backed main sessions
  * keep refusing cross-session questions (openclaw#114797).
  */
-export function buildCodexWatchedSessionsContext(params: {
+export async function prepareCodexWatchedSessionsContext(params: {
   attempt: EmbeddedRunAttemptParams;
   dynamicTools: readonly CodexDynamicToolSpec[];
   sessionKey?: string;
   sandboxed?: boolean;
-}): string | undefined {
+  assertCurrent: () => void;
+}): Promise<string | undefined> {
   if (!shouldIncludeAgentHarnessRuntimeContext(params.attempt)) {
     return undefined;
   }
-  return buildWatchedSessionsHarnessContext({
+  return prepareWatchedSessionsHarnessContext({
     config: params.attempt.config,
     sessionKey: params.sessionKey,
     sandboxed: params.sandboxed,
+    assertCurrent: params.assertCurrent,
     toolNames: flattenCodexDynamicToolFunctions(params.dynamicTools).map((tool) =>
       normalizeLowercaseStringOrEmpty(tool.name),
     ),

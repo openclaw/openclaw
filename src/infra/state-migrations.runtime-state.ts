@@ -58,7 +58,6 @@ export function migrateLegacyJsonState<Value>(params: {
   label: string;
   normalize: (value: unknown) => Value;
   recoverableReadFailure?: (error: unknown) => string | undefined;
-  shouldMigrate?: (value: Value) => boolean;
   migrate: (db: DatabaseSync, value: Value) => LegacyJsonImportOutcome;
   retire?: (params: { sourcePath: string; changes: string[]; warnings: string[] }) => void;
 }): MigrationMessages {
@@ -79,10 +78,6 @@ export function migrateLegacyJsonState<Value>(params: {
     warnings.push(`Failed reading legacy ${params.label} ${params.sourcePath}: ${String(err)}`);
     return { changes, warnings };
   }
-  if (params.shouldMigrate && !params.shouldMigrate(value)) {
-    return { changes, warnings };
-  }
-
   let outcome: LegacyJsonImportOutcome;
   try {
     outcome = runOpenClawStateWriteTransaction(({ db }) => params.migrate(db, value), {

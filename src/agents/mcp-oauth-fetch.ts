@@ -1,11 +1,7 @@
 import { extractWWWAuthenticateParams } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
-import {
-  recordMcpOAuthAuthorizationRequired,
-  resolveMcpOAuthAccessToken,
-  type McpOAuthConfig,
-} from "./mcp-oauth.js";
+import type { McpOAuthConfig } from "./mcp-oauth.js";
 
 type McpOAuthFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -54,6 +50,8 @@ export function withMcpOAuthBearer(params: {
       return await params.fetchFn(requestUrl, await toFetchInit(request));
     }
 
+    const { recordMcpOAuthAuthorizationRequired, resolveMcpOAuthAccessToken } =
+      await import("./mcp-oauth.js");
     const accessToken = await resolveMcpOAuthAccessToken({
       identity: params.identity,
       config: params.config,

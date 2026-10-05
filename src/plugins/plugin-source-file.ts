@@ -11,17 +11,6 @@ import { isGitRuntimeStagingName } from "../infra/update-runtime-staging.js";
 export const isPluginSourceEntry = (name: string): boolean =>
   name !== "node_modules" && name !== ".git" && !isGitRuntimeStagingName(name);
 
-function shouldFallbackFromPluginDescriptorCopy(
-  error: unknown,
-  platform: NodeJS.Platform = process.platform,
-  isBun = Object.hasOwn(process.versions, "bun"),
-): boolean {
-  return (
-    ["ENOENT", "ENOTDIR", "EACCES", "EPERM"].some((code) => hasErrnoCode(error, code)) ||
-    (platform === "darwin" && isBun && hasErrnoCode(error, "EBADF"))
-  );
-}
-
 // Capture and native module hooks are synchronous; no read retains this scratch buffer.
 const scratch = Buffer.allocUnsafe(64 * 1024);
 
@@ -72,24 +61,39 @@ export function isPluginNativeExecutable(source: string, boundary: string): bool
   });
 }
 
-export function copyPluginSourceFile(source: string, boundary: string, target: string): void {
-  withPluginSourceFile(source, boundary, (fd) => {
+export function copyPluginSourceFile(
+  source: string,
+  boundary: string,
+  target: string,
+  options: { hashCopiedContent?: boolean } = {},
+) {
+  return withPluginSourceFile(source, boundary, (fd) => {
     // Reopening the admitted pathname would lose the pinned inode on concurrent replacement.
     if (process.platform === "linux" || process.platform === "darwin") {
       const descriptor = `${process.platform === "linux" ? "/proc/self/fd" : "/dev/fd"}/${fd}`;
       try {
         fs.copyFileSync(descriptor, target, fs.constants.COPYFILE_FICLONE);
-        return;
+        return undefined;
       } catch (error) {
         // Chroots and restricted mounts can lack descriptor paths despite a valid open file.
-        if (!shouldFallbackFromPluginDescriptorCopy(error)) {
+        if (
+          !["ENOENT", "ENOTDIR", "EACCES", "EPERM"].some((code) => hasErrnoCode(error, code)) &&
+          !(
+            process.platform === "darwin" &&
+            Object.hasOwn(process.versions, "bun") &&
+            hasErrnoCode(error, "EBADF")
+          )
+        ) {
           throw error;
         }
       }
     }
-    const output = fs.openSync(target, "w", 0o600);
+    const output = fs.openSync(target, options.hashCopiedContent ? "w+" : "w", 0o600);
     try {
       copyFileDescriptorSync(fd, output, { maxBytes: fs.fstatSync(fd).size });
+      // Hash the actual destination through its owned descriptor. Reopening every
+      // fresh copy repeats Windows file admission before its receipt can be recorded.
+      return options.hashCopiedContent ? hashPluginSourceDescriptor(output) : undefined;
     } catch (error) {
       if (error instanceof FsSafeError && error.code === "too-large") {
         throw new Error(
@@ -121,32 +125,40 @@ export function hashPluginSourceFile(
   receipt?: Hash,
   prepared?: { contentHash: string; sizeBytes: number },
 ) {
-  return withPluginSourceFile(source, boundary, (fd) => {
-    const content = prepared ? undefined : createHash("sha256");
-    const sizeBytes = prepared?.sizeBytes ?? fs.fstatSync(fd).size;
-    receipt?.update(String(sizeBytes)).update("\0");
-    let position = 0;
-    for (;;) {
-      const length = fs.readSync(
-        fd,
-        scratch,
-        0,
-        Math.min(scratch.length, sizeBytes - position + 1),
-        position,
-      );
-      position += length;
-      if (length === 0 || position > sizeBytes) {
-        break;
-      }
-      const chunk = scratch.subarray(0, length);
-      content?.update(chunk);
-      receipt?.update(chunk);
+  return withPluginSourceFile(source, boundary, (fd) =>
+    hashPluginSourceDescriptor(fd, receipt, prepared),
+  );
+}
+
+function hashPluginSourceDescriptor(
+  fd: number,
+  receipt?: Hash,
+  prepared?: { contentHash: string; sizeBytes: number },
+) {
+  const content = prepared ? undefined : createHash("sha256");
+  const sizeBytes = prepared?.sizeBytes ?? fs.fstatSync(fd).size;
+  receipt?.update(String(sizeBytes)).update("\0");
+  let position = 0;
+  for (;;) {
+    const length = fs.readSync(
+      fd,
+      scratch,
+      0,
+      Math.min(scratch.length, sizeBytes - position + 1),
+      position,
+    );
+    position += length;
+    if (length === 0 || position > sizeBytes) {
+      break;
     }
-    if (position !== sizeBytes) {
-      throw new Error(
-        "Plugin source changed while preparing its reload; retry after the edit finishes.",
-      );
-    }
-    return prepared ?? { contentHash: content!.digest("hex"), sizeBytes };
-  });
+    const chunk = scratch.subarray(0, length);
+    content?.update(chunk);
+    receipt?.update(chunk);
+  }
+  if (position !== sizeBytes) {
+    throw new Error(
+      "Plugin source changed while preparing its reload; retry after the edit finishes.",
+    );
+  }
+  return prepared ?? { contentHash: content!.digest("hex"), sizeBytes };
 }

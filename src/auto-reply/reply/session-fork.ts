@@ -1,13 +1,16 @@
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
-  forkSessionEntryFromParentTarget,
   forkSessionFromParentTranscript,
   resolveSessionParentForkDecision,
   type ForkSessionEntryFromParentTargetParams,
   type ForkSessionEntryFromParentTargetResult,
   type SessionParentForkDecision,
 } from "../../config/sessions/session-accessor.js";
-import { prepareSessionForkTranscript } from "../../config/sessions/session-accessor.sqlite-parent-session.js";
+import {
+  forkSessionEntryFromParentTargetWithPatch,
+  prepareSessionForkTranscript,
+} from "../../config/sessions/session-accessor.sqlite-parent-session.js";
+import type { ParentForkEntryPatch } from "../../config/sessions/session-parent-fork.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -40,10 +43,8 @@ type ForkSessionFromParentParams = {
 };
 
 type ForkSessionEntryFromParentParams = Omit<ForkSessionFromParentParams, "parentEntry"> &
-  Pick<
-    ForkSessionEntryFromParentTargetParams,
-    "fallbackEntry" | "patch" | "skipForkWhen" | "skipPatch" | "decisionSkipPatch"
-  > & {
+  Pick<ForkSessionEntryFromParentTargetParams, "fallbackEntry"> & {
+    entryPatch?: ParentForkEntryPatch;
     parentStoreKeys?: readonly string[];
     sessionStoreKeys?: readonly string[];
   };
@@ -126,22 +127,21 @@ export async function forkSessionEntryFromParent(
   params: ForkSessionEntryFromParentParams,
 ): Promise<ForkSessionEntryFromParentTargetResult> {
   const storePath = resolveParentForkStorePath(params);
-  return await forkSessionEntryFromParentTarget({
-    agentId: params.agentId,
-    commitGuard: params.commitGuard,
-    decisionSkipPatch: params.decisionSkipPatch,
-    fallbackEntry: params.fallbackEntry,
-    parentTarget: normalizeForkTarget({
-      canonicalKey: params.parentSessionKey,
-      storeKeys: params.parentStoreKeys,
-    }),
-    patch: params.patch,
-    sessionTarget: normalizeForkTarget({
-      canonicalKey: params.sessionKey,
-      storeKeys: params.sessionStoreKeys,
-    }),
-    skipForkWhen: params.skipForkWhen,
-    skipPatch: params.skipPatch,
-    storePath,
-  });
+  return await forkSessionEntryFromParentTargetWithPatch(
+    {
+      agentId: params.agentId,
+      commitGuard: params.commitGuard,
+      fallbackEntry: params.fallbackEntry,
+      parentTarget: normalizeForkTarget({
+        canonicalKey: params.parentSessionKey,
+        storeKeys: params.parentStoreKeys,
+      }),
+      sessionTarget: normalizeForkTarget({
+        canonicalKey: params.sessionKey,
+        storeKeys: params.sessionStoreKeys,
+      }),
+      storePath,
+    },
+    params.entryPatch,
+  );
 }

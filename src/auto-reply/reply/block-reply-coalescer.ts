@@ -27,7 +27,6 @@ export function createBlockReplyCoalescer(params: {
   const maxChars = Math.max(minChars, Math.floor(config.maxChars));
   const idleMs = Math.max(0, Math.floor(config.idleMs));
   const joiner = config.joiner ?? "";
-  const flushOnEnqueue = config.flushOnEnqueue === true;
 
   let bufferText = "";
   let bufferSourceText: string | undefined;
@@ -69,7 +68,7 @@ export function createBlockReplyCoalescer(params: {
     if (!bufferText || !bufferedPayload) {
       return;
     }
-    if (!options?.force && !flushOnEnqueue && bufferText.length < minChars) {
+    if (!options?.force && bufferText.length < minChars) {
       scheduleIdleFlush();
       return;
     }
@@ -87,7 +86,6 @@ export function createBlockReplyCoalescer(params: {
   const canMergeBufferedTextWithMedia = (payload: ReplyPayload) =>
     Boolean(bufferText) &&
     bufferedPayload !== undefined &&
-    !flushOnEnqueue &&
     !bufferedPayload.audioAsVoice &&
     !payload.audioAsVoice &&
     !payload.isReasoning &&
@@ -135,12 +133,10 @@ export function createBlockReplyCoalescer(params: {
       return;
     }
     const reply = resolveSendableOutboundReplyParts(payload);
-    const hasMedia = reply.hasMedia;
     const text = reply.text;
     const sourceText = getReplyPayloadMetadata(payload)?.blockSourceText;
     const sourceRange = getReplyPayloadMetadata(payload)?.blockSourceRange;
-    const hasText = reply.hasText;
-    if (hasMedia) {
+    if (reply.hasMedia) {
       if (canMergeBufferedTextWithMedia(payload)) {
         void onFlush(mergeBufferedTextWithMedia(payload, text));
         return;
@@ -149,21 +145,7 @@ export function createBlockReplyCoalescer(params: {
       void onFlush(payload);
       return;
     }
-    if (!hasText) {
-      return;
-    }
-
-    // When flushOnEnqueue is set, treat each enqueued payload as its own outbound block
-    // and flush immediately instead of waiting for coalescing thresholds.
-    if (flushOnEnqueue) {
-      if (bufferText) {
-        void flush({ force: true });
-      }
-      bufferedPayload = payload;
-      bufferText = text;
-      bufferSourceText = sourceText;
-      bufferSourceRange = sourceRange;
-      void flush({ force: true });
+    if (!reply.hasText) {
       return;
     }
 

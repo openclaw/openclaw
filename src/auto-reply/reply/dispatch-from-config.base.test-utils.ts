@@ -920,7 +920,7 @@ describe("dispatchReplyFromConfig", () => {
       expect(isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
         true,
       );
-      await runExclusiveSessionLifecycleMutation({
+      await runExclusiveSessionLifecycleMutation("patch", {
         scope: "/tmp/mock-sessions.json",
         identities: [sessionKey, sessionId],
         run: async () => {
@@ -1002,7 +1002,7 @@ describe("dispatchReplyFromConfig", () => {
       ((hookName?: string) => hookName === "before_dispatch") as () => boolean,
     );
     hookMocks.runner.runBeforeDispatch.mockImplementationOnce(async () => {
-      lifecycleMutation = runExclusiveSessionLifecycleMutation({
+      lifecycleMutation = runExclusiveSessionLifecycleMutation("patch", {
         scope: "/tmp/mock-sessions.json",
         identities: [sessionKey, sessionId],
         run: async () => {
@@ -1078,7 +1078,7 @@ describe("dispatchReplyFromConfig", () => {
     const externalLifecycleRequest = new AsyncResource("slack-bypass-settle-race");
     const mutation = externalLifecycleRequest.runInAsyncScope(
       async () =>
-        await runExclusiveSessionLifecycleMutation({
+        await runExclusiveSessionLifecycleMutation("patch", {
           scope: "/tmp/mock-sessions.json",
           identities: [sessionKey, sessionId],
           prepare: async () => {
@@ -1185,7 +1185,7 @@ describe("dispatchReplyFromConfig", () => {
       await requireBlockReplyHandler(opts?.onBlockReply)({ text: "queued block" });
       mutation = externalLifecycleRequest.runInAsyncScope(
         async () =>
-          await runExclusiveSessionLifecycleMutation({
+          await runExclusiveSessionLifecycleMutation("patch", {
             scope: "/tmp/mock-sessions.json",
             identities: [sessionKey, sessionId],
             prepare: async () => {
@@ -1251,7 +1251,7 @@ describe("dispatchReplyFromConfig", () => {
       if (!(event as { isTailDispatch?: boolean }).isTailDispatch) {
         return undefined;
       }
-      await runExclusiveSessionLifecycleMutation({
+      await runExclusiveSessionLifecycleMutation("patch", {
         scope: "/tmp/mock-sessions.json",
         identities: [sessionKey, sessionId],
         prepare: async () => {

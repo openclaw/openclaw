@@ -4,6 +4,10 @@ import {
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
 import {
+  DIAGNOSTIC_MEMORY_PRESSURE_METRICS,
+  type DiagnosticMemoryPressureMetrics,
+} from "../infra/diagnostic-process-types.js";
+import {
   DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY,
   normalizeDiagnosticStabilityQuery,
 } from "./diagnostic-stability-query.js";
@@ -19,7 +23,7 @@ const LIVENESS_EVENT_LOOP_DELAY_WARN_MS = 1_000;
 const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
 const SAFE_EXPORTER_CODE = /^[A-Za-z0-9_-]{1,120}$/u;
 
-export type DiagnosticStabilityEventRecord = {
+export type DiagnosticStabilityEventRecord = DiagnosticMemoryPressureMetrics & {
   seq: number;
   ts: number;
   type: DiagnosticEventPayload["type"];
@@ -58,10 +62,6 @@ export type DiagnosticStabilityEventRecord = {
   costUsd?: number;
   count?: number;
   bytes?: number;
-  limitBytes?: number;
-  thresholdBytes?: number;
-  rssGrowthBytes?: number;
-  windowMs?: number;
   eventLoopDelayP99Ms?: number;
   eventLoopDelayMaxMs?: number;
   eventLoopUtilization?: number;
@@ -501,7 +501,7 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.level = event.level;
       assignReasonCode(record, event.reason);
       record.memory = { ...event.memory };
-      copy(event, "thresholdBytes", "rssGrowthBytes", "windowMs");
+      copy(event, ...DIAGNOSTIC_MEMORY_PRESSURE_METRICS);
       break;
     case "payload.large":
       copy(event, "surface", "action", "bytes", "limitBytes", "count", "channel", "pluginId");

@@ -295,7 +295,6 @@ describe("ensureOnboardingPluginInstalled", () => {
             source === "clawhub"
               ? { clawhubSpec: "clawhub:demo-plugin@1.0.0" }
               : { npmSpec: "@demo/plugin@1.0.0" },
-          preferRemoteInstall: true,
         },
         prompter: {
           progress: () => ({ update, stop }),
@@ -443,7 +442,6 @@ describe("ensureOnboardingPluginInstalled", () => {
                 : source === "clawhub"
                   ? { clawhubSpec }
                   : { npmSpec },
-            preferRemoteInstall: source !== "local",
           },
           prompter: {
             confirm,
@@ -576,7 +574,6 @@ describe("ensureOnboardingPluginInstalled", () => {
                   pluginId: "demo-plugin",
                   label: "Demo plugin",
                   install,
-                  preferRemoteInstall: true,
                 },
               });
             }

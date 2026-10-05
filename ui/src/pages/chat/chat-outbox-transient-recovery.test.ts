@@ -18,53 +18,62 @@ import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 useChatSendBrowserFixture();
 
 describe("transient outbox delivery recovery", () => {
-  it("retries an explicitly retryable send rejection while still connected", async () => {
-    const sendRunIds: string[] = [];
-    let sendAttempts = 0;
+  it.each(["backoff", "reconnect"])(
+    "retries a retryable send rejection after %s",
+    async (trigger) => {
+      const sendRunIds: string[] = [];
+      let sendAttempts = 0;
 
-    const host = makeChatHost({
-      requestHandlers: {
-        "chat.history": idleChatHistory(),
-        "chat.send": (params: unknown) => {
-          const payload = requireRecord(params, "retryable send payload");
-          sendRunIds.push(String(payload.idempotencyKey));
-          sendAttempts += 1;
-          if (sendAttempts === 1) {
-            throw new GatewayRequestError({
-              code: "UNAVAILABLE",
-              message: "Gateway is temporarily busy",
-              retryable: true,
-              retryAfterMs: 100,
-            });
-          }
-          return { runId: payload.idempotencyKey, status: "started", messageSeq: 1 };
+      const host = makeChatHost({
+        requestHandlers: {
+          "chat.history": idleChatHistory(),
+          "chat.send": (params: unknown) => {
+            const payload = requireRecord(params, "retryable send payload");
+            sendRunIds.push(String(payload.idempotencyKey));
+            sendAttempts += 1;
+            if (sendAttempts === 1) {
+              throw new GatewayRequestError({
+                code: "UNAVAILABLE",
+                message: "Gateway is temporarily busy",
+                retryable: true,
+                retryAfterMs: 100,
+              });
+            }
+            return { runId: payload.idempotencyKey, status: "started", messageSeq: 1 };
+          },
         },
-      },
-      chatMessage: "retry without disconnecting",
-    });
-
-    vi.useFakeTimers();
-    try {
-      await handleSendChat(host);
-
-      expect(host.connected).toBe(true);
-      expect(host.chatQueue[0]).toMatchObject({
-        sendAttempts: 0,
-        sendState: "waiting-reconnect",
+        chatMessage: "retry without disconnecting",
       });
-      expect(sendAttempts).toBe(1);
-      await vi.advanceTimersByTimeAsync(100);
-      // The retry timer only kicks off a fire-and-forget drain, so the resend
-      // lands after the tick returns. Wait for the outcome, not the tick.
-      await waitForFast(() => {
+
+      vi.useFakeTimers();
+      try {
+        await handleSendChat(host);
+
+        expect(host.connected).toBe(true);
+        expect(host.chatQueue[0]).toMatchObject({
+          sendAttempts: 0,
+          sendState: "waiting-reconnect",
+        });
+        expect(sendAttempts).toBe(1);
+        if (trigger === "reconnect") {
+          host.connectionEpoch += 1;
+          await resumeStoredChatOutboxes(host);
+        } else {
+          await vi.advanceTimersByTimeAsync(100);
+          // The timer starts a fire-and-forget drain; join its observable outcome.
+          await waitForFast(() => {
+            expect(sendAttempts).toBe(2);
+            expect(listStoredChatOutboxes(host)).toStrictEqual([]);
+          });
+        }
         expect(sendAttempts).toBe(2);
         expect(listStoredChatOutboxes(host)).toStrictEqual([]);
-      });
-      expect(sendRunIds[1]).toBe(sendRunIds[0]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        expect(sendRunIds[1]).toBe(sendRunIds[0]);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it.each([false, true])(
     "reconciles a timed-out send without resending (receipt=%s)",
@@ -192,43 +201,6 @@ describe("transient outbox delivery recovery", () => {
       }
     },
   );
-
-  it("retries after reconnecting with the same Gateway client", async () => {
-    let sendAttempts = 0;
-    const host = makeChatHost({
-      requestHandlers: {
-        "chat.history": idleChatHistory(),
-        "chat.send": (params: unknown) => {
-          sendAttempts += 1;
-          if (sendAttempts === 1) {
-            throw new GatewayRequestError({
-              code: "UNAVAILABLE",
-              message: "Gateway is temporarily busy",
-              retryable: true,
-              retryAfterMs: 100,
-            });
-          }
-          const payload = requireRecord(params, "reconnected send payload");
-          return { runId: payload.idempotencyKey, status: "started", messageSeq: 1 };
-        },
-      },
-      chatMessage: "retry after reconnecting",
-    });
-
-    vi.useFakeTimers();
-    try {
-      await handleSendChat(host);
-      expect(sendAttempts).toBe(1);
-
-      host.connectionEpoch += 1;
-      await resumeStoredChatOutboxes(host);
-
-      expect(sendAttempts).toBe(2);
-      expect(listStoredChatOutboxes(host)).toStrictEqual([]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
 
   it("transfers an active retry backoff to a sibling pane without bypassing it", async () => {
     let historyAttempts = 0;

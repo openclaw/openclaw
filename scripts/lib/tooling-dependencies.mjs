@@ -1,29 +1,51 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { createRequire, registerHooks } from "node:module";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveConfiguredModulesDir } from "./tsx-cli-shim.mjs";
 
+function isWithin(root, target) {
+  const rel = relative(root, target);
+  return (
+    rel !== "" &&
+    rel !== ".." &&
+    !rel.startsWith("../") &&
+    !rel.startsWith("..\\") &&
+    !isAbsolute(rel)
+  );
+}
+
 function contained(root, target) {
   const physical = realpathSync(target);
-  const rel = relative(root, physical);
-  if (!rel || rel === ".." || rel.startsWith("../") || rel.startsWith("..\\") || isAbsolute(rel)) {
+  if (!isWithin(root, physical)) {
     throw new Error("Tooling package escapes its installed dependency owner.");
   }
   return physical;
 }
 
-function qualifiedPackage(checkout, root, specifier, consumer) {
-  const name = specifier
+function packageName(specifier) {
+  return specifier
     .split("/")
     .slice(0, specifier.startsWith("@") ? 2 : 1)
     .join("/");
-  const manifest = JSON.parse(readFileSync(join(checkout, "package.json"), "utf8"));
-  const required =
+}
+
+function declaredVersion(manifest, name) {
+  return (
     manifest.dependencies?.[name] ??
     manifest.devDependencies?.[name] ??
-    manifest.optionalDependencies?.[name];
+    manifest.optionalDependencies?.[name]
+  );
+}
+
+function readManifest(checkout) {
+  return JSON.parse(readFileSync(join(checkout, "package.json"), "utf8"));
+}
+
+function qualifiedPackage(manifest, root, specifier, consumer) {
+  const name = packageName(specifier);
+  const required = declaredVersion(manifest, name);
   const modules = realpathSync(join(root, "node_modules"));
   // A workspace link would execute another checkout's source. Only installed
   // third-party packages can fill missing dependencies in this checkout.
@@ -128,7 +150,7 @@ export function toolingDependencyOptions(checkout, consumer, { tsx = false } = {
   hook.searchParams.set("consumer", consumer);
   let tsxImport;
   if (tsx) {
-    const directory = qualifiedPackage(checkout, root, "tsx/esm", consumer);
+    const directory = qualifiedPackage(readManifest(checkout), root, "tsx/esm", consumer);
     const require = createRequire(join(directory, "package.json"));
     tsxImport = pathToFileURL(contained(directory, require.resolve("tsx/esm"))).href;
   }
@@ -142,23 +164,49 @@ const root = params.get("root");
 if (root) {
   const checkout = params.get("checkout");
   const consumer = params.get("consumer");
+  const manifest = readManifest(checkout);
   const parentURL = pathToFileURL(join(root, "package.json")).href;
+  // Checkout source keeps what resolves inside the checkout; its other declared
+  // packages belong to the qualified tooling root. An ancestor install can be
+  // stale and either succeed with old exports or reject newer subpaths.
+  const rootOwned = (specifier, context) => {
+    const importer = context.parentURL?.startsWith("file:")
+      ? fileURLToPath(context.parentURL)
+      : undefined;
+    return Boolean(
+      importer &&
+      isWithin(checkout, importer) &&
+      !relative(checkout, importer).split(sep).includes("node_modules") &&
+      declaredVersion(manifest, packageName(specifier)),
+    );
+  };
   registerHooks({
     resolve(specifier, context, nextResolve) {
+      if (isAbsolute(specifier) || /^(?:\.{1,2}(?:\/|$)|[a-z][a-z\d+.-]*:|#)/i.test(specifier)) {
+        return nextResolve(specifier, context);
+      }
       let resolved;
       try {
-        return nextResolve(specifier, context);
+        resolved = nextResolve(specifier, context);
       } catch (error) {
-        if (
-          error?.code !== "ERR_MODULE_NOT_FOUND" ||
-          isAbsolute(specifier) ||
-          /^(?:\.{1,2}(?:\/|$)|[a-z][a-z\d+.-]*:|#)/i.test(specifier)
-        ) {
+        if (error?.code !== "ERR_MODULE_NOT_FOUND" && !rootOwned(specifier, context)) {
           throw error;
         }
-        resolved = nextResolve(specifier, { ...context, parentURL });
       }
-      const directory = qualifiedPackage(checkout, root, specifier, consumer);
+      if (resolved) {
+        const target = resolved.url.startsWith("file:") ? fileURLToPath(resolved.url) : undefined;
+        // Dependency-owned imports retain their own private versions.
+        if (
+          !target ||
+          isWithin(checkout, target) ||
+          !target.split(sep).includes("node_modules") ||
+          !rootOwned(specifier, context)
+        ) {
+          return resolved;
+        }
+      }
+      resolved = nextResolve(specifier, { ...context, parentURL });
+      const directory = qualifiedPackage(manifest, root, specifier, consumer);
       contained(directory, fileURLToPath(resolved.url));
       return resolved;
     },

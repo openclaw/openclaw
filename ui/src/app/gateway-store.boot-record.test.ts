@@ -3,7 +3,24 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { clearBootRecords, persistBootRecord, type BootRecord } from "./boot-record.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
+import type { ApplicationGatewayConnectOptions } from "./gateway.ts";
 import { loadSettings } from "./settings.ts";
+
+function bootRecord(scope: string, overrides: Partial<BootRecord> = {}): BootRecord {
+  return {
+    version: 2,
+    authMethod: "token",
+    credential: "9d17676d",
+    recoveryScope: "account-a",
+    scope,
+    savedAt: Date.now(),
+    profileId: "profile-a",
+    agents: { defaultId: "main", mainKey: "main", scope: "per-sender", agents: [{ id: "main" }] },
+    groups: [],
+    sectionOrder: [],
+    ...overrides,
+  };
+}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -22,17 +39,12 @@ afterEach(async () => {
 it("clears persisted and pending warm state before yielding or pagehide", async () => {
   const settings = { ...loadSettings(), token: "test-token" };
   const { gateway } = createGatewayStoreTestStore({ settings });
-  const record: BootRecord = {
-    version: 2,
-    authMethod: "token",
-    credential: "9d17676d",
-    scope: gatewayCredentialScope(settings.gatewayUrl),
-    savedAt: Date.now(),
+  const record = bootRecord(gatewayCredentialScope(settings.gatewayUrl), {
+    recoveryScope: undefined,
     profileId: "previous-profile",
-    agents: { defaultId: "main", mainKey: "main", scope: "per-sender", agents: [{ id: "main" }] },
     groups: [{ name: "Previous profile group", position: 0 }],
     sectionOrder: ["category:Previous profile group"],
-  };
+  });
   const key = "openclaw.control.bootRecord.v1:" + record.scope;
   try {
     gateway.connect();
@@ -53,112 +65,71 @@ it("clears persisted and pending warm state before yielding or pagehide", async 
   }
 });
 
-it.each(["trusted-proxy", "tailscale", "password"])(
-  "supplies %s cached identity without authorizing recovery",
-  async (authMethod) => {
-    const settings = { ...loadSettings(), token: "" };
-    const record: BootRecord = {
-      version: 2,
-      authMethod,
-      credential: "",
-      recoveryScope: "account-a",
-      scope: gatewayCredentialScope(settings.gatewayUrl),
-      savedAt: Date.now(),
-      profileId: "profile-a",
-      agents: { defaultId: "main", mainKey: "main", scope: "per-sender", agents: [{ id: "main" }] },
-      groups: [],
-      sectionOrder: [],
-    };
-    persistBootRecord(record);
-    window.dispatchEvent(new Event("pagehide"));
-    const { gateway, current } = createGatewayStoreTestStore({ settings });
-    gateway.connect();
-    expect(current().opts.offlineRecoveryScope).toBe("account-a");
-    expect(current().opts.password).toBeUndefined();
-    expect(current().opts.token).toBeUndefined();
-    expect(gateway.snapshot.phase).toBe("connecting");
-    gateway.stop();
-  },
-);
+it("supplies cached identity without authorizing recovery", () => {
+  const settings = { ...loadSettings(), token: "" };
+  const record = bootRecord(gatewayCredentialScope(settings.gatewayUrl), {
+    authMethod: "trusted-proxy",
+    credential: "",
+  });
+  persistBootRecord(record);
+  window.dispatchEvent(new Event("pagehide"));
+  const { gateway, current } = createGatewayStoreTestStore({ settings });
+  gateway.connect();
+  expect(current().opts.offlineRecoveryScope).toBe("account-a");
+  expect(current().opts.password).toBeUndefined();
+  expect(current().opts.token).toBeUndefined();
+  expect(gateway.snapshot.phase).toBe("connecting");
+  gateway.stop();
+});
 
-it.each([{ bootstrapToken: "synthetic-bootstrap" }, { password: "synthetic-password" }])(
-  "does not retire an admitted peer on a fresh rejected connection %j",
-  (overrides) => {
+it.each([
+  {
+    name: "fresh bootstrap",
+    overrides: { bootstrapToken: "synthetic-bootstrap" },
+    admitted: false,
+  },
+  { name: "fresh password", overrides: { password: "synthetic-password" }, admitted: false },
+  { name: "same owner", overrides: {}, admitted: true, replacementScope: "account-a" },
+  { name: "replacement owner", overrides: {}, admitted: true, replacementScope: "account-b" },
+] satisfies Array<{
+  name: string;
+  overrides: ApplicationGatewayConnectOptions;
+  admitted: boolean;
+  replacementScope?: string;
+}>)(
+  "retires only captured admission on rejected $name",
+  ({ overrides, admitted, replacementScope }) => {
     const settings = { ...loadSettings(), token: "test-token" };
     const { gateway, current } = createGatewayStoreTestStore({ settings });
     const scope = gatewayCredentialScope(settings.gatewayUrl);
-    const saved: BootRecord = {
-      version: 2,
-      authMethod: "token",
-      credential: "9d17676d",
-      recoveryScope: "peer-account",
-      scope,
-      savedAt: Date.now(),
-      profileId: "profile-a",
-      agents: { defaultId: "main", mainKey: "main", scope: "per-sender", agents: [{ id: "main" }] },
-      groups: [],
-      sectionOrder: [],
-    };
+    const saved = bootRecord(scope);
     persistBootRecord(saved);
     window.dispatchEvent(new Event("pagehide"));
     const key = "openclaw.control.bootRecord.v1:" + scope;
     const bytes = localStorage.getItem(key);
     try {
       gateway.connect(overrides);
-      expect(current().opts.offlineRecoveryScope).toBeUndefined();
+      expect(current().opts.offlineRecoveryScope).toBe(admitted ? "account-a" : undefined);
+      const replacement = { ...saved, recoveryScope: replacementScope };
+      if (admitted) {
+        persistBootRecord(replacement);
+        window.dispatchEvent(new Event("pagehide"));
+        persistBootRecord(replacement);
+      }
       current().opts.onClose?.({
         code: 4008,
         reason: "rejected",
         willRetry: false,
         error: { code: "PAIRING_REQUIRED", message: "Rejected synthetic admission" },
       });
-      expect(localStorage.getItem(key)).toBe(bytes);
+      if (!admitted) {
+        expect(localStorage.getItem(key)).toBe(bytes);
+      }
+      window.dispatchEvent(new Event("pagehide"));
+      expect(localStorage.getItem(key)).toBe(
+        !admitted ? bytes : replacementScope === "account-a" ? null : JSON.stringify(replacement),
+      );
       expect(gateway.snapshot.phase).toBe("stopped");
-    } finally {
-      gateway.stop();
-    }
-  },
-);
-
-it.each(["same-owner", "replacement-owner"])(
-  "retires only captured admission after %s rejection",
-  (which) => {
-    const settings = { ...loadSettings(), token: "test-token" };
-    const scope = gatewayCredentialScope(settings.gatewayUrl);
-    const saved: BootRecord = {
-      version: 2,
-      authMethod: "token",
-      credential: "9d17676d",
-      recoveryScope: "account-a",
-      scope,
-      savedAt: Date.now(),
-      profileId: "same-profile",
-      agents: { defaultId: "main", mainKey: "main", scope: "per-sender", agents: [{ id: "main" }] },
-      groups: [],
-      sectionOrder: [],
-    };
-    persistBootRecord(saved);
-    window.dispatchEvent(new Event("pagehide"));
-    const { gateway, current } = createGatewayStoreTestStore({ settings });
-    try {
-      gateway.connect();
-      expect(current().opts.offlineRecoveryScope).toBe("account-a");
-      const replacement = {
-        ...saved,
-        recoveryScope: which === "same-owner" ? "account-a" : "account-b",
-      };
-      persistBootRecord(replacement);
-      window.dispatchEvent(new Event("pagehide"));
-      persistBootRecord(replacement);
-      current().opts.onClose?.({
-        code: 4008,
-        reason: "rejected",
-        willRetry: false,
-        error: { code: "PAIRING_REQUIRED", message: "Rejected synthetic admission" },
-      });
-      window.dispatchEvent(new Event("pagehide"));
-      const stored = localStorage.getItem("openclaw.control.bootRecord.v1:" + scope);
-      expect(stored && JSON.parse(stored)).toEqual(which === "same-owner" ? null : replacement);
     } finally {
       gateway.stop();
     }
@@ -171,17 +142,7 @@ it.each(["rejection", "credential edit"])(
     const settings = { ...loadSettings(), token: "test-token" };
     const scope = gatewayCredentialScope(settings.gatewayUrl);
     const key = "openclaw.control.bootRecord.v1:" + scope;
-    const legacy: BootRecord = {
-      version: 2,
-      authMethod: "token",
-      credential: "9d17676d",
-      scope,
-      savedAt: Date.now(),
-      profileId: "profile-a",
-      agents: { defaultId: "main", mainKey: "main", scope: "per-sender", agents: [{ id: "main" }] },
-      groups: [],
-      sectionOrder: [],
-    };
+    const legacy = bootRecord(scope, { recoveryScope: undefined });
     for (const published of ["legacy", "live", "peer"] as const) {
       localStorage.setItem(key, JSON.stringify(legacy));
       const { gateway, current } = createGatewayStoreTestStore({ settings });

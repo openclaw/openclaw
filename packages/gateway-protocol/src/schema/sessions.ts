@@ -294,6 +294,40 @@ export const SessionsFilesGetResultSchema = closedObject({
   file: SessionFileEntrySchema,
 });
 
+export const SESSIONS_FILES_ASSETS_MAX_REFS = 64;
+export const SESSIONS_FILES_ASSET_MAX_BYTES = 1024 * 1024;
+export const SESSIONS_FILES_ASSETS_MAX_TOTAL_BYTES = 4 * 1024 * 1024;
+
+const sessionFileAssetRefSchema = Type.String({ minLength: 1, maxLength: 4096 });
+
+/** Reads relative HTML resources under the session's current file-read authority. */
+export const SessionsFilesAssetsParamsSchema = closedObject({
+  ...SessionsFilesGetParamsSchema.properties,
+  refs: Type.Array(sessionFileAssetRefSchema, { maxItems: SESSIONS_FILES_ASSETS_MAX_REFS }),
+});
+
+export const SessionsFilesAssetsResultSchema = closedObject({
+  assets: Type.Array(
+    Type.Union([
+      closedObject({
+        ref: sessionFileAssetRefSchema,
+        mimeType: NonEmptyString,
+        content: Type.String(),
+      }),
+      closedObject({
+        ref: sessionFileAssetRefSchema,
+        error: Type.Union([
+          Type.Literal("not_found"),
+          Type.Literal("too_large"),
+          Type.Literal("outside_session_boundary"),
+          Type.Literal("unsupported"),
+        ]),
+      }),
+    ]),
+    { maxItems: SESSIONS_FILES_ASSETS_MAX_REFS },
+  ),
+});
+
 /** Overwrites one existing session workspace file with hash-based CAS. */
 export const SessionsFilesSetParamsSchema = closedObject({
   ...SessionsFilesGetParamsSchema.properties,
@@ -785,6 +819,8 @@ export type SessionsFilesListParams = Static<typeof SessionsFilesListParamsSchem
 export type SessionsFilesListResult = Static<typeof SessionsFilesListResultSchema>;
 export type SessionsFilesGetParams = Static<typeof SessionsFilesGetParamsSchema>;
 export type SessionsFilesGetResult = Static<typeof SessionsFilesGetResultSchema>;
+export type SessionsFilesAssetsParams = Static<typeof SessionsFilesAssetsParamsSchema>;
+export type SessionsFilesAssetsResult = Static<typeof SessionsFilesAssetsResultSchema>;
 export type SessionsFilesSetParams = Static<typeof SessionsFilesSetParamsSchema>;
 export type SessionsFilesSetResult = Static<typeof SessionsFilesSetResultSchema>;
 export type SessionsFilesRevealParams = Static<typeof SessionsFilesRevealParamsSchema>;

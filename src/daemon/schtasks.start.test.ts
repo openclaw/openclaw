@@ -2,9 +2,22 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as terminalNote from "../../packages/terminal-core/src/note.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { maybeRepairGatewayDaemon } from "../commands/doctor-gateway-daemon-flow.js";
+import { createDoctorPrompter } from "../commands/doctor-prompter.js";
+import * as serviceRepairPolicy from "../commands/doctor-service-repair-policy.js";
+import * as configPaths from "../config/paths.js";
+import * as sqliteLibrary from "../infra/bun-sqlite-library.js";
+import * as installOwner from "../infra/install-owner.js";
+import * as ports from "../infra/ports-inspect.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import * as utils from "../utils.js";
 import { readScheduledTaskCommand } from "./schtasks-layout.js";
 import { startScheduledTask } from "./schtasks.js";
+import * as gatewayService from "./service.js";
+import { createMockGatewayService } from "./service.test-helpers.js";
 
 const native = vi.hoisted(() => ({
   enabled: false,
@@ -94,6 +107,7 @@ beforeEach(() => {
   native.failure = undefined;
   native.afterEnable = undefined;
 });
+afterEach(() => vi.restoreAllMocks());
 
 async function fixture(program?: string, kind = "gateway") {
   const root = temporary.make("schtasks-start-");
@@ -120,6 +134,70 @@ async function fixture(program?: string, kind = "gateway") {
   };
   return { env, file, root, entry };
 }
+
+it.each(["owned", "foreign", "missing launcher"] as const)(
+  "recovers a disabled Scheduled Task through Doctor only with a verified launcher (%s)",
+  async (scenario) => {
+    const { env, root, file } = await fixture();
+    if (scenario === "foreign") {
+      await fs.writeFile(file, '@echo off\r\n"C:\\Windows\\notepad.exe" gateway\r\n');
+    } else if (scenario === "missing launcher") {
+      await fs.unlink(file);
+    }
+    const service = createMockGatewayService({
+      isLoaded: vi.fn(async () => true),
+      readRuntime: vi.fn(async () => ({ status: "stopped", state: "Disabled" })),
+      start: startScheduledTask,
+    });
+    vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
+    vi.spyOn(configPaths, "isDefaultInstallIdentity").mockReturnValue(true);
+    vi.spyOn(serviceRepairPolicy, "shouldManageGatewayService").mockResolvedValue(true);
+    vi.spyOn(installOwner, "readInstallOwner").mockResolvedValue(null);
+    vi.spyOn(utils, "sleep").mockResolvedValue(undefined);
+    vi.spyOn(sqliteLibrary, "ensureSqliteLibrarySelected").mockReturnValue({ source: "runtime" });
+    vi.spyOn(ports, "inspectPortUsage").mockResolvedValue({
+      port: 18789,
+      status: "free",
+      listeners: [],
+      hints: [],
+    });
+    const note = vi.spyOn(terminalNote, "note").mockImplementation(() => {});
+    mockProcessPlatform("win32");
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const options = { repair: true, nonInteractive: true };
+    await withEnvAsync(
+      {
+        ...env,
+        HOME: root,
+        OPENCLAW_STATE_DIR: root,
+        OPENCLAW_SERVICE_REPAIR_POLICY: undefined,
+        OPENCLAW_UPDATE_IN_PROGRESS: undefined,
+      },
+      () =>
+        maybeRepairGatewayDaemon({
+          cfg: { gateway: { mode: "local" } },
+          runtime,
+          options,
+          prompter: createDoctorPrompter({ runtime, options }),
+          gatewayDetailsMessage: "isolated task fixture",
+          healthOk: false,
+        }),
+    );
+    expect(native.enabled).toBe(scenario === "owned");
+    expect(native.running).toBe(scenario === "owned");
+    if (scenario !== "owned") {
+      expect(native.calls.some((args) => args[0] === "/Change" || args[0] === "/Run")).toBe(false);
+      expect(note).toHaveBeenCalledWith(
+        expect.stringMatching(
+          scenario === "foreign"
+            ? /Gateway service start failed: .*not the requested OpenClaw service/
+            : /Gateway service start failed: .*service command could not be inspected/,
+        ),
+        "Gateway",
+      );
+    }
+  },
+);
 
 it.each(["gateway", "node"])(
   "explicitly starts a disabled registered %s without replacing its launcher",

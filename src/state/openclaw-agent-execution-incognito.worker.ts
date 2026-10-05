@@ -89,6 +89,9 @@ export function createIncognitoAgentDatabaseBackend(
           await import("../config/sessions/session-incognito.worker.js");
         sessions = createIncognitoSessionWorker(database, input.identity, input.environment);
       }
+      if (command.type !== "database.incognito.memory") {
+        await sessions?.prepare(command);
+      }
     },
     execute(command) {
       assertCurrent();
@@ -100,7 +103,7 @@ export function createIncognitoAgentDatabaseBackend(
         if (!sessions) {
           throw new Error("Incognito session operation was not prepared");
         }
-        return sessions(command);
+        return sessions.execute(command);
       }
       // sqlite-allow-raw -- Connection diagnostics have no Kysely table representation.
       const pageCount = database.db.prepare("PRAGMA page_count").get()?.page_count;
@@ -113,10 +116,14 @@ export function createIncognitoAgentDatabaseBackend(
     },
     assertSettled() {
       assertCurrent();
+      sessions?.assertSettled();
       if (database.db.isTransaction) {
         throw new Error("Incognito command left an unsettled native transaction");
       }
     },
-    close,
+    close() {
+      sessions?.close();
+      close();
+    },
   };
 }

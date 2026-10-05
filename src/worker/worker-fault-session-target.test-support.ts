@@ -2,12 +2,13 @@ import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.
 import { bindAgentToolExecutionLocation } from "../agents/agent-tool-metadata.js";
 import { prepareCoreToolPolicy } from "../agents/prepared-tool-surface.js";
 import type { BoundAgentRunSessionTarget } from "../agents/run-session-target.types.js";
+import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { WorkerSessionTurnClaim } from "../gateway/worker-environments/placement-record.js";
 import type { WorkerSessionPlacementStore } from "../gateway/worker-environments/placement-store.js";
 import {
   bindWorkerTurnOwner,
-  bindWorkerTurnToolSurface,
+  bindWorkerTurnCapabilities,
 } from "../gateway/worker-environments/placement-turn-claim-events.js";
 import { createWorkerGatewayToolRuntime } from "../gateway/worker-environments/worker-gateway-tool-runtime.js";
 import { resolveWorkerTurnTranscriptTarget } from "../gateway/worker-environments/worker-turn-transcript-target.js";
@@ -64,10 +65,8 @@ export async function bindWorkerFixtureTurnSource(
     throw error;
   }
   let assignment: WorkerLaunchPlan["assignment"];
-  bindWorkerTurnToolSurface(
-    store,
-    claim,
-    createWorkerGatewayToolRuntime({
+  bindWorkerTurnCapabilities(store, claim, {
+    toolSurface: createWorkerGatewayToolRuntime({
       assertCurrent: assertSourceCurrent,
       signal: lifetime.signal,
       prepare: async () => {
@@ -100,10 +99,10 @@ export async function bindWorkerFixtureTurnSource(
         for (const tool of tools) {
           bindAgentToolExecutionLocation(tool, { kind: "placement" });
         }
-        return { tools, policy };
+        return { tools, policy, presentation: createToolSurfacePresentationForTest() };
       },
     }),
-  );
+  });
   return {
     operationalRunInstance,
     setToolAssignment(value: WorkerLaunchPlan["assignment"]) {

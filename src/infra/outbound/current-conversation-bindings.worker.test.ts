@@ -17,7 +17,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import * as admission from "../sqlite-worker-operation-admission.js";
 import { createAccountScopedConversationBindingManager } from "./account-scoped-conversation-bindings.js";
-import { createBoundDeliveryRouter } from "./bound-delivery-router.js";
+import { resolveBoundDeliveryDestination } from "./bound-delivery-router.js";
 import {
   inspectCurrentConversationBindingRecordAsync,
   readCurrentConversationBindingSelectionAsync,
@@ -399,10 +399,8 @@ it.each([
               }, attachment),
           );
           await expect(
-            createBoundDeliveryRouter().resolveDestination({
-              eventKind: "task_completion",
+            resolveBoundDeliveryDestination({
               targetSessionKey: bound.targetSessionKey,
-              failClosed: true,
             }),
           ).rejects.toMatchObject({ code: "BINDING_ADAPTER_UNAVAILABLE" });
           expect(retirements).toBe(1);

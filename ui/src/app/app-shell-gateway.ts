@@ -6,6 +6,7 @@ import {
   BROWSER_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
   PORTAL_PANEL_TOGGLE_EVENT,
+  PLUGIN_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
   UI_COMMAND_EVENT,
 } from "../components/panel-toggle-contract.ts";
@@ -63,7 +64,7 @@ export interface ShellGatewayHost {
   agentRosterRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null;
   readonly outboxStoreImport: { load: () => Promise<unknown> };
   observeDeletedSessions(sessionState: ApplicationContext["sessions"]["state"]): void;
-  recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]): void;
+  recoverDeletedActiveSession(): void;
   selectChatSession(sessionKey: string, agentId?: string | null): void;
   requestUpdate(): void;
 }
@@ -106,7 +107,7 @@ export class ShellGatewayOwner {
         return;
       }
       this.host.observeDeletedSessions(sessions.state);
-      this.host.recoverDeletedActiveSession(sessions.state);
+      this.host.recoverDeletedActiveSession();
       synchronizeTitle();
     };
     synchronize();
@@ -185,10 +186,7 @@ export class ShellGatewayOwner {
       invalidateChatMetadataStore(client, undefined, undefined, modelInvalidation ?? "preserve");
     }
     if (event.event === "sessions.changed") {
-      const context = this.host.context;
-      if (context) {
-        this.host.recoverDeletedActiveSession(context.sessions.state);
-      }
+      this.host.recoverDeletedActiveSession();
       return;
     }
     if (event.event === "config.changed") {
@@ -236,11 +234,16 @@ export class ShellGatewayOwner {
     if (command.kind === "panel") {
       const sessionKey =
         commandParams.sessionKey ??
-        (command.panel === "portal" ? this.host.activeSessionKey : undefined);
+        (command.panel === "portal" || command.panel === "plugin"
+          ? this.host.activeSessionKey
+          : undefined);
       if (
         sessionKey &&
         (!areUiSessionKeysEquivalent(sessionKey, this.host.activeSessionKey) ||
-          !isSessionRouteId(this.host.routeState.routeId))
+          !isSessionRouteId(this.host.routeState.routeId) ||
+          (command.panel === "plugin" &&
+            commandParams.agentId !== undefined &&
+            commandParams.agentId !== context.agentSelection.state.selectedId))
       ) {
         this.host.selectChatSession(sessionKey, commandParams.agentId);
       }
@@ -250,10 +253,18 @@ export class ShellGatewayOwner {
           browser: BROWSER_PANEL_TOGGLE_EVENT,
           desktop: DESKTOP_PANEL_TOGGLE_EVENT,
           portal: PORTAL_PANEL_TOGGLE_EVENT,
+          plugin: PLUGIN_PANEL_TOGGLE_EVENT,
         }[command.panel],
         {
           detail: {
             open: command.open,
+            ...(command.panel === "plugin"
+              ? {
+                  pluginId: command.pluginId,
+                  panelId: command.panelId,
+                  agentId: commandParams.agentId,
+                }
+              : {}),
             ...(sessionKey ? { sessionKey } : {}),
             ...(command.dock ? { dock: command.dock } : {}),
             ...(command.panel === "terminal" && command.terminalSessionId
@@ -267,7 +278,12 @@ export class ShellGatewayOwner {
         },
       );
       if (sessionKey) {
-        rememberSessionPanelToggle(command.panel, panelEvent);
+        rememberSessionPanelToggle(
+          command.panel === "plugin"
+            ? `plugin:${command.pluginId}/${command.panelId}`
+            : command.panel,
+          panelEvent,
+        );
       }
       window.dispatchEvent(panelEvent);
       return;
@@ -327,9 +343,7 @@ export class ShellGatewayOwner {
     this.host.previousGatewayPhase = snapshot.phase;
     this.updateGatewaySessionKey(snapshot);
     const context = this.host.context;
-    if (context) {
-      this.host.recoverDeletedActiveSession(context.sessions.state);
-    }
+    this.host.recoverDeletedActiveSession();
     if (snapshot.phase === "connected" && context) {
       const connectionBootstrap = context.connectionBootstrap;
       void connectionBootstrap.run("runtime-config", async () => {

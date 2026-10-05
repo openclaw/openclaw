@@ -95,6 +95,27 @@ describe("ui.command gateway method", () => {
     expect(result.respond).toHaveBeenCalledWith(true, { ok: true });
   });
 
+  it("delivers plugin panel commands only to the requester", async () => {
+    const requester = client("requester");
+    const params = {
+      sessionKey: "agent:main:main",
+      command: {
+        kind: "panel",
+        panel: "plugin",
+        pluginId: "review",
+        panelId: "document",
+        open: true,
+      },
+    };
+    const result = await call(params, [requester, client("bystander")], requester);
+    expect(result.respond).toHaveBeenCalledWith(true, { ok: true });
+    expect(result.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+      "ui.command",
+      { ...params, agentId: "main" },
+      new Set(["requester"]),
+    );
+  });
+
   it("keeps the agent screen tool bound to its requesting browser across async execution", async () => {
     const requester = client("requester");
     const recipients = [requester, client("bystander")];

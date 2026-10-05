@@ -16,13 +16,13 @@ import {
 import { getSkillsSourceVersion, observeSkillsSnapshotSource } from "../runtime/refresh-state.js";
 import { mergeRemoteNodeSkillEntries } from "../runtime/remote-skills.js";
 import { fingerprintSkillSnapshotConfig } from "../runtime/snapshot-config-fingerprint.js";
+import { recordSkillFileHost } from "../skill-file-host.js";
 import type { SkillEligibilityContext, SkillEntry, SkillSnapshot } from "../types.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { hasBinary, prepareSkillBinaryProbe } from "./config.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import { loadSingleSkillDirectory } from "./local-loader.js";
 import { createSkillEntry } from "./skill-entry-metadata.js";
-import { recordSkillFileHost } from "./skill-file-host.js";
 import { resolvePluginSkillsDir, resolveSkillsUserHomeDir } from "./skill-paths.js";
 import {
   appendLowerPrecedenceSkillRecords,

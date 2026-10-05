@@ -295,7 +295,7 @@ describe("createOpenClawTools browser plugin integration", () => {
     expect(resolveTools({ ...deliveryOptions, config: {} }).context.delivery).toBeUndefined();
   });
 
-  it("does not expose CLI message-only authority to plugin delivery", () => {
+  it("does not expose CLI message-only authority to plugin delivery", async () => {
     const identity = {
       agentId: "main",
       runId: "cli-message-only",
@@ -308,7 +308,7 @@ describe("createOpenClawTools browser plugin integration", () => {
       requesterSenderId: "sender-1",
     });
     setActivePluginRegistry(createEmptyPluginRegistry());
-    resolveGatewayScopedTools({
+    await resolveGatewayScopedTools({
       ...identity,
       cfg: { tools: { allow: ["message"] } },
       surface: "loopback",

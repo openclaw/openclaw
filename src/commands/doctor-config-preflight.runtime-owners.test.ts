@@ -103,6 +103,7 @@ describe("runtime plugin migration ownership", () => {
         configPath,
         JSON.stringify({
           ...config,
+          meta: { migrations: { webhookListeners: true } },
           plugins: { entries: { "missing-fixture": { enabled: true } } },
         }),
       );

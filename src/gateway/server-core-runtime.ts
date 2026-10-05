@@ -25,6 +25,7 @@ import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generati
 import type { GatewayReloadHandlerParams } from "./server-reload-contracts.js";
 import { getHealthVersion, getPresenceVersion } from "./server/health-state.js";
 import { listPluginNodeCapabilities } from "./server/plugins-http/route-capability.js";
+import { invalidateSharedReadResponses } from "./shared-read-responses.js";
 import { resolveGrantExpiryDaysConfig } from "./standing-grant-expiry-config.js";
 
 type GatewayLifecycle = Awaited<ReturnType<typeof prepareGatewayLifecycle>>;
@@ -55,8 +56,6 @@ export async function startGatewayCoreRuntime(input: {
   logDiscovery: GatewayLogger;
   logHealth: GatewayLogger;
   logChannels: GatewayLogger;
-  loadGatewayStartupEarlyModule: () => Promise<typeof import("./server-startup-early.js")>;
-  loadGatewayPluginBootstrapModule: () => Promise<typeof import("./server-plugin-bootstrap.js")>;
   loadGatewayModelCatalog: typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
   loadGatewayModelCatalogSnapshot: typeof import("./server-model-catalog.js").loadGatewayModelCatalogSnapshot;
   readPreparedGatewayModelCatalog: typeof import("./server-model-catalog.js").readPreparedGatewayModelCatalog;
@@ -69,8 +68,6 @@ export async function startGatewayCoreRuntime(input: {
     logDiscovery,
     logHealth,
     logChannels,
-    loadGatewayStartupEarlyModule,
-    loadGatewayPluginBootstrapModule,
     loadGatewayModelCatalog,
     loadGatewayModelCatalogSnapshot,
     readPreparedGatewayModelCatalog,
@@ -154,7 +151,7 @@ export async function startGatewayCoreRuntime(input: {
   const startEarlyRuntime = (): Promise<GatewayEarlyRuntime> =>
     (earlyRuntimePromise ??= startupTrace
       .measure("runtime.early", () =>
-        loadGatewayStartupEarlyModule().then(({ startGatewayEarlyRuntime }) =>
+        import("./server-startup-early.js").then(({ startGatewayEarlyRuntime }) =>
           startGatewayEarlyRuntime({
             scheduler: runtime.scheduler,
             minimalTestGateway,
@@ -471,6 +468,7 @@ export async function startGatewayCoreRuntime(input: {
         Object.assign(attachedGatewayExtraHandlers, loaded.pluginRegistry.gatewayHandlers);
         attachedPluginGatewayHandlerKeys = nextHandlerKeys;
         attachedGatewayMethodRegistry = nextMethodRegistry;
+        invalidateSharedReadResponses(broadcast);
         kernel.publishMethodSurface(nextMethods);
       },
       afterCommit: () => {
@@ -506,7 +504,7 @@ export async function startGatewayCoreRuntime(input: {
         runtime,
         port,
         log,
-        loadGatewayPluginBootstrapModule,
+        loadGatewayPluginBootstrapModule: () => import("./server-plugin-bootstrap.js"),
         prepareAttachedPluginRuntime,
       },
       params,

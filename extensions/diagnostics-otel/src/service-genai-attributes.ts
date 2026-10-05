@@ -13,19 +13,12 @@ import {
 } from "./service-constants.js";
 import type { ModelCallLifecycleDiagnosticEvent } from "./service-types.js";
 
-function hasOtelSemconvOptIn(value: string | undefined, optIn: string): boolean {
+function emitLatestGenAiSemconv(): boolean {
   return (
-    value
+    process.env[OTEL_SEMCONV_STABILITY_OPT_IN_ENV]
       ?.split(",")
       .map((part) => part.trim())
-      .includes(optIn) ?? false
-  );
-}
-
-function emitLatestGenAiSemconv(): boolean {
-  return hasOtelSemconvOptIn(
-    process.env[OTEL_SEMCONV_STABILITY_OPT_IN_ENV],
-    GEN_AI_LATEST_EXPERIMENTAL_OPT_IN,
+      .includes(GEN_AI_LATEST_EXPERIMENTAL_OPT_IN) ?? false
   );
 }
 

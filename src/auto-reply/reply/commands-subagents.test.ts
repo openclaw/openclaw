@@ -23,7 +23,6 @@ import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ReplyPayload } from "../types.js";
 import { buildSubagentsStatusLine } from "./commands-status-subagents.js";
-import { extractSubagentMessageText } from "./commands-subagents-text.js";
 import { handleSubagentsCommand } from "./commands-subagents.js";
 import { handleSubagentsInfoAction } from "./commands-subagents/action-info.js";
 import { handleSubagentsListAction } from "./commands-subagents/action-list.js";
@@ -779,6 +778,18 @@ describe("subagents log", () => {
 
   it.each([
     {
+      name: "preserves user tool markers",
+      messages: [{ role: "user", content: "Here [Tool Call: foo (ID: 1)] ok" }],
+      expectedText: "User: Here [Tool Call: foo (ID: 1)] ok",
+      unexpectedText: "Assistant:",
+    },
+    {
+      name: "sanitizes assistant tool markers",
+      messages: [{ role: "assistant", content: "Here [Tool Call: foo (ID: 1)] ok" }],
+      expectedText: "Assistant: Here ok",
+      unexpectedText: "[Tool Call:",
+    },
+    {
       name: "hides signed commentary while retaining the final answer",
       messages: [
         {
@@ -875,25 +886,5 @@ describe("subagents log", () => {
       method: "chat.history",
       params: { sessionKey: "agent:main:subagent:log", limit: 20 },
     });
-  });
-});
-
-describe("extractSubagentMessageText", () => {
-  it("preserves user markers and sanitizes assistant markers", () => {
-    const cases = [
-      {
-        message: { role: "user", content: "Here [Tool Call: foo (ID: 1)] ok" },
-        expectedText: "Here [Tool Call: foo (ID: 1)] ok",
-      },
-      {
-        message: { role: "assistant", content: "Here [Tool Call: foo (ID: 1)] ok" },
-        expectedText: "Here ok",
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      const result = extractSubagentMessageText(testCase.message);
-      expect(result?.text).toBe(testCase.expectedText);
-    }
   });
 });

@@ -59,6 +59,7 @@ export function sanitizeAssistantVisibleStreamText(
 ): string {
   return sanitizeUserFacingText(sanitizeAssistantText(text, phase, true, options), {
     errorContext: false,
+    streaming: true,
   });
 }
 
@@ -68,7 +69,7 @@ export function createAssistantVisibleStreamText(phase?: AssistantPhase) {
       phase === "final_answer" ? "final-answer-delivery" : "delivery",
       phase === "final_answer",
     ),
-    ...userFacingTextFilters(),
+    ...userFacingTextFilters(false, true),
     trimTextFilter("both", { preserveCodeIndentation: true }),
   ]);
 }

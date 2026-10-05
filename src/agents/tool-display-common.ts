@@ -1,4 +1,7 @@
-import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asPositiveFiniteNumber,
+  resolveOptionalIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
 /**
  * Shared compact tool-call display helpers.
  * Redacts and summarizes arguments into short labels/details for chat and UI
@@ -130,7 +133,7 @@ function lookupValueByPath(args: unknown, path: string): unknown {
 }
 
 /** Format a detail path/key into a short display label. */
-export function formatDetailKey(raw: string, overrides: Record<string, string> = {}): string {
+export function formatDetailKey(raw: string, overrides: Record<string, string>): string {
   const last = raw.split(".").findLast(Boolean) || raw;
   const override = overrides[last];
   if (override) {
@@ -162,17 +165,8 @@ function resolveReadDetail(args: unknown): string | undefined {
     return undefined;
   }
 
-  const offsetRaw =
-    typeof record.offset === "number" && Number.isFinite(record.offset)
-      ? Math.floor(record.offset)
-      : undefined;
-  const limitRaw =
-    typeof record.limit === "number" && Number.isFinite(record.limit)
-      ? Math.floor(record.limit)
-      : undefined;
-
-  const offset = offsetRaw !== undefined ? Math.max(1, offsetRaw) : undefined;
-  const limit = limitRaw !== undefined ? Math.max(1, limitRaw) : undefined;
+  const offset = resolveOptionalIntegerOption(record.offset, { min: 1 });
+  const limit = resolveOptionalIntegerOption(record.limit, { min: 1 });
 
   if (offset !== undefined && limit !== undefined) {
     const unit = limit === 1 ? "line" : "lines";
@@ -248,15 +242,12 @@ function resolveWebSearchDetail(args: unknown): string | undefined {
 }
 
 function collectWebSearchQueries(record: Record<string, unknown>): string[] {
-  const queries: string[] = [];
-  const seen = new Set<string>();
+  const queries = new Set<string>();
   const add = (value: unknown) => {
     const normalized = normalizeOptionalString(value);
-    if (!normalized || seen.has(normalized)) {
-      return;
+    if (normalized) {
+      queries.add(normalized);
     }
-    seen.add(normalized);
-    queries.push(normalized);
   };
 
   add(record.query);
@@ -289,7 +280,7 @@ function collectWebSearchQueries(record: Record<string, unknown>): string[] {
     }
   }
 
-  return queries;
+  return [...queries];
 }
 
 function resolveWebFetchDetail(args: unknown): string | undefined {
@@ -322,7 +313,6 @@ function resolveDetailFromKeys(
   opts: {
     mode: "first" | "summary";
     coerce?: CoerceDisplayValueOptions;
-    maxEntries?: number;
     formatKey?: (raw: string) => string;
   },
 ): string | undefined {
@@ -346,9 +336,8 @@ function resolveDetailFromKeys(
   }
 
   const unique = dedupeByKey(entries, (entry) => `${entry.label}:${entry.value}`);
-  const maxEntries = opts.maxEntries ?? 8;
   const parts: string[] = [];
-  for (let index = 0; index < unique.length && index < maxEntries; index += 1) {
+  for (let index = 0; index < unique.length && index < 8; index += 1) {
     const entry = unique[index];
     if (entry) {
       parts.push(`${entry.label} ${entry.value}`);
@@ -367,7 +356,6 @@ export function resolveToolVerbAndDetailForArgs(params: {
   detailMode: "first" | "summary";
   toolDetailMode?: ToolDetailMode;
   detailCoerce?: CoerceDisplayValueOptions;
-  detailMaxEntries?: number;
   detailFormatKey?: (raw: string) => string;
 }): { verb?: string; detail?: string } {
   // Card arguments belong to the card renderer; generic summaries must not expose them.
@@ -377,15 +365,8 @@ export function resolveToolVerbAndDetailForArgs(params: {
   // Keep the existing read order when caller-owned options expose accessors.
   const { toolKey, args, meta } = params;
   const action = normalizeOptionalString(asRecord(params.args)?.action);
-  const {
-    spec,
-    fallbackDetailKeys,
-    detailMode,
-    toolDetailMode,
-    detailCoerce,
-    detailMaxEntries,
-    detailFormatKey,
-  } = params;
+  const { spec, fallbackDetailKeys, detailMode, toolDetailMode, detailCoerce, detailFormatKey } =
+    params;
   const actionSpec = spec && action ? (spec.actions?.[action] ?? undefined) : undefined;
   const fallbackVerb =
     toolKey === "web_search"
@@ -420,7 +401,6 @@ export function resolveToolVerbAndDetailForArgs(params: {
     detail = resolveDetailFromKeys(args, detailKeys, {
       mode: detailMode,
       coerce: detailCoerce,
-      maxEntries: detailMaxEntries,
       formatKey: detailFormatKey,
     });
   }

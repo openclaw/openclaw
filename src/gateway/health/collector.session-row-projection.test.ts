@@ -18,8 +18,8 @@ import {
 } from "../session-row-projection.js";
 import { buildHealthAgentSummaries, resolveHealthAgentOrder } from "./collector.js";
 
-// Periodic WAL maintenance is independent of the request SQL budget.
-beforeEach(() => vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] }));
+// Hold GatewayScheduler timeouts so WAL maintenance stays outside the request SQL budget.
+beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -129,7 +129,7 @@ describe("health and status resident session summaries", () => {
   it("uses no SQLite for clean repeats and follows dirty and topology publications", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       let cfg: OpenClawConfig = {
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
       };
       const mainKey = "agent:main:primary";
       const backfill = observeSessionRowBackfill([mainKey]);

@@ -9,9 +9,9 @@ import {
 } from "../discovery/chat-command-invocation.js";
 import { buildWorkspaceSkillCommandSpecs } from "../discovery/command-specs.js";
 import type { Skill } from "../loading/skill-contract.js";
-import { recordSkillFileHost } from "../loading/skill-file-host.js";
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
+import { recordSkillFileHost } from "../skill-file-host.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import type { ExplicitSkillSelection } from "../types.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";

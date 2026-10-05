@@ -6,6 +6,7 @@ import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.GatewayModelUnavailableReason
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.NodeApp
 import ai.openclaw.app.PendingAssistantAutoSend
 import ai.openclaw.app.ProviderAuthController
 import ai.openclaw.app.R
@@ -148,9 +149,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Dashboard
-import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Difference
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.GppMaybe
 import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -168,7 +167,6 @@ import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -740,7 +738,6 @@ internal fun ChatScreen(
     pendingRunCount,
     thinkingLevel,
   ) {
-    if (!healthOk) return@LaunchedEffect
     val pending =
       resolvePendingAssistantAutoSend(
         pending = pendingAssistantAutoSend,
@@ -824,14 +821,7 @@ internal fun ChatScreen(
           }
         }
       if (!viewModel.isCurrentChatComposerOwner(ownerSnapshot)) return@withChatShareDraftLease
-      if (
-        !canCommitStagedChatShare(
-          stagedId = share.id,
-          currentHead = viewModel.chatShareDraftForOwner(ownerSnapshot, mainSessionKey),
-          ownerSnapshot = ownerSnapshot,
-          currentOwner = ownerSnapshot,
-        )
-      ) {
+      if (viewModel.chatShareDraftForOwner(ownerSnapshot, mainSessionKey)?.id != share.id) {
         return@withChatShareDraftLease
       }
       // A non-resumed Activity must not acknowledge into its hidden composer; the next visible
@@ -2692,6 +2682,8 @@ private fun ToolActivityItem(
     ProgressToolReceipt(tool)
     return
   }
+  val context = LocalContext.current
+  val toolDisplayConfig = remember(context) { (context.applicationContext as NodeApp).toolDisplayConfig }
   var expanded by rememberSaveable(parentStableKey, saveableKey) { mutableStateOf(false) }
   val resultPresentation = completedToolResultPresentation(tool)
   val isError = tool.hasFailedOutcome
@@ -2737,13 +2729,7 @@ private fun ToolActivityItem(
             if (isError) {
               Icons.Default.Close
             } else {
-              when (kind) {
-                CompletedToolKind.Command -> Icons.Default.Terminal
-                CompletedToolKind.Read -> Icons.Default.Description
-                CompletedToolKind.Edit, CompletedToolKind.Write -> Icons.Default.Edit
-                CompletedToolKind.Search, CompletedToolKind.Fetch -> Icons.Default.Search
-                else -> Icons.AutoMirrored.Filled.List
-              }
+              toolDisplayConfig.iconForTool(tool.name, kind)
             },
           contentDescription = null,
           modifier = Modifier.size(16.dp),
@@ -3703,12 +3689,7 @@ private fun ChatEffortSliderTrack(
   optionCount: Int,
   enabled: Boolean,
 ) {
-  val activeFraction =
-    if (optionCount > 1) {
-      (state.value / (optionCount - 1)).coerceIn(0f, 1f)
-    } else {
-      0f
-    }
+  val activeFraction = (state.value / (optionCount - 1)).coerceIn(0f, 1f)
   val inactiveColor = ClawTheme.colors.text.copy(alpha = if (enabled) 0.07f else 0.04f)
   val activeColor = ClawTheme.colors.text.copy(alpha = if (enabled) 0.18f else 0.08f)
   val dotColor = ClawTheme.colors.text.copy(alpha = if (enabled) 0.28f else 0.12f)

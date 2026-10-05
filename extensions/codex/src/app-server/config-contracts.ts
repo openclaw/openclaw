@@ -10,7 +10,6 @@ import type {
 } from "./protocol.js";
 
 export {
-  CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN,
   type CodexAppServerCommandSource,
   type CodexPluginDestructiveApprovalMode,
   type CodexPluginMarketplaceName,
@@ -100,7 +99,7 @@ export type CodexAppServerRuntimeOptions = {
   /** Prepared boundary for an explicit session permission mode. */
   sessionRoot?: string;
   serviceTier?: CodexServiceTier | null;
-  /** Prefer supported Ultrafast unless the shared Fast-mode control is off. */
+  /** False disables Ultrafast; otherwise only an explicit shared selection can request it. */
   enableUltrafast?: boolean;
   networkProxy?: ResolvedCodexAppServerNetworkProxyConfig;
 };

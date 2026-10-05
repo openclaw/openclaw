@@ -6,6 +6,7 @@ import type {
 } from "../lib/sessions/session-capability.ts";
 
 const QUERY = {
+  source: "sidebar",
   includeOwnerSessionCounts: true,
   limit: 1,
   includeDerivedTitles: false,

@@ -15,19 +15,16 @@ import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/t
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
-  sanitizeProviderReplayHistoryWithPlugin,
+  sanitizeProviderReplayHistoryWithPluginAsync,
   validateProviderReplayTurnsWithPlugin,
 } from "../../plugins/provider-runtime.js";
-import type {
-  ProviderReplaySessionEntry,
-  ProviderReplaySessionState,
-} from "../../plugins/types.js";
 import {
   annotateInterSessionPromptText,
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
 import { hasPersistedMedia } from "../../sessions/user-turn-media.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
+import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "../compaction-usage.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
@@ -57,8 +54,8 @@ import {
   extractToolResultId,
   sanitizeToolCallIdsForCloudCodeAssist,
 } from "../tool-call-id.js";
-import type { TranscriptPolicy } from "../transcript-policy.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
+import type { TranscriptPolicy } from "../transcript-policy.types.js";
 import {
   hasNonzeroUsage,
   makeZeroUsageSnapshot,
@@ -68,13 +65,19 @@ import {
 } from "../usage.js";
 import { isZeroUsageEmptyStopAssistantTurn } from "./empty-assistant-turn.js";
 import {
+  createProviderReplaySessionState,
+  isSameModelSnapshot,
+  MODEL_SNAPSHOT_CUSTOM_TYPE,
+  readModelSnapshotState,
+  type ModelSnapshotEntry,
+} from "./replay-session-state.js";
+import {
   dropReasoningFromHistory,
   dropThinkingBlocks,
   shouldPreserveLatestAssistantThinking,
   stripInvalidThinkingSignatures,
 } from "./thinking.js";
 
-const MODEL_SNAPSHOT_CUSTOM_TYPE = "model-snapshot";
 const MANAGED_DISPLAY_BLOCK_TYPES = new Set([
   "attachment",
   "attachment_error",
@@ -82,17 +85,6 @@ const MANAGED_DISPLAY_BLOCK_TYPES = new Set([
   "image",
   "video",
 ]);
-type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
-type ModelSnapshotEntry = {
-  timestamp: number;
-  provider?: string;
-  modelApi?: string | null;
-  modelId?: string;
-};
-type ModelSnapshotState = {
-  lastSnapshot: ModelSnapshotEntry | null;
-  latestSwitchTimestamp: number | null;
-};
 type AssistantReplayMessage = Extract<AgentMessage, { role: "assistant" }>;
 
 type ProviderReplayHookParams = {
@@ -461,67 +453,6 @@ function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[]
   return touched ? out : messages;
 }
 
-function createProviderReplaySessionState(
-  sessionManager: SessionManager,
-): ProviderReplaySessionState {
-  return {
-    getCustomEntries() {
-      try {
-        return sessionManager.getEntries().flatMap((entry): ProviderReplaySessionEntry[] => {
-          const candidate = entry as CustomEntryLike;
-          if (candidate?.type !== "custom" || typeof candidate.customType !== "string") {
-            return [];
-          }
-          const customType = candidate.customType.trim();
-          return customType ? [{ customType, data: candidate.data }] : [];
-        });
-      } catch {
-        return [];
-      }
-    },
-    appendCustomEntry(customType: string, data: unknown) {
-      try {
-        sessionManager.appendCustomEntry(customType, data);
-      } catch {
-        // ignore persistence failures
-      }
-    },
-  };
-}
-
-function readModelSnapshotState(sessionManager: SessionManager): ModelSnapshotState {
-  let lastSnapshot: ModelSnapshotEntry | null = null;
-  let latestSwitchTimestamp: number | null = null;
-  try {
-    for (const rawEntry of sessionManager.getBranch()) {
-      const entry = rawEntry as CustomEntryLike;
-      if (entry?.type !== "custom" || entry?.customType !== MODEL_SNAPSHOT_CUSTOM_TYPE) {
-        continue;
-      }
-      const data = entry?.data as ModelSnapshotEntry | undefined;
-      if (data && typeof data === "object") {
-        if (
-          lastSnapshot &&
-          !isSameModelSnapshot(lastSnapshot, data) &&
-          Number.isFinite(data.timestamp)
-        ) {
-          latestSwitchTimestamp = data.timestamp;
-        }
-        lastSnapshot = data;
-      }
-    }
-  } catch {
-    return { lastSnapshot: null, latestSwitchTimestamp: null };
-  }
-  return { lastSnapshot, latestSwitchTimestamp };
-}
-
-function isSameModelSnapshot(a: ModelSnapshotEntry, b: ModelSnapshotEntry): boolean {
-  return (["provider", "modelApi", "modelId"] as const).every(
-    (field) => (a[field] ?? "") === (b[field] ?? ""),
-  );
-}
-
 function formatOpenAIResponsesReplayInvariantError(params: {
   reason: "dangling_tool_call" | "orphan_tool_result";
   toolCallId?: string;
@@ -733,17 +664,22 @@ export async function sanitizeSessionHistory(
   let providerSanitized: AgentMessage[] | undefined;
   if (provider && provider.length > 0) {
     const pluginParams = createProviderReplayPluginParams({ ...params, provider });
-    const providerResult = await sanitizeProviderReplayHistoryWithPlugin({
-      ...pluginParams,
-      context: {
-        ...pluginParams.context,
-        sessionId: params.sessionId ?? "",
-        messages: sanitizedCompactionUsage,
-        allowedToolNames: params.allowedToolNames,
-        sessionState: createProviderReplaySessionState(params.sessionManager),
-      },
-    });
-    providerSanitized = providerResult ?? undefined;
+    const replaySession = createProviderReplaySessionState(params.sessionManager);
+    try {
+      const providerResult = await sanitizeProviderReplayHistoryWithPluginAsync({
+        ...pluginParams,
+        context: {
+          ...pluginParams.context,
+          sessionId: params.sessionId ?? "",
+          messages: sanitizedCompactionUsage,
+          allowedToolNames: params.allowedToolNames,
+          sessionState: replaySession.state,
+        },
+      });
+      providerSanitized = providerResult ?? undefined;
+    } finally {
+      replaySession.close();
+    }
   }
   const sanitizedWithProvider = providerSanitized ?? sanitizedCompactionUsage;
   // Provider replay hooks may rewrite history, so reassert the same pairing policy afterward.
@@ -761,7 +697,8 @@ export async function sanitizeSessionHistory(
         MODEL_SNAPSHOT_CUSTOM_TYPE,
         currentSnapshot,
       );
-    } catch {
+    } catch (error) {
+      rethrowIncognitoSessionError(error);
       // ignore persistence failures
     }
   }
@@ -827,4 +764,3 @@ export async function validateReplayTurns(
       })
     : validatedGemini;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

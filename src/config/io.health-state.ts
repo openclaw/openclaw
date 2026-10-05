@@ -33,19 +33,16 @@ const observations = resolveGlobalSet<HealthObservation>(
   "close-and-restart",
 );
 const supersededObservation = new Error("Config health observation was superseded");
+// Supersession uses identity; a process-lived import stack would retain its first caller.
+supersededObservation.stack = undefined;
 
 function matchingObservations(next: HealthObservation): HealthObservation[] {
-  const matches: HealthObservation[] = [];
-  for (const current of observations) {
-    if (
+  return [...observations].filter(
+    (current) =>
       current.configPath === next.configPath &&
       (current.databasePath === next.databasePath ||
-        (next.identity() !== undefined && current.identity() === next.identity()))
-    ) {
-      matches.push(current);
-    }
-  }
-  return matches;
+        (next.identity() !== undefined && current.identity() === next.identity())),
+  );
 }
 
 function supersedeMatchingObservations(next: HealthObservation): void {

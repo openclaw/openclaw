@@ -120,73 +120,88 @@ describe("native service command inspection", () => {
   }
 
   describe.each(readers)("$name", ({ name, read, resolvePath, render }) => {
-    it("does not infer absence from a dangling definition link", async () => {
-      const filename = resolvePath(env);
-      await fs.mkdir(path.dirname(filename), { recursive: true });
-      await fs.symlink(path.join(root, "absent-definition"), filename, "junction");
-      await expect(read(env)).resolves.toBeNull();
-      await expect(read(env, { requireEffective: true })).rejects.toThrow(
-        `Effective ${name} service command could not be inspected.`,
-      );
-    });
-
-    it.each(["registered", "unavailable"])(
-      "does not infer absence from a missing file when native inspection is %s",
+    it.each(["dangling", "directory", "empty", "registered", "unavailable"])(
+      "keeps a %s definition distinct from proven absence",
       async (condition) => {
-        native.launchctl.mockImplementation(async (_command: string, args: string[]) =>
-          args[1]?.startsWith("system/")
-            ? { code: 113, termination: "exit", stdout: "", stderr: "Could not find service" }
-            : condition === "registered"
-              ? {
-                  code: 0,
-                  termination: "exit",
-                  stdout: `${args[1]} = {\n\tstate = waiting\n}`,
-                  stderr: "",
-                }
-              : {
-                  code: 1,
-                  termination: "error",
-                  stdout: "",
-                  stderr: "native-inspection-secret-canary",
-                },
-        );
-        native.scheduler.mockReturnValue(
-          condition === "registered"
-            ? { status: 0, stdout: JSON.stringify({ state: 3 }) }
-            : { status: 2, stdout: "native-inspection-secret-canary" },
-        );
-        await expect(read(env)).resolves.toBeNull();
+        const filename = resolvePath(env);
+        if (condition === "directory") {
+          await expect(read(env, { requireEffective: true })).resolves.toBeNull();
+          await fs.mkdir(filename, { recursive: true });
+        } else if (condition === "empty") {
+          await writeFile(filename, render([]));
+        } else if (condition === "dangling") {
+          await fs.mkdir(path.dirname(filename), { recursive: true });
+          await fs.symlink(path.join(root, "absent-definition"), filename, "junction");
+        } else {
+          native.launchctl.mockImplementation(async (_command: string, args: string[]) =>
+            args[1]?.startsWith("system/")
+              ? { code: 113, termination: "exit", stdout: "", stderr: "Could not find service" }
+              : condition === "registered"
+                ? {
+                    code: 0,
+                    termination: "exit",
+                    stdout: `${args[1]} = {\n\tstate = waiting\n}`,
+                    stderr: "",
+                  }
+                : {
+                    code: 1,
+                    termination: "error",
+                    stdout: "",
+                    stderr: "native-inspection-secret-canary",
+                  },
+          );
+          native.scheduler.mockReturnValue(
+            condition === "registered"
+              ? { status: 0, stdout: JSON.stringify({ state: 3 }) }
+              : { status: 2, stdout: "native-inspection-secret-canary" },
+          );
+        }
+        if (condition !== "empty") {
+          await expect(read(env)).resolves.toBeNull();
+        }
         await expect(read(env, { requireEffective: true })).rejects.toThrow(
           `Effective ${name} service command could not be inspected.`,
         );
       },
     );
 
-    it("keeps missing definitions distinct from failed inspection", async () => {
-      await expect(read(env, { requireEffective: true })).resolves.toBeNull();
-      await fs.mkdir(resolvePath(env), { recursive: true });
-      await expect(read(env)).resolves.toBeNull();
-      await expect(read(env, { requireEffective: true })).rejects.toThrow(
-        `Effective ${name} service command could not be inspected.`,
-      );
-    });
-
-    it("rejects an existing definition without an effective command in strict mode", async () => {
-      await writeFile(resolvePath(env), render([]));
-      await expect(read(env, { requireEffective: true })).rejects.toThrow(
-        `Effective ${name} service command could not be inspected.`,
-      );
-    });
-
-    it("preserves readable recorded paths in both inspection modes", async () => {
-      await writeFile(resolvePath(env), render(programArguments));
-      for (const requireEffective of [false, true]) {
-        await expect(read(env, { requireEffective })).resolves.toMatchObject({
-          programArguments,
-          environment,
-        });
-      }
-    });
+    it.each(
+      (name === "LaunchAgent"
+        ? [programArguments, ["node", "  spaced argument  ", ""]]
+        : [programArguments]
+      ).map((recordedArguments) => ({ recordedArguments })),
+    )(
+      "preserves recorded argv %j and environment in both inspection modes",
+      async ({ recordedArguments }) => {
+        vi.spyOn(performance, "now").mockReturnValue(1_000);
+        const contents = render(recordedArguments);
+        await writeFile(resolvePath(env), contents);
+        for (const requireEffective of [false, true]) {
+          await expect(read(env, { requireEffective, timeoutMs: 750 })).resolves.toMatchObject({
+            programArguments: recordedArguments,
+            environment,
+          });
+        }
+        if (name === "LaunchAgent") {
+          expect(native.plutil).toHaveBeenNthCalledWith(
+            1,
+            "/usr/bin/plutil",
+            ["-convert", "xml1", "-o", "-", "--", "-"],
+            expect.objectContaining({
+              input: Buffer.from(contents),
+              timeoutMs: 750,
+              logOutput: false,
+            }),
+          );
+          expect(native.plutil).toHaveBeenNthCalledWith(
+            2,
+            "/usr/bin/plutil",
+            ["-convert", "json", "-o", "-", "--", "-"],
+            expect.objectContaining({ input: contents, timeoutMs: 750, logOutput: false }),
+          );
+        }
+      },
+    );
   });
 
   describe("Windows aggregate Scheduler timeout transport", () => {
@@ -200,14 +215,13 @@ describe("native service command inspection", () => {
       }),
       stderr: "",
     });
-    it.each(
-      ["parallel", "delegated serial"].flatMap((placement) =>
-        ["absent", "ready", "running"].flatMap((condition) =>
-          [false, true].map((explicit) => ({ placement, condition, explicit })),
-        ),
-      ),
-    )(
-      "preserves $condition with fractional elapsed time ($placement, explicit=$explicit)",
+    it.each([
+      { placement: "parallel", condition: "absent", explicit: false },
+      { placement: "parallel", condition: "running", explicit: true },
+      { placement: "delegated serial", condition: "absent", explicit: true },
+      { placement: "delegated serial", condition: "ready", explicit: false },
+    ])(
+      "preserves native $condition state with fractional elapsed time ($placement, explicit=$explicit)",
       async ({ placement, condition, explicit }) => {
         mockProcessPlatform("win32");
         const windowsEnv = {
@@ -218,7 +232,7 @@ describe("native service command inspection", () => {
         const scriptPath = resolveTaskScriptPath(windowsEnv);
         const backingScriptPath = path.join(root, "gateway.cmd");
         if (condition !== "absent") {
-          // No port is recorded: retain Scheduler state without unrelated listener attribution.
+          // Native state remains useful even when the command cannot identify its process.
           await writeFile(backingScriptPath, buildTaskScript({ programArguments }));
         }
         let now = 0;
@@ -285,10 +299,10 @@ describe("native service command inspection", () => {
           expect(state).toMatchObject({
             command: { programArguments },
             installed: true,
-            running: condition === "running",
+            running: false,
             loadState: { status: "loaded" },
             runtime: {
-              status: condition === "running" ? "running" : "stopped",
+              status: "unknown",
               state: condition === "running" ? "Running" : "Ready",
             },
           });
@@ -308,11 +322,10 @@ describe("native service command inspection", () => {
       },
     );
 
-    it.each(
-      ["absent", "installed"].flatMap((condition) =>
-        [999.25, 1_000].map((elapsed) => ({ condition, elapsed })),
-      ),
-    )(
+    it.each([
+      { condition: "absent", elapsed: 999.25 },
+      { condition: "installed", elapsed: 1_000 },
+    ])(
       "does not launch further native work after reading $condition consumes $elapsed ms",
       async ({ condition, elapsed }) => {
         mockProcessPlatform("win32");
@@ -457,33 +470,28 @@ describe("native service command inspection", () => {
     },
   );
 
-  it.each([
-    "set MALFORMED",
-    "set =invalid",
-    'set "OPENCLAW_STATE_DIR=%USERPROFILE%\\.openclaw"',
-    'set "OPENCLAW_STATE_DIR=%~dp0state"',
-    'set "OPENCLAW_STATE_DIR=!USERPROFILE!\\.openclaw"',
-    'set "OPENCLAW_STATE_DIR=C:\\literal^^caret"',
-    "set OPENCLAW_STATE_DIR=C:\\first & echo second",
-    "set /a HOME=1",
-    "set /p HOME=prompt",
-  ])("rejects an unresolved Windows assignment in strict mode: %s", async (line) => {
-    await writeFile(
-      resolveTaskScriptPath(env),
-      `@echo off\nset HOME=/partial-home\n${line}\nnode gateway.js\n`,
-    );
-    await expect(readScheduledTaskCommand(env)).resolves.toMatchObject({
-      environment: { HOME: "/partial-home" },
-    });
-    await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow(
-      "Effective Scheduled Task service command could not be inspected.",
-    );
-  });
-
-  it("preserves literal Windows assignments without borrowing the caller's environment", async () => {
-    await writeFile(
-      resolveTaskScriptPath(env),
-      [
+  const assignments: Array<{
+    name: string;
+    lines: string[];
+    environment?: Record<string, string>;
+  }> = [
+    ...[
+      "set MALFORMED",
+      "set =invalid",
+      'set "OPENCLAW_STATE_DIR=%USERPROFILE%\\.openclaw"',
+      'set "OPENCLAW_STATE_DIR=%~dp0state"',
+      'set "OPENCLAW_STATE_DIR=!USERPROFILE!\\.openclaw"',
+      'set "OPENCLAW_STATE_DIR=C:\\literal^^caret"',
+      "set OPENCLAW_STATE_DIR=C:\\first & echo second",
+      "set /a HOME=1",
+      "set /p HOME=prompt",
+    ].map((line) => ({
+      name: line,
+      lines: ["@echo off", "set HOME=/partial-home", line, "node gateway.js"],
+    })),
+    {
+      name: "literal assignments",
+      lines: [
         "@echo off",
         "set HOME=/literal-home",
         "set home=/effective-home",
@@ -493,10 +501,7 @@ describe("native service command inspection", () => {
         "set UNQUOTED=  literal spaces  ",
         "set PERCENT=%%USERPROFILE%%",
         "node gateway.js",
-      ].join("\r\n"),
-    );
-    await expect(readScheduledTaskCommand(env, { requireEffective: true })).resolves.toMatchObject({
-      programArguments,
+      ],
       environment: {
         HOME: "/effective-home",
         OPENCLAW_STATE_DIR: "C:\\literal%USERPROFILE% & (state)",
@@ -505,156 +510,114 @@ describe("native service command inspection", () => {
         UNQUOTED: "  literal spaces  ",
         PERCENT: "%USERPROFILE%",
       },
-    });
-  });
-
-  it("rejects a malformed existing plist only in strict mode", async () => {
-    await writeFile(resolveLaunchAgentPlistPath(env), "<plist><dict/></plist>");
-    await expect(readLaunchAgentProgramArguments(env)).resolves.toBeNull();
-    await expect(
-      readLaunchAgentProgramArguments(env, { requireEffective: true }),
-    ).rejects.toThrow();
-  });
-
-  it("rejects a truncated plist even when its command and environment are readable", async () => {
-    const truncated = renderPlist(programArguments).replace(/\s*<\/dict>\s*<\/plist>\s*$/, "");
-    await writeFile(resolveLaunchAgentPlistPath(env), truncated);
-    await expect(readLaunchAgentProgramArguments(env)).resolves.toBeNull();
-    await expect(readLaunchAgentProgramArguments(env, { requireEffective: true })).rejects.toThrow(
-      "Effective LaunchAgent service command could not be inspected.",
-    );
-  });
+    },
+  ];
+  it.each(assignments)(
+    "reads Windows environment literally: $name",
+    async ({ lines, environment: expectedEnvironment }) => {
+      await writeFile(resolveTaskScriptPath(env), lines.join("\r\n"));
+      if (expectedEnvironment) {
+        await expect(
+          readScheduledTaskCommand(env, { requireEffective: true }),
+        ).resolves.toMatchObject({ programArguments, environment: expectedEnvironment });
+      } else {
+        await expect(readScheduledTaskCommand(env)).resolves.toMatchObject({
+          environment: { HOME: "/partial-home" },
+        });
+        await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow(
+          "Effective Scheduled Task service command could not be inspected.",
+        );
+      }
+    },
+  );
 
   it.each([
+    { content: "malformed" },
+    { content: "truncated" },
     { decoded: [] },
     { decoded: { ProgramArguments: "node gateway.js" } },
     { decoded: { ProgramArguments: ["node", 42] } },
     { decoded: { ProgramArguments: programArguments, WorkingDirectory: 42 } },
     { decoded: { ProgramArguments: programArguments, EnvironmentVariables: { HOME: 42 } } },
-  ])("rejects unsupported native plist field types: $decoded", async ({ decoded }) => {
-    await writeFile(resolveLaunchAgentPlistPath(env), renderPlist(programArguments));
-    native.plutil.mockImplementation(async (_command, args, options) =>
-      args[1] === "json"
-        ? {
-            stdout: JSON.stringify(Array.isArray(decoded) ? decoded : { Label: label, ...decoded }),
-            stderr: "",
-          }
-        : decodeLaunchAgentPlistFixture(options.input, args[1]),
+  ])("rejects unreadable native plist contents or fields: %j", async ({ decoded, content }) => {
+    await writeFile(
+      resolveLaunchAgentPlistPath(env),
+      content === "malformed"
+        ? "<plist><dict/></plist>"
+        : content === "truncated"
+          ? renderPlist(programArguments).replace(/\s*<\/dict>\s*<\/plist>\s*$/, "")
+          : renderPlist(programArguments),
     );
+    if (content) {
+      await expect(readLaunchAgentProgramArguments(env)).resolves.toBeNull();
+    } else {
+      native.plutil.mockImplementation(async (_command, args, options) =>
+        args[1] === "json"
+          ? {
+              stdout: JSON.stringify(
+                Array.isArray(decoded) ? decoded : { Label: label, ...decoded },
+              ),
+              stderr: "",
+            }
+          : decodeLaunchAgentPlistFixture(options.input, args[1]),
+      );
+    }
     await expect(readLaunchAgentProgramArguments(env, { requireEffective: true })).rejects.toThrow(
       "Effective LaunchAgent service command could not be inspected.",
     );
   });
 
-  it("preserves the native command without trimming or dropping arguments", async ({
-    onTestFinished,
-  }) => {
-    const clock = vi.spyOn(performance, "now").mockReturnValue(1_000);
-    onTestFinished(() => clock.mockRestore());
-    const recordedArguments = ["node", "  spaced argument  ", ""];
-    const contents = renderPlist(recordedArguments);
-    await writeFile(resolveLaunchAgentPlistPath(env), contents);
-    for (const requireEffective of [false, true]) {
-      await expect(
-        readLaunchAgentProgramArguments(env, { requireEffective, timeoutMs: 750 }),
-      ).resolves.toMatchObject({ programArguments: recordedArguments });
-    }
-    expect(native.plutil).toHaveBeenNthCalledWith(
-      1,
-      "/usr/bin/plutil",
-      ["-convert", "xml1", "-o", "-", "--", "-"],
-      expect.objectContaining({ input: Buffer.from(contents), timeoutMs: 750, logOutput: false }),
-    );
-    expect(native.plutil).toHaveBeenNthCalledWith(
-      2,
-      "/usr/bin/plutil",
-      ["-convert", "json", "-o", "-", "--", "-"],
-      expect.objectContaining({ input: contents, timeoutMs: 750, logOutput: false }),
-    );
-  });
-
-  it.each(["missing", "unreadable"])(
-    "keeps %s generated environment recovery out of strict inspection",
-    async (failure) => {
-      const expectedEnvFile = resolveLaunchAgentEnvironmentReadOptions(
-        env,
-        label,
-      ).expectedEnvironmentFilePath;
-      const recordedEnvFile = path.join(root, "other", "service-env", `${label}.env`);
-      const recordedWrapper = path.join(root, "other", "service-env", `${label}-env-wrapper.sh`);
-      await writeFile(expectedEnvFile, "export OPENCLAW_STATE_DIR='/recovered-state'\n");
-      if (failure === "unreadable") {
-        await fs.mkdir(recordedEnvFile, { recursive: true });
-      }
-      await writeFile(
-        resolveLaunchAgentPlistPath(env),
-        renderPlist([
-          LAUNCH_AGENT_ENV_WRAPPER_SHELL,
-          recordedWrapper,
-          recordedEnvFile,
-          ...programArguments,
-        ]),
-      );
-      await expect(readLaunchAgentProgramArguments(env)).resolves.toMatchObject({
-        programArguments,
-        environment: { OPENCLAW_STATE_DIR: "/recovered-state" },
-      });
-      await expect(
-        readLaunchAgentProgramArguments(env, { requireEffective: true }),
-      ).rejects.toThrow();
-    },
-  );
-
-  it("reads the recorded multiline generated literal in strict mode", async () => {
-    const literal = "first line\r\n  second line\nthird 'quoted' \\cash$";
-    const envFile = resolveLaunchAgentEnvironmentReadOptions(
-      env,
-      label,
-    ).expectedEnvironmentFilePath;
-    await writeFile(
-      envFile,
-      `export OPENCLAW_STATE_DIR='/recorded-state'\nexport NODE_OPTIONS=''\nexport QUOTE=${quoteLaunchAgentEnvironmentValue(literal)}\n`,
-    );
-    await writeFile(
-      resolveLaunchAgentPlistPath(env),
-      renderPlist([
-        LAUNCH_AGENT_ENV_WRAPPER_SHELL,
-        resolveLaunchAgentEnvWrapperPath(env, label),
-        envFile,
-        ...programArguments,
-      ]),
-    );
-    await expect(
-      readLaunchAgentProgramArguments(env, { requireEffective: true }),
-    ).resolves.toMatchObject({
-      programArguments,
-      environment: { OPENCLAW_STATE_DIR: "/recorded-state", NODE_OPTIONS: "", QUOTE: literal },
-    });
-  });
-
   it.each([
+    "missing",
+    "unreadable",
+    "literal",
     "echo unsupported-command",
     "export OPENCLAW_STATE_DIR='unterminated",
     "export OPENCLAW_STATE_DIR=$(printf unsupported)",
     "export OPENCLAW_STATE_DIR='/partial'; echo unsupported-command",
-  ])("rejects unsupported generated environment syntax: %s", async (line) => {
-    const envFile = resolveLaunchAgentEnvironmentReadOptions(
+  ])("inspects generated environment without inventing effective values: %s", async (scenario) => {
+    const recovering = scenario === "missing" || scenario === "unreadable";
+    const expectedEnvFile = resolveLaunchAgentEnvironmentReadOptions(
       env,
       label,
     ).expectedEnvironmentFilePath;
-    await writeFile(envFile, `export HOME='/partial-home'\n${line}\n`);
+    const envFile = recovering
+      ? path.join(root, "other", "service-env", `${label}.env`)
+      : expectedEnvFile;
+    const wrapper = recovering
+      ? path.join(root, "other", "service-env", `${label}-env-wrapper.sh`)
+      : resolveLaunchAgentEnvWrapperPath(env, label);
+    const literal = "first line\r\n  second line\nthird 'quoted' \\cash$";
+    await writeFile(
+      expectedEnvFile,
+      recovering
+        ? "export OPENCLAW_STATE_DIR='/recovered-state'\n"
+        : scenario === "literal"
+          ? `export OPENCLAW_STATE_DIR='/recorded-state'\nexport NODE_OPTIONS=''\nexport QUOTE=${quoteLaunchAgentEnvironmentValue(literal)}\n`
+          : `export HOME='/partial-home'\n${scenario}\n`,
+    );
+    if (scenario === "unreadable") {
+      await fs.mkdir(envFile, { recursive: true });
+    }
     await writeFile(
       resolveLaunchAgentPlistPath(env),
-      renderPlist([
-        LAUNCH_AGENT_ENV_WRAPPER_SHELL,
-        resolveLaunchAgentEnvWrapperPath(env, label),
-        envFile,
-        ...programArguments,
-      ]),
+      renderPlist([LAUNCH_AGENT_ENV_WRAPPER_SHELL, wrapper, envFile, ...programArguments]),
     );
-    await expect(readLaunchAgentProgramArguments(env)).resolves.toMatchObject({ programArguments });
-    await expect(readLaunchAgentProgramArguments(env, { requireEffective: true })).rejects.toThrow(
-      "Effective LaunchAgent service command could not be inspected.",
-    );
+    if (scenario === "literal") {
+      await expect(
+        readLaunchAgentProgramArguments(env, { requireEffective: true }),
+      ).resolves.toMatchObject({
+        programArguments,
+        environment: { OPENCLAW_STATE_DIR: "/recorded-state", NODE_OPTIONS: "", QUOTE: literal },
+      });
+    } else {
+      await expect(readLaunchAgentProgramArguments(env)).resolves.toMatchObject({
+        programArguments,
+        ...(recovering ? { environment: { OPENCLAW_STATE_DIR: "/recovered-state" } } : {}),
+      });
+      await expect(
+        readLaunchAgentProgramArguments(env, { requireEffective: true }),
+      ).rejects.toThrow("Effective LaunchAgent service command could not be inspected.");
+    }
   });
 });

@@ -7,15 +7,20 @@ import type {
   WorkerOperationContext,
   WorkerOperationHandlers,
 } from "../../state/worker-operation-registry.js";
+import { drainWorkerSessionPlacement } from "./placement-drain.js";
+import { readWorkerPlacementMovesReadOnly } from "./placement-move-intent.js";
+import { createPlacementPendingFailureOps } from "./placement-pending-failure.js";
 import {
   advanceCursor,
   normalizeEpoch,
   required,
+  resolvePlacementTurnEnvironment,
   type WorkerSessionTurnClaim,
   type WorkerTurnClaimInput,
 } from "./placement-record.js";
 import { find, getRequired, query } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import { createPlacementTransitionOps } from "./placement-transitions.worker.js";
 import { createPlacementTurnClaimOps } from "./placement-turn-claims.js";
 import type {
   PlacementAckCursorInput,
@@ -23,19 +28,29 @@ import type {
 } from "./placement-turn-claims.types.js";
 import {
   createPlacementWorkspaceResultOps,
+  hasCurrentWorkspaceResultClaim,
   insertWorkerWorkspacePendingResult,
+  listPendingWorkerWorkspaceResultsInDatabase,
   recordStagedWorkerWorkspaceResult,
 } from "./placement-workspace-result.js";
+import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 
-type ClaimInput = { claim: WorkerSessionTurnClaim; nowMs?: number };
+type ClaimInput = {
+  claim: WorkerSessionTurnClaim;
+  nowMs?: number;
+  sessionEntryCurrentSource?: SessionEntryCurrentSource;
+};
 
 function operation<
   Input extends {
-    claim: { sessionId: string };
     nowMs?: number;
     gatewayInstanceId?: string;
     sessionEntryCurrentSource?: SessionEntryCurrentSource;
-  },
+  } & (
+    | { claim: { sessionId: string } }
+    | { pending: WorkerWorkspacePendingResult }
+    | { sessionId: string }
+  ),
 >(
   type: string,
   execute: (runtime: PlacementStoreRuntime, input: Input) => PlacementTurnClaimReceipt,
@@ -45,12 +60,25 @@ function operation<
     const database = open();
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
+        const sessionId =
+          "claim" in input
+            ? input.claim.sessionId
+            : "pending" in input
+              ? input.pending.sessionId
+              : input.sessionId;
+        const move = () =>
+          type === "placementTurns.updateWorkspaceBaseManifest" ||
+          type === "placementTurns.completeResult"
+            ? (readWorkerPlacementMovesReadOnly(db, [sessionId]).get(sessionId) ?? null)
+            : undefined;
         const source = guardedWorkspaceWrite ? input.sessionEntryCurrentSource : undefined;
         const admit = (stage: "transaction" | "commit", facts: unknown) =>
           requestSessionEntryCurrentAdmission(source, { stage, facts }, { lookup: "logical" });
         admit(
           "transaction",
-          guardedWorkspaceWrite ? { placement: find(db, input.claim.sessionId) } : undefined,
+          guardedWorkspaceWrite
+            ? { placement: find(db, sessionId), placementMove: move() }
+            : undefined,
         );
         const receipt = execute(
           {
@@ -62,6 +90,9 @@ function operation<
           },
           input,
         );
+        receipt.workspaceResult =
+          listPendingWorkerWorkspaceResultsInDatabase(db, sessionId)[0] ?? null;
+        receipt.placementMove = move();
         admit("commit", receipt);
         deferSqliteWorkerCommitReceipt(db, receipt);
         return receipt;
@@ -73,6 +104,163 @@ function operation<
 }
 
 export const placementTurnClaimOperations = {
+  "placementTurns.transition": operation(
+    "placementTurns.transition",
+    (
+      runtime,
+      input: Parameters<ReturnType<typeof createPlacementTransitionOps>["transition"]>[0] & {
+        nowMs?: number;
+      },
+    ) => createPlacementTransitionOps(runtime).transition(input),
+  ),
+  "placementTurns.startDrain": operation(
+    "placementTurns.startDrain",
+    (
+      runtime,
+      input: Parameters<ReturnType<typeof createPlacementTransitionOps>["startDrain"]>[0] & {
+        nowMs?: number;
+      },
+    ) => createPlacementTransitionOps(runtime).startDrain(input),
+  ),
+  "placementTurns.startReconcile": operation(
+    "placementTurns.startReconcile",
+    (
+      runtime,
+      input: Parameters<ReturnType<typeof createPlacementTransitionOps>["startReconcile"]>[0] & {
+        nowMs?: number;
+      },
+    ) => createPlacementTransitionOps(runtime).startReconcile(input),
+  ),
+  "placementTurns.fail": operation(
+    "placementTurns.fail",
+    (
+      runtime,
+      input: Parameters<ReturnType<typeof createPlacementTransitionOps>["fail"]>[0] & {
+        nowMs?: number;
+      },
+    ) => createPlacementTransitionOps(runtime).fail(input),
+  ),
+  "placementTurns.failResult": operation(
+    "placementTurns.failResult",
+    (
+      runtime,
+      input: { pending: WorkerWorkspacePendingResult; recoveryError: string; nowMs?: number },
+    ) =>
+      createPlacementPendingFailureOps(runtime).failWorkspaceResultAndReleaseTurn(
+        input.pending,
+        input.recoveryError,
+      ),
+  ),
+  "placementTurns.claimReclaimResult": operation(
+    "placementTurns.claimReclaimResult",
+    (
+      runtime,
+      input: { claim: WorkerTurnClaimInput; gatewayInstanceId: string; nowMs?: number },
+    ) => {
+      const claim = createPlacementTurnClaimOps(runtime).claimReclaimWorkspaceResult(input.claim);
+      return { claim, placement: getRequired(runtime.read(), claim.sessionId) };
+    },
+  ),
+  "placementTurns.claimMutationResult": operation(
+    "placementTurns.claimMutationResult",
+    (
+      runtime,
+      input: {
+        claim: WorkerTurnClaimInput;
+        gatewayInstanceId: string;
+        nowMs?: number;
+        sessionEntryCurrentSource?: SessionEntryCurrentSource;
+      },
+    ) => {
+      const claim = createPlacementTurnClaimOps(runtime).claimWorkspaceMutationResult(input.claim);
+      return { claim, placement: getRequired(runtime.read(), claim.sessionId) };
+    },
+    true,
+  ),
+  "placementTurns.markResultPending": operation(
+    "placementTurns.markResultPending",
+    (runtime, input: ClaimInput & { gatewayInstanceId: string }) => {
+      createPlacementWorkspaceResultOps(runtime).markWorkspaceResultPending(input.claim);
+      return { placement: getRequired(runtime.read(), input.claim.sessionId) };
+    },
+  ),
+  "placementTurns.acceptResult": operation(
+    "placementTurns.acceptResult",
+    (runtime, input: ClaimInput) => {
+      createPlacementWorkspaceResultOps(runtime).acceptWorkspaceResult(input.claim);
+      return { placement: getRequired(runtime.read(), input.claim.sessionId) };
+    },
+    true,
+  ),
+  "placementTurns.handoffResult": operation(
+    "placementTurns.handoffResult",
+    (runtime, input: ClaimInput & { gatewayInstanceId: string }) => {
+      createPlacementWorkspaceResultOps(runtime).handoffWorkspaceResultRecovery(input.claim);
+      return { placement: getRequired(runtime.read(), input.claim.sessionId) };
+    },
+  ),
+  "placementTurns.abandonResult": operation(
+    "placementTurns.abandonResult",
+    (runtime, input: { pending: WorkerWorkspacePendingResult }) => {
+      createPlacementWorkspaceResultOps(runtime).abandonWorkspaceResult(input.pending);
+      return { placement: find(runtime.read(), input.pending.sessionId) };
+    },
+  ),
+  "placementTurns.drainResult": operation(
+    "placementTurns.drainResult",
+    (runtime, input: ClaimInput) => {
+      const { claim } = input;
+      const db = runtime.read();
+      const current = getRequired(db, required(claim.sessionId, "session id"));
+      const ownsWorkspaceResult = hasCurrentWorkspaceResultClaim(db, claim);
+      const currentOwner = resolvePlacementTurnEnvironment(current, claim);
+      const owner =
+        currentOwner ??
+        (ownsWorkspaceResult &&
+        current.state === "active" &&
+        current.environmentId &&
+        current.activeOwnerEpoch !== null
+          ? {
+              environmentId: current.environmentId,
+              ownerEpoch: current.activeOwnerEpoch,
+            }
+          : undefined);
+      if (current.state !== "active" || !owner || !ownsWorkspaceResult) {
+        throw new Error(`Cannot drain stale workspace result for session ${claim.sessionId}`);
+      }
+      return {
+        placement: drainWorkerSessionPlacement(
+          db,
+          {
+            sessionId: current.sessionId,
+            environmentId: owner.environmentId,
+            ownerEpoch: owner.ownerEpoch,
+            expectedGeneration: current.generation,
+            allowPendingWorkspaceResult: true,
+          },
+          runtime.now(),
+        ),
+      };
+    },
+  ),
+  "placementTurns.completeResult": operation(
+    "placementTurns.completeResult",
+    (runtime, input: ClaimInput) => ({
+      placement: createPlacementTurnClaimOps(runtime).completeWorkspaceResultAndReleaseTurn(
+        input.claim,
+      ),
+    }),
+    true,
+  ),
+  "placementTurns.cancelResult": operation(
+    "placementTurns.cancelResult",
+    (runtime, input: ClaimInput & { gatewayInstanceId: string; reason?: "node-disconnect" }) => ({
+      placement: createPlacementTurnClaimOps(runtime).cancelWorkspaceResultAndReleaseTurn(
+        input.claim,
+        input.reason ? { reason: input.reason } : undefined,
+      ),
+    }),
+  ),
   "placementTurns.updateAckCursors": operation(
     "placementTurns.updateAckCursors",
     (runtime, input: PlacementAckCursorInput & { gatewayInstanceId: string; nowMs?: number }) => {

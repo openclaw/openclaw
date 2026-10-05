@@ -64,7 +64,7 @@ describe("sessionsTailCommand", () => {
     process.env.OPENCLAW_STATE_DIR = path.join(tmpDir, "state");
     mocks.getRuntimeConfig.mockReturnValue({
       agents: {
-        list: [{ id: "main" }, { id: "ops" }],
+        entries: { main: {}, ops: {} },
       },
     });
     storePath = path.join(tmpDir, "sessions.sqlite");

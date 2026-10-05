@@ -61,6 +61,7 @@ import {
   runUpdateFinalizationDoctorInFreshProcess,
   withPrePluginUpdateDoctorEnv,
 } from "./update-command-fresh-doctor.js";
+import { refuseImmutableUpdateActivation } from "./update-command-immutable.js";
 import { settleUpdateDoctorMaintenance } from "./update-command-maintenance.js";
 import {
   collectPostCorePluginAdvisories,
@@ -91,7 +92,9 @@ export async function updateFinalizeCommand(
 ): Promise<void> {
   // Refuse retained recovery before discovery; preflight rechecks before state writes.
   await assertUpdateRecoveryAdmission({ env: process.env });
-  await refuseHostOwnedUpdate(await resolveUpdateRoot(), opts);
+  const discoveredRoot = await resolveUpdateRoot();
+  await refuseHostOwnedUpdate(discoveredRoot, opts);
+  await refuseImmutableUpdateActivation(discoveredRoot, opts);
   const invocationCwd = tryProcessCwd();
   suppressDeprecations();
   const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
@@ -134,6 +137,11 @@ export async function updateFinalizeCommand(
                 });
                 if (resolvedInstallKind === "host") {
                   reportHostOwnedUpdate(await readInstallOwner(resolvedRoot), opts);
+                }
+                if (resolvedInstallKind === "immutable") {
+                  throw new Error(
+                    "Use openclaw update recover --root <installation-root> for immutable activation recovery.",
+                  );
                 }
                 lifecycle.recordInstallKind(
                   resolvedInstallKind,
@@ -367,6 +375,7 @@ async function updateFinalizeCommandInternal(
             workspaceSuggestions: true,
             timeoutMs: lifecycle.budget("doctor"),
             onWarnings: onDoctorWarnings,
+            onDoctorStep: (step) => lifecycle.recordDoctorStep(step),
           }),
         undefined,
         {
@@ -434,11 +443,11 @@ async function updateFinalizeCommandInternal(
           nodeRunner,
           runId: invokingRunId,
           pluginUpdate: initialPluginUpdate,
-          freshDoctorRequired: initialPluginUpdate.changed,
           yes: opts.yes === true,
           json: opts.json === true,
           timeoutMs: lifecycle.budget("targetConfigConvergence"),
           onWarnings: onDoctorWarnings,
+          onDoctorStep: (step) => lifecycle.recordDoctorStep(step),
         });
         const resolvedWarnings = await readResolvedDeferredPluginMigrationWarnings(doctorWarnings);
         phase.assertCurrent();

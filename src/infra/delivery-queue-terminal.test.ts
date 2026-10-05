@@ -263,7 +263,7 @@ describe("delivery queue pending terminal transition", () => {
             .map((row) => row.detail)
             .join("\n");
           expect(plan).toMatch(
-            /SEARCH delivery_queue_entries USING INDEX \S+ \(queue_name=\? AND status=\?\)/,
+            /SEARCH delivery_queue_entries USING INDEX \S+ \((?:queue_name=\? AND status=\?|status=\? AND queue_name=\?)\)/,
           );
           expect(plan).not.toContain("SCAN delivery_queue_entries");
         } else {
