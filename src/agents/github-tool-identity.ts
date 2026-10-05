@@ -12,6 +12,10 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import { isManagedGitHubProfileId } from "../config/github-identity-profile-id.js";
 import { resolveStateDir } from "../config/paths.js";
+import {
+  captureExternalSessionCommitGuard,
+  composeSessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef, isValidEnvSecretRefId } from "../config/types.secrets.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
@@ -745,7 +749,3 @@ export async function installManagedGitHubProfile(params: {
     await fs.rm(stagingRoot, { recursive: true, force: true });
   }
 }
-import {
-  captureExternalSessionCommitGuard,
-  composeSessionSourceAssertion,
-} from "../config/sessions/session-source-authority.js";

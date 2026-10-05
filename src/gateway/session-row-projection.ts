@@ -381,12 +381,12 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     row: records.Row,
     configuredAgentIds = new Set(listAgentIds(cfg)),
     readRow = rowReads.readResidentSessionRow,
-    databaseFacts?: records.PreparedSessionRowDatabaseFacts,
+    preparedDatabaseFacts?: records.PreparedSessionRowDatabaseFacts,
     repositoryWorkspace?: Parameters<
       typeof rowReads.readResidentSessionRow
     >[0]["repositoryWorkspace"],
   ) {
-    databaseFacts ??= row.retainedDatabaseFacts;
+    const databaseFacts = preparedDatabaseFacts ?? row.retainedDatabaseFacts;
     if (!row.entry || (!databaseFacts && !isIncognitoSessionKey(row.key))) {
       return false;
     }

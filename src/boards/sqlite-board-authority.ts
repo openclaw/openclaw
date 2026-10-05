@@ -34,7 +34,7 @@ export async function prepareBoardSourceAuthority(
           typeof predicate.source.databaseIdentity !== "string" ||
           `file:${predicate.source.databaseIdentity}` !== identity.key,
       ),
-    assertAdmission(request: SqliteWorkerAdmissionRequest) {
+    assertAdmission(this: void, request: SqliteWorkerAdmissionRequest) {
       const refused = isRecord(request.facts) && request.facts.boardSourceRefused;
       if (refused) {
         // SAFETY: The paired Board worker publishes this private refusal payload.

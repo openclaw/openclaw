@@ -161,11 +161,14 @@ describe("board and progress-card database write admission", () => {
         const grants = vi
           .spyOn(admission, "createSqliteWorkerOperationAdmission")
           .mockImplementation((admit, attachment) =>
-            createAdmission((request, grant) => {
-              inGrant = request.stage === "transaction" || request.stage === "commit";
-              if (inGrant) stages.push(request.stage);
+            createAdmission((admissionRequest, grant) => {
+              inGrant =
+                admissionRequest.stage === "transaction" || admissionRequest.stage === "commit";
+              if (inGrant) {
+                stages.push(admissionRequest.stage);
+              }
               try {
-                admit(request, grant);
+                admit(admissionRequest, grant);
               } finally {
                 inGrant = false;
               }
