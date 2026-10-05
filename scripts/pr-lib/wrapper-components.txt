@@ -313,6 +313,7 @@ src/agents/worktrees/git-path-inventory.ts
 src/agents/worktrees/git-worktree-operations.runtime.ts
 src/agents/worktrees/git.ts
 src/agents/worktrees/owner.ts
+src/agents/worktrees/preparation-timing.ts
 src/agents/worktrees/provisioned-file-inspection.ts
 src/agents/worktrees/provisioned-snapshot-store.ts
 src/agents/worktrees/provisioned-snapshot.ts

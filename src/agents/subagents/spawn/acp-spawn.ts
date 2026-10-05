@@ -323,13 +323,15 @@ export async function spawnAcpDirect(
   if (!admission.ok) {
     return rejectSubagentPolicy(admission.error);
   }
-  const resumeAuthorization = validateAcpResumeSessionOwnership({
+  const resumeAuthorization = await validateAcpResumeSessionOwnership({
     cfg,
     targetAgentId,
     backendId,
     requesterSessionKey: requesterInternalKey,
     resumeSessionId: params.resumeSessionId,
+    assertCurrent: ctx.assertActive,
   });
+  ctx.assertActive?.();
   if (!resumeAuthorization.ok) {
     return {
       status: "forbidden",

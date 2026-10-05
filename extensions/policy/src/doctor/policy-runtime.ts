@@ -21,9 +21,7 @@ export async function readPolicyFile(
   return file === null ? null : { ...file, displayName, ocDocName: basename(displayName) };
 }
 
-export async function readExecApprovalsFile(
-  _ctx: HealthCheckContext,
-): Promise<{ raw: string; path: string; displayName: string; ocDocName: string } | null> {
+export async function readExecApprovalsFile() {
   const snapshot = readExecApprovalsSnapshot();
   if (!snapshot.exists || snapshot.raw === null) {
     return null;
@@ -99,23 +97,6 @@ export function parsePolicyFile(
 
 export function workspaceRepairsEnabled(ctx: HealthCheckContext): boolean {
   return policySettings(ctx).workspaceRepairs === true;
-}
-
-export function workspaceRepairsDisabledResult(fileName: string): {
-  readonly status: "skipped";
-  readonly reason: string;
-  readonly changes: readonly string[];
-  readonly warnings: readonly string[];
-} {
-  const reason = "workspace repairs are disabled";
-  return {
-    status: "skipped",
-    reason,
-    changes: [],
-    warnings: [
-      `Skipped ${fileName} repair. Enable plugins.entries.policy.config.workspaceRepairs to let doctor --fix edit workspace files.`,
-    ],
-  };
 }
 
 export function readChannelDenyRules(

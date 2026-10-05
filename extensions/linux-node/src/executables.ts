@@ -1,15 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export type ExecutableResolver = (
-  command: string,
-  env: NodeJS.ProcessEnv,
-  extraCandidates?: readonly string[],
-) => string | null;
-
 const cache = new Map<string, string | null>();
 
-export const resolveExecutable: ExecutableResolver = (command, env, extraCandidates = []) => {
+export function resolveExecutable(
+  command: string,
+  env: NodeJS.ProcessEnv,
+  extraCandidates: readonly string[] = [],
+): string | null {
   const pathValue = env.PATH ?? "";
   const key = `${command}\0${pathValue}\0${extraCandidates.join("\0")}`;
   if (cache.has(key)) {
@@ -32,4 +30,4 @@ export const resolveExecutable: ExecutableResolver = (command, env, extraCandida
     }) ?? null;
   cache.set(key, found);
   return found;
-};
+}

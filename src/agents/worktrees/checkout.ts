@@ -18,6 +18,7 @@ import {
   WORKTREE_CHECKOUT_TIMEOUT_MS,
   type GitResult,
 } from "./git.js";
+import { timeWorktreePreparationPhase } from "./preparation-timing.js";
 import { prepareWorktreeTemplate } from "./template-cache.js";
 
 const log = createSubsystemLogger("agents/worktrees");
@@ -444,7 +445,10 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
       destinationRemoved = true;
       materializationStarted = true;
       await options.requireSpace(cloneBytes);
-      await template.backend.cloneTemplate(template.record.path, options.destination, options);
+      const { backend, record } = template;
+      await timeWorktreePreparationPhase("templateApply", () =>
+        backend.cloneTemplate(record.path, options.destination, options),
+      );
       const cloneCompletedAtMs = Date.now();
       await assertRegistration();
       assertOwned(options);
