@@ -75,7 +75,7 @@ export function commitSessionEntryPatch(
   });
 }
 
-function readRefusedSessionSource(
+export function readRefusedSessionSource(
   database: OpenClawAgentDatabase,
   sources: SessionEntryPatchCommit["sources"],
 ): SessionEntryPatchCommitted["refusedSource"] {
