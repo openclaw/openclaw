@@ -15,7 +15,7 @@ import {
   projectSessionParticipant,
   projectSessionProfileInvolvement,
 } from "./session-identity-projection.js";
-import { matchesSessionArchiveFilter, type SessionEntrySelection } from "./session-list-filters.js";
+import type { SessionEntrySelection } from "./session-list-filters.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import type * as records from "./session-row-projection-record.js";
@@ -27,7 +27,7 @@ import {
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
 import { prepareProjectedSessionSharing } from "./session-sharing.js";
-import { resolveSessionChildOwners } from "./session-utils-core.js";
+import { matchesSessionArchiveFilter, resolveSessionChildOwners } from "./session-utils-core.js";
 import {
   projectGatewaySessionActiveRun,
   projectGatewaySessionRunState,
