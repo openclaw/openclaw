@@ -9,6 +9,5 @@ export {
   DEFAULT_MAX_LINES,
   formatSize,
   truncateHead,
-  truncateTail,
   type TruncationResult,
 } from "../../../../packages/agent-core/src/harness/utils/truncate.js";

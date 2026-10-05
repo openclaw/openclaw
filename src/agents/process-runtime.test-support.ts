@@ -45,11 +45,6 @@ export const agentProcessTestEntrypoints = {
     sourceWorkerName: "sessions/tools/read.retention.test-support",
     distWorkerPath: "agents/sessions/tools/read.retention.test-support.js",
   },
-  outputAccumulator: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "sessions/tools/output-accumulator",
-    distWorkerPath: "agents/sessions/tools/output-accumulator.js",
-  },
   transcriptLifecycleRetention: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName:
