@@ -1,6 +1,7 @@
 import type { Virtualizer } from "@tanstack/virtual-core";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../scroll.ts";
 import { maxTranscriptScrollOffset } from "./chat-transcript-geometry.ts";
+import type { TranscriptResizeAnchor } from "./chat-transcript-resize-anchor.ts";
 import {
   CHAT_TRANSCRIPT_SCROLL_RESTORE_STABLE_FRAMES,
   CHAT_TRANSCRIPT_ZERO_MAX_SETTLE_FRAMES,
@@ -8,7 +9,10 @@ import {
 } from "./chat-transcript-session.ts";
 
 export type TranscriptScrollRestoreHost = {
-  readonly offsetState: { pendingScrollOffset: ChatTranscriptPendingScrollOffset | null };
+  readonly offsetState: {
+    pendingScrollOffset: ChatTranscriptPendingScrollOffset | null;
+    readonly resizeAnchor: Pick<TranscriptResizeAnchor, "clear">;
+  };
   getScrollElement(): HTMLDivElement | null;
   isContentReady(): boolean;
   getRowCount(): number;
@@ -59,6 +63,8 @@ export function applyPendingScrollOffset(owner: TranscriptScrollRestoreHost): vo
   }
   const targetOffset = Math.min(pending.offset, maxOffset);
   const element = owner.getScrollElement();
+  // An absolute restore replaces any shift held on screen during a fling.
+  owner.offsetState.resizeAnchor.clear();
   if (element) {
     element.scrollTop = targetOffset;
   }

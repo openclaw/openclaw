@@ -162,7 +162,10 @@ export function measureTranscriptRow(
   element: HTMLElement,
   entry: ResizeObserverEntry | undefined,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  // Structural, so geometry stays a leaf below the resize anchor.
+  resizeAnchor?: { observeRow(element: HTMLElement): void },
 ): number {
+  resizeAnchor?.observeRow(element);
   if (!entry && virtualizer.targetWindow?.ResizeObserver) {
     // Registration happens during Lit commit; the observer supplies real sizes
     // after layout, including the first measurement of a newly mounted row.
