@@ -986,14 +986,13 @@ extensions/twitch/src/twitch-ingress.ts	4
 extensions/venice/models.ts	1
 extensions/vllm/stream.ts	1
 extensions/voice-call/index.ts	2
-extensions/voice-call/setup-api.ts	1
-extensions/voice-call/src/config.ts	2
+extensions/voice-call/src/config.ts	1
 extensions/voice-call/src/manager/outbound.ts	2
 extensions/voice-call/src/media-stream.ts	1
 extensions/voice-call/src/providers/shared/guarded-json-api.ts	2
 extensions/voice-call/src/response-generator.ts	2
 extensions/voice-call/src/runtime.ts	1
-extensions/voice-call/src/webhook.ts	7
+extensions/voice-call/src/webhook.ts	5
 extensions/voyage/embedding-batch.ts	1
 extensions/web-readability/web-content-extractor.ts	2
 extensions/whatsapp/src/account-config.ts	1

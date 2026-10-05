@@ -5,8 +5,6 @@ import { copyCallRecord, transitionState } from "./state.js";
 import { persistCallRecord } from "./store.js";
 import { clearMaxDurationTimer, rejectTranscriptWaiter } from "./timers.js";
 
-// Shared call finalization path for manager and webhook lifecycle exits.
-
 const log = createSubsystemLogger("voice-call/lifecycle");
 
 type CallLifecycleContext = Pick<

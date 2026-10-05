@@ -266,10 +266,17 @@ type UserTranscriptState = {
   recentFinalTimer?: ReturnType<typeof setTimeout>;
 };
 
-type UserTranscriptOwnerAdoption = {
-  owner: UserTranscriptState;
-  previous?: UserTranscriptState;
-};
+function clearPartialUserTranscript(state: UserTranscriptState): void {
+  state.partial = undefined;
+  state.rawPartial = undefined;
+  state.partialUpdatedAt = undefined;
+}
+
+function clearRecentFinalUserTranscript(state: UserTranscriptState): void {
+  clearTimeout(state.recentFinalTimer);
+  state.recentFinalTimer = undefined;
+  state.recentFinal = undefined;
+}
 
 type RealtimeCallEndCause = "completed" | "disconnect" | "shutdown" | "inactivity" | "error";
 
@@ -917,13 +924,14 @@ export class RealtimeCallHandler {
         ? providerConfig.interruptResponseOnInputAudio
         : undefined;
     // Providers may close synchronously before createBridge returns; no consult can exist yet.
-    const nativeConsultOwner: { current?: ActiveRealtimeVoiceBridge } = {};
+    let nativeConsultOwner: ActiveRealtimeVoiceBridge | undefined = undefined;
     let provisionalCloseReason: RealtimeVoiceCloseReason | undefined;
     let sessionClosed = false;
     // Provisional ownership accepts callbacks fired during createBridge. Commit
     // retires the predecessor only after creation succeeds; failure restores it.
-    const userTranscriptAdoption = this.beginUserTranscriptOwnerAdoption(callId);
-    const userTranscriptOwner = userTranscriptAdoption.owner;
+    const previousTranscriptOwner = this.userTranscriptStatesByCallId.get(callId);
+    const userTranscriptOwner: UserTranscriptState = {};
+    this.userTranscriptStatesByCallId.set(callId, userTranscriptOwner);
     let transcriptPersistence = Promise.resolve();
     let transcriptFailure: { error: unknown } | undefined;
     const reportTranscriptFailure = (error: unknown) => {
@@ -967,7 +975,7 @@ export class RealtimeCallHandler {
       ...(handlesAgentConsult
         ? {
             runAgentConsult: async (request) => {
-              const owner = nativeConsultOwner.current;
+              const owner = nativeConsultOwner;
               const generation = continuityGeneration;
               request.signal?.throwIfAborted();
               await transcriptPersistence;
@@ -1044,7 +1052,7 @@ export class RealtimeCallHandler {
         },
       },
       onTranscript: (role, text, isFinal) => {
-        const owner = nativeConsultOwner.current;
+        const owner = nativeConsultOwner;
         if (
           provisionalCloseReason ||
           (sessionClosed && !isFinal) ||
@@ -1079,79 +1087,90 @@ export class RealtimeCallHandler {
         }
         if (!isFinal) {
           if (role === "user" && text.trim()) {
-            const transcript = this.recordPartialUserTranscript(callId, userTranscriptOwner, text);
-            if (!transcript) {
+            const state = this.getUserTranscriptState(callId, userTranscriptOwner);
+            if (!state) {
               return;
             }
+            const transcript = limitPartialUserTranscript(
+              appendTranscriptText(state.partial, text),
+            );
+            state.partial = transcript;
+            state.rawPartial = limitPartialUserTranscript(`${state.rawPartial ?? ""}${text}`);
+            state.partialUpdatedAt = Date.now();
             console.log(
               `[voice-call] realtime input transcript callId=${callId} providerCallId=${callSid} final=false chars=${text.trim().length} aggregateChars=${transcript.length}`,
             );
           }
           return;
         }
+        let transcript = text;
         if (role === "user") {
           const state = this.getUserTranscriptState(callId, userTranscriptOwner);
           if (!state) {
             return;
           }
-          const transcript = resolveFinalTranscriptText({
+          transcript = resolveFinalTranscriptText({
             partial: state.partial,
             rawPartial: state.rawPartial,
             final: text,
           });
-          this.clearPartialUserTranscript(callId, userTranscriptOwner);
-          this.setRecentFinalUserTranscript(callId, userTranscriptOwner, transcript);
+          clearPartialUserTranscript(state);
+          clearRecentFinalUserTranscript(state);
+          state.recentFinal = transcript;
+          const timer = setTimeout(() => {
+            if (!this.getUserTranscriptState(callId, state)) {
+              return;
+            }
+            if (state.recentFinal === transcript) {
+              state.recentFinal = undefined;
+            }
+            if (state.recentFinalTimer === timer) {
+              state.recentFinalTimer = undefined;
+            }
+          }, RECENT_FINAL_USER_TRANSCRIPT_TTL_MS);
+          timer.unref?.();
+          state.recentFinalTimer = timer;
           console.log(
             `[voice-call] realtime input transcript callId=${callId} providerCallId=${callSid} final=true chars=${text.trim().length} aggregateChars=${transcript.length}`,
           );
-          const event: NormalizedEvent = {
-            id: `realtime-speech-${callSid}-${randomUUID()}`,
-            type: "call.speech",
-            callId,
-            providerCallId: callSid,
-            timestamp: Date.now(),
-            transcript,
-            isFinal: true,
-          };
-          const generation = continuityGeneration;
-          transcriptPersistence = this.manager.processEvent(event).then(() => {
-            if (
-              handlesAgentConsult ||
-              sessionClosed ||
-              generation !== continuityGeneration ||
-              !this.getUserTranscriptState(callId, userTranscriptOwner) ||
-              !this.isActiveBridgeOwner(callId, session)
-            ) {
-              return;
-            }
-            this.scheduleForcedAgentConsult({
-              harness,
-              session,
-              callId,
-              callSid,
-              transcript,
-              userTranscriptOwner,
-              clearAudio: () => {
-                const clearedBytes = audioPacer.clearAudio();
-                console.log(
-                  `[voice-call] realtime forced consult cleared outbound audio callId=${callId} providerCallId=${callSid} queuedBytes=${clearedBytes}`,
-                );
-              },
-            });
-          });
-          void transcriptPersistence.catch(reportTranscriptFailure);
-          return;
         }
-        transcriptPersistence = this.manager
-          .processEvent({
-            id: `realtime-bot-${callSid}-${randomUUID()}`,
-            type: "call.assistant-speech",
+        const event: NormalizedEvent = {
+          id: `realtime-${role === "user" ? "speech" : "bot"}-${callSid}-${randomUUID()}`,
+          callId,
+          providerCallId: callSid,
+          timestamp: Date.now(),
+          transcript,
+          ...(role === "user"
+            ? { type: "call.speech", isFinal: true }
+            : { type: "call.assistant-speech" }),
+        };
+        const generation = continuityGeneration;
+        transcriptPersistence = this.manager.processEvent(event).then(() => {
+          if (
+            role !== "user" ||
+            handlesAgentConsult ||
+            sessionClosed ||
+            generation !== continuityGeneration ||
+            !this.getUserTranscriptState(callId, userTranscriptOwner) ||
+            !this.isActiveBridgeOwner(callId, session)
+          ) {
+            return;
+          }
+          this.scheduleForcedAgentConsult({
+            harness,
+            session,
             callId,
-            providerCallId: callSid,
-            timestamp: Date.now(),
-            transcript: text,
-          })
-          .then(() => {});
+            callSid,
+            transcript,
+            userTranscriptOwner,
+            clearAudio: () => {
+              const clearedBytes = audioPacer.clearAudio();
+              console.log(
+                `[voice-call] realtime forced consult cleared outbound audio callId=${callId} providerCallId=${callSid} queuedBytes=${clearedBytes}`,
+              );
+            },
+          });
+        });
         void transcriptPersistence.catch(reportTranscriptFailure);
       },
       onToolCall: async (toolEvent, sessionLocal) => {
@@ -1192,9 +1211,13 @@ export class RealtimeCallHandler {
           // A fresh provider session cannot complete the prior session's text,
           // audio, tool work, or Talk turn.
           const turnId = harness.talk.activeTurnId;
-          const owner = nativeConsultOwner.current;
+          const owner = nativeConsultOwner;
           if (owner && this.isActiveBridgeOwner(callId, owner)) {
-            this.resetUserTranscriptState(callId, userTranscriptOwner);
+            const state = this.getUserTranscriptState(callId, userTranscriptOwner);
+            if (state) {
+              clearPartialUserTranscript(state);
+              clearRecentFinalUserTranscript(state);
+            }
             this.resetConsultSessionForContinuity(callId, owner);
           }
           harness.flushOutput(() => {
@@ -1260,7 +1283,7 @@ export class RealtimeCallHandler {
           payload: { reason },
           final: true,
         });
-        const owner = nativeConsultOwner.current;
+        const owner = nativeConsultOwner;
         if (!owner) {
           // Settle terminal creation before adopting a bridge or retiring its predecessor.
           provisionalCloseReason ??= reason;
@@ -1281,7 +1304,7 @@ export class RealtimeCallHandler {
           return;
         }
         if (ownsCallState) {
-          void closeBinding(telephonyBinding, reason);
+          void closeBinding(reason);
         }
         this.streamDisconnectLifecycle.retire(callSid, streamSid);
         if (ws.readyState === WebSocket.OPEN) {
@@ -1296,7 +1319,14 @@ export class RealtimeCallHandler {
       console.error("[voice-call] Failed to create realtime bridge:", error);
     }
     if (!candidate || provisionalCloseReason) {
-      this.rollbackUserTranscriptOwnerAdoption(callId, userTranscriptAdoption);
+      if (this.getUserTranscriptState(callId, userTranscriptOwner)) {
+        clearRecentFinalUserTranscript(userTranscriptOwner);
+        if (previousTranscriptOwner) {
+          this.userTranscriptStatesByCallId.set(callId, previousTranscriptOwner);
+        } else {
+          this.userTranscriptStatesByCallId.delete(callId);
+        }
+      }
       try {
         await drainProviderClose(() => candidate?.close());
       } catch (error) {
@@ -1317,8 +1347,11 @@ export class RealtimeCallHandler {
       return null;
     }
     const session = candidate;
-    this.commitUserTranscriptOwnerAdoption(callId, userTranscriptAdoption);
-    nativeConsultOwner.current = session;
+    if (this.getUserTranscriptState(callId, userTranscriptOwner) && previousTranscriptOwner) {
+      clearTimeout(previousTranscriptOwner.recentFinalTimer);
+      previousTranscriptOwner.recentFinalTimer = undefined;
+    }
+    nativeConsultOwner = session;
     const localBargeIn =
       !(session.bridge.handlesInputAudioBargeIn ?? providerHandlesInputAudioBargeIn) &&
       resolveRealtimeVoiceBargeIn({
@@ -1363,8 +1396,15 @@ export class RealtimeCallHandler {
       this.cancelConsultSession(callId, session);
       audioPacer.close();
       sessionClosePromise = drainProviderClose(closeSession).finally(() => {
-        this.clearActiveBridgeMappings(callId, callSid, session);
-        this.clearUserTranscriptState(callId, userTranscriptOwner);
+        for (const key of [callId, callSid]) {
+          if (this.activeBridgesByCallId.get(key) === session) {
+            this.activeBridgesByCallId.delete(key);
+          }
+        }
+        if (this.getUserTranscriptState(callId, userTranscriptOwner)) {
+          clearRecentFinalUserTranscript(userTranscriptOwner);
+          this.userTranscriptStatesByCallId.delete(callId);
+        }
         harness.close();
       });
       return sessionClosePromise;
@@ -1379,19 +1419,18 @@ export class RealtimeCallHandler {
     };
     let bindingClosed = false;
     let bindingClosePromise: Promise<void> | undefined;
-    const closeBinding = (
-      binding: RealtimeTelephonyBinding,
-      cause?: RealtimeCallEndCause,
-    ): Promise<void> => {
+    const closeBinding = (cause?: RealtimeCallEndCause): Promise<void> => {
       if (bindingClosed) {
         return bindingClosePromise ?? callEndPromise ?? Promise.resolve();
       }
       bindingClosed = true;
       clearLivenessTimer();
-      const ownsCall = this.activeTelephonyBindingsByCallId.get(callId) === binding;
+      const ownsCall = this.activeTelephonyBindingsByCallId.get(callId) === telephonyBinding;
       const finishClose = () => {
-        const stillOwnsCall = this.activeTelephonyBindingsByCallId.get(callId) === binding;
-        this.clearActiveTelephonyBinding(callId, binding);
+        const stillOwnsCall = this.activeTelephonyBindingsByCallId.get(callId) === telephonyBinding;
+        if (stillOwnsCall) {
+          this.activeTelephonyBindingsByCallId.delete(callId);
+        }
         if (cause === "disconnect") {
           this.streamDisconnectLifecycle.disconnect(callSid, streamSid);
         } else {
@@ -1443,11 +1482,11 @@ export class RealtimeCallHandler {
           acknowledge();
         }
       },
-      close: (cause) => closeBinding(telephonyBinding, cause),
+      close: (cause) => closeBinding(cause),
       endCall: () => {
         // Close the provider session before the carrier socket so no pending
         // response can reach the caller after the hang-up request succeeds.
-        void closeBinding(telephonyBinding);
+        void closeBinding();
         if (ws.readyState === WebSocket.OPEN) {
           ws.close(1000, "Call ended");
         }
@@ -1475,7 +1514,7 @@ export class RealtimeCallHandler {
         livenessTimer.unref?.();
       },
       retire: () => {
-        void closeBinding(telephonyBinding);
+        void closeBinding();
       },
     };
     this.activeBridgesByCallId.set(callId, session);
@@ -1489,7 +1528,7 @@ export class RealtimeCallHandler {
     session.connect().catch(async (error: unknown) => {
       console.error("[voice-call] Failed to connect realtime bridge:", error);
       try {
-        await closeBinding(telephonyBinding, "error");
+        await closeBinding("error");
       } catch {
         // The binding reports cleanup failure and preserves it for concurrent shutdown.
       } finally {
@@ -1500,133 +1539,12 @@ export class RealtimeCallHandler {
     return telephonyBinding;
   }
 
-  private beginUserTranscriptOwnerAdoption(callId: string): UserTranscriptOwnerAdoption {
-    const adoption = {
-      owner: {},
-      previous: this.userTranscriptStatesByCallId.get(callId),
-    } satisfies UserTranscriptOwnerAdoption;
-    this.userTranscriptStatesByCallId.set(callId, adoption.owner);
-    return adoption;
-  }
-
-  private commitUserTranscriptOwnerAdoption(
-    callId: string,
-    adoption: UserTranscriptOwnerAdoption,
-  ): void {
-    if (this.userTranscriptStatesByCallId.get(callId) !== adoption.owner) {
-      return;
-    }
-    if (adoption.previous?.recentFinalTimer) {
-      clearTimeout(adoption.previous.recentFinalTimer);
-      adoption.previous.recentFinalTimer = undefined;
-    }
-  }
-
-  private rollbackUserTranscriptOwnerAdoption(
-    callId: string,
-    adoption: UserTranscriptOwnerAdoption,
-  ): void {
-    if (this.userTranscriptStatesByCallId.get(callId) !== adoption.owner) {
-      return;
-    }
-    if (adoption.owner.recentFinalTimer) {
-      clearTimeout(adoption.owner.recentFinalTimer);
-      adoption.owner.recentFinalTimer = undefined;
-    }
-    if (adoption.previous) {
-      this.userTranscriptStatesByCallId.set(callId, adoption.previous);
-      return;
-    }
-    this.userTranscriptStatesByCallId.delete(callId);
-  }
-
   private getUserTranscriptState(
     callId: string,
     owner: UserTranscriptState,
   ): UserTranscriptState | undefined {
     const state = this.userTranscriptStatesByCallId.get(callId);
     return state === owner ? state : undefined;
-  }
-
-  private recordPartialUserTranscript(
-    callId: string,
-    owner: UserTranscriptState,
-    text: string,
-  ): string | undefined {
-    const state = this.getUserTranscriptState(callId, owner);
-    if (!state) {
-      return undefined;
-    }
-    const next = limitPartialUserTranscript(appendTranscriptText(state.partial, text));
-    const raw = limitPartialUserTranscript(`${state.rawPartial ?? ""}${text}`);
-    state.partial = next;
-    state.rawPartial = raw;
-    state.partialUpdatedAt = Date.now();
-    return next;
-  }
-
-  private clearPartialUserTranscript(callId: string, owner: UserTranscriptState): void {
-    const state = this.getUserTranscriptState(callId, owner);
-    if (!state) {
-      return;
-    }
-    state.partial = undefined;
-    state.rawPartial = undefined;
-    state.partialUpdatedAt = undefined;
-  }
-
-  private setRecentFinalUserTranscript(
-    callId: string,
-    owner: UserTranscriptState,
-    text: string,
-  ): void {
-    const state = this.getUserTranscriptState(callId, owner);
-    if (!state) {
-      return;
-    }
-    this.clearRecentFinalUserTranscript(callId, owner);
-    state.recentFinal = text;
-    const timer = setTimeout(() => {
-      if (this.userTranscriptStatesByCallId.get(callId) !== state) {
-        return;
-      }
-      if (state.recentFinal === text) {
-        state.recentFinal = undefined;
-      }
-      if (state.recentFinalTimer === timer) {
-        state.recentFinalTimer = undefined;
-      }
-    }, RECENT_FINAL_USER_TRANSCRIPT_TTL_MS);
-    timer.unref?.();
-    state.recentFinalTimer = timer;
-  }
-
-  private clearRecentFinalUserTranscript(callId: string, owner: UserTranscriptState): void {
-    const state = this.getUserTranscriptState(callId, owner);
-    if (!state) {
-      return;
-    }
-    if (state.recentFinalTimer) {
-      clearTimeout(state.recentFinalTimer);
-      state.recentFinalTimer = undefined;
-    }
-    state.recentFinal = undefined;
-  }
-
-  private resetUserTranscriptState(callId: string, owner: UserTranscriptState): void {
-    this.clearPartialUserTranscript(callId, owner);
-    this.clearRecentFinalUserTranscript(callId, owner);
-  }
-
-  private clearUserTranscriptState(callId: string, owner: UserTranscriptState): void {
-    const state = this.getUserTranscriptState(callId, owner);
-    if (!state) {
-      return;
-    }
-    if (state.recentFinalTimer) {
-      clearTimeout(state.recentFinalTimer);
-    }
-    this.userTranscriptStatesByCallId.delete(callId);
   }
 
   private cancelNativeConsult(callId: string, owner: ActiveRealtimeVoiceBridge): void {
@@ -1675,25 +1593,6 @@ export class RealtimeCallHandler {
     return this.activeBridgesByCallId.get(callId) === owner;
   }
 
-  private clearActiveBridgeMappings(
-    callId: string,
-    callSid: string,
-    owner: ActiveRealtimeVoiceBridge,
-  ): void {
-    for (const key of [callId, callSid]) {
-      if (this.activeBridgesByCallId.get(key) !== owner) {
-        continue;
-      }
-      this.activeBridgesByCallId.delete(key);
-    }
-  }
-
-  private clearActiveTelephonyBinding(callId: string, binding: RealtimeTelephonyBinding): void {
-    if (this.activeTelephonyBindingsByCallId.get(callId) === binding) {
-      this.activeTelephonyBindingsByCallId.delete(callId);
-    }
-  }
-
   private resolveUserTranscriptContext(
     callId: string,
     owner: UserTranscriptState,
@@ -1717,7 +1616,7 @@ export class RealtimeCallHandler {
       return;
     }
     if (current === text) {
-      this.clearPartialUserTranscript(callId, owner);
+      clearPartialUserTranscript(state);
       return;
     }
     if (current.toLowerCase().startsWith(text.toLowerCase())) {
@@ -1726,7 +1625,7 @@ export class RealtimeCallHandler {
         state.partial = remaining;
         state.rawPartial = remaining;
       } else {
-        this.clearPartialUserTranscript(callId, owner);
+        clearPartialUserTranscript(state);
       }
     }
     const recent = state.recentFinal;
@@ -1734,7 +1633,7 @@ export class RealtimeCallHandler {
       return;
     }
     if (recent === text || recent.toLowerCase().startsWith(text.toLowerCase())) {
-      this.clearRecentFinalUserTranscript(callId, owner);
+      clearRecentFinalUserTranscript(state);
     }
   }
 

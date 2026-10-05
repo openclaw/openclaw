@@ -44,24 +44,13 @@ function markRestoredCallSkipped(call: CallRecord, endReason: "completed" | "tim
   call.state = endReason;
 }
 
-function resolveDefaultStoreBase(config: VoiceCallConfig, storePath?: string): string {
-  const rawOverride = storePath?.trim() || config.store?.trim();
-  if (rawOverride) {
-    return resolveUserPath(rawOverride);
-  }
-  return resolveDefaultVoiceCallStoreDir();
-}
-
 export class CallManager {
   private activeCalls = new Map<CallId, CallRecord>();
   private providerCallIdMap = new Map<string, CallId>();
   private processedEventIds = new Set<string>();
   private rejectedProviderCallIds = new Map<string, symbol>();
   private provider: VoiceCallProvider | null = null;
-  private config: VoiceCallConfig;
-  private coreSession: VoiceCallCoreSessionConfig | undefined;
   private storePath: string;
-  private stateRuntime: VoiceCallStateRuntime["state"] | undefined;
   private webhookUrl: string | null = null;
   private activeTurnCalls = new Set<CallId>();
   private endCallOperations = new Map<CallId, Promise<CallEndResult>>();
@@ -159,15 +148,13 @@ export class CallManager {
   streamSessionIssuer: StreamSessionIssuer | undefined;
 
   constructor(
-    config: VoiceCallConfig,
+    private readonly config: VoiceCallConfig,
     storePath?: string,
-    coreSession?: VoiceCallCoreSessionConfig,
-    stateRuntime?: VoiceCallStateRuntime["state"],
+    private readonly coreSession?: VoiceCallCoreSessionConfig,
+    private readonly stateRuntime?: VoiceCallStateRuntime["state"],
   ) {
-    this.config = config;
-    this.coreSession = coreSession;
-    this.storePath = resolveDefaultStoreBase(config, storePath);
-    this.stateRuntime = stateRuntime;
+    const rawOverride = storePath?.trim() || config.store?.trim();
+    this.storePath = rawOverride ? resolveUserPath(rawOverride) : resolveDefaultVoiceCallStoreDir();
   }
 
   initialize(provider: VoiceCallProvider, webhookUrl: string): Promise<void> {
@@ -271,10 +258,6 @@ export class CallManager {
     provider: VoiceCallProvider,
     candidates: Map<CallId, CallRecord>,
   ): Promise<Map<CallId, CallRecord>> {
-    if (candidates.size === 0) {
-      return new Map();
-    }
-
     const maxAgeMs = resolveVoiceCallSecondsTimerDelayMs(this.config.maxDurationSeconds);
     const now = Date.now();
     const verified = new Map<CallId, CallRecord>();
@@ -364,35 +347,20 @@ export class CallManager {
         throw outcome.reason;
       }
     }
-    if (skippedNoProviderCallId > 0) {
-      console.log(
-        `[voice-call] Skipped ${skippedNoProviderCallId} restored call(s) with no providerCallId`,
-      );
-    }
-    if (skippedOlderThanMaxDuration > 0) {
-      console.log(
-        `[voice-call] Skipped ${skippedOlderThanMaxDuration} restored call(s) older than maxDurationSeconds`,
-      );
-    }
-    for (const [status, count] of [...skippedTerminalStatuses].toSorted(([a], [b]) =>
-      a.localeCompare(b),
-    )) {
-      console.log(`[voice-call] Skipped ${count} restored call(s) with provider status: ${status}`);
-    }
-    if (keptVerifiedActive > 0) {
-      console.log(
-        `[voice-call] Kept ${keptVerifiedActive} restored call(s) confirmed active by provider`,
-      );
-    }
-    if (keptUnknownProviderStatus > 0) {
-      console.log(
-        `[voice-call] Kept ${keptUnknownProviderStatus} restored call(s) with unknown provider status (relying on timer)`,
-      );
-    }
-    if (keptVerificationFailures > 0) {
-      console.log(
-        `[voice-call] Kept ${keptVerificationFailures} restored call(s) after verification failure (relying on timer)`,
-      );
+    const summaries = [
+      ["Skipped", skippedNoProviderCallId, "with no providerCallId"],
+      ["Skipped", skippedOlderThanMaxDuration, "older than maxDurationSeconds"],
+      ...[...skippedTerminalStatuses]
+        .toSorted(([a], [b]) => a.localeCompare(b))
+        .map(([status, count]) => ["Skipped", count, `with provider status: ${status}`] as const),
+      ["Kept", keptVerifiedActive, "confirmed active by provider"],
+      ["Kept", keptUnknownProviderStatus, "with unknown provider status (relying on timer)"],
+      ["Kept", keptVerificationFailures, "after verification failure (relying on timer)"],
+    ] as const;
+    for (const [action, count, reason] of summaries) {
+      if (count > 0) {
+        console.log(`[voice-call] ${action} ${count} restored call(s) ${reason}`);
+      }
     }
     return verified;
   }
@@ -459,9 +427,7 @@ export class CallManager {
       maxDurationTimers: this.maxDurationTimers,
       initialMessageInFlight: this.initialMessageInFlight,
       onCallerSpeech: (call) => this.invalidateAutoResponse(call),
-      onCallAnswered: (call) => {
-        this.maybeSpeakInitialMessageOnAnswered(call);
-      },
+      onCallAnswered: (call) => this.maybeSpeakInitialMessageOnAnswered(call),
       streamSessionIssuer: this.streamSessionIssuer,
     };
   }

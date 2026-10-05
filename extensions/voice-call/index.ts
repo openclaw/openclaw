@@ -470,25 +470,28 @@ export default definePluginEntry({
         try {
           // Preserve tool error precedence: runtime availability is checked before model input.
           await ensureRuntime();
+          const initiateParams = {
+            to: normalizeOptionalString(rawParams.to),
+            message: normalizeOptionalString(rawParams.message),
+            dtmfSequence: normalizeOptionalString(rawParams.dtmfSequence),
+            sessionKey: normalizeOptionalString(rawParams.sessionKey),
+            agentId,
+            requesterSessionKey,
+          };
           if (typeof rawParams.action === "string") {
             switch (rawParams.action) {
               case "initiate_call": {
-                const message = normalizeOptionalString(rawParams.message);
+                const message = initiateParams.message;
                 if (!message) {
                   throw new VoiceCallCommandInputError("message required");
                 }
                 return json(
                   await commands.initiate({
-                    to: normalizeOptionalString(rawParams.to),
-                    message,
-                    dtmfSequence: normalizeOptionalString(rawParams.dtmfSequence),
+                    ...initiateParams,
                     mode:
                       rawParams.mode === "notify" || rawParams.mode === "conversation"
                         ? rawParams.mode
                         : undefined,
-                    sessionKey: normalizeOptionalString(rawParams.sessionKey),
-                    agentId,
-                    requesterSessionKey,
                   }),
                 );
               }
@@ -534,19 +537,7 @@ export default definePluginEntry({
             return json(await commands.status(sid));
           }
 
-          return json(
-            await commands.initiate(
-              {
-                to: normalizeOptionalString(rawParams.to),
-                dtmfSequence: normalizeOptionalString(rawParams.dtmfSequence),
-                message: normalizeOptionalString(rawParams.message),
-                sessionKey: normalizeOptionalString(rawParams.sessionKey),
-                agentId,
-                requesterSessionKey,
-              },
-              "to required for call",
-            ),
-          );
+          return json(await commands.initiate(initiateParams, "to required for call"));
         } catch (err) {
           return json({
             error: formatErrorMessage(err),

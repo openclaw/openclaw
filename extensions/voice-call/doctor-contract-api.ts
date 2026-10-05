@@ -47,45 +47,29 @@ function resolveVoiceCallStateDatabaseEnv(
   };
 }
 
-function describeVoiceCallSchemaMigration(migration: OpenClawStateDatabaseSchemaMigration): string {
-  switch (migration.kind) {
-    case "agent-databases-composite-primary-key":
-      return "agent database registry primary key -> agent_id,path";
-    case "agent-databases-relative-paths-v9":
-      return "agent database registry paths -> state-relative paths";
-    case "audit-events-v2":
-      return "audit event ledger -> versioned message lifecycle schema";
-    case "commitments-retirement-v7":
-      return "retired commitments storage -> discarded rows, table, and indexes";
-    case "state-table-retirement-v10":
-      return "retired shared-state tables -> removed tables and indexes";
-    case "state-table-retirement-v11":
-      return "retired skill curator tables -> removed tables and indexes";
-    case "singleton-state-foldin-v12":
-      return "singleton state tables -> shared configuration state";
-    case "state-consolidation-v13":
-      return "cron jobs and subagent runs -> canonical JSON storage";
-    case "creator-namespace-v14":
-      return "cron creators -> explicit principal namespaces";
-    case "conversation-binding-targets-v15":
-      return "conversation bindings -> exact target keys without agent/session projections";
-    case "skill-workshop-directory-ownership-v16":
-      return "Skill Workshop proposals -> per-agent Workshop directory ownership";
-    case "prepared-worker-ownership-v17":
-      return "prepared workers -> one-use capacity and fixed workspace ownership";
-    case "github-publication-requester-authority-v18":
-      return "GitHub publication receipts -> original requesting authority";
-    case "worker-placement-execution-mode-v8":
-      return "cloud worker placements -> execution-mode claims";
-    case "operator-approvals-system-agent":
-      return "operator approvals -> OpenClaw system changes";
-    case "session-watch-cursor-provenance-v4":
-      return "session watch cursors -> provenance column";
-    case "strict-tables-v3":
-      return "tables -> SQLite STRICT typing";
-  }
-  return migration.kind satisfies never;
-}
+const schemaMigrationDescriptions = {
+  "agent-databases-composite-primary-key": "agent database registry primary key -> agent_id,path",
+  "agent-databases-relative-paths-v9": "agent database registry paths -> state-relative paths",
+  "audit-events-v2": "audit event ledger -> versioned message lifecycle schema",
+  "commitments-retirement-v7": "retired commitments storage -> discarded rows, table, and indexes",
+  "state-table-retirement-v10": "retired shared-state tables -> removed tables and indexes",
+  "state-table-retirement-v11": "retired skill curator tables -> removed tables and indexes",
+  "singleton-state-foldin-v12": "singleton state tables -> shared configuration state",
+  "state-consolidation-v13": "cron jobs and subagent runs -> canonical JSON storage",
+  "creator-namespace-v14": "cron creators -> explicit principal namespaces",
+  "conversation-binding-targets-v15":
+    "conversation bindings -> exact target keys without agent/session projections",
+  "skill-workshop-directory-ownership-v16":
+    "Skill Workshop proposals -> per-agent Workshop directory ownership",
+  "prepared-worker-ownership-v17":
+    "prepared workers -> one-use capacity and fixed workspace ownership",
+  "github-publication-requester-authority-v18":
+    "GitHub publication receipts -> original requesting authority",
+  "worker-placement-execution-mode-v8": "cloud worker placements -> execution-mode claims",
+  "operator-approvals-system-agent": "operator approvals -> OpenClaw system changes",
+  "session-watch-cursor-provenance-v4": "session watch cursors -> provenance column",
+  "strict-tables-v3": "tables -> SQLite STRICT typing",
+} satisfies Record<OpenClawStateDatabaseSchemaMigration["kind"], string>;
 
 /** Doctor migrations owned by the voice-call plugin. */
 export const stateMigrations: PluginDoctorStateMigration[] = [
@@ -109,7 +93,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       return {
         preview: schemaMigrations.map(
           (migration) =>
-            `- Voice Call SQLite schema: ${describeVoiceCallSchemaMigration(migration)}`,
+            `- Voice Call SQLite schema: ${schemaMigrationDescriptions[migration.kind]}`,
         ),
       };
     },

@@ -115,31 +115,11 @@ function resolveForwardedClientIp(
   return realIp || undefined;
 }
 
-function normalizeWebhookResponse(parsed: {
-  statusCode?: number;
-  providerResponseHeaders?: Record<string, string>;
-  providerResponseBody?: string;
-}): WebhookResponsePayload {
-  return {
-    statusCode: parsed.statusCode ?? 200,
-    headers: parsed.providerResponseHeaders,
-    body: parsed.providerResponseBody ?? "OK",
-  };
-}
-
-function buildRealtimeRejectedTwiML(): WebhookResponsePayload {
+function buildTwilioResponse(content = ""): WebhookResponsePayload {
   return {
     statusCode: 200,
     headers: { "Content-Type": "text/xml" },
-    body: '<?xml version="1.0" encoding="UTF-8"?><Response><Reject reason="rejected" /></Response>',
-  };
-}
-
-function buildTwilioReplayTwiML(): WebhookResponsePayload {
-  return {
-    statusCode: 200,
-    headers: { "Content-Type": "text/xml" },
-    body: '<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+    body: `<?xml version="1.0" encoding="UTF-8"?><Response>${content}</Response>`,
   };
 }
 
@@ -250,15 +230,14 @@ export class VoiceCallWebhookServer {
 
   private resolveMediaStreamClientIp(request: http.IncomingMessage): string | undefined {
     const remoteIp = request.socket.remoteAddress ?? undefined;
-    const trustedProxyIPs = this.config.webhookSecurity.trustedProxyIPs.filter(Boolean);
     const normalizedTrustedProxyIps = new Set(
-      trustedProxyIPs.map((ip) => normalizeProxyIp(ip)).filter((ip): ip is string => Boolean(ip)),
+      this.config.webhookSecurity.trustedProxyIPs
+        .map((ip) => normalizeProxyIp(ip))
+        .filter((ip): ip is string => Boolean(ip)),
     );
     const normalizedRemoteIp = normalizeProxyIp(remoteIp);
     const fromTrustedProxy =
-      normalizedTrustedProxyIps.size > 0 &&
-      normalizedRemoteIp !== undefined &&
-      normalizedTrustedProxyIps.has(normalizedRemoteIp);
+      normalizedRemoteIp !== undefined && normalizedTrustedProxyIps.has(normalizedRemoteIp);
     const shouldTrustForwardingHeaders =
       this.config.webhookSecurity.trustForwardingHeaders && fromTrustedProxy;
 
@@ -279,13 +258,10 @@ export class VoiceCallWebhookServer {
       return false;
     }
 
-    const mode = (call.metadata?.mode as string | undefined) ?? "conversation";
-    if (mode !== "conversation") {
-      return false;
-    }
-
-    const initialMessage = normalizeOptionalString(call.metadata?.initialMessage) ?? "";
-    return initialMessage.length > 0;
+    return (
+      (call.metadata?.mode ?? "conversation") === "conversation" &&
+      Boolean(normalizeOptionalString(call.metadata?.initialMessage))
+    );
   }
 
   private getCurrentStream(providerCallId: string, streamSid: string) {
@@ -332,24 +308,17 @@ export class VoiceCallWebhookServer {
       isProviderConfigured: ({ provider, cfg, providerConfig }) =>
         provider.isConfigured({ cfg, providerConfig }),
     });
-    if (!resolution.ok && resolution.code === "missing-configured-provider") {
-      this.logger.warn(
-        `Streaming enabled but realtime transcription provider "${resolution.configuredProviderId}" is not registered`,
-      );
-      return;
-    }
-    if (!resolution.ok && resolution.code === "no-registered-provider") {
-      this.logger.warn("Streaming enabled but no realtime transcription provider is registered");
-      return;
-    }
     if (!resolution.ok) {
       this.logger.warn(
-        `Streaming enabled but provider "${resolution.provider?.id}" is not configured`,
+        resolution.code === "missing-configured-provider"
+          ? `Streaming enabled but realtime transcription provider "${resolution.configuredProviderId}" is not registered`
+          : resolution.code === "no-registered-provider"
+            ? "Streaming enabled but no realtime transcription provider is registered"
+            : `Streaming enabled but provider "${resolution.provider?.id}" is not configured`,
       );
       return;
     }
-    const provider = resolution.provider;
-    const providerConfig = resolution.providerConfig;
+    const { provider, providerConfig } = resolution;
 
     const streamConfig: MediaStreamConfig = {
       transcriptionProvider: provider,
@@ -390,8 +359,7 @@ export class VoiceCallWebhookServer {
           return;
         }
         const { call } = current;
-        const suppressBargeIn = this.shouldSuppressBargeInForInitialMessage(call);
-        if (suppressBargeIn) {
+        if (this.shouldSuppressBargeInForInitialMessage(call)) {
           this.logger.info(
             `Ignoring barge transcript while initial message is still playing (${providerCallId})`,
           );
@@ -509,11 +477,11 @@ export class VoiceCallWebhookServer {
 
       if (this.realtimeHandler || this.mediaStreamHandler) {
         this.server.on("upgrade", (request, socket, head) => {
-          if (this.realtimeHandler && this.isRealtimeWebSocketUpgrade(request)) {
+          const path = this.getUpgradePathname(request);
+          if (this.realtimeHandler && this.isRealtimeWebSocketUpgrade(path)) {
             this.realtimeHandler.handleWebSocketUpgrade(request, socket, head);
             return;
           }
-          const path = this.getUpgradePathname(request);
           if (path === streamPath && this.mediaStreamHandler) {
             this.mediaStreamHandler.handleUpgrade(request, socket, head);
           } else {
@@ -632,7 +600,11 @@ export class VoiceCallWebhookServer {
     const payload = await this.runWebhookPipeline(req, webhookPath, res);
     // A body-limit rejection already wrote its answer through the transport owner.
     if (payload) {
-      this.writeWebhookResponse(res, payload);
+      res.statusCode = payload.statusCode;
+      for (const [key, value] of Object.entries(payload.headers ?? {})) {
+        res.setHeader(key, value);
+      }
+      res.end(payload.body);
     }
   }
 
@@ -737,7 +709,7 @@ export class VoiceCallWebhookServer {
           return cachedResponse;
         }
         if (this.provider.name === "twilio") {
-          return buildTwilioReplayTwiML();
+          return buildTwilioResponse();
         }
       }
 
@@ -764,7 +736,7 @@ export class VoiceCallWebhookServer {
             !this.shouldAcceptRealtimeInboundRequest(realtimeParams)
           ) {
             this.logger.info("Realtime inbound call rejected before stream setup");
-            return buildRealtimeRejectedTwiML();
+            return buildTwilioResponse('<Reject reason="rejected" />');
           }
           this.logger.info(
             `Serving realtime TwiML for Twilio call ${realtimeParams.get("CallSid") ?? "unknown"} (direction=${direction ?? "unknown"})`,
@@ -779,7 +751,11 @@ export class VoiceCallWebhookServer {
           verification.releaseReplay?.();
         }
 
-        return normalizeWebhookResponse(parsed);
+        return {
+          statusCode: parsed.statusCode ?? 200,
+          headers: parsed.providerResponseHeaders,
+          body: parsed.providerResponseBody ?? "OK",
+        };
       };
 
       if (isReplay) {
@@ -848,7 +824,7 @@ export class VoiceCallWebhookServer {
     // Twilio owners receive the real one-time TwiML; waiters only see token-free XML.
     const response = ownerResponse.then((payload) =>
       this.provider.name === "twilio"
-        ? buildTwilioReplayTwiML()
+        ? buildTwilioResponse()
         : cloneWebhookResponsePayload(payload),
     );
     // Preserve rejection for concurrent waiters without creating an orphaned rejection.
@@ -901,11 +877,10 @@ export class VoiceCallWebhookServer {
     }
   }
 
-  private isRealtimeWebSocketUpgrade(req: http.IncomingMessage): boolean {
+  private isRealtimeWebSocketUpgrade(pathname: string | null): boolean {
     try {
-      const pathname = buildRequestUrl(req.url).pathname;
       const pattern = this.realtimeHandler?.getStreamPathPattern();
-      if (!pattern) {
+      if (pathname === null || !pattern) {
         return false;
       }
       const normalizedPattern = normalizeWebhookPath(pattern);
@@ -988,7 +963,7 @@ export class VoiceCallWebhookServer {
     if (result.waiterResolved || (isCurrent && !isCurrent())) {
       return false;
     }
-    const callMode = result.call.metadata?.mode as string | undefined;
+    const callMode = result.call.metadata?.mode;
     if (result.call.direction !== "inbound" && callMode !== "conversation") {
       return false;
     }
@@ -999,16 +974,6 @@ export class VoiceCallWebhookServer {
       this.logger.warn(`Failed to auto-respond: ${String(err)}`);
     });
     return false;
-  }
-
-  private writeWebhookResponse(res: http.ServerResponse, payload: WebhookResponsePayload): void {
-    res.statusCode = payload.statusCode;
-    if (payload.headers) {
-      for (const [key, value] of Object.entries(payload.headers)) {
-        res.setHeader(key, value);
-      }
-    }
-    res.end(payload.body);
   }
 
   private async handleInboundResponse(callId: string, userMessage: string): Promise<void> {
