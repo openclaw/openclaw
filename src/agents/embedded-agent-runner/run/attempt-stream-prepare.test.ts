@@ -194,7 +194,11 @@ describe("prepareEmbeddedAttemptStream", () => {
             });
             const delivery = prepared.queueHandle.messageInjectionV2!.queueMessage(
               "redirect the original",
-              { isInboundUserMessage: true, userTurnTranscriptRecorder: recorder },
+              {
+                isInboundUserMessage: true,
+                userTurnTranscriptRecorder: recorder,
+                toolAuthorityFingerprint: preparedAttempt.toolAuthorityFingerprint,
+              },
               assertCurrent,
               "source-bound",
             );

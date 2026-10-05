@@ -1,15 +1,46 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
-import type { AgentQuestionDispatcher } from "../../agents/harness/gateway-question-dispatch.js";
-import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
+import {
+  QuestionDispatchRefusedError,
+  type AgentQuestionDispatcher,
+} from "../../agents/harness/gateway-question-dispatch.js";
+import {
+  claimPendingAgentQuestionAnswer,
+  registerPendingAgentQuestion,
+} from "../../agents/harness/gateway-question.js";
 import {
   createAgentQuestionAnswerAuthority,
   withAgentQuestionAnswerAuthority,
 } from "../../agents/harness/host-private-capabilities.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
+import {
+  copyConversationBindingRouteFacts,
+  readConversationBindingRouteFacts,
+  withConversationBindingRouteFacts,
+} from "../../channels/conversation-binding-route-facts.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  listSessionPendingInputs,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { EmbeddedQuestionBroker } from "../../infra/embedded-question-broker.js";
+import {
+  registerSessionBindingAdapter,
+  unregisterSessionBindingAdapter,
+  type SessionBindingAdapter,
+  type SessionBindingRecord,
+} from "../../infra/outbound/session-binding-service.js";
+import { registerPluginCommand } from "../../plugins/commands.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import {
+  createTestUserTurnTranscriptTarget,
+  readTranscriptMessages,
+} from "../../sessions/user-turn-transcript.test-support.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -35,7 +66,11 @@ import {
 import { resetInboundDedupe } from "./inbound-dedupe.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/lifecycle.js";
-import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
+import {
+  REPLY_OPERATION_RUN_STATE,
+  resolveReplyOperationRunState,
+  type ReplyOperationRunState,
+} from "./reply-operation-run-state.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -151,6 +186,397 @@ function createQuestionDispatch(name: string) {
 }
 
 describe("dispatch input custody after a question response", () => {
+  it.each(["unsupported", "refused"] as const)(
+    "preserves early question dispatch ownership for %s",
+    async (outcome) => {
+      const fixture = createQuestionDispatch(outcome);
+      // The question-only runtime is independent of ordinary reply admission.
+      fixture.operation.complete();
+      const ctx = buildTestCtx({
+        ...fixture.ctx,
+        Body: "answer",
+        RawBody: "answer",
+        BodyForCommands: "answer",
+        CommandBody: "answer",
+        commandText: "answer",
+      });
+      let published = false;
+      const authority = createAgentQuestionAnswerAuthority({
+        sessionKey: fixture.operation.key,
+        fingerprint: "early-dispatch-question",
+        project: () => "early-dispatch-question",
+        assertActive() {
+          if (published && outcome === "refused") {
+            throw new QuestionDispatchRefusedError("owner refused");
+          }
+        },
+      });
+      const gatewayCall = vi.fn(async () => ({}));
+      const question = withAgentQuestionAnswerAuthority(authority, () =>
+        registerPendingAgentQuestion({
+          sessionKey: fixture.operation.key,
+          questionId: `early-${outcome}`,
+          questions: [{ id: "answer", header: "Answer", question: "Continue?" }],
+          // The shipped legacy dispatcher cannot carry a final source assertion.
+          gatewayCall,
+        }),
+      );
+      question.attachRegistration(Promise.resolve());
+      published = true;
+      const dispatcher = createDispatcher();
+      const ordinaryReply = { text: "ordinary compatibility dispatch" };
+      const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+        expect(resolveReplyOperationRunState(opts)?.questionInputHandled).not.toBe(true);
+        return ordinaryReply;
+      });
+      try {
+        await expect(
+          dispatchReplyFromConfig({
+            ctx,
+            cfg: automaticDirectReplyConfig,
+            dispatcher,
+            replyResolver,
+          }),
+        ).resolves.toMatchObject({ queuedFinal: true });
+        if (outcome === "unsupported") {
+          expect(replyResolver).toHaveBeenCalledOnce();
+          expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(ordinaryReply);
+        } else {
+          expect(replyResolver).not.toHaveBeenCalled();
+          expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({
+              isError: true,
+              text: expect.stringContaining("owner refused"),
+            }),
+          );
+        }
+        expect(gatewayCall).not.toHaveBeenCalled();
+        expect(question.isResolving()).toBe(false);
+        expect(fixture.cancel).not.toHaveBeenCalled();
+      } finally {
+        question.dispose();
+      }
+    },
+  );
+  it("keeps an authorized registered plugin command out of a pending question", async () => {
+    const sessionKey = "agent:main:discord:direct:plugin-command-question";
+    sessionStoreMocks.currentEntry = {
+      sessionId: "plugin-command-question",
+      updatedAt: Date.now(),
+    };
+    const pluginHandler = vi.fn(async () => ({ text: "paired" }));
+    expect(
+      registerPluginCommand("test-plugin", {
+        name: "pair-test",
+        description: "Pair test command",
+        handler: pluginHandler,
+      }),
+    ).toEqual({ ok: true });
+    const resolved = vi.fn();
+    const gatewayCall: AgentQuestionDispatcher = {
+      version: 2,
+      call: async (request) => {
+        if (request.authority.kind === "source-bound") {
+          request.authority.assertCurrent();
+        }
+        if (request.method === "question.resolve") {
+          resolved();
+        }
+        return {};
+      },
+    };
+    const question = registerPendingAgentQuestion({
+      sessionKey,
+      questionId: "ask_plugin_command_question",
+      questions: [{ id: "answer", header: "Answer", question: "Continue?" }],
+      gatewayCall,
+    });
+    question.attachRegistration(Promise.resolve());
+    const command = "/pair-test";
+    const replyResolver = vi.fn(async () => ({ text: "normal command path" }));
+    try {
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "discord",
+          Surface: "discord",
+          ChatType: "direct",
+          From: "user:plugin-command",
+          To: "channel:plugin-command",
+          SessionKey: sessionKey,
+          MessageSid: "plugin-command-answer",
+          Body: command,
+          RawBody: command,
+          BodyForAgent: command,
+          BodyForCommands: command,
+          CommandBody: command,
+          CommandSource: "text",
+          CommandAuthorized: true,
+        }),
+        cfg: { ...automaticDirectReplyConfig, commands: { text: true } },
+        dispatcher: createDispatcher(),
+        replyResolver,
+      });
+
+      expect(replyResolver).toHaveBeenCalledOnce();
+      expect(resolved).not.toHaveBeenCalled();
+      await expect(claimPendingAgentQuestionAnswer({ sessionKey, text: "Continue" })).resolves.toBe(
+        true,
+      );
+      expect(resolved).toHaveBeenCalledOnce();
+    } finally {
+      question.dispose();
+    }
+  });
+
+  it.each([
+    ["before dispatch", "before-dispatch"],
+    ["after claim entry", "after-claim"],
+  ] as const)("refuses a reassigned conversation binding %s", async (when, slug) => {
+    const sessionKey = `agent:main:webchat:direct:stale-binding-${slug}`;
+    const conversation = {
+      channel: "webchat",
+      accountId: "default",
+      conversationId: `stale-binding-${slug}`,
+    };
+    const observed: SessionBindingRecord = {
+      bindingId: "binding-observed",
+      boundAt: 1,
+      targetKind: "session",
+      targetSessionKey: sessionKey,
+      conversation,
+      status: "active",
+    };
+    const reassigned: SessionBindingRecord = {
+      ...observed,
+      bindingId: "binding-reassigned",
+      boundAt: 2,
+    };
+    let binding = when === "before dispatch" ? reassigned : observed;
+    sessionStoreMocks.currentEntry = {
+      sessionId: `stale-binding-${slug}`,
+      updatedAt: Date.now(),
+    };
+    const resolved = vi.fn();
+    const gatewayCall: AgentQuestionDispatcher = {
+      version: 2,
+      call: async (request) => {
+        if (request.method === "question.resolve") {
+          resolved();
+        }
+        return {};
+      },
+    };
+    let claimStarted = false;
+    let releaseRegistration = () => {};
+    const registration =
+      when === "before dispatch"
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            releaseRegistration = resolve;
+          });
+    const authority = createAgentQuestionAnswerAuthority({
+      sessionKey,
+      fingerprint: "binding-question",
+      project: () => "binding-question",
+      assertActive: () => {
+        claimStarted = true;
+      },
+    });
+    const question = withAgentQuestionAnswerAuthority(authority, () =>
+      registerPendingAgentQuestion({
+        sessionKey,
+        questionId: `ask_stale_binding_${slug}`,
+        questions: [{ id: "answer", header: "Answer", question: "Continue?" }],
+        gatewayCall,
+      }),
+    );
+    question.attachRegistration(registration);
+    const adapter: SessionBindingAdapter = {
+      channel: conversation.channel,
+      accountId: conversation.accountId,
+      listBySession: () => [binding],
+      inspectByConversation: () => binding,
+      inspectByConversationAsync: async () => binding,
+      resolveByConversation: () => binding,
+      resolveByConversationAsync: async () => binding,
+      touchAsync: async () => undefined,
+    };
+    registerSessionBindingAdapter(adapter);
+    const route = withConversationBindingRouteFacts(
+      { sessionKey, agentId: "main" },
+      { kind: "agent", binding: observed, sessionKey },
+      "main",
+      conversation,
+    );
+    const answer = "Continue";
+    const ctx = buildTestCtx({
+      Provider: "webchat",
+      Surface: "webchat",
+      ChatType: "direct",
+      From: `user:${slug}`,
+      To: `channel:${slug}`,
+      AgentId: "main",
+      SessionKey: sessionKey,
+      MessageSid: `${slug}-answer`,
+      Body: answer,
+      RawBody: answer,
+      BodyForAgent: answer,
+      BodyForCommands: answer,
+      CommandBody: answer,
+      CommandSource: "text",
+      CommandAuthorized: true,
+    });
+    copyConversationBindingRouteFacts(route, ctx);
+    const routeFacts = readConversationBindingRouteFacts(ctx);
+    expect(routeFacts?.kind === "agent" ? routeFacts.bindingId : undefined).toBe(
+      "binding-observed",
+    );
+    const replyResolver = vi.fn(async () => ({ text: "should not start a turn" }));
+    const pending = dispatchReplyFromConfig({
+      ctx,
+      cfg: automaticDirectReplyConfig,
+      dispatcher: createDispatcher(),
+      replyResolver,
+    });
+    try {
+      if (when === "after claim entry") {
+        await vi.waitFor(() => expect(claimStarted).toBe(true));
+        binding = reassigned;
+        releaseRegistration();
+      }
+      await expect(pending).rejects.toMatchObject({
+        code: "SESSION_WORK_START_CHANGED",
+        message: expect.stringContaining("Conversation binding changed"),
+      });
+      expect(resolved).not.toHaveBeenCalled();
+      expect(replyResolver).not.toHaveBeenCalled();
+    } finally {
+      releaseRegistration();
+      unregisterSessionBindingAdapter({
+        channel: adapter.channel,
+        accountId: adapter.accountId,
+        adapter,
+      });
+      question.dispose();
+    }
+  });
+
+  it("persists a staged inbound answer before question resolution", async () => {
+    const sessionKey = "agent:main:webchat:direct:staged-question";
+    const sessionId = "staged-question";
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ask-user-staged-"));
+    const storePath = path.join(dir, "sessions.sqlite");
+    const target = createTestUserTurnTranscriptTarget({ sessionId, sessionKey, storePath });
+    const answer = "Continue";
+    const replyState: ReplyOperationRunState = {};
+    sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
+    const order: string[] = [];
+    const resolved = vi.fn();
+    const adapter: SessionBindingAdapter = {
+      channel: "webchat",
+      accountId: "default",
+      listBySession: () => [],
+      inspectByConversation: () => null,
+      inspectByConversationAsync: async () => null,
+      resolveByConversation: () => null,
+      resolveByConversationAsync: async () => null,
+      touchAsync: async () => undefined,
+    };
+    registerSessionBindingAdapter(adapter);
+    try {
+      await replaceSessionEntry(target, { sessionId, updatedAt: Date.now() });
+      const recorder = createUserTurnTranscriptRecorder({
+        target,
+        input: { text: answer, idempotencyKey: "staged-question:user" },
+      });
+      expect(
+        await recorder.stageApproved?.({ runId: "staged-question", assertCurrent: () => {} }),
+      ).toBe(true);
+      expect((await listSessionPendingInputs(target)).total).toBe(1);
+      const persist = recorder.persistApproved.bind(recorder);
+      vi.spyOn(recorder, "persistApproved").mockImplementation(async (options) => {
+        const result = await persist(options);
+        order.push(recorder.hasPersisted() ? "persisted" : "not-persisted");
+        return result;
+      });
+      const authority = createAgentQuestionAnswerAuthority({
+        sessionKey,
+        fingerprint: "staged-question",
+        project: () => "staged-question",
+        assertActive: () => {},
+        admitTranscriptAnswer: (source) => {
+          order.push(source?.hasPersisted() ? "admitted" : "not-admitted");
+        },
+      });
+      const gatewayCall: AgentQuestionDispatcher = {
+        version: 2,
+        call: async (request) => {
+          if (request.method === "question.resolve") {
+            order.push("resolved");
+            resolved();
+          }
+          return {};
+        },
+      };
+      const question = withAgentQuestionAnswerAuthority(authority, () =>
+        registerPendingAgentQuestion({
+          sessionKey,
+          questionId: "ask_staged",
+          questions: [{ id: "answer", header: "Answer", question: "Continue?" }],
+          gatewayCall,
+        }),
+      );
+      question.attachRegistration(Promise.resolve());
+      const replyResolver = vi.fn(async () => ({ text: "should not start a turn" }));
+      try {
+        await dispatchReplyFromConfig({
+          ctx: buildTestCtx({
+            Provider: "webchat",
+            Surface: "webchat",
+            ChatType: "direct",
+            From: "user:staged-question",
+            To: "channel:staged-question",
+            AgentId: "main",
+            SessionKey: sessionKey,
+            MessageSid: "staged-question-answer",
+            Body: answer,
+            RawBody: answer,
+            BodyForAgent: answer,
+            BodyForCommands: answer,
+            CommandBody: answer,
+            CommandSource: "text",
+            CommandAuthorized: true,
+          }),
+          cfg: automaticDirectReplyConfig,
+          dispatcher: createDispatcher(),
+          replyOptions: {
+            userTurnTranscriptRecorder: recorder,
+            [REPLY_OPERATION_RUN_STATE]: replyState,
+          },
+          replyResolver,
+        });
+        expect(order).toEqual(["persisted", "admitted", "resolved"]);
+        expect(replyState.questionInputHandled).toBe(true);
+        expect((await listSessionPendingInputs(target)).total).toBe(0);
+        expect(await readTranscriptMessages({ sessionId, sessionKey, storePath })).toEqual([
+          expect.objectContaining({ role: "user", content: answer }),
+        ]);
+        expect(resolved).toHaveBeenCalledOnce();
+        expect(replyResolver).not.toHaveBeenCalled();
+      } finally {
+        unregisterSessionBindingAdapter({
+          channel: adapter.channel,
+          accountId: adapter.accountId,
+          adapter,
+        });
+        question.dispose();
+      }
+    } finally {
+      await closeOpenClawAgentDatabasesAsync(dir);
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   // Real question/receipt classification is covered by the wire regression. Here
   // the real dispatch owner must preserve that recorded fact through source faults.
   it.each([
@@ -266,140 +692,171 @@ describe("dispatch input custody after a question response", () => {
     }
   });
 
-  it("reports an incomplete multi-question answer and keeps the question open", async () => {
-    const fixture = createQuestionDispatch("incomplete-answer");
-    const dispatcher = createDispatcher();
-    const broker = new EmbeddedQuestionBroker(createTestGatewayScheduler());
-    const questionId = "ask_incomplete_answer";
-    const questions = [
-      { id: "destination", header: "Where", question: "Where to?" },
-      { id: "budget", header: "Budget", question: "How much?" },
-    ];
-    broker.request({
-      id: questionId,
-      sessionKey: fixture.operation.key,
-      questions: questions.map(({ id, ...question }) => ({
-        ...question,
-        questionId: id,
-        options: [],
-      })),
-    });
-    const onResolved = vi.fn();
-    broker.subscribe((event) => {
-      if (event.event === "question.resolved") {
-        onResolved(event.payload);
-      }
-    });
-    const onResumed = vi.fn();
-    const answer = broker.waitAnswer({ id: questionId, includeResolutionId: true });
-    const resumed = answer.then(onResumed);
-    const gatewayCall: AgentQuestionDispatcher = {
-      version: 2,
-      call: async ({ method, params, authority }) => {
-        if (authority.kind === "source-bound") {
-          authority.assertCurrent();
+  it.each(["early", "later"] as const)(
+    "reports an incomplete multi-question answer through %s dispatch and keeps the question open",
+    async (admissionPath) => {
+      const fixture = createQuestionDispatch(`incomplete-answer-${admissionPath}`);
+      const dispatcher = createDispatcher();
+      const broker = new EmbeddedQuestionBroker(createTestGatewayScheduler());
+      const questionId = "ask_incomplete_answer";
+      const questions = [
+        { id: "destination", header: "Where", question: "Where to?" },
+        { id: "budget", header: "Budget", question: "How much?" },
+      ];
+      broker.request({
+        id: questionId,
+        sessionKey: fixture.operation.key,
+        questions: questions.map(({ id, ...question }) => ({
+          ...question,
+          questionId: id,
+          options: [],
+        })),
+      });
+      const onResolved = vi.fn();
+      broker.subscribe((event) => {
+        if (event.event === "question.resolved") {
+          onResolved(event.payload);
         }
-        return broker.call(method, params);
-      },
-    };
-    // The creator authority the source-bound claim path requires; this fixture
-    // accepts any caller so the test exercises answer validation, not policy.
-    const authority = createAgentQuestionAnswerAuthority({
-      sessionKey: fixture.operation.key,
-      fingerprint: "question-custody-fixture",
-      project: () => "question-custody-fixture",
-      assertActive: () => {},
-    });
-    const question = withAgentQuestionAnswerAuthority(authority, () =>
-      registerPendingAgentQuestion({
-        sessionKey: fixture.operation.key,
-        questionId,
-        questions,
-        gatewayCall,
-        answer,
-      }),
-    );
-    question.attachRegistration(Promise.resolve());
-    const replyResolver = vi.fn(async (ctx: MsgContext, opts?: GetReplyOptions) => {
-      const text = ctx.BodyForAgent;
-      if (typeof text !== "string") {
-        throw new Error("missing question answer text");
-      }
-      const result = await runReplyQuestionInput({
-        commandBody: text,
-        followupRun: createQueueTestRun({ prompt: text }),
-        sessionKey: fixture.operation.key,
-        sessionCtx: ctx,
-        opts,
       });
-      expect(result.handled).toBe(true);
-      return result.handled ? result.payload : undefined;
-    });
-    const dispatch = (text: string, messageId: string) =>
-      dispatchReplyFromConfig({
-        ctx: { ...fixture.ctx, agentText: text, MessageSid: messageId },
-        cfg: { ...automaticDirectReplyConfig, diagnostics: { enabled: true } },
-        dispatcher,
-        replyOptions: {
-          sourceReplyDeliveryMode: "message_tool_only",
-          turnAdoptionLifecycle: { onAdopted: async () => {} },
+      const onResumed = vi.fn();
+      const answer = broker.waitAnswer({ id: questionId, includeResolutionId: true });
+      const resumed = answer.then(onResumed);
+      const gatewayCall: AgentQuestionDispatcher = {
+        version: 2,
+        call: async ({ method, params, authority }) => {
+          if (authority.kind === "source-bound") {
+            authority.assertCurrent();
+          }
+          return broker.call(method, params);
         },
-        replyResolver,
+      };
+      // The creator authority the source-bound claim path requires; this fixture
+      // accepts any caller so the test exercises answer validation, not policy.
+      const authority = createAgentQuestionAnswerAuthority({
+        sessionKey: fixture.operation.key,
+        fingerprint: "question-custody-fixture",
+        project: () => "question-custody-fixture",
+        assertActive: () => {},
       });
-    try {
-      await dispatch("Lisbon", "incomplete-answer");
-      expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
-      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-        expect.objectContaining({
-          text: expect.stringContaining("The answer was not accepted: question 'budget'"),
-          isError: true,
+      const question = withAgentQuestionAnswerAuthority(authority, () =>
+        registerPendingAgentQuestion({
+          sessionKey: fixture.operation.key,
+          questionId,
+          questions,
+          gatewayCall,
+          answer,
         }),
       );
-      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-        expect.objectContaining({ text: expect.stringContaining("still open") }),
-      );
-      expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
-        expect.objectContaining({ outcome: "error", reason: "question-response-rejected" }),
-      );
-      expect(question.isResolving()).toBe(false);
-      expect(broker.get({ id: questionId }).question).toMatchObject({ status: "pending" });
-      expect(broker.get({ id: questionId }).question.answers).toBeUndefined();
-      expect(onResolved).not.toHaveBeenCalled();
-      expect(onResumed).not.toHaveBeenCalled();
-      expect(fixture.cancel).not.toHaveBeenCalled();
-
-      await dispatch("Lisbon", "incomplete-answer");
-      expect(replyResolver).toHaveBeenCalledOnce();
-      expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
-      expect(onResolved).not.toHaveBeenCalled();
-
-      await dispatch("1: Lisbon\n2: 2000", "complete-answer");
-      expect(broker.get({ id: questionId }).question).toMatchObject({
-        status: "answered",
-        answers: { answers: { destination: ["Lisbon"], budget: ["2000"] } },
+      question.attachRegistration(Promise.resolve());
+      const replyResolver = vi.fn(async (ctx: MsgContext, opts?: GetReplyOptions) => {
+        const text = ctx.BodyForAgent;
+        if (typeof text !== "string") {
+          throw new Error("missing question answer text");
+        }
+        const result = await runReplyQuestionInput({
+          commandBody: text,
+          followupRun: createQueueTestRun({ prompt: text }),
+          sessionKey: fixture.operation.key,
+          sessionCtx: ctx,
+          opts,
+        });
+        expect(result.handled).toBe(true);
+        return result.handled ? result.payload : undefined;
       });
-      await resumed;
-      expect(onResolved).toHaveBeenCalledExactlyOnceWith({
-        id: questionId,
-        status: "answered",
-        answers: { answers: { destination: ["Lisbon"], budget: ["2000"] } },
-      });
-      expect(onResumed).toHaveBeenCalledOnce();
-      expect(replyResolver).toHaveBeenCalledTimes(2);
-      expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
+      const onAdopted = vi.fn(async () => {});
+      const dispatchStates: ReplyOperationRunState[] = [];
+      const dispatch = (text: string, messageId: string) => {
+        const replyState: ReplyOperationRunState = {};
+        dispatchStates.push(replyState);
+        return dispatchReplyFromConfig({
+          ctx:
+            admissionPath === "early"
+              ? buildTestCtx({
+                  ...fixture.ctx,
+                  Body: text,
+                  RawBody: text,
+                  BodyForAgent: text,
+                  BodyForCommands: text,
+                  CommandBody: text,
+                  commandText: text,
+                  MessageSid: messageId,
+                })
+              : { ...fixture.ctx, agentText: text, MessageSid: messageId },
+          cfg: { ...automaticDirectReplyConfig, diagnostics: { enabled: true } },
+          dispatcher,
+          replyOptions: {
+            sourceReplyDeliveryMode: "message_tool_only",
+            turnAdoptionLifecycle: { onAdopted },
+            [REPLY_OPERATION_RUN_STATE]: replyState,
+          },
+          replyResolver,
+        });
+      };
+      try {
+        await dispatch("Lisbon", "incomplete-answer");
+        expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
+        expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+          expect.objectContaining({
+            text: expect.stringContaining("The answer was not accepted: question 'budget'"),
+            isError: true,
+          }),
+        );
+        expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+          expect.objectContaining({ text: expect.stringContaining("still open") }),
+        );
+        if (admissionPath === "later") {
+          expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+            expect.objectContaining({ outcome: "error", reason: "question-response-rejected" }),
+          );
+        }
+        expect(dispatchStates[0]).toMatchObject({
+          questionInputHandled: true,
+          admission: { status: "skipped", reason: "question-response-rejected" },
+        });
+        expect(onAdopted).not.toHaveBeenCalled();
+        expect(replyRunRegistry.get(fixture.operation.key)).toBe(fixture.operation);
+        expect(question.isResolving()).toBe(false);
+        expect(broker.get({ id: questionId }).question).toMatchObject({ status: "pending" });
+        expect(broker.get({ id: questionId }).question.answers).toBeUndefined();
+        expect(onResolved).not.toHaveBeenCalled();
+        expect(onResumed).not.toHaveBeenCalled();
+        expect(fixture.cancel).not.toHaveBeenCalled();
 
-      await dispatch("1: Lisbon\n2: 2000", "complete-answer");
-      expect(replyResolver).toHaveBeenCalledTimes(2);
-      expect(onResolved).toHaveBeenCalledOnce();
-      expect(onResumed).toHaveBeenCalledOnce();
-      expect(fixture.cancel).not.toHaveBeenCalled();
-    } finally {
-      question.dispose();
-      broker.stop();
-      await resumed;
-      fixture.operation.complete();
-    }
-  });
+        await dispatch("Lisbon", "incomplete-answer");
+        expect(replyResolver).toHaveBeenCalledTimes(admissionPath === "early" ? 0 : 1);
+        expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
+        expect(onResolved).not.toHaveBeenCalled();
+
+        await dispatch("1: Lisbon\n2: 2000", "complete-answer");
+        expect(broker.get({ id: questionId }).question).toMatchObject({
+          status: "answered",
+          answers: { answers: { destination: ["Lisbon"], budget: ["2000"] } },
+        });
+        await resumed;
+        expect(onResolved).toHaveBeenCalledExactlyOnceWith({
+          id: questionId,
+          status: "answered",
+          answers: { answers: { destination: ["Lisbon"], budget: ["2000"] } },
+        });
+        expect(onResumed).toHaveBeenCalledOnce();
+        expect(onAdopted).toHaveBeenCalledTimes(admissionPath === "early" ? 1 : 0);
+        expect(replyResolver).toHaveBeenCalledTimes(admissionPath === "early" ? 0 : 2);
+        expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
+
+        await dispatch("1: Lisbon\n2: 2000", "complete-answer");
+        expect(replyResolver).toHaveBeenCalledTimes(admissionPath === "early" ? 0 : 2);
+        expect(onResolved).toHaveBeenCalledOnce();
+        expect(onResumed).toHaveBeenCalledOnce();
+        expect(onAdopted).toHaveBeenCalledTimes(admissionPath === "early" ? 1 : 0);
+        expect(fixture.cancel).not.toHaveBeenCalled();
+      } finally {
+        question.dispose();
+        broker.stop();
+        await resumed;
+        fixture.operation.complete();
+      }
+    },
+  );
 
   it.each([
     { code: "INVALID_REQUEST", reason: "QUESTION_ID_IN_USE" },

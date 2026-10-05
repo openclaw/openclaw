@@ -45,10 +45,8 @@ import type {
   SessionEntryPatchResult,
 } from "./session-accessor.types.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
-import {
-  isNativeSessionEntryRead,
-  withSessionEntriesFromStoresInWorker,
-} from "./session-entry-read-runtime.js";
+import { withSessionEntriesFromStoresInWorker } from "./session-entry-read-runtime.js";
+import { isNativeSessionEntryRead } from "./session-entry-read-scope.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import { prepareSessionStoreTargetInventory } from "./session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "./session-store-target-runtime.js";

@@ -184,6 +184,9 @@ export const replyRunRegistry: ReplyRunRegistry = {
     const sourceTurnId = replyRunState.sourceTurnByKey.get(normalizedSessionKey);
     return {
       [replyMessageInjectionTargetOwner]: {
+        get toolAuthorityFingerprint() {
+          return operation.toolAuthorityFingerprint;
+        },
         acceptParticipant: (overlay) => operation.personalToolParticipants?.accept(overlay),
         projectToolAuthorityFingerprint: (overlay) =>
           operation.projectToolAuthorityFingerprint(overlay),

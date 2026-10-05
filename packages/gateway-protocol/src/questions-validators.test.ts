@@ -67,6 +67,44 @@ describe("question protocol validators", () => {
     ).toBe(false);
   });
 
+  it("validates bounded source binding routes on resolution", () => {
+    const conversation = {
+      channel: "webchat",
+      accountId: "default",
+      conversationId: "source-conversation",
+    };
+    const sourceBindingRoutes = [
+      {
+        conversation,
+        selection: {
+          kind: "binding",
+          bindingId: "binding-1",
+          boundAt: 1,
+          targetSessionKey: "agent:main:source",
+          targetKind: "session",
+          conversation,
+        },
+      },
+    ];
+    expect(
+      validateQuestionResolveParams({ id: "question-uuid", answers, sourceBindingRoutes }),
+    ).toBe(true);
+    expect(
+      validateQuestionResolveParams({
+        id: "question-uuid",
+        answers,
+        sourceBindingRoutes: Array.from({ length: 9 }, () => sourceBindingRoutes[0]),
+      }),
+    ).toBe(false);
+    expect(
+      validateQuestionResolveParams({
+        id: "question-uuid",
+        answers,
+        sourceBindingRoutes: [{ conversation, selection: { kind: "binding" } }],
+      }),
+    ).toBe(false);
+  });
+
   it("enforces the shared question header cap", () => {
     expect(
       validateQuestionRequestParams({

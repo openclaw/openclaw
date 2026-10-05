@@ -5,6 +5,7 @@ import {
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { canSteerEmbeddedRunDuringCompaction } from "../../agents/embedded-agent-runner/runs.probes.js";
 import {
+  PreparedQuestionAnswerRefusedError,
   QuestionAnswerUnconfirmedError,
   QuestionDispatchRefusedError,
   QuestionDispatchUnsupportedError,
@@ -31,6 +32,7 @@ import {
   type ReplyMessageInjectionTarget,
   type ReplyOperation,
   type ReplyTurnParticipants,
+  type ReplyToolAuthorityOverlay,
 } from "./reply-run-registry.contracts.js";
 import {
   getAttachedBackend,
@@ -292,6 +294,7 @@ function resolveReplyMessageInjectionFailure(
   const refusal = candidates.findLast(
     (candidate) =>
       candidate instanceof MessageInjectionAuthorityError ||
+      candidate instanceof PreparedQuestionAnswerRefusedError ||
       ((assertCurrent !== undefined || unsupported !== undefined) &&
         ((candidate instanceof QuestionDispatchRefusedError &&
           !(candidate instanceof QuestionDispatchUnsupportedError)) ||
@@ -311,6 +314,7 @@ function resolveReplyMessageInjectionFailure(
   const authorityError = refusal ?? unsupported;
   if (
     authorityError instanceof MessageInjectionAuthorityError ||
+    authorityError instanceof PreparedQuestionAnswerRefusedError ||
     authorityError instanceof QuestionDispatchRefusedError ||
     authorityError instanceof SessionPendingInputCustodyError
   ) {
@@ -480,6 +484,110 @@ export function beginReplyMessageInjectionTarget(
     acceptance: acceptance.promise,
     outcome,
   };
+}
+
+/** Claims only a pending user-input request on one exact active reply operation. */
+export async function claimPendingReplyMessageInjectionTarget(params: {
+  target: ReplyMessageInjectionTarget;
+  text: string;
+  options: Omit<ReplyMessageInjectionOptions, "toolAuthorityOverlay"> & {
+    toolAuthorityOverlay: ReplyToolAuthorityOverlay;
+  };
+  assertSourceCurrent: () => void;
+  assertPreparedCurrent?: () => Promise<void>;
+}): Promise<boolean> {
+  const owner = params.target[replyMessageInjectionTargetOwner];
+  const resolved = owner.resolve({ assertCurrent: params.assertSourceCurrent });
+  const backend = "injection" in resolved ? resolved.backend : undefined;
+  const guarded = backend?.messageInjectionV2;
+  if (!backend || guarded?.version !== 2 || !guarded.claimPendingUserInputAnswer) {
+    return false;
+  }
+  const canInject = () => {
+    params.assertSourceCurrent();
+    const current = owner.resolve({ assertCurrent: params.assertSourceCurrent });
+    return (
+      "injection" in current &&
+      current.backend === backend &&
+      current.backend.messageInjectionV2 === guarded
+    );
+  };
+  const assertCurrent = createMessageInjectionAuthority(canInject);
+  const assertTargetCurrent = () => {
+    try {
+      assertCurrent();
+    } catch (error) {
+      throw new QuestionDispatchRefusedError(
+        error instanceof Error ? error.message : "question answer authority refused",
+        { cause: error },
+      );
+    }
+  };
+  assertTargetCurrent();
+  try {
+    if (!guarded.isAvailable()) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  const { toolAuthorityOverlay, personalToolParticipant, ...backendOptions } = params.options;
+  const participant = personalToolParticipant ?? toolAuthorityOverlay;
+  const projectedToolAuthorityFingerprint =
+    owner.projectToolAuthorityFingerprint(toolAuthorityOverlay);
+  const creatorToolAuthorityFingerprint = normalizeOptionalString(
+    backend.toolAuthorityFingerprint ?? owner.toolAuthorityFingerprint,
+  );
+  // The prepared followup owner may prove equivalent policy at the active
+  // model route. Keep that pending-input-only proof through the host sink.
+  const claimToolAuthorityFingerprint =
+    normalizeOptionalString(backendOptions.pendingInputAuthorityFingerprint) ===
+    creatorToolAuthorityFingerprint
+      ? creatorToolAuthorityFingerprint
+      : projectedToolAuthorityFingerprint;
+  const assertClaimCurrent = () => {
+    assertTargetCurrent();
+    if (
+      !creatorToolAuthorityFingerprint ||
+      claimToolAuthorityFingerprint !== creatorToolAuthorityFingerprint
+    ) {
+      throw new QuestionDispatchRefusedError(
+        "question answer caller policy does not match its creator",
+      );
+    }
+    const current = owner.resolve({
+      options: claimOptions,
+      personalToolParticipant: participant,
+      assertCurrent: params.assertSourceCurrent,
+    });
+    if (
+      !("injection" in current) ||
+      current.backend !== backend ||
+      current.backend.messageInjectionV2 !== guarded
+    ) {
+      throw new QuestionDispatchRefusedError("question answer is not admitted by its active owner");
+    }
+    assertTargetCurrent();
+  };
+  // An absent question must fall through as an ordinary message. V2 sinks call
+  // this assertion only after they find and reserve a real pending input, then
+  // again at final I/O; projection itself still receives an immediate liveness check.
+  const claimOptions = {
+    ...backendOptions,
+    toolAuthorityFingerprint: claimToolAuthorityFingerprint,
+  };
+  assertTargetCurrent();
+  const claimed = await guarded.claimPendingUserInputAnswer(
+    params.text,
+    claimOptions,
+    assertClaimCurrent,
+    "source-bound",
+    ...(params.assertPreparedCurrent ? ([params.assertPreparedCurrent] as const) : []),
+  );
+  if (claimed) {
+    owner.acceptParticipant?.(participant);
+  }
+  return claimed;
 }
 
 /** Finalize adoption and cleanup on the captured owner without rediscovery. */

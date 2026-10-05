@@ -1,3 +1,4 @@
+import type { QuestionSourceBindingRoute } from "../../../packages/gateway-protocol/src/schema/questions.js";
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { CurrentInboundPromptContext } from "../../agents/internal-runtime-context.js";
 import type { ReplyExpectation } from "../../agents/reply-completion.js";
@@ -28,6 +29,10 @@ export type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup";
 export type ReplyBackendQueueMessageOptions = {
   /** Prepared context for this queue item, separate from its transcript and answer text. */
   currentInboundContext?: CurrentInboundPromptContext;
+  /** Durable conversation owners that must still match at Gateway question commit. */
+  questionSourceBindingRoutes?: readonly QuestionSourceBindingRoute[];
+  /** Rechecks the prepared channel binding after pending-question preparation. */
+  assertQuestionSourceCurrent?: () => Promise<void>;
   steeringMode?: "all";
   /** True when this queue item came from the channel's current user turn. */
   isInboundUserMessage?: boolean;
@@ -171,6 +176,7 @@ export type ReplyBackendMessageInjectionV2 = {
     options: ReplyBackendQueueMessageOptions | undefined,
     assertCurrent: () => void,
     authorityKind: "run" | "source-bound",
+    assertPreparedCurrent?: () => Promise<void>,
   ): Promise<boolean>;
   cancelPendingUserInput?(
     resolvedBy: string,
@@ -227,6 +233,7 @@ export type ReplyMessageInjectionResolution =
 
 /** An adapter over one existing execution owner; it never acquires another run slot. */
 type ReplyMessageInjectionOwner = {
+  readonly toolAuthorityFingerprint?: string;
   acceptParticipant?(participant: ReplyTurnParticipantInput): void;
   projectToolAuthorityFingerprint(overlay: ReplyToolAuthorityOverlay): string | undefined;
   resolve(params: {

@@ -39,7 +39,9 @@ You can answer from any supported conversation surface:
   a question that ends elsewhere leaves the buttons in place until someone taps
   one and is told it was already answered.
 - For a question created by an active OpenClaw run, a plain-text reply works on
-  any channel when your current permissions match the creator's. Reply with a
+  any channel when your current permissions match the creator's and the channel
+  [releases any plugin-owned inbound lane when core adopts the originating
+  turn](/plugins/sdk-channel-plugins#release-inbound-on-adoption). Reply with a
   number, an option label, or your own answer. For multi-select questions,
   separate choices with commas.
 

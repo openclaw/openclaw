@@ -1,5 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  PreparedQuestionAnswerRefusedError,
+  QuestionDispatchRefusedError,
+  QuestionDispatchUnsupportedError,
+} from "../../agents/harness/gateway-question-dispatch.js";
 import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain.js";
 import { resolveRestartRecoverySteeringBlockReason } from "../../config/sessions/restart-recovery-receipt.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -26,6 +31,10 @@ import {
   replyRunRegistry,
 } from "./reply-run-registry.js";
 import { refreshReplyOperationTyping } from "./reply-run-typing.js";
+import {
+  assertPreparedConversationBindingRouteCurrent,
+  readPreparedConversationBindingSourceRoutes,
+} from "./session-conversation-binding.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
@@ -186,17 +195,25 @@ export async function runActiveReplySteer(
     if (!isCurrentFallback()) {
       return await fallback("automatic model fallback changed during steering admission");
     }
+    const sourceBindingRoutes = readPreparedConversationBindingSourceRoutes(params.sessionCtx);
     const injectionAttempt = beginReplyMessageInjectionTarget(injectionTarget, followupRun.prompt, {
       currentInboundContext: followupRun.currentInboundContext,
       inboundAudio: followupRun.currentInboundAudio === true,
-      assertCurrent: automaticFallbackRoute
-        ? () => {
-            followupRun.operatorAuthority?.assertCurrent();
-            if (!isCurrentFallback()) {
-              throw new Error("Automatic model fallback changed during steering admission");
+      questionSourceBindingRoutes: sourceBindingRoutes,
+      assertQuestionSourceCurrent: sourceBindingRoutes
+        ? () => assertPreparedConversationBindingRouteCurrent(params.sessionCtx)
+        : undefined,
+      assertCurrent:
+        sourceBindingRoutes || automaticFallbackRoute || followupRun.operatorAuthority
+          ? () => {
+              params.opts?.abortSignal?.throwIfAborted();
+              resolveFollowupAbortSignal(followupRun)?.throwIfAborted();
+              followupRun.operatorAuthority?.assertCurrent();
+              if (!isCurrentFallback()) {
+                throw new Error("Automatic model fallback changed during steering admission");
+              }
             }
-          }
-        : followupRun.operatorAuthority?.assertCurrent,
+          : undefined,
       steeringMode: "all",
       isInboundUserMessage:
         followupRun.currentInboundEventKind !== "room_event" &&
@@ -286,6 +303,24 @@ export async function runActiveReplySteer(
     typing.cleanup();
     return "handled";
   } catch (error) {
+    if (
+      error instanceof PreparedQuestionAnswerRefusedError ||
+      (error instanceof QuestionDispatchRefusedError &&
+        !(error instanceof QuestionDispatchUnsupportedError))
+    ) {
+      // The prepared source cannot be replayed against a new conversation owner.
+      parked.consume();
+      if (replyOperationRunState) {
+        replyOperationRunState.admission = {
+          status: "skipped",
+          reason: "question-response-refused",
+        };
+      }
+      typing.cleanup();
+      throw error instanceof PreparedQuestionAnswerRefusedError && error.cause instanceof Error
+        ? error.cause
+        : error;
+    }
     if (resolveFollowupAbortSignal(followupRun)?.aborted) {
       parked.consume();
     } else {

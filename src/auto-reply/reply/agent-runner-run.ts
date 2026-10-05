@@ -260,7 +260,10 @@ export async function runReplyAgent(
     );
   }
 
-  const questionInput = await runReplyQuestionInput(input);
+  const questionInput = await runReplyQuestionInput({
+    ...input,
+    pendingInputAuthorityFingerprint: steeringAuthority.pendingInputAuthorityFingerprint,
+  });
   if (questionInput.handled) {
     releaseAdmissionTicket();
     typing.cleanup();

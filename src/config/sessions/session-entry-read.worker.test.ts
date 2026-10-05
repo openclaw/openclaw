@@ -521,28 +521,53 @@ it.each(["worker", "row-facts"] as const)(
   },
 );
 
-it("closes worker-prepared authority synchronously before queued consumers can reuse it", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    const sessionKey = "agent:main:consumer";
-    writeSessionEntry(database, sessionKey, { sessionId: "consumer-session", updatedAt: 1 });
-    const input = { agentId: "main", storePath: database.path, sessionKeys: [sessionKey], env };
-    let queued: Promise<void> | undefined;
-    await withSessionEntriesFromStoresInWorker([input], ([read]) => {
-      expect(read!.result.entries[0]?.entry.sessionId).toBe("consumer-session");
-      read!.assertCurrent();
-      queued = Promise.resolve().then(() => {
-        expect(read!.assertCurrent).toThrow("consumer is no longer active");
+it.each([false, true])(
+  "closes worker-prepared authority before queued consumers (ordered=%s)",
+  async (ordered) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      const database = openOpenClawAgentDatabase({ agentId: "main", env });
+      const sessionKey = "agent:main:consumer";
+      writeSessionEntry(database, sessionKey, { sessionId: "consumer-session", updatedAt: 1 });
+      const input = { agentId: "main", storePath: database.path, sessionKeys: [sessionKey], env };
+      const order: string[] = [];
+      await withSessionEntriesFromStoresInWorker(
+        [input],
+        ([read]) => {
+          order.push("consume");
+          read!.assertCurrent();
+        },
+        {
+          ordered,
+          prepareSource: (selectedInput, selectedDatabase, identity) => {
+            expect(selectedInput).toBe(input);
+            expect(selectedDatabase.path).toBe(database.path);
+            expect(identity.key).toMatch(/^file:/);
+            order.push("source");
+          },
+          beforeConsume: async () => {
+            order.push("prepare");
+            await Promise.resolve();
+          },
+        },
+      );
+      expect(order).toEqual(["source", "prepare", "consume"]);
+      let queued: Promise<void> | undefined;
+      await withSessionEntriesFromStoresInWorker([input], ([read]) => {
+        expect(read!.result.entries[0]?.entry.sessionId).toBe("consumer-session");
+        read!.assertCurrent();
+        queued = Promise.resolve().then(() => {
+          expect(read!.assertCurrent).toThrow("consumer is no longer active");
+        });
       });
+      await queued;
+      const result = await readSessionEntriesFromStoreInWorker(input);
+      expect(Object.keys(result).toSorted()).toEqual(["entries", "kind", "lifecycleTimestamps"]);
+      await expect(withSessionEntriesFromStoresInWorker([input], async () => {})).rejects.toThrow(
+        "consumers must remain synchronous",
+      );
     });
-    await queued;
-    const result = await readSessionEntriesFromStoreInWorker(input);
-    expect(Object.keys(result).toSorted()).toEqual(["entries", "kind", "lifecycleTimestamps"]);
-    await expect(withSessionEntriesFromStoresInWorker([input], async () => {})).rejects.toThrow(
-      "consumers must remain synchronous",
-    );
-  });
-});
+  },
+);
 
 function seedRetainedSessionHeader(
   database: ReturnType<typeof openOpenClawAgentDatabase>,

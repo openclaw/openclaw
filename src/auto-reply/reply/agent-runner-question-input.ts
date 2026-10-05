@@ -12,7 +12,13 @@ import type { RunReplyAgentParams } from "./agent-runner-core.js";
 import { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/lifecycle.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
+import type {
+  ReplyMessageInjectionOptions,
+  ReplyToolAuthorityOverlay,
+} from "./reply-run-registry.contracts.js";
+import { claimPendingReplyMessageInjectionTarget, replyRunRegistry } from "./reply-run-registry.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority.js";
+import { readPreparedConversationBindingSourceRoutes } from "./session-conversation-binding.js";
 
 type ReplyQuestionInputParams = Pick<
   RunReplyAgentParams,
@@ -24,11 +30,88 @@ type ReplyQuestionInputParams = Pick<
   | "sessionCtx"
   | "sessionEntry"
   | "sessionKey"
->;
+> & { pendingInputAuthorityFingerprint?: string };
 
 type ReplyQuestionInputResult =
   | { handled: false }
   | { handled: true; payload: ReplyPayload | undefined };
+
+/** Claims before a successor operation can hide or supersede the waiting creator. */
+export async function claimPendingReplyQuestionInput(params: {
+  sessionKey: string;
+  text: string;
+  caller: ReplyToolAuthorityOverlay;
+  personalToolParticipant?: ReplyMessageInjectionOptions["personalToolParticipant"];
+  pendingInputAuthorityFingerprint?: string;
+  assertSourceCurrent: () => void;
+  assertPreparedCurrent?: () => Promise<void>;
+  sourceBindingRoutes?: Parameters<
+    typeof claimPendingAgentQuestionAnswerFromCaller
+  >[0]["sourceBindingRoutes"];
+  onAnswerProcessed?: () => void;
+  sourceRecorder?: Parameters<
+    typeof claimPendingAgentQuestionAnswerFromCaller
+  >[0]["sourceRecorder"];
+}): Promise<boolean> {
+  const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(params.sessionKey);
+  if (!target) {
+    return await claimPendingAgentQuestionAnswerFromCaller({
+      sessionKey: params.sessionKey,
+      text: params.text,
+      caller: params.caller,
+      assertSourceCurrent: params.assertSourceCurrent,
+      assertPreparedCurrent: params.assertPreparedCurrent,
+      sourceBindingRoutes: params.sourceBindingRoutes,
+      onAnswerProcessed: params.onAnswerProcessed,
+      sourceRecorder: params.sourceRecorder,
+    });
+  }
+  // An embedded question is also in the host map. Its execution owner must
+  // admit the source before that map can settle or record a participant.
+  try {
+    const claimed = await claimPendingReplyMessageInjectionTarget({
+      target,
+      text: params.text,
+      options: {
+        isInboundUserMessage: true,
+        toolAuthorityOverlay: params.caller,
+        personalToolParticipant: params.personalToolParticipant,
+        pendingInputAuthorityFingerprint: params.pendingInputAuthorityFingerprint,
+        userTurnTranscriptRecorder: params.sourceRecorder,
+        questionSourceBindingRoutes: params.sourceBindingRoutes,
+      },
+      assertSourceCurrent: params.assertSourceCurrent,
+      assertPreparedCurrent: params.assertPreparedCurrent,
+    });
+    if (claimed) {
+      params.onAnswerProcessed?.();
+    }
+    return claimed;
+  } catch (error) {
+    const rejection = readQuestionRejection(error);
+    if (rejection?.code === "INVALID_REQUEST" && rejection.reason === "QUESTION_INVALID_ANSWER") {
+      params.onAnswerProcessed?.();
+    }
+    throw error;
+  }
+}
+
+/** Both admission paths preserve the existing retry notice for this exact validation outcome. */
+export function createQuestionInvalidAnswerReply(error: unknown): ReplyPayload | undefined {
+  const rejection = readQuestionRejection(error);
+  if (rejection?.code !== "INVALID_REQUEST" || rejection.reason !== "QUESTION_INVALID_ANSWER") {
+    return undefined;
+  }
+  const detail = error instanceof Error ? error.message.trim() : "";
+  return markReplyPayloadForSourceSuppressionDelivery({
+    text: `${
+      detail
+        ? `The answer was not accepted: ${detail}.`
+        : "The answer was not accepted because a question is still unanswered."
+    } The question is still open, so reply again and answer every question by number or question id.`,
+    isError: true,
+  });
+}
 
 /** Question-only runtimes accept answers without exposing ordinary steering. */
 export async function runReplyQuestionInput(
@@ -74,11 +157,19 @@ export async function runReplyQuestionInput(
   const state = resolveReplyOperationRunState(opts);
   let outcome: { status: "answered" } | { status: "indeterminate"; errorMessage: string };
   try {
-    const claimed = await claimPendingAgentQuestionAnswerFromCaller({
+    const claimed = await claimPendingReplyQuestionInput({
       sessionKey,
       text,
       caller,
+      personalToolParticipant: {
+        operatorAuthority: followupRun.operatorAuthority,
+        senderId: followupRun.run.senderId,
+        senderName: followupRun.run.senderName,
+        gatewayUiCommandTarget: followupRun.run.gatewayUiCommandTarget,
+      },
+      pendingInputAuthorityFingerprint: params.pendingInputAuthorityFingerprint,
       assertSourceCurrent,
+      sourceBindingRoutes: readPreparedConversationBindingSourceRoutes(params.sessionCtx),
       sourceRecorder: followupRun.userTurnTranscriptRecorder,
       onAnswerProcessed: () => {
         if (state) {
@@ -108,23 +199,12 @@ export async function runReplyQuestionInput(
       };
     }
     // Validation precedes commitment: keep the question open and explain how to retry.
-    const rejection = readQuestionRejection(error);
-    if (rejection?.code === "INVALID_REQUEST" && rejection.reason === "QUESTION_INVALID_ANSWER") {
-      const detail = error instanceof Error ? error.message.trim() : "";
+    const rejectedReply = createQuestionInvalidAnswerReply(error);
+    if (rejectedReply) {
       if (state) {
         state.admission = { status: "skipped", reason: "question-response-rejected" };
       }
-      return {
-        handled: true,
-        payload: markReplyPayloadForSourceSuppressionDelivery({
-          text: `${
-            detail
-              ? `The answer was not accepted: ${detail}.`
-              : "The answer was not accepted because a question is still unanswered."
-          } The question is still open, so reply again and answer every question by number or question id.`,
-          isError: true,
-        }),
-      };
+      return { handled: true, payload: rejectedReply };
     }
     if (!(error instanceof QuestionAnswerUnconfirmedError)) {
       throw error;

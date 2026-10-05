@@ -13,11 +13,11 @@ import {
   readSessionEntriesByStatus,
 } from "./session-accessor.sqlite-status.js";
 import type { SessionAccessScope, SessionEntrySummary } from "./session-accessor.types.js";
+import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
 import {
   captureSessionEntryReadScope,
   isNativeSessionEntryRead,
-  withSessionStoreReaderInWorker,
-} from "./session-entry-read-runtime.js";
+} from "./session-entry-read-scope.js";
 
 async function readSessionStatusSelection(
   input: Partial<Omit<SessionAccessScope, "sessionKey">>,

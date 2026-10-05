@@ -26,6 +26,7 @@ export async function withOrderedSessionEntriesInWorker<T>(
   inputs: readonly SessionEntryWorkerRead[],
   consume: (reads: readonly PreparedSessionEntryWorkerRead[]) => T,
   readStore: ReadSessionStore,
+  beforeConsume?: () => Promise<void>,
 ): Promise<T> {
   const selected: Array<{
     input: SessionEntryWorkerRead;
@@ -112,6 +113,10 @@ export async function withOrderedSessionEntriesInWorker<T>(
             assertCurrent();
             reads.push({ result, database, assertCurrent });
           }
+          if (beforeConsume) {
+            await beforeConsume();
+          }
+          assertCurrent();
           const result = consume(reads);
           if (isPromiseLike(result)) {
             void Promise.resolve(result).catch(() => {});
