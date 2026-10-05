@@ -2449,6 +2449,43 @@ describe("openclaw state database", () => {
     readOnly?.walMaintenance.close();
   });
 
+  it("rejects a missing current-schema table instead of recreating it empty", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const drifted = new DatabaseSync(databasePath);
+    drifted.exec("DROP TABLE apns_registration_tombstones;");
+    const schemaBefore = hashSqliteSchema(drifted);
+    drifted.close();
+
+    expect(() => openOpenClawStateDatabase(options)).toThrow(
+      /missing table apns_registration_tombstones/iu,
+    );
+    const refusal = {
+      changes: [],
+      warnings: [
+        `Failed migrating shared state database schema at ${databasePath}: SqliteSchemaMismatchError: SQLite schema is incomplete or noncanonical for ${databasePath}: missing table apns_registration_tombstones; run openclaw doctor --fix to repair it.`,
+      ],
+    };
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual(refusal);
+
+    const after = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(hashSqliteSchema(after)).toBe(schemaBefore);
+      expect(
+        after
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'apns_registration_tombstones'",
+          )
+          .get(),
+      ).toBeUndefined();
+    } finally {
+      after.close();
+    }
+  });
+
   it("rejects a missing stable v5 table before migration through startup admission", async () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };

@@ -264,33 +264,46 @@ describe("pw-session connection scoping", () => {
     }
   });
 
-  it("does not fall back to Playwright discovery for guarded non-loopback CDP hosts", async () => {
-    const endpoint = "http://93.184.216.34:9222";
-    const ssrfPolicy = { allowPrivateNetwork: true };
-    const error = "discovery unavailable";
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      const discoveryStarted = createDeferred<void>();
-      const discoveryError = new Error(error);
-      getChromeWebSocketEndpointSpy.mockImplementation(async () => {
-        discoveryStarted.resolve();
-        throw discoveryError;
-      });
+  it.each([
+    {
+      host: "non-loopback CDP hosts",
+      cdpUrl: "http://93.184.216.34:9222",
+      ssrfPolicy: { allowPrivateNetwork: true },
+      error: "discovery unavailable",
+    },
+    {
+      host: "loopback HTTP CDP hosts",
+      cdpUrl,
+      ssrfPolicy: {},
+      error: "loopback discovery blocked",
+    },
+  ])(
+    "does not fall back to Playwright discovery for guarded $host",
+    async ({ cdpUrl: endpoint, ssrfPolicy, error }) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const discoveryStarted = createDeferred<void>();
+        const discoveryError = new Error(error);
+        getChromeWebSocketEndpointSpy.mockImplementation(async () => {
+          discoveryStarted.resolve();
+          throw discoveryError;
+        });
 
-      const connection = listPagesViaPlaywright({ cdpUrl: endpoint, ssrfPolicy });
-      await Promise.all([
-        expect(connection).rejects.toThrow(
-          "Guarded CDP endpoint did not expose a usable WebSocket URL.",
-        ),
-        expect(connection).rejects.toThrow(error),
-        discoveryStarted.promise.then(() => vi.runAllTimersAsync()),
-      ]);
+        const connection = listPagesViaPlaywright({ cdpUrl: endpoint, ssrfPolicy });
+        await Promise.all([
+          expect(connection).rejects.toThrow(
+            "Guarded CDP endpoint did not expose a usable WebSocket URL.",
+          ),
+          expect(connection).rejects.toThrow(error),
+          discoveryStarted.promise.then(() => vi.runAllTimersAsync()),
+        ]);
 
-      expect(connectOverCdpSpy).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        expect(connectOverCdpSpy).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("allows loopback CDP control without widening the navigation allowlist", async () => {
     const browser = makeBrowser("A", "https://example.com");

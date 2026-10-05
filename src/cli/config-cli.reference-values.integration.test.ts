@@ -439,6 +439,7 @@ describe("config CLI rejections", () => {
   });
 
   it.each([
+    new Error("Config validation failed: unexpected write failure"),
     new ConfigWritePostCommitError({
       configPath: "/tmp/openclaw.json",
       rollbackStatus: "unknown",

@@ -152,6 +152,27 @@ type WorkerEnvironmentServiceOptions = support.WorkerEnvironmentServiceOptions;
 describe("worker ACK ordering", () => {
   support.setupWorkerEnvironmentServiceSuite({ reuseReadWorkers: true });
 
+  it.each(["transcript", "terminal"] as const)(
+    "does not return a successful %s ACK when persistence rejects",
+    async (kind) => {
+      const { liveEvents } = support.sequencedLiveEvents();
+      const { identity, placementStore, workerService } = await support.placementHarness(
+        `worker-ack-rejection-${kind}`,
+        `session-ack-rejection-${kind}`,
+        { liveEvents, applyTranscriptCommit: support.successfulTranscriptCommit("entry-retry") },
+      );
+      const error = new Error("ACK persistence refused");
+      placementStore.updateAckCursors.mockRejectedValueOnce(error);
+      const request = () =>
+        kind === "transcript"
+          ? workerService.commitTranscript(identity, support.transcriptRequest(identity, "retry"))
+          : workerService.pushLiveEvent(identity, support.terminalEvent(identity));
+      await expect(request()).rejects.toBe(error);
+      await expect(request()).resolves.toMatchObject({ ok: true });
+      expect(placementStore.updateAckCursors).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("advances the transcript cursor when a stale-base commit consumes its sequence", async () => {
     const applyTranscriptCommit = vi
       .fn<NonNullable<WorkerEnvironmentServiceOptions["applyTranscriptCommit"]>>()
