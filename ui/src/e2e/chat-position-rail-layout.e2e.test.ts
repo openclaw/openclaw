@@ -9,6 +9,7 @@ import {
   createChatFlowE2eSuite,
   captureUiProof,
   installMockGateway,
+  scrollChatThreadToTop,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
 
@@ -522,10 +523,8 @@ suite.define(() => {
           await page.setViewportSize({ width: 390, height: 844 });
           await track.waitFor({ state: "hidden" });
           if (count === 80 && direction === "ltr") {
-            const transcript = page.locator(".chat-thread");
-            await transcript.hover();
-            await page.mouse.wheel(0, -30000);
-            await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(0);
+            await waitForChatScrollIdle(page);
+            await scrollChatThreadToTop(page);
             await page.setViewportSize({ width: 1440, height: 1000 });
             await track.waitFor();
             await expect
