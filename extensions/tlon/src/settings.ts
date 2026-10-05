@@ -12,6 +12,11 @@ export type PendingApproval = {
   channelNest?: string;
   groupFlag?: string;
   messagePreview?: string;
+  /**
+   * Set when the request came from a group DM (club). The requesting ship is then only an
+   * unverified author claim, so approval replays must keep the club-scoped, non-owner identity.
+   */
+  clubId?: string;
   /** Full message context for processing after approval */
   originalMessage?: {
     messageId: string;
@@ -130,7 +135,8 @@ function parsePendingApprovals(value: unknown): PendingApproval[] | undefined {
       typeof obj.id === "string" &&
       (obj.type === "dm" || obj.type === "channel" || obj.type === "group") &&
       typeof obj.requestingShip === "string" &&
-      typeof obj.timestamp === "number"
+      typeof obj.timestamp === "number" &&
+      (obj.clubId === undefined || typeof obj.clubId === "string")
     );
   });
 }

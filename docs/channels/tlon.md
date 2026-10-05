@@ -191,6 +191,11 @@ The owner ship is authorized everywhere: DM invites are always auto-accepted, gr
 always auto-accepted, and channel messages always pass authorization. The owner does not need to
 be in `dmAllowlist`, `defaultAuthorizedShips`, or `groupInviteAllowlist`.
 
+Group DMs are the exception. Tlon does not verify who wrote a group DM message, so group DM
+messages never carry owner authority: owner commands, approval replies, and admin commands only
+work in a 1:1 DM with the bot. A group DM message whose claimed author is on `dmAllowlist` is still
+answered, but as an ordinary unverified sender.
+
 When `ownerShip` is set, unauthorized requests do not just get dropped — they queue a pending
 approval and DM the owner:
 

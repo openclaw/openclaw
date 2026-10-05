@@ -162,6 +162,8 @@ export function createTlonApprovalRuntime(params: {
       (item) =>
         item.type === approval.type &&
         item.requestingShip === approval.requestingShip &&
+        // A group DM claim must never merge into (or overwrite) a verified 1:1 request.
+        item.clubId === approval.clubId &&
         (approval.type !== "channel" || item.channelNest === approval.channelNest) &&
         (approval.type !== "group" || item.groupFlag === approval.groupFlag),
     );

@@ -17,6 +17,7 @@ export function createPendingApproval(
     id: generateApprovalId(params.type),
     type: params.type,
     requestingShip: params.requestingShip,
+    ...(params.clubId !== undefined ? { clubId: params.clubId } : {}),
     channelNest: params.channelNest,
     groupFlag: params.groupFlag,
     messagePreview:
@@ -38,6 +39,13 @@ export function formatApprovalRequest(approval: PendingApproval): string {
 
   switch (approval.type) {
     case "dm":
+      if (approval.clubId !== undefined) {
+        return (
+          `New group DM message claiming to be from ${approval.requestingShip} (unverified; group DM ${approval.clubId}):${preview}\n\n` +
+          `Approving adds ${approval.requestingShip} to the DM allowlist. The message is answered as an unverified group DM sender, never as ${approval.requestingShip}.\n` +
+          `Reply "approve", "deny", or "block" (ID: ${approval.id})`
+        );
+      }
       return (
         `New DM request from ${approval.requestingShip}:${preview}\n\n` +
         `Reply "approve", "deny", or "block" (ID: ${approval.id})`
