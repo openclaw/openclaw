@@ -82,5 +82,8 @@ export function createDeepSeekTextFilter() {
     flush() {
       return consume(true);
     },
+    hasPending() {
+      return buffer.length > 0;
+    },
   };
 }

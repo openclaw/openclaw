@@ -40,6 +40,7 @@ import {
 } from "./openai-completions-dsml.js";
 import { getCompat } from "./openai-transport-params.js";
 import {
+  createCumulativeReplayGuard,
   isOpenAICompletionsThinkingEnabled,
   parseOpenAICompletionsUsage,
   readOpenAICompletionsContentDeltas,
@@ -61,6 +62,11 @@ type OpenAICompatibleChoice = ChatCompletionChunk["choices"][number] & {
 type OpenAICompatibleChatCompletionChunk = Omit<ChatCompletionChunk, "choices"> & {
   choices: OpenAICompatibleChoice[];
 };
+
+// A deferred emit step for the DSML visible-text chain: text steps carry
+// their filtered piece and may be suppressed whole-frame by the replay guard;
+// every other step always runs.
+type DsmlChainStep = { text?: string; emit(): void };
 
 type CompletionsStreamOptions = {
   signal?: AbortSignal;
@@ -108,6 +114,7 @@ export async function processCompletionsStream(
   const emitReasoning = options?.emitReasoning ?? true;
   const compat = getCompat(model as OpenAIModeModel);
   const visibleReasoningDetailTypes = new Set(compat.visibleReasoningDetailTypes);
+  const replayGuard = createCumulativeReplayGuard(compat.dropCumulativeTextDeltaReplays);
   const shouldFilterDeepSeekDsmlText = !directMode && compat.thinkingFormat === "deepseek";
   const deepSeekTextFilter = shouldFilterDeepSeekDsmlText ? createDeepSeekTextFilter() : null;
   const deepSeekToolCallRecoverer = shouldFilterDeepSeekDsmlText ? createDsmlRecoverer() : null;
@@ -144,6 +151,40 @@ export async function processCompletionsStream(
   const pushStreamEvent = (event: AssistantMessageEvent) => {
     chunkPushedEvent = true;
     stream.push(event);
+  };
+  // The replay guard compares each complete provider frame's whole visible
+  // contribution before it is allowed to stream, so a provider frame that
+  // restates everything accumulated so far is dropped instead of doubling
+  // into the live message. Frame identity is decided once per frame; admitted
+  // pieces then record without re-comparing. Both visible-text feeders route
+  // through this seam; the closures read the declared block union rather
+  // than flow narrowing.
+  const opensTextBlock = (source?: OpenAICompletionsTextSource) =>
+    currentBlock?.type !== "text" || currentTextSource !== source;
+  const framesSettled = () =>
+    !reasoningTagTextPartitioner.hasPending() &&
+    !deepSeekToolCallRecoverer?.hasPending() &&
+    !deepSeekTextFilter?.hasPending();
+  const classifyFrame = (visible: string) =>
+    replayGuard.classifyFrame(visible, opensTextBlock(), framesSettled());
+  const admitText = (text: string, source?: OpenAICompletionsTextSource, wholeFrame = false) =>
+    replayGuard.admitTextDelta(text, opensTextBlock(source), wholeFrame);
+  // Pending DSML chain steps for the frame currently being assembled. Steps
+  // without `text` (recovered tool calls) always run; text steps are held
+  // back until the frame is classified, so a settled restatement drops its
+  // visible pieces while its recovered tool calls still flow.
+  let dsmlPlan: DsmlChainStep[] = [];
+  const settleDsmlPlan = () => {
+    if (!compat.dropCumulativeTextDeltaReplays || dsmlPlan.length === 0) {
+      return;
+    }
+    const admitted = classifyFrame(dsmlPlan.reduce((text, step) => text + (step.text ?? ""), ""));
+    for (const step of dsmlPlan) {
+      if (admitted || step.text === undefined) {
+        step.emit();
+      }
+    }
+    dsmlPlan = [];
   };
   const queuePostToolCallDelta = (next: CompletionsReasoningDelta) => {
     const nextBytes = Buffer.byteLength(next.text, "utf8");
@@ -214,6 +255,7 @@ export async function processCompletionsStream(
       output.content.push(currentBlock);
       contentBlockIndices.set(currentBlock, output.content.length - 1);
       pushStreamEvent({ type: "text_start", contentIndex: blockIndex(), partial: output });
+      replayGuard.onTextStart();
     }
     currentBlock.text += text;
     if (pendingInterruptedTextBlock && text.trim()) {
@@ -251,7 +293,7 @@ export async function processCompletionsStream(
     appendTextDeltaInternal(text, source);
   };
   const appendVisibleTextDelta = (text: string) => {
-    if (!text) {
+    if (!text || !admitText(text)) {
       return;
     }
     if (currentBlock?.type === "toolCall" && !directMode) {
@@ -263,6 +305,12 @@ export async function processCompletionsStream(
   const appendReasoningDeltas = (reasoningDeltas: readonly CompletionsReasoningDelta[]) => {
     for (const reasoningDelta of reasoningDeltas) {
       if (reasoningDelta.kind === "thinking" && !emitReasoning) {
+        continue;
+      }
+      if (
+        reasoningDelta.kind === "text" &&
+        !admitText(reasoningDelta.text, reasoningDelta.source, true)
+      ) {
         continue;
       }
       if (currentBlock?.type === "toolCall" && !directMode) {
@@ -315,14 +363,27 @@ export async function processCompletionsStream(
     });
   };
   const appendRecoveredParts = (recoveredParts: readonly DeepSeekDsmlRecoveredPart[]) => {
+    if (!compat.dropCumulativeTextDeltaReplays) {
+      for (const recoveredPart of recoveredParts) {
+        if (recoveredPart.kind === "toolCall") {
+          appendRecoveredToolCall(recoveredPart);
+          continue;
+        }
+        const parts = deepSeekTextFilter?.push(recoveredPart.text) ?? [recoveredPart.text];
+        for (const part of parts) {
+          appendVisibleTextDelta(part);
+        }
+      }
+      return;
+    }
     for (const recoveredPart of recoveredParts) {
       if (recoveredPart.kind === "toolCall") {
-        appendRecoveredToolCall(recoveredPart);
+        dsmlPlan.push({ emit: () => appendRecoveredToolCall(recoveredPart) });
         continue;
       }
       const parts = deepSeekTextFilter?.push(recoveredPart.text) ?? [recoveredPart.text];
       for (const part of parts) {
-        appendVisibleTextDelta(part);
+        dsmlPlan.push({ text: part, emit: () => appendVisibleTextDelta(part) });
       }
     }
   };
@@ -356,6 +417,11 @@ export async function processCompletionsStream(
       return;
     }
     flushReasoningTagTextPartitioner();
+    // The flush may release strict-buffered text into the deferred replay
+    // plan. Materialize it here, before the interrupted-text boundary is
+    // recorded, so the resumed reasoning field cannot stream ahead of it and
+    // the released text keeps its commentary phase.
+    settleDsmlPlan();
     if (currentBlock?.type !== "text") {
       return;
     }
@@ -478,6 +544,13 @@ export async function processCompletionsStream(
           }
         } else {
           const hasLaterVisibleText = contentDeltaIndex < lastVisibleTextIndex;
+          if (reasoningTagTextPartitioner.hasPending()) {
+            reasoningTagTextPartitioner.markStrict();
+          }
+          if (!hasLaterVisibleText || !reasoningTagTextPartitioner.hasPendingSyntax()) {
+            flushReasoningTagTextPartitioner();
+          }
+          settleDsmlPlan();
           beginReasoning(hasLaterVisibleText);
           if (emitReasoning) {
             if (currentBlock?.type === "toolCall" && !directMode) {
@@ -488,6 +561,7 @@ export async function processCompletionsStream(
           }
         }
       }
+      settleDsmlPlan();
       if (!hasReasoningThinking) {
         appendReasoningDeltas(reasoningDeltas);
       }
@@ -495,6 +569,7 @@ export async function processCompletionsStream(
       if (toolCallDeltas.length > 0) {
         sawNativeToolCallDelta = true;
         flushReasoningTagTextPartitioner();
+        settleDsmlPlan();
         rememberPendingCommentaryTags(
           provisionalCommentaryTags,
           tagPendingCommentaryText(output.content),
@@ -597,6 +672,7 @@ export async function processCompletionsStream(
   }
   flushReasoningTagTextPartitioner();
   appendRecoveredParts(deepSeekToolCallRecoverer?.flush() ?? []);
+  settleDsmlPlan();
   for (const part of deepSeekTextFilter?.flush() ?? []) {
     appendVisibleTextDelta(part);
   }

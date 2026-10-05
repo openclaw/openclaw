@@ -172,6 +172,9 @@ export function createDsmlRecoverer() {
     flush() {
       return consume(true);
     },
+    hasPending() {
+      return buffer.length > 0;
+    },
   };
 }
 
