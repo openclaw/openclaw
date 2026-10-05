@@ -111,10 +111,10 @@ export class SwarmRosterHydrator {
   private parentRefreshQueued = false;
   private parentRefreshForced = false;
   private publishingParentRead = false;
-  private childRefresh: Promise<void> | null = null;
-  private childRefreshQueued = false;
-  /** The parent-named children the child query was last asked to bring in. */
-  private requestedChildren = "";
+  /** True once the first child read has answered. */
+  private childrenRead = false;
+  /** Parent-named children the child query has already been asked to bring in. */
+  private readonly requestedChildren = new Set<string>();
 
   update(params: SwarmHydrationParams): void {
     const key = `${params.sourceEpoch}:${params.agentId ?? ""}:${params.parentKey}`;
@@ -186,52 +186,37 @@ export class SwarmRosterHydrator {
   }
 
   private refreshChildren(): void {
-    const children = this.children;
-    if (!children) {
-      return;
-    }
-    if (this.childRefresh) {
-      this.childRefreshQueued = true;
-      return;
-    }
     const generation = this.generation;
-    const request = children
-      .refresh()
-      .catch(() => {
-        if (generation === this.generation) {
-          this.retry("children");
-        }
-      })
-      .finally(() => {
-        if (generation !== this.generation || this.childRefresh !== request) {
-          return;
-        }
-        this.childRefresh = null;
-        if (this.childRefreshQueued) {
-          this.childRefreshQueued = false;
-          this.refreshChildren();
-        }
-      });
-    this.childRefresh = request;
+    // The list keeps one more read queued behind a read already in flight.
+    void this.children?.refresh().catch(() => {
+      if (generation === this.generation) {
+        this.retry("children");
+      }
+    });
   }
 
   /**
    * A launch reaches the parent row at once, but the child query only re-reads
    * on its paced schedule. Read it now, and report the roster incomplete until
-   * that read answers, so nothing counts children it has not seen.
+   * that read answers, so nothing counts children it has not seen. Each named
+   * child is asked for once: one the list never returns, such as an archived
+   * child, must not hide the count again or keep the list re-reading.
    */
   private refreshNewChildren(): void {
-    const named = this.parentRow?.childSessions;
-    if (!named?.length || (!this.hydrated && !this.childRefresh)) {
-      // Nothing new, or the first read is still loading every child.
+    if (!this.childrenRead) {
+      // The first read is still loading every child.
       return;
     }
     const held = new Set(this.childRows.map((row) => row.key));
-    const missing = named.filter((key) => !held.has(key)).join("\n");
-    if (!missing || missing === this.requestedChildren) {
+    const unasked = (this.parentRow?.childSessions ?? []).filter(
+      (key) => !held.has(key) && !this.requestedChildren.has(key),
+    );
+    if (unasked.length === 0) {
       return;
     }
-    this.requestedChildren = missing;
+    for (const key of unasked) {
+      this.requestedChildren.add(key);
+    }
     this.hydrated = false;
     this.refreshChildren();
   }
@@ -416,6 +401,7 @@ export class SwarmRosterHydrator {
         const parent = this.parentRow;
         this.childRows = rows;
         this.rows = parent ? mergeSwarmSessionRows(this.childRows, [parent]) : [];
+        this.childrenRead = true;
         this.hydrated = true;
         this.recovered("children");
         // A child launched during this read is still missing from it.
@@ -445,9 +431,8 @@ export class SwarmRosterHydrator {
     this.parentRequest = null;
     this.parentRefreshQueued = false;
     this.parentRefreshForced = false;
-    this.childRefresh = null;
-    this.childRefreshQueued = false;
-    this.requestedChildren = "";
+    this.childrenRead = false;
+    this.requestedChildren.clear();
     this.rows = [];
     this.hydrated = false;
     this.key = key;

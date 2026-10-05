@@ -3,7 +3,7 @@ import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   areUiSessionKeysEquivalent,
-  isSubagentSessionKey,
+  isDashboardSessionKey,
   resolveUiSessionNavigationParentKey,
 } from "../../lib/sessions/session-key.ts";
 import { pendingSessionsYield } from "./chat-sessions-yield.ts";
@@ -93,7 +93,7 @@ export function resolveChatSubagentWait(input: {
   }
   // A child session opened in its own right is not a subagent: it is counted
   // without a name, and only once no subagent is left.
-  const children = unfinished.filter((row) => isSubagentSessionKey(row.key));
+  const children = unfinished.filter((row) => !isDashboardSessionKey(row.key));
   const child = children.length === 1 ? children[0] : undefined;
   return {
     // The yield's transcript row can predate the handoff by its whole wrapping

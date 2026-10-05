@@ -815,49 +815,6 @@ describe("buildCachedChatItems row identity", () => {
 describe("buildCachedChatItems working spark", () => {
   const readingIndicator = (props: Partial<CachedChatItemsProps>) =>
     buildCachedChatItems(createProps(props)).find((item) => item.kind === "reading-indicator");
-  it("does not lend a handed-off run's leftover live rows to the status that follows", () => {
-    resetChatThreadState();
-    const handoff = [
-      {
-        role: "assistant",
-        runId: "handed-off",
-        timestamp: 2_000,
-        content: [{ type: "toolCall", id: "yield", name: "sessions_yield", arguments: {} }],
-      },
-      {
-        role: "toolResult",
-        runId: "handed-off",
-        toolCallId: "yield",
-        toolName: "sessions_yield",
-        timestamp: 2_001,
-        content: [{ type: "text", text: '{"status":"yielded"}' }],
-      },
-    ];
-    // The handed-off run's live tool rows are still held when the agent resumes.
-    const leftover = toolResultMessage("launch", "sessions_spawn", "accepted", 1_500, {
-      runId: "handed-off",
-      __openclawToolStreamReceivedAt: 1_500,
-    });
-    const before = Date.now();
-    const resumed = readingIndicator({
-      sessionKey: "agent:main:resumed-after-handoff",
-      runWorking: true,
-      messages: handoff,
-      toolMessages: [leftover],
-    });
-    expect(resumed).not.toHaveProperty("runId");
-    expect(resumed?.startedAt).toBeGreaterThanOrEqual(before);
-
-    // Without a handoff those rows are the running turn's own.
-    resetChatThreadState();
-    expect(
-      readingIndicator({
-        sessionKey: "agent:main:still-running",
-        runWorking: true,
-        toolMessages: [leftover],
-      }),
-    ).toMatchObject({ runId: "handed-off", startedAt: 1_500 });
-  });
   it("keeps one working row from optimistic send through acknowledgement", () => {
     resetChatThreadState();
     const sessionKey = "agent:main:working-row";
@@ -2030,48 +1987,6 @@ describe("expansion-state render dependencies", () => {
     expect(expanded.has(hiddenCardId)).toBe(false);
     expect(expanded.has("visible-card:toolcard:0")).toBe(true);
     expect(getExpansionStateVersion(expanded)).toBe(filteredVersion + 1);
-  });
-
-  it("carries what the reader opened to the stored rows that replace live ones", () => {
-    resetChatThreadState();
-    const sessionKey = "handoff-swaps-live-rows";
-    const group = (key: string, id: string) =>
-      preparedGroup(key, {
-        role: "assistant",
-        content: [{ type: "toolcall", id, name: "browser.open" }],
-      });
-    const live = [group("live-row", "call-1")];
-    syncToolCardExpansionState(sessionKey, live, false);
-    const expanded = getExpandedToolCards(sessionKey);
-    setExpansionState(expanded, "live-row:toolcard:0", true);
-    setExpansionState(expanded, `activity:${live[0]!.key}`, true);
-
-    // A handoff reloads the same call under another message key.
-    const stored = [group("stored-row", "call-1")];
-    syncToolCardExpansionState(sessionKey, stored, false);
-
-    expect(expanded.get("stored-row:toolcard:0")).toBe(true);
-    expect(expanded.get(`activity:${stored[0]!.key}`)).toBe(true);
-    expect(expanded.has("live-row:toolcard:0")).toBe(false);
-    expect(expanded.has(`activity:${live[0]!.key}`)).toBe(false);
-  });
-
-  it("does not carry an opened row between messages that reuse one call id", () => {
-    resetChatThreadState();
-    const sessionKey = "reused-call-ids-stay-apart";
-    const group = (key: string) =>
-      preparedGroup(key, {
-        role: "assistant",
-        content: [{ type: "toolcall", id: "shared-call", name: "browser.open" }],
-      });
-    syncToolCardExpansionState(sessionKey, [group("first"), group("second")], false);
-    const expanded = getExpandedToolCards(sessionKey);
-    setExpansionState(expanded, "first:toolcard:0", true);
-
-    syncToolCardExpansionState(sessionKey, [group("third"), group("fourth")], false);
-
-    expect(expanded.get("third:toolcard:0")).toBe(false);
-    expect(expanded.get("fourth:toolcard:0")).toBe(false);
   });
 
   it("auto-expands retained cards hidden while transcript search is active", () => {

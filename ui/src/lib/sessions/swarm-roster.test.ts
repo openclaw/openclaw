@@ -517,6 +517,56 @@ describe("SwarmRosterHydrator", () => {
     }
   });
 
+  it("asks once for a named child the list never returns and stays hydrated afterwards", async () => {
+    vi.useFakeTimers();
+    // The parent keeps naming an archived child; the default list leaves it out.
+    const archived = "agent:worker:subagent:archived";
+    let children = [row(0)];
+    let held = createDeferred();
+    held.resolve();
+    const list = vi.fn(async () => {
+      const answer = result(children, 0, children.length);
+      await held.promise;
+      return answer;
+    });
+    const readParent = vi.fn(async () => ({
+      ...parentRow(),
+      childSessions: [...children.map((entry) => entry.key), archived],
+    }));
+    const sessions = sessionSource(list);
+    const hydrator = new SwarmRosterHydrator();
+    try {
+      hydrator.update({
+        sessions,
+        readParent,
+        parentKey: parentRow().key,
+        sourceEpoch: 1,
+        currentRows: () => [],
+        onRows: () => undefined,
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      expect(hydrator.hydrated).toBe(true);
+      const reads = list.mock.calls.length;
+      sessions.invalidateParent();
+      await vi.advanceTimersByTimeAsync(250);
+      expect(list.mock.calls.length).toBe(reads);
+
+      // A launch asks for the new child alone: one read, and no count until it answers.
+      children = [row(0), row(1)];
+      held = createDeferred();
+      sessions.invalidateParent();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(list.mock.calls.length).toBe(reads + 1);
+      expect(hydrator.hydrated).toBe(false);
+      held.resolve();
+      await vi.advanceTimersByTimeAsync(250);
+      expect(hydrator.hydrated).toBe(true);
+      expect(list.mock.calls.length).toBe(reads + 1);
+    } finally {
+      hydrator.dispose();
+    }
+  });
+
   it("keeps a freshly fetched tie winner over an unchanged current page", async () => {
     vi.useFakeTimers();
     const running = { ...row(0), status: "running" as const, updatedAt: 5 };

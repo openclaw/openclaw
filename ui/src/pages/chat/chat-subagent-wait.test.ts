@@ -142,6 +142,9 @@ describe("chat waiting on subagents", () => {
       runningCount: 0,
       sessionCount: 1,
     });
+    // A subagent on the ACP runtime is a subagent like any other.
+    const acp = { ...child, key: "agent:main:acp:coder", label: "Coder" };
+    expect(derive([acp])).toMatchObject({ runningCount: 1, child: { key: acp.key } });
     // Subagents come first: the other sessions are counted once none is left.
     expect(derive([child, session])).toMatchObject({
       runningCount: 1,
