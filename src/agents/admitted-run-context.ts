@@ -9,6 +9,7 @@ import {
   type ExecutionIdentityAdmissionToken,
 } from "../audit/execution-identity-admission.js";
 import { executionIdentitySpawnAdmission } from "../audit/execution-identity-spawn-admission.js";
+import type { GoalRecoveryIssuerBasis } from "../config/sessions/main-session-recovery.types.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -56,7 +57,7 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   /** Original live Factory transport only; never persisted or restored from issuer intent. */
   createFactoryGitHubDispatchCredentialReader?: (
     target: FactoryGitHubDispatchTarget,
-  ) => ((env: NodeJS.ProcessEnv) => Promise<string | undefined>) | undefined;
+  ) => import("./github-credential-reader.js").GitHubCredentialReader | undefined;
   /** Original access dependency; null is proven independent, undefined is unclassified. */
   gatewayAccessGrant?: GatewayAccessGrantRef | null;
   assertCurrent: () => void;
@@ -136,9 +137,12 @@ export function createAdmittedRunOperatorAuthority(
           const reader = createFactoryReader({ ...target, assertCurrent: assertTargetCurrent });
           return (
             reader &&
-            (async (env: NodeJS.ProcessEnv) => {
+            (async (
+              env: NodeJS.ProcessEnv,
+              admission?: import("./github-credential-reader.js").GitHubRepositoryAdmissionRequest,
+            ) => {
               assertTargetCurrent();
-              const token = await reader(env);
+              const token = await reader(env, admission);
               assertTargetCurrent();
               return token;
             })

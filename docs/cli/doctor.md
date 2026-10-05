@@ -79,6 +79,31 @@ Each entry points at the page that now holds the content.
 - <a id="macos%3A-launchctl-env-overrides" />[macOS: `launchctl` env overrides](/cli/doctor/recovery#macos%3A-launchctl-env-overrides)
 - <a id="macos-launchctl-env-overrides" />[macOS: `launchctl` env overrides](/cli/doctor/recovery#macos-launchctl-env-overrides)
 
+## Protected session recovery inspection
+
+`doctor recovery-inspect` reads one exact session from a protected, consistent
+agent/shared SQLite capture. It runs the canonical effect and committed-input
+selectors in the read-only history worker and emits only IDs, booleans, and
+disposition enums. It does not migrate state, acquire input custody, issue
+authorization, or replay pending inputs.
+
+```bash
+openclaw doctor recovery-inspect \
+  --agent-db /protected/agent.sqlite --state-db /protected/openclaw.sqlite \
+  --agent main --key agent:main:dashboard:example \
+  --session-id ORIGINAL_SID --lifecycle ORIGINAL_LIFECYCLE \
+  --placement-generation 19
+```
+
+Output is JSON. Use both databases from the same protected capture and supply
+the expected original SID, lifecycle revision, and placement generation.
+Identity mismatches and unavailable readers retain an unknown disposition.
+`effectHold: null` means the committed-input selector did not evaluate effects;
+it is not an effects-clear result. Stored issuer metadata is provenance only,
+and provider release remains unknown when no cleanup receipt was recorded.
+Before any live recovery, its existing owner must revalidate current authority,
+effects, placement, and cleanup; this offline report never authorizes dispatch.
+
 ## Related
 
 - [CLI reference](/cli)

@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
@@ -24,9 +24,9 @@ import {
   loadTranscriptEvents,
   persistSessionTranscriptTurn,
   replaceSessionEntry,
-  replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
+import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import {
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
@@ -260,28 +260,56 @@ describe("typed Goal operation persistence", () => {
     }
   });
 
-  it("rejects a session replacement made by the commit authority check", async () => {
+  it("rejects a session replacement while awaiting write admission", async () => {
     const goal = await createSessionGoal({ ...scope(), objective: "original objective" });
     const before = loadSessionEntry(scope());
-    await expect(
-      mutateSessionGoal({
-        ...scope(),
-        expectedSessionId: sessionId,
-        operation: {
-          ...identity("edit-rebound"),
-          action: "edit",
-          goalId: goal.id,
-          objective: "must not commit",
-        },
-        assertCurrent: () => {
-          replaceSessionEntrySync(scope(), {
-            ...before!,
-            sessionId: "replacement-session",
-          });
-        },
-      }),
-    ).rejects.toMatchObject({ code: "session-rebound" });
-    expect(loadSessionEntry(scope())).toEqual(before);
+    const transcriptBefore = await loadTranscriptEvents(scope());
+    const entered = createDeferred();
+    const release = createDeferred();
+    const replacement = { ...before!, sessionId: "replacement-session" };
+    const writer = runExclusiveSqliteSessionWrite(
+      resolveSqliteScope(scope()),
+      async () => {
+        entered.resolve();
+        await release.promise;
+        replaceSessionEntrySync(scope(), replacement);
+      },
+      "session.goal.mutate",
+    );
+    await entered.promise;
+    const operation = {
+      ...identity("edit-rebound"),
+      action: "edit" as const,
+      goalId: goal.id,
+      objective: "must not commit",
+    };
+    const assertCurrent = vi.fn();
+    const mutation = mutateSessionGoal({
+      ...scope(),
+      expectedSessionId: sessionId,
+      operation,
+      assertCurrent,
+    });
+    void mutation.catch(() => {});
+    try {
+      release.resolve();
+      await writer;
+      await expect(mutation).rejects.toMatchObject({ code: "session-rebound" });
+      expect(assertCurrent).toHaveBeenCalled();
+      expect(loadSessionEntry(scope())).toEqual(replacement);
+      expect(await loadTranscriptEvents(scope())).toEqual(transcriptBefore);
+      await expect(
+        lookupSessionGoalOperation({
+          ...scope(),
+          expectedSessionId: replacement.sessionId,
+          operation,
+        }),
+      ).resolves.toBeUndefined();
+    } finally {
+      release.resolve();
+      await mutation.catch(() => {});
+      await writer;
+    }
   });
 
   it("replays the original success after clear and reopening without recreating Goal or turn", async () => {

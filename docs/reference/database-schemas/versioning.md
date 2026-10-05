@@ -293,6 +293,17 @@ already validate the optional pending-input table may reject the added column
 despite sharing version 19. Consumed source receipts remain until their session
 window is deleted, so rewriting a transcript cannot make an old input runnable again.
 
+Authenticated queued-turn recovery adds nullable private
+`session_pending_inputs.recovery_intent_json TEXT` through the existing open,
+Doctor, and first-use owners without changing the agent schema-version marker.
+It contains noncredential original issuer references and exact input bindings;
+accepted message bytes and public pending-input projections stay unchanged.
+Historical NULL values do not authorize restart execution. Older compatible
+readers ignore the added column, but an already-promoted head uses the existing
+current-turn intent. Rollback must therefore quiesce and withdraw recovery work,
+as described in [restart recovery](/gateway/restart-recovery), rather than assume
+that ignoring the column disables every continuation.
+
 Cron run receipts use the optional `cron_run_trigger_state_retirements` companion
 without changing state schema 17 or the released receipt table's shape. Its only
 column is `receipt_id`, a primary key referencing the existing receipt with

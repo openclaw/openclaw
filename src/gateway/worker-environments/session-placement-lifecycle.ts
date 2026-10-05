@@ -1,21 +1,30 @@
+import { getRuntimeConfig } from "../../config/config.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
+import { assertWorkerRecoveryExecutorReleased } from "./environment-record.js";
+import type { WorkerPlacementDispatchOptions } from "./placement-dispatch.types.js";
 import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
-import type { WorkerSessionPlacementRecord } from "./placement-record.js";
+import {
+  REPOSITORY_REF_WORKER_RECOVERY_ERROR,
+  type WorkerSessionPlacementRecord,
+} from "./placement-record.js";
 import type {
   WorkerSessionPlacementRetirement,
   WorkerSessionPlacementStore,
 } from "./placement-store.js";
 import {
   isFailedWorkerPlacementEnvironmentGone,
+  isWorkerPlacementDestroyedBeforeActivation,
   matchesWorkerPlacementTarget,
   type WorkerPlacementCancellationTarget,
 } from "./placement-target.js";
 import type {
+  WorkerPlacementDispatchRequest,
   WorkerEnvironmentServiceContract,
   WorkerPlacementDispatchContract,
   WorkerPlacementReclaimSourceCheck,
 } from "./service-contract.js";
+import { usesRepositoryRefWorkerRecovery } from "./service-validation.js";
 
 export type SessionWorkerPlacementContext = {
   workerEnvironmentService?: Pick<WorkerEnvironmentServiceContract, "get" | "readRecoveryHold">;
@@ -66,21 +75,108 @@ type SessionWorkerPlacementMutationParams = {
 type RetirablePlacement = Extract<Placement, { state: "local" | "reclaimed" | "failed" }>;
 type FailedPlacement = Extract<Placement, { state: "failed" }>;
 
+export async function prepareRepositoryRefWorkerPlacement(
+  options: Pick<
+    WorkerPlacementDispatchOptions,
+    "placements" | "environments" | "prepareRepositoryRefRecovery"
+  >,
+  request: WorkerPlacementDispatchRequest,
+  assertCurrent: () => void,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const { placements, environments } = options;
+  const failed = placements.get(request.sessionId);
+  if (failed?.state !== "failed" || failed.recoveryError !== REPOSITORY_REF_WORKER_RECOVERY_ERROR) {
+    return false;
+  }
+  const assertRecoveryCurrent = () => {
+    assertCurrent();
+    const current = placements.get(request.sessionId);
+    const environment = failed.environmentId ? environments.get(failed.environmentId) : undefined;
+    if (
+      !matchesWorkerPlacementTarget(current, failed) ||
+      current?.state !== "failed" ||
+      current.sessionKey !== request.sessionKey ||
+      current.agentId !== request.agentId ||
+      !canRecoverRepositoryRefWorkerPlacement(current, environment)
+    ) {
+      throw new Error(
+        "Ephemeral worker recovery requires current policy and confirmed executor retirement",
+      );
+    }
+  };
+  assertRecoveryCurrent();
+  if (!options.prepareRepositoryRefRecovery) {
+    throw new Error("Repository-ref worker recovery is unavailable");
+  }
+  await options.prepareRepositoryRefRecovery({
+    ...request,
+    signal,
+    assertCurrent: assertRecoveryCurrent,
+  });
+  assertRecoveryCurrent();
+  return true;
+}
+
 export function canRedispatchFailedWorkerPlacement(
   placement: FailedPlacement,
   environment: WorkerEnvironmentPlacementFacts | undefined,
 ): boolean {
   return Boolean(
-    placement.activeOwnerEpoch !== null &&
+    (placement.activeOwnerEpoch !== null ||
+      isWorkerPlacementDestroyedBeforeActivation(placement, environment)) &&
     !placement.turnClaim &&
     environment &&
     environment.environmentId === placement.environmentId &&
     (environment.providerId !== DEVICE_WORKER_PROVIDER_ID || environment.nodeDeviceId) &&
+    (isFailedWorkerPlacementEnvironmentGone({
+      placement,
+      environmentService: { get: () => environment },
+    }) ||
+      canRecoverRepositoryRefWorkerPlacement(placement, environment)),
+  );
+}
+
+export function canRecoverRepositoryRefWorkerPlacement(
+  placement: FailedPlacement,
+  environment: WorkerEnvironmentPlacementFacts | undefined,
+): boolean {
+  if (
+    placement.recoveryError !== REPOSITORY_REF_WORKER_RECOVERY_ERROR ||
+    placement.turnClaim ||
+    !environment ||
+    environment.environmentId !== placement.environmentId ||
+    !usesRepositoryRefWorkerRecovery(getRuntimeConfig(), environment)
+  ) {
+    return false;
+  }
+  if (
     isFailedWorkerPlacementEnvironmentGone({
       placement,
       environmentService: { get: () => environment },
-    }),
-  );
+    })
+  ) {
+    return true;
+  }
+  const hold = environment.recoveryHold;
+  if (
+    environment.state !== "orphaned" ||
+    !hold ||
+    hold.kind === "prepared" ||
+    hold.phase !== "held" ||
+    hold.sessionId !== placement.sessionId ||
+    hold.sessionKey !== placement.sessionKey ||
+    hold.agentId !== placement.agentId ||
+    hold.ownerEpoch !== placement.activeOwnerEpoch
+  ) {
+    return false;
+  }
+  try {
+    assertWorkerRecoveryExecutorReleased(environment);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isWorkerPlacementSafeForMutation(
@@ -203,6 +299,34 @@ export function prepareSessionWorkerPlacementMutationCheck(
   };
   assertCurrent();
   return assertCurrent;
+}
+
+/** Accepting recovery intent retains physical resources; dispatch still owns reclaim and fencing. */
+export async function prepareSessionWorkerPlacementRecoveryIntentCheck(
+  params: Pick<SessionWorkerPlacementMutationParams, "context" | "sessionId">,
+) {
+  const service = params.context.workerSessionPlacementService;
+  if (!params.sessionId || !service) {
+    return { assertCurrent: () => {}, [Symbol.dispose]: () => {} };
+  }
+  if (!service.prepareRuntimeRefresh) {
+    throw new Error("Worker placement recovery observation is unavailable");
+  }
+  const prepared = await service.prepareRuntimeRefresh(params.sessionId);
+  try {
+    prepared.assertCurrent();
+    const current = prepared.placement;
+    if (
+      current?.turnClaim ||
+      (current && !["local", "active", "failed", "reclaimed"].includes(current.state))
+    ) {
+      throw new Error("Worker placement changed before recovery intent acceptance");
+    }
+    return { assertCurrent: prepared.assertCurrent, [Symbol.dispose]: prepared.release };
+  } catch (error) {
+    prepared.release();
+    throw error;
+  }
 }
 
 /** Archive visibility can change while a failed placement retains its physical cleanup. */

@@ -86,9 +86,9 @@ async function runAdmittedNodeEvent(
   }
 }
 
-function expectSuspendBusyWithRootWork(requestId: string): void {
+async function expectSuspendBusyWithRootWork(requestId: string): Promise<void> {
   expect(
-    prepareGatewaySuspend({
+    await prepareGatewaySuspend({
       requestId,
       pauseScheduling: vi.fn(),
       resumeScheduling: vi.fn(),
@@ -99,8 +99,8 @@ function expectSuspendBusyWithRootWork(requestId: string): void {
   });
 }
 
-function expectSuspendReady(requestId: string): void {
-  const result = prepareGatewaySuspend({
+async function expectSuspendReady(requestId: string): Promise<void> {
+  const result = await prepareGatewaySuspend({
     requestId,
     pauseScheduling: vi.fn(),
     resumeScheduling: vi.fn(),
@@ -553,10 +553,10 @@ describe("voice transcript events", () => {
     );
 
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
-    expectSuspendBusyWithRootWork("voice-touch-busy");
+    await expectSuspendBusyWithRootWork("voice-touch-busy");
     touch.resolve();
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-    expectSuspendReady("voice-touch-ready");
+    await expectSuspendReady("voice-touch-ready");
   });
   it("does not block agent dispatch when session-store touch fails", async () => {
     const warn = vi.fn();
@@ -787,10 +787,10 @@ describe("agent request events", () => {
     );
 
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
-    expectSuspendBusyWithRootWork("agent-dispatch-busy");
+    await expectSuspendBusyWithRootWork("agent-dispatch-busy");
     dispatch.resolve(undefined as never);
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-    expectSuspendReady("agent-dispatch-ready");
+    await expectSuspendReady("agent-dispatch-ready");
   });
 
   it("keeps an accepted detached receipt delivery visible to suspension", async () => {
@@ -811,10 +811,10 @@ describe("agent request events", () => {
     );
 
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
-    expectSuspendBusyWithRootWork("receipt-delivery-busy");
+    await expectSuspendBusyWithRootWork("receipt-delivery-busy");
     receipt.resolve(sentDurableMessageBatchResult);
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-    expectSuspendReady("receipt-delivery-ready");
+    await expectSuspendReady("receipt-delivery-ready");
   });
 
   it("does not launch agent work when pairing changes during model lookup", async () => {

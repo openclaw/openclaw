@@ -456,39 +456,56 @@ describe("session snapshot merge", () => {
     expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
   });
 
-  it("preserves the safe-tools guard when a newer recovery owner wins a stale clear", () => {
-    const initialRecovery: SessionEntry = {
-      ...initial,
-      abortedLastRun: true,
-      restartRecoveryForceSafeTools: true,
-      mainRestartRecovery: {
-        cycleId: "cycle-1",
-        revision: 1,
-        chargedAttempts: 1,
-      },
-    };
-    const next: SessionEntry = {
-      ...initialRecovery,
-      updatedAt: 2,
-      abortedLastRun: false,
-      restartRecoveryForceSafeTools: undefined,
-      mainRestartRecovery: undefined,
-    };
-    const current: SessionEntry = {
-      ...initialRecovery,
-      updatedAt: 3,
-      mainRestartRecovery: {
-        ...initialRecovery.mainRestartRecovery!,
-        revision: 2,
-      },
-    };
+  it.each(["safe-tools", "captured goal pause"] as const)(
+    "preserves %s when a newer recovery owner wins a stale clear",
+    (state) => {
+      const initialRecovery: SessionEntry = {
+        ...initial,
+        abortedLastRun: true,
+        restartRecoveryForceSafeTools: true,
+        ...(state === "captured goal pause"
+          ? { restartRecoveryGoal: { id: "goal-1", sessionId: "session-1", capturedAtMs: 1 } }
+          : {}),
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 1,
+          chargedAttempts: 1,
+        },
+      };
+      const next: SessionEntry = {
+        ...initialRecovery,
+        updatedAt: 2,
+        abortedLastRun: false,
+        restartRecoveryForceSafeTools: undefined,
+        restartRecoveryGoal: undefined,
+        mainRestartRecovery: undefined,
+      };
+      const current: SessionEntry = {
+        ...initialRecovery,
+        updatedAt: 3,
+        mainRestartRecovery: {
+          ...initialRecovery.mainRestartRecovery!,
+          revision: 2,
+          ...(state === "captured goal pause"
+            ? {
+                pause: {
+                  reason: "unverifiable-external-effect" as const,
+                  pausedAtMs: 3,
+                  goalId: "goal-1",
+                },
+              }
+            : {}),
+        },
+      };
 
-    const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
+      const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
 
-    expect(merged.restartRecoveryForceSafeTools).toBe(true);
-    expect(merged.abortedLastRun).toBe(true);
-    expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
-  });
+      expect(merged.restartRecoveryForceSafeTools).toBe(true);
+      expect(merged.abortedLastRun).toBe(true);
+      expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
+      expect(merged.restartRecoveryGoal).toEqual(current.restartRecoveryGoal);
+    },
+  );
 
   it("preserves recovery state when the safe-tools guard is acquired during fence cleanup", () => {
     const initialRecovery: SessionEntry = {

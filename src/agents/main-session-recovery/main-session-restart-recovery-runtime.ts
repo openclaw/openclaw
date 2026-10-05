@@ -18,9 +18,14 @@ import {
   listAgentDatabaseAdmissionRefusals,
   readAgentDatabaseAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
-import { runWithMainSessionRecoveryAdmission } from "./main-session-recovery-admission.js";
-import { getMainSessionRecoveryRetryCount } from "./main-session-recovery-state.js";
+import {
+  runWithMainSessionRecoveryAdmission,
+  withPreparedRestartRecoveryTarget,
+} from "./main-session-recovery-admission.js";
+import { createMainSessionRecoveryCapacity } from "./main-session-recovery-capacity.js";
+import { getMainSessionRecoveryRetryCount } from "./main-session-recovery-empty-aggregate.js";
 import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";
+import type { MainSessionRecoveryCounts } from "./main-session-restart-dispatch.types.js";
 import {
   restartRecoveryStoreTargetKey,
   type MainSessionRecoverySkipReason,
@@ -37,10 +42,12 @@ import {
 } from "./main-session-restart-recovery-shared.js";
 import {
   loadExpectedRestartRecoveryTarget,
+  isExpectedRestartRecoveryTarget,
   recoverStore,
 } from "./main-session-restart-recovery-store.js";
 
-type RecoveryCounts = { started: number; settled: number; failed: number; skipped: number };
+const STARTUP_RECOVERY_MAX_ACTIVE_RUNS = 1;
+type RecoveryCounts = MainSessionRecoveryCounts;
 
 async function runRecoveryRetries(params: {
   initialDelayMs: number;
@@ -82,6 +89,7 @@ export async function recoverRestartAbortedMainSessions(params: {
   agentIds?: ReadonlySet<string>;
   onExhaustedTarget?: (target: ExhaustedRestartRecoveryTarget) => void;
   stateDir?: string;
+  recoveryCapacity?: ReturnType<typeof createMainSessionRecoveryCapacity>;
   handledSessionKeys?: Set<string>;
   activeSessionIds?: Iterable<string>;
   activeSessionKeys?: Iterable<string>;
@@ -172,25 +180,32 @@ async function recoverExpectedRestartRecovery(
   },
 ): Promise<RecoveryCounts> {
   const expected = params.expectedTarget;
-  const loadExpected = () =>
-    loadExpectedRestartRecoveryTarget({ expected, storePath: params.storePath });
-  if (!loadExpected()) {
-    return { started: 0, settled: 0, failed: 0, skipped: 0 };
-  }
-  return (
-    (await runWithMainSessionRecoveryAdmission({
-      ...params,
-      canonicalSessionKey: expected.canonicalSessionKey,
-      sessionId: expected.sessionId,
-      isCurrent: () => Boolean(loadExpected()),
-      run: (recoveryAdmission) =>
-        recoverStore({
+  return await withPreparedRestartRecoveryTarget(
+    { ...expected, storePath: params.storePath },
+    async (target) => {
+      if (!isExpectedRestartRecoveryTarget(target.readCurrent(), expected)) {
+        return { started: 0, settled: 0, failed: 0, skipped: 0 };
+      }
+      return (
+        (await runWithMainSessionRecoveryAdmission({
           ...params,
-          shouldContinue: recoveryAdmission.shouldContinue,
-          handledSessionKeys: new Set<string>(),
-          recoveryAdmission,
-        }),
-    })) ?? { started: 0, settled: 0, failed: 0, skipped: 1 }
+          canonicalSessionKey: expected.canonicalSessionKey,
+          sessionId: expected.sessionId,
+          isCurrent: () => isExpectedRestartRecoveryTarget(target.readCurrent(), expected),
+          run: (recoveryAdmission) =>
+            recoverStore({
+              ...params,
+              shouldContinueDelivery: () => params.shouldContinue?.() !== false,
+              shouldContinue: () => {
+                target.assertSourceCurrent();
+                return recoveryAdmission.shouldContinue();
+              },
+              handledSessionKeys: new Set<string>(),
+              recoveryAdmission,
+            }),
+        })) ?? { started: 0, settled: 0, failed: 0, skipped: 1 }
+      );
+    },
   );
 }
 
@@ -272,6 +287,9 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
     params.shouldContinue?.() !== false &&
     isAgentEventLifecycleGenerationCurrent(lifecycleGeneration);
   const startupRecoveryCutoffMs = Date.now();
+  const recoveryCapacity = createMainSessionRecoveryCapacity({
+    limit: STARTUP_RECOVERY_MAX_ACTIVE_RUNS,
+  });
   const startupCheckedStorePaths = params.startupCheckedStorePaths ?? new Set<string>();
   const runRecoveryAttempt = async (
     exhaustedTargets: Map<string, ExhaustedRestartRecoveryTarget>,
@@ -302,6 +320,7 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
           },
           stateDir: params.stateDir,
           handledSessionKeys,
+          recoveryCapacity,
           excludedStoreTargets: new Set(marking.failedTargets?.map(restartRecoveryStoreTargetKey)),
           lifecycleGeneration,
           shouldContinue,

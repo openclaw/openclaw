@@ -32,6 +32,15 @@ import { GatewayRequestEntryLifetime } from "./server-request-entry.js";
 import { TerminalSessionManager } from "./terminal/session-manager.js";
 import { baseOpenRequest, makeFakePty } from "./terminal/session-manager.test-helpers.js";
 
+// Goal persistence has separate owner-boundary coverage; these cases isolate request admission.
+// mock-isolation: Exercise request commit guards without loading real agent SQLite history-worker lanes and recovery registries.
+vi.mock("../agents/main-session-recovery/main-session-restart-recovery-marking.js", () => ({
+  markRestartAbortedMainSessions: async (params: { assertCommitAllowed?: () => void }) => {
+    params.assertCommitAllowed?.();
+    return { marked: 0, skipped: 0 };
+  },
+}));
+
 function deferred() {
   let resolve = () => {};
   const promise = new Promise<void>((done) => {

@@ -3,6 +3,7 @@ import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-t
 import { getAgentRunLifecycleGeneration } from "../../infra/agent-run-registry.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";
+import type { MainSessionResumeResult } from "./main-session-restart-dispatch.types.js";
 
 export type MainSessionRecoverySkipReason =
   | "stopped"
@@ -28,6 +29,27 @@ export type MainSessionRecoveryDecision = {
   reason: string;
   nextOwner: string;
 };
+
+export function dispatchedMainSessionRecoveryDecision(
+  result: MainSessionResumeResult,
+): MainSessionRecoveryDecision {
+  if (typeof result === "object") {
+    if (result.kind === "current-input") {
+      return {
+        decision: "deferred",
+        reason: "foreground_input_current",
+        nextOwner: "session-owner",
+      };
+    }
+    return { decision: "blocked", reason: result.reason, nextOwner: "operator" };
+  }
+  return {
+    decision: result === "failed" || result === "skipped" ? "deferred" : result,
+    reason: `dispatch_${result}`,
+    nextOwner:
+      result === "started" ? "main-lane" : result === "settled" ? "none" : "main-session-recovery",
+  };
+}
 
 export function skippedMainSessionRecoveryDecision(
   reason: MainSessionRecoverySkipReason,

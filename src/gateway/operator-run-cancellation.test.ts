@@ -403,8 +403,10 @@ describe("operator access cancellation", () => {
           );
         } else {
           const retained = await f.retain(source.signal, "bound-run", guest.entry);
+          expect(() => guest.entry.assertSourceCurrent?.()).not.toThrow();
           retained.armCancellation();
           retained.release();
+          expect(() => guest.entry.assertSourceCurrent?.()).toThrow("authority");
           source.abort();
         }
         await f.settle();

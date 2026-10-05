@@ -2290,6 +2290,7 @@ export const en: TranslationMap & {
     statusRequested: "Publication queued",
     statusPublishing: "Publication in progress",
     statusUnavailable: "Publication status unavailable",
+    optionsUnavailable: "Publication options unavailable; refresh to retry",
     statusUnknown: "Outcome unknown",
     unknown:
       "The outcome is unknown. Retry keeps the original account and request; it does not switch accounts.",
@@ -3350,6 +3351,19 @@ export const en: TranslationMap & {
     restartRecoveryDisabled: "Its transcript is safe.",
     resumeInNewSession: "Resume in new session",
     resumingSession: "Resuming…",
+    interruptedActionTitle: "An interrupted action has an unknown outcome",
+    interruptedActionBody:
+      "Review the action before starting a new turn. Retry or Discard cannot resolve its outcome.",
+    reviewInterruptedAction: "Review interrupted action",
+    interruptedActionReview:
+      "Action {call} may have taken effect. Its recorded outcome remains unknown. Acknowledging stops recovery of this turn and returns this same conversation to idle. It does not run the action again or start a model, tool, or worker. Check the affected state before asking for further work.",
+    interruptedActionAcknowledgement:
+      "I acknowledge the unknown outcome and choose not to replay this interrupted turn.",
+    interruptedActionConfirm: "Acknowledge and return to idle",
+    interruptedActionIssuerUnavailable:
+      "The original accepted input authority is unavailable. The action remains held.",
+    interruptedActionChanged:
+      "The reviewed action changed or remains held. Refresh and review it again.",
     systemNotice: {
       guardian: {
         approvedSummary: "Guardian approved {action}.",

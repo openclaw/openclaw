@@ -467,10 +467,11 @@ async function persistPreparedGatewaySessionLifecycleEvent(
         return null;
       }
       const patch: Partial<PersistedLifecycleSessionShape> &
-        Pick<SessionEntry, "providerReview" | "goal"> = derivePersistedSessionLifecyclePatch({
-        entry,
-        event: params.event,
-      });
+        Pick<SessionEntry, "providerReview" | "goal" | "goalPauseOrigin"> =
+        derivePersistedSessionLifecyclePatch({
+          entry,
+          event: params.event,
+        });
       if (
         eventRunId &&
         isMainRestartRecoveryCandidate(entry, sessionEntry.canonicalKey) &&
@@ -505,6 +506,9 @@ async function persistPreparedGatewaySessionLifecycleEvent(
           },
           endedAt,
         );
+      }
+      if (patch.goal?.status === "paused") {
+        patch.goalPauseOrigin = "terminal-error";
       }
       if (
         (phase === "error" || phase === "end") &&

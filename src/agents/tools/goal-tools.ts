@@ -8,6 +8,9 @@ import {
 } from "../../config/sessions/goals.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { captureAmbientGatewayOperatorAuthority } from "../../gateway/operator-invocation-authority.js";
+import { captureGatewayGoalIssuerAdmission } from "../../gateway/operator-run-authority.js";
+import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { stringEnum } from "../schema/typebox.js";
 import {
@@ -17,6 +20,10 @@ import {
   readPositiveIntegerParam,
   readToolStringParam,
 } from "./common.js";
+import {
+  getGatewayToolCallerIdentity,
+  captureGatewayToolCallerAssertion,
+} from "./gateway-caller-context.js";
 
 type GoalToolOptions = {
   agentSessionKey?: string;
@@ -96,13 +103,53 @@ export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
         message: "token_budget must be a positive integer",
       });
       const scope = resolveGoalSessionScope(options);
-      const goal = await createSessionGoal({
-        ...scope,
-        actor: { type: "agent", id: scope.sessionKey },
-        objective,
-        ...(tokenBudget !== undefined ? { tokenBudget } : {}),
+      const source = await captureAmbientGatewayOperatorAuthority({
+        retainInherited: true,
+        missingBindingError: () => new Error("Goal issuer Gateway binding is unavailable"),
       });
-      return jsonResult({ status: "created", goal });
+      let facts: Awaited<ReturnType<typeof prepareSessionMutationFacts>> | undefined;
+      try {
+        let issuerAdmission: ReturnType<typeof captureGatewayGoalIssuerAdmission>;
+        if (source.authority) {
+          const context = getGatewayToolCallerIdentity()?.gatewayContextResolver?.();
+          if (!context) {
+            throw new Error("Goal issuer Gateway binding is unavailable");
+          }
+          const getConfig = context.getCommittedRuntimeConfig ?? context.getRuntimeConfig;
+          facts = await prepareSessionMutationFacts({ ...scope, cfg: getConfig() });
+          const target = facts.readCurrent(getConfig()).target.entry;
+          const assertCaller = captureGatewayToolCallerAssertion();
+          issuerAdmission = captureGatewayGoalIssuerAdmission({
+            authority: source.authority,
+            sessionKey: scope.sessionKey,
+            sessionId: target.sessionId,
+            lifecycleRevision: target.lifecycleRevision,
+            assertCurrent: () => {
+              source.assertInvocationCurrent?.();
+              assertCaller?.();
+              const current = facts!.readCurrent(getConfig()).target.entry;
+              if (
+                current.sessionId !== target.sessionId ||
+                current.lifecycleRevision !== target.lifecycleRevision
+              ) {
+                throw new Error("Goal issuer session lifecycle changed before admission");
+              }
+            },
+          });
+        }
+        const goal = await createSessionGoal({
+          ...scope,
+          issuerAdmission,
+          assertCurrent: captureGatewayToolCallerAssertion(),
+          actor: { type: "agent", id: scope.sessionKey },
+          objective,
+          ...(tokenBudget !== undefined ? { tokenBudget } : {}),
+        });
+        return jsonResult({ status: "created", goal });
+      } finally {
+        facts?.release();
+        source.release?.();
+      }
     },
   };
 }
@@ -131,6 +178,7 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
       try {
         const goal = await updateSessionGoalStatus({
           ...scope,
+          assertCurrent: captureGatewayToolCallerAssertion(),
           actor: { type: "agent", id: scope.sessionKey },
           status,
           ...(note ? { note } : {}),

@@ -184,6 +184,13 @@ describe("gateway operator role config", () => {
     }
   });
 
+  test("deduplicates a role's explicit Cloud profile choices", () => {
+    const result = OpenClawSchema.parse(
+      withRole({ ...validRole, workerProfiles: ["approved-cloud", "approved-cloud"] }),
+    );
+    expect(result.gateway?.roles?.definitions.guest?.workerProfiles).toEqual(["approved-cloud"]);
+  });
+
   test("accepts an access-policy plugin reference without plugin configuration", () => {
     const result = OpenClawSchema.parse(
       withRole({ ...validRole, accessPolicyPlugin: " unavailable-access-policy " }),

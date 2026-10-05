@@ -25,3 +25,19 @@ it.each([0, -1, 1.5, "4096", null])(
     expect(OpenClawSchema.safeParse({ worktreeMaxCount }).success).toBe(false);
   },
 );
+
+it("accepts a single repository branch prefix and rejects ref syntax", () => {
+  expect(OpenClawSchema.parse({ repositoryBranchPrefix: "clawson" }).repositoryBranchPrefix).toBe(
+    "clawson",
+  );
+  for (const repositoryBranchPrefix of [
+    "",
+    "../other",
+    "refs/heads",
+    "-option",
+    "has space",
+    "a".repeat(65),
+  ]) {
+    expect(OpenClawSchema.safeParse({ repositoryBranchPrefix }).success).toBe(false);
+  }
+});

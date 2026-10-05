@@ -159,6 +159,7 @@ export async function loadAgentCompoundOperations() {
   return {
     "session.turn.prepare": turn.prepareSessionTurn,
     "session.turn.commit": turn.commitSessionTurn,
+    "session.turn.goal.commit": turn.commitSessionGoalMutation,
     "session.lifecycle.reset": reset.commitSessionReset,
     "session.lifecycle.project": lifecycle.commitSessionLifecycleProjection,
   } satisfies Handlers;

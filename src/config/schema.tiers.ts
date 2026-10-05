@@ -6,7 +6,7 @@ const ROOT_TIER_PATHS = `
 accessGroups acp agents approvals attachments auth bindings broadcast browser channels
 cloudWorkers commands cron desktop diagnostics discovery env gateway hooks logging mcp memory messages
 meta models nodeHost plugins proxy secrets security session skills storage surfaces talk telemetry tools transcripts
-tts ui update wizard worktreeAcceleration worktreeMaxCount worktreeRoot
+tts ui update wizard worktreeAcceleration worktreeMaxCount worktreeRoot repositoryBranchPrefix
 `
   .trim()
   .split(/\s+/);

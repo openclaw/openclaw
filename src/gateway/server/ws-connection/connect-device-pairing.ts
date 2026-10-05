@@ -15,6 +15,7 @@ import {
   approveBootstrapDevicePairing,
   approveDevicePairing,
 } from "../../../infra/device-pairing-approval.js";
+import { getPublishedOperatorPairingIdentity } from "../../../infra/device-pairing-publication.js";
 import { waitForDevicePairingResolution } from "../../../infra/device-pairing-resolution.js";
 import {
   getPairedDevice,
@@ -599,11 +600,25 @@ export async function authorizeGatewayConnectDevice(
           isIssuanceCurrent: isConnectAuthorizationCurrent,
         });
 
+  let operatorPairingIdentity: string | undefined;
+  if (
+    process.env.FACTORY_AUTH_MODE === "github" &&
+    role === "operator" &&
+    device &&
+    hasServerApprovedDeviceTokenBaseline
+  ) {
+    try {
+      operatorPairingIdentity = getPublishedOperatorPairingIdentity(device.id) ?? undefined;
+    } catch {
+      // Ordinary ingress keeps its existing auth decision; unavailable continuation facts hold recovery.
+    }
+  }
   return {
     ...state,
     scopes,
     handoffBootstrapProfile,
     deviceToken,
     bootstrapDeviceTokens,
+    ...(operatorPairingIdentity ? { operatorPairingIdentity } : {}),
   };
 }

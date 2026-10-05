@@ -165,7 +165,9 @@ describe("runCli environment and passive startup", () => {
         ["update", "--dry-run"],
         ["update", "--help"],
         ["doctor", "--help"],
+        ["doctor", "recovery-inspect"],
       ]) {
+        startup.prepareDoctorDatabasePreflight.mockClear();
         if (!args.includes("--help")) {
           startup.route.mockImplementationOnce(async () => {
             expect(existsSync(database), `before dispatch: ${args.join(" ")}`).toBe(false);
@@ -181,6 +183,9 @@ describe("runCli environment and passive startup", () => {
           },
         });
         expect(existsSync(database), `after invocation: ${args.join(" ")}`).toBe(false);
+        if (args[1] === "recovery-inspect") {
+          expect(startup.prepareDoctorDatabasePreflight).not.toHaveBeenCalled();
+        }
       }
       await initializeDebugProxyCaptureAsync("cli-enabled-control");
       expect(existsSync(database)).toBe(true);

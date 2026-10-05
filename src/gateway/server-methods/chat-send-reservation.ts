@@ -3,7 +3,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { SessionGoalOperationError } from "../../config/sessions/goals-operations.js";
 import { resolveChatRunExpiresAtMs } from "../chat-abort.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
-import { readPreRegisteredRun } from "./chat-abort-authorization.js";
+import { readPreRegisteredRun, writePreRegisteredChatAbort } from "./chat-abort-authorization.js";
 import type { prepareGoalChatSendRetry } from "./chat-send-goal-retry.js";
 import type { ChatSendPreAdmissionParams } from "./chat-send-pre-admission.types.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
@@ -19,6 +19,8 @@ export function createPendingChatSendReservationAccess(params: {
   request: NormalizedChatSendRequest;
   session: PreparedChatSendSession;
 }) {
+  const requestIdentity =
+    params.request.goalOperation?.requestFingerprint ?? params.request.requestIdentity;
   const read = () =>
     readPreRegisteredRun({
       key: params.key,
@@ -27,6 +29,14 @@ export function createPendingChatSendReservationAccess(params: {
     });
   return {
     read,
+    abort: (stopReason: string) =>
+      writePreRegisteredChatAbort({
+        context: params.context,
+        runId: params.runId,
+        stopReason,
+        attemptId: params.attemptId,
+        requestIdentity,
+      }),
     reserve: () => {
       const { context, request, session, attemptId } = params;
       context.dedupe.set(params.key, {

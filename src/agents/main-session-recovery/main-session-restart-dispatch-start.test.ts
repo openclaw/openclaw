@@ -61,6 +61,85 @@ afterEach(() => {
 });
 
 describe("restart recovery startup ownership", () => {
+  it.each(["confirmed", "unknown"] as const)(
+    "joins the exact source admission before continuation when publication is %s",
+    async (publication) => {
+      const context = createDirectChatContext({ trackExecution: trackAsyncWork });
+      const runtime = createGatewayInstanceRuntime({
+        getContext: () => context,
+        getMethodRegistry: () => createGatewayMethodRegistry([]),
+        isDispatchAvailable: () => true,
+      });
+      const registration = registerChatAbortController({
+        chatAbortControllers: context.chatAbortControllers,
+        runId,
+        agentId: "main",
+        sessionId,
+        sessionKey,
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        kind: "agent",
+        timeoutMs: 60_000,
+        expiresAtMs: resolveAgentRunExpiresAtMs({ now: Date.now(), timeoutMs: 60_000 }),
+      });
+      const entered = createDeferred();
+      const disposition = createDeferred();
+      const unknown = new Error("source publication outcome unavailable");
+      let effects = 0;
+      let execution: Promise<void> | undefined;
+      const onStarted = vi.fn(async () => {
+        entered.resolve();
+        await disposition.promise;
+        if (publication === "unknown") {
+          throw unknown;
+        }
+      });
+      startTurn.mockImplementation(({ io }) => {
+        execution = (async () => {
+          if (!registration.registered) {
+            throw new Error("Expected the original registered startup owner");
+          }
+          io.emitStartOwner?.(runId, registration.entry);
+          io.emitAcceptance([true, { runId, status: "accepted" }, undefined], { runId });
+          registration.markExecutionStarted();
+          await io.emitExecutionStarted?.();
+          effects += 1;
+          io.emitFinal([true, { runId, status: "ok" }, undefined], { runId });
+        })();
+        return execution;
+      });
+      const recovery = dispatchRestartRecoveryUntilStarted({
+        agentParams: {
+          agentId: "main",
+          sessionKey,
+          expectedExistingSessionId: sessionId,
+          idempotencyKey: runId,
+          message: "continue after restart",
+        },
+        gatewayRuntime: runtime.recovery,
+        onStarted,
+      });
+      try {
+        await entered.promise;
+        expect(effects).toBe(0);
+        expect(onStarted).toHaveBeenCalledOnce();
+        disposition.resolve();
+        const result = await recovery;
+        await execution?.catch(() => {});
+        if (publication === "unknown") {
+          expect(result).toMatchObject({ kind: "failed", error: unknown });
+          expect(effects).toBe(0);
+        } else {
+          expect(["started", "terminal"]).toContain(result.kind);
+          expect(effects).toBe(1);
+        }
+      } finally {
+        disposition.resolve();
+        await execution?.catch(() => {});
+        registration.cleanup();
+        runtime.close();
+      }
+    },
+  );
   it.each([
     "session queue",
     "global queue",
@@ -153,7 +232,7 @@ describe("restart recovery startup ownership", () => {
             registration.markExecutionStarted();
             executionEntered.resolve();
             if (stage !== "cached queue") {
-              io.emitExecutionStarted?.();
+              await io.emitExecutionStarted?.();
             }
             await finish.promise;
             return { meta: { durationMs: 0 } };
@@ -190,7 +269,7 @@ describe("restart recovery startup ownership", () => {
         });
         return;
       }
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(blockedLane ? 120_000 : 30_000);
       expect(registration.controller.signal.aborted).toBe(false);
       preparation.resolve();
       if (blockedLane) {

@@ -79,6 +79,26 @@ function codeModeWait(runId = "code-run") {
 }
 
 describe("resolveMainSessionResumePolicy former terminal states", () => {
+  it.each([false, true])("pauses unresolved external effects with fullAccess=%s", (fullAccess) => {
+    expect(
+      resolvePolicy({
+        fullAccess,
+        messages: [
+          { role: "user", content: "send the update" },
+          {
+            role: "assistant",
+            stopReason: "toolUse",
+            content: [{ type: "toolCall", id: "send-1", name: "message", arguments: {} }],
+          },
+        ],
+      }),
+    ).toEqual({
+      action: "pause",
+      reason: "unverifiable-external-effect",
+      toolCallId: "send-1",
+      toolName: "message",
+    });
+  });
   it.each([
     { deliveryReceiptState: "terminal-pending" as const },
     { beforeAgentReplyState: "pending" as const },
@@ -100,7 +120,7 @@ describe("resolveMainSessionResumePolicy former terminal states", () => {
 });
 
 describe("resolveMainSessionResumePolicy progress tails", () => {
-  it("retains replay restrictions when final-phase async delivery follows a side-effecting call", () => {
+  it("pauses when final-phase async delivery follows a side-effecting call", () => {
     expect(
       resolveMainSessionResumePolicy([
         { role: "user", content: "finish the interrupted work" },
@@ -113,6 +133,11 @@ describe("resolveMainSessionResumePolicy progress tails", () => {
         },
         asyncDeliveryMessage("The background check finished.", "async-after-exec"),
       ]),
-    ).toEqual({ action: "resume", forceRestartSafeTools: true });
+    ).toEqual({
+      action: "pause",
+      reason: "unverifiable-external-effect",
+      toolCallId: "call-bash",
+      toolName: "bash",
+    });
   });
 });

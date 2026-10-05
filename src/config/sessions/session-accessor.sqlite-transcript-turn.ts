@@ -127,6 +127,7 @@ export async function appendExpectedSessionTranscriptTurn(
       options.keyFormat === "agent-qualified"
         ? () => {
             options.sessionTurnMutation?.assertCurrent?.();
+            options.sessionTurnMutation?.issuerAdmission?.assertCurrent();
             const current = withOpenClawAgentDatabaseReadOnly(
               (database) =>
                 readWithCanonicalSessionAdmission(database, () => {
@@ -166,6 +167,7 @@ export async function appendExpectedSessionTranscriptTurn(
     async () => {
       const mutation = options.sessionTurnMutation;
       mutation?.assertCurrent?.();
+      mutation?.issuerAdmission?.assertCurrent();
       const preparedDatabase = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
       prepareSessionTurnRouting(mutation?.routingPredicate, resolved.env)?.(preparedDatabase);
       if (mutation) {

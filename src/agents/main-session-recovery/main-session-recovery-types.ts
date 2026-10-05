@@ -1,4 +1,8 @@
 import type { MainRestartRecoveryState, RestartRecoveryRun } from "../../config/sessions.js";
+import type {
+  NoReplayRecoveryDecision,
+  TurnRecoveryIntent,
+} from "../../config/sessions/main-session-recovery.types.js";
 
 type MainSessionRecoveryExecutionIdentity = NonNullable<
   MainRestartRecoveryState["executionIdentity"]
@@ -46,6 +50,7 @@ export type MainSessionRecoveryConflict =
   | "already_tombstoned"
   | "foreground_active"
   | "not_interrupted"
+  | "session_paused"
   | "recovery_exhausted"
   | "reservation_active"
   | "session_replaced"
@@ -60,12 +65,44 @@ type RecoveryRunOwner = {
   sessionId: string;
 };
 
+type RecoveryDeliveryClaim = { deliveryClaim?: { runId: string; sourceRunId?: string } };
+
 type AdmittedRecoveryAttempt = RecoveryRunOwner & {
   cycleId: string;
   attempt: number;
 };
 
+type WorkerCapacityDecision = RecoveryRunOwner & {
+  cycleId: string;
+  lifecycleRevision?: string;
+  now: number;
+  worker: NonNullable<NonNullable<MainRestartRecoveryState["capacityWait"]>["worker"]>;
+};
+type ProviderCapacityDecision = Omit<WorkerCapacityDecision, "worker"> & {
+  provider: NonNullable<NonNullable<MainRestartRecoveryState["capacityWait"]>["provider"]>;
+};
+
 export type MainSessionRecoveryCommand =
+  | ({ kind: "wait_provider_capacity" } & ProviderCapacityDecision)
+  | ({ kind: "finish_provider_capacity" } & ProviderCapacityDecision)
+  | ({ kind: "validate_provider_recovery" } & ProviderCapacityDecision)
+  | ({ kind: "wait_worker_capacity" } & WorkerCapacityDecision)
+  | ({ kind: "finish_worker_capacity" } & WorkerCapacityDecision)
+  | ({ kind: "validate_worker_recovery" } & WorkerCapacityDecision)
+  | {
+      kind: "wait_capacity";
+      observation: MainSessionRecoveryObservation;
+      lifecycleGeneration: string;
+      runId: string;
+      now: number;
+    }
+  | {
+      kind: "cancel_capacity_wait";
+      wait: Omit<MainSessionRecoveryReservation, "attempt" | "executionIdentityAdmission"> & {
+        worker?: NonNullable<MainRestartRecoveryState["capacityWait"]>["worker"];
+        provider?: NonNullable<MainRestartRecoveryState["capacityWait"]>["provider"];
+      };
+    }
   | {
       kind: "mark_interrupted";
       cycleId: string;
@@ -101,19 +138,32 @@ export type MainSessionRecoveryCommand =
       kind: "cancel_reservation" | "abandon_reservation";
       reservation: MainSessionRecoveryReservation;
     }
-  | ({ kind: "validate_recovery" } & RecoveryRunOwner)
+  | ({ kind: "validate_recovery" } & RecoveryRunOwner & RecoveryDeliveryClaim)
   | ({
       kind: "admit_recovery";
       now: number;
-    } & RecoveryRunOwner)
+    } & RecoveryRunOwner &
+      RecoveryDeliveryClaim)
   | ({
       kind: "mark_admitted_recovery_interrupted";
       now: number;
     } & AdmittedRecoveryAttempt)
-  | ({ kind: "claim_foreground" } & MainSessionRecoveryOwnerClaim)
+  | ({ kind: "claim_foreground"; inputIntent?: TurnRecoveryIntent } & MainSessionRecoveryOwnerClaim)
   | { kind: "bind_foreground_run"; claim: MainSessionRecoveryOwnerClaim; runId: string }
   | { kind: "validate_foreground"; claim: MainSessionRecoveryOwnerClaim }
   | { kind: "release_foreground"; claim: MainSessionRecoveryOwnerClaim }
+  | {
+      kind: "pause";
+      now: number;
+      observation: MainSessionRecoveryObservation;
+      effect: Omit<NonNullable<MainRestartRecoveryState["pause"]>, "pausedAtMs">;
+    }
+  | {
+      kind: "acknowledge_pause";
+      now: number;
+      observation: MainSessionRecoveryObservation;
+      noReplay?: NoReplayRecoveryDecision;
+    }
   | {
       kind: "tombstone";
       now: number;
@@ -129,6 +179,7 @@ export type MainSessionRecoveryTransitionResult =
         | "applied"
         | "doctor_repaired"
         | "foreground_validated"
+        | "goal_limited"
         | "no_change"
         | "recovery_validated"
         | "tombstoned";

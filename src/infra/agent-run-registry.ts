@@ -109,6 +109,7 @@ function storeRunContext(runId: string, context: AgentRunContext, predecessor?: 
   context.capacityWaits = undefined;
   context.executionActivity = undefined;
   context.eventState = { seq: 0 };
+  context.capacityWaitClock = undefined;
   context.registeredAt ??= Date.now();
   getAgentRunRegistryState().contexts.set(runId, context);
   recordAgentEventRouting(runId, context, predecessor);

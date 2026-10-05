@@ -417,7 +417,11 @@ export function startGatewayMaintenanceTimers(params: {
       if (entry.projectSessionTerminalPending === true && !terminalClearOverdue) {
         continue;
       }
-      if (isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now })) {
+      if (
+        isFutureDateTimestampMs(entry.resolvePreparationExpiresAtMs?.() ?? entry.expiresAtMs, {
+          nowMs: now,
+        })
+      ) {
         continue;
       }
       if (entry.projectSessionTerminalPersistence) {

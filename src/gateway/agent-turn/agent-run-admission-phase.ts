@@ -9,9 +9,6 @@ import {
   isEmbeddedAgentRunAbortableForRunId,
   retainEmbeddedAgentRunAbortabilityForRunId,
 } from "../../agents/embedded-agent-runner/runs.js";
-import { repairMainSessionRecoveryMutation } from "../../agents/main-session-recovery/main-session-recovery-lifecycle.js";
-import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
-import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   loadPublishedGatewayReplyDispatchRuntime,
@@ -55,7 +52,6 @@ import type {
   PreparedAgentRunModelRuntime,
   PreparedAgentRunDispatch,
 } from "./agent-run-admission-types.js";
-import { admitAgentRestartRecovery } from "./agent-run-recovery-admission.js";
 import {
   prepareGatewaySubagentRun,
   resolveRegisteredSubagentTimeoutSeconds,
@@ -252,15 +248,11 @@ export async function prepareAgentRunDispatch(
   let capturedOperator: Awaited<ReturnType<typeof retainGatewayOperatorRun>> | undefined;
   let followupCompletion: FollowupCompletionOwner | undefined;
   let adoptedParentResume: SubagentRunRecord | undefined;
-  let restoreAdmittedRestartRecoveryInterrupted:
-    | (() => Promise<MainSessionRecoveryPendingTarget | undefined>)
-    | undefined;
   const cleanupPreaccept = async (admissionReleased = false, failure?: string) => {
     const lease = preparedModelRuntimeLease;
     preparedModelRuntimeLease = undefined;
     const completion = followupCompletion;
     followupCompletion = undefined;
-    let pendingRecovery: MainSessionRecoveryPendingTarget | undefined;
     try {
       const adopted = adoptedParentResume;
       adoptedParentResume = undefined;
@@ -311,30 +303,16 @@ export async function prepareAgentRunDispatch(
       }
     } finally {
       try {
-        if (restoreAdmittedRestartRecoveryInterrupted) {
-          pendingRecovery = await repairMainSessionRecoveryMutation({
-            mutation: restoreAdmittedRestartRecoveryInterrupted,
-            onDeferredSuccess: scheduleMainSessionRecoveryPendingTarget,
-            onError: (error) =>
-              params.context.logGateway.warn(
-                `failed to restore unaccepted restart recovery: ${formatForLog(error)}`,
-              ),
-          });
-        }
+        await lease?.[Symbol.asyncDispose]();
       } finally {
         try {
-          await lease?.[Symbol.asyncDispose]();
-        } finally {
-          try {
-            capturedOperator?.release();
-            activeRunAbort.cleanup();
-            if (!admissionReleased) {
-              activeGatewayWorkAdmission.release();
-            }
-          } finally {
-            completion?.finishExecution(params.runId);
-            scheduleMainSessionRecoveryPendingTarget(pendingRecovery);
+          capturedOperator?.release();
+          activeRunAbort.cleanup();
+          if (!admissionReleased) {
+            activeGatewayWorkAdmission.release();
           }
+        } finally {
+          completion?.finishExecution(params.runId);
         }
       }
     }
@@ -440,29 +418,6 @@ export async function prepareAgentRunDispatch(
   }
   const { pluginSubagent, reactivateSubagent, adoptParentResume, followupSuccessor } =
     subagentAdmission;
-  if (params.isRestartRecoveryResumeRun) {
-    const recoverySessionKey = params.resolvedSessionKey;
-    if (!recoverySessionKey) {
-      return rejectPreaccept(
-        errorShape(ErrorCodes.UNAVAILABLE, "restart recovery session target is unavailable"),
-      );
-    }
-    try {
-      restoreAdmittedRestartRecoveryInterrupted = await admitAgentRestartRecovery({
-        lifecycleGeneration: params.lifecycleGeneration,
-        runId: params.runId,
-        sessionId: params.request.expectedExistingSessionId ?? params.getAdmittedSessionId(),
-        sessionKey: recoverySessionKey,
-        storePath: lifecycleStorePath,
-      });
-      const recoveryRevalidation = revalidateAdmission();
-      if (recoveryRevalidation !== true) {
-        return recoveryRevalidation;
-      }
-    } catch (err) {
-      return rejectPreaccept(errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-    }
-  }
   let assertInputAdmissionCurrent = params.assertAdmissionCurrent;
   let resumedTaskAdopted = false;
   let userTurn: PreparedAgentRunUserTurn;
@@ -493,7 +448,15 @@ export async function prepareAgentRunDispatch(
   };
   try {
     assertInputAdmissionCurrent?.();
+    capturedOperator = await retainGatewayOperatorRun({ ...params, entry: activeRunAbort.entry });
+    const operatorAdmission = revalidateAdmission();
+    if (operatorAdmission !== true) {
+      return await operatorAdmission;
+    }
+    capturedOperator.authority?.assertCurrent();
+
     userTurn = await prepareAgentRunUserTurn({
+      operatorAuthority: capturedOperator.authority,
       assertCurrent: () => {
         assertInputOwnerCurrent();
         activeRunAbort.controller.signal.throwIfAborted();
@@ -507,11 +470,12 @@ export async function prepareAgentRunDispatch(
       request: params.request,
       cfg: params.cfg,
       cfgForAgent: params.cfgForAgent,
-      sessionEntry: params.sessionEntry,
+      sessionEntry: params.assertGatewayWorkAdmissionAllowed() ?? params.sessionEntry,
       resolvedSessionKey: params.resolvedSessionKey,
       requestedSessionKeyRaw: params.requestedSessionKeyRaw,
       admittedSessionId: params.getAdmittedSessionId(),
       activeSessionAgentId: params.activeSessionAgentId,
+      sessionStorePath: lifecycleStorePath,
       resolvedThreadId,
       suppressVisibleSessionEffects: params.suppressVisibleSessionEffects,
       requestedPromptPersistenceSuppression: params.requestedPromptPersistenceSuppression,
@@ -560,7 +524,6 @@ export async function prepareAgentRunDispatch(
   }
   try {
     // The transport request ends at acceptance; execution retains this exact caller.
-    capturedOperator = await retainGatewayOperatorRun({ ...params, entry: activeRunAbort.entry });
     const operatorAdmission = revalidateAdmission(userTurn);
     if (operatorAdmission !== true) {
       return await operatorAdmission;
@@ -644,6 +607,9 @@ export async function prepareAgentRunDispatch(
     // Pending input outlives admission; only the child controller and lifecycle
     // may reject its execution after this synchronous ownership transfer.
     assertInputAdmissionCurrent = undefined;
+    if (activeRunAbort.entry) {
+      activeRunAbort.entry.accepted = true;
+    }
     params.io.emitAcceptance([true, accepted, undefined], { runId: params.runId });
     capturedOperator.armCancellation();
     recordAgentRunUserTurnParticipant(
@@ -694,7 +660,6 @@ export async function prepareAgentRunDispatch(
       unpersistedOffloadedRefs: userTurn.recorder ? [] : params.offloadedRefs,
       userTurn,
       workspaceOverride,
-      restoreAdmittedRestartRecoveryInterrupted,
     };
   } catch (error) {
     return releaseFailedAgentRunAdmission(userTurn, error, cleanupPreaccept);

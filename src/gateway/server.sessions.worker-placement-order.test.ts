@@ -99,6 +99,8 @@ test.each(["delete", "archive", "recover"] as const)(
     });
     const service = coordinateWorkerPlacementDispatch(
       {
+        canRecoverFailedPlacement: () => false,
+        recoverFailedPlacement: unexpectedPlacementOperation,
         dispatch: unexpectedPlacementOperation,
         forceDestroyEnvironment: unexpectedPlacementOperation,
         getEnvironmentAttachedSessionIds: () => [],

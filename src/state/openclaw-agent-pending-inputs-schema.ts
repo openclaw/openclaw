@@ -7,6 +7,7 @@ export const SESSION_PENDING_INPUTS_TABLE = "session_pending_inputs";
 export const SESSION_INPUT_COMPLETIONS_TABLE = "session_input_completions";
 const presentDatabases = new WeakSet<DatabaseSync>();
 const completeDatabases = new WeakSet<DatabaseSync>();
+const consumptionDatabases = new WeakSet<DatabaseSync>();
 const completionDatabases = new WeakSet<DatabaseSync>();
 let absentDatabases = new WeakSet<DatabaseSync>();
 
@@ -51,6 +52,7 @@ export function ensureSessionPendingInputsSchema(db: DatabaseSync): void {
       ),
     );
     ensureColumn(db, SESSION_PENDING_INPUTS_TABLE, "consumed_event_id TEXT");
+    ensureColumn(db, SESSION_PENDING_INPUTS_TABLE, "recovery_intent_json TEXT");
   });
   absentDatabases = new WeakSet();
   if (!nested) {
@@ -83,22 +85,24 @@ export function ensureSessionInputCompletionsSchema(db: DatabaseSync): void {
 export function hasPendingInputConsumptionColumnMigration(db: DatabaseSync): boolean {
   return (
     hasSessionPendingInputsSchema(db) &&
-    !tableHasColumn(db, SESSION_PENDING_INPUTS_TABLE, "consumed_event_id")
+    (!tableHasColumn(db, SESSION_PENDING_INPUTS_TABLE, "consumed_event_id") ||
+      !tableHasColumn(db, SESSION_PENDING_INPUTS_TABLE, "recovery_intent_json"))
   );
 }
 
 export function ensurePendingInputConsumptionColumn(db: DatabaseSync): void {
   ensureColumn(db, SESSION_PENDING_INPUTS_TABLE, "consumed_event_id TEXT");
+  ensureColumn(db, SESSION_PENDING_INPUTS_TABLE, "recovery_intent_json TEXT");
 }
 
 /** Read-only callers can inspect pre-feature stores without installing schema. */
 export function hasPendingInputConsumptionColumn(db: DatabaseSync): boolean {
-  if (completeDatabases.has(db)) {
+  if (completeDatabases.has(db) || consumptionDatabases.has(db)) {
     return true;
   }
   const present = tableHasColumn(db, SESSION_PENDING_INPUTS_TABLE, "consumed_event_id");
   if (present && !db.isTransaction) {
-    completeDatabases.add(db);
+    consumptionDatabases.add(db);
   }
   return present;
 }

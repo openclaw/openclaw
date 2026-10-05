@@ -423,6 +423,10 @@ describe("gateway client capability tool filtering", () => {
     expect(
       hasTool(createOpenClawTools({ githubPublicationAvailable: true }), "github_publish"),
     ).toBe(true);
+    for (const available of [undefined, false, true]) {
+      const tools = createOpenClawTools({ githubPullRequestReadAvailable: available });
+      expect(hasTool(tools, "github_pull_request_read")).toBe(available === true);
+    }
   });
 
   it("omits host UI runtime tools for sandboxed agents", () => {

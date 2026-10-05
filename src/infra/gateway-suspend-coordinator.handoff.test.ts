@@ -337,7 +337,7 @@ describe("gateway suspend coordinator", () => {
         nowMs: () => now,
         createSuspensionId: () => "external-lease",
       };
-      expect(prepareGatewaySuspend(params).status).toBe(draining ? "draining" : "ready");
+      expect((await prepareGatewaySuspend(params)).status).toBe(draining ? "draining" : "ready");
       return {
         owner,
         commitStop,
@@ -373,8 +373,8 @@ describe("gateway suspend coordinator", () => {
 
     it.each([false, true])(
       "commits the host's one-way shutdown before acknowledging and preserves it after expiry (draining: %s)",
-      (draining) => {
-        const fixture = setup(draining);
+      async (draining) => {
+        const fixture = await setup(draining);
         expect(fixture.commit()).toEqual({
           ok: true,
           value: { status: "committed", suspensionId: "external-lease", expiresAtMs: 121_000 },
@@ -394,8 +394,8 @@ describe("gateway suspend coordinator", () => {
       },
     );
 
-    it("reconciles a lost committed reply without committing twice or adopting another host", () => {
-      const fixture = setup(true);
+    it("reconciles a lost committed reply without committing twice or adopting another host", async () => {
+      const fixture = await setup(true);
       const committed = fixture.commit();
       expect(committed.ok).toBe(true);
       fixture.advance(SUSPEND_TTL_MS + 1);
@@ -421,8 +421,8 @@ describe("gateway suspend coordinator", () => {
 
     it.each(["expired", "resumed", "write custody", "old host"] as const)(
       "refuses committed shutdown for %s without invoking the host exit owner",
-      (reason) => {
-        const fixture = setup(true);
+      async (reason) => {
+        const fixture = await setup(true);
         if (reason === "expired") {
           fixture.advance(SUSPEND_TTL_MS);
         } else if (reason === "resumed") {
@@ -437,8 +437,8 @@ describe("gateway suspend coordinator", () => {
       },
     );
 
-    it("does not acknowledge a host callback that leaves suspension reversible", () => {
-      const fixture = setup(false);
+    it("does not acknowledge a host callback that leaves suspension reversible", async () => {
+      const fixture = await setup(false);
       fixture.owner.commitStop = () => {};
       expect(fixture.commit().ok).toBe(false);
       expect(getGatewaySuspendStatus("external-lease").status).toBe("ready");
@@ -447,15 +447,15 @@ describe("gateway suspend coordinator", () => {
 
     it.each([false, true])(
       "consumes one explicit arm without renewing it (draining: %s)",
-      (draining) => {
-        const fixture = setup(draining);
+      async (draining) => {
+        const fixture = await setup(draining);
         expect(fixture.consume()).toEqual({ ok: true, value: false });
         expect(fixture.arm()).toEqual({
           ok: true,
           value: { status: "armed", suspensionId: "external-lease", expiresAtMs: 121_000 },
         });
         fixture.advance(30_000);
-        expect(prepareGatewaySuspend(fixture.params)).toMatchObject({ expiresAtMs: 121_000 });
+        expect(await prepareGatewaySuspend(fixture.params)).toMatchObject({ expiresAtMs: 121_000 });
         expect(fixture.arm()).toMatchObject({ ok: true, value: { expiresAtMs: 121_000 } });
         expect(fixture.consume()).toEqual({ ok: true, value: true });
         expect(fixture.consume()).toEqual({ ok: true, value: false });
@@ -466,8 +466,8 @@ describe("gateway suspend coordinator", () => {
 
     it.each(["expiry", "resume", "replacement", "host", "restart", "disarm"])(
       "refuses a previously armed handoff after %s",
-      (change) => {
-        const fixture = setup(true);
+      async (change) => {
+        const fixture = await setup(true);
         expect(fixture.arm().ok).toBe(true);
         if (change === "expiry") {
           fixture.advance(SUSPEND_TTL_MS);
@@ -476,7 +476,7 @@ describe("gateway suspend coordinator", () => {
           resumeGatewaySuspend("external-lease");
         }
         if (change === "replacement") {
-          prepareGatewaySuspend(fixture.params);
+          await prepareGatewaySuspend(fixture.params);
         }
         if (change === "host") {
           fixture.replaceHost();
@@ -494,8 +494,8 @@ describe("gateway suspend coordinator", () => {
 
     it.each([false, true])(
       "refreshes final-chat custody after a lease becomes ready (draining: %s)",
-      (draining) => {
-        const fixture = setup(draining);
+      async (draining) => {
+        const fixture = await setup(draining);
         fixture.finishWork();
         expect(getGatewaySuspendStatus("external-lease").status).toBe("ready");
         expect(fixture.arm().ok).toBe(true);
@@ -505,7 +505,7 @@ describe("gateway suspend coordinator", () => {
           activeCount: 1,
           blockers: [expect.objectContaining({ kind: "terminal-persistence", count: 1 })],
         };
-        expect(prepareGatewaySuspend(fixture.params)).toMatchObject(pending);
+        expect(await prepareGatewaySuspend(fixture.params)).toMatchObject(pending);
         expect(getGatewaySuspendStatus("external-lease")).toMatchObject(pending);
         expect(getGatewaySuspendAdmissionPhase()).toBe("prepared");
         expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
@@ -517,7 +517,7 @@ describe("gateway suspend coordinator", () => {
         expect(fixture.arm().ok).toBe(false);
 
         fixture.finishPersistence();
-        expect(prepareGatewaySuspend(fixture.params)).toMatchObject({
+        expect(await prepareGatewaySuspend(fixture.params)).toMatchObject({
           status: "ready",
           activeCount: 0,
           blockers: [],

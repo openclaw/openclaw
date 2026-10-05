@@ -18,7 +18,7 @@ import {
   type SessionEntrySnapshotRow,
 } from "./session-entry-snapshots.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export function selectSessionEntryRows(
   database: Pick<OpenClawAgentDatabase, "db">,

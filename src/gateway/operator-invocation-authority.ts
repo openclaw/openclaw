@@ -144,3 +144,5 @@ export async function captureAmbientGatewayOperatorAuthority(params: {
     throw error;
   }
 }
+
+export { restoreGatewayGoalRecoveryAuthority } from "./operator-recovery-invocation-authority.js";

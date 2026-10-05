@@ -61,6 +61,19 @@ function resolveSharedAuthInvalidation(
   return { kind: "generation", generation };
 }
 
+const contextGenerations = new WeakMap<object, SharedGatewaySessionGenerationState>();
+
+export function bindGatewaySharedAuthGeneration(
+  context: object,
+  state: SharedGatewaySessionGenerationState,
+) {
+  contextGenerations.set(context, state);
+}
+
+export function readGatewaySharedAuthGeneration(context: object) {
+  return contextGenerations.get(context);
+}
+
 /** One Gateway owns its generation fields, revision and read-only admission capability. */
 export class SharedGatewaySessionGenerationState {
   #current: string | undefined;

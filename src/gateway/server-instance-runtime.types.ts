@@ -1,6 +1,11 @@
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
 import type { SubagentCompletionToolHandoffRegistration } from "../agents/subagents/announce/subagent-announce-handoff.js";
+import type {
+  GoalRecoveryIntent,
+  TurnRecoveryIntent,
+} from "../config/sessions/main-session-recovery.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
@@ -12,6 +17,8 @@ import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
 
 export type GatewayInstanceAgentDispatchOptions = {
   assertAdmissionCurrent?: () => void;
+  /** Already verified original operator restrictions, never serialized request data. */
+  operatorRunAuthority?: AdmittedRunOperatorAuthority;
   allowModelOverride?: boolean;
   allowSyntheticModelOverride?: boolean;
   allowSyntheticCronRunContinuation?: boolean;
@@ -26,7 +33,7 @@ export type GatewayInstanceAgentDispatchOptions = {
   internalDeliverySuppressErrors?: boolean;
   onAccepted?: (payload: unknown) => void;
   onStartOwner?: (owner: AgentTurnStartOwner) => void;
-  onExecutionStarted?: () => void;
+  onExecutionStarted?: (() => void) | (() => Promise<void>);
   onSignalAbort?: () => Promise<void> | void;
   scopes?: string[];
   signal?: AbortSignal;
@@ -50,7 +57,28 @@ export type GatewayRecoveryTypingParams = {
   isCurrent: (cfg: OpenClawConfig) => boolean;
 };
 
+export type ExplicitAcceptedInputRecovery = {
+  predecessor?: TurnRecoveryIntent;
+  profileId: string;
+  accountId: number;
+  goalId: string;
+  pausedAt?: number;
+};
+
 export type GatewayRecoveryRuntime = {
+  prepareGoalRecoveryAuthority?: (
+    intent: GoalRecoveryIntent | TurnRecoveryIntent,
+    target: {
+      agentId: string;
+      sessionKey: string;
+      acceptedTurn?: TurnRecoveryIntent;
+      explicitAcceptedInput?: ExplicitAcceptedInputRecovery;
+    },
+  ) => Promise<{
+    authority: AdmittedRunOperatorAuthority;
+    release: () => void;
+    prepareAcceptedInput?: (assertDispatchCurrent: () => void) => Promise<string | undefined>;
+  }>;
   dispatchSessionMethod: <T = unknown>(
     method: GatewayRecoverySessionMethod,
     params: unknown,

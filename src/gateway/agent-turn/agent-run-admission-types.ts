@@ -67,6 +67,7 @@ export type PrepareAgentRunDispatchParams = Omit<
   | "deferTimeoutCompletion"
   | "admittedSessionId"
   | "resolvedThreadId"
+  | "sessionStorePath"
 > & {
   assertAdmissionCurrent?: () => void;
   hasCurrentClientAuthority?: () => boolean;

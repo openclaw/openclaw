@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { beforeEach, describe, expect, it, onTestFinished, test } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, test, vi } from "vitest";
 import { createAgentCommandLifecycle } from "../agents/command/lifecycle.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -15,7 +15,10 @@ import {
   withAgentRunLifecycleGeneration,
   type AgentEventRuntimePayload,
 } from "./agent-events.js";
-import { registerAgentRunCapacityWait } from "./agent-run-capacity-wait.js";
+import {
+  captureAgentRunCapacityWait,
+  registerAgentRunCapacityWait,
+} from "./agent-run-capacity-wait.js";
 import {
   claimAgentRunContext,
   clearAgentRunContext,
@@ -166,6 +169,38 @@ describe("agent event routing after cancellation", () => {
       emitAgentEvent({ runId, stream: "lifecycle", data });
     }
     expect(events.map((event) => event.data.phase)).toEqual(["start", "error", "start", "error"]);
+  });
+
+  test("capacity clocks and releases cannot borrow a same-epoch replacement context", () => {
+    let now = 1_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const runId = "capacity-clock-run";
+    const generation = getAgentEventLifecycleGeneration();
+    const scope = {
+      sessionKey: "agent:main:capacity",
+      sessionId: "capacity-session",
+      lifecycleGeneration: generation,
+    };
+    try {
+      registerAgentRunContext(runId, scope);
+      const oldClock = captureAgentRunCapacityWait(runId, generation);
+      const oldRelease = registerAgentRunCapacityWait(runId, generation);
+      now += 10_000;
+      expect(oldClock()).toEqual({ waiting: true, elapsedMs: 10_000 });
+      clearAgentRunContext(runId);
+      registerAgentRunContext(runId, scope);
+      const currentClock = captureAgentRunCapacityWait(runId, generation);
+      const currentRelease = registerAgentRunCapacityWait(runId, generation);
+      now += 5_000;
+      oldRelease?.();
+      expect(oldClock()).toBeUndefined();
+      expect(currentClock()).toEqual({ waiting: true, elapsedMs: 5_000 });
+      currentRelease?.();
+      expect(currentClock()).toEqual({ waiting: false, elapsedMs: 5_000 });
+    } finally {
+      clearAgentRunContext(runId);
+      clock.mockRestore();
+    }
   });
 
   it.each([

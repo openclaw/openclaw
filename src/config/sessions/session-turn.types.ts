@@ -1,8 +1,10 @@
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type {
+  SessionGoalOperation,
   SessionTranscriptTurnMutation,
   SessionTranscriptTurnMutationResult,
 } from "./goals-operations.types.js";
+import type { GoalRecoveryIntent } from "./main-session-recovery.types.js";
 import type { CliHistoryWriterFacts } from "./session-accessor.sqlite-cli-history-boundary.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type {
@@ -34,6 +36,7 @@ export type SqliteExpectedSessionTranscriptTurnResult = {
 export type SqliteSessionTurnOptions = {
   workerPrepared?: true;
   preparedGoalId?: string;
+  preparedGoalIssuer?: GoalRecoveryIntent;
   assertCurrent?: () => void;
   acceptedResultGuard?: SessionTranscriptTurnPersistOptions["acceptedResultGuard"];
   atomicGroup?: boolean;
@@ -62,7 +65,7 @@ export type SessionTurnPlan = {
     SqliteSessionTurnOptions,
     "messages" | "onMessageCommitted" | "assertCurrent" | "sessionTurnMutation" | "config"
   > & {
-    sessionTurnMutation?: Omit<SessionTranscriptTurnMutation, "assertCurrent">;
+    sessionTurnMutation?: Omit<SessionTranscriptTurnMutation, "assertCurrent" | "issuerAdmission">;
     messages: Array<
       Omit<
         SessionTranscriptTurnMessageAppend,
@@ -95,5 +98,18 @@ export type SessionTurnCommitted = {
   projectionNeedsReconcile: boolean;
   custody?: SessionPendingInputWorkerReceipt;
   authority?: import("./session-pending-input-authority.js").SessionPendingInputAuthorityFacts;
+  publication?: SessionEntryReplacementPublication;
+};
+
+export type SessionGoalMutationPlan = {
+  sessionKey: string;
+  expectedSessionId: string;
+  operation: Exclude<SessionGoalOperation, { action: "start" }> & {
+    action: "edit" | "pause" | "block" | "complete" | "clear";
+  };
+};
+export type SessionGoalCommitted = {
+  kind: "session-goal";
+  result: SessionTranscriptTurnMutationResult & { sessionEntry?: SessionEntry };
   publication?: SessionEntryReplacementPublication;
 };

@@ -1,5 +1,6 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
+import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { withoutGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import {
@@ -14,6 +15,7 @@ import type {
 import { createApprovalNativeRouteCoordinator } from "../infra/approval-native-route-coordinator.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 // HTTP agent ingress can finish before the lazy agent.wait handler loads its recorder.
 import "./agent-turn/agent-job.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
@@ -26,6 +28,7 @@ import {
   WRITE_SCOPE,
 } from "./method-scopes.js";
 import type { GatewayMethodRegistry } from "./methods/registry.js";
+import { restoreGatewayGoalRecoveryAuthority } from "./operator-invocation-authority.js";
 import { createRecoveryTypingManager } from "./recovery-typing.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import type {
@@ -160,6 +163,22 @@ export function createGatewayInstanceRuntime(
     "sessions.delete",
   ]);
   const recovery: GatewayRecoveryRuntime = {
+    prepareGoalRecoveryAuthority: async (intent, target) => {
+      const context = options.getContext();
+      const assertContextCurrent = () => {
+        assertDispatchAvailable("goal recovery authority");
+        if (options.getContext() !== context) {
+          throw new Error("Gateway recovery authority owner changed");
+        }
+      };
+      assertContextCurrent();
+      return restoreGatewayGoalRecoveryAuthority({
+        ...target,
+        intent,
+        context,
+        assertContextCurrent,
+      });
+    },
     dispatchSessionMethod: (method, payload, requestOptions = {}) =>
       dispatch({
         allowedMethods: recoverySessionMethods,
@@ -182,6 +201,11 @@ export function createGatewayInstanceRuntime(
       dispatchOptions: GatewayInstanceAgentDispatchOptions = {},
     ) => {
       assertDispatchAvailable("agent");
+      const operator = dispatchOptions.operatorRunAuthority;
+      if (operator) {
+        assertAdmittedRunOperatorAuthority(operator);
+        operator.assertCurrent();
+      }
       const delegatedToolPolicyHandoffId = dispatchOptions.delegatedToolPolicyHandoff
         ? registerSubagentCompletionToolHandoff(dispatchOptions.delegatedToolPolicyHandoff)
         : undefined;
@@ -195,12 +219,17 @@ export function createGatewayInstanceRuntime(
         dispatchOptions.internalDeliverySuppressErrors === true ||
         delegatedToolPolicyHandoffId ||
         dispatchOptions.scopes ||
-        dispatchOptions.syntheticScopes,
+        dispatchOptions.syntheticScopes ||
+        operator,
       );
       const agentTurns = needsDedicatedPrincipal
         ? createAgentTurnFacade({
+            assertContextCurrent: operator?.assertCurrent,
             client: createSyntheticPluginRuntimeClient({
-              operatorRoleActor: { kind: "system" },
+              operatorRoleActor: operator
+                ? { kind: "operator", profileId: operator.profileId }
+                : { kind: "system" },
+              operatorRunAuthority: operator,
               allowModelOverride:
                 dispatchOptions.allowModelOverride === true ||
                 dispatchOptions.allowSyntheticModelOverride === true,
@@ -210,7 +239,14 @@ export function createGatewayInstanceRuntime(
               internalDeliverySuppressText: dispatchOptions.internalDeliverySuppressText,
               internalDeliverySuppressErrors: dispatchOptions.internalDeliverySuppressErrors,
               delegatedToolPolicyHandoffId,
-              scopes: dispatchOptions.scopes ?? dispatchOptions.syntheticScopes,
+              scopes: operator
+                ? [
+                    ...intersectOperatorScopes(
+                      operator.scopes,
+                      dispatchOptions.scopes ?? dispatchOptions.syntheticScopes ?? operator.scopes,
+                    ),
+                  ]
+                : (dispatchOptions.scopes ?? dispatchOptions.syntheticScopes),
             }),
           })
         : recoveryAgentTurns;

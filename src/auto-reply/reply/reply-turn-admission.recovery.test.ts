@@ -1,4 +1,5 @@
 import { setImmediate } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
@@ -6,8 +7,16 @@ import * as recoveryLifecycle from "../../agents/main-session-recovery/main-sess
 import * as recoveryOwnerRelease from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import * as recoveryStore from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import * as restartRecovery from "../../agents/main-session-recovery/main-session-restart-recovery.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  loadSessionEntry,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import {
+  listSessionPendingInputs,
+  stageSessionPendingInput,
+} from "../../config/sessions/session-accessor.pending-inputs.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
@@ -24,6 +33,7 @@ import {
 import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import { admitTestReplyTurn, createSessionStore } from "./reply-turn-admission.test-support.js";
+import * as recoveryWait from "./reply-turn-recovery-wait.js";
 
 type Admission = Awaited<ReturnType<typeof admitTestReplyTurn>>;
 const sessionKey = "agent:main:main";
@@ -135,6 +145,138 @@ function recoveryFixture(overrides: Partial<SessionEntry> = {}) {
     write: (value: SessionEntry) => replaceSessionEntry({ storePath, sessionKey }, value),
   };
 }
+
+function createPredecessor() {
+  return {
+    runId: "orphaned-predecessor",
+    inputId: "missing-predecessor-input",
+    idempotencyKey: "predecessor-request",
+    sessionId,
+    sessionKey,
+    lifecycleRevision: "original-revision",
+    lifecycleGeneration: "old-process",
+    repositoryWorkspaceId: "existing-repository",
+    issuer: {
+      version: 1 as const,
+      profileId: "original-profile",
+      factoryActor: { host: "microsoft.ghe.com" as const, accountId: 101 },
+      assignedRole: "administrator",
+      rolePolicyGeneration: "original-role-policy",
+      aliasBindingIds: ["original-alias"],
+      scopes: ["operator.read", "operator.write"],
+      modelCeilings: ["*"],
+      device: { deviceId: "original-device", identity: "original-device-key" },
+      authPrincipal: { role: "operator", authMethod: "trusted-proxy" as const },
+      authPolicyGeneration: "original-auth-policy",
+      sharedAuthGeneration: null,
+      grant: null,
+    },
+  };
+}
+
+it.each(["none", "effect", "provider"] as const)(
+  "preserves a paused Goal and predecessor custody during visible admission (hold: %s)",
+  async (hold) => {
+    const goal = {
+      schemaVersion: 1 as const,
+      id: "paused-goal",
+      objective: "Keep the existing branch",
+      status: "paused" as const,
+      createdAt: 10,
+      updatedAt: 20,
+      pausedAt: 20,
+      tokenStart: 0,
+      tokensUsed: 0,
+      continuationTurns: 0,
+    };
+    const predecessor = createPredecessor();
+    const f = recoveryFixture({
+      goal,
+      goalPauseOrigin: "manual",
+      lifecycleRevision: "original-revision",
+      repositoryWorkspaceId: "existing-repository",
+      mainRestartRecovery: {
+        cycleId: "original-cycle",
+        revision: 1,
+        chargedAttempts: 0,
+        turnIntent: predecessor,
+        queuedInputsPending: true,
+        ...(hold === "effect"
+          ? {
+              pause: {
+                reason: "unverifiable-external-effect" as const,
+                toolName: "github_publish",
+                pausedAtMs: 30,
+              },
+            }
+          : {}),
+        ...(hold === "provider"
+          ? {
+              capacityWait: {
+                runId: predecessor.runId,
+                lifecycleGeneration: predecessor.lifecycleGeneration,
+                sinceMs: 30,
+                provider: {
+                  kind: "settled-shortage-v1" as const,
+                  environmentId: "",
+                  ownerEpoch: 1,
+                  placementGeneration: 1,
+                  providerId: "crabbox",
+                  profileId: "original-profile",
+                  operationId: "original-operation",
+                  leaseId: "original-lease",
+                  attemptName: "original-attempt",
+                  attemptNonce: "original-nonce",
+                  providerCode: "SkuNotAvailable",
+                  attempt: 1,
+                },
+              },
+            }
+          : {}),
+      },
+    });
+    const context = createRecoveryGatewayContext();
+    const retryEntered = createDeferred();
+    const retryActual = restartRecovery.retryRestartAbortedMainSessionRecovery;
+    const retry = vi
+      .spyOn(restartRecovery, "retryRestartAbortedMainSessionRecovery")
+      .mockImplementation(async (request) => {
+        const result = await retryActual(request);
+        retryEntered.resolve();
+        return result;
+      });
+    const admission = f.admit({
+      resolveGatewayContext: () => context,
+      upstreamAbortSignal: f.abort.signal,
+    });
+    if (hold !== "none") {
+      await expect(admission).rejects.toThrow(/paused|unresolved|capacity/i);
+      expect(f.read()).toMatchObject(f.entry);
+    } else {
+      const result = await Promise.race([
+        admission,
+        retryEntered.promise.then(() => {
+          throw new Error("Visible input was deferred to ineligible paused-Goal recovery");
+        }),
+      ]);
+      owned(result);
+      expect(f.read()).toMatchObject({
+        goal,
+        goalPauseOrigin: "manual",
+        repositoryWorkspaceId: "existing-repository",
+        mainRestartRecovery: {
+          cycleId: "original-cycle",
+          chargedAttempts: 0,
+          queuedInputsPending: true,
+          turnIntent: predecessor,
+          foregroundClaims: { tokens: [expect.any(String)] },
+        },
+      });
+    }
+    expect(f.read()?.lastRunId).toBeUndefined();
+    expect(retry).not.toHaveBeenCalled();
+  },
+);
 
 it("keeps deferred owner release retries from retaining a successor", async () => {
   const deferredReleases: Promise<void>[] = [];
@@ -425,3 +567,187 @@ it("preserves live recovery authority while monitoring", async () => {
   owner.release();
   await owner.released;
 });
+
+it.each([
+  { guard: "missing-intent", successor: "current" },
+  { guard: "missing-restorer", successor: "current" },
+  { guard: "source-mismatch", successor: "current" },
+  { guard: "missing-goal-marker", successor: "current" },
+  { guard: "missing-intent", successor: "queued" },
+  { guard: "missing-intent", successor: "revoked" },
+  { guard: "missing-intent", successor: "changed" },
+  { guard: "missing-intent", successor: "intent-changed" },
+] as const)(
+  "settles fresh admission without replay for $guard with $successor authority/state",
+  async ({ guard, successor }) => {
+    vi.stubEnv("FACTORY_AUTH_MODE", "github");
+    try {
+      const predecessor = createPredecessor();
+      const retainedIntents =
+        guard === "missing-goal-marker"
+          ? {
+              goalIntent: {
+                goalId: "paused-goal",
+                sessionId,
+                sessionKey,
+                lifecycleRevision: predecessor.lifecycleRevision,
+                issuer: predecessor.issuer,
+              },
+            }
+          : guard === "missing-intent"
+            ? {}
+            : { turnIntent: predecessor };
+      const f = recoveryFixture({
+        lifecycleRevision: "original-revision",
+        restartRecoveryDeliveryRunId: "old-recovery",
+        restartRecoveryDeliverySourceRunId:
+          guard === "source-mismatch" ? "different-source" : predecessor.runId,
+        goalPauseOrigin: "terminal-error",
+        goal: {
+          schemaVersion: 1,
+          id: "paused-goal",
+          objective: "Keep the existing branch",
+          status: "paused",
+          createdAt: 10,
+          updatedAt: 20,
+          pausedAt: 20,
+          tokenStart: 0,
+          tokensUsed: 0,
+          continuationTurns: 0,
+        },
+        mainRestartRecovery: {
+          cycleId: "original-cycle",
+          revision: 1,
+          chargedAttempts: 0,
+          ...retainedIntents,
+        },
+      });
+      const scope = { agentId: "main", sessionKey, sessionId, storePath: f.storePath };
+      const originalInput = await stageSessionPendingInput(scope, {
+        message: {
+          role: "user",
+          content: "Original accepted work",
+          timestamp: 10,
+          idempotencyKey: predecessor.idempotencyKey,
+        },
+        runId: predecessor.runId,
+        assertCurrent: () => {},
+      });
+      expect(originalInput).toBeDefined();
+      predecessor.inputId = originalInput!.inputId;
+      await f.write({
+        ...f.entry,
+        mainRestartRecovery: {
+          ...f.entry.mainRestartRecovery!,
+          ...retainedIntents,
+        },
+      });
+      await appendTranscriptMessage(scope, {
+        message: { role: "user", content: "Original accepted work", timestamp: 10 },
+      });
+      const input = await stageSessionPendingInput(scope, {
+        message: {
+          role: "user",
+          content: "Fresh request",
+          timestamp: 30,
+          idempotencyKey: "fresh-input",
+        },
+        runId: "fresh-run",
+        assertCurrent: () => {},
+      });
+      expect(input).toBeDefined();
+      const pendingBefore = await listSessionPendingInputs(scope);
+      const context = createRecoveryGatewayContext();
+      const runtime = expectDefined(context.recoveryRuntime, "fixture recovery runtime");
+      const prepare = vi.fn().mockRejectedValue(new Error("Original issuer must not be restored"));
+      if (guard !== "missing-restorer") {
+        runtime.prepareGoalRecoveryAuthority = prepare;
+      }
+      // A permanent issuer hold must settle admission, never enter the transient wait owner.
+      const wait = vi
+        .spyOn(recoveryWait, "waitForRestartRecoveryProgress")
+        .mockRejectedValue(new Error("Non-executable recovery entered a transient wait"));
+      let current = true;
+      const revoked = new Error("Fresh request authority revoked");
+      const retryActual = restartRecovery.retryRestartAbortedMainSessionRecovery;
+      const retry = vi
+        .spyOn(restartRecovery, "retryRestartAbortedMainSessionRecovery")
+        .mockImplementation(async (request) => {
+          const result = await retryActual(request);
+          expect(result.authorityHold).toMatchObject({
+            kind: "authority-hold",
+            reason:
+              successor === "intent-changed" && retry.mock.calls.length > 1
+                ? "source-mismatch"
+                : guard,
+          });
+          if (successor === "intent-changed" && retry.mock.calls.length === 1) {
+            const entry = f.read()!;
+            await f.write({
+              ...entry,
+              mainRestartRecovery: {
+                ...entry.mainRestartRecovery!,
+                turnIntent: { ...predecessor, runId: "new-accepted-source" },
+              },
+            });
+          } else if (successor === "revoked") {
+            current = false;
+          } else if (successor === "changed") {
+            const entry = f.read()!;
+            await f.write({
+              ...entry,
+              goalPauseOrigin: "manual",
+              mainRestartRecovery: {
+                ...entry.mainRestartRecovery!,
+                revision: entry.mainRestartRecovery!.revision + 1,
+              },
+            });
+          }
+          return result;
+        });
+      const admission = f.admit({
+        resolveGatewayContext: () => context,
+        kind: successor === "queued" ? "queued_followup" : "visible",
+        assertRequestCurrent: () => {
+          if (!current) {
+            throw revoked;
+          }
+        },
+      });
+      if (successor === "queued") {
+        await expect(admission).resolves.toEqual({
+          status: "skipped",
+          reason: "lifecycle-invalidated",
+        });
+      } else if (successor === "changed") {
+        owned(await admission);
+      } else if (successor === "revoked") {
+        await expect(admission).rejects.toBe(revoked);
+      } else {
+        await expect(admission).rejects.toMatchObject({ code: "SESSION_WORK_START_INVALIDATED" });
+      }
+      expect(retry).toHaveBeenCalledTimes(successor === "intent-changed" ? 2 : 1);
+      expect(wait).not.toHaveBeenCalled();
+      expect(prepare).not.toHaveBeenCalled();
+      expect(runtime.dispatchAgent).not.toHaveBeenCalled();
+      expect(f.read()).toMatchObject({
+        goal: f.entry.goal,
+        goalPauseOrigin: successor === "changed" ? "manual" : "terminal-error",
+        abortedLastRun: true,
+        restartRecoveryDeliveryRunId: "old-recovery",
+        restartRecoveryDeliverySourceRunId: f.entry.restartRecoveryDeliverySourceRunId,
+        mainRestartRecovery: { chargedAttempts: 0 },
+      });
+      expect(f.read()?.mainRestartRecovery?.reservation).toBeUndefined();
+      if (successor !== "changed") {
+        expect(f.read()?.mainRestartRecovery?.foregroundClaims).toBeUndefined();
+        expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+      }
+      expect(await listSessionPendingInputs(scope)).toEqual(pendingBefore);
+      expect(originalInput!.state).toBe("queued");
+      expect(input!.state).toBe("queued");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  },
+);

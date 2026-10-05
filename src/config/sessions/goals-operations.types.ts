@@ -1,5 +1,10 @@
 import type { SessionsGoalMutationResult } from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import type {
+  GoalRecoveryDecisionAdmission,
+  GoalRecoveryIntent,
+  GoalRecoveryIssuerAdmission,
+} from "./main-session-recovery.types.js";
 
 type SessionGoalOperationIdentity = {
   operationId: string;
@@ -25,6 +30,8 @@ export const SESSION_GOAL_OPERATION_ERROR_CODES = [
   "goal-rebound",
   "capacity",
   "receipt-invalid",
+  "recovery-decision-changed",
+  "recovery-decision-caller",
   "invalid",
 ] as const;
 
@@ -50,6 +57,19 @@ export type SessionGoalOperationLookupResult =
   | { receipt: SessionGoalOperationResult | undefined }
   | { error: { code: SessionGoalOperationErrorCode; message: string } };
 
+/** Live reviewed recovery assertions remain on the host through native settlement. */
+export type GoalRecoveryInputAdmission = {
+  operation: SessionGoalOperation & { action: "resume" };
+  decision: GoalRecoveryDecisionAdmission;
+  issuer: GoalRecoveryIssuerAdmission;
+};
+
+export type AcceptedGoalRecoveryInput = {
+  operation: GoalRecoveryInputAdmission["operation"];
+  decision: Omit<GoalRecoveryDecisionAdmission, "assertCurrent">;
+  intent: GoalRecoveryIntent;
+};
+
 /** Closed session mutation admitted together with its transcript and lifecycle state. */
 export type SessionTranscriptTurnMutation = {
   kind: "goal";
@@ -62,6 +82,7 @@ export type SessionTranscriptTurnMutation = {
     storePath: string;
     canonicalKey: string;
   };
+  issuerAdmission?: GoalRecoveryIssuerAdmission;
   operation: SessionGoalOperation & { action: "start" | "resume" };
   runId: string;
 };

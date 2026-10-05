@@ -42,6 +42,14 @@ const GoalOperationIdentity = {
   issuedAtMs: Type.Integer({ minimum: 0 }),
 };
 
+/** Reference to the reviewed current hold, never authorization or a reusable capability. */
+export const GoalRecoveryDecisionSchema = closedObject({
+  cycleId: NonEmptyString,
+  revision: Type.Integer({ minimum: 1 }),
+  pausedAtMs: Type.Integer({ minimum: 0 }),
+});
+export type GoalRecoveryDecision = Static<typeof GoalRecoveryDecisionSchema>;
+
 export const SessionsGoalUpdateParamsSchema = Type.Union([
   closedObject({
     ...GoalOperationIdentity,
@@ -50,13 +58,14 @@ export const SessionsGoalUpdateParamsSchema = Type.Union([
   }),
   closedObject({
     ...GoalOperationIdentity,
-    action: Type.Union([
-      Type.Literal("pause"),
-      Type.Literal("resume"),
-      Type.Literal("complete"),
-      Type.Literal("block"),
-    ]),
+    action: Type.Union([Type.Literal("pause"), Type.Literal("complete"), Type.Literal("block")]),
     note: Type.Optional(Type.String({ maxLength: 2_000 })),
+  }),
+  closedObject({
+    ...GoalOperationIdentity,
+    action: Type.Literal("resume"),
+    note: Type.Optional(Type.String({ maxLength: 2_000 })),
+    recoveryDecision: Type.Optional(GoalRecoveryDecisionSchema),
   }),
 ]);
 export const SessionsGoalClearParamsSchema = closedObject(GoalOperationIdentity);

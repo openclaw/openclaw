@@ -1,4 +1,5 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
@@ -94,6 +95,32 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     if (params.restartRecoveryTombstoned) {
       return this.restartRecoveryComposerBanner();
     }
+    if (params.selectedSession?.interruptedAction && !params.selectedSessionArchived) {
+      const action = params.selectedSession.interruptedAction;
+      const access = readSessionMethodAccess(this.context.gateway.snapshot, {
+        method: "sessions.recover",
+        params: { key: params.sessionKey },
+      });
+      return {
+        kind: "composer-replacement" as const,
+        title: t("chat.interruptedActionTitle"),
+        text: t("chat.interruptedActionBody"),
+        icon: "warning" as const,
+        tone: "neutral" as const,
+        actionLabel: t("chat.reviewInterruptedAction"),
+        busy: this.recoveringSession,
+        disabledReason: !action.decision
+          ? t("chat.interruptedActionIssuerUnavailable")
+          : access.allowed
+            ? undefined
+            : access.reason,
+        onAction: () => {
+          if (access.allowed && action.decision && !this.recoveringSession) {
+            void this.reviewInterruptedAction(params.sessionKey, action);
+          }
+        },
+      };
+    }
     if (params.selectedSessionArchived) {
       return {
         kind: "composer-replacement" as const,
@@ -118,6 +145,74 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
         )
       : undefined;
   }
+
+  protected readonly reviewInterruptedAction = async (
+    sessionKey: string,
+    action: NonNullable<GatewaySessionRow["interruptedAction"]>,
+  ): Promise<boolean> => {
+    const state = this.state;
+    const decision = action.decision;
+    if (!state?.client || !state.connected || !decision || this.recoveringSession) {
+      return false;
+    }
+    const sessions = this.context.sessions;
+    const scope = {
+      context: this.context,
+      state,
+      client: state.client,
+      generation: this.connectionGeneration,
+    };
+    const isCurrent = () =>
+      this.isConnectionScopeCurrent(scope) &&
+      this.context.sessions === sessions &&
+      state.sessionKey === sessionKey;
+    this.recoveringSession = true;
+    this.requestUpdate();
+    try {
+      const confirmed = await showConfirmDialog({
+        title: t("chat.interruptedActionTitle"),
+        message: t("chat.interruptedActionReview", { call: decision.toolCallId }),
+        requiredAcknowledgement: t("chat.interruptedActionAcknowledgement"),
+        confirmLabel: t("chat.interruptedActionConfirm"),
+        danger: true,
+        signal: this.headerSessionMutationAbortController.signal,
+      });
+      if (!confirmed || !isCurrent()) {
+        return false;
+      }
+      const params = {
+        key: sessionKey,
+        ...scopedAgentParamsForSession(state, sessionKey),
+        acknowledgeUnknownOutcome: decision,
+      };
+      const access = readSessionMethodAccess(this.context.gateway.snapshot, {
+        method: "sessions.recover",
+        params,
+      });
+      if (!access.allowed) {
+        setChatError(state, access.reason, true);
+        return false;
+      }
+      const result = await sessions.recover(params);
+      if (!isCurrent()) {
+        return false;
+      }
+      if (
+        !result ||
+        result.sessionId !== decision.sessionId ||
+        result.key !== sessionKey ||
+        result.continuation.status !== "idle"
+      ) {
+        setChatError(state, state.sessionsError ?? t("chat.interruptedActionChanged"), true);
+        return false;
+      }
+      setChatError(state, null);
+      return true;
+    } finally {
+      this.recoveringSession = false;
+      this.requestUpdate();
+    }
+  };
 
   protected restartRecoveryComposerBanner() {
     const state = this.state;

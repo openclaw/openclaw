@@ -7,6 +7,7 @@ import type {
 import { projectMainSessionRecoveryLifecycle } from "./main-session-recovery-lifecycle.js";
 import {
   inspectMainRestartRecoveryRolloverEligibility,
+  isMainSessionRecoveryPending,
   transitionMainSessionRecovery,
 } from "./main-session-recovery-state.js";
 
@@ -230,6 +231,24 @@ describe("main session recovery state", () => {
     expect(entry.abortedLastRun).toBe(false);
   });
 
+  it("clears captured intent without other residue before a later independent restart", () => {
+    const entry = interruptedEntry({
+      status: "done",
+      abortedLastRun: false,
+      mainRestartRecovery: undefined,
+      restartRecoveryGoal: { id: "withdrawn-goal", sessionId: "session-1", capturedAtMs: 1 },
+    });
+    expect(transitionMainSessionRecovery(entry, { kind: "clear" })).toEqual({ kind: "applied" });
+    expect(entry.restartRecoveryGoal).toBeUndefined();
+    expect(transitionMainSessionRecovery(entry, { kind: "clear" })).toEqual({ kind: "no_change" });
+    transitionMainSessionRecovery(entry, {
+      kind: "mark_interrupted",
+      cycleId: "next-cycle",
+      now: 200,
+    });
+    expect(isMainSessionRecoveryPending(entry, sessionKey)).toBe(true);
+  });
+
   it("keeps interrupted delivery custody authoritative regardless of the recorded outcome", () => {
     const entry = interruptedEntry({
       status: "failed",
@@ -305,75 +324,104 @@ describe("main session recovery state", () => {
     expect(entry.mainRestartRecovery?.reservation).toBeUndefined();
   });
 
-  it("moves a reservation into the lifecycle fence during Gateway admission", () => {
-    const entry = interruptedEntry({
-      lastRunId: "settled-run",
-      pendingFinalDelivery: { kind: "replayable", text: " captured reply ", createdAt: 1 },
-      restartRecoveryDeliveryRunId: "recovery-1",
-      restartRecoveryDeliverySourceRunId: "source-1",
-      restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration: "generation-old" }],
-      mainRestartRecovery: recoveryState({
-        revision: 2,
-        chargedAttempts: 1,
-        reservation: {
+  it.each(["omitted claim", "exact claim", "changed source", "whitespace source"] as const)(
+    "moves a reservation into the lifecycle fence only for current Gateway admission with %s",
+    (claim) => {
+      const entry = interruptedEntry({
+        lastRunId: "settled-run",
+        pendingFinalDelivery: { kind: "replayable", text: " captured reply ", createdAt: 1 },
+        restartRecoveryDeliveryRunId: "recovery-1",
+        restartRecoveryDeliverySourceRunId: "source-1",
+        restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration: "generation-old" }],
+        mainRestartRecovery: recoveryState({
+          revision: 2,
+          chargedAttempts: 1,
+          reservation: {
+            runId: "recovery-1",
+            attempt: 1,
+            lifecycleGeneration: "generation-1",
+          },
+        }),
+      });
+      const deliveryClaim =
+        claim === "omitted claim" ? undefined : { runId: "recovery-1", sourceRunId: "source-1" };
+      if (claim === "changed source" || claim === "whitespace source") {
+        entry.restartRecoveryDeliverySourceRunId =
+          claim === "changed source" ? "changed-source" : " source-1 ";
+        const before = structuredClone(entry);
+        const owner = {
+          lifecycleGeneration: "generation-1",
           runId: "recovery-1",
+          sessionId: "session-1",
+          deliveryClaim,
+        };
+        for (const command of [
+          { ...owner, kind: "validate_recovery" },
+          { ...owner, kind: "admit_recovery", now: 300 },
+        ] as const) {
+          expect(transitionMainSessionRecovery(entry, command)).toEqual({
+            kind: "rejected",
+            reason: "stale_reservation",
+          });
+          expect(entry).toEqual(before);
+        }
+        return;
+      }
+      expect(
+        transitionMainSessionRecovery(entry, {
+          kind: "validate_recovery",
+          lifecycleGeneration: "generation-1",
+          runId: "recovery-1",
+          sessionId: "session-1",
+          deliveryClaim,
+        }),
+      ).toEqual({ kind: "recovery_validated" });
+      expect(entry.mainRestartRecovery?.reservation).toBeDefined();
+      expect(entry.abortedLastRun).toBe(true);
+
+      expect(
+        transitionMainSessionRecovery(entry, {
+          kind: "admit_recovery",
+          lifecycleGeneration: "generation-1",
+          now: 300,
+          runId: "recovery-1",
+          sessionId: "session-1",
+          deliveryClaim,
+        }),
+      ).toMatchObject({ kind: "admitted_recovery" });
+      expect(entry).toMatchObject({
+        abortedLastRun: false,
+        pendingFinalDelivery: { kind: "replayable", text: "captured reply", createdAt: 1 },
+        restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration: "generation-1" }],
+        mainRestartRecovery: {
+          revision: 3,
+          chargedAttempts: 1,
+        },
+      });
+      expect(entry.mainRestartRecovery?.reservation).toBeUndefined();
+      expect(entry.lifecycleRunId).toBe("recovery-1");
+      expect(entry.lastRunId).toBeUndefined();
+
+      expect(
+        transitionMainSessionRecovery(entry, {
+          kind: "mark_admitted_recovery_interrupted",
+          cycleId: "cycle-1",
           attempt: 1,
           lifecycleGeneration: "generation-1",
-        },
-      }),
-    });
-    expect(
-      transitionMainSessionRecovery(entry, {
-        kind: "validate_recovery",
-        lifecycleGeneration: "generation-1",
-        runId: "recovery-1",
-        sessionId: "session-1",
-      }),
-    ).toEqual({ kind: "recovery_validated" });
-    expect(entry.mainRestartRecovery?.reservation).toBeDefined();
-    expect(entry.abortedLastRun).toBe(true);
-
-    expect(
-      transitionMainSessionRecovery(entry, {
-        kind: "admit_recovery",
-        lifecycleGeneration: "generation-1",
-        now: 300,
-        runId: "recovery-1",
-        sessionId: "session-1",
-      }),
-    ).toMatchObject({ kind: "admitted_recovery" });
-    expect(entry).toMatchObject({
-      abortedLastRun: false,
-      pendingFinalDelivery: { kind: "replayable", text: "captured reply", createdAt: 1 },
-      restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration: "generation-1" }],
-      mainRestartRecovery: {
-        revision: 3,
-        chargedAttempts: 1,
-      },
-    });
-    expect(entry.mainRestartRecovery?.reservation).toBeUndefined();
-    expect(entry.lifecycleRunId).toBe("recovery-1");
-    expect(entry.lastRunId).toBeUndefined();
-
-    expect(
-      transitionMainSessionRecovery(entry, {
-        kind: "mark_admitted_recovery_interrupted",
-        cycleId: "cycle-1",
-        attempt: 1,
-        lifecycleGeneration: "generation-1",
-        now: 400,
-        runId: "recovery-1",
-        sessionId: "session-1",
-      }),
-    ).toMatchObject({ kind: "applied" });
-    expect(entry.mainRestartRecovery?.chargedAttempts).toBe(1);
-    expect(entry.mainRestartRecovery?.reservation).toBeUndefined();
-    expect(entry.abortedLastRun).toBe(true);
-    expect(entry.restartRecoveryDeliveryRunId).toBeUndefined();
-    expect(entry.restartRecoveryDeliverySourceRunId).toBe("source-1");
-    expect(entry.lifecycleRunId).toBeUndefined();
-    expect(entry.lastRunId).toBeUndefined();
-  });
+          now: 400,
+          runId: "recovery-1",
+          sessionId: "session-1",
+        }),
+      ).toMatchObject({ kind: "applied" });
+      expect(entry.mainRestartRecovery?.chargedAttempts).toBe(1);
+      expect(entry.mainRestartRecovery?.reservation).toBeUndefined();
+      expect(entry.abortedLastRun).toBe(true);
+      expect(entry.restartRecoveryDeliveryRunId).toBeUndefined();
+      expect(entry.restartRecoveryDeliverySourceRunId).toBe("source-1");
+      expect(entry.lifecycleRunId).toBeUndefined();
+      expect(entry.lastRunId).toBeUndefined();
+    },
+  );
 
   it("rejects a reservation created by an older lifecycle generation", () => {
     const entry = interruptedEntry({
@@ -695,6 +743,7 @@ describe("main session recovery state", () => {
         status: "done",
         abortedLastRun: false,
         restartRecoveryRuns: undefined,
+        restartRecoveryGoal: undefined,
         mainRestartRecovery: undefined,
       },
     });
@@ -715,6 +764,7 @@ describe("main session recovery state", () => {
         status: "failed",
         abortedLastRun: false,
         restartRecoveryRuns: undefined,
+        restartRecoveryGoal: undefined,
         mainRestartRecovery: undefined,
       },
     });
@@ -973,6 +1023,7 @@ describe("main session recovery state", () => {
         status: "done",
         abortedLastRun: false,
         restartRecoveryRuns: undefined,
+        restartRecoveryGoal: undefined,
         mainRestartRecovery: undefined,
       },
     });

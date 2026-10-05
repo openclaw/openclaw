@@ -10,11 +10,11 @@ import {
 } from "../../infra/kysely-sync.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
-  type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import {
   captureOpenClawAgentDatabaseExecution,
@@ -36,6 +36,7 @@ import {
   buildCreatedSessionGoal,
   buildUpdatedSessionGoalObjective,
   buildUpdatedSessionGoalStatus,
+  buildSessionGoalIssuerPatch,
 } from "./goals-transitions.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
@@ -376,7 +377,18 @@ export function mutateSessionGoalInDatabase(
   const sessionEntry = writeSessionEntry(
     database,
     input.sessionKey,
-    mergeSessionEntry(fresh.entry, { goal }),
+    mergeSessionEntry(fresh.entry, {
+      goal,
+      ...(input.operation.action === "edit"
+        ? {}
+        : buildSessionGoalIssuerPatch(fresh.entry, undefined)),
+      goalPauseOrigin:
+        input.operation.action === "pause"
+          ? "manual"
+          : input.operation.action === "edit"
+            ? fresh.entry.goalPauseOrigin
+            : undefined,
+    }),
     {
       canonicalPreviousEntry: fresh.entry,
     },

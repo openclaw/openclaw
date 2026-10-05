@@ -2,12 +2,19 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { suspendHandlers } from "./suspend.js";
 
 const coordinator = vi.hoisted(() => ({
   prepare: vi.fn(),
   status: vi.fn(),
   resume: vi.fn(),
+  capture: vi.fn(),
+}));
+
+// mock-isolation: Exercise the suspend RPC capture callback without loading real agent SQLite history-worker lanes and recovery registries.
+vi.mock("../../agents/main-session-recovery/main-session-restart-recovery-marking.js", () => ({
+  markRestartAbortedMainSessions: coordinator.capture,
 }));
 
 vi.mock("../../infra/gateway-suspend-coordinator.js", () => ({
@@ -20,23 +27,30 @@ vi.mock("../server-active-work.js", () => ({
   createGatewayServerActiveWorkInspectors: vi.fn(() => ({ getChatRuns: vi.fn(() => 0) })),
 }));
 
-function invoke(method: keyof typeof suspendHandlers, params: unknown) {
+function invoke(
+  method: keyof typeof suspendHandlers,
+  params: unknown,
+  runs = new Map<string, ChatAbortControllerEntry>(),
+) {
   const respond = vi.fn();
   const pauseScheduling = vi.fn();
   const resumeScheduling = vi.fn();
   const warn = vi.fn();
   const info = vi.fn();
   const handler = expectDefined(suspendHandlers[method], "suspendHandlers[method] test invariant");
+  const context = {
+    cron: { pauseScheduling, resumeScheduling },
+    logGateway: { warn },
+    chatAbortControllers: runs,
+    chatQueuedTurns: new Map(),
+    getRuntimeConfig: () => ({}),
+    resolveGatewayContext: (): unknown => context,
+  };
   return Promise.resolve(
     handler({
       params,
       respond,
-      context: {
-        cron: { pauseScheduling, resumeScheduling },
-        logGateway: { warn, info },
-        chatAbortControllers: new Map(),
-        chatQueuedTurns: new Map(),
-      },
+      context,
     } as unknown as Parameters<typeof handler>[0]),
   ).then(() => ({ respond, pauseScheduling, resumeScheduling, info }));
 }
@@ -46,6 +60,41 @@ beforeEach(() => {
 });
 
 describe("gateway suspend handlers", () => {
+  it("captures exact accepted preparation runs through the registered before-drain handler", async () => {
+    coordinator.prepare.mockReturnValueOnce({
+      status: "draining",
+      suspensionId: "accepted-suspension",
+      expiresAtMs: Date.now() + 60_000,
+    });
+    const entry: ChatAbortControllerEntry = {
+      controller: new AbortController(),
+      sessionId: "accepted-session",
+      sessionKey: "agent:main:accepted",
+      lifecycleGeneration: "accepted-generation",
+      startedAtMs: 1,
+      expiresAtMs: Date.now() + 60_000,
+      accepted: true,
+    };
+    await invoke(
+      "gateway.suspend.prepare",
+      { requestId: "accepted-capture", drain: true },
+      new Map([["accepted-run", entry]]),
+    );
+    const options = coordinator.prepare.mock.calls[0]![0];
+    await options.beforeDrain(() => {});
+    const captured = coordinator.capture.mock.calls[0]![0];
+    expect(captured.captureGoals).toBe(true);
+    expect(captured.activeRuns).toEqual([
+      expect.objectContaining({
+        runId: "accepted-run",
+        sessionId: "accepted-session",
+        accepted: true,
+      }),
+    ]);
+    expect(captured.isActiveRun(captured.activeRuns[0])).toBe(true);
+    entry.controller.abort();
+    expect(captured.isActiveRun(captured.activeRuns[0])).toBe(false);
+  });
   it("validates the closed prepare params shape", async () => {
     const { respond } = await invoke("gateway.suspend.prepare", {
       requestId: "request-1",

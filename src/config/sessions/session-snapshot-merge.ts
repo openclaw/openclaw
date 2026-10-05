@@ -49,6 +49,7 @@ const MODEL_OVERRIDE_CONFLICT_DEPENDENT_FIELDS = ["contextWindow", "thinkingLeve
 const MAIN_SESSION_RECOVERY_TRANSACTION_FIELDS = [
   "abortedLastRun",
   "restartRecoveryRuns",
+  "restartRecoveryGoal",
   "restartRecoveryForceSafeTools",
   "mainRestartRecovery",
 ] as const satisfies ReadonlyArray<keyof SessionEntry>;
@@ -69,6 +70,8 @@ function mainSessionRecoveryCycleChanged(before: SessionEntry, after: SessionEnt
     beforeState?.chargedAttempts !== afterState?.chargedAttempts ||
     beforeState?.startedAttempt !== afterState?.startedAttempt ||
     !isDeepStrictEqual(beforeState?.reservation, afterState?.reservation) ||
+    !isDeepStrictEqual(beforeState?.pause, afterState?.pause) ||
+    !isDeepStrictEqual(beforeState?.acknowledgedPause, afterState?.acknowledgedPause) ||
     !isDeepStrictEqual(beforeState?.tombstone, afterState?.tombstone)
   );
 }
@@ -77,6 +80,7 @@ function mainSessionRecoveryTransactionChanged(before: SessionEntry, after: Sess
   return (
     before.abortedLastRun !== after.abortedLastRun ||
     !isDeepStrictEqual(before.restartRecoveryRuns, after.restartRecoveryRuns) ||
+    !isDeepStrictEqual(before.restartRecoveryGoal, after.restartRecoveryGoal) ||
     before.restartRecoveryForceSafeTools !== after.restartRecoveryForceSafeTools ||
     mainSessionRecoveryCycleChanged(before, after)
   );
@@ -105,6 +109,7 @@ function isCanonicalMainSessionRecoveryClear(entry: SessionEntry): boolean {
   return (
     entry.abortedLastRun === false &&
     entry.restartRecoveryRuns === undefined &&
+    entry.restartRecoveryGoal === undefined &&
     entry.restartRecoveryForceSafeTools === undefined &&
     entry.mainRestartRecovery === undefined
   );
@@ -217,6 +222,7 @@ export function projectSessionSnapshotChanges(
     !mainRecoveryOwnershipChangedConcurrently &&
     Boolean(initial.mainRestartRecovery && current.mainRestartRecovery) &&
     !mainSessionRecoveryCycleChanged(initial, current) &&
+    isDeepStrictEqual(initial.restartRecoveryGoal, current.restartRecoveryGoal) &&
     params.initial.restartRecoveryForceSafeTools === params.current.restartRecoveryForceSafeTools &&
     restartRecoveryRunsOnlyConsumed(params.initial, params.current);
   if (
@@ -224,7 +230,7 @@ export function projectSessionSnapshotChanges(
     !mainRecoveryOwnershipChangedConcurrently &&
     (!mainRecoveryChangedConcurrently || currentOnlyConsumedLifecycleFences)
   ) {
-    // Apply all four fields together. Concurrent ownership changes settle through
+    // Apply the recovery fields together. Concurrent ownership changes settle through
     // their lifecycle/release owner, never through an older run-local snapshot.
     for (const field of MAIN_SESSION_RECOVERY_TRANSACTION_FIELDS) {
       patchRecord[field] = Object.hasOwn(params.next, field) ? next[field] : undefined;

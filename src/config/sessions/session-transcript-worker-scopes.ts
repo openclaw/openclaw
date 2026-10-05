@@ -34,6 +34,11 @@ export async function withHistoryDatabase<T>(
       () => scope.run(database, operation),
     );
     historyDatabaseScopes.delete(key);
+    if (operationLabel === "doctor-session-recovery") {
+      // Doctor disposes its private snapshot immediately after this one-shot reply.
+      scope.close();
+      return { ok: true, value, closedHistoryDatabase: database };
+    }
     // Tasks without retained connections must not evict useful connections or retain empty scopes.
     if (!scope.hasRetainedConnection) {
       return { ok: true, value, closedHistoryDatabase: database };

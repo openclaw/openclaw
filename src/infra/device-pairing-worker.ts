@@ -65,6 +65,9 @@ function commitReceipt(value: unknown): DevicePairingCommitReceipt {
       (entry) =>
         isRecord(entry) &&
         typeof entry.deviceId === "string" &&
+        (entry.operatorIdentity === undefined ||
+          entry.operatorIdentity === null ||
+          typeof entry.operatorIdentity === "string") &&
         (entry.binding === null ||
           (isRecord(entry.binding) &&
             typeof entry.binding.identity === "string" &&
@@ -112,6 +115,7 @@ function commitReceipt(value: unknown): DevicePairingCommitReceipt {
     ...(workerEnvironment ? { workerEnvironment } : {}),
     changed: value.changed.map((entry) => ({
       deviceId: entry.deviceId,
+      ...(entry.operatorIdentity === undefined ? {} : { operatorIdentity: entry.operatorIdentity }),
       binding:
         entry.binding === null
           ? null

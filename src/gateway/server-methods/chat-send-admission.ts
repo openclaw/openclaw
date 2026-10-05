@@ -31,7 +31,6 @@ import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admi
 import { registerChatAbortController } from "../chat-abort.js";
 import { retainGatewayOperatorRun } from "../operator-run-cancellation.js";
 import type { DedupeEntry } from "../server-shared.js";
-import { writePreRegisteredChatAbort } from "./chat-abort-authorization.js";
 import {
   resolveRestartSafeChatAdmission,
   withRestartSafeChatPlacement,
@@ -69,6 +68,7 @@ import {
   admitChatSendUploads,
   assertChatSendExclusiveAdmission,
   createChatSendWorkAdmission,
+  assertChatSendWorkAdmissionCurrent,
   consumeChatSendAdmissionRetry,
   prepareChatSendAdmissionRetry,
   withCurrentChatSendRetry,
@@ -164,14 +164,7 @@ export async function admitChatSend(
   }
   let retryComparison = reserved.retryComparison;
   const uploadAdmission = reserved.uploadAdmission;
-  const abortPendingChatSend = (stopReason: string) =>
-    writePreRegisteredChatAbort({
-      context,
-      runId: clientRunId,
-      stopReason,
-      attemptId: pendingAttemptId,
-      requestIdentity,
-    });
+  const abortPendingChatSend = pendingReservation.abort;
   let admittedSessionId = backingSessionId ?? clientRunId;
   let expectedActiveReplyOperation: ReplyOperation | undefined;
   let gatewayWorkAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
@@ -697,20 +690,15 @@ export async function admitChatSend(
       retainGatewayWorkAdmission: retainedWork.retain,
       setPendingInputCleanup: retainedWork.setPendingInputCleanup,
       assertClientUploadAllowed: uploadAdmission.assertClientUploadAllowed,
-      assertWorkAdmissionCurrent: () => {
-        const queued = context.chatQueuedTurns.get(clientRunId);
-        // Collect retires source cancellation while retaining the original
-        // admission until the aggregate commits or settles.
-        if (
-          !retainedWork.isActive() ||
-          !acquiredGatewayWorkAdmission.isActive() ||
-          lifecycleGeneration !== getAgentEventLifecycleGeneration() ||
-          (activeRunAbort.controller.signal.aborted &&
-            !(queued?.controller === activeRunAbort.controller && queued.abortable === false))
-        ) {
-          throw new Error("Chat admission ended or was cancelled; submit a new turn.");
-        }
-      },
+      assertWorkAdmissionCurrent: () =>
+        assertChatSendWorkAdmissionCurrent({
+          context,
+          clientRunId,
+          retainedWork,
+          admission: acquiredGatewayWorkAdmission,
+          lifecycleGeneration,
+          controller: activeRunAbort.controller,
+        }),
       restartSafeAdmission,
       setDiscardAbandonedPreparedMedia: setDiscardPreparedMedia,
     },

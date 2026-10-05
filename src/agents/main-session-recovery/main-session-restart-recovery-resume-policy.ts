@@ -326,6 +326,12 @@ function requiresRestartSafeToolResult(message: unknown): boolean {
 
 type MainSessionResumePolicy =
   | {
+      action: "pause";
+      reason: "unverifiable-external-effect";
+      toolCallId?: string;
+      toolName?: string;
+    }
+  | {
       action: "complete";
       reason: "delivered-terminal" | "delivered-terminal-receipt";
       toolCallId: string;
@@ -336,6 +342,122 @@ type MainSessionResumePolicy =
       forceRestartSafeTools: boolean;
       forceCodeModeTools?: true;
     };
+
+/** Reconciles the original turn in order without retaining transcript content. */
+export function createRestartEffectReconciler(
+  verifiedToolCallId?: string,
+  expectedSourceTurnId?: string,
+  preserveUnresolvedAcrossTurns = false,
+) {
+  type Effect = Extract<MainSessionResumePolicy, { action: "pause" }>;
+  const pending = new Map<string, Effect>();
+  const verifiedMirrorIds = new Set<string>();
+  let anonymousCalls = 0;
+  let checkpoint: ReturnType<typeof readCodeModeCheckpoint>;
+  let turn = 0;
+  const effectKey = (id: string) => (preserveUnresolvedAcrossTurns ? `${turn}:${id}` : id);
+  return {
+    visit(message: unknown) {
+      const record = asOptionalRecord(message);
+      const role = getMessageRole(message);
+      if (role === "user" && !isMainSessionRestartRecoveryInputProvenance(record?.provenance)) {
+        if (!preserveUnresolvedAcrossTurns) {
+          pending.clear();
+        }
+        turn += 1;
+        verifiedMirrorIds.clear();
+        checkpoint = undefined;
+        return;
+      }
+      if (role === "tool" || role === "toolResult") {
+        const toolCallId = normalizeOptionalString(record?.toolCallId);
+        const toolName = normalizeOptionalString(record?.toolName);
+        const details = asOptionalRecord(record?.details);
+        if (
+          toolCallId &&
+          (toolCallId === verifiedToolCallId || verifiedMirrorIds.has(toolCallId))
+        ) {
+          pending.delete(effectKey(toolCallId));
+        } else if (
+          details?.reason === "missing_tool_result" &&
+          !isAgentToolReplaySafe({ name: toolName })
+        ) {
+          pending.set(effectKey(toolCallId ?? `anonymous:${++anonymousCalls}`), {
+            action: "pause",
+            reason: "unverifiable-external-effect",
+            toolCallId,
+            toolName,
+          });
+        } else if (toolCallId && !isRestartAbortedWaitFailure(message)) {
+          // Approval-pending is a recorded refusal to execute, not an unknown effect.
+          pending.delete(effectKey(toolCallId));
+        }
+        checkpoint = readCodeModeCheckpoint(message) ?? checkpoint;
+        return;
+      }
+      if (role !== "assistant") {
+        return;
+      }
+      const mirror = readTerminalSourceReplyDeliveryMirror(message);
+      if (
+        expectedSourceTurnId &&
+        mirror?.sourceTurnId === expectedSourceTurnId &&
+        mirror.toolCallId
+      ) {
+        verifiedMirrorIds.add(mirror.toolCallId);
+        pending.delete(effectKey(mirror.toolCallId));
+      }
+      if (!Array.isArray(record?.content)) {
+        return;
+      }
+      for (const block of record.content) {
+        const call = asOptionalRecord(block);
+        if (call?.type !== "toolCall" && call?.type !== "toolUse" && call?.type !== "tool_use") {
+          continue;
+        }
+        const toolCallId = normalizeOptionalString(call.id);
+        const toolName = normalizeOptionalString(call.name);
+        if (
+          toolCallId &&
+          (toolCallId === verifiedToolCallId || verifiedMirrorIds.has(toolCallId))
+        ) {
+          continue;
+        }
+        if (isAgentToolReplaySafe({ name: toolName })) {
+          continue;
+        }
+        if (toolName === CODE_MODE_WAIT_TOOL_NAME) {
+          const args = asOptionalObjectRecord(call.arguments ?? call.input);
+          if (
+            checkpoint?.replaySafe === true &&
+            checkpoint.runId === normalizeOptionalString(args?.runId)
+          ) {
+            continue;
+          }
+        }
+        pending.set(effectKey(toolCallId ?? `anonymous:${++anonymousCalls}`), {
+          action: "pause",
+          reason: "unverifiable-external-effect",
+          toolCallId,
+          toolName,
+        });
+      }
+    },
+    effect: () => pending.values().next().value,
+  };
+}
+
+export function resolveUnverifiableRestartEffect(
+  messages: readonly unknown[],
+  verifiedToolCallId?: string,
+  expectedSourceTurnId?: string,
+) {
+  const reconciler = createRestartEffectReconciler(verifiedToolCallId, expectedSourceTurnId);
+  for (const message of messages) {
+    reconciler.visit(message);
+  }
+  return reconciler.effect();
+}
 
 export function resolveMainSessionResumePolicy(
   messages: unknown[],
@@ -350,6 +472,14 @@ export function resolveMainSessionResumePolicy(
     messages,
     expectedSourceTurnId,
   );
+  const effect = resolveUnverifiableRestartEffect(
+    messages,
+    deliveryReceiptState === "delivered-terminal" ? deliveryToolCallId : undefined,
+    expectedSourceTurnId,
+  );
+  if (effect) {
+    return effect;
+  }
   if (mirroredToolCallId) {
     return { action: "complete", reason: "delivered-terminal", toolCallId: mirroredToolCallId };
   }

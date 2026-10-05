@@ -147,6 +147,7 @@ export function buildGatewaySessionSnapshot(params: {
     systemSent: sessionRow.systemSent,
     abortedLastRun: sessionRow.abortedLastRun,
     restartRecoveryStatus: sessionRow.restartRecoveryStatus ?? null,
+    interruptedAction: sessionRow.interruptedAction ?? null,
     inputTokens: sessionRow.inputTokens,
     outputTokens: sessionRow.outputTokens,
     lastChannel: sessionRow.lastChannel,

@@ -33,6 +33,10 @@ export async function retainGatewayOperatorRun(
   },
 ) {
   const captured = await captureGatewayOperatorRunAuthority(params);
+  const assertSourceCurrent = captured?.authority.assertCurrent;
+  if (params.entry && assertSourceCurrent) {
+    params.entry.assertSourceCurrent = assertSourceCurrent;
+  }
   const releaseSource =
     captured?.release ?? retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
   const signal = captured?.authority.signal;

@@ -171,6 +171,8 @@ export type AuthenticatedGatewayConnect = {
 };
 
 export type DeviceAuthorizedGatewayConnect = AuthenticatedGatewayConnect & {
+  /** Private exact operator pairing cohort admitted by this handshake. */
+  operatorPairingIdentity?: string;
   deviceToken: DeviceAuthToken | null;
   bootstrapDeviceTokens: Array<{
     deviceToken: string;

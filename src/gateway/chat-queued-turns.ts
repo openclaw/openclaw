@@ -9,11 +9,75 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
+import { withSessionPendingInputQueue } from "../config/sessions/session-accessor.pending-inputs.js";
 import {
   resolveChatAbortDiagnosticReason,
   type ChatAbortDiagnosticReason,
 } from "./chat-abort-diagnostics.js";
 import { chatRunBelongsToAgent } from "./chat-run-owner.js";
+
+/** Restart drops controllers, not durable custody; current RPC authority still owns cancellation. */
+export async function cancelDurableQueuedChatTurns(params: {
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+  runId?: string;
+  assertCurrent: () => void;
+  authorize: (
+    target: Pick<QueuedChatTurnEntry, "sessionKey" | "sessionId" | "agentId" | "ownerDeviceId">,
+  ) => boolean;
+}): Promise<string[]> {
+  return withSessionPendingInputQueue(
+    {
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    },
+    params.assertCurrent,
+    async (operation) => {
+      const cancelled: string[] = [];
+      let afterSeq: number | undefined;
+      let throughSeq: number | undefined;
+      for (;;) {
+        const snapshot = await operation.read(params.runId, { afterSeq, throughSeq });
+        params.assertCurrent();
+        const { current, rows, entry } = snapshot;
+        if (!current || !entry || entry.sessionId !== params.sessionId) {
+          return cancelled;
+        }
+        throughSeq ??= snapshot.throughSeq;
+        for (const row of rows) {
+          const target = {
+            agentId: params.agentId,
+            sessionId: row.session_id,
+            sessionKey: row.session_key,
+            ownerDeviceId: row.ownerDeviceId,
+          };
+          if (!params.authorize(target)) {
+            continue;
+          }
+          const assertCancellationCurrent = () => {
+            params.assertCurrent();
+            if (!params.authorize(target)) {
+              throw new Error("Queued input cancellation authority changed");
+            }
+          };
+          assertCancellationCurrent();
+          if (await operation.cancel(entry, row, assertCancellationCurrent)) {
+            cancelled.push(row.run_id);
+          }
+        }
+        params.assertCurrent();
+        if (params.runId || snapshot.nextAfterSeq === undefined) {
+          return cancelled;
+        }
+        afterSeq = snapshot.nextAfterSeq;
+      }
+    },
+  );
+}
 
 export type QueuedChatTurnEntry = {
   controller: AbortController;

@@ -38,6 +38,7 @@ type CapturedRevocation = {
   hasSourceAuthority: boolean;
   isRevocationCurrent: CurrentCaller;
   sourceIdentity: object;
+  sourceDependencies?: SourceDependencies;
   releaseSourceIdentity?: () => void;
   releaseClientRevocation?: () => void;
 };
@@ -174,6 +175,7 @@ export function captureGatewayDeviceRevocation(
     hasSourceAuthority: sourceAuthority !== undefined,
     isRevocationCurrent,
     sourceIdentity: Object.freeze({}),
+    sourceDependencies: sourceAuthority?.dependencies,
   };
   captures.set(isCurrent, capture);
   capture.releaseClientRevocation = sourceAuthority?.subscribe(() => revoke(state));
@@ -237,6 +239,22 @@ export function readGatewayDeviceSourceIdentity(
   guard: (() => unknown) | undefined,
 ): object | undefined {
   return guard ? captures.get(guard)?.sourceIdentity : undefined;
+}
+
+/** Original attested dependency references, available only through a live host capture. */
+export function readGatewayDeviceRecoverySource(guard: (() => unknown) | undefined) {
+  const capture = guard ? captures.get(guard) : undefined;
+  const dependencies = capture?.sourceDependencies;
+  if (!capture?.isSourceCurrent() || !dependencies || capture.state.role !== "operator") {
+    return undefined;
+  }
+  return {
+    deviceId: capture.state.deviceId,
+    authPolicyGeneration: dependencies.authPolicyGeneration,
+    shared: dependencies.sharedGenerationOwner
+      ? { generation: dependencies.sharedGeneration, owner: dependencies.sharedGenerationOwner }
+      : null,
+  };
 }
 
 /** Notify retained work of access revocation, independently of transport or Gateway shutdown. */

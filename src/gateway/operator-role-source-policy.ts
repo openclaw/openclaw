@@ -1,4 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import type {
   GatewayOperatorRoleDefinition,
   GatewayOperatorRolesConfig,
@@ -11,6 +13,13 @@ export function sourceRolePolicy(role: GatewayOperatorRoleDefinition | undefined
   }
   const { modelPolicy: _modelPolicy, ...sourcePolicy } = role;
   return sourcePolicy;
+}
+
+/** Durable original-source comparison; model ceilings retain their separate narrowing contract. */
+export function resolveOperatorRoleSourcePolicyGeneration(
+  role: GatewayOperatorRoleDefinition | undefined,
+): string | null {
+  return role ? sha256Hex(stableStringify(sourceRolePolicy(role))) : null;
 }
 
 export function sourceRolePolicies(roles: GatewayOperatorRolesConfig | undefined) {

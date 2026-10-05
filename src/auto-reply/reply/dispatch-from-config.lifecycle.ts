@@ -48,6 +48,10 @@ import {
   waitForReplyBarrierSettlement,
 } from "./reply-run-registry.js";
 import {
+  mayRetainActiveReplyAdmission,
+  observeReplyAdmissionBoundary,
+} from "./reply-turn-admission-errors.js";
+import {
   admitReplyTurn,
   resolveReplyTurnKind,
   runWithReplyOperationLifecycleAdmission,
@@ -418,6 +422,12 @@ export function createDispatchReplyOperationCoordinator(params: {
           onLifecycleInterrupt,
         });
       } catch (error) {
+        observeReplyAdmissionBoundary(
+          replyTurnKind,
+          "predispatch-refused",
+          replyRunRegistry.get(dispatchOperationSessionKey),
+          error,
+        );
         if (
           phase === "pre_dispatch" &&
           replyTurnKind === "visible" &&
@@ -438,7 +448,8 @@ export function createDispatchReplyOperationCoordinator(params: {
       replyTurnKind === "visible" &&
       isRecoverableTerminalSessionStatus(params.operationSessionStoreEntry.entry?.status) &&
       admission.activeOperation?.sessionId === params.operationSessionStoreEntry.entry?.sessionId &&
-      !admission.activeOperation?.terminalRecovery
+      !admission.activeOperation?.terminalRecovery &&
+      mayRetainActiveReplyAdmission(replyTurnKind, admission.activeOperation)
     ) {
       const cleared = forceClearReplyRunBySessionId(
         admission.activeOperation?.sessionId ?? operationSessionId,

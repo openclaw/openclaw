@@ -27,6 +27,7 @@ function renderDiff(item: { additions?: number; deletions?: number }) {
 }
 
 function pullRequestPreview(pr: ControlUiSessionPullRequest): ControlUiLinkReaderPreview {
+  const source = URL.parse(pr.url);
   return {
     url: pr.url,
     title: pr.title,
@@ -43,9 +44,10 @@ function pullRequestPreview(pr: ControlUiSessionPullRequest): ControlUiLinkReade
               : "neutral",
     },
     author: pr.author?.login,
-    authorUrl: pr.author?.login
-      ? "https://github.com/" + encodeURIComponent(pr.author.login)
-      : undefined,
+    authorUrl:
+      pr.author?.login && source?.protocol === "https:" && !source.username && !source.password
+        ? source.origin + "/" + encodeURIComponent(pr.author.login)
+        : undefined,
     metadata: [
       ...(pr.additions === undefined
         ? []
@@ -122,9 +124,7 @@ class ActivitySessionGit extends OpenClawLightDomElement {
     if (!snapshot) {
       return nothing;
     }
-    const branch = snapshot.pullRequests.some((pr) => pr.state === "open" || pr.state === "draft")
-      ? undefined
-      : snapshot.branch;
+    const branch = snapshot.branch;
     if (!branch && snapshot.pullRequests.length === 0) {
       return nothing;
     }
@@ -133,6 +133,7 @@ class ActivitySessionGit extends OpenClawLightDomElement {
       .client=${gateway.snapshot.phase === "connected" ? gateway.snapshot.client : null}
       .readers=${availableLinkPreviewReaders(gateway.snapshot)}
       .agentId=${this.agentId}
+      .sessionKey=${this.sessionKey}
       .previewSeeds=${snapshot.pullRequests.map(pullRequestPreview)}
     >
       <div class="activity-feed__git">

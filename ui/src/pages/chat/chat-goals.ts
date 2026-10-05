@@ -3,11 +3,14 @@ import { Value } from "typebox/value";
 import {
   SessionsGoalClearParamsSchema,
   SessionsGoalUpdateParamsSchema,
+  GoalRecoveryDecisionSchema,
+  type GoalRecoveryDecision,
   type SessionsGoalClearParams,
   type SessionsGoalMutationResult,
   type SessionsGoalUpdateParams,
 } from "../../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
 import type { ChatGoalAction, ChatGoalDraft, ChatGoalRecovery } from "../../lib/chat/chat-types.ts";
@@ -59,6 +62,8 @@ const rejectedGoalReasons = new Set([
   "goal-rebound",
   "capacity",
   "invalid",
+  "recovery-decision-changed",
+  "recovery-decision-caller",
 ]);
 
 function rejectGoalOperation(host: ChatHost, message: string): false {
@@ -191,7 +196,7 @@ export async function mutateChatGoal(
 
 async function runGoalOperation(
   host: ChatHost,
-  action?: { goalId: string } & (
+  action?: { goalId: string; recoveryDecision?: GoalRecoveryDecision } & (
     | { action: ChatGoalAction }
     | { action: "edit"; objective: string }
   ),
@@ -353,7 +358,13 @@ async function runGoalOperation(
           ? identity
           : action.action === "edit"
             ? { ...identity, action: "edit", objective: action.objective }
-            : { ...identity, action: action.action },
+            : {
+                ...identity,
+                action: action.action,
+                ...(action.action === "resume" && action.recoveryDecision
+                  ? { recoveryDecision: action.recoveryDecision }
+                  : {}),
+              },
       pending: false,
     };
     const schema =
@@ -445,6 +456,38 @@ async function runGoalOperation(
     const details =
       error instanceof GatewayRequestError && isRecord(error.details) ? error.details : null;
     const reason = details?.reason;
+    if (
+      error instanceof GatewayRequestError &&
+      details?.code === "GOAL_RECOVERY_DECISION_REQUIRED" &&
+      "action" in params &&
+      params.action === "resume" &&
+      details.goalId === params.goalId &&
+      details.sessionId === params.sessionId &&
+      Value.Check(GoalRecoveryDecisionSchema, details.recoveryDecision)
+    ) {
+      // This structured pre-admission refusal proves no turn or Goal receipt was accepted.
+      operations.delete(signature);
+      settleSavedOperation();
+      operation.pending = false;
+      if (!targetIsCurrent()) {
+        return false;
+      }
+      const confirmed = await showConfirmDialog({
+        title: t("chat.goals.recoveryDecisionTitle"),
+        message: t("chat.goals.recoveryDecisionMessage"),
+        requiredAcknowledgement: t("chat.goals.recoveryDecisionAcknowledgement"),
+        confirmLabel: t("chat.goals.recoveryDecisionConfirm"),
+        danger: true,
+      });
+      if (!confirmed || !targetIsCurrent()) {
+        return false;
+      }
+      return await runGoalOperation(host, {
+        action: "resume",
+        goalId: params.goalId,
+        recoveryDecision: details.recoveryDecision,
+      });
+    }
     const rejected =
       typeof reason === "string" &&
       ((details?.code === "GOAL_OPERATION_REJECTED" && rejectedGoalReasons.has(reason)) ||

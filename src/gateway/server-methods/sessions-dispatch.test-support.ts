@@ -104,6 +104,7 @@ type DispatchSessionEntry = Pick<
   | "modelSelectionLocked"
   | "providerOverride"
   | "modelOverride"
+  | "createdActor"
   | "permissionMode"
   | "sessionRoot"
 >;

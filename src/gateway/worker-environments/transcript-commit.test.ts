@@ -527,6 +527,7 @@ describe("worker transcript commit application", () => {
         request: { message: text, idempotencyKey: runId },
         cfg,
         resolvedSessionKey: SESSION_KEY,
+        sessionStorePath: storePath,
         admittedSessionId: SESSION_ID,
         activeSessionAgentId: "main",
         suppressVisibleSessionEffects: false,

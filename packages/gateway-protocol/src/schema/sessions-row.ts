@@ -12,6 +12,7 @@ import {
 import { SessionActivitySummarySchema } from "./sessions-activity-summary.js";
 import { SessionProviderReviewProjectionSchema } from "./sessions-provider-review.js";
 import { SessionSharingRoleSchema, SessionVisibilitySchema } from "./sessions-sharing-values.js";
+import { SessionUnknownOutcomeDecisionSchema } from "./sessions-unknown-outcome.js";
 
 export const SessionPermissionModeSchema = Type.Union([
   Type.Literal("read-only"),
@@ -169,6 +170,14 @@ export const SessionRowSchema = Type.Object(
     /** Exact run that produced the latest terminal lifecycle projection. */
     lastRunId: Type.Optional(NonEmptyString),
     restartRecoveryStatus: Type.Optional(Type.Literal("tombstoned")),
+    interruptedAction: Type.Optional(
+      closedObject({
+        reason: Type.Literal("unverifiable-external-effect"),
+        toolCallId: Type.Optional(NonEmptyString),
+        toolName: Type.Optional(NonEmptyString),
+        decision: Type.Optional(SessionUnknownOutcomeDecisionSchema),
+      }),
+    ),
     activeLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedBy: Type.Optional(Type.String()),
     parentSessionKey: Type.Optional(Type.String()),

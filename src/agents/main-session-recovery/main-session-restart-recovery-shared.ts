@@ -7,6 +7,7 @@ import {
   type InternalSessionEntry as SessionEntry,
   type SessionStoreTarget,
 } from "../../config/sessions.js";
+import { isCapturedMainRestartTurnCurrent } from "../../config/sessions/main-session-recovery.types.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
 import { isPerAgentSessionStoreConfig } from "../../config/sessions/session-store-config.js";
 import { prepareSessionStoreTargetInventory } from "../../config/sessions/session-store-target-inventory.js";
@@ -32,6 +33,31 @@ export type ExpectedRestartRecoveryTarget = {
 export type ExhaustedRestartRecoveryTarget = ExpectedRestartRecoveryTarget & {
   storePath: string;
 };
+
+export function readInterruptedRunId(entry: SessionEntry): string | undefined {
+  const original = entry.mainRestartRecovery?.turnIntent?.runId;
+  if (original && entry.restartRecoveryRuns?.some((run) => run.runId === original)) {
+    return original;
+  }
+  const runs = entry.restartRecoveryRuns;
+  // Terminal settlement can retire the pre-start fence while the accepted input
+  // still belongs to restart recovery. Resolve its source, never mint its authority.
+  if (
+    original &&
+    entry.abortedLastRun === true &&
+    !runs?.length &&
+    !normalizeOptionalString(entry.lifecycleRunId) &&
+    !normalizeOptionalString(entry.restartRecoveryDeliveryRunId) &&
+    isCapturedMainRestartTurnCurrent(entry)
+  ) {
+    return original;
+  }
+  return runs?.length === 1
+    ? runs[0]?.runId
+    : !runs?.length
+      ? normalizeOptionalString(entry.lifecycleRunId)
+      : undefined;
+}
 
 export function resolveRestartRecoveryTerminalClientRunId(
   entry: Pick<SessionEntry, "restartRecoveryDeliverySourceRunId" | "restartRecoverySourceIngress">,

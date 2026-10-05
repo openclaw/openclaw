@@ -6,6 +6,10 @@ import type {
   readSessionEntryResetRecallCutoff,
 } from "../../../packages/memory-host-sdk/src/host/session-files.js";
 import type { BoardReadOperations } from "../../boards/sqlite-board-operations.js";
+import type {
+  DoctorSessionRecoveryInput,
+  DoctorSessionRecoveryDiagnostic,
+} from "../../commands/doctor-session-recovery.types.js";
 import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
 import type {
   SessionRowTranscriptFields,
@@ -336,6 +340,7 @@ type BoardWidgetDocumentWorkerInput = BoardReadWorkerInput<
 >;
 
 export type SessionHistoryWorkerInput =
+  | DoctorSessionRecoveryInput
   | BoardSnapshotWorkerInput
   | BoardWidgetDocumentWorkerInput
   | SessionStoreProjectionWorkerInput
@@ -408,6 +413,7 @@ export type SessionHistoryWorkerPreparedInput =
   PreparedHistoryInput<SessionHistoryDatabaseWorkerInput>;
 
 export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValues & {
+  "doctor-session-recovery": DoctorSessionRecoveryDiagnostic;
   "board-snapshot": {
     kind: "board-snapshot";
     value: BoardReadOperations["boards.readSnapshot"]["output"];
@@ -551,6 +557,10 @@ type CancellableSessionHistoryReader<
 > = (input: Omit<Input, "kind" | "database">, signal?: AbortSignal) => Promise<Value>;
 
 export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
+  readDoctorSessionRecovery: SessionHistoryReader<
+    DoctorSessionRecoveryInput,
+    DoctorSessionRecoveryDiagnostic
+  >;
   readBoardSnapshot: SessionHistoryReader<
     BoardSnapshotWorkerInput,
     BoardReadOperations["boards.readSnapshot"]["output"]

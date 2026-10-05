@@ -17,7 +17,7 @@ import {
   parsePullListItem,
   type ControlUiSessionPullRequestsParams,
 } from "./control-ui-session-prs.js";
-import { gitHubPublicApi } from "./github-public-api.js";
+import { gitHubPublicApi, type ControlUiGitHubPreviewIdentity } from "./github-public-api.js";
 
 const checkDetailsCache = createRetainedCache<{
   expiresAt: number;
@@ -42,6 +42,7 @@ type LoadSessionCheckDetailsDeps = {
   sessionScope: string;
   assertCurrent: () => void;
   fetchImpl?: typeof fetch;
+  githubIdentity?: ControlUiGitHubPreviewIdentity;
   loadPullRequests: (
     params: ControlUiSessionPullRequestsParams,
     deps: { fetchImpl?: typeof fetch },
@@ -79,10 +80,12 @@ export async function loadControlUiSessionPullRequestChecks(
     return unavailable("The session pull request or head changed; reopen CI details");
   }
   const host = new URL(pull.url).hostname;
+  await deps.githubIdentity?.revalidate();
   const read = prepareSessionPullRequestGitHubRead(
     host,
     deps.fetchImpl ?? fetch,
     deps.assertCurrent,
+    { identity: deps.githubIdentity },
   );
   const assertCurrent = read.assertCurrent;
   const checkTarget = { ...target, host, apiBaseUrl: read.apiBaseUrl };
@@ -109,12 +112,22 @@ export async function loadControlUiSessionPullRequestChecks(
       lastGood: previous,
       access: createGitHubReadGroup(),
     };
-    releaseReader = pending.access.add(deps.assertCurrent);
+    releaseReader = pending.access.add(read.assertCurrent, undefined, deps.githubIdentity);
+    const sharedIdentity = deps.githubIdentity
+      ? {
+          ...deps.githubIdentity,
+          assertSelected: pending.access.assertCurrent,
+          revalidate: async () => {
+            await pending.access.identity()?.revalidate();
+            pending.access.assertCurrent();
+          },
+        }
+      : undefined;
     const transportRead = prepareSessionPullRequestGitHubRead(
       host,
       deps.fetchImpl ?? fetch,
       pending.access.assertCurrent,
-      { signal: pending.access.signal },
+      { signal: pending.access.signal, identity: sharedIdentity },
     );
     activeCheckDetails += 1;
     const load = async (): Promise<ControlUiSessionPullRequestCheckDetails> => {
@@ -226,7 +239,8 @@ export async function loadControlUiSessionPullRequestChecks(
     checkDetailsCache.set(key, pending);
     entry = pending;
   }
-  const release = releaseReader ?? entry.access.add(deps.assertCurrent);
+  const release =
+    releaseReader ?? entry.access.add(read.assertCurrent, undefined, deps.githubIdentity);
   try {
     const result = await entry.promise;
     assertCurrent();

@@ -185,7 +185,7 @@ describe("Gateway host lifecycle authority", () => {
   it("does not carry an armed lease into another host iteration in the same process", async () => {
     const first = owner();
     const processInstanceId = getGatewayProcessInstanceId();
-    const lease = prepareGatewaySuspend({
+    const lease = await prepareGatewaySuspend({
       requestId: "host-iteration-handoff",
       drain: true,
       pauseScheduling: () => {},

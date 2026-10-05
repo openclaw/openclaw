@@ -7,7 +7,9 @@ import type { AttachedChatWorkContext } from "../chat/work-context.js";
 import type {
   SessionTranscriptTurnMutation,
   SessionTranscriptTurnMutationResult,
+  GoalRecoveryInputAdmission,
 } from "../config/sessions/goals-operations.types.js";
+import type { TurnRecoveryIssuerAdmission } from "../config/sessions/main-session-recovery.types.js";
 import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
@@ -15,6 +17,7 @@ import type {
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import type { TranscriptTurnAdmission } from "../config/sessions/transcript-turn-admission.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MediaFactInput } from "../media/media-facts.js";
 import type { InputProvenance } from "./input-provenance.js";
 
@@ -97,7 +100,7 @@ export type UserTurnMessagePersistenceParams = {
   agentId?: string;
   sessionKey?: string;
   cwd?: string;
-  config?: unknown;
+  config?: OpenClawConfig;
   updateMode?: UserTurnTranscriptUpdateMode;
   beforeMessageWrite?: UserTurnBeforeMessageWrite;
 };
@@ -119,7 +122,7 @@ export type UserTurnTranscriptTarget = {
   agentId: string;
   threadId?: string | number;
   cwd?: string;
-  config?: unknown;
+  config?: OpenClawConfig;
   beforeMessageWrite?: UserTurnBeforeMessageWrite;
 };
 
@@ -212,7 +215,10 @@ export type UserTurnTranscriptRecorder = {
     assertAdmittedCurrent?: () => void;
     assertCompletionCurrent?: () => void;
     authority?: import("../config/sessions/session-pending-input-authority.js").SessionPendingInputAuthority;
+    turnIssuerAdmission?: TurnRecoveryIssuerAdmission;
+    goalRecoveryAdmission?: GoalRecoveryInputAdmission;
   }) => Promise<boolean>;
+  getGoalOperation?: () => SessionTranscriptTurnMutationResult | undefined;
   getProcessingCompletion?: () => AgentRunTerminalOutcome | undefined;
   /** Released synchronous SDK contract; internal recorders use completeProcessingAsync. */
   completeProcessing?: (outcome: AgentRunTerminalOutcome) => AgentRunTerminalOutcome | undefined;

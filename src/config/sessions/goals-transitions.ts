@@ -1,9 +1,58 @@
 import crypto from "node:crypto";
+import type {
+  AcceptedGoalRecoveryInput,
+  GoalRecoveryInputAdmission,
+} from "./goals-operations.types.js";
+import {
+  createMainRestartRecoveryCycle,
+  hasMainRestartRecoveryEpisode,
+  type GoalRecoveryIntent,
+  type TurnRecoveryIntent,
+} from "./main-session-recovery.types.js";
 import { resolveFreshSessionTotalTokens } from "./types.js";
-import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
+import type {
+  SessionEntry,
+  InternalSessionEntry,
+  SessionGoal,
+  SessionGoalStatus,
+} from "./types.js";
 
 export class SessionGoalTransitionError extends Error {
   override name = "SessionGoalTransitionError";
+}
+
+/** Goal and original issuer are one private fresh-row mutation, not separate publications. */
+export function buildSessionGoalIssuerPatch(
+  entry: InternalSessionEntry,
+  intent?: GoalRecoveryIntent,
+): Pick<InternalSessionEntry, "mainRestartRecovery"> {
+  if (!intent && !hasMainRestartRecoveryEpisode(entry)) {
+    return { mainRestartRecovery: undefined };
+  }
+  return {
+    mainRestartRecovery: {
+      ...(entry.mainRestartRecovery ?? createMainRestartRecoveryCycle()),
+      goalIntent: intent,
+    },
+  };
+}
+
+/** Capture plain Goal acceptance facts while the host still owns its original live assertions. */
+export function captureGoalRecoveryInput(
+  entry: InternalSessionEntry,
+  admission: GoalRecoveryInputAdmission | undefined,
+  turn: TurnRecoveryIntent | undefined,
+): AcceptedGoalRecoveryInput | undefined {
+  if (!admission) {
+    return undefined;
+  }
+  admission.decision.assertCurrent();
+  const intent = admission.issuer.capture(entry, { id: admission.operation.goalId });
+  if (!intent || !turn) {
+    throw new Error("Goal recovery requires its original verified accepted issuer");
+  }
+  const { reference, sessionId, goalId } = admission.decision;
+  return { operation: admission.operation, decision: { reference, sessionId, goalId }, intent };
 }
 
 function normalizeTokenCount(value: number | undefined): number | undefined {

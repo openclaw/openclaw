@@ -58,6 +58,12 @@ export type GatewayClient = Pick<
   internal?: NonNullable<GatewayWsClient["internal"]> & {
     /** Authenticated operator transport ingress; never accepted from wire params. */
     authenticatedOperator?: true;
+    /** Handshake-owned pairing reference; never accepted from wire parameters. */
+    operatorPairingIdentity?: string;
+    /** Authenticated Control UI operator ingress; never accepted from wire params. */
+    authenticatedControlUi?: true;
+    /** Authenticated Control UI admin admission; never accepted from wire params. */
+    controlUiAdmin?: true;
     /** Marks the server-constructed client used by trusted in-process dispatch. */
     syntheticClient?: true;
     /** Original source restriction carried only by trusted in-process run admission. */

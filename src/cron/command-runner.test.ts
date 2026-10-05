@@ -148,7 +148,7 @@ describe("runCronCommandJob", () => {
         cleanup.resolve(outcome);
         expect((await running).status).toBe("error");
         expect(
-          prepareGatewaySuspend({
+          await prepareGatewaySuspend({
             requestId: "scheduled-backup-cleanup",
             drain: true,
             pauseScheduling: () => {},

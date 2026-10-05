@@ -326,6 +326,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
                 }).kind === "managed";
             },
             githubPublicationAvailable: attempt.githubPublicationAvailable,
+            githubPullRequestReadAvailable: attempt.githubPullRequestReadAvailable,
             abortSignal,
             skillWorkshop: {
               env: attempt.skillWorkshopProposalEnv,

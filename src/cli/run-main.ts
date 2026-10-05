@@ -929,7 +929,11 @@ async function runCliWithPreparedOutputMode(
     });
   }
   let doctorDatabasePreflight: DoctorDatabasePreflight | undefined;
-  if (!isHelpOrVersionInvocation && normalizedInvocation.primary === "doctor") {
+  if (
+    !isHelpOrVersionInvocation &&
+    normalizedInvocation.primary === "doctor" &&
+    normalizedInvocation.commandPath[1] !== "recovery-inspect"
+  ) {
     // Debug capture can migrate shared state before Commander reaches Doctor.
     // Resolve the update guard after selectors settle, before any bootstrap writer.
     const { preflightUpdateDoctorCli } = await import("../commands/doctor-update-schema-guard.js");

@@ -11,6 +11,7 @@ export function createTestControlUiSessionPrSubscriptions(
     prepareRead: async (_connId, session) => {
       const parsed = parseAgentSessionKey(session.sessionKey);
       const target = {
+        sessionId: "subscription-fixture",
         params: {
           sessionKey: session.sessionKey,
           agentId: session.agentId ?? parsed?.agentId ?? "main",

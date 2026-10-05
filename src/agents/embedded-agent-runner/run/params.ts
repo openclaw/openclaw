@@ -379,6 +379,7 @@ export type EmbeddedForegroundPromptContext = Pick<
 > & {
   /** SDK observation of the completed attempt; new runs recheck publication availability. */
   githubPublicationAvailable?: boolean;
+  githubPullRequestReadAvailable?: boolean;
   agentId: string;
   workspaceDir: string;
   cwd?: string;

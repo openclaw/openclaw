@@ -17,6 +17,32 @@ import {
 } from "../../../shared/device-bootstrap-profile.js";
 import { resolveGatewayClientPlatformIdentity } from "../../../shared/gateway-client-platform.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
+import { ADMIN_SCOPE } from "../../method-scopes.js";
+import type { GatewayClient } from "../../server-methods/shared-types.js";
+import type { DeviceAuthorizedGatewayConnect } from "./message-handler-types.js";
+
+/** Project authenticated handshake facts into the same private ingress metadata. */
+export function prepareGatewayOperatorIngressMetadata(
+  params: Pick<
+    DeviceAuthorizedGatewayConnect,
+    "role" | "authMethod" | "operatorPairingIdentity"
+  > & {
+    clientId: string;
+    scopes: readonly string[];
+  },
+): NonNullable<GatewayClient["internal"]> {
+  const authenticated =
+    params.role === "operator" && params.authMethod !== undefined && params.authMethod !== "none";
+  const controlUi = authenticated && params.clientId === GATEWAY_CLIENT_IDS.CONTROL_UI;
+  return {
+    ...(authenticated ? { authenticatedOperator: true } : {}),
+    ...(controlUi ? { authenticatedControlUi: true } : {}),
+    ...(controlUi && params.scopes.includes(ADMIN_SCOPE) ? { controlUiAdmin: true } : {}),
+    ...(params.operatorPairingIdentity
+      ? { operatorPairingIdentity: params.operatorPairingIdentity }
+      : {}),
+  };
+}
 
 export function resolvePairedAccessScopes(
   device: Pick<PairedDevice, "approvedScopes" | "scopes"> | null | undefined,

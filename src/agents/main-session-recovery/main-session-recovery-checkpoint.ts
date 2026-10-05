@@ -5,7 +5,10 @@ import {
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
 import { getTranscriptMessageRole } from "../embedded-agent-runner/message-visibility.js";
-import { hasReplaySafeCodeModeCheckpointInCurrentTurn } from "./main-session-restart-recovery-resume-policy.js";
+import {
+  createRestartEffectReconciler,
+  hasReplaySafeCodeModeCheckpointInCurrentTurn,
+} from "./main-session-restart-recovery-resume-policy.js";
 
 type RecoverySource =
   | "completion"
@@ -16,12 +19,21 @@ type RecoverySource =
 
 export function selectMainSessionRecoveryCheckpoint(
   visit: (read: (message: unknown) => void) => void,
-): { replaySafe: boolean; source: RecoverySource | undefined } {
+  verifiedToolCallId?: string,
+  expectedSourceTurnId?: string,
+  preserveUnresolvedAcrossTurns = false,
+) {
+  const effects = createRestartEffectReconciler(
+    verifiedToolCallId,
+    expectedSourceTurnId,
+    preserveUnresolvedAcrossTurns,
+  );
   let replaySafe = false;
   let source: RecoverySource | undefined;
   // The display tail can evict the source and checkpoint. Recovery inputs
-  // continue the original turn; both facts come from one constant-memory snapshot.
+  // continue the original turn; checkpoint, source and pending effects share one snapshot.
   visit((message) => {
+    effects.visit(message);
     if (getTranscriptMessageRole(message) === "user") {
       const provenance = normalizeInputProvenance(asOptionalRecord(message)?.provenance);
       if (!isMainSessionRestartRecoveryInputProvenance(provenance)) {
@@ -50,5 +62,5 @@ export function selectMainSessionRecoveryCheckpoint(
       replaySafe = true;
     }
   });
-  return { replaySafe, source };
+  return { replaySafe, source, unresolvedEffect: effects.effect() };
 }

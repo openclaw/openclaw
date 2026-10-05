@@ -195,6 +195,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     session_status: displayTool("barChart", "Session Status", ["sessionKey", "model"]),
     github_publish: displayTool("github", "GitHub Publish", ["title"]),
     github_identity_status: displayTool("settings", "GitHub Identity Status", []),
+    github_pull_request_read: displayTool("github", "GitHub Pull Request Read", ["pull_request"]),
     sessions: {
       icon: "layers",
       title: "Session Settings",

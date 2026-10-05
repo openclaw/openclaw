@@ -15,6 +15,7 @@ import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import {
+  bindGatewaySharedAuthGeneration,
   disconnectStaleSharedGatewayAuthClients,
   enforceSharedGatewaySessionGenerationForConfigWrite,
 } from "./server-shared-auth-generation.js";
@@ -557,5 +558,6 @@ export function createGatewayRequestContext(
     broadcastVoiceWakeRoutingChanged: runtime.broadcastVoiceWakeRoutingChanged,
     unavailableGatewayMethods: runtime.unavailableGatewayMethods,
   };
+  bindGatewaySharedAuthGeneration(context, sharedGatewaySessionGenerationState);
   return bindSessionRowProjection(context, runtime.getSessionRowProjection);
 }

@@ -2,10 +2,8 @@ import {
   PENDING_FINAL_DELIVERY_CLEAR_PATCH,
   sanitizePendingFinalDeliveryText,
 } from "../../auto-reply/reply/pending-final-delivery-state.js";
-import type {
-  InternalSessionEntry as SessionEntry,
-  MainRestartRecoveryState,
-} from "../../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import { createMainRestartRecoveryCycle as createCycle } from "../../config/sessions/main-session-recovery.types.js";
 import {
   hasMainSessionRecoveryClaim,
   isMainRestartRecoveryCandidate,
@@ -19,11 +17,27 @@ import {
   buildMainSessionRecoverySettlementPatch,
   removeMainSessionRecoveryForegroundClaim,
 } from "./main-session-recovery-clear.js";
-import { isMainRestartRecoveryAggregateEmptyAndUnowned } from "./main-session-recovery-empty-aggregate.js";
+import {
+  isMainRestartRecoveryAggregateEmptyAndUnowned,
+  getMainSessionRecoveryRetryCount,
+  hasOpaqueProviderCapacityWait,
+} from "./main-session-recovery-empty-aggregate.js";
+import {
+  activateCapturedMainRestartGoal,
+  hasCurrentForegroundClaim,
+  ownsForegroundClaim,
+  validateRecoveryAdmission,
+  isMainSessionRecoveryIntentCurrent,
+  isForegroundRecoveryInputCurrent,
+  matchesObservation,
+  refundMainSessionRecoveryWorkerWait,
+  transitionMainSessionRecoveryPause,
+  transitionMainSessionRecoveryCapacityWait,
+  updateRecoveryState,
+} from "./main-session-recovery-state-transitions.js";
+import { retireTerminalMainSessionRecoverySource } from "./main-session-recovery-terminal-source.js";
 import type {
   MainSessionRecoveryCommand,
-  MainSessionRecoveryConflict,
-  MainSessionRecoveryObservation,
   MainSessionRecoveryTransitionResult,
   MainSessionRecoveryView,
 } from "./main-session-recovery-types.js";
@@ -31,6 +45,12 @@ import {
   MAX_RECOVERY_RETRIES,
   resolveRestartRecoveryTerminalClientRunId,
 } from "./main-session-restart-recovery-shared.js";
+
+export {
+  isMainSessionRecoveryPending,
+  isCapturedMainRestartGoalCurrent,
+  isMainSessionRecoveryIntentCurrent,
+} from "./main-session-recovery-state-transitions.js";
 
 export type {
   MainSessionRecoveryCommand,
@@ -42,98 +62,6 @@ export type {
 
 const MAIN_RESTART_RECOVERY_REMEDIATION_HINT =
   "inspect the failed main session and use /new or reset to start a replacement session";
-
-function updateRecoveryState(
-  entry: SessionEntry,
-  state: MainRestartRecoveryState,
-  patch: Omit<Partial<MainRestartRecoveryState>, "revision">,
-): MainRestartRecoveryState {
-  return (entry.mainRestartRecovery = { ...state, revision: state.revision + 1, ...patch });
-}
-
-function createCycle(cycleId: string): MainRestartRecoveryState {
-  return {
-    cycleId,
-    revision: 1,
-    chargedAttempts: 0,
-  };
-}
-
-export function getMainSessionRecoveryRetryCount(
-  state: MainRestartRecoveryState | undefined,
-): number {
-  return state ? state.chargedAttempts - (state.startedAttempt ?? 0) : 0;
-}
-
-function matchesObservation(
-  entry: SessionEntry,
-  observation: MainSessionRecoveryObservation,
-): MainSessionRecoveryConflict | null {
-  if (entry.sessionId !== observation.sessionId) {
-    return "session_replaced";
-  }
-  if (entry.mainRestartRecovery?.cycleId !== observation.cycleId) {
-    return "stale_cycle";
-  }
-  return entry.mainRestartRecovery.revision === observation.revision ? null : "stale_revision";
-}
-
-function hasCurrentForegroundClaim(
-  state: MainRestartRecoveryState,
-  lifecycleGeneration: string,
-): boolean {
-  return (
-    state.foregroundClaims?.lifecycleGeneration === lifecycleGeneration &&
-    state.foregroundClaims.tokens.length > 0
-  );
-}
-
-function ownsForegroundClaim(
-  state: MainRestartRecoveryState | undefined,
-  claim: { cycleId: string; lifecycleGeneration: string; claimId: string },
-): boolean {
-  return (
-    state?.cycleId === claim.cycleId &&
-    state.foregroundClaims?.lifecycleGeneration === claim.lifecycleGeneration &&
-    state.foregroundClaims.tokens.includes(claim.claimId)
-  );
-}
-
-function validateRecoveryAdmission(
-  entry: SessionEntry,
-  command: {
-    lifecycleGeneration: string;
-    runId: string;
-    sessionId: string;
-  },
-): MainSessionRecoveryConflict | null {
-  const state = entry.mainRestartRecovery;
-  if (entry.sessionId !== command.sessionId) {
-    return "session_replaced";
-  }
-  if (entry.abortedLastRun !== true || !state) {
-    return "not_interrupted";
-  }
-  if (
-    state.reservation?.runId !== command.runId ||
-    state.reservation.lifecycleGeneration !== command.lifecycleGeneration
-  ) {
-    return "stale_reservation";
-  }
-  return hasCurrentForegroundClaim(state, command.lifecycleGeneration) ? "foreground_active" : null;
-}
-
-export function isMainSessionRecoveryPending(entry: SessionEntry, sessionKey: string): boolean {
-  const state = entry.mainRestartRecovery;
-  return (
-    hasMainSessionRecoveryClaim(entry) &&
-    entry.abortedLastRun === true &&
-    isMainRestartRecoveryCandidate(entry, sessionKey) &&
-    !state?.foregroundClaims &&
-    !state?.reservation &&
-    !state?.tombstone
-  );
-}
 
 /** Failed foreground admission can leave an unfinished recovery cycle behind. */
 export function isMainSessionRecoveryReconciliationCandidate(entry: SessionEntry): boolean {
@@ -213,6 +141,9 @@ function inspectMainSessionRecovery(params: {
 }): MainSessionRecoveryView {
   const { entry } = params;
   const state = entry.mainRestartRecovery;
+  if (state?.pause || hasOpaqueProviderCapacityWait(entry)) {
+    return { status: "blocked" };
+  }
   if (state?.tombstone) {
     return { status: "tombstoned" };
   }
@@ -234,6 +165,19 @@ function inspectMainSessionRecovery(params: {
     !state
   ) {
     return { status: "inactive" };
+  }
+  const goalIntent = state.goalIntent;
+  if (
+    entry.restartRecoveryGoal &&
+    (!goalIntent ||
+      goalIntent.goalId !== entry.restartRecoveryGoal.id ||
+      goalIntent.sessionId !== entry.sessionId ||
+      goalIntent.sessionKey !== params.sessionKey ||
+      goalIntent.lifecycleRevision !== entry.lifecycleRevision)
+  ) {
+    // References only make the goal a verification candidate. Runtime restoration
+    // must revalidate the original issuer before charging or dispatching any work.
+    return { status: "blocked" };
   }
   const observation = {
     sessionId: entry.sessionId,
@@ -293,8 +237,36 @@ export function transitionMainSessionRecovery(
   entry: SessionEntry,
   command: MainSessionRecoveryCommand,
 ): MainSessionRecoveryTransitionResult {
+  // Cleanup may settle retained owners, but no fresh work or generic clear can
+  // consume a human-decision hold, including after a process generation changes.
+  if (
+    entry.mainRestartRecovery?.pause &&
+    command.kind !== "observe" &&
+    command.kind !== "inspect" &&
+    command.kind !== "cancel_reservation" &&
+    command.kind !== "cancel_capacity_wait" &&
+    command.kind !== "abandon_reservation" &&
+    command.kind !== "release_foreground" &&
+    command.kind !== "acknowledge_pause"
+  ) {
+    return { kind: "rejected", reason: "session_paused" };
+  }
   switch (command.kind) {
+    case "wait_capacity":
+    case "wait_worker_capacity":
+    case "wait_provider_capacity":
+    case "finish_provider_capacity":
+    case "validate_provider_recovery":
+    case "finish_worker_capacity":
+    case "validate_worker_recovery":
+      if (!isMainSessionRecoveryIntentCurrent(entry)) {
+        return { kind: "rejected", reason: "not_interrupted" };
+      }
+      return transitionMainSessionRecoveryCapacityWait(entry, command);
+    case "cancel_capacity_wait":
+      return transitionMainSessionRecoveryCapacityWait(entry, command);
     case "mark_interrupted": {
+      refundMainSessionRecoveryWorkerWait(entry);
       const startedAt = entry.lifecycleRunId ? entry.startedAt : undefined;
       const preserveOutcome =
         (entry.status === undefined && entry.endedAt !== undefined) ||
@@ -314,7 +286,10 @@ export function transitionMainSessionRecovery(
         updateRecoveryState(entry, state, {
           foregroundClaims: undefined,
           reservation: undefined,
+          acknowledgedPause: undefined,
         });
+      } else if (state.acknowledgedPause) {
+        updateRecoveryState(entry, state, { acknowledgedPause: undefined });
       }
       entry.activeWriterRunId = undefined;
       entry.lifecycleRunId = undefined;
@@ -347,6 +322,7 @@ export function transitionMainSessionRecovery(
       };
     }
     case "observe": {
+      retireTerminalMainSessionRecoverySource(entry, command.sessionKey);
       if (
         hasMainSessionRecoveryClaim(entry) &&
         entry.abortedLastRun === true &&
@@ -401,6 +377,9 @@ export function transitionMainSessionRecovery(
       };
     }
     case "prepare_attempt": {
+      if (!isMainSessionRecoveryIntentCurrent(entry)) {
+        return { kind: "rejected", reason: "not_interrupted" };
+      }
       const conflict = matchesObservation(entry, command.observation);
       if (conflict) {
         return { kind: "rejected", reason: conflict };
@@ -424,6 +403,7 @@ export function transitionMainSessionRecovery(
             ? state.executionIdentity
             : undefined,
         chargedAttempts: command.attempt,
+        capacityWait: undefined,
         reservation: {
           runId: command.runId,
           attempt: command.attempt,
@@ -514,6 +494,9 @@ export function transitionMainSessionRecovery(
         return { kind: "rejected", reason: conflict };
       }
       const state = entry.mainRestartRecovery!;
+      if (!activateCapturedMainRestartGoal(entry, state, command.now)) {
+        return { kind: "goal_limited" };
+      }
       updateRecoveryState(entry, state, {
         reservation: undefined,
         foregroundClaims: undefined,
@@ -591,6 +574,9 @@ export function transitionMainSessionRecovery(
       return { kind: "applied" };
     }
     case "claim_foreground": {
+      if (!isForegroundRecoveryInputCurrent(entry, command.inputIntent)) {
+        return { kind: "rejected", reason: "stale_revision" };
+      }
       if (
         entry.sessionId === command.sessionId &&
         isMainRestartRecoveryCandidate(entry, command.sessionKey) &&
@@ -696,6 +682,9 @@ export function transitionMainSessionRecovery(
       updateRecoveryState(entry, state, { foregroundClaims });
       return { kind: "applied" };
     }
+    case "acknowledge_pause":
+    case "pause":
+      return transitionMainSessionRecoveryPause(entry, command);
     case "tombstone": {
       const conflict = matchesObservation(entry, command.observation);
       if (conflict) {

@@ -20,14 +20,18 @@ export type AgentTurnIo = {
   /** Publishes the exact controller before asynchronous runtime preparation. */
   emitStartOwner?: (runId: string, entry: ChatAbortControllerEntry) => void;
   /** Internal lifecycle observer; public transports do not expose this callback. */
-  emitExecutionStarted?: () => void;
+  emitExecutionStarted?: (() => void) | (() => Promise<void>);
   emitFinal: (final: AgentTurnFrame, meta?: Parameters<RespondFn>[3]) => void;
 };
 
 export type AgentTurnPrincipal = Pick<
   GatewayClient,
   | "authenticatedUserId"
+  | "authPolicy"
   | "authenticatedUserProfile"
+  | "authenticatedFactoryGitHubAccountId"
+  | "connectionSignal"
+  | "invalidated"
   | "connId"
   | "connect"
   | "internal"

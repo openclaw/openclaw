@@ -269,6 +269,13 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "github_pull_request_read",
+    description: "Read a bounded pull request from the bound repository session",
+    sectionId: "sessions",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "agents_wait",
     description: AGENTS_WAIT_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",

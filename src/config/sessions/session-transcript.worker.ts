@@ -93,6 +93,11 @@ serveOwnedWorkerTasks(
     const readRequest = async (): Promise<
       SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]
     > => {
+      if (request.kind === "doctor-session-recovery") {
+        const { readDoctorSessionRecovery } =
+          await import("../../commands/doctor-session-recovery.worker.js");
+        return readDoctorSessionRecovery(request);
+      }
       if (isSessionHistoryReadOperation(request)) {
         const execute = await prepareSessionHistoryReadOperation(request);
         return execute();

@@ -1,3 +1,10 @@
+import { retainPreparedSessionSharingFacts } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import {
+  projectSessionSharingEntry,
+  type SessionSharingEntry,
+} from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import { withSessionStoreReaderInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
   beginSessionWorkAdmission,
@@ -14,6 +21,66 @@ export type MainSessionRecoveryAdmission = {
   shouldContinue: () => boolean;
   beginDispatch: () => boolean;
 };
+
+/** Keep the exact worker source and committed postimages through recovery admission. */
+export async function withPreparedRestartRecoveryTarget<T>(
+  params: { agentId?: string; sessionKey: string; storePath: string },
+  consume: (target: {
+    entry: SessionEntry | undefined;
+    readCurrent: () => SessionSharingEntry | undefined;
+    assertSourceCurrent: () => void;
+  }) => Promise<T>,
+): Promise<T> {
+  let retained: ReturnType<typeof retainPreparedSessionSharingFacts> | undefined;
+  try {
+    return await withSessionStoreReaderInWorker(
+      params,
+      async ({ reader, database, continuation, assertCurrent }) => {
+        if (!retained) {
+          throw new Error("Restart recovery target has no prepared publication source");
+        }
+        await retained.prepareRead();
+        assertCurrent();
+        const result = await reader.readExactEntries({
+          sessionKeys: [params.sessionKey],
+          projection: "full",
+          env: database.env,
+          continuation,
+        });
+        assertCurrent();
+        const entry = result.entries.find(
+          ({ sessionKey }) => sessionKey === params.sessionKey,
+        )?.entry;
+        retained.initialize({
+          entry: entry ? projectSessionSharingEntry(entry) : undefined,
+          membership: new Set(),
+        });
+        const facts = retained;
+        const value = await consume({
+          entry,
+          readCurrent: () => {
+            assertCurrent();
+            return facts.readCurrent()?.entry;
+          },
+          assertSourceCurrent: assertCurrent,
+        });
+        assertCurrent();
+        return value;
+      },
+      {
+        prepareSource: (_database, identity) => {
+          retained = retainPreparedSessionSharingFacts({
+            databaseIdentity: identity.key,
+            sessionKey: params.sessionKey,
+            acquiring: true,
+          });
+        },
+      },
+    );
+  } finally {
+    retained?.release();
+  }
+}
 
 /** Keeps pending dispatch visible to foreground admission until the Gateway adopts it. */
 export async function runWithMainSessionRecoveryAdmission<T>(params: {

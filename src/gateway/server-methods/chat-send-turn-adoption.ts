@@ -69,6 +69,23 @@ export function createChatSendTurnAdoptionLifecycle(params: {
   let adoptionStarted = false;
   let withdrawalHold: Deferred | undefined;
   let releaseWorkAdmission: (() => void) | undefined;
+  const holdPendingInputWithdrawal = () => {
+    if (adoptionStarted || withdrawalHold || params.controller.signal.aborted) {
+      return undefined;
+    }
+    const hold = createDeferredCore();
+    withdrawalHold = hold;
+    return () => {
+      if (withdrawalHold === hold) {
+        withdrawalHold = undefined;
+      }
+      hold.resolve();
+    };
+  };
+  const admitted = params.context.chatAbortControllers.get(params.runId);
+  if (admitted === params.sessionBinding && admitted.controller === params.controller) {
+    admitted.holdPendingInputWithdrawal = holdPendingInputWithdrawal;
+  }
   type Completion = Exclude<QueuedFollowupReplyBatch["completion"], { kind: "progress" }>;
   const recordQueuedTerminal = (completion: Completion, publish = false) => {
     if (terminalKnown || !ownsQueueIdentity()) {
@@ -185,20 +202,8 @@ export function createChatSendTurnAdoptionLifecycle(params: {
         agentId: params.agentId,
         ownerConnId: normalizeOptionalString(params.ownerConnId),
         ownerDeviceId: normalizeOptionalString(params.ownerDeviceId),
-        holdPendingInputWithdrawal: () => {
-          if (adoptionStarted || withdrawalHold || params.controller.signal.aborted) {
-            return undefined;
-          }
-          const hold = createDeferredCore();
-          withdrawalHold = hold;
-          return () => {
-            if (withdrawalHold === hold) {
-              withdrawalHold = undefined;
-            }
-            hold.resolve();
-          };
-        },
-        // Active and queued custody share the acknowledged abort owner's reason.
+        holdPendingInputWithdrawal,
+        // Queue cancellation supersedes the source run's earlier custody acknowledgement.
         onAborted: (reason) => {
           params.sessionBinding.abortDiagnosticReason = reason;
           if (!adoptionStarted) {
@@ -236,6 +241,9 @@ export function createChatSendTurnAdoptionLifecycle(params: {
       recordQueuedTerminal({ kind: "aborted", stopReason: "aborted" }, true);
     },
     onSettled: () => {
+      if (admitted?.holdPendingInputWithdrawal === holdPendingInputWithdrawal) {
+        admitted.holdPendingInputWithdrawal = undefined;
+      }
       const ownsCompletion = completeQueuedChatTurn(
         params.chatQueuedTurns,
         params.runId,

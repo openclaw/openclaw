@@ -6,9 +6,15 @@ import {
   admitReplyTurn,
   runWithReplyOperationLifecycleAdmission,
 } from "../../auto-reply/reply/reply-turn-admission.js";
+import { updateSessionGoalStatus } from "../../config/sessions/goals.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  registerChatAbortController,
+  type ChatAbortControllerEntry,
+} from "../../gateway/chat-abort.js";
+import { captureGatewayRestartRecoveryRuns } from "../../gateway/server-run-shutdown.js";
 import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -40,14 +46,300 @@ import {
 import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-preflight.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { isMainSessionRecoveryPending } from "./main-session-recovery-state.js";
 import { readStartupRecoveryWarning } from "./main-session-restart-recovery-diagnostics.js";
 import {
   markRestartAbortedMainSessions,
   markStartupOrphanedMainSessionsForRecovery,
 } from "./main-session-restart-recovery-marking.js";
+import { recoverRestartAbortedMainSessions } from "./main-session-restart-recovery-runtime.js";
 import { discoverRestartRecoveryStoreTargets } from "./main-session-restart-recovery-shared.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-restart-owner-");
+it.each([
+  "no goal",
+  "active goal",
+  "complete",
+  "manual pause",
+  "cancel",
+  "revoked",
+  "replacement",
+  "unaccepted",
+  "late revocation",
+  "late acceptance",
+] as const)("captures exact accepted drain intent and excludes %s", async (change) => {
+  await withOpenClawTestState({ label: "accepted-drain-capture" }, async (state) => {
+    const cfg = { session: { store: state.statePath("sessions.json") } };
+    await state.writeConfig(cfg);
+    const target = {
+      agentId: "main",
+      sessionKey: "agent:main:drain",
+      storePath: cfg.session.store,
+    };
+    const sessionId = "drain-session";
+    const runId = "accepted-drain-run";
+    await replaceSessionEntry(target, {
+      sessionId,
+      lifecycleRevision: "drain-life",
+      status: "done",
+      updatedAt: 1,
+      ...(change === "active goal" || change === "manual pause"
+        ? {
+            goal: {
+              schemaVersion: 1 as const,
+              id: "drain-goal",
+              objective: "Finish the accepted work",
+              status: "active" as const,
+              createdAt: 1,
+              updatedAt: 1,
+              tokenStart: 0,
+              tokensUsed: 0,
+              continuationTurns: 0,
+            },
+          }
+        : {}),
+    });
+    const controllers = new Map<string, ChatAbortControllerEntry>();
+    const registration = registerChatAbortController({
+      chatAbortControllers: controllers,
+      ...target,
+      sessionId,
+      runId,
+      kind: "agent",
+      timeoutMs: 60_000,
+    });
+    if (!registration.registered) {
+      throw new Error("Expected exact drain registration");
+    }
+    let actorCurrent = true;
+    registration.entry.accepted = true;
+    if (change === "late acceptance") {
+      delete registration.entry.accepted;
+    }
+    registration.entry.assertSourceCurrent = () => {
+      if (!actorCurrent) {
+        throw new Error("actor revoked");
+      }
+    };
+    const resolver = () => undefined;
+    const admission = await beginSessionWorkAdmission({
+      scope: target.storePath,
+      identities: [target.sessionKey, sessionId],
+      resolveGatewayContext: resolver,
+      assertAllowed: () => {},
+    });
+    const captured = captureGatewayRestartRecoveryRuns({
+      chatAbortControllers: controllers,
+      acceptedOnly: true,
+    });
+    const apply = sessionAccessor.applySessionEntryReplacements;
+    let restore = () => {};
+    let replacementRegistration: ReturnType<typeof registerChatAbortController> | undefined;
+    try {
+      if (change === "complete") {
+        registration.entry.registrationCleanupRequested = true;
+        registration.entry.projectSessionTerminalPersisted = true;
+      } else if (change === "manual pause") {
+        await updateSessionGoalStatus({ ...target, status: "paused" });
+      } else if (change === "cancel") {
+        registration.controller.abort(new Error("human cancelled"));
+      } else if (change === "revoked") {
+        actorCurrent = false;
+      } else if (change === "replacement") {
+        controllers.delete(runId);
+        replacementRegistration = registerChatAbortController({
+          chatAbortControllers: controllers,
+          ...target,
+          sessionId,
+          runId,
+          timeoutMs: 60_000,
+        });
+      } else if (change === "unaccepted") {
+        delete registration.entry.accepted;
+      } else if (change === "late acceptance") {
+        registration.entry.accepted = true;
+      } else if (change === "late revocation") {
+        const spy = vi
+          .spyOn(sessionAccessor, "applySessionEntryReplacements")
+          .mockImplementationOnce((params) =>
+            apply({
+              ...params,
+              update: async (entries) => {
+                const planned = await params.update(entries);
+                actorCurrent = false;
+                return planned;
+              },
+            }),
+          );
+        restore = () => spy.mockRestore();
+      }
+      const result = await markRestartAbortedMainSessions({
+        cfg,
+        stateDir: state.stateDir,
+        resolveGatewayContext: resolver,
+        ...captured,
+        captureGoals: true,
+      });
+      const eligible =
+        change === "no goal" || change === "active goal" || change === "late acceptance";
+      expect(result.marked).toBe(eligible ? 1 : 0);
+      const saved = loadSessionEntry(target)!;
+      expect(saved.sessionId).toBe(sessionId);
+      expect(saved.abortedLastRun).toBe(eligible ? true : undefined);
+      expect(saved.status).toBe(eligible ? "running" : "done");
+      if (change === "active goal") {
+        expect(saved.restartRecoveryGoal?.id).toBe("drain-goal");
+      }
+      if (change === "manual pause") {
+        expect(saved.goal?.status).toBe("paused");
+      }
+      if (change === "no goal") {
+        await persistGatewaySessionLifecycleEvent({
+          ...target,
+          event: {
+            ts: Date.now(),
+            sessionId,
+            runId,
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
+            data: { phase: "end", endedAt: Date.now() },
+          },
+        });
+        // The captured interruption won before this old owner's terminal event.
+        // Only fresh recovery admission may settle the retained handoff.
+        expect(loadSessionEntry(target)).toMatchObject({
+          status: "running",
+          abortedLastRun: true,
+          mainRestartRecovery: saved.mainRestartRecovery,
+        });
+        expect(loadSessionEntry(target)?.restartRecoveryRuns).toBeUndefined();
+        expect(
+          (await markStartupOrphanedMainSessionsForRecovery({ cfg, stateDir: state.stateDir }))
+            .marked,
+        ).toBe(0);
+      }
+    } finally {
+      restore();
+      admission.release();
+      for (const entry of controllers.values()) {
+        entry.controller.abort();
+      }
+      replacementRegistration?.cleanup();
+      registration.cleanup();
+    }
+  });
+});
+
+it.each(["active", "terminal error", "complete", "manual pause", "cancel", "replacement"] as const)(
+  "captures an idle active goal before drain and honors %s at startup",
+  async (stateAtStartup) => {
+    await withOpenClawTestState({ label: "restart-goal-capture" }, async (state) => {
+      const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+      await state.writeConfig(cfg);
+      const target = { agentId: "main", sessionKey: "agent:main:captured-goal" };
+      await replaceSessionEntry(target, {
+        sessionId: "captured-session",
+        lifecycleRevision: "original-life",
+        status: "done",
+        updatedAt: 1,
+        goal: {
+          schemaVersion: 1,
+          id: "original-goal",
+          objective: "Finish accepted work",
+          status: "active",
+          createdAt: 1,
+          updatedAt: 1,
+          tokenStart: 0,
+          tokensUsed: 0,
+          continuationTurns: 0,
+        },
+      });
+      const captured = await markRestartAbortedMainSessions({
+        cfg,
+        stateDir: state.stateDir,
+        activeRuns: [],
+        resolveGatewayContext: () => undefined,
+        captureGoals: true,
+      });
+      expect(captured.marked).toBe(1);
+      const entry = loadSessionEntry(target)!;
+      expect(entry.status).toBe("done");
+      expect(entry.restartRecoveryGoal).toMatchObject({
+        id: "original-goal",
+        sessionId: "captured-session",
+        lifecycleRevision: "original-life",
+      });
+      if (stateAtStartup === "complete") {
+        entry.goal = { ...entry.goal!, status: "complete" };
+      } else if (stateAtStartup === "terminal error") {
+        entry.goal = { ...entry.goal!, status: "paused" };
+        entry.goalPauseOrigin = "terminal-error";
+      } else if (stateAtStartup === "manual pause") {
+        entry.goal = { ...entry.goal!, status: "paused" };
+        entry.goalPauseOrigin = "manual";
+      } else if (stateAtStartup === "cancel") {
+        entry.goal = undefined;
+      } else if (stateAtStartup === "replacement") {
+        entry.lifecycleRevision = "replacement-life";
+      }
+      await replaceSessionEntry(target, entry);
+      const marked = await markStartupOrphanedMainSessionsForRecovery({
+        cfg,
+        stateDir: state.stateDir,
+      });
+      const resumes = stateAtStartup === "active" || stateAtStartup === "terminal error";
+      expect(marked.marked).toBe(resumes ? 1 : 0);
+      expect(loadSessionEntry(target)?.abortedLastRun).toBe(resumes ? true : undefined);
+      expect(loadSessionEntry(target)?.sessionId).toBe("captured-session");
+      const preserved = loadSessionEntry(target)!;
+      const dispatchAgent = vi.fn(() => {
+        throw new Error("Unattributed goal must not dispatch");
+      });
+      await recoverRestartAbortedMainSessions({
+        cfg,
+        stateDir: state.stateDir,
+        gatewayRuntime: {
+          dispatchAgent: async () => dispatchAgent(),
+          dispatchSessionMethod: async () => {
+            throw new Error("Unexpected session dispatch");
+          },
+          waitForAgent: async () => {
+            throw new Error("Unexpected agent wait");
+          },
+          sendRecoveryNotice: async () => ({ suppressed: true }),
+        },
+      });
+      expect(dispatchAgent).not.toHaveBeenCalled();
+      expect(loadSessionEntry(target)?.goal).toEqual(preserved.goal);
+      if (!resumes) {
+        const active = await markRestartAbortedMainSessions({
+          cfg,
+          stateDir: state.stateDir,
+          activeRuns: [
+            {
+              ...target,
+              sessionId: "captured-session",
+              runId: "later-unrelated-run",
+              lifecycleGeneration: getAgentEventLifecycleGeneration(),
+            },
+          ],
+          resolveGatewayContext: () => undefined,
+          captureGoals: true,
+        });
+        const withdrawn = stateAtStartup === "complete" || stateAtStartup === "manual pause";
+        expect(active.marked).toBe(withdrawn ? 0 : 1);
+        const later = loadSessionEntry(target)!;
+        if (withdrawn) {
+          expect(later).toEqual(preserved);
+        } else if (stateAtStartup === "replacement") {
+          expect(later.restartRecoveryGoal?.lifecycleRevision).toBe("replacement-life");
+        } else {
+          expect(later.restartRecoveryGoal).toBeUndefined();
+        }
+        expect(isMainSessionRecoveryPending(later, target.sessionKey)).toBe(!withdrawn);
+      }
+    });
+  },
+);
 
 it("keeps healthy stores recoverable when an earlier startup mark fails", async () => {
   await withOpenClawTestState({ label: "recovery-mark-failure" }, async (state) => {

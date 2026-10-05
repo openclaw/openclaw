@@ -442,7 +442,13 @@ export function registerHarnessCompletionRecoveryCases(
         },
       },
       { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
-      { role: "toolResult", content: "done" },
+      {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "exec",
+        isError: false,
+        content: "done",
+      },
     ]);
 
     await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });

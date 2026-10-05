@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import {
+  createDeferred,
+  withinTest,
+  awaitGateBeforeSettlement,
+} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { InternalSessionEntry } from "../../config/sessions.js";
 import {
@@ -12,6 +16,7 @@ import {
 import { callGateway } from "../../gateway/call.js";
 import * as transcriptReaders from "../../gateway/session-transcript-readers.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
+import { resolveProjectedAgentRunProgressState } from "../../infra/agent-run-registry.js";
 import * as gatewayWorkAdmission from "../../process/gateway-work-admission.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -22,6 +27,7 @@ import {
   getSessionWorkAdmissionOwnerRelease,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { waitForFast } from "../subagent-test-fixtures.test-helpers.js";
@@ -102,7 +108,13 @@ describe("startup recovery admission", () => {
     for (const message of [
       { role: "user", content: "run the tool" },
       { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
-      { role: "toolResult", content: "done" },
+      {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "exec",
+        isError: false,
+        content: "done",
+      },
     ]) {
       await appendTranscriptMessage(
         {

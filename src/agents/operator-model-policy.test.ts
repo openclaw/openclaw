@@ -3,6 +3,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   prepareOperatorModelPolicy,
   resolveOperatorModelDefault,
+  readOperatorModelPolicyCeilings,
+  restoreOperatorModelCeilings,
 } from "./operator-model-policy.js";
 
 function config(): OpenClawConfig {
@@ -28,6 +30,37 @@ function config(): OpenClawConfig {
 }
 
 describe("operator model policy", () => {
+  it("restores original wildcard and deny ceilings without broadening under newer policy", () => {
+    const cfg = config();
+    const original = prepareOperatorModelPolicy({
+      cfg,
+      policy: { allow: ["vendor/*"], deny: ["vendor/restricted-*"] },
+      manifestPlugins: [],
+    });
+    const ceilings = readOperatorModelPolicyCeilings(original)!;
+    const restored = restoreOperatorModelCeilings(ceilings, {
+      cfg,
+      policy: { allow: ["vendor/*", "second/*"] },
+      manifestPlugins: [],
+    })!;
+    expect(restored.allows({ provider: "vendor", model: "future-model" })).toBe(true);
+    expect(restored.allows({ provider: "vendor", model: "restricted-new" })).toBe(false);
+    expect(restored.allows({ provider: "second", model: "manual" })).toBe(false);
+    const narrowed = restoreOperatorModelCeilings(ceilings, {
+      cfg,
+      policy: { allow: ["vendor/primary"] },
+      manifestPlugins: [],
+    })!;
+    expect(narrowed.allows({ provider: "vendor", model: "future-model" })).toBe(false);
+    expect(narrowed.allows({ provider: "vendor", model: "primary" })).toBe(true);
+    expect(() =>
+      restoreOperatorModelCeilings(["unclassified"], {
+        cfg,
+        policy: undefined,
+        manifestPlugins: [],
+      }),
+    ).toThrow("ceiling is unavailable");
+  });
   it("derives membership from source models, aliases, wildcards, and explicit empty policies", () => {
     const cases: Array<{
       policy: Parameters<typeof prepareOperatorModelPolicy>[0]["policy"];

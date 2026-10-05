@@ -4,10 +4,16 @@ import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import {
   loadSessionEntry,
   readSessionSubmittedInput,
+  replaceSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import {
+  readSessionPendingInputStage,
+  stageSessionPendingInput,
+} from "../../config/sessions/session-accessor.pending-inputs.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail, resolveUserProfileId } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -15,6 +21,8 @@ import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
+import { seedAttachedPlacementEnvironment } from "../worker-environments/placement-test-fixtures.js";
 import { writePreRegisteredChatAbort } from "./chat-abort-authorization.js";
 import { resolveDurableChatClaim } from "./chat-restart-recovery.js";
 import {
@@ -114,6 +122,199 @@ beforeEach(() => {
   vi.mocked(readSessionSubmittedInput).mockReset().mockResolvedValue(undefined);
   vi.mocked(resolveDurableChatClaim).mockReset();
 });
+
+it.each([
+  "idle",
+  "manual Goal",
+  "settling turn",
+  "replacement",
+  "revoked caller",
+  "effect hold",
+] as const)(
+  "fresh chat pre-admission preserves interrupted input on an active worker: %s",
+  async (mode) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const { params } = preAdmissionFixture("second-fresh-turn");
+      const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+      await state.writeConfig(cfg);
+      params.context.getRuntimeConfig = () => cfg;
+      params.session.cfg = cfg;
+      params.session.storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
+      const { sessionKey } = params.session;
+      const sessionId = "mention-session";
+      const target = { agentId: "main", sessionKey };
+      await replaceSessionEntry(target, { sessionId, updatedAt: 1 });
+      const held = await stageSessionPendingInput(
+        { ...target, sessionId },
+        {
+          runId: "old-interrupted-input",
+          message: {
+            role: "user",
+            content: "Held original instruction",
+            timestamp: 1,
+            idempotencyKey: "old-interrupted-input:user",
+          },
+          assertCurrent: () => {},
+        },
+      );
+      held!.finish("interrupted");
+      await held!.settled?.();
+      const goal =
+        mode === "manual Goal"
+          ? {
+              schemaVersion: 1 as const,
+              id: "paused-goal",
+              objective: "Preserve original work",
+              status: "paused" as const,
+              createdAt: 1,
+              updatedAt: 2,
+              pausedAt: 2,
+              tokenStart: 0,
+              tokensUsed: 0,
+              continuationTurns: 0,
+            }
+          : undefined;
+      await replaceSessionEntry(target, {
+        sessionId,
+        updatedAt: 3,
+        status: undefined,
+        abortedLastRun: false,
+        lifecycleRunId: "completed-fresh-turn",
+        activeWriterRunId: "completed-fresh-turn",
+        restartRecoveryTerminalRunIds: ["old-interrupted-input", "completed-fresh-turn"],
+        mainRestartRecovery: {
+          cycleId: "retained-cycle",
+          revision: 3,
+          chargedAttempts: 0,
+          ...(mode === "effect hold"
+            ? {
+                pause: {
+                  reason: "unverifiable-external-effect" as const,
+                  toolCallId: "unknown-action",
+                  pausedAtMs: 2,
+                },
+              }
+            : {}),
+        },
+        ...(goal ? { goal, goalPauseOrigin: "manual" as const } : {}),
+      });
+      params.session.entry = loadSessionEntry(target)!;
+      const placements = createWorkerSessionPlacementStore();
+      const identity = { ...target, sessionId };
+      seedAttachedPlacementEnvironment(openOpenClawStateDatabase(), {
+        environmentId: "same-worker",
+        sessionId,
+        ownerEpoch: 445,
+      });
+      let placement = await placements.startDispatch(identity);
+      for (const [from, to, patch] of [
+        ["requested", "provisioning", { environmentId: "same-worker" }],
+        ["provisioning", "syncing", { workerBundleHash: "a".repeat(64) }],
+        [
+          "syncing",
+          "starting",
+          {
+            workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
+            remoteWorkspaceDir: "/workspace",
+          },
+        ],
+        ["starting", "active", { activeOwnerEpoch: 445 }],
+      ] as const) {
+        placement = await placements.transition({
+          sessionId,
+          from,
+          to,
+          expectedGeneration: placement.generation,
+          patch,
+        });
+      }
+      params.context.workerSessionPlacementService = placements;
+      const before = loadSessionEntry(target);
+      const pendingBefore = await readSessionPendingInputStage(
+        { ...target, sessionId },
+        "old-interrupted-input:user",
+        () => {},
+      );
+      let claim: Awaited<ReturnType<typeof placements.claimTurn>> | undefined;
+      if (mode === "settling turn") {
+        claim = await placements.claimTurn({
+          ...identity,
+          claimId: "settling",
+          runId: "settling-run",
+          owner: { kind: "worker", environmentId: "same-worker", ownerEpoch: 445 },
+        });
+      }
+      if (mode === "replacement") {
+        const prepare = placements.prepareRuntimeRefresh.bind(placements);
+        vi.spyOn(placements, "prepareRuntimeRefresh").mockImplementationOnce(async (id) => {
+          const facts = await prepare(id);
+          seedAttachedPlacementEnvironment(openOpenClawStateDatabase(), {
+            environmentId: "same-worker",
+            sessionId,
+            ownerEpoch: 446,
+          });
+          placements.adoptActive({
+            sessionId,
+            environmentId: "same-worker",
+            ownerEpoch: 446,
+            expectedGeneration: placement.generation,
+          });
+          return facts;
+        });
+      }
+      if (mode === "revoked caller") {
+        let current = true;
+        params.assertCurrent = () => {
+          if (!current) {
+            throw new Error("Original caller revoked");
+          }
+        };
+        const prepare = placements.prepareRuntimeRefresh.bind(placements);
+        vi.spyOn(placements, "prepareRuntimeRefresh").mockImplementationOnce(async (id) => {
+          const facts = await prepare(id);
+          current = false;
+          return facts;
+        });
+      }
+      vi.mocked(resolveDurableChatClaim).mockResolvedValue({
+        kind: "continue",
+        entry: params.session.entry,
+      });
+      try {
+        const allowed = await runChatSendPreAdmission(params);
+        expect(allowed, JSON.stringify(vi.mocked(params.respond).mock.calls)).toBe(
+          mode === "idle" || mode === "manual Goal",
+        );
+        if (allowed) {
+          expect(params.respond).not.toHaveBeenCalled();
+          expect(placements.get(sessionId)).toEqual(placement);
+          expect(loadSessionEntry(target)?.goal).toEqual(goal);
+          expect(loadSessionEntry(target)?.sessionId).toBe(sessionId);
+          expect(await runChatSendPreAdmission(params)).toBe(true);
+        } else {
+          expect(params.respond).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({ code: "INVALID_REQUEST" }),
+          );
+          expect(loadSessionEntry(target)).toEqual(before);
+        }
+        const pendingAfter = await readSessionPendingInputStage(
+          { ...target, sessionId },
+          "old-interrupted-input:user",
+          () => {},
+        );
+        expect(pendingAfter.existing).toEqual(pendingBefore.existing);
+        expect(pendingAfter.committed).toEqual(pendingBefore.committed);
+      } finally {
+        if (claim) {
+          await placements.releaseTurn(claim);
+        }
+        vi.restoreAllMocks();
+      }
+    });
+  },
+);
 
 describe("chat send stop ownership", () => {
   it("stops selected-agent work without cancelling the compatibility owner's run", async () => {

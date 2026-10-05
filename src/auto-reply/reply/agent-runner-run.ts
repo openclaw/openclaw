@@ -65,7 +65,11 @@ import { type ReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { bindReplyOperationTyping } from "./reply-run-typing.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
-import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
+import {
+  admitReplyTurn,
+  resolveReplyTurnKind,
+  runWithReplyOperationLifecycleAdmission,
+} from "./reply-turn-admission.js";
 import {
   isDuplicateRestartRecoverySource,
   retireTerminalRestartRecoverySourceClaim,
@@ -638,42 +642,44 @@ export async function runReplyAgent(
   });
   try {
     await replyOperation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(followupRun));
-    return await executePreparedReplyAgentRun({
-      ...params,
-      activeSessionStore,
-      admitUserTurn,
-      applyReplyToMode,
-      beginBeforeAgentReply,
-      blockReplyPipeline,
-      cfg,
-      checkpointBeforeAgentReply,
-      resolveVisibleReplyDelivery,
-      activeIsNewSession: isNewSession,
-      getActiveSessionEntry: () => activeSessionEntry,
-      isHeartbeat,
-      isRestartRecoveryArmed,
-      opts: runOpts,
-      pendingToolTasks,
-      replyMediaContext,
-      replyOperation,
-      replyRouteThreadId,
-      replyToChannel,
-      replyToMode,
-      returnWithQueuedFollowupDrain,
-      runFollowupTurn,
-      sendDirectCompactionNotice,
-      setActiveSessionEntry: (entry) => {
-        activeSessionEntry = entry;
-      },
-      setRunFollowupTurn: (runner) => {
-        runFollowupTurn = runner;
-      },
-      shouldEmitToolOutput,
-      shouldEmitToolResult,
-      traceAgentPhase,
-      turnAdoptionLifecycle,
-      typingSignals,
-    });
+    return await runWithReplyOperationLifecycleAdmission(replyOperation, () =>
+      executePreparedReplyAgentRun({
+        ...params,
+        activeSessionStore,
+        admitUserTurn,
+        applyReplyToMode,
+        beginBeforeAgentReply,
+        blockReplyPipeline,
+        cfg,
+        checkpointBeforeAgentReply,
+        resolveVisibleReplyDelivery,
+        activeIsNewSession: isNewSession,
+        getActiveSessionEntry: () => activeSessionEntry,
+        isHeartbeat,
+        isRestartRecoveryArmed,
+        opts: runOpts,
+        pendingToolTasks,
+        replyMediaContext,
+        replyOperation,
+        replyRouteThreadId,
+        replyToChannel,
+        replyToMode,
+        returnWithQueuedFollowupDrain,
+        runFollowupTurn,
+        sendDirectCompactionNotice,
+        setActiveSessionEntry: (entry) => {
+          activeSessionEntry = entry;
+        },
+        setRunFollowupTurn: (runner) => {
+          runFollowupTurn = runner;
+        },
+        shouldEmitToolOutput,
+        shouldEmitToolResult,
+        traceAgentPhase,
+        turnAdoptionLifecycle,
+        typingSignals,
+      }),
+    );
   } catch (error) {
     replyRunState.recordReplyOperationAgentTurn(
       followupRun.replyOperationRunStates,

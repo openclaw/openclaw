@@ -1,8 +1,18 @@
 import { randomUUID } from "node:crypto";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import {
+  hasMainRestartRecoveryEpisode,
+  type TurnRecoveryIntent,
+} from "../../config/sessions/main-session-recovery.types.js";
 import { isMainRestartRecoveryCandidate } from "../../config/sessions/restart-recovery-state.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
-import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { promoteQueuedSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
+import { captureSessionEntryReadScope } from "../../config/sessions/session-entry-read-request.js";
+import { withSessionStoreReaderInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import {
+  getAgentEventLifecycleGeneration,
+  assertAgentRunLifecycleGenerationCurrent,
+} from "../../infra/agent-events.js";
 import {
   retryMainSessionRecoveryMutation,
   scheduleMainSessionRecoveryMutation,
@@ -61,6 +71,7 @@ export async function commitMainSessionRecovery(params: {
   requireWriteSuccess?: boolean;
   scanAliases?: boolean;
   shouldContinue?: () => boolean;
+  assertCommitAllowed?: () => void;
   target: MainSessionRecoveryStoreTarget;
 }): Promise<MainSessionRecoveryStoreResult> {
   const reservationCleanup =
@@ -81,6 +92,7 @@ export async function commitMainSessionRecovery(params: {
     requireWriteSuccess: params.requireWriteSuccess,
     ...(params.scanAliases ? {} : { sessionKeys: [params.target.sessionKey] }),
     storePath: params.target.storePath,
+    assertCommitAllowed: params.assertCommitAllowed,
     update: (entries) => {
       // Recheck after entering write admission: shutdown can begin while this
       // recovery owner is waiting, including between exact and moved-key lookups.
@@ -156,6 +168,7 @@ export async function commitMainSessionRecovery(params: {
       const previousRecoveryState = entry.mainRestartRecovery;
       const previousRecoveryRuns = entry.restartRecoveryRuns;
       const previousDeliveryRunId = entry.restartRecoveryDeliveryRunId;
+      const previousDeliverySourceRunId = entry.restartRecoveryDeliverySourceRunId;
       const command =
         (params.command.kind === "claim_foreground" ||
           params.command.kind === "observe" ||
@@ -168,6 +181,7 @@ export async function commitMainSessionRecovery(params: {
         previousRecoveryState !== entry.mainRestartRecovery ||
         previousRecoveryRuns !== entry.restartRecoveryRuns ||
         previousDeliveryRunId !== entry.restartRecoveryDeliveryRunId ||
+        previousDeliverySourceRunId !== entry.restartRecoveryDeliverySourceRunId ||
         (transition.kind !== "foreground_validated" &&
           transition.kind !== "no_change" &&
           transition.kind !== "observed" &&
@@ -207,6 +221,8 @@ export async function refreshMainSessionRecoveryOwner(
 }
 
 export async function claimMainSessionRecoveryOwner(params: {
+  assertCommitAllowed?: () => void;
+  inputIntent?: TurnRecoveryIntent;
   allowMissingSession?: boolean;
   lifecycleGeneration: string;
   replacementSessionId?: string;
@@ -222,9 +238,11 @@ export async function claimMainSessionRecoveryOwner(params: {
       sessionId: params.sessionId,
       sessionKey: params.target.sessionKey,
       claimId: randomUUID(),
+      ...(params.inputIntent ? { inputIntent: params.inputIntent } : {}),
       ...(params.runId ? { runId: params.runId } : {}),
     },
     requireWriteSuccess: true,
+    assertCommitAllowed: params.assertCommitAllowed,
     target: params.target,
   });
   if (claim.transition.kind === "foreground_claimed") {
@@ -252,7 +270,7 @@ export async function claimMainSessionRecoveryOwner(params: {
     claim.entry &&
     claim.entry.abortedLastRun !== true &&
     claim.entry.restartRecoveryRuns === undefined &&
-    claim.entry.mainRestartRecovery === undefined &&
+    !hasMainRestartRecoveryEpisode(claim.entry) &&
     (claim.entry.sessionId === params.sessionId ||
       claim.entry.sessionId === params.replacementSessionId);
   if (
@@ -313,6 +331,19 @@ async function releaseMainSessionRecoveryOwnerWithRetries(
   );
   const { entry, sessionKey } = released;
   if (
+    entry &&
+    sessionKey &&
+    entry.sessionId === lease.sessionId &&
+    (released.transition.kind === "applied" || released.transition.kind === "no_change") &&
+    !isMainSessionRecoveryPending(entry, sessionKey) &&
+    !entry.restartRecoveryDeliveryRunId
+  ) {
+    const queued = await promoteQueuedMainSessionInput({ ...lease, sessionKey }, entry);
+    if (queued) {
+      return queued;
+    }
+  }
+  if (
     (released.transition.kind !== "applied" && released.transition.kind !== "no_change") ||
     !entry ||
     !sessionKey ||
@@ -327,6 +358,48 @@ async function releaseMainSessionRecoveryOwnerWithRetries(
     sessionKey,
     storePath: lease.storePath,
   };
+}
+
+/** Existing foreground release and startup admission share the exact pending-row promotion owner. */
+export async function promoteQueuedMainSessionInput(
+  target: MainSessionRecoveryStoreTarget,
+  entry: SessionEntry,
+  assertCurrent?: () => void,
+): Promise<MainSessionRecoveryPendingTarget | undefined> {
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
+  const prepared = captureSessionEntryReadScope(target);
+  const promote = (
+    scope: Parameters<typeof promoteQueuedSessionPendingInput>[0],
+    assertSourceCurrent?: () => void,
+  ) =>
+    promoteQueuedSessionPendingInput(scope, { expectedEntry: entry, lifecycleGeneration }, () => {
+      assertSourceCurrent?.();
+      assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+      assertCurrent?.();
+    });
+  const promoted = prepared.agentId
+    ? await promote({
+        ...prepared.scope,
+        agentId: prepared.agentId,
+        sessionId: entry.sessionId,
+      })
+    : await withSessionStoreReaderInWorker(
+        target,
+        async ({ logicalAgentId, database, assertCurrent: assertSourceCurrent }) =>
+          promote(
+            {
+              ...target,
+              agentId: logicalAgentId,
+              storePath: database.path,
+              env: database.env,
+              sessionId: entry.sessionId,
+            },
+            assertSourceCurrent,
+          ),
+      );
+  return promoted?.entry.mainRestartRecovery?.queuedInputId
+    ? { ...target, sessionId: entry.sessionId }
+    : undefined;
 }
 
 export async function releaseMainSessionRecoveryOwner(

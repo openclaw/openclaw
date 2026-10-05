@@ -87,6 +87,11 @@ export function createSessionHistoryWorkerReaders(
       );
   }
   return {
+    readDoctorSessionRecovery: reader(
+      "doctor-session-recovery",
+      "a Doctor recovery diagnostic",
+      (value) => value,
+    ),
     readBoardSnapshot: reader("board-snapshot", "a Board snapshot", (result) => result.value),
     readBoardWidgetDocument: reader(
       "board-widget-document",

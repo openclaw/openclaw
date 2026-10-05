@@ -2,6 +2,7 @@ import type { AgentTurnStartOwner } from "../../gateway/agent-turn/internal-faca
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import type { AgentRunRequest } from "../../gateway/server-methods/agent-request-types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 
 const RESTART_RECOVERY_START_OBSERVATION_MS = 10_000;
 
@@ -35,8 +36,10 @@ export type RestartRecoveryDispatchStartOutcome =
 
 export async function dispatchRestartRecoveryUntilStarted(params: {
   agentParams: AgentRunRequest;
+  operatorRunAuthority?: AdmittedRunOperatorAuthority;
   gatewayRuntime: GatewayRecoveryRuntime;
   onSettled?: () => void;
+  onStarted?: () => Promise<void>;
 }): Promise<RestartRecoveryDispatchStartOutcome> {
   let dispatchAccepted = false;
   let executionStarted = false;
@@ -67,18 +70,31 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
       executionStartTimer = undefined;
     }
   };
-  const onExecutionStarted = () => {
+  let startAdmission: Promise<void> | undefined;
+  const onExecutionStarted = (): Promise<void> | undefined => {
     if (executionStartTimedOut || startOwner?.observe()?.executionStarted !== true) {
-      return;
+      return undefined;
     }
-    executionStarted = true;
-    clearExecutionStartTimer();
-    executionStart.resolve();
+    const joinAdmission = params.onStarted;
+    if (!joinAdmission) {
+      executionStarted = true;
+      clearExecutionStartTimer();
+      executionStart.resolve();
+      return undefined;
+    }
+    return (startAdmission ??= (async () => {
+      executionStarted = true;
+      clearExecutionStartTimer();
+      await joinAdmission();
+      executionStart.resolve();
+    })());
   };
   const observeExecutionStart = () => {
     const ownerState = startOwner?.observe();
     if (ownerState?.executionStarted) {
-      onExecutionStarted();
+      void onExecutionStarted()?.catch((error: unknown) => {
+        executionStartTimeout.resolve({ kind: "failed", error, observation: observe() });
+      });
       return;
     }
     if (ownerState && ownerState.expiresAtMs > Date.now()) {
@@ -106,6 +122,7 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
       params.agentParams,
       undefined,
       {
+        operatorRunAuthority: params.operatorRunAuthority,
         expectFinal: true,
         onAccepted: () => {
           dispatchAccepted = true;

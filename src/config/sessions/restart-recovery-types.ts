@@ -70,6 +70,13 @@ export type RestartRecoveryTerminalDeliveryEvidence =
 
 /** Durable ownership and idempotency state for gateway restart recovery. */
 export type SessionRestartRecoveryState = {
+  /** Active intent captured by the suspension owner before draining accepted work. */
+  restartRecoveryGoal?: {
+    id: string;
+    sessionId: string;
+    lifecycleRevision?: string;
+    capturedAtMs: number;
+  };
   restartRecoveryBeforeAgentReplyState?: RestartRecoveryBeforeAgentReplyState;
   /** Durable pre/post boundary around the terminal external send. */
   restartRecoveryDeliveryReceiptState?: "terminal-pending" | "delivered-terminal";

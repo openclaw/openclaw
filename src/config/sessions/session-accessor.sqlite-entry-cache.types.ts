@@ -23,13 +23,29 @@ export type SessionEntryCacheSnapshot = {
 
 export type SessionSharingEntry = Pick<
   InternalSessionEntry,
-  keyof ReturnType<typeof projectSessionSharingEntry>
->;
+  Exclude<keyof ReturnType<typeof projectSessionSharingEntry>, "pendingFinalDeliveryContext">
+> &
+  Pick<ReturnType<typeof projectSessionSharingEntry>, "pendingFinalDeliveryContext">;
 
 export function projectSessionSharingEntry(entry: InternalSessionEntry) {
   return {
     sessionId: entry.sessionId,
     previousSessionId: entry.previousSessionId,
+    status: entry.status,
+    abortedLastRun: entry.abortedLastRun,
+    restartRecoveryDeliveryRunId: entry.restartRecoveryDeliveryRunId,
+    restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
+    ...(entry.restartRecoveryDeliveryContext === undefined
+      ? {}
+      : { restartRecoveryDeliveryContext: structuredClone(entry.restartRecoveryDeliveryContext) }),
+    ...(entry.restartRecoverySourceReplyDeliveryMode === undefined
+      ? {}
+      : { restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode }),
+    ...(entry.pendingFinalDelivery?.context === undefined
+      ? {}
+      : { pendingFinalDeliveryContext: structuredClone(entry.pendingFinalDelivery.context) }),
+    ...(entry.sendPolicy === undefined ? {} : { sendPolicy: entry.sendPolicy }),
+    ...(entry.chatType === undefined ? {} : { chatType: entry.chatType }),
     updatedAt: entry.updatedAt,
     createdAt: entry.createdAt,
     initializationPending: entry.initializationPending,
@@ -41,6 +57,7 @@ export function projectSessionSharingEntry(entry: InternalSessionEntry) {
     pendingProjectGitUrl: entry.pendingProjectGitUrl,
     pendingWorktree: entry.pendingWorktree ? structuredClone(entry.pendingWorktree) : undefined,
     lifecycleRevision: entry.lifecycleRevision,
+    pluginOwnerId: entry.pluginOwnerId,
     lifecycleRunId: entry.lifecycleRunId,
     activeWriterRunId: entry.activeWriterRunId,
     ...(entry.subagentRecovery
@@ -68,6 +85,7 @@ export function projectSessionSharingEntry(entry: InternalSessionEntry) {
     sandbox: entry.sandbox,
     spawnedBy: entry.spawnedBy,
     spawnDepth: entry.spawnDepth,
+    subagentRole: entry.subagentRole,
     parentSessionKey: entry.parentSessionKey,
     sessionStartedAt: entry.sessionStartedAt,
   };

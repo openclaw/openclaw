@@ -4,6 +4,7 @@ import { AGENT_MODEL_FIELD_LABELS } from "./schema.labels.agent-models.js";
 import { APPROVAL_FIELD_LABELS } from "./schema.labels.approvals.js";
 import { BROWSER_FIELD_LABELS } from "./schema.labels.browser.js";
 import { GITHUB_TOOL_FIELD_LABELS } from "./schema.labels.github.js";
+import { PLUGIN_FIELD_LABELS } from "./schema.labels.plugins.js";
 import { SESSION_FIELD_LABELS } from "./schema.labels.session.js";
 import { WORKSPACE_FIELD_LABELS } from "./schema.labels.workspace.js";
 import { META_FIELD_LABELS } from "./schema.meta.js";
@@ -15,6 +16,7 @@ import { STORAGE_FIELD_LABELS } from "./zod-schema.storage.js";
 import { TELEMETRY_FIELD_LABELS } from "./zod-schema.telemetry.js";
 
 export const FIELD_LABELS: Record<string, string> = {
+  repositoryBranchPrefix: "Repository Branch Prefix",
   ...META_FIELD_LABELS,
   ...BROWSER_FIELD_LABELS,
   env: "Environment",
@@ -728,33 +730,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.defaults.botLoopProtection.cooldownSeconds": "Default Bot Loop Cooldown Seconds",
   "channels.modelByChannel": "Channel Model Overrides",
   "discovery.mdns.mode": "mDNS Discovery Mode",
-  plugins: "Plugins",
-  "plugins.enabled": "Enable Plugins",
-  "plugins.allow": "Plugin Allowlist",
-  "plugins.deny": "Plugin Denylist",
-  "plugins.load": "Plugin Loader",
-  "plugins.load.paths": "Plugin Load Paths",
-  "plugins.slots": "Plugin Slots",
-  "plugins.slots.memory": "Memory Plugin",
-  "plugins.slots.contextEngine": "Context Engine Plugin",
-  "plugins.entries": "Plugin Entries",
-  "plugins.entries.*.enabled": "Plugin Enabled",
-  "plugins.entries.*.hooks": "Plugin Hook Policy",
-  "plugins.entries.*.hooks.allowConversationAccess": "Allow Conversation Access Hooks",
-  "plugins.entries.*.hooks.allowPromptInjection": "Allow Prompt Injection Hooks",
-  "plugins.entries.*.hooks.timeoutMs": "Plugin Hook Timeout (ms)",
-  "plugins.entries.*.hooks.timeouts": "Plugin Hook Timeout Overrides",
-  "plugins.entries.*.subagent": "Plugin Subagent Policy",
-  "plugins.entries.*.subagent.allowModelOverride": "Allow Plugin Subagent Model Override",
-  "plugins.entries.*.subagent.allowedModels": "Plugin Subagent Allowed Models",
-  "plugins.entries.*.llm": "Plugin LLM Policy",
-  "plugins.entries.*.llm.allowModelOverride": "Allow Plugin LLM Model Override",
-  "plugins.entries.*.llm.allowedModels": "Plugin LLM Allowed Models",
-  "plugins.entries.*.llm.allowedCompletionModels": "Plugin LLM Allowed Completion Models",
-  "plugins.entries.*.llm.allowAuthProfileOverride": "Allow Plugin LLM Auth Profile Override",
-  "plugins.entries.*.llm.allowAgentIdOverride": "Allow Plugin LLM Agent Override",
-  "plugins.entries.*.apiKey": "Plugin API Key", // pragma: allowlist secret
-  "plugins.entries.*.env": "Plugin Environment Variables",
-  "plugins.entries.*.config": "Plugin Config",
+  ...PLUGIN_FIELD_LABELS,
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

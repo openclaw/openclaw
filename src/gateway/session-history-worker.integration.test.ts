@@ -404,7 +404,12 @@ it("reduces full transcript recovery, usage, and MCP facts without caller-thread
     };
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
     const messages = [
-      { role: "user", content: "Continue safely", provenance: { kind: "external_user" } },
+      {
+        role: "user",
+        content: "Continue safely",
+        idempotencyKey: "summary-source",
+        provenance: { kind: "external_user" },
+      },
       {
         role: "toolResult",
         toolName: "exec",
@@ -436,6 +441,37 @@ it("reduces full transcript recovery, usage, and MCP facts without caller-thread
             },
           },
         },
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "delivered-send", name: "message", arguments: {} },
+          { type: "toolCall", id: "pending-send", name: "message", arguments: {} },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "pending-send",
+        toolName: "message",
+        content: "Missing recorded result",
+        details: { reason: "missing_tool_result" },
+      },
+      {
+        role: "assistant",
+        content: "Recorded delivery",
+        openclawDeliveryMirror: {
+          kind: "message-tool-source-reply",
+          final: true,
+          sourceTurnId: "summary-source",
+          toolCallId: "delivered-send",
+        },
+      },
+      {
+        role: "toolResult",
+        toolCallId: "delivered-send",
+        toolName: "message",
+        content: "Late synthesized missing result",
+        details: { reason: "missing_tool_result" },
       },
       ...Array.from({ length: 1200 }, () => ({
         role: "assistant",
@@ -476,10 +512,27 @@ it("reduces full transcript recovery, usage, and MCP facts without caller-thread
       );
     });
     try {
-      expect(await readMainSessionRecoveryCheckpoint(target)).toEqual({
+      expect(await readMainSessionRecoveryCheckpoint(target, undefined, "summary-source")).toEqual({
         replaySafe: true,
         source: "external_user",
+        unresolvedEffect: {
+          action: "pause",
+          reason: "unverifiable-external-effect",
+          toolCallId: "pending-send",
+          toolName: "message",
+        },
       });
+      expect(
+        await readMainSessionRecoveryCheckpoint(target, "pending-send", "summary-source"),
+      ).toEqual({
+        replaySafe: true,
+        source: "external_user",
+        unresolvedEffect: undefined,
+      });
+      expect(
+        (await readMainSessionRecoveryCheckpoint(target, "pending-send", "other-source"))
+          .unresolvedEffect,
+      ).toMatchObject({ toolCallId: "delivered-send" });
       expect(scans).toEqual([]);
       expect(await readLatestSessionUsageFromTranscriptAsync(target)).toMatchObject({
         inputTokens: 2400,
@@ -499,5 +552,24 @@ it("reduces full transcript recovery, usage, and MCP facts without caller-thread
     } finally {
       observers.forEach((observer) => observer.mockRestore());
     }
+
+    await appendTranscriptMessage(target, {
+      message: {
+        role: "user",
+        content: "A new original turn",
+        provenance: { kind: "external_user" },
+        idempotencyKey: "next-source",
+      },
+    });
+    await appendTranscriptMessage(target, {
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "delivered-send", name: "message", arguments: {} }],
+      },
+    });
+    await waitForSessionTranscriptProjection(target);
+    expect(
+      (await readMainSessionRecoveryCheckpoint(target, undefined, "next-source")).unresolvedEffect,
+    ).toMatchObject({ toolCallId: "delivered-send" });
   });
 });

@@ -1,3 +1,4 @@
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import {
   type AgentWaitParams,
   type ErrorShape,
@@ -5,6 +6,7 @@ import {
   validateAgentWaitParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { captureAgentRunCapacityWait } from "../../infra/agent-run-capacity-wait.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "../chat-abort.js";
 import type { GatewayMethodRegistry } from "../methods/registry.js";
@@ -96,6 +98,7 @@ export function createInternalAgentTurnFacade(
       const acceptanceResult = createDeferredCore<GatewayMethodDispatchResponse>();
       let finalResult: Deferred<GatewayMethodDispatchResponse> | undefined;
       let postAcceptanceError: Error | undefined;
+      let cachedStartNotification: Promise<void> | undefined;
       // Acceptance publishes the abort owner before this callback runs. Retain that exact
       // entry so a late deadline cannot cancel a same-run-id successor.
       let acceptedAbortOwner: { entry: ChatAbortControllerEntry; runId: string } | undefined;
@@ -114,6 +117,19 @@ export function createInternalAgentTurnFacade(
           return;
         }
         startOwnerPublished = true;
+        const readCapacityWait = captureAgentRunCapacityWait(runId, lifecycleGeneration);
+        owner.resolvePreparationExpiresAtMs = () => {
+          if (
+            owner.executionStarted ||
+            owner.registrationCleanupRequested ||
+            owner.projectSessionTerminalObservedAt !== undefined ||
+            owner.controller.signal.aborted ||
+            context.chatAbortControllers.get(runId) !== owner
+          ) {
+            return owner.expiresAtMs;
+          }
+          return owner.expiresAtMs + (readCapacityWait()?.elapsedMs ?? 0);
+        };
         const observe = () => {
           try {
             options.assertContextCurrent?.();
@@ -128,7 +144,11 @@ export function createInternalAgentTurnFacade(
             owner.sessionKey === expectedSessionKey &&
             !owner.controller.signal.aborted &&
             owner.registrationCleanupRequested !== true
-            ? { executionStarted: owner.executionStarted === true, expiresAtMs: owner.expiresAtMs }
+            ? {
+                executionStarted: owner.executionStarted === true,
+                expiresAtMs: owner.resolvePreparationExpiresAtMs?.() ?? owner.expiresAtMs,
+                waitingForCapacity: readCapacityWait()?.waiting === true,
+              }
             : undefined;
         };
         dispatchOptions.onStartOwner({
@@ -186,7 +206,14 @@ export function createInternalAgentTurnFacade(
               acceptedRunId &&
               context.chatAbortControllers.get(acceptedRunId)?.executionStarted === true
             ) {
-              dispatchOptions.onExecutionStarted?.();
+              const started = dispatchOptions.onExecutionStarted?.();
+              if (isPromiseLike(started)) {
+                cachedStartNotification = Promise.resolve(started);
+                void cachedStartNotification.catch((error: unknown) => {
+                  postAcceptanceError = error instanceof Error ? error : new Error(String(error));
+                  finalResult?.reject(postAcceptanceError);
+                });
+              }
             }
           }
         },
@@ -287,6 +314,9 @@ export function createInternalAgentTurnFacade(
       );
       const response = (async () => {
         const first = acceptance ?? (await acceptanceResult.promise);
+        if (cachedStartNotification) {
+          await cachedStartNotification;
+        }
         if (
           dispatchOptions.expectFinal !== true ||
           (first.payload as { status?: unknown } | undefined)?.status !== "accepted"

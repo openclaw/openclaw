@@ -50,8 +50,11 @@ export async function prepareGatewaySuspend(params: {
   nowMs?: () => number;
   createSuspensionId?: () => string;
   warn?: (message: string) => void;
-}): GatewaySuspendPrepareResult {
+  beforeDrain?: (assertCurrent: () => void) => Promise<void>;
+  assertCurrent?: () => void;
+}): Promise<GatewaySuspendPrepareResult> {
   const terminalPolicy = params.terminalPolicy ?? "preserve";
+  params.assertCurrent?.();
   const drain = params.drain === true;
   const activeWorkOptions = {
     ignoreTerminalSessions: terminalPolicy === "terminate",
@@ -89,12 +92,13 @@ export async function prepareGatewaySuspend(params: {
   let suspensionInvalidated = false;
   const admission = tryBeginGatewaySuspendAdmission(() => {
     suspensionInvalidated = true;
-    const activeEntry = COORDINATOR_STATE.current;
+    const activeEntry = COORDINATOR_STATE.current ?? COORDINATOR_STATE.preparing;
     if (activeEntry?.owner !== owner) {
       return;
     }
     clearEntryTimer(activeEntry);
     COORDINATOR_STATE.current = null;
+    COORDINATOR_STATE.preparing = null;
     // Restart drain must not resume the old scheduler while shutdown is in
     // flight. Keep its cleanup until the next in-process lifecycle begins.
     COORDINATOR_STATE.retiredForLifecycleReset = activeEntry;
@@ -118,6 +122,17 @@ export async function prepareGatewaySuspend(params: {
 
   let schedulingPaused = false;
   let reopenAdmission = admission.rollback;
+  const preparation: GatewaySuspendPreparation = {
+    kind: "preparing",
+    owner,
+    resumeScheduling: params.resumeScheduling,
+    reopenAdmission: () => reopenAdmission(),
+    warn: params.warn,
+    invalidate: () => {
+      suspensionInvalidated = true;
+    },
+  };
+  COORDINATOR_STATE.preparing = preparation;
   const resume = () =>
     resumeSchedulingBeforeReopen({
       owner,
@@ -129,7 +144,7 @@ export async function prepareGatewaySuspend(params: {
   try {
     params.pauseScheduling();
     schedulingPaused = true;
-    const snapshot = createGatewayActiveWorkSnapshot(params.inspect, activeWorkOptions);
+    let snapshot = createGatewayActiveWorkSnapshot(params.inspect, activeWorkOptions);
     if (
       (params.nowMs ?? Date.now)() >= nowMs + GATEWAY_SUSPEND_TTL_MS ||
       performance.now() >= deadlineAtMs
@@ -151,8 +166,49 @@ export async function prepareGatewaySuspend(params: {
         writeCustody: snapshot.writeCustody,
       };
     }
-    const admissionTransition = snapshot.idle ? admission.commit : admission.drain;
-    if (!admissionTransition()) {
+    if (params.beforeDrain) {
+      const remainingMs = Math.min(
+        nowMs + GATEWAY_SUSPEND_TTL_MS - (params.nowMs ?? Date.now)(),
+        deadlineAtMs - performance.now(),
+      );
+      const timerGeneration = (preparation.timerGeneration ?? 0) + 1;
+      preparation.timerGeneration = timerGeneration;
+      preparation.timer = setTimeout(
+        () => {
+          if (
+            preparation.timerGeneration !== timerGeneration ||
+            COORDINATOR_STATE.preparing !== preparation
+          ) {
+            return;
+          }
+          clearEntryTimer(preparation);
+          resume();
+          preparation.invalidate();
+          if (COORDINATOR_STATE.preparing === preparation) {
+            COORDINATOR_STATE.preparing = null;
+          }
+        },
+        Math.max(0, Math.ceil(remainingMs)),
+      );
+      preparation.timer.unref?.();
+      const assertCurrent = () => {
+        params.assertCurrent?.();
+        if (
+          suspensionInvalidated ||
+          COORDINATOR_STATE.preparing !== preparation ||
+          isGatewayRestartDraining() ||
+          (params.nowMs ?? Date.now)() >= nowMs + GATEWAY_SUSPEND_TTL_MS ||
+          performance.now() >= deadlineAtMs
+        ) {
+          throw new Error("gateway suspension changed before restart intent capture");
+        }
+      };
+      await params.beforeDrain(assertCurrent);
+      assertCurrent();
+      snapshot = createGatewayActiveWorkSnapshot(params.inspect, activeWorkOptions);
+    }
+    params.assertCurrent?.();
+    if (!(snapshot.idle ? admission.commit() : admission.drain())) {
       throw new Error("gateway suspension admission changed during preparation");
     }
     reopenAdmission = admission.release;
@@ -184,10 +240,18 @@ export async function prepareGatewaySuspend(params: {
       reopenAdmission();
     }
     throw err;
+  } finally {
+    clearEntryTimer(preparation);
+    if (COORDINATOR_STATE.preparing === preparation) {
+      COORDINATOR_STATE.preparing = null;
+    }
   }
 }
 
 function handoffRefusal(held: HeldGatewaySuspension, owner: GatewaySuspendHandoffOwner) {
+  if (held.reader) {
+    return "gateway writer retirement is irreversible";
+  }
   if (
     COORDINATOR_STATE.current !== held ||
     held.nowMs() >= held.expiresAtMs ||
@@ -457,11 +521,7 @@ export function resumeGatewaySuspend(suspensionId: string): GatewaySuspendResume
     return { ok: false, reason: "suspension-mismatch" };
   }
   if (!resumeAndReopen(held)) {
-    return {
-      ok: false,
-      reason: "scheduler-resume-failed",
-      retryAfterMs: GATEWAY_SCHEDULER_RECOVERY_RETRY_MS,
-    };
+    return schedulerResumeFailure();
   }
   return {
     ok: true,
@@ -475,12 +535,17 @@ export function resumeGatewaySuspend(suspensionId: string): GatewaySuspendResume
 export function resetGatewaySuspendCoordinatorForLifecycleRestart(): void {
   const current = COORDINATOR_STATE.current;
   const retired = COORDINATOR_STATE.retiredForLifecycleReset;
+  const preparing = COORDINATOR_STATE.preparing;
   COORDINATOR_STATE.current = null;
+  COORDINATOR_STATE.preparing = null;
   COORDINATOR_STATE.retiredForLifecycleReset = null;
-  const entries = current && current !== retired ? [current, retired] : [current ?? retired];
+  const entries = new Set([current, retired, preparing]);
   for (const entry of entries) {
     if (!entry) {
       continue;
+    }
+    if (entry.kind === "preparing") {
+      entry.invalidate();
     }
     clearEntryTimer(entry);
     try {

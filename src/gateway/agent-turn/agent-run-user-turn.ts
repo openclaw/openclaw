@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import {
   claimExecApprovalFollowupRuntimeHandoff,
@@ -13,6 +14,7 @@ import {
 import type { ExecElevatedDefaults } from "../../agents/bash-tools.exec-types.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deleteMediaBuffer } from "../../media/store.js";
 import {
@@ -37,12 +39,12 @@ import {
   type ChatImageContent,
   type OffloadedRef,
 } from "../chat-attachments.js";
+import { captureGatewayTurnIssuerAdmission } from "../operator-run-authority.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { resolveSessionRuntimeCwd } from "../server-methods/agent-session-reset.js";
 import { gatewayClientSenderFields } from "../server-methods/gateway-client-identity.js";
 import { resolveGatewayInputParticipant } from "../session-input-participant.js";
-import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
   shouldSuppressAgentPromptPersistence,
@@ -132,6 +134,7 @@ export function recordAgentRunUserTurnParticipant(
 }
 
 export async function prepareAgentRunUserTurn(params: {
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   assertCurrent: () => void;
   assertCompletionCurrent?: () => void;
   privateCompletion?: true;
@@ -147,6 +150,7 @@ export async function prepareAgentRunUserTurn(params: {
   requestedSessionKeyRaw?: string;
   admittedSessionId: string;
   activeSessionAgentId: string;
+  sessionStorePath: string;
   resolvedThreadId?: string | number;
   suppressVisibleSessionEffects: boolean;
   requestedPromptPersistenceSuppression: boolean;
@@ -286,17 +290,26 @@ export async function prepareAgentRunUserTurn(params: {
         trackInputCompletion: params.privateCompletion,
         pendingInputReplaySourceSessionKeys: settleWakeReplay?.sourceSessionKeys,
         input,
-        target: () => {
+        target: async () => {
           params.assertCurrent();
-          const loaded = loadSessionEntry(params.resolvedSessionKey!, {
-            agentId: params.activeSessionAgentId,
-            clone: false,
-          });
-          const latestEntry = loaded.entry;
+          const latestEntry = await readSessionEntryReadOnlyInWorker(
+            {
+              sessionKey: params.resolvedSessionKey!,
+              agentId: params.activeSessionAgentId,
+              storePath: params.sessionStorePath,
+              readConsistency: "latest",
+            },
+            params.assertCurrent,
+          );
+          params.assertCurrent();
           const loadedSessionId = latestEntry?.sessionId?.trim();
           // Session creation is persisted before this phase. No matching entry
           // means the admitted lifecycle instance changed and must fail closed.
-          if (!latestEntry || loadedSessionId !== params.admittedSessionId) {
+          if (
+            !latestEntry ||
+            loadedSessionId !== params.admittedSessionId ||
+            latestEntry.lifecycleRevision !== params.sessionEntry?.lifecycleRevision
+          ) {
             return undefined;
           }
           return {
@@ -304,8 +317,7 @@ export async function prepareAgentRunUserTurn(params: {
             expectedSessionId: params.admittedSessionId,
             sessionKey: params.resolvedSessionKey!,
             sessionEntry: latestEntry,
-            sessionStore: loaded.store,
-            storePath: loaded.storePath,
+            storePath: params.sessionStorePath,
             agentId: params.activeSessionAgentId,
             cwd: resolveSessionRuntimeCwd({ sessionEntry: latestEntry }),
             ...(params.resolvedThreadId != null ? { threadId: params.resolvedThreadId } : {}),
@@ -327,6 +339,17 @@ export async function prepareAgentRunUserTurn(params: {
       if (
         !(await recorder.stageApproved!({
           runId: params.runId,
+          turnIssuerAdmission:
+            !params.inputProvenance || params.inputProvenance.kind === "external_user"
+              ? captureGatewayTurnIssuerAdmission({
+                  authority: params.operatorAuthority,
+                  sessionKey: params.resolvedSessionKey,
+                  sessionId: params.admittedSessionId,
+                  lifecycleRevision: params.sessionEntry?.lifecycleRevision,
+                  runId: params.runId,
+                  assertCurrent: params.assertCurrent,
+                })
+              : undefined,
           assertCurrent: () => {
             params.assertCurrent();
             settleWakeReplay?.assertCurrent();

@@ -15,6 +15,7 @@ import type { UserTurnOriginalInputCommit } from "../../sessions/user-turn-trans
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
 import type { MentionInbox } from "../mention-inbox.types.js";
+import { captureGatewayGoalIssuerAdmission } from "../operator-run-authority.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { formatForLog } from "../ws-log.js";
 import { buildRestartSafeChatTranscriptState } from "./chat-restart-recovery.js";
@@ -141,6 +142,18 @@ export function createGatewayChatUserTurnController(params: {
             operation: request.goalOperation,
             runId: session.clientRunId,
             ...params.goalCommitGuard,
+            issuerAdmission: captureGatewayGoalIssuerAdmission({
+              authority: admission.operatorAuthority,
+              sessionKey: session.sessionTarget.storeKey,
+              sessionId: admission.admittedSessionId,
+              lifecycleRevision: (admission.initialSessionEntry ?? session.entry)
+                ?.lifecycleRevision,
+              assertCurrent: () => {
+                admission.assertWorkAdmissionCurrent();
+                admission.assertSessionTargetCurrent();
+                params.goalCommitGuard?.assertCurrent();
+              },
+            }),
           },
         }
       : {}),

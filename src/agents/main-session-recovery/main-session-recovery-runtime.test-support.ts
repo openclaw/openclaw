@@ -110,7 +110,7 @@ export function createRecoveryRuntimeFixture(params: {
           abort: () => false,
         });
         options?.onAccepted?.(result);
-        options?.onExecutionStarted?.();
+        await options?.onExecutionStarted?.();
         await params.getDispatchSettlement();
       }
       return result;

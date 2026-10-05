@@ -19,16 +19,16 @@ and what the automatic resume looks like.
 
 ## What survives a restart
 
-| State                          | Storage                                            | Behavior across restart                                                 |
-| ------------------------------ | -------------------------------------------------- | ----------------------------------------------------------------------- |
-| Conversation history           | Per-agent SQLite database                          | Untouched; sessions continue from the stored transcript                 |
-| Accepted Control UI follow-ups | Per-agent SQLite pending inputs and browser outbox | Matching interrupted inputs are re-admitted when the browser reconnects |
-| Interrupted main-session turn  | Per-agent SQLite session row and transcript        | Automatically resumed or reconciled a few seconds after startup         |
-| Subagent runs                  | SQLite (shared state database)                     | Interrupted runs settle; the parent decides how to continue             |
-| Queued outbound deliveries     | SQLite delivery queue                              | Drained after restart; undelivered replies are retried                  |
-| Scheduled (cron) jobs          | SQLite cron store                                  | Schedules persist; the scheduler re-arms on boot                        |
-| Restart continuation           | SQLite restart sentinel                            | One-shot follow-up dispatched to the session that asked for the restart |
-| Gateway terminal PTYs          | Process memory                                     | End with the old process; terminal sessions are not recovered           |
+| State                          | Storage                                            | Behavior across restart                                                                                                                                  |
+| ------------------------------ | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Conversation history           | Per-agent SQLite database                          | Untouched; sessions continue from the stored transcript                                                                                                  |
+| Accepted Control UI follow-ups | Per-agent SQLite pending inputs and browser outbox | Authenticated queued inputs retain their own issuer for server-side restart admission; browser receipts still reconcile matching interrupted submissions |
+| Interrupted main-session turn  | Per-agent SQLite session row and transcript        | Automatically resumed or reconciled a few seconds after startup                                                                                          |
+| Subagent runs                  | SQLite (shared state database)                     | Interrupted runs settle; the parent decides how to continue                                                                                              |
+| Queued outbound deliveries     | SQLite delivery queue                              | Drained after restart; undelivered replies are retried                                                                                                   |
+| Scheduled (cron) jobs          | SQLite cron store                                  | Schedules persist; the scheduler re-arms on boot                                                                                                         |
+| Restart continuation           | SQLite restart sentinel                            | One-shot follow-up dispatched to the session that asked for the restart                                                                                  |
+| Gateway terminal PTYs          | Process memory                                     | End with the old process; terminal sessions are not recovered                                                                                            |
 
 The Control UI retains accepted text and attachments in its outbox until the
 Gateway confirms transcript consumption. After reconnecting, it checks the saved
@@ -49,6 +49,91 @@ Inputs accepted by older versions without resumable custody also require explici
 An uncertain submission stays unconfirmed until its outcome can be reconciled
 or the user chooses to retry it. Recovery of a turn already in the transcript
 does not depend on the browser returning.
+
+Before cooperative suspension starts draining, the recovery owner captures active
+unfinished goals and exact accepted chat or agent registrations, including turns
+still preparing without a goal. Acceptance does not imply execution started.
+Capture rechecks the original caller and registration at commit; completion,
+manual pause, cancellation, replacement, and revoked callers cannot transfer
+their old intent into a fresh recovery attempt. A goal added or paused during
+drain also fences an originally goal-less turn at recovery admission.
+
+A manually paused Goal stays paused when you send a new message. That authorized
+message can take foreground custody without waiting for automatic continuation
+of the paused Goal's predecessor. An unresolved external-effect hold still blocks
+the whole session until you review it and explicitly choose whether to continue.
+
+A Goal paused by a terminal error remains eligible for recovery under its original
+accepted authority. If the recovery owner has no original intent or authority
+restorer, or the accepted source no longer matches, a new foreground request gets
+an action-required refusal instead of waiting indefinitely. The predecessor,
+paused Goal, and pending inputs remain preserved; a fresh request cannot supply
+missing historical authority or automatically resume the Goal. Live recovery
+owners and temporary capacity waits still keep their existing admission custody.
+
+Fresh input can reconcile orphaned recovery metadata while the same worker remains
+active and idle. This preflight retains the worker and interrupted inputs; it does
+not archive, reset, reclaim, or replay them. A settling turn, replaced placement
+authority, or revoked caller still prevents reconciliation.
+
+When a terminal delivery source remains beside a different current accepted
+intent, recovery observation retires only that source ID after writer, delivery
+and active recovery claims are absent. Canonical orphan capture may retain run
+fences for that exact accepted intent and captured generation; observation keeps
+those fences while retiring the unrelated terminal source. Foreign or changed
+fences prevent retirement. The current input keeps its original issuer and
+custody; older interrupted inputs remain held. A changed or nonterminal source,
+revoked issuer, or unknown external effect still prevents admission.
+
+Captured goal metadata preserves intent but does not retain the original caller's
+authority. Captured goals without a durable, verified issuer binding remain held
+by startup recovery; the Gateway cannot substitute its System caller. Their goal,
+budget, and history remain intact. Restoring current issuer authority is a
+separate required resumption seam. Software Factory accepted goal-less turns
+retain the original verified issuer with the exact pending input, run, session
+key, session ID, lifecycle, and repository workspace identity. The existing agent
+SQLite worker commits these private noncredential references with accepted input
+custody before ACK, including turns still preparing without transcript input.
+Startup restores current original authority through the same recovery owner;
+it cannot substitute the System principal. Missing historical references remain
+held. An accepted queued follower cannot replace a running turn's issuer.
+
+If a new goal-less message is still held by its original foreground admission,
+recovery checks effects and the accepted issuer before returning custody to that
+same caller. It refunds its unused recovery reservation without dispatching or
+consuming the input. Foreign or settling owners, readmitted inputs, and changed
+issuer or lifecycle facts cannot use this handoff. The original caller rechecks
+its authority and exact input intent when claiming foreground work.
+
+A retained Goal paused by a terminal error does not prevent that same fresh
+input handoff when no captured recovery Goal owns it. The Goal stays paused and
+older interrupted inputs remain held. An active Goal, captured recovery Goal,
+changed issuer or intent, or unknown external effect still prevents the handoff.
+
+Queued inputs retain their existing SQLite input ID, request, and acceptance
+sequence before ACK. Drain does not copy them into another queue. Cancellation
+and transcript consumption remain authoritative, and fresh re-admission preserves
+accepted bytes and identity. Each newly accepted authenticated follower stores its
+private original issuer and request/message digests on that same input row. The
+existing acceptance sequence selects the next unstarted follower after the current
+owner settles. Startup revalidates that follower's original authority and dispatches
+its accepted text and run identity on the same session without a browser return.
+A missing, malformed, revoked, or unavailable issuer holds the head and prevents
+later inputs from overtaking it. Cancellation and consumption remain authoritative;
+private references never enter pending-input or transcript projections.
+
+An admitted recovery turn waits before execution when its node explicitly
+rejects physical capacity admission without creating its launch claim. A bound
+worker can reuse its own slot even when the node advertises no free slots. The
+existing recovery owner records the exact run, placement, claim, node connection and
+pairing generation and rejected launch in SQLite, shows the run as waiting, and
+rechecks capacity every five seconds before retrying. Waiting alone does not
+consume the recovery failure budget. Startup preserves that accounting for a
+recorded attempt that never started execution.
+Current actor authority, manual pause, cancellation and placement ownership are
+rechecked before execution. An unavailable node, missing credentials or an
+unknown launch outcome does not qualify as this capacity wait; existing
+reconciliation and custody rules still apply.
 
 When an update replaces the bundled Control UI, an open tab reloads after the
 Gateway reports the new build. Automatic recovery for that reported build and
@@ -692,6 +777,162 @@ the user to repeat the request. Preparing a new message cannot consume the
 interruption marker; the recovery owner retains it until work is adopted or
 settled.
 
+Planned suspension captures active unfinished goals before draining accepted work.
+The recovery owner rechecks the captured session lifecycle and goal at final
+execution admission, after asynchronous preparation. A terminal-error pause can
+resume automatically from those committed goal facts; manual pauses, completed or
+replaced goals, and unresolved external-effect holds cannot. Automatic activation
+keeps the existing token baseline, spent tokens, and continuation count. An
+exhausted goal stays budget-limited, refunds its unstarted recovery reservation,
+and starts no model work; only an explicit goal resume can reset its budget window.
+
+Software Factory goals created through an authenticated operator's trusted native
+tool caller or accepted Goal turn retain their original issuer references in the
+same private session mutation. Startup revalidates the original profile and alias
+bindings, device approval and token generation, committed auth policy, applicable
+original access grant, scope ceiling, model ceiling, and current session access.
+It issues a new process-bound operator restriction for the same logical session;
+captured goals never inherit the startup System principal. These references contain
+no credentials and do not themselves authorize execution. Current authority is
+checked again at execution admission and subsequent effects. Factory
+repository redispatch binds credential reads to the current workspace identity,
+agent/session key, repository URL, requested ref, branch, setup policy, and
+creation identity. Its own accepted base and checkpoint publications do not
+invalidate that selection; the existing placement and checkpoint CAS owners
+validate those mutable progress facts. A replaced repository target or closed
+original authority still denies reads before and after awaited work. Node workspace
+command delivery also rechecks its exact tunnel owner and caller authority after
+the node transport returns. A delayed receipt from a retired owner cannot cross
+that boundary or create an accepted result under a fresh placement. Retirement
+still joins pending local delivery and the owning physical workspace drain; a
+late reply does not prove that other old executors or external effects settled.
+
+Older goals without verified original issuer capture remain held; names, creator
+labels, profile rows, and transcript text cannot backfill that basis. Revoked or
+unavailable verification starts no automatic turn. Install issuer capture in the
+predecessor before using a later replacement to qualify this recovery path.
+A saved issuer without a captured interruption marker also remains held; it does
+not establish the issuer of an interrupted foreground or queued turn.
+Source-level issuer qualification does not by itself prove fresh-worker placement,
+checkpoint restoration, accepted-queue custody, or live release continuity.
+
+Repository admission preserves safe credential broker rejection messages while
+keeping arbitrary subprocess output private. A redeemed original-issuer proof
+does not establish a usable GitHub credential or repository entitlement. A broker
+refusal still blocks admission before worker allocation; restarting the same
+session does not bypass that refusal.
+
+An interrupted accepted turn does not need a goal to continue on its original
+logical session. Startup rechecks its exact durable input custody and repository
+binding as well as the original issuer restrictions above. Cancelled input,
+completed or manually paused work, replaced session identity, revoked or
+unavailable authority, and whole-session unknown-effect holds start no automatic
+turn. A known completion or cancellation during drain retires the original
+no-goal intent under its current epoch; a restart cancellation retains it, and
+an older result cannot settle a newer owner. The existing recovery cycle,
+reservation, and idempotency identities still own attempts and settlement.
+Accepted queued followers retain their own verified issuer in the existing pending
+row, independently of the current turn. A conservative session hint keeps startup
+discovery bounded; the row owns order, identity, and disposition. The existing
+recovery owner re-admits one head at a time, preserves its original plaintext and
+run identity, and applies current role, device, grant, model, session, and repository
+checks before effects. A later interruption after a recorded runtime start uses
+ordinary recovery instead of replaying the initial request. The existing Stop
+method can cancel durable unused input under current session and device/admin
+authority even after its process-local controller is gone.
+
+The private nullable input metadata column does not change accepted message bytes
+or schema-version markers. Historical NULL values remain unknown. An older reader
+does not discover unpromoted followers from this metadata; a promoted head may be
+visible through its existing current-turn intent. Rollback therefore still requires
+the release owner's quiescence and withdrawal controls, and cannot rely on ignoring
+the new metadata to prevent all automatic work. Source proof does not establish
+captured-plugin transport, fresh warm/cold worker allocation, checkpoint visibility,
+or live release continuity.
+
+When a failed worker is retained for salvage, its visible transcript notice names
+the previous accepted checkpoint, the prepared recovery checkpoint and its manifest
+hash, alongside the retained-resource disposition and uncertain later edits. The
+notice precedes the atomic checkpoint cutover and describes continuation as pending
+that acceptance; it does not claim execution has resumed. Repeating the same
+checkpoint notice adds no duplicate, while an older notice lacking the checkpoint
+identity does not hide the current warning. The notice remains visible after the
+session database reopens; it neither authorizes recovery nor releases held resources.
+
+The recovery runtime joins its exact admitted-run metadata write through the existing
+execution-start callback before native execution continues. Current caller and session
+authority are checked again after that join. A failed or unavailable publication admits
+no native effect; it does not bypass the sharing guard or reacquire a different issuer.
+Ordinary synchronous startup callbacks retain their immediate behavior.
+
+Confirmed dedicated workers can dispose of eligible failed leases through ordinary
+environment reconciliation and prepared-pool maintenance. The private hold first captures a
+content-free failure snapshot (origin, collection time, and failure digest; an
+unverified cause remains unverified). Session custody also requires the accepted
+checkpoint, current placement identity, a closed old claim, and no unresolved
+workspace results. For still-present compute, the same hold stages the exact recovery
+checkpoint while placement remains failed, the previous accepted checkpoint remains
+current, and resources remain charged. Only confirmed destruction of the exact owned
+lease and enrollment retirement permit checkpoint cutover under fresh original caller
+authority. Provider hold rejection does not attest absence; its captured custody can
+proceed through this guarded disposal path. Legacy holds without the original diagnostic
+capture, shared workers, live claims, and uncertain ownership remain held.
+
+Background failed-placement reconciliation also admits disposal from the existing
+accepted repository checkpoint. It verifies the pinned checkpoint artifacts, records
+failure custody, and stages the unchanged checkpoint through the same hold transaction
+before exact provider cleanup. This path needs no old turn transcript, remote read, or
+human force request. An absent remote-head field denotes unchanged accepted state,
+not a verified remote head. Cleanup leaves the placement failed and the repository
+revision unchanged, then schedules ordinary pool refill after confirmed settlement.
+Startup can consume that checkpoint for an interrupted accepted turn without a goal,
+but only through restored current original authority and the existing continuation
+owner. Manual pauses, unknown external effects and terminal accepted inputs still
+prevent continuation; unresolved results, moves or invalid checkpoint custody prevent
+automatic disposal. Legacy holds without diagnostic provenance are not backfilled.
+
+The existing destroy transaction retains the exact lease and immutable resource
+receipt while cleanup is pending. A known provider release is recorded before node
+enrollment retirement so restart does not repeat that settled effect. An uncertain
+provider operation remains owned for canonical reconciliation; neither an error nor
+cleanup proves a never-started allocation or earns a refund. Only final provider and
+enrollment settlement releases the active recovery hold and its resource-custody
+capacity. The sanitized disposition remains with the existing terminal environment
+receipt and seven-day retention, subject to placement references. Manual pauses,
+cancellation, accepted history and checkpoints, and whole-session unknown-effect
+holds stay independent of physical worker disposal. Unaccepted worker edits are not
+promised to survive this cleanup.
+
+If the retained prepared-worker budget is full, its transaction returns a typed
+capacity refusal before creating custody or contacting the provider. An exact unused,
+unattached dedicated reserve with teardown already requested then uses ordinary
+guarded provider destruction. Existing holds remain intact. Provider refusal or an
+unknown cleanup outcome keeps the reserve charged for reconciliation; only confirmed
+provider and enrollment settlement releases it. Missing original resource bindings
+still prevent deletion, and absent compute alone does not prove companion cleanup.
+
+These additive private hold fields require no new setting, schema version, store,
+or public operation. Older source retains its hold denial; it cannot undo completed
+disposal. Rollback still requires the release owner's quiescence and withdrawal
+controls, with pending exact cleanup custody preserved.
+
+For an unknown external outcome, **Resume Goal** first requires review and explicit
+acknowledgment of the selected goal and current recovery decision. Declining starts
+no work. The existing recovery owner checks current human authority and quiescent
+session and placement ownership, then atomically accepts the decision, goal,
+original issuer, continuation input, and operation receipt through the agent SQLite
+worker. The accepted run uses the existing recovery reservation and dispatcher on
+the same session; it does not replay the interrupted command or remove retained
+resources. A changed decision, goal, session, lifecycle, or original issuer rejects
+acceptance. Unattributed historical work remains held.
+
+These private references contain identity and scope restrictions, not credentials
+or reusable execution authority. Public session projections omit them. There is
+no new recovery flag: existing pause, cancellation, and lifecycle admission controls
+still own withdrawal. Rolling back to an older reader that lacks original-issuer
+custody requires the release owner's existing quiescence and withdrawal controls;
+ignoring an additive private reference does not make automatic recovery safe.
+
 Recovery reads the interrupted turn's source before starting another run, even
 when a final reply is already pending. If the transcript cannot be read, the
 saved reply and any admitted completion claim remain available for a later
@@ -747,6 +988,19 @@ Cancelling a recovery reservation after foreground work finishes clears an empty
 uncharged recovery record. Recovery reconciliation and foreground admission also
 clear this residue from older sessions, so it cannot block a completed subagent's
 requester turn. Interrupted work and pending delivery keep their recovery custody.
+
+Waiting for the recovery scheduler's capacity persists a same-session wait marker
+and projects the turn as queued. OpenClaw reserves and charges no dispatch attempt
+until a slot is available. Cancellation clears only that wait's exact cycle and
+epoch; a late slot cannot resume a manually paused goal or an external-effect hold.
+The pending intent survives database reopen and Gateway replacement.
+
+After RPC acceptance, the original reservation and unknown-outcome accounting
+still apply. Positively recorded session or global queue holds from the exact run
+context do not consume its preparation deadline; execution receives the normal
+model budget when it actually starts. Ordinary slow preparation still expires.
+An absent provider claim does not establish capacity waiting or authorize another
+allocation.
 
 After the durable budget is exhausted, the session is tombstoned instead of
 looping forever. Inspect the failed session and use `/new` or `/reset` to start a
@@ -1004,6 +1258,26 @@ channels.start --params '{"channel":"<id>"}'`
 
 ## Verify recovery after an update
 
+An original authenticated user can use `sessions.recover` for an interrupted
+session with a manually paused Goal and an unconsumed server-held accepted input,
+even when the browser outbox is absent. Recovery admits the oldest eligible
+pending input with its saved payload, issuer, input ID, run ID, session ID, and
+repository selection. It leaves the Goal paused. A displaced predecessor remains
+recorded as unresolved in the existing transcript; it is neither replayed nor
+marked completed. Live work, cancellation, changed authority, unresolved external
+effects, and unverified provider allocations still prevent re-admission.
+
+Shutdown can preserve an accepted input by committing its original user message;
+ordinary pending custody then disappears from the queue without proving execution
+or completion. An explicit `sessions.recover` request from that same verified user
+can re-admit the latest interrupted committed input under genuinely captured
+current ingress authority. Stored profile provenance identifies the source turn;
+it does not grant execution rights or reconstruct an unavailable historical grant.
+Available saved restrictions still apply. Recovery retains the original message
+and run identity, leaves older pending inputs and the paused Goal unchanged, and
+uses existing foreground policy, approval, effect, and placement checks. Background
+recovery retains its existing persisted-authority requirements.
+
 A healthy Gateway confirms availability, not completion of interrupted work.
 Check each previously active session and its child tasks: it should have finished
 before shutdown, resumed execution, or reached a visible terminal outcome or
@@ -1016,6 +1290,28 @@ execution resumed. It does not prove that an assistant reply was delivered.
 Use the session transcript and recorded delivery outcome to verify completion.
 
 ## What is not resumed
+
+Eligible interrupted Goals and accepted turns can wait for provider capacity when
+the provider attests an exact settled rejection. The rejected operation, lease,
+provider attempt and nonce remain recorded while the session waits. Native and
+provider cleanup must finish before a fresh placement generation can allocate;
+an uncertain allocation never becomes free capacity. Waiting uses the existing
+recovery cadence and queued session status. It does not consume another automatic
+recovery attempt, and restart refunds the exact never-started waiting attempt once.
+Manual pause, cancellation and current issuer/placement checks still take precedence.
+
+Crabbox supports this path for a complete Azure fixed-allocation result with
+`azure-fixed-vm-capacity-v1`, `capacity_shortage`, `settled_nonallocation`, and
+settled companions. This means the rejected VM and owned companion resources are
+settled, not that no resources or cost ever existed. Missing, malformed, truncated,
+ambiguous or unsupported output retains ordinary failure and cleanup behavior.
+The current reader holds an unsupported or malformed provider wait without
+clearing it, refunding its charge or dispatching another attempt. The provider
+wait is additive private recovery metadata, with no database schema bump.
+Older runtime writers do not understand it: their attempt preparation can clear
+the new shape. Do not activate an older image as writer while this incompatible
+pending state remains. Settle or advance it through the current recovery owner
+before rollback; older-image continuation of a pending provider wait is unsupported.
 
 - Sessions excluded from main-session recovery because another owner already
   handles them: subagent sessions (settled back to their parent), cron sessions (the

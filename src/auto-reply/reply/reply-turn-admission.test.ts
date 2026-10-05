@@ -460,6 +460,46 @@ it("does not let queued followups reclaim a stale active operation", async () =>
   expect(replyRunRegistry.get(sessionKey)).toBe(active);
   active.complete();
 });
+it.each(["complete", "cancel"] as const)(
+  "retains a new visible input while the predecessor has committed output but is closing: %s",
+  async (outcome) => {
+    vi.useFakeTimers();
+    const active = operation();
+    active.setPhase("running");
+    active.attachBackend({ kind: "embedded", cancel: vi.fn(), isStreaming: () => false });
+    active.freezeAbort();
+    const controller = new AbortController();
+    let settled = false;
+    const waiting = admit({
+      waitForActive: false,
+      retainLifecycleAdmissionOnActive: true,
+      upstreamAbortSignal: controller.signal,
+    }).then((result) => {
+      settled = true;
+      return result;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+    expect(replyRunRegistry.get(sessionKey)).toBe(active);
+    expect(active.result).toBeNull();
+    if (outcome === "cancel") {
+      controller.abort();
+    } else {
+      active.complete();
+    }
+    const result = await waiting;
+    if (outcome === "cancel") {
+      expect(result).toMatchObject({ status: "skipped", reason: "aborted" });
+    } else {
+      const next = owned(result);
+      expect(next.sessionId).toBe(sessionId);
+      next.complete();
+    }
+    expect(active.result).toEqual(outcome === "complete" ? { kind: "completed" } : null);
+    active.complete();
+  },
+);
+
 it("lets visible turns reclaim terminal operations after settle grace elapsed", async () => {
   vi.useFakeTimers();
   const active = operation();

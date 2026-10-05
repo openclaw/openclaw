@@ -34,6 +34,7 @@ export type AgentRunContext = {
   projectSessionActive?: boolean;
   /** Exact scheduler wait leases; absent during ordinary runtime preparation. */
   capacityWaits?: Set<symbol>;
+  capacityWaitClock?: { startedAtMs?: number; elapsedMs: number };
   /** Whether hidden events may reach exact sessions.messages subscribers.
    * Internal maintenance sharing a foreground key disables this to prevent selected-chat leaks. */
   projectSessionMessages?: boolean;

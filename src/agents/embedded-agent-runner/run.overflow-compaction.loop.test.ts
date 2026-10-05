@@ -26,11 +26,14 @@ const mocks = vi.hoisted(() => ({
   runAttempt: vi.fn(),
   settleRequesterAfterSessionSpawns: vi.fn(),
   prepareGitHubPublicationAvailability: vi.fn(),
+  prepareGitHubPullRequestReadAvailability: vi.fn(),
 }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-vi.mock("../../gateway/github-publication-availability.js", () => ({
+vi.mock("../../gateway/github-publication-availability.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../gateway/github-publication-availability.js")>()),
   prepareGitHubPublicationAvailability: mocks.prepareGitHubPublicationAvailability,
+  prepareGitHubPullRequestReadAvailability: mocks.prepareGitHubPullRequestReadAvailability,
 }));
 
 vi.mock("../delegation-capability.js", () => ({
@@ -220,6 +223,7 @@ describe("embedded run retry dispatch", () => {
     mocks.runAttempt.mockReset().mockResolvedValue({ terminal: { kind: "ok" } });
     mocks.settleRequesterAfterSessionSpawns.mockReset();
     mocks.prepareGitHubPublicationAvailability.mockReset().mockResolvedValue(true);
+    mocks.prepareGitHubPullRequestReadAvailability.mockReset().mockReturnValue(false);
     admission = prepareSystemAgentRunAdmission({}, "run-1", "main", "dispatch-test");
     admittedRunContext = await admission.admit("plugin-harness", "dispatch-test");
   });

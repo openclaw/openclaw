@@ -75,6 +75,49 @@ afterEach(() => vi.restoreAllMocks());
 describe("environment gateway methods", () => {
   registerWorkerInferenceEnvironmentTests((prefix) => tempDirs.make(prefix));
 
+  it("projects only the role-approved Cloud choices for native creation", async () => {
+    const context = mockContext(workerService());
+    const config = context.getRuntimeConfig();
+    context.getRuntimeConfig = () => ({
+      ...config,
+      gateway: {
+        roles: {
+          default: "observer",
+          definitions: {
+            observer: { sessions: { others: "view" }, agents: [], scopes: ["operator.read"] },
+            engineer: {
+              sessions: { others: "view" },
+              agents: ["main"],
+              scopes: ["operator.read", "operator.write"],
+              workerProfiles: ["aws"],
+            },
+          },
+        },
+      },
+    });
+    const read = async (role: "observer" | "engineer", write = role === "engineer") => {
+      const respond = vi.fn();
+      await environmentsHandlers["environments.list"]?.({
+        params: { projection: "profiles" },
+        respond,
+        context,
+        client: {
+          authenticatedUserProfile: { profileId: "person" },
+          preparedSessionProfile: { profileId: "person", aliases: new Set(["person"]), role },
+          connect: {
+            role: "operator",
+            scopes: write ? ["operator.read", "operator.write"] : ["operator.read"],
+          },
+        },
+      } as never);
+      return respond.mock.calls[0]?.[1] as EnvironmentsListResult;
+    };
+    expect((await read("observer")).dispatchableProfileIds).toEqual([]);
+    expect((await read("engineer", false)).dispatchableProfileIds).toEqual([]);
+    const engineer = await read("engineer");
+    expect(engineer.profiles?.map((profile) => profile.id)).toEqual(["aws", "zeta"]);
+    expect(engineer.dispatchableProfileIds).toEqual(["aws"]);
+  });
   it("probes disabled host setup only when requested without advertising or granting desktop access", async () => {
     const probe = vi.spyOn(rfbProbe, "probeRfbServer").mockResolvedValue({
       kind: "rfb",

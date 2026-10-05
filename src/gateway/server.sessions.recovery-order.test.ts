@@ -14,12 +14,14 @@ import { createDeferredCore } from "../shared/deferred.js";
 import * as storeWrites from "../shared/store-writer-queue.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
+import { recoverGatewaySession } from "./session-recovery-service.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
   seedSessionTranscript,
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
+  getGatewayConfigModule,
 } from "./test/server-sessions.test-helpers.js";
 import { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
 import type { WorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
@@ -30,6 +32,94 @@ const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
+
+test.each([false, true])(
+  "same-session Goal pause decision retries a rejected continuation with current authority (revoked: %s)",
+  async (revoked) => {
+    const { storePath } = await createSessionStoreDir();
+    const key = "agent:main:dashboard:uncertain-effect";
+    const sessionId = "uncertain-effect-session";
+    await writeSessionStore({
+      entries: {
+        [key]: sessionStoreEntry(sessionId, {
+          status: "interrupted",
+          abortedLastRun: true,
+          goal: {
+            schemaVersion: 1,
+            id: "reviewed-goal",
+            objective: "Synthetic Goal",
+            status: "paused",
+            createdAt: 1,
+            updatedAt: 100,
+            tokenStart: 0,
+            tokensUsed: 0,
+            continuationTurns: 0,
+          },
+          goalPauseOrigin: "recovery-hold",
+          mainRestartRecovery: {
+            cycleId: "uncertain-cycle",
+            revision: 1,
+            chargedAttempts: 0,
+            pause: {
+              reason: "unverifiable-external-effect",
+              toolCallId: "send-1",
+              pausedAtMs: 100,
+              goalId: "reviewed-goal",
+            },
+          },
+        }),
+      },
+    });
+    const { getRuntimeConfig: readRuntimeConfig } = await getGatewayConfigModule();
+    let current = true;
+    const launchContinuation = vi
+      .fn<Parameters<typeof recoverGatewaySession>[0]["launchContinuation"]>()
+      .mockResolvedValueOnce({
+        status: "rejected",
+        error: { code: "UNAVAILABLE", message: "runtime closed before admission" },
+      })
+      .mockResolvedValue({ status: "started", runId: "continued-once" });
+    const request = () =>
+      recoverGatewaySession({
+        cfg: readRuntimeConfig(),
+        key,
+        actor: { type: "human", source: "profile", id: "test-operator" },
+        workerPlacementContext: {},
+        launchContinuation,
+        commitGuard: () => {
+          if (!current) {
+            throw new Error("caller authority revoked");
+          }
+        },
+      });
+    expect(await request()).toMatchObject({
+      ok: true,
+      created: false,
+      successorKey: key,
+      successorEntry: { sessionId },
+      continuation: { status: "rejected" },
+    });
+    current = !revoked;
+    if (revoked) {
+      await expect(request()).rejects.toThrow("caller authority revoked");
+      expect(launchContinuation).toHaveBeenCalledTimes(1);
+    } else {
+      expect(await request()).toMatchObject({
+        ok: true,
+        created: false,
+        successorKey: key,
+        successorEntry: { sessionId },
+        continuation: { status: "started" },
+      });
+      expect(launchContinuation).toHaveBeenCalledTimes(2);
+      expect(launchContinuation.mock.calls[1]?.[0]).toEqual(launchContinuation.mock.calls[0]?.[0]);
+    }
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+      sessionId,
+      mainRestartRecovery: { acknowledgedPause: { toolCallId: "send-1" } },
+    });
+  },
+);
 
 test.each([false, true])(
   "concurrent cloud recovery waits for its canonical successor and rechecks queued authority (revoked: %s)",

@@ -87,6 +87,8 @@ export type OpenClawSharedToolsOptions = {
   runtimeToolAllowlist?: string[];
   /** Host-prepared proof that this exact session can request Gateway publication. */
   githubPublicationAvailable?: boolean;
+  /** Host-prepared proof that this exact repository session can make bounded GitHub reads. */
+  githubPullRequestReadAvailable?: boolean;
   cronCreatorAuthorityUnavailableReason?: CronToolOptions["creatorAuthorityUnavailableReason"];
   /** Mutable model-context generation used to expire screenshot coordinate frames. */
   computerContextEpoch?: { value: number };

@@ -261,7 +261,7 @@ beforeEach(() => {
       if (typeof input.requestId !== "string") {
         throw new Error("Missing fixture request ID");
       }
-      const result = prepareGatewaySuspend({
+      const result = await prepareGatewaySuspend({
         requestId: input.requestId,
         drain: true,
         terminalPolicy: "terminate",

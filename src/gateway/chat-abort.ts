@@ -49,6 +49,7 @@ export type RestartRecoveryCandidate = {
   sessionKey: string;
   sessionId: string;
   observedAt?: number;
+  accepted?: true;
 };
 
 export type InFlightRunSnapshot = {
@@ -205,13 +206,14 @@ export function registerChatAbortController(params: {
     ) {
       return false;
     }
+    const preparationExpiresAtMs = entry.resolvePreparationExpiresAtMs?.() ?? entry.expiresAtMs;
     executionStarted = true;
     entry.executionStarted = true;
     if (entry.kind !== "agent") {
       return true;
     }
     const now = Date.now();
-    if (!isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now })) {
+    if (!isFutureDateTimestampMs(preparationExpiresAtMs, { nowMs: now })) {
       return true;
     }
     entry.expiresAtMs = resolveAgentRunExpiresAtMs({

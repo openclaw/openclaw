@@ -177,7 +177,7 @@ describe("queued completion handoff", () => {
         options?.onAccepted?.({ status: "accepted", runId: "completion-run" });
         accepted.resolve(options ?? {});
         const operation = parentSettled.promise.then(async () => {
-          options?.onExecutionStarted?.();
+          await options?.onExecutionStarted?.();
           executed = true;
           executionStarted.resolve();
           await executionSettled.promise;

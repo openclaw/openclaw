@@ -13,13 +13,19 @@ import {
   type PendingInputMutationReceipt,
   type PendingInputRead,
   type PendingInputSnapshot,
+  type PendingInputQueueSnapshot,
+  type CommittedRecoveryInputSnapshot,
   type PendingInputSourceSnapshot,
 } from "./session-pending-input-operations.types.js";
 
 export type IncognitoPendingInputOperations = {
   "session.pendingInputs.read": {
     input: PendingInputRead;
-    output: PendingInputSnapshot | PendingInputSourceSnapshot;
+    output:
+      | PendingInputSnapshot
+      | PendingInputSourceSnapshot
+      | PendingInputQueueSnapshot
+      | CommittedRecoveryInputSnapshot;
   };
   "session.pendingInputs.mutate": {
     input: PendingInputMutation;

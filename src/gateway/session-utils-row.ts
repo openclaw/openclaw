@@ -21,6 +21,7 @@ import {
   resolveProjectedSessionContextBudgetStatus,
   SESSION_TOTAL_TOKENS_VERSION,
 } from "../config/sessions.js";
+import { projectNoGoalInterruptedAction } from "../config/sessions/main-session-recovery.types.js";
 import { resolveSessionModelOverrideSource } from "../config/sessions/model-override-provenance.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import {
@@ -540,6 +541,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
     restartRecoveryStatus: entry?.mainRestartRecovery?.tombstone ? "tombstoned" : undefined,
+    interruptedAction: entry ? projectNoGoalInterruptedAction(entry) : undefined,
     thinkingLevel: input.thinkingProjection.thinkingLevel,
     contextWindow: input.contextWindowProfile.contextWindow,
     contextWindows: input.contextWindowProfile.contextWindows,

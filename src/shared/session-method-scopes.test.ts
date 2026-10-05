@@ -242,8 +242,8 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
   });
 
   it.each([
-    [{ key: "agent:main:thread", profileId: "development" }, "operator.admin"],
-    [{ key: "agent:main:thread", profileId: "   " }, "operator.admin"],
+    [{ key: "agent:main:thread", profileId: "development" }, "operator.write"],
+    [{ key: "agent:main:thread", profileId: "   " }, "operator.write"],
     [{ key: "agent:main:thread", deviceId: "device-1" }, "operator.write"],
     [{ key: "agent:main:thread", autoDevice: true }, "operator.write"],
     [

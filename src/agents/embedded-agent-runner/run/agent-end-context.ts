@@ -68,6 +68,7 @@ export function buildEmbeddedForegroundPromptContext(
     requireExplicitMessageTarget: run.requireExplicitMessageTarget,
     disableMessageTool: run.disableMessageTool,
     githubPublicationAvailable: run.githubPublicationAvailable,
+    githubPullRequestReadAvailable: run.githubPullRequestReadAvailable,
     conversationRecall: run.conversationRecall,
     toolOverrides: run.toolOverrides,
     permissionMode: run.permissionMode,

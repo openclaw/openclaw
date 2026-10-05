@@ -39,6 +39,7 @@ const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "get_goal", family: "openclaw" },
   { name: "github_identity_status", family: "openclaw" },
   { name: "github_publish", family: "openclaw" },
+  { name: "github_pull_request_read", family: "openclaw" },
   { name: "heartbeat_respond", family: "openclaw" },
   { name: "view_image", family: "openclaw" },
   { name: "image_generate", family: "openclaw" },

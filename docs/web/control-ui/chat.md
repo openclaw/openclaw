@@ -898,6 +898,21 @@ does not recover a capped reply's missing text.
 
 ## Conversations stopped for review
 
+If a conversation without a Goal stops because an interrupted action has no verified
+outcome, **Review interrupted action** replaces the composer. Retry and Discard do
+not resolve that action. The original authenticated input issuer can review the exact
+current action and choose **Acknowledge and return to idle**. This records a no-replay
+disposition for that turn; its historical outcome stays unknown. It preserves the
+same conversation, history, and repository branch, and starts no model, tool, or
+worker. You can then send a new turn. Check the affected state before requesting
+further work.
+
+The decision is bound to the session lifecycle, recovery cycle and revision, run,
+and tool call. A stale review, a different user, missing original input authority,
+pending accepted input, or active worker custody keeps the action held. A manually
+paused Goal retains its separate Goal recovery controls. Refresh before reviewing
+a changed action; neither refresh nor reconnect acknowledges it.
+
 When a provider stops a conversation as a misalignment precaution, chat holds
 ordinary sends, queued input, and Talk. **Review findings** opens the available
 explanation. If the provider and runtime support continuation, the dialog shows

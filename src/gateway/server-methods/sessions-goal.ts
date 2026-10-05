@@ -6,11 +6,17 @@ import {
   type SessionsGoalClearParams,
   type SessionsGoalUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { lookupSessionGoalOperation } from "../../config/sessions/goals-operations-read.js";
 import {
   mutateSessionGoal,
   SessionGoalOperationError,
   type SessionGoalOperation,
 } from "../../config/sessions/goals-operations.js";
+import {
+  isGoalRecoveryDecisionCurrent,
+  type GoalRecoveryDecisionAdmission,
+} from "../../config/sessions/main-session-recovery.types.js";
+import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
@@ -22,10 +28,11 @@ import {
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { captureSessionMutationRouting } from "../session-sharing-preparation.js";
+import { prepareSessionMutationFacts } from "../session-sharing-preparation.js";
 import { prepareSessionSharingSource } from "../session-sharing-source.js";
 import {
-  resolveSessionMutationAuthorization,
   resolveSessionSharingTarget,
+  resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
@@ -40,6 +47,7 @@ async function handleSessionGoalMutation(
 ): Promise<void> {
   const { client, context, respond } = options;
   const method = request.action === "clear" ? "sessions.goal.clear" : "sessions.goal.update";
+  let releaseFacts: (() => void) | undefined;
   try {
     const authorization = options.sessionMutationAuthorization
       ? { authorization: options.sessionMutationAuthorization, error: null }
@@ -59,11 +67,15 @@ async function handleSessionGoalMutation(
       respond(false, undefined, requestedAgent.error);
       return;
     }
-    const target = resolveSessionSharingTarget({
+    const facts = await prepareSessionMutationFacts({
       cfg,
       sessionKey: request.sessionKey,
       agentId: requestedAgent.agentId,
+      allowMissing: true,
     });
+    releaseFacts = facts.release;
+    const initial = facts.readCurrent(context.getRuntimeConfig());
+    const target = initial.target;
     if (!target || (request.sessionId && target.entry.sessionId !== request.sessionId)) {
       respond(
         false,
@@ -73,12 +85,16 @@ async function handleSessionGoalMutation(
       return;
     }
     const assertTarget = (current: ReturnType<typeof resolveSessionSharingTarget>) => {
+      const prepared = facts.readCurrent(context.getRuntimeConfig());
+
       // Reset can keep the same session ID. Fence the lifecycle and resolved store as well.
       if (
         !current ||
         current.agentId !== target.agentId ||
         current.storePath !== target.storePath ||
         current.storeKey !== target.storeKey ||
+        prepared.sourcePath !== initial.sourcePath ||
+        prepared.sourceAgentId !== initial.sourceAgentId ||
         current.entry.sessionId !== target.entry.sessionId ||
         current.entry.lifecycleRevision !== target.entry.lifecycleRevision
       ) {
@@ -99,13 +115,16 @@ async function handleSessionGoalMutation(
     const assertCurrent = () => {
       options.sessionMutationCommitGuard?.();
       authorization.authorization?.assertCurrent();
-      assertTarget(
-        resolveSessionSharingTarget({
-          cfg: context.getRuntimeConfig(),
-          sessionKey: request.sessionKey,
-          agentId: requestedAgent.agentId,
-        }),
-      );
+      assertTarget(facts.readCurrent(context.getRuntimeConfig()).target);
+    };
+    // Chat admission retains the accepted target independently of this preparation lease.
+    const assertAdmittedInputCurrent = () => {
+      if (authorization.authorization?.assertAdmittedInputCurrent) {
+        authorization.authorization.assertAdmittedInputCurrent();
+      } else {
+        options.sessionMutationCommitGuard?.();
+        authorization.authorization?.assertCurrent();
+      }
     };
     assertCurrent();
     const identity = {
@@ -115,13 +134,147 @@ async function handleSessionGoalMutation(
       goalId: request.goalId,
     };
     if (request.action === "resume") {
+      let recoveryDecisionAdmission: GoalRecoveryDecisionAdmission | undefined;
+      {
+        const prepared = facts.readCurrent(context.getRuntimeConfig());
+        const source = await withSessionEntryReadOnlyInWorker(
+          {
+            agentId: target.agentId,
+            sessionKey: target.storeKey,
+            storePath: prepared.sourcePath ?? target.storePath,
+            projection: "list",
+            readConsistency: "latest",
+            hydrateSkillPromptRefs: false,
+          },
+          assertCurrent,
+          async (loaded, owner) => {
+            owner.assertCurrent();
+            if (!loaded.ok) {
+              throw loaded.error;
+            }
+            facts.readCurrent(context.getRuntimeConfig());
+            return loaded.value;
+          },
+        );
+        assertCurrent();
+        const pause = source?.mainRestartRecovery?.pause;
+        if (request.recoveryDecision && !pause) {
+          const receipt = await lookupSessionGoalOperation({
+            agentId: target.agentId,
+            sessionKey: target.storeKey,
+            storePath: target.storePath,
+            expectedSessionId: target.entry.sessionId,
+            operation: {
+              ...identity,
+              action: "resume",
+              ...(request.note ? { note: request.note } : {}),
+            },
+          });
+          if (receipt) {
+            assertCurrent();
+            respond(true, { ...receipt, replayed: true }, undefined, {
+              cached: true,
+              runId: receipt.runId,
+            });
+            return;
+          }
+          throw new SessionGoalOperationError(
+            "recovery-decision-changed",
+            "The recovery hold changed; review the current Goal.",
+          );
+        }
+        const assertDecisionCaller = () => {
+          assertAdmittedInputCurrent();
+          if (
+            !client?.connId ||
+            client.invalidated ||
+            client.connectionSignal?.aborted ||
+            client.connect.role !== "operator" ||
+            client.internal?.authenticatedOperator !== true ||
+            client.internal.syntheticClient ||
+            client.internal.agentRuntimeIdentity ||
+            client.internal.agentToolCaller ||
+            options.hasCurrentClientAuthority?.() === false ||
+            context.isConnectionActive?.(client.connId) === false
+          ) {
+            throw new SessionGoalOperationError(
+              "recovery-decision-caller",
+              "Recovery requires a current authenticated explicit user decision.",
+            );
+          }
+        };
+        if (pause) {
+          if (
+            !source?.goal ||
+            source.goal.id !== request.goalId ||
+            request.sessionId !== source.sessionId
+          ) {
+            throw new SessionGoalOperationError(
+              "goal-rebound",
+              "The selected Goal changed; refresh it before continuing.",
+            );
+          }
+          if (!request.recoveryDecision) {
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                "An interrupted external action has no verified outcome. Review it before resuming this Goal.",
+                {
+                  details: {
+                    code: "GOAL_RECOVERY_DECISION_REQUIRED",
+                    reason: "goal-recovery-decision-required",
+                    sessionId: source.sessionId,
+                    goalId: source.goal.id,
+                    recoveryDecision: {
+                      cycleId: source.mainRestartRecovery!.cycleId,
+                      revision: source.mainRestartRecovery!.revision,
+                      pausedAtMs: pause.pausedAtMs,
+                    },
+                  },
+                },
+              ),
+            );
+            return;
+          }
+          recoveryDecisionAdmission = {
+            reference: request.recoveryDecision,
+            sessionId: source.sessionId,
+            goalId: source.goal.id,
+            assertCurrent: assertDecisionCaller,
+          };
+          if (!isGoalRecoveryDecisionCurrent(source, recoveryDecisionAdmission)) {
+            throw new SessionGoalOperationError(
+              "recovery-decision-changed",
+              "The recovery decision changed; review it again.",
+            );
+          }
+        }
+      }
+      if (recoveryDecisionAdmission) {
+        const { handleSessionGoalRecovery } = await import("./session-goal-recovery.js");
+        await handleSessionGoalRecovery(options, {
+          agentId: target.agentId,
+          sessionKey: target.canonicalKey,
+          operation: {
+            ...identity,
+            action: "resume",
+            ...(request.note ? { note: request.note } : {}),
+          },
+          decision: recoveryDecisionAdmission,
+        });
+        return;
+      }
       const { handleSessionGoalResumeChat } = await import("./chat-send-handler.js");
       await handleSessionGoalResumeChat(
         {
           ...options,
           sessionMutationAuthorization: {
+            ...authorization.authorization,
             assertCurrent,
             assertTargetCurrent: assertCurrent,
+            assertAdmittedInputCurrent,
           },
           params: {
             sessionKey: target.canonicalKey,
@@ -247,6 +400,8 @@ async function handleSessionGoalMutation(
         errorShape(ErrorCodes.UNAVAILABLE, "Unable to update the Goal; retry the request."),
       );
     }
+  } finally {
+    releaseFacts?.();
   }
 }
 

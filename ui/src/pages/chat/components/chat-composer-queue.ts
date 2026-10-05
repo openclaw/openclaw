@@ -32,7 +32,7 @@ type ChatQueueProps = {
   onQueueSteer?: (id: string) => void;
   onQueueMove?: (id: string, targetId: string) => void;
   queuedEdit?: ChatComposerProps["queuedEdit"];
-  onQueueRemove: (id: string) => void;
+  onQueueRemove?: (id: string) => void;
 };
 
 /** Queue-level reorder facts: what the column shows, and what may move where. */
@@ -593,7 +593,7 @@ function renderChatQueueItem(
             : nothing
         }
         ${
-          busy || editing
+          busy || editing || !props.onQueueRemove
             ? nothing
             : html`
                 <openclaw-tooltip .content=${t("chat.queue.removeQueuedMessage")}>
@@ -605,7 +605,7 @@ function renderChatQueueItem(
                     @click=${(event: MouseEvent) => {
                       // Chromium retargets click 2 after row removal; detail still owns the gesture.
                       if (event.detail <= 1) {
-                        props.onQueueRemove(item.id);
+                        props.onQueueRemove?.(item.id);
                       }
                     }}
                     @dblclick=${(event: MouseEvent) => event.stopPropagation()}

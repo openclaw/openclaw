@@ -1,6 +1,4 @@
-import "./side-question.test-support.js";
-import { Server } from "node:http";
-import path from "node:path";
+import { Server } from "node:net";
 import {
   invokeNativeHookRelay,
   nativeHookRelayTesting,

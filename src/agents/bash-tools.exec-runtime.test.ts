@@ -118,7 +118,7 @@ async function runExecWithExit(params: {
   return { run, outcome: await run.promise };
 }
 
-function prepareSuspension(requestId: string) {
+async function prepareSuspension(requestId: string) {
   // This test owns only the background-exec registry. Other process-global
   // activity counters may legitimately stay busy in the non-isolated suite.
   const inspect: GatewayActiveWorkInspectors = {
@@ -138,7 +138,7 @@ function prepareSuspension(requestId: string) {
     getTerminalPersistence: () => 0,
     getTerminalSessions: () => 0,
   };
-  return prepareGatewaySuspend({
+  return await prepareGatewaySuspend({
     requestId,
     pauseScheduling: vi.fn(),
     resumeScheduling: vi.fn(),
@@ -574,7 +574,7 @@ describe("sandbox exec finalization suspension", () => {
       producer?.onStderr?.("during cleanup\n");
       expect(getFinishedSession(run.session.id)).toBeUndefined();
 
-      const busy = prepareSuspension(`before-finalize-${expectedFailureKind ?? "success"}`);
+      const busy = await prepareSuspension(`before-finalize-${expectedFailureKind ?? "success"}`);
       expect(busy.status).toBe("busy");
       if (busy.status === "busy") {
         expect(busy.blockers).toContainEqual(
@@ -614,7 +614,7 @@ describe("sandbox exec finalization suspension", () => {
       producer?.onStdout?.("late output".repeat(1_000));
       expect(getFinishedSession(run.session.id)).toMatchObject(outputBeforeLateCallback);
 
-      const ready = prepareSuspension(`after-finalize-${expectedFailureKind ?? "success"}`);
+      const ready = await prepareSuspension(`after-finalize-${expectedFailureKind ?? "success"}`);
       expect(ready.status).toBe("ready");
       if (ready.status === "ready") {
         expect(resumeGatewaySuspend(ready.suspensionId)).toMatchObject({ ok: true });

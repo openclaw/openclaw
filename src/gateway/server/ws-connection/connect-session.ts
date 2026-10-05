@@ -56,6 +56,7 @@ import {
   resolveEffectiveConnectionScopes,
   resolveGatewayConnectPolicyFailure,
 } from "./connect-admission.js";
+import { prepareGatewayOperatorIngressMetadata } from "./connect-device-metadata.js";
 import { sendGatewayHello } from "./connect-hello.js";
 import { prepareGatewayNodeConnect } from "./connect-node-session.js";
 import {
@@ -364,16 +365,13 @@ export async function attachAuthenticatedGatewayConnect(
   }
   // Record the authenticated ingress after device and role scope restrictions.
   // Later turns must not infer management authority from names or session routing.
-  const authenticatedOperator =
-    role === "operator" && authMethod !== undefined && authMethod !== "none";
-  const authenticatedControlUi =
-    authenticatedOperator && connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
-  const controlUiAdmin = authenticatedControlUi && scopes.includes(ADMIN_SCOPE);
   const internal = {
     ...(isLocalClient ? { isLocalClient: true as const } : {}),
-    ...(authenticatedOperator ? { authenticatedOperator: true as const } : {}),
-    ...(authenticatedControlUi ? { authenticatedControlUi: true as const } : {}),
-    ...(controlUiAdmin ? { controlUiAdmin: true as const } : {}),
+    ...prepareGatewayOperatorIngressMetadata({
+      ...state,
+      scopes,
+      clientId: connectParams.client.id,
+    }),
     ...(isTrustedApprovalRuntime ? { approvalRuntime: true } : {}),
     ...(trustedAgentRuntimeIdentity ? { agentRuntimeIdentity: trustedAgentRuntimeIdentity } : {}),
     ...(sharedSecretOperatorOwner ? { operatorRoleActor: { kind: "system" as const } } : {}),

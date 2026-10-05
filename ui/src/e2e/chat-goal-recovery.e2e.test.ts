@@ -8,6 +8,95 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI goal recovery" });
 
 suite.define(() => {
+  it("requires review of an unknown outcome before one selected Goal continuation", async () => {
+    const artifacts = createControlUiE2eArtifactDir("goal-reviewed-recovery");
+    await suite.withPage(
+      { viewport: { width: 1440, height: 900 }, colorScheme: "light" },
+      async ({ page }) => {
+        const now = Date.now();
+        const goal = {
+          schemaVersion: 1,
+          id: "reviewed-goal",
+          objective: "Finish the sample deployment",
+          status: "paused",
+          createdAt: now,
+          updatedAt: now,
+          tokenStart: 0,
+          tokensUsed: 0,
+          continuationTurns: 0,
+        };
+        const method = "sessions.goal.update";
+        const sessionId = "reviewed-session";
+        const gateway = await installMockGateway(page, {
+          sessionKey: "agent:main:main",
+          heldMethods: [method],
+          methodResponses: {
+            "sessions.list": {
+              ts: now,
+              path: "",
+              count: 1,
+              defaults: { model: "test-model", modelProvider: "test", contextTokens: 128_000 },
+              sessions: [
+                { key: "agent:main:main", sessionId, kind: "direct", updatedAt: now, goal },
+              ],
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}chat/main`);
+        const resume = page.getByRole("button", { name: "Resume goal", exact: true });
+        await resume.waitFor();
+        await page.screenshot({ path: path.join(artifacts, "before-reviewed-decision.png") });
+        await resume.click();
+        const first = await gateway.waitForRequest(method);
+        const recoveryDecision = { cycleId: "reviewed-cycle", revision: 4, pausedAtMs: now };
+        await gateway.rejectDeferred(method, {
+          code: "INVALID_REQUEST",
+          message: "Review the interrupted action before continuing.",
+          details: {
+            code: "GOAL_RECOVERY_DECISION_REQUIRED",
+            reason: "goal-recovery-decision-required",
+            sessionId,
+            goalId: goal.id,
+            recoveryDecision,
+          },
+        });
+        const acknowledgement = page.getByRole("checkbox", {
+          name: "I have reviewed the uncertain action and choose to continue this goal.",
+          exact: true,
+        });
+        await acknowledgement.waitFor();
+        const confirm = page.getByRole("button", { name: "Continue goal", exact: true });
+        expect(await confirm.isEnabled()).toBe(false);
+        expect(await gateway.getRequests(method)).toHaveLength(1);
+        await page.screenshot({ path: path.join(artifacts, "after-reviewed-decision.png") });
+        await gateway.deferNext(method);
+        await acknowledgement.check();
+        await confirm.click();
+        await expect.poll(async () => (await gateway.getRequests(method)).length).toBe(2);
+        const second = (await gateway.getRequests(method))[1]!;
+        expect(second.params).toMatchObject({
+          action: "resume",
+          goalId: goal.id,
+          sessionId,
+          recoveryDecision,
+        });
+        if (!isRecord(first.params) || !isRecord(second.params)) {
+          throw new Error("Expected Goal update request parameters");
+        }
+        expect(second.params.operationId).not.toBe(first.params.operationId);
+        await gateway.resolveDeferred(method, {
+          status: "started",
+          sessionId,
+          goalId: goal.id,
+          goal: { ...goal, status: "active" },
+          runId: "reviewed-run",
+        });
+        await expect.poll(() => acknowledgement.count()).toBe(0);
+        expect(await gateway.getRequests(method)).toHaveLength(2);
+      },
+    );
+  });
+
   it("lets an invalid Goal edit be corrected without reload or recovery", async () => {
     const artifacts = createControlUiE2eArtifactDir("goal-invalid-edit");
     await suite.withPage(

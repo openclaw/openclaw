@@ -3,7 +3,10 @@ import { html, nothing } from "lit";
 import "./chat-outbox-recovery.ts";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { availableLinkReaders } from "../../app/link-reader-routing.ts";
+import {
+  availableLinkReaders,
+  availableLinkPreviewReaders,
+} from "../../app/link-reader-routing.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import { icons } from "../../components/icons.ts";
 import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
@@ -383,8 +386,17 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       panePresentation,
       html`${renderChatImageLightbox(state.imageLightbox, state.handleCloseImage)}${this.renderResetConfirmation()}`,
     );
+    const previewContent = html`<openclaw-link-reader-hovercard-provider
+      .client=${this.context.gateway.snapshot.phase === "connected" ? this.context.gateway.snapshot.client : null}
+      .readers=${availableLinkPreviewReaders(this.context.gateway.snapshot)}
+      .claimedReaders=${availableLinkReaders(this.context.gateway.snapshot)}
+      .pagePreviewContext=${this.context}
+      .agentId=${currentAgentId}
+      .sessionKey=${state.sessionKey}
+      >${content}</openclaw-link-reader-hovercard-provider
+    >`;
     return this.onBackToSubagents
-      ? html`<section class="chat-subagent-detail">${content}${overlays}</section>`
-      : html`${content}${overlays}`;
+      ? html`<section class="chat-subagent-detail">${previewContent}${overlays}</section>`
+      : html`${previewContent}${overlays}`;
   }
 }

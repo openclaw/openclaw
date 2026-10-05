@@ -1,3 +1,4 @@
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { parseOperatorModelPolicyWildcardRef } from "../config/model-policy-ref.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -13,6 +14,112 @@ import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.
 export type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
 
 const modelPolicyMembership = new WeakMap<PreparedOperatorModelPolicy, string>();
+const modelPolicyCeilings = new WeakMap<PreparedOperatorModelPolicy, readonly string[]>();
+
+export function readOperatorModelPolicyCeilings(policy: PreparedOperatorModelPolicy | undefined) {
+  return policy ? modelPolicyCeilings.get(policy) : [];
+}
+
+/** Retain predicates and their original ceilings when current policy narrows an accepted run. */
+export function intersectOperatorModelPolicies(
+  original: PreparedOperatorModelPolicy | undefined,
+  current: PreparedOperatorModelPolicy | undefined,
+): PreparedOperatorModelPolicy | undefined {
+  if (!original || !current) {
+    return current ?? original;
+  }
+  if (
+    original === current ||
+    (readOperatorModelPolicyMembership(original) === readOperatorModelPolicyMembership(current) &&
+      readOperatorModelPolicyMembership(original) !== undefined)
+  ) {
+    return current;
+  }
+  const narrowed = Object.freeze({
+    models: Object.freeze(current.models.filter(original.allows)),
+    allows: (ref: ModelRef) => original.allows(ref) && current.allows(ref),
+  });
+  const previous = readOperatorModelPolicyCeilings(original);
+  const next = readOperatorModelPolicyCeilings(current);
+  if (previous && next) {
+    modelPolicyCeilings.set(narrowed, Object.freeze([...new Set([...previous, ...next])]));
+  }
+  return narrowed;
+}
+
+/** Restore canonical predicate facts, then intersect with today's prepared policy. */
+export function restoreOperatorModelCeilings(
+  ceilings: readonly string[],
+  params: {
+    cfg: OpenClawConfig;
+    policy: GatewayOperatorRoleDefinition["modelPolicy"];
+  } & ModelManifestNormalizationContext,
+): PreparedOperatorModelPolicy | undefined {
+  let restored = prepareOperatorModelPolicy(params);
+  for (const membership of ceilings) {
+    const value = safeParseJson(membership);
+    if (!Array.isArray(value) || value.length !== 4) {
+      throw new Error("Original operator model ceiling is unavailable");
+    }
+    const [allowedKeys, allowedWildcards, deniedKeys, deniedWildcards] = value;
+    const strings = (refs: unknown): refs is string[] =>
+      Array.isArray(refs) && refs.every((ref) => typeof ref === "string");
+    if (
+      !strings(allowedKeys) ||
+      !strings(allowedWildcards) ||
+      !strings(deniedKeys) ||
+      !strings(deniedWildcards)
+    ) {
+      throw new Error("Original operator model ceiling is unavailable");
+    }
+    const exact = (keys: string[]) =>
+      new Map(
+        keys.map((key) => {
+          const ref = safeParseJson(key);
+          if (
+            !Array.isArray(ref) ||
+            ref.length !== 2 ||
+            typeof ref[0] !== "string" ||
+            typeof ref[1] !== "string"
+          ) {
+            throw new Error("Original operator model identity is unavailable");
+          }
+          const model = { provider: ref[0], model: ref[1] };
+          if (identity(model) !== key) {
+            throw new Error("Original operator model identity is invalid");
+          }
+          return [key, model] as const;
+        }),
+      );
+    const refs = (keys: string[], wildcards: string[]) => {
+      if (wildcards.some((raw) => parseOperatorModelPolicyWildcardRef(raw)?.key !== raw)) {
+        throw new Error("Original operator model wildcard is invalid");
+      }
+      return {
+        exact: exact(keys),
+        patterns: compileGlobPatterns({ raw: wildcards, normalize: (raw) => raw }),
+      };
+    };
+    const allowed = refs(allowedKeys, allowedWildcards);
+    const denied = refs(deniedKeys, deniedWildcards);
+    const allows = (ref: ModelRef) => matches(allowed, ref) && !matches(denied, ref);
+    const sourceModels = restored?.models ?? prepareAgentModels(params).models;
+    const original = Object.freeze({
+      models: Object.freeze(
+        [
+          ...new Map(
+            [...sourceModels, ...allowed.exact.values()].map((ref) => [identity(ref), ref]),
+          ).values(),
+        ].filter(allows),
+      ),
+      allows,
+    });
+    modelPolicyMembership.set(original, membership);
+    modelPolicyCeilings.set(original, Object.freeze([membership]));
+    restored = intersectOperatorModelPolicies(original, restored);
+  }
+  return restored;
+}
 
 /** Comparison uses the original predicate, including models outside concrete discovery choices. */
 export function readOperatorModelPolicyMembership(
@@ -87,7 +194,10 @@ function prepareRefs(refs: readonly string[], resolve: (raw: string) => ModelRef
   };
 }
 
-function matches(prepared: ReturnType<typeof prepareRefs>, ref: ModelRef) {
+function matches(
+  prepared: Pick<ReturnType<typeof prepareRefs>, "exact" | "patterns">,
+  ref: ModelRef,
+) {
   return (
     prepared.exact.has(identity(ref)) ||
     matchesAnyGlobPattern(`${normalizeProviderId(ref.provider)}/${ref.model}`, prepared.patterns)
@@ -144,5 +254,6 @@ export function prepareOperatorModelPolicy(
       denied.wildcards,
     ]),
   );
+  modelPolicyCeilings.set(prepared, Object.freeze([modelPolicyMembership.get(prepared)!]));
   return prepared;
 }

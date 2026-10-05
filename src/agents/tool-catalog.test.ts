@@ -53,7 +53,12 @@ describe("tool-catalog", () => {
   it("lets operators configure run-dependent tools without granting restricted profiles", () => {
     const ids = listCoreToolSections().flatMap((section) => section.tools.map((tool) => tool.id));
     expect(ids).toEqual(
-      expect.arrayContaining(["github_publish", "github_identity_status", "transcripts"]),
+      expect.arrayContaining([
+        "github_publish",
+        "github_identity_status",
+        "github_pull_request_read",
+        "transcripts",
+      ]),
     );
     expect(resolveCoreToolProfiles("transcripts")).toEqual([]);
   });
@@ -81,7 +86,11 @@ describe("tool-catalog", () => {
       allowed: ["presence", "session_status", "gateway"],
       denied: ["exec", "message"],
     },
-    { profile: "coding", allowed: ["read", "exec", "bundle-mcp"], denied: ["browser", "message"] },
+    {
+      profile: "coding",
+      allowed: ["read", "exec", "github_pull_request_read", "bundle-mcp"],
+      denied: ["browser", "message"],
+    },
     {
       profile: "messaging",
       allowed: ["message", "bundle-mcp"],

@@ -865,7 +865,7 @@ describe("plugin suspension admission", () => {
           await started.promise;
           expect(getActiveGatewayRootWorkCount()).toBe(1);
           expect(
-            prepareGatewaySuspend({
+            await prepareGatewaySuspend({
               requestId: "plugin-active",
               pauseScheduling: vi.fn(),
               resumeScheduling: vi.fn(),

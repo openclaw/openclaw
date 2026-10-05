@@ -18,6 +18,8 @@ import {
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
+import { retainSessionEntryWorkerPublication } from "./session-accessor.sqlite-entry-cache-publication.js";
+import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import {
   prepareSqliteScope,
@@ -28,6 +30,7 @@ import type { IncognitoSessionActor } from "./session-incognito-actor.js";
 import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import {
+  type PendingInputMutationReceipt,
   readPendingInputMutationReceipt,
   type PendingInputCustodyGrant,
   type PendingInputMutation,
@@ -296,6 +299,18 @@ export async function preparePendingInputStore(
                 retained: RetainedWorkerTransactionAdmission;
               }
             | undefined;
+          let publication: ReturnType<typeof retainSessionEntryWorkerPublication> | undefined;
+          let publicationSettled = false;
+          const settlePublication = (
+            receipt: PendingInputMutationReceipt["publication"],
+            unknown: boolean,
+          ) => {
+            if (publicationSettled) {
+              return undefined;
+            }
+            publicationSettled = true;
+            return publication?.settle(receipt, unknown);
+          };
           const readReceipt = (facts: unknown) => readPendingInputMutationReceipt(facts, input);
           let committedFacts: PendingInputCustodyGrant | undefined;
           const checkGrant = (stage: "transaction" | "commit", facts: unknown) => {
@@ -315,6 +330,17 @@ export async function preparePendingInputStore(
             identity?.key.slice(5),
             assertOpen,
             async (execution, source, context) => {
+              await execution.prepare(source);
+              assertOpen();
+              const physicalIdentity = execution.fileIdentity?.physicalIdentity;
+              if (!physicalIdentity) {
+                throw new Error("Pending input lost its original physical database");
+              }
+              publication = retainSessionEntryWorkerPublication({
+                agentId: resolved.agentId,
+                storePath: options.path,
+                databaseIdentity: physicalIdentity,
+              });
               const result = await execution.runExisting(source, async (worker) => {
                 const native = getOpenClawAgentDatabaseIfOpen(options);
                 const revision = native && readSqliteNativeMutationRevision(native.db);
@@ -340,6 +366,16 @@ export async function preparePendingInputStore(
                   await admitted.retained.settled;
                   const receipt = readReceipt(admitted.admission.committed?.facts);
                   if (admitted.admission.settlement?.kind === "completed" && receipt) {
+                    const published = settlePublication(receipt.publication, false);
+                    if (published) {
+                      publishCommittedSessionIdentity(
+                        resolved.agentId,
+                        physicalIdentity,
+                        published.previous,
+                        published.current,
+                        published.prepared,
+                      );
+                    }
                     if (publish) {
                       assertOpen();
                     }
@@ -350,12 +386,18 @@ export async function preparePendingInputStore(
                     return receipt;
                   }
                   if (admitted.admission.settlement?.kind !== "completed") {
+                    settlePublication(undefined, true);
                     throw new SqliteWorkerError(
                       "Pending input native commitment is unknown; do not replay",
                       "outcome-unknown",
                     );
                   }
                 }
+                settlePublication(
+                  undefined,
+                  Boolean(admitted) ||
+                    (!outcome.ok && hasSqliteWorkerOutcomeUnknown(outcome.error)),
+                );
                 if (!outcome.ok) {
                   throw outcome.error;
                 }
@@ -371,12 +413,19 @@ export async function preparePendingInputStore(
             },
             (admission, retained, facts) => {
               checkGrant("commit", facts);
-              if (
-                !isRecord(facts) ||
-                !isRecord(facts.publication) ||
-                !readReceipt(facts.publication.receipt)
-              ) {
+              const receipt =
+                isRecord(facts) && isRecord(facts.publication)
+                  ? readReceipt(facts.publication.receipt)
+                  : undefined;
+              if (!isRecord(facts) || !isRecord(facts.publication) || !receipt) {
                 throw new Error("Pending input commit omitted its exact receipt");
+              }
+              if (receipt.publication) {
+                publication?.begin(
+                  receipt.publication.changedKeys,
+                  receipt.publication.membershipInvalidatedKeys,
+                  receipt.publication.sharingUnchangedKeys,
+                );
               }
               admitted = { admission, retained };
             },
@@ -384,7 +433,14 @@ export async function preparePendingInputStore(
             undefined,
             undefined,
             (facts) => checkGrant("transaction", facts),
-          );
+          ).catch((error: unknown) => {
+            settlePublication(
+              undefined,
+              hasSqliteWorkerOutcomeUnknown(error) ||
+                Boolean(admitted && admitted.admission.settlement?.kind !== "completed"),
+            );
+            throw error;
+          });
         })(),
       );
     },

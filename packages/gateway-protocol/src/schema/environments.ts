@@ -256,6 +256,8 @@ const WorkerEnvironmentProfileSummarySchema = closedObject({
 export const EnvironmentsListResultSchema = closedObject({
   environments: Type.Array(EnvironmentSummarySchema),
   profiles: Type.Optional(Type.Array(WorkerEnvironmentProfileSummarySchema)),
+  /** Per-role Cloud choices for native session creation; absent without named roles. */
+  dispatchableProfileIds: Type.Optional(Type.Array(NonEmptyString, { uniqueItems: true })),
   preparedPool: Type.Optional(
     closedObject({
       maxTotal: Type.Integer({ minimum: 0 }),

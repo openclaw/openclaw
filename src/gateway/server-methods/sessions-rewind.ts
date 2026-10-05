@@ -560,6 +560,7 @@ async function mutateSessionAtMessage(
           };
           assertRepositoryCurrent();
           const forked = await forkSessionRepositoryWorkspace({
+            branchPrefix: cfg.repositoryBranchPrefix,
             sourceWorkspaceId: current.entry.repositoryWorkspaceId,
             agentId: current.target.agentId,
             sessionKey: targetKey,

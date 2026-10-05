@@ -1015,6 +1015,7 @@ CREATE TABLE IF NOT EXISTS session_pending_inputs (
   state TEXT NOT NULL CHECK (state IN ('queued', 'interrupted', 'cancelled')),
   accepted_at INTEGER NOT NULL,
   consumed_event_id TEXT,
+  recovery_intent_json TEXT,
   UNIQUE (session_id, idempotency_key),
   FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE,
   FOREIGN KEY (session_id) REFERENCES session_windows(session_id) ON DELETE CASCADE

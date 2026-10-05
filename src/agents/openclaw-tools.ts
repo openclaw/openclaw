@@ -63,8 +63,7 @@ import { createDashboardTool } from "./tools/dashboard-tool.js";
 import { createDecisionTool } from "./tools/decision-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
 import { createGatewayToolCallerWrapper } from "./tools/gateway-caller-context.js";
-import { createGitHubIdentityStatusTool } from "./tools/github-identity-status-tool.js";
-import { createGitHubPublishTool } from "./tools/github-publish-tool.js";
+import { createGitHubSessionTools } from "./tools/github-session-tools.js";
 import {
   createCreateGoalTool,
   createGetGoalTool,
@@ -476,8 +475,10 @@ export function createOpenClawTools(
     heartbeatTool,
     createDecisionTool(sessionAgentId, options),
     createTtsTool({ ...options, agentId: sessionAgentId }),
-    options?.githubPublicationAvailable !== undefined ? createGitHubIdentityStatusTool() : null,
-    options?.githubPublicationAvailable === true ? createGitHubPublishTool() : null,
+    ...createGitHubSessionTools({
+      publicationAvailable: options?.githubPublicationAvailable,
+      pullRequestReadAvailable: options?.githubPullRequestReadAvailable,
+    }),
     transcriptsTool,
     imageGenerateTool,
     musicGenerateTool,

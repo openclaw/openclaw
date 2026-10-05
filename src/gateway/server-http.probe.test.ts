@@ -335,7 +335,7 @@ describe("gateway probe endpoints", () => {
         resolvedAuth: AUTH_NONE,
         overrides: { getReadiness, openAiChatCompletionsEnabled: true },
         run: async (server) => {
-          const prepared = prepareGatewaySuspend({
+          const prepared = await prepareGatewaySuspend({
             requestId: "request-readiness-probe",
             pauseScheduling: vi.fn(),
             resumeScheduling: vi.fn(),
@@ -438,7 +438,7 @@ describe("gateway probe endpoints", () => {
           await watchStarted;
           expect(getActiveGatewayRootWorkCount()).toBe(1);
 
-          const prepared = prepareGatewaySuspend({
+          const prepared = await prepareGatewaySuspend({
             requestId: "request-http-work",
             pauseScheduling: vi.fn(),
             resumeScheduling: vi.fn(),

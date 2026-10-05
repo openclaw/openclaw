@@ -1,11 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { prepareAgentRunUserTurn } from "./agent-run-user-turn.js";
 import type { AgentTurnContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  loadSessionEntry: vi.fn(),
+  readSessionEntryReadOnlyInWorker: vi.fn(),
   persistSessionTranscriptTurn: vi.fn(),
   resolveSessionTranscriptRuntimeTarget: vi.fn(),
   stageSessionPendingInput: vi.fn(),
@@ -27,10 +26,10 @@ vi.mock("../../media/store.js", async () => {
   return { ...actual, deleteMediaBuffer: mocks.deleteMediaBuffer };
 });
 
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
-  return { ...actual, loadSessionEntry: mocks.loadSessionEntry };
-});
+vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-entry-read-runtime.js")>()),
+  readSessionEntryReadOnlyInWorker: mocks.readSessionEntryReadOnlyInWorker,
+}));
 
 vi.mock("../../config/sessions/session-accessor.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
@@ -46,7 +45,7 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
 
 describe("prepareAgentRunUserTurn", () => {
   beforeEach(() => {
-    mocks.loadSessionEntry.mockReset();
+    mocks.readSessionEntryReadOnlyInWorker.mockReset();
     mocks.resolveSessionTranscriptRuntimeTarget.mockReset().mockResolvedValue({});
     mocks.persistInboundImagesForTranscript.mockReset().mockResolvedValue({ entries: [] });
     mocks.deleteMediaBuffer.mockReset().mockResolvedValue(undefined);
@@ -97,139 +96,67 @@ describe("prepareAgentRunUserTurn", () => {
     });
   });
 
-  it("fails closed when the admitted session entry disappeared before transcript persistence", async () => {
-    const sessionKey = "agent:main:main";
-    const admittedSessionId = "admitted-session";
-    const sessionEntry: SessionEntry = {
-      sessionId: admittedSessionId,
-      updatedAt: 1,
-    };
-    mocks.loadSessionEntry.mockReturnValue({
-      cfg: {},
-      storePath: "/tmp/sessions.json",
-      canonicalKey: sessionKey,
-      entry: undefined,
-      store: {},
-    });
-
-    await expect(
-      prepareAgentRunUserTurn({
-        assertCurrent: () => {},
-        request: {
-          message: "must not reach the stale session",
-          idempotencyKey: "disappeared-session-run",
-        } as AgentRunRequest,
-        cfg: {},
-        sessionEntry,
-        resolvedSessionKey: sessionKey,
-        admittedSessionId,
-        activeSessionAgentId: "main",
-        suppressVisibleSessionEffects: false,
-        requestedPromptPersistenceSuppression: false,
-        canUseInternalRuntimeHandoff: false,
-        message: "must not reach the stale session",
-        effectiveTranscriptInputText: "must not reach the stale session",
-        images: [],
-        offloadedRefs: [],
-        runId: "disappeared-session-run",
-        client: null,
-        context: {
-          logGateway: { warn: vi.fn() },
-        } as unknown as AgentTurnContext,
-      }),
-    ).rejects.toThrow("agent turn was not durably admitted");
-    expect(mocks.persistSessionTranscriptTurn).not.toHaveBeenCalled();
-  });
-
-  it("does not stage the user turn when delegated runtime authority closes at commit", async () => {
-    const sessionKey = "agent:main:worker-child";
-    const admittedSessionId = "worker-child-session";
-    const sessionEntry: SessionEntry = { sessionId: admittedSessionId, updatedAt: 1 };
-    mocks.loadSessionEntry.mockReturnValue({
-      cfg: {},
-      storePath: "/tmp/sessions.json",
-      canonicalKey: sessionKey,
-      entry: sessionEntry,
-      store: { [sessionKey]: sessionEntry },
-    });
-    let authorityActive = true;
-    mocks.beforeTranscriptCommit = () => {
-      authorityActive = false;
-    };
-
-    await expect(
-      prepareAgentRunUserTurn({
-        request: { message: "must not outlive the worker turn", idempotencyKey: "closed-run" },
-        cfg: {},
-        sessionEntry,
-        resolvedSessionKey: sessionKey,
-        admittedSessionId,
-        activeSessionAgentId: "main",
-        suppressVisibleSessionEffects: false,
-        requestedPromptPersistenceSuppression: false,
-        canUseInternalRuntimeHandoff: false,
-        message: "must not outlive the worker turn",
-        effectiveTranscriptInputText: "must not outlive the worker turn",
-        images: [],
-        offloadedRefs: [],
-        runId: "closed-run",
-        client: null,
-        context: { logGateway: { warn: vi.fn() } } as unknown as AgentTurnContext,
-        assertCurrent: () => {
-          if (!authorityActive) {
-            throw new TypeError("agent runtime authority is no longer active");
-          }
-        },
-      }),
-    ).rejects.toThrow("agent runtime authority is no longer active");
-    expect(mocks.persistedMessages).toEqual([]);
-  });
-
-  it("deletes persisted media when delegated runtime authority closes during persistence", async () => {
-    const sessionKey = "agent:main:worker-child";
-    const sessionEntry: SessionEntry = { sessionId: "revoked-media-session", updatedAt: 1 };
-    mocks.loadSessionEntry.mockReturnValue({
-      cfg: {},
-      storePath: "/tmp/sessions.json",
-      canonicalKey: sessionKey,
-      entry: sessionEntry,
-      store: { [sessionKey]: sessionEntry },
-    });
-    let authorityActive = true;
-    mocks.persistInboundImagesForTranscript.mockImplementationOnce(async () => {
-      authorityActive = false;
-      return { entries: [{ id: "revoked-media", fact: {} }] };
-    });
-
-    await expect(
-      prepareAgentRunUserTurn({
-        request: { message: "private image", idempotencyKey: "revoked-media-run" },
-        cfg: {},
-        sessionEntry,
-        resolvedSessionKey: sessionKey,
-        admittedSessionId: "revoked-media-session",
-        activeSessionAgentId: "main",
-        suppressVisibleSessionEffects: false,
-        requestedPromptPersistenceSuppression: false,
-        canUseInternalRuntimeHandoff: false,
-        message: "private image",
-        effectiveTranscriptInputText: "private image",
-        images: [],
-        offloadedRefs: [],
-        runId: "revoked-media-run",
-        client: null,
-        context: { logGateway: { warn: vi.fn() } } as unknown as AgentTurnContext,
-        assertCurrent: () => {
-          if (!authorityActive) {
-            throw new TypeError("agent runtime authority is no longer active");
-          }
-        },
-      }),
-    ).rejects.toThrow("agent runtime authority is no longer active");
-    expect(mocks.deleteMediaBuffer).toHaveBeenCalledWith("revoked-media", "inbound");
-    expect(mocks.loadSessionEntry).not.toHaveBeenCalled();
-    expect(mocks.resolveSessionTranscriptRuntimeTarget).not.toHaveBeenCalled();
-    expect(mocks.stageSessionPendingInput).not.toHaveBeenCalled();
-    expect(mocks.persistedMessages).toEqual([]);
-  });
+  it.each(["missing session", "commit revocation", "media revocation"] as const)(
+    "does not persist an unauthorized user turn after %s",
+    async (failure) => {
+      const sessionKey = "agent:main:worker-child";
+      const sessionEntry: SessionEntry = { sessionId: "admitted-session", updatedAt: 1 };
+      mocks.readSessionEntryReadOnlyInWorker.mockResolvedValue(
+        failure === "missing session" ? undefined : sessionEntry,
+      );
+      let authorityActive = true;
+      if (failure === "commit revocation") {
+        mocks.beforeTranscriptCommit = () => {
+          authorityActive = false;
+        };
+      } else if (failure === "media revocation") {
+        mocks.persistInboundImagesForTranscript.mockImplementationOnce(async () => {
+          authorityActive = false;
+          return { entries: [{ id: "revoked-media", fact: {} }] };
+        });
+      }
+      const message = "must not outlive the admitted turn";
+      await expect(
+        prepareAgentRunUserTurn({
+          request: { message, idempotencyKey: "admitted-run" },
+          cfg: {},
+          sessionEntry,
+          resolvedSessionKey: sessionKey,
+          sessionStorePath: "/tmp/sessions.json",
+          admittedSessionId: sessionEntry.sessionId,
+          activeSessionAgentId: "main",
+          suppressVisibleSessionEffects: false,
+          requestedPromptPersistenceSuppression: false,
+          canUseInternalRuntimeHandoff: false,
+          message,
+          effectiveTranscriptInputText: message,
+          images: [],
+          offloadedRefs: [],
+          runId: "admitted-run",
+          client: null,
+          context: { logGateway: { warn: vi.fn() } } as unknown as AgentTurnContext,
+          assertCurrent: () => {
+            if (!authorityActive) {
+              throw new TypeError("agent runtime authority is no longer active");
+            }
+          },
+        }),
+      ).rejects.toThrow(
+        failure === "missing session"
+          ? "agent turn was not durably admitted"
+          : "agent runtime authority is no longer active",
+      );
+      if (failure === "missing session") {
+        expect(mocks.persistSessionTranscriptTurn).not.toHaveBeenCalled();
+      } else {
+        expect(mocks.persistedMessages).toEqual([]);
+      }
+      if (failure === "media revocation") {
+        expect(mocks.deleteMediaBuffer).toHaveBeenCalledWith("revoked-media", "inbound");
+        expect(mocks.readSessionEntryReadOnlyInWorker).not.toHaveBeenCalled();
+        expect(mocks.resolveSessionTranscriptRuntimeTarget).not.toHaveBeenCalled();
+        expect(mocks.stageSessionPendingInput).not.toHaveBeenCalled();
+      }
+    },
+  );
 });

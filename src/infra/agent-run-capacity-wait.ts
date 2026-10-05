@@ -11,6 +11,29 @@ export function isAgentRunWaitingForCapacity(runId: string): boolean {
   );
 }
 
+/** Capture the scheduler's exact context; a recycled run id cannot donate wait time. */
+export function captureAgentRunCapacityWait(runId: string, lifecycleGeneration: string) {
+  const context = getAgentRunContext(runId);
+  return () => {
+    if (
+      !context ||
+      getAgentRunContext(runId) !== context ||
+      context.lifecycleGeneration !== lifecycleGeneration ||
+      lifecycleGeneration !== getAgentRunLifecycleGeneration()
+    ) {
+      return undefined;
+    }
+    return {
+      waiting: (context.capacityWaits?.size ?? 0) > 0,
+      elapsedMs:
+        (context.capacityWaitClock?.elapsedMs ?? 0) +
+        (context.capacityWaitClock?.startedAtMs === undefined
+          ? 0
+          : Math.max(0, Date.now() - context.capacityWaitClock.startedAtMs)),
+    };
+  };
+}
+
 /** Records a scheduler-owned wait and releases only the exact captured run instance. */
 export function registerAgentRunCapacityWait(
   runId: string,
@@ -25,6 +48,7 @@ export function registerAgentRunCapacityWait(
     return undefined;
   }
   const waits = (context.capacityWaits ??= new Set());
+  const clock = (context.capacityWaitClock ??= { elapsedMs: 0 });
   const token = Symbol("agent-run-capacity-wait");
   const publish = () => {
     bumpAgentRunIndexVersion(context);
@@ -43,6 +67,7 @@ export function registerAgentRunCapacityWait(
   };
   waits.add(token);
   if (waits.size === 1) {
+    clock.startedAtMs = Date.now();
     publish();
   }
   return () => {
@@ -57,6 +82,8 @@ export function registerAgentRunCapacityWait(
       return;
     }
     delete context.capacityWaits;
+    clock.elapsedMs += Math.max(0, Date.now() - (clock.startedAtMs ?? Date.now()));
+    clock.startedAtMs = undefined;
     publish();
   };
 }

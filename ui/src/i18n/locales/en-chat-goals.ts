@@ -16,6 +16,12 @@ const enChatGoals = {
       busy: "Wait for this run to finish. Your draft is unchanged.",
       annotationUnsupported: "Send or remove browser annotations first. Your draft is unchanged.",
       actionPending: "Wait for the pending goal action.",
+      recoveryDecisionTitle: "Resume goal after an unknown outcome?",
+      recoveryDecisionMessage:
+        "An interrupted external action may already have changed something. Review the action before continuing. OpenClaw will continue this goal from accepted state and will not automatically repeat that interrupted action.",
+      recoveryDecisionAcknowledgement:
+        "I have reviewed the uncertain action and choose to continue this goal.",
+      recoveryDecisionConfirm: "Continue goal",
       invalidRequest: "Goal update is invalid. Check the objective and try again.",
       outcomeUnknown: "Goal update not confirmed. Check its outcome before making another change.",
       recoveryTitle: "Goal update not confirmed",

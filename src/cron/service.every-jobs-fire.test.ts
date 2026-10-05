@@ -74,7 +74,7 @@ describe("CronService interval/cron jobs fire on time", () => {
       });
 
       expect(
-        prepareGatewaySuspend({
+        await prepareGatewaySuspend({
           requestId: "cron-resume-retry",
           pauseScheduling: () => cron.pauseScheduling(),
           resumeScheduling: () => cron.resumeScheduling(),

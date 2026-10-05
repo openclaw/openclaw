@@ -324,6 +324,27 @@ export function createChatSendWorkAdmission(params: {
   };
 }
 
+/** Collect keeps source custody while transferring cancellation to its aggregate. */
+export function assertChatSendWorkAdmissionCurrent(params: {
+  context: Pick<GatewayRequestContext, "chatQueuedTurns">;
+  clientRunId: string;
+  retainedWork: Pick<ReturnType<typeof createChatSendWorkAdmission>, "isActive">;
+  admission: Pick<SessionWorkAdmissionLease, "isActive">;
+  lifecycleGeneration: string;
+  controller: AbortController;
+}): void {
+  const queued = params.context.chatQueuedTurns.get(params.clientRunId);
+  if (
+    !params.retainedWork.isActive() ||
+    !params.admission.isActive() ||
+    params.lifecycleGeneration !== getAgentEventLifecycleGeneration() ||
+    (params.controller.signal.aborted &&
+      !(queued?.controller === params.controller && queued.abortable === false))
+  ) {
+    throw new Error("Chat admission ended or was cancelled; submit a new turn.");
+  }
+}
+
 /** Rechecked inside the session writer barrier before exclusive input is admitted. */
 export function assertChatSendExclusiveAdmission(
   request: NormalizedChatSendRequest,

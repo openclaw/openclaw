@@ -11,13 +11,11 @@ import type {
   SessionGoalOperationResult,
 } from "../../config/sessions/goals-operations.js";
 import { withSessionPendingInputAuthorityGuard } from "../../config/sessions/session-pending-input-authority.js";
-import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import { logVerbose } from "../../globals.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-// chat.send owns admission, ACK timing, and detached dispatch handoff.
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import {
   retireProviderReviewAcknowledgment,
@@ -28,6 +26,7 @@ import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
 import { resolveChatAbortDiagnosticReason } from "../chat-abort-diagnostics.js";
+import { captureGatewayTurnIssuerAdmission } from "../operator-run-authority.js";
 import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
@@ -52,6 +51,7 @@ import {
   createChatSendMessageInjectionStarter,
   settleChatSendPreAckMessageInjection,
 } from "./chat-send-message-injection.js";
+import type { ChatSendInternalOptions } from "./chat-send-pre-admission.types.js";
 import { applyChatSendReplyContextFields } from "./chat-send-reply-context.js";
 import { prepareAndAdmitChatSend } from "./chat-send-setup.js";
 import { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
@@ -63,16 +63,6 @@ import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { publishCommittedSessionGoalChange } from "./session-goal-change.js";
 import type { GatewayRequestHandlerOptions, SessionMutationAuthorization } from "./types.js";
-
-type ChatSendInternalOptions = {
-  providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
-  goalResume?: SessionGoalOperation & { action: "resume" };
-  trustedSystemInput?: boolean;
-  transcript?: Parameters<typeof createGatewayChatUserTurnController>[0]["transcript"];
-  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
-  toolsAllow?: string[];
-  skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
-};
 
 const mediaDocumentContextLoader = createLazyImportLoader(
   () => import("../../media-understanding/file-context.js"),
@@ -121,15 +111,18 @@ async function handleChatSendWithOptions(
     messageInjectionTarget,
     restartSafeAdmission,
   } = admission;
+  diagnostics.bindRun({ runId: clientRunId, sessionId: admittedSessionId, lifecycleGeneration });
   const phase = diagnostics.scope("attachments");
-  const preparedAttachments = await prepareChatSendAttachments({
-    client,
-    request,
-    session,
-    admission,
-    respond,
-    context,
-  });
+  const preparedAttachments = await diagnostics.measure("attachments", () =>
+    prepareChatSendAttachments({
+      client,
+      request,
+      session,
+      admission,
+      respond,
+      context,
+    }),
+  );
   if (!preparedAttachments.ok) {
     return;
   }
@@ -343,28 +336,38 @@ async function handleChatSendWithOptions(
               assertCustodyCurrent();
               return true;
             });
-      const staged = await userTurnRecorder.stageApproved?.({
-        runId: clientRunId,
-        authority: sessionMutationAuthorization?.admittedInputAuthority
-          ? withSessionPendingInputAuthorityGuard(
-              sessionMutationAuthorization.admittedInputAuthority,
-              assertCustodyLifetimeCurrent,
-              req.expectedProfileId === undefined
-                ? undefined
-                : (cause) => {
-                    preparationFailure ??= { cause };
-                    assertAdmittedCurrent();
-                    throw cause;
-                  },
-            )
-          : undefined,
-        assertCurrent: () => {
-          admission.assertClientUploadAllowed?.();
-          sessionMutationCommitGuard?.();
-          assertCustodyCurrent();
-        },
-        assertAdmittedCurrent,
-      });
+      const staged = await diagnostics.measure("inputCustody", () =>
+        userTurnRecorder.stageApproved?.({
+          runId: clientRunId,
+          authority: sessionMutationAuthorization?.admittedInputAuthority
+            ? withSessionPendingInputAuthorityGuard(
+                sessionMutationAuthorization.admittedInputAuthority,
+                assertCustodyLifetimeCurrent,
+                req.expectedProfileId === undefined
+                  ? undefined
+                  : (cause) => {
+                      preparationFailure ??= { cause };
+                      assertAdmittedCurrent();
+                      throw cause;
+                    },
+              )
+            : undefined,
+          turnIssuerAdmission: captureGatewayTurnIssuerAdmission({
+            authority: admission.operatorAuthority,
+            sessionKey: session.sessionTarget.storeKey,
+            sessionId: admittedSessionId,
+            lifecycleRevision: (admission.initialSessionEntry ?? entry)?.lifecycleRevision,
+            runId: clientRunId,
+            assertCurrent: assertCustodyCurrent,
+          }),
+          assertCurrent: () => {
+            admission.assertClientUploadAllowed?.();
+            sessionMutationCommitGuard?.();
+            assertCustodyCurrent();
+          },
+          assertAdmittedCurrent,
+        }),
+      );
       if (userTurnRecorder.isPendingInputConsumed?.()) {
         admission.cleanupAdmittedRun();
         clearAgentRunContext(clientRunId, lifecycleGeneration);
@@ -392,7 +395,9 @@ async function handleChatSendWithOptions(
     }
     let goalResult: SessionGoalOperationResult | undefined;
     if (restartSafeAdmission) {
-      const persistedUserTurn = await persistGatewayUserTurnTranscript();
+      const persistedUserTurn = await diagnostics.measure("inputTranscript", () =>
+        persistGatewayUserTurnTranscript(),
+      );
       const goalOperation = request.goalOperation;
       if (goalOperation) {
         const mutation = persistedUserTurn?.sessionTurnMutationResult;
@@ -589,6 +594,9 @@ async function handleChatSendWithOptions(
       ctx.CommandTargetSessionKey,
     ]);
     phase?.mark("response");
+    if (activeRunAbort.entry) {
+      activeRunAbort.entry.accepted = true;
+    }
     respond(true, ackPayload, undefined, { runId: clientRunId });
     phase?.finish();
     diagnostics.acknowledge();
@@ -643,8 +651,7 @@ async function handleChatSendWithOptions(
   } catch (err) {
     replyAdmissionTicket?.release();
     await handleChatSendSetupError({
-      // Uncommitted Goal admissions may retry with their original identity. Committed
-      // outcomes replay from the durable receipt instead of this transient error cache.
+      // Retry uncommitted Goal admissions; committed outcomes replay from the durable receipt.
       cacheResult: request.goalOperation === undefined && !pendingStageAttempted,
       admission,
       context,

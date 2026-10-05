@@ -348,6 +348,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     },
   },
   {
+    commandPath: ["doctor", "recovery-inspect"],
+    exact: true,
+    policy: { ...PASSIVE_STARTUP_POLICY, ownsProtocolStdout: true, hideBanner: true },
+  },
+  {
     commandPath: ["triage"],
     policy: { configGuard: "skip", loadPlugins: "never" },
   },

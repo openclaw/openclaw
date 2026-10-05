@@ -1,4 +1,5 @@
 // Session lifecycle timestamps prefer store metadata and fall back to transcript headers.
+import { hasOpaqueProviderCapacityWait } from "../../agents/main-session-recovery/main-session-recovery-empty-aggregate.js";
 import {
   assertProviderReviewAcknowledgment,
   type ProviderReviewAcknowledgment,
@@ -87,6 +88,16 @@ export function resolveSessionWorkStartError(
   }
   if (entry?.initializationPending === true) {
     return `Session "${sessionKey}" is still initializing. Retry after initialization completes.`;
+  }
+  if (entry?.mainRestartRecovery?.pause && options?.purpose !== "accepted-result-settlement") {
+    return `Session "${sessionKey}" is paused because an interrupted external action has no verified outcome. Review the action and explicitly choose whether to continue.`;
+  }
+  if (
+    entry &&
+    hasOpaqueProviderCapacityWait(entry) &&
+    options?.purpose !== "accepted-result-settlement"
+  ) {
+    return `Session "${sessionKey}" has an unverified provider capacity wait. Reconcile its allocation before starting more work.`;
   }
   if (entry?.providerReview && options?.purpose !== "accepted-result-settlement") {
     try {

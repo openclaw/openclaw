@@ -255,6 +255,58 @@ export function registerMaintenanceCommands(
     });
   setCommandJsonMode(doctor, "output", isDoctorMachineOutput);
 
+  const recoveryInspect = doctor
+    .command("recovery-inspect")
+    .description("Read safe recovery metadata from an explicit protected database capture")
+    .requiredOption("--agent-db <path>", "Absolute protected agent SQLite path")
+    .requiredOption(
+      "--state-db <path>",
+      "Absolute protected shared SQLite path from the same capture",
+    )
+    .requiredOption("--agent <id>", "Exact database agent ID")
+    .requiredOption("--key <key>", "Exact canonical session key")
+    .requiredOption("--session-id <id>", "Expected original session ID")
+    .requiredOption("--lifecycle <id>", "Expected original lifecycle revision")
+    .requiredOption("--placement-generation <number>", "Expected placement generation")
+    .action(async (opts, command) => {
+      if (
+        hasExplicitOptions(command.parent!, [
+          ...STATE_SQLITE_CONFLICTING_OPTION_NAMES,
+          "stateSqlite",
+        ])
+      ) {
+        return exitDoctorError(
+          "Recovery inspection cannot be combined with Doctor checks or repairs.",
+          true,
+        );
+      }
+      try {
+        const { inspectDoctorSessionRecovery } =
+          await import("../../commands/doctor-session-recovery.js");
+        const result = await inspectDoctorSessionRecovery({
+          agentDb: opts.agentDb,
+          stateDb: opts.stateDb,
+          agentId: opts.agent,
+          sessionKey: opts.key,
+          sessionId: opts.sessionId,
+          lifecycleRevision: opts.lifecycle,
+          placementGeneration: Number(opts.placementGeneration),
+        });
+        defaultRuntime.writeJson(result);
+        return exitCliAfterOutput(defaultRuntime, 0);
+      } catch (error) {
+        if (error instanceof ExitError) {
+          throw error;
+        }
+        // Raw storage errors can contain private locators or payload details.
+        return exitDoctorError(
+          "Recovery inspection unavailable; verify the protected capture and exact selectors.",
+          true,
+        );
+      }
+    });
+  setCommandJsonMode(recoveryInspect, "output", () => true);
+
   program
     .command("triage")
     .description("Collect sanitized diagnostics and open a local coding agent for repair")

@@ -1,4 +1,8 @@
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import {
+  createMainRestartRecoveryCycle,
+  hasMainRestartRecoveryEpisode,
+} from "../../config/sessions/main-session-recovery.types.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
 
 type ForegroundClaims = NonNullable<
@@ -25,7 +29,7 @@ export function removeMainSessionRecoveryForegroundClaim(
 
 type MainRecoveryStateFields = Pick<
   SessionEntry,
-  "abortedLastRun" | "restartRecoveryRuns" | "mainRestartRecovery"
+  "abortedLastRun" | "restartRecoveryRuns" | "restartRecoveryGoal" | "mainRestartRecovery"
 >;
 
 // restartRecoveryDeliveryRunId stays out of this patch: it keys delivery-claim
@@ -34,20 +38,61 @@ type MainRecoveryStateFields = Pick<
 export const MAIN_SESSION_RECOVERY_CLEAR_PATCH: Partial<MainRecoveryStateFields> = {
   abortedLastRun: false,
   restartRecoveryRuns: undefined,
+  restartRecoveryGoal: undefined,
   mainRestartRecovery: undefined,
 };
 
 export function buildMainSessionRecoveryClearPatch(
-  entry?: Partial<MainRecoveryStateFields> | null,
+  entry?: Partial<
+    MainRecoveryStateFields &
+      Pick<SessionEntry, "goal" | "goalPauseOrigin" | "sessionId" | "lifecycleRevision">
+  > | null,
 ): Partial<MainRecoveryStateFields> {
+  if (entry?.mainRestartRecovery?.pause) {
+    return {};
+  }
   if (
     entry?.abortedLastRun !== true &&
     entry?.restartRecoveryRuns === undefined &&
+    entry?.restartRecoveryGoal === undefined &&
     entry?.mainRestartRecovery === undefined
   ) {
     return {};
   }
-  return MAIN_SESSION_RECOVERY_CLEAR_PATCH;
+  const intent = entry?.mainRestartRecovery?.goalIntent;
+  const queued = entry?.mainRestartRecovery?.queuedInputsPending;
+  if (
+    intent &&
+    intent.sessionId === entry?.sessionId &&
+    intent.lifecycleRevision === entry.lifecycleRevision &&
+    intent.goalId === entry.goal?.id &&
+    (entry.goal.status === "active" ||
+      entry.goal.status === "budget_limited" ||
+      entry.goal.status === "usage_limited" ||
+      (entry.goal.status === "paused" && entry.goalPauseOrigin === "terminal-error"))
+  ) {
+    if (
+      !hasMainRestartRecoveryEpisode(entry) &&
+      entry.restartRecoveryRuns === undefined &&
+      entry.abortedLastRun !== true
+    ) {
+      return {};
+    }
+    return {
+      ...MAIN_SESSION_RECOVERY_CLEAR_PATCH,
+      mainRestartRecovery: {
+        ...createMainRestartRecoveryCycle(),
+        goalIntent: intent,
+        ...(queued ? { queuedInputsPending: true } : {}),
+      },
+    };
+  }
+  return queued
+    ? {
+        ...MAIN_SESSION_RECOVERY_CLEAR_PATCH,
+        mainRestartRecovery: { ...createMainRestartRecoveryCycle(), queuedInputsPending: true },
+      }
+    : MAIN_SESSION_RECOVERY_CLEAR_PATCH;
 }
 
 export function buildMainSessionRecoverySettlementPatch(

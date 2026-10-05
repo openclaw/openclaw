@@ -6,6 +6,7 @@ import {
   writeSessionGoalOperationReceipt,
 } from "./goals-operations.js";
 import type { SessionTranscriptTurnMutation } from "./goals-operations.types.js";
+import { buildSessionGoalIssuerPatch } from "./goals-transitions.js";
 import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
 import { readQualifiedSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import {
@@ -92,6 +93,7 @@ export function createSessionTranscriptTurnKernel(
       const mutation = options.sessionTurnMutation;
       options.assertCurrent?.();
       mutation?.assertCurrent?.();
+      mutation?.issuerAdmission?.assertCurrent();
       assertRouting?.(transactionDb);
       let result: SqliteExpectedSessionTranscriptTurnResult;
       const fresh = readEntry(transactionDb);
@@ -214,7 +216,22 @@ export function createSessionTranscriptTurnKernel(
         touchSessionEntry: options.touchSessionEntry,
       });
       if (mutation) {
+        const issuer = options.workerPrepared
+          ? options.preparedGoalIssuer
+          : goal
+            ? mutation.issuerAdmission?.capture(appendedEntry, goal)
+            : undefined;
+        if (
+          issuer &&
+          (issuer.goalId !== goal?.id ||
+            issuer.sessionId !== appendedEntry.sessionId ||
+            issuer.sessionKey !== resolved.sessionKey ||
+            issuer.lifecycleRevision !== appendedEntry.lifecycleRevision)
+        ) {
+          throw new Error("Goal issuer admission differs from the current session and goal");
+        }
         sessionPatch.goal = goal;
+        Object.assign(sessionPatch, buildSessionGoalIssuerPatch(appendedEntry, issuer));
       }
       const next =
         Object.keys(sessionPatch).length > 0
@@ -263,6 +280,7 @@ export function createSessionTranscriptTurnKernel(
         sessionEntry: structuredClone(next),
         sessionFile: options.sessionFile,
       };
+      mutation?.issuerAdmission?.assertCurrent();
       return { result, identity };
     },
   };

@@ -12,7 +12,9 @@ export type InternalAgentTurnPrincipalOptions = {
 };
 
 export type AgentTurnStartOwner = {
-  observe: () => { executionStarted: boolean; expiresAtMs: number } | undefined;
+  observe: () =>
+    | { executionStarted: boolean; expiresAtMs: number; waitingForCapacity?: boolean }
+    | undefined;
   abort: () => boolean;
 };
 
@@ -34,7 +36,7 @@ export type InternalAgentTurnDispatchOptions = {
   expectFinal?: boolean;
   onAccepted?: (payload: unknown) => void;
   onStartOwner?: (owner: AgentTurnStartOwner) => void;
-  onExecutionStarted?: () => void;
+  onExecutionStarted?: (() => void) | (() => Promise<void>);
   onSignalAbort?: () => Promise<void> | void;
   signal?: AbortSignal;
   timeoutMs?: number;

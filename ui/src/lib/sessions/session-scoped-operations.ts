@@ -1,4 +1,5 @@
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
+import type { SessionsRecoverParams } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   SessionsBranchesListResult,
@@ -49,7 +50,7 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
       },
     ));
 
-  const recover = async (params: { key: string; agentId?: string }) => {
+  const recover = async (params: SessionsRecoverParams) => {
     const scope = host.connection.capture();
     if (!scope) {
       return null;

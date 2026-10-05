@@ -1,6 +1,12 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { retainPreparedSessionSharingFacts } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import {
+  projectSessionSharingEntry,
+  type SessionSharingEntry,
+} from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import { prepareSessionGenerationFacts } from "../../config/sessions/session-delivery-generation.js";
+import { withSessionEntriesFromStoreInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -17,7 +23,19 @@ import { mainSessionRecoveryLog } from "./main-session-restart-recovery-shared.j
 
 export function resolveRestartRecoveryDeliveryContext(params: {
   cfg?: OpenClawConfig;
-  entry: SessionEntry;
+  entry: Pick<
+    SessionEntry,
+    | "sessionId"
+    | "updatedAt"
+    | "restartRecoveryDeliveryContext"
+    | "restartRecoveryDeliveryRunId"
+    | "delivery"
+    | "sendPolicy"
+    | "chatType"
+  > & {
+    pendingFinalDelivery?: Pick<NonNullable<SessionEntry["pendingFinalDelivery"]>, "context">;
+    pendingFinalDeliveryContext?: DeliveryContext;
+  };
   includeSessionDeliveryFallback?: boolean;
   sessionKey: string;
 }): (DeliveryContext & { channel: string; to: string }) | undefined {
@@ -29,7 +47,9 @@ export function resolveRestartRecoveryDeliveryContext(params: {
   const hasActiveRunDeliveryClaim =
     normalizeOptionalString(params.entry.restartRecoveryDeliveryRunId) !== undefined;
   const deliveryContext =
-    normalizeDeliveryContext(params.entry.pendingFinalDelivery?.context) ??
+    normalizeDeliveryContext(
+      params.entry.pendingFinalDelivery?.context ?? params.entry.pendingFinalDeliveryContext,
+    ) ??
     activeRunDeliveryContext ??
     (params.includeSessionDeliveryFallback && !hasActiveRunDeliveryClaim
       ? deliveryContextFromSession(params.entry)
@@ -43,7 +63,7 @@ export function resolveRestartRecoveryDeliveryContext(params: {
     params.cfg &&
     resolveSendPolicy({
       cfg: params.cfg,
-      entry: params.entry,
+      entry: { ...params.entry, pendingFinalDelivery: undefined },
       sessionKey: params.sessionKey,
       channel,
       chatType: params.entry.chatType,
@@ -61,7 +81,84 @@ type RestartRecoveryDeliveryScope = MainSessionRecoveryStoreTarget & {
   deliveryContext: DeliveryContext & { channel: string; to: string };
   cfg?: OpenClawConfig;
   shouldContinue?: () => boolean;
+  readCurrent: () => SessionSharingEntry | undefined;
 };
+
+/** Delivery keeps published row facts and physical generation beyond the admission reader frame. */
+export async function prepareRestartRecoveryDeliveryFacts(
+  params: MainSessionRecoveryStoreTarget & {
+    agentId: string;
+    sessionId: string;
+    lifecycleRevision?: string;
+  },
+) {
+  let releasePrepared: (() => void) | undefined;
+  try {
+    return await withSessionEntriesFromStoreInWorker(
+      { ...params, sessionKeys: [params.sessionKey], projection: "sharing" },
+      async (read) => {
+        const entry = read.result.entries.find(
+          ({ sessionKey }) => sessionKey === params.sessionKey,
+        )?.entry;
+        const sharing = read.result.sharing;
+        if (!entry || !sharing) {
+          throw new Error("Restart recovery delivery facts are unavailable");
+        }
+        const facts = retainPreparedSessionSharingFacts({
+          databaseIdentity: sharing.databaseIdentity,
+          sessionKey: params.sessionKey,
+          entry: projectSessionSharingEntry(entry),
+          membership: new Set(),
+        });
+        try {
+          const generation = await prepareSessionGenerationFacts({
+            ...params,
+            lifecycleRevision: params.lifecycleRevision ?? null,
+          });
+          try {
+            read.assertCurrent();
+            generation.assertCurrent();
+            releasePrepared = () => {
+              try {
+                facts.release();
+              } finally {
+                generation.release();
+              }
+            };
+            return {
+              readCurrent: () => {
+                try {
+                  generation.assertCurrent();
+                  return facts.readCurrent()?.entry;
+                } catch {
+                  return undefined;
+                }
+              },
+              release: releasePrepared,
+            };
+          } catch (error) {
+            generation.release();
+            throw error;
+          }
+        } catch (error) {
+          facts.release();
+          throw error;
+        }
+      },
+    );
+  } catch (error) {
+    try {
+      releasePrepared?.();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "Restart recovery delivery preparation and cleanup failed",
+        { cause: cleanupError },
+      );
+    }
+    throw error;
+  }
+}
 
 /** Recheck the owning recovery, not a remembered route, at each delivery boundary. */
 export function isRestartRecoveryDeliveryCurrent(params: RestartRecoveryDeliveryScope): boolean {
@@ -71,7 +168,7 @@ export function isRestartRecoveryDeliveryCurrent(params: RestartRecoveryDelivery
   ) {
     return false;
   }
-  const current = loadSessionEntryReadOnly(params);
+  const current = params.readCurrent();
   return (
     current?.sessionId === params.sessionId &&
     current.abortedLastRun !== true &&

@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -66,6 +67,70 @@ describe("committed pending input release", () => {
     receipts.push(receipt);
     return receipt;
   };
+  it("preserves accepted queue identities and order through retirement without consuming cancelled work twice", async () => {
+    const original = [];
+    for (const runId of ["completed", "cancelled", "first-waiting", "second-waiting"]) {
+      original.push(await stage(runId, { requestFingerprint: `drain:${runId}` }));
+    }
+    await promote(original[0]!);
+    original[1]!.finish("cancelled");
+    await original[1]!.settled?.();
+    const readRows = () =>
+      database()
+        .db.prepare(
+          "SELECT seq, input_id, run_id, message_json, state, consumed_event_id FROM session_pending_inputs ORDER BY seq",
+        )
+        .all();
+    const before = readRows();
+    rotateAgentEventLifecycleGeneration();
+    const after = readRows();
+    expect(
+      after.map(({ seq, input_id, run_id, message_json }) => ({
+        seq,
+        input_id,
+        run_id,
+        message_json,
+      })),
+    ).toEqual(
+      before.map(({ seq, input_id, run_id, message_json }) => ({
+        seq,
+        input_id,
+        run_id,
+        message_json,
+      })),
+    );
+    expect(
+      (await listSessionPendingInputs(scope())).items.map(({ runId, state }) => ({ runId, state })),
+    ).toEqual([
+      { runId: "cancelled", state: "cancelled" },
+      { runId: "first-waiting", state: "interrupted" },
+      { runId: "second-waiting", state: "interrupted" },
+    ]);
+    await expect(stage("cancelled", { requestFingerprint: "drain:cancelled" })).rejects.toThrow(
+      "ownership ended",
+    );
+    for (const index of [2, 3]) {
+      const runId = index === 2 ? "first-waiting" : "second-waiting";
+      const resumed = await stage(runId, { requestFingerprint: `drain:${runId}` });
+      expect(resumed.inputId).toBe(original[index]!.inputId);
+      expect(await promote(resumed)).toMatchObject({ appended: true });
+      expect(await promote(resumed)).toMatchObject({ appended: false });
+    }
+    expect(
+      (await loadTranscriptEvents(scope()))
+        .filter(isRecord)
+        .filter((event) => event.type === "message")
+        .map((event) => event.message),
+    ).toEqual([
+      expect.objectContaining({ idempotencyKey: "completed:user" }),
+      expect.objectContaining({ idempotencyKey: "first-waiting:user" }),
+      expect.objectContaining({ idempotencyKey: "second-waiting:user" }),
+    ]);
+    expect((await listSessionPendingInputs(scope())).items.map(({ runId }) => runId)).toEqual([
+      "cancelled",
+    ]);
+  });
+
   const prepare = async (collected: boolean) => {
     const first = await stage("first");
     const sources = [first];

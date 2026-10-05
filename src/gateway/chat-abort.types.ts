@@ -19,11 +19,19 @@ export type ChatAbortControllerEntry = {
   operationalRunInstance?: OperationalRunInstanceRef;
   /** Exact approval lease captured when this controller's execution was admitted. */
   agentRunDelegatedAuthority?: AgentRunDelegatedAuthority;
+  /** Original retained ingress owner; capture must not turn revoked work into restart intent. */
+  assertSourceCurrent?: () => void;
   agentId?: string;
   startedAtMs: number;
   /** False until lane admission reaches the execution boundary. */
   executionStarted?: boolean;
+  /** Set by the accepting RPC only after durable input/admission has succeeded. */
+  accepted?: true;
+  /** Private capability from this exact turn's adoption owner; never serialized. */
+  holdPendingInputWithdrawal?: () => (() => void) | undefined;
   expiresAtMs: number;
+  /** Recovery preparation excludes only positively observed, exact-owner capacity holds. */
+  resolvePreparationExpiresAtMs?: () => number;
   ownerConnId?: string;
   ownerDeviceId?: string;
   providerId?: string;

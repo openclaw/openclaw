@@ -209,7 +209,7 @@ export function registerSuspensionHandoffAuthorizationTests() {
             }
           : undefined,
     });
-    const lease = prepareGatewaySuspend({
+    const lease = await prepareGatewaySuspend({
       requestId: "handoff-route",
       drain: true,
       pauseScheduling: () => {},

@@ -8,7 +8,12 @@ import {
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionWorkAdmission,
+  getSessionWorkAdmissionRelease,
+  runExclusiveSessionLifecycleMutation,
+  startSessionWorkAdmissionInterruption,
+} from "../../sessions/session-lifecycle-admission.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -73,6 +78,64 @@ export function registerReplyAdmissionCases({
   makeSessionFixture,
   runEmbeddedAgentMock,
 }: AdmissionFixture): void {
+  it("keeps the newly admitted reply owner through its placement dispatch drain", async () => {
+    const sessionKey = "agent:main:main";
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({}, sessionKey);
+    const competingInterrupt = vi.fn();
+    const unrelatedInterrupt = vi.fn();
+    const competing = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [sessionKey],
+      assertAllowed: () => {},
+      onInterrupt: () => {
+        competingInterrupt();
+        competing.release();
+      },
+    });
+    const unrelated = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: ["agent:main:other"],
+      assertAllowed: () => {},
+      onInterrupt: unrelatedInterrupt,
+    });
+    let ownerInterrupted: boolean | undefined;
+    runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      await runExclusiveSessionLifecycleMutation("placement-dispatch", {
+        scope: storePath,
+        identities: [sessionKey, sessionEntry.sessionId],
+        prepare: async () => {
+          const interruption = startSessionWorkAdmissionInterruption({
+            scope: storePath,
+            identities: [sessionKey, sessionEntry.sessionId],
+          });
+          ownerInterrupted = replyRunRegistry.get(sessionKey)?.abortSignal.aborted;
+          // A broken self-drain cannot join until this backend returns.
+          if (!ownerInterrupted) {
+            await interruption.released;
+          }
+        },
+        run: async () => {},
+      });
+      return { payloads: [{ text: "continued on the assigned worker" }], meta: {} };
+    });
+    const { run } = createMinimalRun({ sessionKey, sessionEntry, sessionStore, storePath });
+    try {
+      await run();
+      expect(ownerInterrupted).toBe(false);
+      expect(competingInterrupt).toHaveBeenCalledOnce();
+      expect(competing.isActive()).toBe(false);
+      expect(unrelatedInterrupt).not.toHaveBeenCalled();
+      expect(unrelated.isActive()).toBe(true);
+      await getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionKey] });
+      expect(
+        getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionKey] }),
+      ).toBeUndefined();
+    } finally {
+      competing.release();
+      unrelated.release();
+    }
+  });
+
   it.each(["backend", "adoption"] as const)(
     "settles a tracked reply after lifecycle rotation during %s completion",
     async (stage) => {

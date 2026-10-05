@@ -57,6 +57,32 @@ export function hasEffectivePairedDeviceRole(
   return listEffectivePairedDeviceRoles(device).includes(normalized);
 }
 
+/** Exact operator approval/token cohort; presence and display updates do not renew it. */
+export function resolveOperatorPairingIdentity(device: PairedDevice | null): string | null {
+  if (!device || !hasEffectivePairedDeviceRole(device, "operator")) {
+    return null;
+  }
+  const token = device.tokens?.operator;
+  if (!token) {
+    return null;
+  }
+  return sha256Hex(
+    JSON.stringify([
+      device.deviceId,
+      device.publicKey,
+      device.createdAtMs,
+      token.role,
+      token.token,
+      token.createdAtMs,
+      token.rotatedAtMs ?? null,
+      token.revokedAtMs ?? null,
+      token.scopes.toSorted(),
+      token.issuer ?? null,
+      (device.approvedScopes ?? device.scopes ?? []).toSorted(),
+    ]),
+  );
+}
+
 /** Resolve the authenticated node pairing independently of surface approval. */
 function resolveNodePairingIdentity(
   device: PairedDevice | null,

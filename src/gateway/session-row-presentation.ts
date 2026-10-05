@@ -197,6 +197,9 @@ export function prepareProjectedSessionPresentation(
       : {}),
     sharingRole: sharing.roleForTarget(value),
     sendDisabledReason:
+      (value.entry.mainRestartRecovery?.pause
+        ? "Review the interrupted action before starting a new turn; its outcome is unknown."
+        : undefined) ??
       authorizeSessionAgentRun(
         { cfg: policyConfig, client: client ?? null, target: value },
         { policy: sharing.policy },

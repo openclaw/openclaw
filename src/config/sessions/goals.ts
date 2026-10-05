@@ -8,9 +8,16 @@ import {
   buildCreatedSessionGoal,
   buildUpdatedSessionGoalObjective,
   buildUpdatedSessionGoalStatus,
+  buildSessionGoalIssuerPatch,
 } from "./goals-transitions.js";
+import type { GoalRecoveryIssuerAdmission } from "./main-session-recovery.types.js";
 import { loadSessionEntryReadOnly, patchSessionEntryCore } from "./session-accessor.js";
-import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
+import type {
+  InternalSessionEntry,
+  SessionEntry,
+  SessionGoal,
+  SessionGoalStatus,
+} from "./types.js";
 
 type SessionGoalSnapshot = {
   status: "missing" | "found";
@@ -25,11 +32,14 @@ type SessionGoalStoreOptions = {
   persist?: boolean;
   actor?: { type: SessionStateActorType; id?: string };
   agentId?: string;
+  /** Private caller fence composed by the existing goal producer. */
+  assertCurrent?: () => void;
 };
 
 type CreateSessionGoalOptions = SessionGoalStoreOptions & {
   objective: string;
   tokenBudget?: number;
+  issuerAdmission?: GoalRecoveryIssuerAdmission;
 };
 
 type UpdateSessionGoalStatusOptions = SessionGoalStoreOptions & {
@@ -127,7 +137,7 @@ export async function getSessionGoal(
       }
       return { goal: accounted };
     },
-    { fallbackEntry: options.fallbackEntry },
+    { fallbackEntry: options.fallbackEntry, assertCommitAllowed: options.assertCurrent },
   );
   if (!result || !goal) {
     return { status: "missing" };
@@ -150,9 +160,17 @@ export async function createSessionGoal(options: CreateSessionGoalOptions): Prom
         { objective, tokenBudget: options.tokenBudget },
         now,
       );
-      return { goal: created };
+      options.issuerAdmission?.assertCurrent();
+      const issuer = options.issuerAdmission?.capture(entry, created);
+      return { goal: created, ...buildSessionGoalIssuerPatch(entry, issuer) };
     },
-    { fallbackEntry: options.fallbackEntry },
+    {
+      fallbackEntry: options.fallbackEntry,
+      assertCommitAllowed: () => {
+        options.assertCurrent?.();
+        options.issuerAdmission?.assertCurrent();
+      },
+    },
   );
   if (!result || !created) {
     throw new Error("session not found");
@@ -168,6 +186,14 @@ export async function updateSessionGoalStatus(
     options,
     (entry, now) => buildUpdatedSessionGoalStatus(entry, options, now),
     (goal) => `goal status changed to ${goal.status}`,
+    (entry) => ({
+      goalPauseOrigin: options.status === "paused" ? "manual" : undefined,
+      ...(options.status === "paused" ||
+      options.status === "complete" ||
+      options.status === "blocked"
+        ? buildSessionGoalIssuerPatch(entry, undefined)
+        : {}),
+    }),
   );
 }
 
@@ -189,6 +215,9 @@ async function updateSessionGoal(
   options: SessionGoalStoreOptions,
   update: (entry: SessionEntry, now: number) => SessionGoal,
   summarize: (goal: SessionGoal) => string,
+  patch?: (
+    entry: InternalSessionEntry,
+  ) => Pick<InternalSessionEntry, "goalPauseOrigin" | "mainRestartRecovery">,
 ): Promise<SessionGoal> {
   const now = nowMs(options.now);
   let updated: SessionGoal | undefined;
@@ -198,8 +227,9 @@ async function updateSessionGoal(
     (entry) => {
       foundSession = true;
       updated = update(entry, now);
-      return { goal: updated };
+      return { goal: updated, ...patch?.(entry) };
     },
+    { assertCommitAllowed: options.assertCurrent },
   );
   if (!result || !updated) {
     throw new Error(foundSession ? "goal not found" : "session not found");
@@ -217,8 +247,9 @@ export async function clearSessionGoal(options: SessionGoalStoreOptions): Promis
         return null;
       }
       removed = true;
-      return { goal: undefined };
+      return { goal: undefined, ...buildSessionGoalIssuerPatch(entry, undefined) };
     },
+    { assertCommitAllowed: options.assertCurrent },
   );
   if (result && removed) {
     await recordGoalChange(options, result, "goal cleared");

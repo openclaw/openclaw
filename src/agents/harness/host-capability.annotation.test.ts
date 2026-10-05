@@ -28,6 +28,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createWorkerSessionPlacementStore } from "../../gateway/worker-environments/placement-store.js";
 import { seedAttachedPlacementEnvironment } from "../../gateway/worker-environments/placement-test-fixtures.js";
+import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import { createDiagnosticLogRecordCapture } from "../../logging/test-helpers/diagnostic-log-capture.js";
 import { readCodexSessionTranscriptEventsBeforeAdmission } from "../../plugin-sdk/codex-session-transcript-runtime.js";
 import { readSessionTranscriptVisibleMessageDelta } from "../../plugin-sdk/session-transcript-runtime.js";
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -411,6 +413,58 @@ describe("host-owned current admission annotation", () => {
         expect(await readCodexSessionTranscriptEventsBeforeAdmission(f.target, refreshed)).toEqual(
           before.slice(0, -1),
         );
+        setLoggerOverride({
+          level: "warn",
+          file: path.join(path.dirname(f.target.storePath), "fence.log"),
+        });
+        const diagnostics = createDiagnosticLogRecordCapture();
+        try {
+          await expect(
+            readCodexSessionTranscriptEventsBeforeAdmission(f.target, original),
+          ).rejects.toThrow(
+            `Current-turn transcript admission identity changed: ${original.entryId}`,
+          );
+          await diagnostics.flush();
+          const mismatch = expectDefined(
+            diagnostics.records.find(
+              (record) => record.attributes?.reason === "admission_identity_changed",
+            ),
+            "identity mismatch diagnostic",
+          );
+          const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+          expect(mismatch.attributes).toMatchObject({
+            operation: "validate-current-turn-transcript-read",
+            transcriptScopeHash: hash(original.sessionId),
+            entryHash: hash(original.entryId),
+            logicalTurnHash: hash(original.logicalTurnId),
+            generationChanged: true,
+            rawSeqChanged: false,
+            parentChanged: false,
+            activeMessagePositionChanged: false,
+            expectedGenerationHash: hash(original.generation),
+            currentGenerationHash: hash(refreshed.generation),
+            expectedRawSeq: original.rawSeq,
+            currentRawSeq: refreshed.rawSeq,
+            expectedActiveMessagePosition: original.activeMessagePosition,
+            currentActiveMessagePosition: refreshed.activeMessagePosition,
+          });
+          const serialized = JSON.stringify(mismatch);
+          for (const privateValue of [
+            original.sessionId,
+            original.entryId,
+            original.generation,
+            refreshed.generation,
+            original.sessionKey,
+            original.storePath,
+            "native prompt",
+          ]) {
+            expect(serialized).not.toContain(privateValue);
+          }
+        } finally {
+          diagnostics.cleanup();
+          resetLogger();
+          setLoggerOverride(null);
+        }
         expect(
           readClosedTranscriptTurnInDatabase(db, {
             boundary: { admission: original, terminal: refreshed },
@@ -463,6 +517,10 @@ describe("host-owned current admission annotation", () => {
           }),
           "terminal",
         );
+        expect(f.receipt()).toEqual(refreshed);
+        expect(
+          await readCodexSessionTranscriptEventsBeforeAdmission(f.target, f.receipt()),
+        ).toEqual(before.slice(0, -1));
         const facts = {
           boundary: {
             admission: refreshed,

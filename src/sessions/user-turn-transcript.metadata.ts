@@ -20,6 +20,13 @@ export function buildRunUserTurnIdempotencyKey(runId: string): string {
   return `${runId}:user`;
 }
 
+/** Decode only the canonical recorded user-turn key, never message text. */
+export function readRunUserTurnIdempotencyKey(value: unknown): string | undefined {
+  return typeof value === "string" && value.endsWith(":user") && value.length > 5
+    ? value.slice(0, -5)
+    : undefined;
+}
+
 export function normalizePersistedSteerTargetRunId(value: unknown): string | undefined {
   const normalized = normalizeOptionalString(value);
   return normalized && normalized.length <= STEER_TARGET_RUN_ID_MAX_CHARS ? normalized : undefined;

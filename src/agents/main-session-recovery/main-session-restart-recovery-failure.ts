@@ -23,6 +23,52 @@ const TOMBSTONED_SESSION_NOTICE =
   "Your transcript is safe. In WebChat, use Resume in new session to continue it; " +
   "in other channels, use /new or /reset to start a replacement session.";
 
+export async function pauseMainRestartRecoveryWithNotice(params: {
+  agentId: string;
+  sessionKey: string;
+  storePath: string;
+  observation: MainSessionRecoveryObservation;
+  effect: Omit<
+    NonNullable<NonNullable<SessionEntry["mainRestartRecovery"]>["pause"]>,
+    "pausedAtMs"
+  >;
+  shouldContinue?: () => boolean;
+}): Promise<boolean> {
+  const paused = await commitMainSessionRecovery({
+    command: {
+      kind: "pause",
+      now: Date.now(),
+      observation: params.observation,
+      effect: params.effect,
+    },
+    requireWriteSuccess: true,
+    shouldContinue: params.shouldContinue,
+    target: params,
+  });
+  const entry = paused.entry;
+  const state = entry?.mainRestartRecovery;
+  if (paused.transition.kind !== "applied" || !entry || !state?.pause) {
+    return false;
+  }
+  const label = state.pause.toolName ? ` (${state.pause.toolName})` : "";
+  const notice = await appendAssistantMessageToSessionTranscript({
+    ...params,
+    expectedSessionId: entry.sessionId,
+    expectedSessionState: buildRestartRecoveryExpectedState(entry, {
+      cycleId: state.cycleId,
+      revision: state.revision,
+    }),
+    text: `I paused this whole session because an interrupted action${label} has no verified outcome. I will not replay it or continue other work automatically, even with Full Access. Review the action and explicitly choose whether to continue. This pause preserves history and does not release retained worker resources.`,
+    idempotencyKey: `main-session-restart-recovery:${entry.sessionId}:${state.cycleId}:paused-notice`,
+  });
+  if (!notice.ok) {
+    mainSessionRecoveryLog.warn(
+      `restart recovery pause notice unavailable for ${params.sessionKey}: ${notice.reason}`,
+    );
+  }
+  return true;
+}
+
 function buildRestartRecoveryTombstoneNoticeKey(entry: SessionEntry): string {
   const interruptedRunId =
     normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) ??

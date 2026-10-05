@@ -11,20 +11,36 @@ export async function createNodeCarrier(root: string) {
     root: home,
     env: { ...process.env, HOME: home, TMPDIR: home },
   });
-  const binding = {
+  let binding = {
     gatewayNamespace: "gateway",
     environmentId: "environment",
     sessionId: "session",
     generation: 1,
   };
-  const initial = await runtime.exec({
+  let initial = await runtime.exec({
     ...binding,
     argv: ["node", "-e", "process.stdout.write('ready')"],
   });
   return {
     home,
-    binding,
-    workspace: initial.workspaceDir,
+    get binding() {
+      return binding;
+    },
+    get workspace() {
+      return initial.workspaceDir;
+    },
+    acquireManagedWorkspaceAsync: runtime.acquireManagedWorkspaceAsync.bind(runtime),
+    stopEnvironment: runtime.processes.stopEnvironment.bind(runtime.processes),
+    async bindWorkspace(next: typeof binding) {
+      const nextBinding = { ...next };
+      const nextWorkspace = await runtime.exec({
+        ...nextBinding,
+        argv: ["node", "-e", "process.stdout.write('ready')"],
+      });
+      binding = nextBinding;
+      initial = nextWorkspace;
+      return initial.workspaceDir;
+    },
     async runWorkspaceCommand(
       command: Parameters<WorkerWorkspaceTunnelHandle["runWorkspaceCommand"]>[0],
     ) {

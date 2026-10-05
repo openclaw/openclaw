@@ -1,4 +1,7 @@
-import { prepareGitHubPublicationAvailability } from "../../../gateway/github-publication-availability.js";
+import {
+  prepareGitHubPublicationAvailability,
+  prepareGitHubPullRequestReadAvailability,
+} from "../../../gateway/github-publication-availability.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { agentHarnessExposesOpenClawTools } from "../../harness/tool-surface.js";
 import {
@@ -23,6 +26,7 @@ export async function withPreparedEmbeddedGatewayTools<T>(
     | "disableTools"
     | "sessionPersistence"
     | "githubPublicationAvailable"
+    | "githubPullRequestReadAvailable"
   > & { agentId: string; sessionKey: string; agentHarnessId: string },
   isAttemptCurrent: () => boolean,
   run: () => Promise<T>,
@@ -61,6 +65,12 @@ export async function withPreparedEmbeddedGatewayTools<T>(
         sessionKey: attempt.sessionKey,
         agentId: attempt.agentId,
         assertCurrent: isCurrent,
+      });
+      attempt.githubPullRequestReadAvailable = await prepareGitHubPullRequestReadAvailability({
+        sessionId: attempt.sessionId,
+        sessionKey: attempt.sessionKey,
+        agentId: attempt.agentId,
+        githubPublicationAvailable: attempt.githubPublicationAvailable,
       });
       if (!isCurrent()) {
         throw new Error("GitHub tool preparation outlived its admitted Gateway run");

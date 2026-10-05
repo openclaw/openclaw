@@ -88,7 +88,7 @@ export async function verifyReversibleFenceRecovery(
     if (fence === "suspension") {
       const pauseScheduling = vi.fn();
       const resumeScheduling = vi.fn();
-      const prepared = prepareGatewaySuspend({
+      const prepared = await prepareGatewaySuspend({
         requestId: "plugin-reload-suspension",
         drain: true,
         pauseScheduling,

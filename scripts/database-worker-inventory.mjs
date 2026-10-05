@@ -744,6 +744,12 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
+        operations: ["readUserProfileForAuthenticationAlias"],
+        evidence:
+          "Sole runtime caller openclaw-state-read.worker.ts:615 serves the authentication-alias read command; host authentication callers await that reader.",
+      },
+      {
+        tier: "W",
         operations: [
           "readUserProfileEmailBindings",
           "readUserProfileSnapshotSync",
@@ -1803,6 +1809,23 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/state/user-profile-factory-github-identity.ts",
+    [
+      {
+        tier: "W",
+        operations: ["applyFactoryGitHubIdentity"],
+        evidence:
+          "Sole executor user-profiles.worker.ts:136 runs the Factory identity mutation inside its shared-state write transaction.",
+      },
+      {
+        tier: "W",
+        operations: ["selectFactoryGitHubIdentities"],
+        evidence:
+          "Sole caller user-profile-github-identity.ts:313 is resolveUserProfileGitHubAttributionInDatabase; readUserProfileGitHubCommand is dispatched only by openclaw-state-read.worker.ts:555.",
+      },
+    ],
+  ],
+  [
     "src/state/user-profile-github-identity.ts",
     [
       {
@@ -1867,6 +1890,12 @@ const reviewedOperations = new Map([
   [
     "src/state/user-profiles.ts",
     [
+      {
+        tier: "W",
+        operations: ["ensureFactoryGitHubProfile"],
+        evidence:
+          "Sole executor user-profiles.worker.ts:132 handles userProfiles.ensureFactoryGitHub through the registered shared-state writer.",
+      },
       {
         tier: "W",
         operations: [
@@ -1964,6 +1993,8 @@ const workerModules = new Set([
   "src/gateway/session-history-worker-reader.ts", // Only session-transcript.worker.ts dispatches history metadata reads.
 
   "src/gateway/worker-environments/inference-store.kernel.ts", // Inference worker dispatcher creates this kernel only.
+  "src/gateway/worker-environments/prepared-recovery-hold-store.ts", // Prepared custody runs through store.kernel.ts in store.worker.ts mutations only.
+  "src/gateway/worker-environments/recovery-hold-store.ts", // Hold acceptance/disposal kernels run through store.kernel.ts and store-transitions.ts in store.worker.ts only.
   "src/gateway/worker-environments/placement-read-projection.ts", // Shared-state read worker placement projection and recovery dispatchers only.
   "src/gateway/worker-environments/session-attachment-store.ts", // Environment worker kernel and read-worker attachment facts only.
   "src/gateway/worker-environments/store-mutations.ts", // Environment worker kernel, transitions, and initialization only.

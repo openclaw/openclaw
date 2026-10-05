@@ -51,6 +51,7 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
   ["sessions.delete", { fields: ["key"], required: true }],
   ["sessions.dispatch", { fields: ["key"], required: true, runStart: true }],
   ["sessions.files.set", { fields: ["sessionKey"], required: true }],
+  ["sessions.github.pullRequest.read", { fields: ["sessionKey"], readOnly: true }],
   ["sessions.github.publish", { fields: ["sessionKey"], required: true }],
   ["sessions.github.confirm", { fields: ["sessionKey"], required: true }],
   ["sessions.fork", { fields: ["sessionKey"], required: true }],

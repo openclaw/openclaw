@@ -279,6 +279,7 @@ describe("listGatewayMethods", () => {
       "sessions.processes.stop",
       "catalog.browse",
       "catalog.searchKeywords",
+      "sessions.github.pullRequest.read",
     ];
     expect(listGatewayMethods().slice(-expectedSuffix.length)).toEqual(expectedSuffix);
     const methods = listGatewayMethods();
@@ -364,6 +365,7 @@ describe("listGatewayMethods", () => {
       "sessions.processes.stop",
       "catalog.browse",
       "catalog.searchKeywords",
+      "sessions.github.pullRequest.read",
     ]);
   });
 
@@ -577,6 +579,7 @@ describe("listGatewayMethods", () => {
       "sessions.processes.stop",
       "catalog.browse",
       "catalog.searchKeywords",
+      "sessions.github.pullRequest.read",
     ];
     expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));

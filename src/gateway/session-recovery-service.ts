@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -14,15 +13,20 @@ import {
   inspectMainRestartRecoveryRolloverEligibility,
   isMainSessionRecoveryReconciliationCandidate,
 } from "../agents/main-session-recovery/main-session-recovery-state.js";
+import { commitMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-store.js";
 import { markOrphanedMainSessionForRecovery } from "../agents/main-session-recovery/main-session-restart-recovery-marking.js";
 import { createAgentRunDirectAbortError } from "../agents/run-termination.js";
+import type { SessionGoalOperationResult } from "../config/sessions/goals-operations.types.js";
+import {
+  isGoalRecoveryDecisionCurrent,
+  type GoalRecoveryDecisionAdmission,
+} from "../config/sessions/main-session-recovery.types.js";
 import { recoverSessionEntryFromRestartTombstone } from "../config/sessions/session-accessor.js";
 import {
   buildSessionCreationStamp,
   inheritSessionCreationPolicy,
   type SessionCreatedActor,
 } from "../config/sessions/session-entry-provenance.js";
-import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { inheritSessionSelection } from "../config/sessions/session-entry-selection.js";
 import { mergeSessionEntry, type InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -34,7 +38,6 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { normalizeSessionIdentities } from "../sessions/session-lifecycle-identity.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
@@ -43,16 +46,18 @@ import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operat
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import { buildDashboardSessionKey } from "./session-create-key.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
-import { invalidSessionRequest } from "./session-request-error.js";
 import {
-  prepareSessionMutationFacts,
-  SessionMutationFactsUnavailableError,
-} from "./session-sharing-preparation.js";
+  SessionRecoverySourceChangedError,
+  prepareRecoverySource,
+} from "./session-recovery-source.js";
+import { invalidSessionRequest } from "./session-request-error.js";
+import { SessionMutationFactsUnavailableError } from "./session-sharing-preparation.js";
 import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 import {
   prepareSessionWorkerPlacementMutationCheck,
+  prepareSessionWorkerPlacementRecoveryIntentCheck,
   prepareSessionWorkerPlacementStop,
   type SessionWorkerPlacementContext,
 } from "./worker-environments/session-placement-lifecycle.js";
@@ -72,6 +77,7 @@ type RecoverGatewaySessionResult =
       successorEntry: InternalSessionEntry;
       successorKey: string;
       continuation: SessionRecoveryContinuationOutcome;
+      goalOperation?: SessionGoalOperationResult;
     }
   | { ok: false; error: ErrorShape };
 
@@ -84,118 +90,6 @@ function recoveryConflictError(reason: string): ErrorShape {
       : "Session changed before recovery; refresh and retry.",
     { details: { reason } },
   );
-}
-
-class SessionRecoverySourceChangedError extends Error {
-  constructor(options?: ErrorOptions) {
-    super("Session changed before recovery; refresh and retry.", options);
-    this.name = "SessionRecoverySourceChangedError";
-  }
-}
-
-/** Keep full recovery metadata tied to the existing sharing/source publication lifetime. */
-async function prepareRecoverySource(params: {
-  cfg: OpenClawConfig;
-  target: GatewaySessionStoreTarget;
-  commitGuard?: () => void;
-  storageReady?: Promise<void>;
-}) {
-  const { target } = params;
-  const facts = await prepareSessionMutationFacts({
-    cfg: params.cfg,
-    sessionKey: target.canonicalKey,
-    agentId: target.agentId,
-    allowMissing: true,
-    storageReady: params.storageReady,
-  });
-  let generation = 0;
-  let selectedGeneration = -1;
-  let selected: InternalSessionEntry | undefined;
-  const sourcePaths = new Set([path.resolve(target.storePath)]);
-  const readFacts = () => {
-    try {
-      const current = facts.readCurrent(params.cfg);
-      if (
-        facts.storageTarget.agentId !== target.agentId ||
-        facts.storageTarget.canonicalKey !== target.canonicalKey ||
-        path.resolve(facts.storageTarget.storePath) !== path.resolve(target.storePath)
-      ) {
-        throw new SessionRecoverySourceChangedError();
-      }
-      return current;
-    } catch (error) {
-      if (error instanceof SessionMutationFactsUnavailableError) {
-        throw new SessionRecoverySourceChangedError({ cause: error });
-      }
-      throw error;
-    }
-  };
-  try {
-    const source = readFacts();
-    if (source.sourcePath) {
-      sourcePaths.add(path.resolve(source.sourcePath));
-    }
-  } catch (error) {
-    facts.release();
-    throw error;
-  }
-  const unsubscribe = sessionChanges.subscribeFacts((change) => {
-    if (
-      !("all" in change) &&
-      change.storePath &&
-      sourcePaths.has(path.resolve(change.storePath)) &&
-      target.storeKeys.includes(change.sessionKey)
-    ) {
-      generation += 1;
-    }
-  });
-  const assertCurrent = () => {
-    params.commitGuard?.();
-    readFacts();
-    if (selectedGeneration !== generation) {
-      throw new SessionRecoverySourceChangedError();
-    }
-  };
-  return {
-    current() {
-      assertCurrent();
-      return selected;
-    },
-    async refresh() {
-      params.commitGuard?.();
-      const before = generation;
-      const current = readFacts();
-      if (!current.target) {
-        selected = undefined;
-        selectedGeneration = before;
-        assertCurrent();
-        return undefined;
-      }
-      const read = await withSessionEntryReadOnlyInWorker(
-        {
-          agentId: target.agentId,
-          sessionKey: current.target.storeKey,
-          storePath: current.sourcePath ?? target.storePath,
-        },
-        () => params.commitGuard?.(),
-        async (result, owner) => {
-          owner.assertCurrent();
-          if (!result.ok) {
-            throw result.error;
-          }
-          return result.value;
-        },
-      );
-      selected = read;
-      selectedGeneration = before;
-      assertCurrent();
-      return selected;
-    },
-    [Symbol.dispose]() {
-      unsubscribe();
-      facts.release();
-    },
-  };
 }
 
 /** Reconcile dead recovery ownership before a new send can replace its delivery claim. */
@@ -224,10 +118,12 @@ export async function reconcileOrphanedGatewaySessionRecovery(params: {
         return undefined;
       }
       await source.refresh();
-      const assertPlacementCurrent = prepareSessionWorkerPlacementMutationCheck({
+      // Reconciliation retains the worker and history; only dispatch owns resource changes.
+      using placementIntent = await prepareSessionWorkerPlacementRecoveryIntentCheck({
         context: params.workerPlacementContext,
         sessionId: initialSource.sessionId,
       });
+      const assertPlacementCurrent = placementIntent.assertCurrent;
       const assertCurrent = () => {
         params.commitGuard?.();
         assertPlacementCurrent();
@@ -274,6 +170,14 @@ export async function recoverGatewaySession(params: {
   cfg: OpenClawConfig;
   commitGuard?: () => void;
   key: string;
+  goalResume?: {
+    decision: GoalRecoveryDecisionAdmission;
+    accept: (
+      source: InternalSessionEntry,
+      assertCurrent: () => void,
+      target: Pick<GatewaySessionStoreTarget, "agentId" | "canonicalKey" | "storePath">,
+    ) => Promise<SessionGoalOperationResult>;
+  };
   requestingOperatorProfileId?: string;
   operatorRoleActor?: GatewayOperatorRoleActor;
   workerPlacementContext: SessionWorkerPlacementContext;
@@ -283,6 +187,7 @@ export async function recoverGatewaySession(params: {
     sessionId: string;
     sessionKey: string;
     storePath: string;
+    entry?: InternalSessionEntry;
   }) => Promise<SessionRecoveryContinuationOutcome>;
 }): Promise<RecoverGatewaySessionResult> {
   const sourceTarget = await resolveGatewaySessionStoreTargetInWorker({
@@ -294,6 +199,184 @@ export async function recoverGatewaySession(params: {
   const initialSource = findCanonicalStoreMatch(sourceTarget.store, sourceTarget.storeKeys)?.entry;
   if (!initialSource?.sessionId) {
     return invalidSessionRequest("Session recovery source was not found.");
+  }
+  if (initialSource.mainRestartRecovery?.pause && !initialSource.goal) {
+    return invalidSessionRequest(
+      "Review the interrupted action and explicitly acknowledge its unknown outcome without replay before starting a new turn.",
+    );
+  }
+  if (
+    initialSource.mainRestartRecovery?.pause ||
+    initialSource.mainRestartRecovery?.acknowledgedPause
+  ) {
+    if (params.actor?.type !== "human") {
+      return {
+        ok: false,
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "An unresolved external action requires an explicit human recovery decision.",
+        ),
+      };
+    }
+    const recovery = initialSource.mainRestartRecovery;
+    const decision = recovery.pause ?? recovery.acknowledgedPause;
+    if (!decision) {
+      return { ok: false, error: recoveryConflictError("source-changed") };
+    }
+    using source = await prepareRecoverySource({ ...params, target: sourceTarget });
+    using placementIntent = params.goalResume
+      ? await prepareSessionWorkerPlacementRecoveryIntentCheck({
+          context: params.workerPlacementContext,
+          sessionId: initialSource.sessionId,
+        })
+      : undefined;
+    let assertPlacementCurrent: (() => void) | undefined;
+    const assertCurrent = () => {
+      params.commitGuard?.();
+      assertPlacementCurrent?.();
+      const current = source.current();
+      if (
+        current?.sessionId !== initialSource.sessionId ||
+        current.lifecycleRevision !== initialSource.lifecycleRevision ||
+        isEmbeddedAgentRunActive(initialSource.sessionId) ||
+        isSessionWorkAdmissionActive(sourceTarget.storePath, [
+          ...sourceTarget.storeKeys,
+          initialSource.sessionId,
+        ])
+      ) {
+        throw new Error("Session changed before recovery; refresh and retry.");
+      }
+      const ownership = resolvePluginSessionOwnershipError({
+        action: "recover",
+        entry: current,
+        key: sourceTarget.canonicalKey,
+        pluginOwnerId: params.authorizedPluginId,
+      });
+      if (ownership) {
+        throw new Error(ownership.message);
+      }
+    };
+    const assertReviewedCurrent = () => {
+      assertCurrent();
+      const current = source.current();
+      if (
+        params.goalResume &&
+        (!current ||
+          !isGoalRecoveryDecisionCurrent(current, params.goalResume.decision) ||
+          current.status !== initialSource.status ||
+          current.abortedLastRun !== initialSource.abortedLastRun ||
+          current.lifecycleRunId !== initialSource.lifecycleRunId ||
+          current.lastRunId !== initialSource.lastRunId ||
+          current.activeWriterRunId !== initialSource.activeWriterRunId ||
+          current.goal?.status !== initialSource.goal?.status ||
+          current.goal?.updatedAt !== initialSource.goal?.updatedAt ||
+          current.goalPauseOrigin !== initialSource.goalPauseOrigin)
+      ) {
+        throw new Error("The reviewed Goal recovery decision changed before acceptance");
+      }
+    };
+    const resumed = await runExclusiveSessionLifecycleMutation("recover", {
+      scope: sourceTarget.storePath,
+      identities: [...sourceTarget.storeKeys, initialSource.sessionId],
+      run: async () => {
+        await source.refresh();
+        assertPlacementCurrent =
+          placementIntent?.assertCurrent ??
+          prepareSessionWorkerPlacementMutationCheck({
+            context: params.workerPlacementContext,
+            sessionId: initialSource.sessionId,
+          });
+        assertCurrent();
+        if (params.goalResume) {
+          assertReviewedCurrent();
+          const reviewedSource = source.current();
+          if (!reviewedSource) {
+            throw new SessionRecoverySourceChangedError();
+          }
+          const goalOperation = await params.goalResume.accept(
+            reviewedSource,
+            assertReviewedCurrent,
+            {
+              agentId: sourceTarget.agentId,
+              canonicalKey: sourceTarget.canonicalKey,
+              storePath: sourceTarget.storePath,
+            },
+          );
+          const entry = await source.refresh();
+          assertCurrent();
+          if (
+            !entry ||
+            entry.sessionId !== initialSource.sessionId ||
+            entry.lifecycleRevision !== initialSource.lifecycleRevision
+          ) {
+            throw new Error("Goal recovery lost its accepted session");
+          }
+          return { entry, transition: { kind: "applied" as const }, goalOperation };
+        }
+        if (recovery.acknowledgedPause) {
+          const current = source.current();
+          if (
+            current?.mainRestartRecovery?.cycleId !== recovery.cycleId ||
+            current.mainRestartRecovery.acknowledgedPause?.pausedAtMs !== decision.pausedAtMs
+          ) {
+            throw new Error("Session changed before recovery; refresh and retry.");
+          }
+          return { entry: current, transition: { kind: "applied" as const } };
+        }
+        return await commitMainSessionRecovery({
+          command: {
+            kind: "acknowledge_pause",
+            now: Date.now(),
+            observation: {
+              sessionId: initialSource.sessionId,
+              cycleId: recovery.cycleId,
+              revision: recovery.revision,
+            },
+          },
+          target: { ...sourceTarget, sessionKey: sourceTarget.canonicalKey },
+          requireWriteSuccess: true,
+          assertCommitAllowed: assertCurrent,
+        });
+      },
+    });
+    if (resumed.transition.kind !== "applied" || !resumed.entry) {
+      return { ok: false, error: recoveryConflictError("source-changed") };
+    }
+    if (!params.goalResume) {
+      await source.refresh();
+    }
+    assertCurrent();
+    const current = source.current();
+    if (
+      current?.mainRestartRecovery?.cycleId !== recovery.cycleId ||
+      current.mainRestartRecovery.acknowledgedPause?.pausedAtMs !== decision.pausedAtMs
+    ) {
+      return { ok: false, error: recoveryConflictError("source-changed") };
+    }
+    const continuation = await params.launchContinuation({
+      agentId: sourceTarget.agentId,
+      idempotencyKey:
+        "goalOperation" in resumed && resumed.goalOperation?.runId
+          ? resumed.goalOperation.runId
+          : `restart-recovery-decision:${initialSource.sessionId}:${recovery.cycleId}:${decision.pausedAtMs}`,
+      sessionId: initialSource.sessionId,
+      sessionKey: sourceTarget.canonicalKey,
+      storePath: sourceTarget.storePath,
+      ...(params.goalResume ? { entry: resumed.entry } : {}),
+    });
+    return {
+      ok: true,
+      agentId: sourceTarget.agentId,
+      created: false,
+      sourceKey: sourceTarget.canonicalKey,
+      successorEntry: resumed.entry,
+      successorKey: sourceTarget.canonicalKey,
+      continuation,
+      ...("goalOperation" in resumed ? { goalOperation: resumed.goalOperation } : {}),
+    };
+  }
+  if (params.goalResume) {
+    return { ok: false, error: recoveryConflictError("source-changed") };
   }
   if (isMainSessionRecoveryReconciliationCandidate(initialSource)) {
     const repaired = await reconcileOrphanedGatewaySessionRecovery({

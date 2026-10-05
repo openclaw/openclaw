@@ -115,6 +115,7 @@ import {
 } from "./main-session-recovery-store.js";
 import { dispatchRestartRecoveryUntilStarted } from "./main-session-restart-dispatch-start.js";
 import { readStartupRecoveryWarning } from "./main-session-restart-recovery-diagnostics.js";
+import { registerUnresolvedEffectRecoveryCases } from "./main-session-restart-recovery-effect.test-harness.js";
 import {
   createRestartRecoveryStoreFixture,
   mainSessionEntry,
@@ -1448,12 +1449,14 @@ describe("main-session-restart-recovery", () => {
       [sessionKey]: { ...current, abortedLastRun: true },
     });
     expect(notice?.isCurrent?.({})).toBe(false);
+    await writeStore(sessionsDir, { [sessionKey]: current });
+    expect(notice?.isCurrent?.({})).toBe(true);
     await writeStore(sessionsDir, {
       [sessionKey]: { ...current, sessionId: "replacement-session" },
     });
     expect(notice?.isCurrent?.({})).toBe(false);
     await writeStore(sessionsDir, { [sessionKey]: current });
-    expect(notice?.isCurrent?.({})).toBe(true);
+    expect(notice?.isCurrent?.({})).toBe(false);
     dispatchSettlement.resolve();
     await waitForFast(() => expect(notice?.isCurrent?.({})).toBe(false));
   });
@@ -2123,7 +2126,7 @@ describe("main-session-restart-recovery", () => {
     await writeTranscript(sessionsDir, "main-session", [
       { role: "user", content: "calculate the answer" },
       { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "calc" }] },
-      { role: "toolResult", content: "42" },
+      { role: "toolResult", toolCallId: "call-1", toolName: "calc", isError: false, content: "42" },
     ]);
 
     await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 }, {});
@@ -2365,7 +2368,7 @@ describe("main-session-restart-recovery", () => {
     await writeTranscript(sessionsDir, "main-session", [
       { role: "user", content: "calculate the answer" },
       { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "calc" }] },
-      { role: "toolResult", content: "42" },
+      { role: "toolResult", toolCallId: "call-1", toolName: "calc", isError: false, content: "42" },
     ]);
 
     await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
@@ -3769,12 +3772,14 @@ describe("main-session-restart-recovery", () => {
               "abort",
               () => {
                 // A start callback that loses the deadline race cannot reclaim ownership.
-                options?.onExecutionStarted?.();
                 const abortError =
                   signal.reason instanceof Error
                     ? signal.reason
                     : new Error("execution-start wait aborted");
-                void Promise.resolve(options?.onSignalAbort?.()).then(
+                (async () => {
+                  await options?.onExecutionStarted?.();
+                  await options?.onSignalAbort?.();
+                })().then(
                   () => reject(abortError),
                   () => reject(abortError),
                 );
@@ -3977,54 +3982,24 @@ describe("main-session-restart-recovery", () => {
     expect(completed?.pendingFinalDelivery).toBeUndefined();
   });
 
-  it.each<{
-    name: string;
-    entry: SessionEntryFixture & { sessionKey?: string };
-    sourceRunId?: string;
-  }>([
-    {
-      name: "resumes with restart-safe tools while a terminal provider outcome remains unknown",
-      entry: {
-        restartRecoveryDeliveryReceiptState: "terminal-pending",
-        restartRecoveryDeliveryToolCallId: "message-call-1",
-      },
-      sourceRunId: "discord-message-1",
-    },
-    {
-      name: "resumes safely for a source-less silent before_agent_reply checkpoint",
-      entry: {
-        sessionKey: "agent:main:custom:direct:123",
-        restartRecoveryBeforeAgentReplyState: "handled-silent",
-      },
-    },
-    ...(["pending", "handled-reply", "handled-unrecoverable"] as const).map(
-      (restartRecoveryBeforeAgentReplyState) => ({
-        name: `resumes safely for a ${restartRecoveryBeforeAgentReplyState} before_agent_reply checkpoint without a recoverable result`,
-        entry: { restartRecoveryBeforeAgentReplyState },
-        sourceRunId: "discord-message-1",
-      }),
-    ),
-  ])("$name", async ({ entry, sourceRunId }) => {
-    const { sessionsDir, readEntry } = await makeMainSessionFixture({
+  it("pauses the whole session while a terminal provider outcome remains unknown", async () => {
+    const { sessionsDir, storePath, sessionKey } = await makeMainSessionFixture({
       sessionKey: "agent:main:discord:direct:123",
+      restartRecoveryDeliveryReceiptState: "terminal-pending",
+      restartRecoveryDeliveryToolCallId: "message-call-1",
       restartRecoveryDeliveryRunId: "recovery-1",
-      restartRecoveryDeliverySourceRunId: sourceRunId,
+      restartRecoveryDeliverySourceRunId: "discord-message-1",
       restartRecoveryDeliveryContext: discordDeliveryContext,
-      ...entry,
     });
     await writeTranscript(sessionsDir, "main-session", [
-      sourceRunId
-        ? makeUserMessage("do the thing", { idempotencyKey: sourceRunId })
-        : makeUserMessage("quiet"),
+      { role: "user", content: "do the thing", idempotencyKey: "discord-message-1" },
     ]);
-    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
-    expect(callGateway).toHaveBeenCalledOnce();
-    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
-    expect(sendRecoveryNotice).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ idempotencyKey: expect.stringMatching(/:resumed-notice$/) }),
-    );
-    expect(readEntry()?.status).toBeUndefined();
-    expect(readEntry()).toMatchObject({ abortedLastRun: false });
+
+    await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(loadSessionEntry({ sessionKey, storePath })?.mainRestartRecovery?.pause).toMatchObject({
+      reason: "unverifiable-external-effect",
+    });
   });
 
   it("reconciles a receipt delivered during a restart-recovery continuation", async () => {
@@ -4115,13 +4090,21 @@ describe("main-session-restart-recovery", () => {
     },
   ])(
     "resumes safely when terminal completion cannot reconcile $label",
-    async ({ sourceTurnId, messages }) => {
-      const { sessionsDir, readEntry } = await makeDeliveredReceiptFixture(
+    async ({ label, sourceTurnId, messages }) => {
+      const { sessionsDir, storePath, sessionKey, readEntry } = await makeDeliveredReceiptFixture(
         "message-call-1",
         sourceTurnId,
       );
       await writeTranscript(sessionsDir, "main-session", messages);
 
+      if (label === "unfinished sibling tool work") {
+        await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
+        expect(callGateway).not.toHaveBeenCalled();
+        expect(
+          loadSessionEntry({ sessionKey, storePath })?.mainRestartRecovery?.pause?.reason,
+        ).toBe("unverifiable-external-effect");
+        return;
+      }
       await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
 
       expect(callGateway).toHaveBeenCalledOnce();
@@ -4637,6 +4620,279 @@ describe("main-session-restart-recovery", () => {
       ).toBe(restricted);
     },
   );
+  it("keeps replay safety outside the recent transcript window under full access", async () => {
+    await writePreparedMainSessionTranscript(
+      [
+        { role: "user", content: "do the thing" },
+        codeModeCheckpointMessage(),
+        {
+          role: "user",
+          content: "Continue after restart",
+          provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
+        },
+        ...Array.from({ length: 24 }, (_, index) => ({
+          role: "toolResult",
+          toolName: "read",
+          content: [{ type: "text", text: `read result ${index}` }],
+        })),
+      ],
+      { permissionMode: "full", restartRecoveryForceSafeTools: true },
+    );
+
+    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
+    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+  });
+
+  it("resumes an in-flight safe tool call across a repeated restart", async () => {
+    await writePreparedMainSessionTranscript(
+      [
+        { role: "user", content: "do the thing" },
+        createAssistantToolCallMessage([
+          { type: "thinking", thinking: "I need one more read." },
+          { type: "toolCall", id: "call-read-2", name: "read", arguments: { path: "README.md" } },
+        ]),
+      ],
+      { restartRecoveryForceSafeTools: true },
+    );
+
+    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
+    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+  });
+
+  it("retains replay safety after a provider error under full access", async () => {
+    await writePreparedMainSessionTranscript(
+      [
+        { role: "user", content: "do the thing" },
+        codeModeCheckpointMessage(),
+        {
+          role: "assistant",
+          stopReason: "error",
+          content: [{ type: "text", text: "Provider failed." }],
+        },
+      ],
+      { permissionMode: "full", restartRecoveryForceSafeTools: true },
+    );
+
+    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+  });
+
+  it("ends prior replay restrictions at a new full-access user turn", async () => {
+    await writePreparedMainSessionTranscript(
+      [
+        { role: "user", content: "the earlier request" },
+        codeModeCheckpointMessage(),
+        {
+          role: "user",
+          provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
+          content:
+            "[System] Your previous turn was interrupted by a gateway restart while OpenClaw was waiting on tool/model work. Continue from the existing transcript and finish the interrupted response.",
+        },
+        { role: "assistant", content: [{ type: "text", text: "Finished that recovery." }] },
+        { role: "user", content: "a later request" },
+        { role: "assistant", content: [{ type: "text", text: "Finished the later request." }] },
+      ],
+      { permissionMode: "full", restartRecoveryForceSafeTools: true },
+    );
+
+    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(gatewayParams()).not.toHaveProperty("forceRestartSafeTools");
+  });
+
+  it("resumes safely without replaying visible assistant text beside a Code Mode wait", async () => {
+    await writePreparedMainSessionTranscript([
+      { role: "user", content: "do the thing" },
+      codeModeCheckpointMessage("exec"),
+      createAssistantToolCallMessage([
+        { type: "text", text: "I already sent this part." },
+        {
+          type: "toolCall",
+          id: "call-wait-1",
+          name: "wait",
+          arguments: { runId: "cm_interrupted" },
+        },
+      ]),
+    ]);
+
+    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+    expect(gatewayParams()).not.toHaveProperty("forceCodeModeTools");
+  });
+
+  it("keeps partial provider-abort output under replay-safe recovery", async () => {
+    await writePreparedMainSessionTranscript([
+      { role: "user", content: "do the thing" },
+      codeModeCheckpointMessage("exec"),
+      codeModeWaitCallMessage(),
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "partial answer" }],
+        stopReason: "error",
+        errorMessage: "Request was aborted",
+        errorCode: AGENT_RUN_RESTART_ABORT_ERROR_CODE,
+      },
+    ]);
+
+    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+  });
+
+  it("resumes a partial streamed answer interrupted by a restart", async () => {
+    await writePreparedMainSessionTranscript([
+      { role: "user", content: "do the thing" },
+      makeAssistantTextMessage("Here is the first half of the answer", {
+        stopReason: "aborted",
+        errorMessage: "This operation was aborted",
+      }),
+    ]);
+
+    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(gatewayParams()).not.toMatchObject({ forceRestartSafeTools: true });
+  });
+
+  registerUnresolvedEffectRecoveryCases({
+    writePreparedMainSessionTranscript,
+    expectRecovery,
+    loadTestTranscript,
+  });
+
+  it("pauses a native tool whose result was synthesized as missing", async () => {
+    await writePreparedMainSessionTranscript([
+      { role: "user", content: "run the command" },
+      createAssistantToolCallMessage([
+        { type: "toolCall", id: "call-bash-1", name: "bash", arguments: { command: "true" } },
+      ]),
+      {
+        role: "toolResult",
+        toolName: "bash",
+        toolCallId: "call-bash-1",
+        content: "native tool call had no matching result",
+        details: { reason: "missing_tool_result" },
+        isError: true,
+      },
+    ]);
+    await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("pauses a dangling side-effecting call in an aborted tail", async () => {
+    await writePreparedMainSessionTranscript([
+      { role: "user", content: "do the thing" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Kicking that off." },
+          { type: "toolCall", id: "call-bash-1", name: "bash", arguments: { command: "true" } },
+        ],
+        stopReason: "aborted",
+        errorMessage: "This operation was aborted",
+      },
+    ]);
+
+    await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("resumes an interrupted replay-safe tool call without restricting tools", async () => {
+    await writePreparedMainSessionTranscript([
+      { role: "user", content: "do the thing" },
+      createAssistantToolCallMessage([
+        { type: "text", text: "Let me look that up." },
+        { type: "toolCall", id: "call-read-1", name: "read", arguments: { path: "README.md" } },
+      ]),
+    ]);
+
+    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(gatewayParams()).not.toMatchObject({ forceRestartSafeTools: true });
+  });
+
+  it("resumes through the shutdown error persisted for an interrupted Code Mode wait", async () => {
+    await writePreparedMainSessionTranscript([
+      { role: "user", content: "do the thing" },
+      codeModeCheckpointMessage(),
+      codeModeWaitCallMessage(),
+      {
+        role: "toolResult",
+        toolName: "wait",
+        toolCallId: "call-wait-1",
+        content: [{ type: "text", text: "Error: The operation was aborted." }],
+        details: {
+          status: "failed",
+          error: "Error: The operation was aborted.",
+          code: "internal_error",
+        },
+        isError: true,
+      },
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "aborted",
+        errorMessage: "Request was aborted",
+      },
+    ]);
+
+    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
+    expect(gatewayParams()).toMatchObject({
+      forceRestartSafeTools: true,
+      forceCodeModeTools: true,
+    });
+    expect(gatewayParams().message).toContain("Continue from the existing transcript");
+    expect(gatewayParams().message).toContain(
+      "the tool surface has been narrowed to replay-safe tools",
+    );
+    expect(gatewayParams().message).toContain(
+      "the full tool surface restores on the next user turn",
+    );
+  });
+
+  it("resumes through the current Code Mode abort persisted for an interrupted wait", async () => {
+    await writePreparedMainSessionTranscript([
+      { role: "user", content: "do the thing" },
+      codeModeCheckpointMessage(),
+      codeModeWaitCallMessage(),
+      {
+        role: "toolResult",
+        toolName: "wait",
+        toolCallId: "call-wait-1",
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "failed",
+              code: "aborted",
+              error: "code mode execution aborted",
+            }),
+          },
+        ],
+        details: {
+          status: "failed",
+          code: "aborted",
+          error: "code mode execution aborted",
+          replaySafe: true,
+        },
+        isError: true,
+      },
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "aborted",
+        errorCode: "OPENCLAW_RESTART_ABORT",
+        errorMessage: "agent run aborted for restart",
+      },
+    ]);
+
+    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
+    expect(gatewayParams()).toMatchObject({
+      forceRestartSafeTools: true,
+      forceCodeModeTools: true,
+    });
+  });
 
   it.each([
     {
@@ -4694,17 +4950,39 @@ describe("main-session-restart-recovery", () => {
         replaySafe: true,
       },
     },
-  ])("resumes a Code Mode wait safely after a $label", async ({ checkpoint }) => {
+  ])("pauses a Code Mode wait without a verified matching $label", async ({ checkpoint }) => {
     await writePreparedMainSessionTranscript([
       { role: "user", content: "do the thing" },
       codeModeCheckpointMessage("wait", checkpoint),
       codeModeWaitCallMessage(),
     ]);
 
-    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
-    expect(callGateway).toHaveBeenCalledOnce();
-    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
-    expect(gatewayParams()).not.toHaveProperty("forceCodeModeTools");
+    await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("pauses a mixed Code Mode wait and unresolved write without dispatching", async () => {
+    await writePreparedMainSessionTranscript([
+      { role: "user", content: "do the thing" },
+      codeModeCheckpointMessage("exec"),
+      createAssistantToolCallMessage([
+        {
+          type: "toolCall",
+          id: "call-wait-1",
+          name: "wait",
+          arguments: { runId: "cm_interrupted" },
+        },
+        {
+          type: "toolCall",
+          id: "call-write-1",
+          name: "write",
+          arguments: { path: "result.txt", content: "done" },
+        },
+      ]),
+    ]);
+
+    await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
+    expect(callGateway).not.toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
