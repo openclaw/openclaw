@@ -469,6 +469,22 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     fixHint: `Run "${doctorFixCommand}" to rotate hooks.token away from Gateway auth.`,
   });
 
+  const { repairSystemAgentWorkspacePin } =
+    await import("./doctor/shared/system-agent-workspace-repair.js");
+  const authoredDefaultWorkspace = (
+    snapshot.parsed as { agents?: { defaults?: { workspace?: unknown } } } | undefined
+  )?.agents?.defaults?.workspace;
+  const systemAgentWorkspace = await repairSystemAgentWorkspacePin(state.candidate, process.env, {
+    includeOwnsRoster,
+    authoredDefaultWorkspace:
+      typeof authoredDefaultWorkspace === "string" ? authoredDefaultWorkspace : undefined,
+  });
+  explicitSetPaths.push(...(systemAgentWorkspace.explicitSetPaths ?? []));
+  applyConfigMutation(systemAgentWorkspace, {
+    fixHint: `Run "${doctorFixCommand}" to pin the system agent's workspace.`,
+    emitWarnings: true,
+  });
+
   if (shouldRepair) {
     const { runDoctorRepairSequence } = await import("./doctor/repair-sequencing.js");
     const prompter = params.prompter;
