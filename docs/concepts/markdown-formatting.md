@@ -76,7 +76,17 @@ channel and optionally per account:
 Inline code in table cells keeps its parsed content, including leading and
 trailing spaces, in every enabled table mode.
 
-Per-channel plugin defaults: Matrix defaults to `block` (native tables);
+`off` describes what happens to the text, not what a renderer does with it. When
+a Feishu presentation is delivered as a card, that card's Markdown element parses
+tables itself, so under `off` the untouched table text can still be drawn as a
+native table there. An ordinary Feishu message carrying the same text takes the
+post path, and so does a presentation that falls back to one. A presentation
+addressed to a document comment falls back to comment text, because comments
+render no cards. This is about ordinary final messages: under `off` a streaming
+preview carries the authored text either way, since its conversion is identity.
+
+Per-channel plugin defaults: Feishu defaults to `block` (native tables in
+cards; `code` on the post path); Matrix defaults to `block` (native tables);
 Mattermost defaults to `off`; Signal and WhatsApp default to `bullets`;
 Telegram defaults to `block` (which resolves to `code` unless the account
 has `richMessages` enabled). Any

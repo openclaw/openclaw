@@ -164,17 +164,88 @@ describe("Feishu outbound shared delivery", () => {
     expect(deliveredText).toContain(`- ${label}: \`/open-run\``);
   });
 
+  // The card builder owns a table block only on the direct-send actions, which hand it the
+  // authored presentation. This path does not: the shared adapter degrades the block to the
+  // fallback type this channel advertises and cuts that linear form to the text limit before
+  // the plugin renders anything, so what the card carries here is a run of context blocks.
+  // The cut is the one a reviewer worries about, so the assertions below are on what the
+  // card actually received: every element inside the limit, every row still there, the grey
+  // the degraded block asks for, and no pipe row for the cut to break, because the linear
+  // form of a table block has none. Projecting the block before adaptation, or advertising a
+  // native table this card does not draw, hands the builder plain text blocks and the grey
+  // goes, for a one-row table as much as for this one.
+  it("splits an oversized table block into context elements the card keeps grey", async () => {
+    const rows = 60;
+    await sendDurableMessageBatch({
+      cfg: {
+        channels: {
+          feishu: {
+            enabled: true,
+            markdown: { tables: "code" },
+            accounts: { work: { appId: "cli_work", appSecret: "secret_work" } },
+          },
+        },
+      },
+      channel: "feishu",
+      to: "chat_1",
+      skipQueue: true,
+      payloads: [
+        {
+          presentation: {
+            blocks: [
+              {
+                type: "table",
+                caption: "Pipeline",
+                headers: ["Account", "Stage"],
+                rows: Array.from({ length: rows }, (_entry, index) => [
+                  `account-${String(index)}-${"x".repeat(80)}`,
+                  "Review",
+                ]),
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+    const card = (
+      sendCardFeishuMock.mock.calls[0]?.[0] as {
+        card?: { body?: { elements?: { content?: string }[] } };
+      }
+    )?.card;
+    const elements = (card?.body?.elements ?? []).map((element) => element.content ?? "");
+    // Guard the fixture: one element would not exercise the adapter's cut at all.
+    expect(elements.length).toBeGreaterThan(1);
+    for (const content of elements) {
+      expect(content.length).toBeLessThanOrEqual(4000);
+      expect(content.startsWith("<font color='grey'>")).toBe(true);
+      expect(content.endsWith("</font>")).toBe(true);
+    }
+    const joined = elements.join("");
+    expect(joined).toContain("Pipeline (table)");
+    for (let index = 0; index < rows; index += 1) {
+      expect(joined).toContain(`account-${String(index)}-`);
+    }
+    expect(joined).not.toContain("|");
+  });
+
   it("replays a queued direct message after Feishu runtime availability is restored", async () => {
     const originalSendText = feishuChannelRuntime.feishuOutbound.sendText;
-    if (!originalSendText) {
-      throw new Error("Expected Feishu runtime sendText");
+    const originalSendFormattedText = feishuChannelRuntime.feishuOutbound.sendFormattedText;
+    if (!originalSendText || !originalSendFormattedText) {
+      throw new Error("Expected Feishu runtime text senders");
     }
     const deliveryIntentId = "feishu-direct-runtime-availability";
 
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "feishu", plugin: feishuPlugin, source: "test" }]),
     );
+    // An unavailable runtime takes down every text sender the channel advertises. Leaving
+    // one of them resolvable is a runtime that works, and core would route to it.
     feishuChannelRuntime.feishuOutbound.sendText = undefined;
+    feishuChannelRuntime.feishuOutbound.sendFormattedText = undefined;
 
     try {
       await withStateDirEnv("openclaw-feishu-runtime-availability-", async ({ stateDir }) => {
@@ -199,6 +270,7 @@ describe("Feishu outbound shared delivery", () => {
         });
 
         feishuChannelRuntime.feishuOutbound.sendText = originalSendText;
+        feishuChannelRuntime.feishuOutbound.sendFormattedText = originalSendFormattedText;
         await drainPendingDeliveries({
           drainKey: "feishu:default",
           logLabel: "Feishu runtime availability recovery",
@@ -221,6 +293,7 @@ describe("Feishu outbound shared delivery", () => {
       });
     } finally {
       feishuChannelRuntime.feishuOutbound.sendText = originalSendText;
+      feishuChannelRuntime.feishuOutbound.sendFormattedText = originalSendFormattedText;
     }
   });
 

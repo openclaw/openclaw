@@ -4,7 +4,13 @@ import type { ChannelDirectoryAdapter, ChannelOutboundAdapter } from "./types.ad
 type MaybePromise<T> = T | Promise<T>;
 
 type DirectoryMethod = "self" | "listPeersLive" | "listGroupsLive" | "listGroupMembers";
-type OutboundMethod = "renderPresentation" | "sendPayload" | "sendText" | "sendMedia" | "sendPoll";
+type OutboundMethod =
+  | "renderPresentation"
+  | "sendPayload"
+  | "sendText"
+  | "sendFormattedText"
+  | "sendMedia"
+  | "sendPoll";
 
 type RuntimeForwarderParams<Runtime, Fn> = {
   getRuntime: () => MaybePromise<Runtime>;
@@ -116,6 +122,7 @@ export function createRuntimeOutboundDelegates<Runtime>(
     renderPresentation: forward(() => params.renderPresentation, false),
     sendPayload: forward(() => params.sendPayload),
     sendText: forward(() => params.sendText),
+    sendFormattedText: forward(() => params.sendFormattedText),
     sendMedia: forward(() => params.sendMedia),
     sendPoll: forward(() => params.sendPoll),
   };
