@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createAssistantMessageEventStream, type Context } from "openclaw/plugin-sdk/llm";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -16,8 +16,10 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   runWithDeferredSessionSuspension,
   suspendSession,
@@ -111,7 +113,11 @@ afterEach(async () => {
   // Worker lease release still needs the fixture's shared-state database.
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
-  await closeOpenClawStateDatabaseAsync();
+  for (const root of tempRoots.dirs) {
+    await closeOpenClawStateDatabaseByPathAsync(
+      resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: path.join(root, "final") }),
+    );
+  }
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -120,6 +126,11 @@ afterEach(async () => {
     "fixture workers must settle before root deletion",
   ).toBe(false);
   tempRoots.cleanup();
+});
+
+afterAll(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
 });
 
 async function createRun(agentId: string, sessionPersistence?: "durable" | "detached") {
